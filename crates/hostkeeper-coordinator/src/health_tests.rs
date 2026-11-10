@@ -10,9 +10,9 @@ use bytes::Bytes;
 use http_body_util::BodyExt;
 use hyper::{Method, StatusCode};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
-use tokio::sync::mpsc;
+use tokio::sync::{mpsc, oneshot};
 
-use super::{HEALTH_PATH, Serving, Verdict, answer, connection, serve, verdict};
+use super::{HEALTH_PATH, Serving, Verdict, answer, connection, drain_on, serve, verdict};
 use crate::marks_support::rig_on;
 use crate::service::Coordinator;
 use crate::store::{Fake, Health};
@@ -155,8 +155,8 @@ async fn each_state_that_is_not_serving_is_503_with_its_one_reason_token() {
     );
 }
 
-/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`, `not_writer`
-/// and `store_unreachable`.
+/// Proves: every verdict's status and token: `200 ok`, and `503` for `starting`, `not_writer`,
+/// `store_unreachable` and `draining`.
 ///
 /// Catches: a reason that answers `200`, or two verdicts that share a token.
 #[test]
@@ -178,10 +178,178 @@ fn each_verdict_has_its_status_and_token() {
             StatusCode::SERVICE_UNAVAILABLE,
             "store_unreachable",
         ),
+        (
+            Verdict::Draining,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "draining",
+        ),
     ];
     for (verdict, status, token) in all {
         assert_eq!((verdict.status(), verdict.token()), (status, token));
     }
+}
+
+/// Proves: once drained, `GET /healthz` is `503` with the body `draining` exactly, whatever
+/// else holds: a coordinator still starting, one serving on a store that takes writes, one whose
+/// store's link is lost and one deposed; a `HEAD` is answered as a `GET`; neither a link made
+/// again nor a [`Serving::set`] after the drain (a start that finishes its binds late) brings
+/// back `200 ok`; the answer changes nothing the fake holds. Other paths stay `404 not_found`.
+///
+/// Catches: a coordinator told to stop that a load balancer still reads as healthy and keeps
+/// sending to; a store state or a late end of the start that wins over the drain; a reason
+/// token other than `draining`, or with more beside it.
+#[tokio::test]
+async fn a_drained_coordinator_is_503_draining_whatever_else_holds() {
+    let fake = Fake::new();
+    let rig = rig_on("health-draining", &fake, "");
+    let (commits, lines) = (fake.commits(), fake.audit());
+    let draining = (
+        StatusCode::SERVICE_UNAVAILABLE,
+        Bytes::from_static(b"draining"),
+    );
+
+    let starting = Serving::default();
+    starting.drain();
+    assert_eq!(get(&rig.coordinator, &starting).await, draining, "starting");
+    starting.set();
+    assert_eq!(
+        get(&rig.coordinator, &starting).await,
+        draining,
+        "a set after the drain"
+    );
+
+    let serving = Serving::default();
+    serving.set();
+    assert_eq!(
+        get(&rig.coordinator, &serving).await,
+        (StatusCode::OK, Bytes::from_static(b"ok"))
+    );
+    serving.drain();
+    assert_eq!(verdict(&rig.coordinator, &serving), Verdict::Draining);
+    assert_eq!(get(&rig.coordinator, &serving).await, draining, "serving");
+    for (health, what) in [
+        (Health::Lost, "the link lost"),
+        (Health::Deposed { found: 7 }, "deposed"),
+        (Health::Up, "the link made again"),
+    ] {
+        fake.set_health(health);
+        assert_eq!(get(&rig.coordinator, &serving).await, draining, "{what}");
+    }
+    let (status, body, kind, cache) =
+        asked(&rig.coordinator, &serving, &Method::HEAD, HEALTH_PATH).await;
+    assert_eq!(
+        (status, body, kind.as_str(), cache.as_str()),
+        (
+            draining.0,
+            draining.1.clone(),
+            "text/plain; charset=utf-8",
+            "no-store"
+        ),
+        "as a GET: the connection leaves the body out"
+    );
+    let (status, body, _, _) = asked(&rig.coordinator, &serving, &Method::GET, "/v1/status").await;
+    assert_eq!(
+        (status, body),
+        (StatusCode::NOT_FOUND, Bytes::from_static(b"not_found"))
+    );
+    assert_eq!((fake.commits(), fake.audit()), (commits, lines));
+}
+
+/// Proves: [`drain_on`] leaves the coordinator as it was while the stop has not come, drains it
+/// once the stop resolves, and answers what the stop answered: a stop that succeeded and a stop
+/// that failed (the signal handler could not be set up) both drain.
+///
+/// Catches: a drain that comes before the stop (a serving coordinator read as going away), a
+/// stop that never drains, a failed stop that leaves the coordinator read as healthy while it
+/// exits, and a stop whose outcome is lost.
+#[tokio::test]
+async fn the_stop_drains_and_answers_what_it_answered() {
+    let serving = Serving::default();
+    serving.set();
+    let (stop, stopped) = oneshot::channel::<io::Result<()>>();
+    let mut draining = std::pin::pin!(drain_on(
+        async move { stopped.await.expect("sent") },
+        serving.clone()
+    ));
+    assert!(futures::poll!(draining.as_mut()).is_pending());
+    assert!(!serving.is_draining(), "drained before the stop");
+    stop.send(Ok(())).expect("sent");
+    draining.await.expect("the stop's outcome");
+    assert!(serving.is_draining(), "the stop drains");
+
+    let failed = Serving::default();
+    let why = drain_on(
+        async { Err::<(), _>(io::Error::other("no signal handler")) },
+        failed.clone(),
+    )
+    .await
+    .expect_err("the stop's failure");
+    assert_eq!(why.to_string(), "no signal handler");
+    assert!(failed.is_draining(), "a failed stop drains too");
+}
+
+/// Proves: over the listener, a probe answered `200 ok` before the stop, and a probe that
+/// connected before the stop and sends its request after it, are told `200 ok` and
+/// `503 draining`; a probe that connects after the stop is told `503 draining` too.
+///
+/// Catches: a verdict taken when a connection is accepted rather than when its request is
+/// answered, so a probe that connected just before the stop reads a stopping coordinator as
+/// healthy.
+#[tokio::test]
+async fn a_probe_answered_after_the_stop_is_told_draining() {
+    let fake = Fake::new();
+    let (rig, serving) = serving_on("health-drain-listener", &fake);
+    let (offer, offered) = mpsc::unbounded_channel::<DuplexStream>();
+    let offered = Arc::new(tokio::sync::Mutex::new(offered));
+    let accept = move || {
+        let offered = Arc::clone(&offered);
+        async move {
+            offered
+                .lock()
+                .await
+                .recv()
+                .await
+                .ok_or_else(|| io::Error::from(io::ErrorKind::BrokenPipe))
+        }
+    };
+    let listening = tokio::spawn(serve(
+        accept,
+        Arc::new(rig.coordinator),
+        serving.clone(),
+        PATIENCE,
+        4,
+    ));
+    let head = "GET /healthz HTTP/1.1\r\nhost: localhost\r\n\r\n";
+
+    let (mut before, server) = tokio::io::duplex(4096);
+    offer.send(server).expect("offered");
+    let answer = exchange(&mut before, head).await;
+    assert_eq!(
+        answer.split_once("\r\n\r\n").map(|(_, body)| body),
+        Some("ok")
+    );
+
+    // A pipe of 1 byte: the first bytes are written only once the server reads them.
+    let (mut across, server) = tokio::io::duplex(1);
+    offer.send(server).expect("offered");
+    across.write_all(b"GET ").await.expect("written");
+    drain_on(async {}, serving.clone()).await;
+    let answer = exchange(&mut across, &head["GET ".len()..]).await;
+    let (status, body) = answer.split_once("\r\n\r\n").expect("a head");
+    assert!(
+        status.starts_with("HTTP/1.1 503 Service Unavailable\r\n"),
+        "{answer}"
+    );
+    assert_eq!(body, "draining", "{answer}");
+
+    let (mut after, server) = tokio::io::duplex(4096);
+    offer.send(server).expect("offered");
+    let answer = exchange(&mut after, head).await;
+    assert_eq!(
+        answer.split_once("\r\n\r\n").map(|(_, body)| body),
+        Some("draining")
+    );
+    listening.abort();
 }
 
 /// Proves: every method of `/healthz` but `GET` and `HEAD` (`POST`, `PUT`, `DELETE`, `PATCH`,
