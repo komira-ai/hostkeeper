@@ -132,6 +132,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler),
   B10 (the generated command line: `hkctl`, over the gateway),
   B24 (the CI client), B25 (the UI).
+  Designed: operator login with a username, a password and a browser session, and API tokens
+  managed in the UI ([operator-login.md](docs/design/operator-login.md)).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a
