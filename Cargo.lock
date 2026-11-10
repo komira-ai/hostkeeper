@@ -1479,6 +1479,7 @@ dependencies = [
  "prost",
  "prost-reflect",
  "prost-types",
+ "protox",
  "rcgen",
  "rustls",
  "rustls-native-certs",

@@ -278,8 +278,10 @@ the tarball; with the tarball first, every new Linux host takes the tarball.
 - **The host runs the service with an installer the list has no entry for, or that its daemon no longer lists:** it
   is ordered nothing and shows `GATE_REASON_INSTALLER_DROPPED`. It is listed apart, not failed, but `Converge` names
   it, because the release meant it to update and a host may change a service's installer only by uninstalling it
-  (section 5.1). This holds for an old daemon too: one that runs the service from archives, given a list with no
-  archive entry, is `installer_dropped`, and one that does not run it is `no_build_for_host`.
+  (section 5.1), or by the move off archives (packages-native.md section 10.6): a host that runs it from
+  `hostkeeper-archive`, whose daemon still lists `hostkeeper-archive` and the installer of a native entry of the list,
+  is picked the first such entry; one that lists no native installer of the list is `installer_dropped`. A daemon
+  before `target-v1` is `no_build_for_host`, whether or not it runs the service.
 
 The daemon announces its installers once per start, so the pick is the same for a host at every beat until the daemon
 restarts. A daemon given an entry of an installer it does not list (its list changed at a restart the coordinator has

@@ -304,6 +304,14 @@ request shows both at zero. A host that keeps either count above zero is named b
 up, or removes it from the fleet and installs it afresh (network-install.md). So no host is left on a daemon that
 nothing can update.
 
+**Stage 9 shipped early.** A24 and A25 landed while both counts were above zero: every host of the farm still ran
+`hostkeeper` from `hostkeeper-archive` on a daemon of A19 to A24 (it announces `apt` on Linux), and A25 had taken the
+move's pick out of the coordinator, so every such host was picked nothing (`installer_dropped`) and none could move.
+The coordinator keeps the move's pick (below) until both counts are zero; the two queries of the runbook
+([docs/operations/move-to-native.md](../operations/move-to-native.md), stage 9) are the exit condition for deleting it,
+in a pull request of its own. Only the pick is kept: no release lists an archive entry again, and the move's rollback
+is not ordered (below).
+
 After stage 9 a host set up from a `.deb` or `.pkg` older than A19's release has a daemon that can install
 nothing a release lists: it shows `no_build_for_host` for `hostkeeper`, and is set up again from the current package.
 The runbooks (enrollment, network install, the MDM kit) install the newest release's.
@@ -317,10 +325,16 @@ does is not one we run.
 
 **The move of one service on one host** (A18, A19):
 
-- **The pick.** A host that runs the service from `hostkeeper-archive`, and whose daemon lists the installer of a
-  native entry of its platform's list, is picked that native entry. This is the one exception to packages.md section
-  3.3's first rule ("a host takes the entry of the installer it runs"). A host that lists no native installer of the
-  list is picked the archive entry, and an old daemon is too.
+- **The pick.** A host that runs the service from `hostkeeper-archive` (its daemon names no installer for it, or names
+  `hostkeeper-archive`), and whose daemon lists the installer of a native entry of its platform's list, is picked the
+  first such native entry in the list's order. This is the one exception to packages.md section 3.3's first rule ("a
+  host takes the entry of the installer it runs"). Since A25 no host is picked an archive entry: a host that lists no
+  native installer of the list is picked nothing (`installer_dropped`), and a daemon before `target-v1` is picked
+  nothing too (`no_build_for_host`). The pick is made
+  only for a daemon that still lists `hostkeeper-archive` (A19 to A24): a daemon from A25 lists no archive installer,
+  cannot move a service off archives and would refuse the order (`release_unreadable`), so a service it still runs
+  from archives is picked nothing; it is installed afresh. A Mac daemon of v0.1.221 announces `hostkeeper-archive`
+  alone, no `macos-pkg`, so such a Mac is not moved by the pick: it is set up again from the current `.pkg`.
 - **The daemon.** The one installer change it accepts is from `hostkeeper-archive` to a native installer. Back, or
   between native installers, is `installer_changed`, as today. The move is an update: `stage` the native version, the
   hook's `prepare` from its tree, then `activate`, which first takes away the archive version's placed units and files
@@ -330,9 +344,13 @@ does is not one we run.
 - **The move's rollback**, automatic or a `ForceRollback`, before or after the move settled: `activate` the archive
   version again. It purges the native package (for a service; for `hostkeeper`, the package stays at the version apt
   installed, since purging it would remove the unit and the binary the host starts), places the archive's paths
-  again, and records `hostkeeper-archive`. The coordinator orders it with the release's archive entry, which A18 sends
-  for a rollback of a host whose installer is native to a release with no native entry. The daemon takes it from its
-  sealed copy and fetches nothing. Once the next update has retired the archive version, the move cannot be undone.
+  again, and records `hostkeeper-archive`. The daemon takes it from its sealed copy and fetches nothing. Once the
+  next update has retired the archive version, the move cannot be undone. Since A25 the coordinator never orders it:
+  no pick returns an archive entry, so a moved host going back to a version whose list has no native entry it lists
+  is picked nothing (`installer_dropped`), and one going back to a version with such an entry is ordered that entry,
+  which a daemon refuses `rollback_below_installer` below its floor (*A rollback of the daemon below the change*,
+  below). The automatic rollback of a daemon's own failed move needs no order: before the confirm the old binary goes
+  on from archives.
 - **hostkeeper's move** is 10.4's self-update with the move's `activate`. After `N` confirms, it installs its `.deb`
   (an upgrade of the bootstrap package dpkg still lists at the host's first version), enables the `.deb`'s unit, takes
   away the archive's package unit from `/etc/systemd/system/` and reloads systemd. The running daemon is not
@@ -342,8 +360,8 @@ does is not one we run.
   that holds an `apt` version, and to one before A19 on a host where `hostkeeper` itself moved, both
   `rollback_below_installer` (packages.md section 9.1; A19 adds its row to the compiled table). A hand-over that fails
   runs the old binary, which is the one that ran the move, so it reads everything on the host.
-- **Old daemons.** A daemon before `target-v1` is ordered the archive entry through the channel, as today, until it
-  updates. Stage 9's second count waits for it.
+- **Old daemons.** A daemon before `target-v1` was ordered the archive entry through the channel until it updated;
+  since A25 it is ordered nothing (`no_build_for_host`). Stage 9's second count waits for it.
 
 ### 10.7 What is deleted at the end (A25, A28)
 
@@ -361,7 +379,8 @@ does is not one we run.
   switch and relink of `place.rs`, the attestation proof and the trusted root's report (10.3). At its start a daemon
   from A25 deletes the archive version directory of a service it runs natively (the move's `previous`), and nothing
   else. The coordinator's `channel.rs`, `channel_https.rs`, `release_index.rs`, the `--release-channel` flag, the
-  archive rules of `picks.rs` and the orders by index for old daemons; the JSON route stays frozen and carries no order.
+  archive rules of `picks.rs` but the move's pick, kept until stage 9's counts are zero (10.6), and the orders by index
+  for old daemons; the JSON route stays frozen and carries no order.
   A stored release with archive entries or an index still loads, its archive entries never picked.
   `hostkeeper-release`'s installer set loses `hostkeeper-archive`, `tarball` and `oci-image` (10.1).
 - **Proto: nothing removed.** `package_digest`, `release_index`, `release_index_digest`, `index_digest`,
