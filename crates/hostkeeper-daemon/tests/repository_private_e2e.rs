@@ -507,6 +507,10 @@ fn a_host_of_another_group_is_answered_404_for_this_groups_paths() {
 /// sends has `other` as the one suite, and once it is applied the old mirror is gone.
 ///
 /// Catches: a mirror of one group's files left on a host that is no longer in the group.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 #[test]
 fn a_host_that_changes_group_loses_the_old_groups_mirror() {
     let mut bench = Bench::new("private-e2e-moved");

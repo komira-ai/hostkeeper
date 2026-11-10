@@ -260,6 +260,10 @@ fn the_index_files_of_the_hosts_architecture_are_mirrored_byte_for_byte() {
 
 /// Proves the new directory takes the old mirror's place whole: a file of the old one (a stale
 /// index, a package file) is gone, and a host of another architecture lists only its own files.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 #[test]
 fn a_new_index_replaces_the_old_mirror_whole() {
     let bench = bench("mirror-replace");

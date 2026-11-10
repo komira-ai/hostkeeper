@@ -817,6 +817,10 @@ fn a_private_entry_is_written_with_the_uri_of_the_hosts_mirror() {
 /// were already in place: a mirror of a repository the set does not name, and one of the entry's
 /// repository holding another group's suite (the host moved), go; the mirror of the entry's own
 /// suite stays.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 #[test]
 fn an_applied_set_removes_the_mirrors_it_does_not_keep() {
     let rig = Rig::new("push-prune");

@@ -186,7 +186,8 @@ fn a_set_without_the_advertised_feature_is_not_written() {
 }
 
 /// Proves a host with no repository directory (a Mac) announces exactly the features every
-/// daemon does, sends no report, and writes nothing for a set that arrives.
+/// daemon does, and `private-repository-v1` only on a Mac (its `coordinator` store), sends no
+/// report, and writes nothing for a set that arrives.
 #[test]
 fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     let rig = Rig::new("push-mac");
@@ -195,7 +196,11 @@ fn a_host_with_no_repository_directory_announces_and_writes_nothing() {
     heartbeater.beat_once();
     heartbeater.beat_once();
     let beats = link.beats();
-    assert_eq!(beats[0].features, ANNOUNCED.to_vec());
+    let mut announced = ANNOUNCED.to_vec();
+    if hostkeeper_daemon::links::reads_private_repositories(hostkeeper_daemon::links::PLATFORM) {
+        announced.push(hostkeeper_link::PRIVATE_REPOSITORY);
+    }
+    assert_eq!(beats[0].features, announced);
     assert_eq!(beats[1].repositories, None);
     assert!(
         daemon
