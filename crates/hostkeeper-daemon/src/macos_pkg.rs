@@ -316,7 +316,7 @@ impl Repository {
                 activate: bound,
                 remove: bound,
             },
-            boot: false,
+            hook: None,
         }))
     }
 

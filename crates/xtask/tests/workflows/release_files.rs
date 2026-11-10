@@ -255,12 +255,22 @@ fn native_entry(
         Platform::MacosArm64 => format!("dev.hostkeeper.{service}"),
         _ => service.to_owned(),
     };
+    let mut hook = json!({
+        "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
+        "verifyDeadlineSecs": "120",
+    });
+    // The program the service's package installs (its `.deb`'s, or its `.pkg`'s), with the
+    // archive command's `update-hook`; hostkeeper's daemon runs built-in steps and names none.
+    if service != "hostkeeper" {
+        let program = match platform {
+            Platform::MacosArm64 => format!("/Library/Application Support/{service}/bin/{service}"),
+            _ => format!("/usr/lib/{service}/{service}"),
+        };
+        hook["command"] = json!([program, "update-hook"]);
+    }
     let manifest = json!({
         "package": package,
-        "hook": {
-            "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
-            "verifyDeadlineSecs": "120",
-        },
+        "hook": hook,
         "run": [run_unit(service, platform)],
         "minHostkeeper": FLOOR,
         "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},

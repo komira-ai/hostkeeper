@@ -24,10 +24,10 @@
 //!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
 //!   daemon's issue file; with `--service hello` or `--service mdm` it reads a service's `.deb`
-//!   against the rules of docs/design/packages-native.md section 10.2 instead.
-//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the hook
-//!   at `/usr/lib/<service>/hostkeeper-hook`, the units installed disabled and no maintainer
-//!   script.
+//!   against what this repository's builder writes instead.
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the
+//!   program at `/usr/lib/<service>/`, the units in `/usr/lib/systemd/system/` and no hook
+//!   wrapper (the manifest's `hook.command` names the program).
 //! - `index` ([`index`]): the release index of a package, `index.json` for hostkeeper,
 //!   `hello-index.json` for hello, `hello-fail-ready-index.json` for its failing build and
 //!   `mdm-index.json` for mdm: which package serves each platform, refused unless it has the
@@ -44,6 +44,8 @@
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
+//! - `push-image` ([`image_push`]): that layout pushed to the registry and read back by its
+//!   digest, byte for byte, an attempt that fails tried again after a wait.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
@@ -92,6 +94,7 @@ pub(crate) mod git;
 mod github;
 mod hkctl;
 pub(crate) mod image_index;
+mod image_push;
 mod index;
 mod locate;
 mod macos_pkg;
@@ -113,19 +116,16 @@ mod targets;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
+mod wired;
 
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::advisories::DenyCli;
-use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
 pub(crate) use files::{answer, file_sha256};
-use git::GitCli;
-use github::Gh;
-use macos_pkg::PkgbuildCli;
-use ports::{Adapters, Exec, PortError, Ports};
+use ports::{Adapters, PortError, Ports};
 pub(crate) use run_state::{RunState, state};
+use wired::Wired;
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -289,11 +289,10 @@ pub(crate) enum Verb {
     /// `nfpm-stage` wrote, and the console's issue link.
     ///
     /// With `--service hello` or `--service mdm` (not with `--staged`), read a service's `.deb`
-    /// (`release deb`) instead and refuse it unless its control archive holds no maintainer
-    /// script, its `Package` is the service, every file is at a path of the service's (its units
-    /// plain files named for it in `/usr/lib/systemd/system/`), every entry is root's and
-    /// writable by root alone, its hook is `/usr/lib/<service>/hostkeeper-hook` (a regular file,
-    /// 0755) and its units' programs are files of the package; it declares no dependency.
+    /// (`release deb`) instead and refuse it unless its `Package` is the service, every entry is
+    /// root's and writable by root alone and its units' programs are files of the package; it
+    /// declares no dependency. These are checks of this repository's own build: nothing is
+    /// checked about its scripts, paths or unit names.
     CheckLinuxPkg {
         /// The `.deb`, `.rpm` or tarball.
         package: PathBuf,
@@ -309,11 +308,10 @@ pub(crate) enum Verb {
         service: Option<Service>,
     },
     /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one
-    /// Linux platform: the program and its hook at `/usr/lib/<service>/`, the units in
-    /// `/usr/lib/systemd/system/`, installed disabled, and no maintainer script
-    /// (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
-    /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb` (the failing
-    /// build's control: `X.Y.Z~fail.ready`).
+    /// Linux platform: the program at `/usr/lib/<service>/` and the units in
+    /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built
+    /// for linux-x86_64 only, with the pinned tools out of `--archives`. Writes
+    /// `<service>_<version>_<arch>.deb` (the failing build's control: `X.Y.Z~fail.ready`).
     Deb {
         /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).
         #[arg(long, value_enum)]
@@ -393,7 +391,7 @@ pub(crate) enum Verb {
     /// program is the binary the pkg installs; `productbuild` wraps the component as the unsigned distribution pkg.
     ///
     /// With `--service hello`, hello's `.pkg` instead (`hello-<version>-macos-arm64.pkg`, or of
-    /// its failing build with `--fail-ready`): the program and its hook under
+    /// its failing build with `--fail-ready`): the program under
     /// `/Library/Application Support/hello/`, the two slots' plists in `/Library/LaunchDaemons/`
     /// with `Disabled` true, and no script; `--gh` and `--trusted-root` are refused.
     MacosPkg {
@@ -434,9 +432,9 @@ pub(crate) enum Verb {
     /// owners and bytes.
     ///
     /// With `--service hello` (and `--fail-ready` for its failing build), check hello's `.pkg`
-    /// instead: one component with no script, whose payload is exactly the program, the hook
-    /// and the two slots' disabled plists at hello's paths; `--gh` and `--trusted-root` are
-    /// refused.
+    /// instead: one component with no script, whose payload is exactly the program and the two
+    /// slots' disabled plists at hello's paths, as its builder writes them; `--gh` and
+    /// `--trusted-root` are refused.
     CheckMacosPkg {
         /// The directory `pkgutil --expand` wrote of the distribution pkg.
         expanded: PathBuf,
@@ -494,6 +492,18 @@ pub(crate) enum Verb {
         /// An env file (`GITHUB_ENV`) to append `IMAGE_DIGEST=<the index's digest>` to.
         #[arg(long)]
         env_file: Option<PathBuf>,
+    },
+    /// Push the layout of `image-layout` to the registry, tagged with the version, and refuse
+    /// it unless the registry then serves the release's image index by its digest, byte for
+    /// byte; an attempt that fails is tried again after a wait.
+    PushImage {
+        /// The release's files, which hold the image index.
+        dir: PathBuf,
+        #[arg(long)]
+        version: Version,
+        /// The layout `image-layout` wrote of those files.
+        #[arg(long)]
+        layout: PathBuf,
     },
     /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
     /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
@@ -910,6 +920,19 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::PushImage {
+            dir,
+            version,
+            layout,
+        } => image_push::push(
+            ports.registry,
+            ports.wait,
+            &image_push::Request {
+                dir,
+                version,
+                layout,
+            },
+        ),
         Verb::ChannelSync {
             trust_list,
             channel_dir,
@@ -956,48 +979,6 @@ struct Lent<'a>(Ports<'a>);
 impl Adapters for Lent<'_> {
     fn ports(&self) -> Ports<'_> {
         self.0
-    }
-}
-
-/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary, `pkgbuild`, `curl` and `cargo deny`, each running its program through a copy of `exec`. The real
-/// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
-/// fake one.
-struct Wired<E> {
-    git: GitCli<E>,
-    gh: Gh<E>,
-    version_of: VersionOf<E>,
-    pkgbuild: PkgbuildCli<E>,
-    curl: mdm_fetch::CurlCli<E>,
-    deny: DenyCli<E>,
-}
-
-impl<E: Exec + Clone> Wired<E> {
-    fn new(exec: E) -> Wired<E> {
-        Wired {
-            git: GitCli::new(exec.clone()),
-            gh: Gh::new(exec.clone()),
-            version_of: VersionOf::new(exec.clone()),
-            pkgbuild: PkgbuildCli::new(exec.clone()),
-            curl: mdm_fetch::CurlCli::new(exec.clone()),
-            deny: DenyCli::new(exec),
-        }
-    }
-}
-
-impl<E: Exec> Adapters for Wired<E> {
-    fn ports(&self) -> Ports<'_> {
-        Ports {
-            git: &self.git,
-            runs: &self.gh,
-            store: &self.gh,
-            source: &self.gh,
-            verifier: &self.gh,
-            run_version: &self.version_of,
-            pkgbuild: &self.pkgbuild,
-            advisories: &self.deny,
-            download: &self.curl,
-        }
     }
 }
 

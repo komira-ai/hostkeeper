@@ -170,6 +170,7 @@ pub fn secs(n: u64) -> Bound {
 pub fn step_call<'a>(executable: &'a Path, unit: &'a str, bound: Bound) -> StepCall<'a> {
     StepCall {
         service: "web",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Cutover,
             artifact: None,

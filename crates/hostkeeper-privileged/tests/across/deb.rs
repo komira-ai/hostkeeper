@@ -5,11 +5,10 @@
 //! - **The `.deb`** of a version is built here around the `hostkeeper` binary of its [`Build`], as
 //!   `packaging/linux/nfpm.yaml` lays the package out: `/usr/bin/hostkeeper`, the unit
 //!   ([`unit_text`]: the rig's, which starts `current` of the test's binary directory), the
-//!   tmpfiles rules and the config template of `packaging/linux/`, and the one issue link of
-//!   `OWN_LINKS`, with the shipped `postinst` and `prerm` (`packaging/linux/scripts/`) as its
-//!   maintainer scripts, and nothing outside the list of hostkeeper's own package
-//!   (`hostkeeper_install::repository::tree::OWN_FILES`, held by [`Repository::publish`]). Two
-//!   files of the list are left out because the host is a test's: the pinned `gh` and the Sigstore
+//!   tmpfiles rules and the config template of `packaging/linux/`, and its one issue link
+//!   ([`ISSUE_LINK`]), with the shipped `postinst` and `prerm` (`packaging/linux/scripts/`) as its
+//!   maintainer scripts. Three files of nfpm.yaml's list are left out because the host is a
+//!   test's: the pinned `gh` and the Sigstore
 //!   trusted root, which the end-to-end rig installed at their fixed paths with the test signer's
 //!   root (a package that replaced it with the production root would refuse every later
 //!   package), and `hostkeeper-pxe`. It is built with `dpkg-deb`, gzip at level 1 (the binaries
@@ -40,7 +39,6 @@ use std::sync::{Mutex, PoisonError};
 
 use hostkeeper_config::platform::Platform;
 use hostkeeper_daemon::selfupdate::APT_RELEASE_BINARY;
-use hostkeeper_install::repository::tree::{OWN_FILES, OWN_LINKS};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Store};
 use hostkeeper_proto::hostkeeper::release::v1::{
@@ -53,6 +51,13 @@ use sha2::{Digest, Sha256};
 use super::super::e2e::scenario::LOCAL;
 use super::super::e2e::wait_for;
 use super::linux::{DEB_UNIT, PACKAGE, REPOSITORIES_DIR, unit_text};
+
+/// The one link of hostkeeper's `.deb` (`packaging/linux/nfpm.yaml`): the console's issue file
+/// the daemon writes while the host waits for its enrollment.
+const ISSUE_LINK: (&str, &str) = (
+    "etc/issue.d/hostkeeper.issue",
+    "/run/hostkeeper/enrollment.issue",
+);
 use super::repo::{Key, SUITE, Signing, architecture, run, write_index};
 use super::{Build, HK, Rig, floor};
 
@@ -207,7 +212,7 @@ impl Repository {
     /// suite again.
     ///
     /// # Panics
-    /// The package cannot be built, or a file of it is not on hostkeeper's own list.
+    /// The package cannot be built.
     pub fn publish(&self, version: &str, binary: &[u8], unit: &str, floor: &str) -> Built {
         let architecture = architecture();
         let tree = self.work.path().join(format!("{PACKAGE}-{version}"));
@@ -232,13 +237,10 @@ impl Repository {
             ),
         ];
         for (path, bytes, mode) in files {
-            assert!(
-                OWN_FILES.contains(&path),
-                "{path} is not on hostkeeper's own package's list"
-            );
             put(&tree, path, bytes, mode);
         }
-        for (path, target) in OWN_LINKS {
+        {
+            let (path, target) = ISSUE_LINK;
             let link = tree.join(path);
             fs::create_dir_all(link.parent().expect("a parent")).expect("make the directory");
             symlink(target, &link).expect("the package's link");

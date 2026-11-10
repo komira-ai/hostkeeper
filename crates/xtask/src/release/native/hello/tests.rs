@@ -4,10 +4,8 @@ use super::{DEB_PROGRAM, File, PKG_PROGRAM, deb_files, pkg_files, plist, unit};
 /// each file of the good build but the program.
 const DEB_A: &str = include_str!("../../../../../../examples/hello/package/deb/hello@a.service");
 const DEB_B: &str = include_str!("../../../../../../examples/hello/package/deb/hello@b.service");
-const DEB_HOOK: &str = include_str!("../../../../../../examples/hello/package/deb/hostkeeper-hook");
 const PKG_A: &str = include_str!("../../../../../../examples/hello/package/pkg/hello.a.plist");
 const PKG_B: &str = include_str!("../../../../../../examples/hello/package/pkg/hello.b.plist");
-const PKG_HOOK: &str = include_str!("../../../../../../examples/hello/package/pkg/hostkeeper-hook");
 
 fn listed(files: &[File]) -> Vec<(&str, u32)> {
     files.iter().map(|f| (f.path.as_str(), f.mode)).collect()
@@ -22,21 +20,19 @@ fn text(files: &[File], path: &str) -> String {
 }
 
 #[test]
-fn the_deb_holds_the_program_the_hook_and_one_plain_unit_per_slot_as_the_goldens() {
+fn the_deb_holds_the_program_and_one_plain_unit_per_slot_as_the_goldens() {
     // Catches: a file moved, added or left out, a mode changed, the program's bytes not the
-    // given binary's, or a unit or the hook that differs from its committed golden.
+    // given binary's, or a unit that differs from its committed golden.
     let files = deb_files(b"BIN".to_vec(), false);
     assert_eq!(
         listed(&files),
         [
             ("/usr/lib/hello/hello", 0o755),
-            ("/usr/lib/hello/hostkeeper-hook", 0o755),
             ("/usr/lib/systemd/system/hello@a.service", 0o644),
             ("/usr/lib/systemd/system/hello@b.service", 0o644),
         ]
     );
     assert_eq!(files[0].data, b"BIN");
-    assert_eq!(text(&files, "/usr/lib/hello/hostkeeper-hook"), DEB_HOOK);
     assert_eq!(
         text(&files, "/usr/lib/systemd/system/hello@a.service"),
         DEB_A
@@ -48,23 +44,18 @@ fn the_deb_holds_the_program_the_hook_and_one_plain_unit_per_slot_as_the_goldens
 }
 
 #[test]
-fn the_pkg_holds_the_program_the_hook_and_one_disabled_job_per_slot_as_the_goldens() {
+fn the_pkg_holds_the_program_and_one_disabled_job_per_slot_as_the_goldens() {
     // Catches: as for the deb, and a plist whose Disabled entry is lost.
     let files = pkg_files(b"BIN".to_vec(), false).expect("the files");
     assert_eq!(
         listed(&files),
         [
             ("/Library/Application Support/hello/bin/hello", 0o755),
-            ("/Library/Application Support/hello/hostkeeper-hook", 0o755),
             ("/Library/LaunchDaemons/hello.a.plist", 0o644),
             ("/Library/LaunchDaemons/hello.b.plist", 0o644),
         ]
     );
     assert_eq!(files[0].data, b"BIN");
-    assert_eq!(
-        text(&files, "/Library/Application Support/hello/hostkeeper-hook"),
-        PKG_HOOK
-    );
     assert_eq!(text(&files, "/Library/LaunchDaemons/hello.a.plist"), PKG_A);
     assert_eq!(text(&files, "/Library/LaunchDaemons/hello.b.plist"), PKG_B);
     for slot in ["a", "b"] {

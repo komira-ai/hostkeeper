@@ -160,6 +160,9 @@ pub fn commit_boot_stopping(
 pub enum Stage {
     /// A registration socket kbf's agent left is removed, before any unit is touched.
     UnlinkRegistrationSocket,
+    /// A `policy-rc.d` file hostkeeper wrote and a killed run left is removed, before any
+    /// package-manager call ([`hostkeeper_install::repository::policy::clear_stale`]).
+    ClearPolicyRcD,
     /// The leftovers of crashed package fetches and unpacks are removed.
     BeforeRecords,
     /// The placed links are finished or undone, and compared with `current`.
@@ -174,6 +177,9 @@ pub enum Stage {
     RunUpdates,
     /// The post-success watchers restart.
     RestartWatchers,
+    /// The run units of apt services that no enablement link starts are started
+    /// ([`Daemon::start_run_units`]).
+    StartRunUnits,
     /// The `boot` step of each service runs.
     BootSteps,
     /// The readiness notice is sent.
@@ -467,12 +473,16 @@ fn rebuild(
             .first()
             .map(PathBuf::from)
             .unwrap_or_default(),
+        hook_args: manifest.hook.command.iter().skip(1).cloned().collect(),
+        previous_hook: (params.previous_release().zip(params.previous_version()))
+            .and_then(|(dir, version)| Some((dir, Version::new(version).ok()?)))
+            .and_then(|(dir, v)| crate::target::previous_hook(&dir, service, &v, &ctx.own_version)),
         bounds: bounds(&manifest.hook),
         // Written to the params file when the update began; a resumed update does not write it.
         declared_params: Params::default(),
         min_updater_protocol: None,
         order_try: rec.order_try,
-        // As the update made it: a version with no hook program runs the built-in steps.
+        // As the update made it: a version whose manifest names no command runs the built-in steps.
         builtin_steps: crate::selfupdate::builtin_steps(service, manifest.min_hostkeeper)
             | manifest.hook.command.is_empty(),
     };
@@ -512,7 +522,7 @@ fn ran(ctx: &Ctx, service: &ServiceName, result: Result<Finished, RunError>) -> 
 /// The version `current` names in the package directory `dir`: `None` when there is no
 /// `current`. A `current` that is not a link, or not a link to a version directory beside it (one
 /// plain name that is a version), is refused: its tree is never run.
-fn current_version(dir: &Path) -> Result<Option<Version>, String> {
+pub(crate) fn current_version(dir: &Path) -> Result<Option<Version>, String> {
     let target = match fs::read_link(dir.join(CURRENT)) {
         Ok(target) => target,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -814,6 +824,7 @@ impl Daemon {
     /// notice, exactly once.
     pub fn after_boot(&self, report: &mut BootReport, notifier: &dyn ReadyNotifier) {
         let ctx = self.ctx();
+        self.start_run_units(report);
         report.stages.push(Stage::BootSteps);
         let names = installed::service_dirs(&ctx.dirs.packages).unwrap_or_else(|error| {
             ctx.alert(

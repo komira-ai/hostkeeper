@@ -173,6 +173,8 @@ pub struct Ran {
     pub executable: PathBuf,
     /// The staged release, given to `prepare` only.
     pub artifact: Option<PathBuf>,
+    /// The arguments given before the step.
+    pub hook_args: Vec<String>,
 }
 
 /// A step held inside the launcher, or a sleep held on the clock, until the test releases it.
@@ -434,6 +436,7 @@ impl StepLauncher for ScriptedLauncher {
             unit: call.unit.to_owned(),
             executable: call.executable.to_path_buf(),
             artifact: call.invocation.artifact.clone(),
+            hook_args: call.hook_args.to_vec(),
         });
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most_running.fetch_max(now, Ordering::SeqCst);

@@ -249,7 +249,7 @@ fn a_removal_takes_its_order_from_the_record() {
         order.bounds.remove,
         Duration::from_secs(REMOVE_SECS_WITHOUT_BOUNDS)
     );
-    assert!(!order.boot);
+    assert_eq!(order.hook, None);
     let named = repository
         .removal_order(&hello(), &entry())
         .expect("an order")

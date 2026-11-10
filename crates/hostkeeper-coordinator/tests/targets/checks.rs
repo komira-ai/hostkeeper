@@ -181,8 +181,8 @@ const SELF_THREE: [(&str, char, u64); 3] = [
 /// than 2 KiB of locators in an entry, an entry over 24 KiB, a manifest that breaks a rule, and
 /// for `hostkeeper` a list with a tarball entry, one with two entries and one with its archive
 /// entry before its native one; and of a native entry (packages-native.md, A18), a `macos-pkg`
-/// entry with an attestation and an entry of `macos-pkg` or `apt` with a hook command, and a
-/// boot step without a command on any other. Each refusal is the
+/// entry with an attestation, an entry of `macos-pkg` or `apt` with a relative hook program,
+/// and a boot step without a command on any entry. Each refusal is the
 /// rule the row names, which the check of `hostkeeper-release` states, and changes no file, adds
 /// no audit entry and leaves the version without a release.
 ///
@@ -352,16 +352,16 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
             "entry 0 of macos-arm64: the macos-pkg entry has an attestation; a package's signature and the pin are its trust, and no daemon checks one".to_owned(),
         ),
         (
-            "a macos-pkg entry with a hook command",
+            "a macos-pkg entry with a relative hook program",
             "web",
             mac(|pkg| {
                 let hook = pkg.manifest.as_mut().and_then(|m| m.hook.as_mut());
                 hook.expect("a hook").command = vec!["bin/web".to_owned()];
             }),
-            "entry 0 of macos-arm64: hook.command is set on a native entry; a native package's hook is its program at its fixed path".to_owned(),
+            "entry 0 of macos-arm64: hook.command names the program \"bin/web\", which is not absolute; on a native entry it is the absolute path of a file the package installs".to_owned(),
         ),
         (
-            "an apt entry with a hook command",
+            "an apt entry with a relative hook program",
             "web",
             BTreeMap::from([(
                 "linux-x86_64".to_owned(),
@@ -372,7 +372,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     apt
                 }]),
             )]),
-            "entry 0 of linux-x86_64: hook.command is set on a native entry; a native package's hook is its program at its fixed path".to_owned(),
+            "entry 0 of linux-x86_64: hook.command names the program \"bin/web\", which is not absolute; on a native entry it is the absolute path of a file the package installs".to_owned(),
         ),
         (
             "a boot step without a command on a deb entry",
