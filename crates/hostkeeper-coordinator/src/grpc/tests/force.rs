@@ -36,6 +36,7 @@ fn daemon_beat(features: &[&str]) -> proto::HeartbeatRequest {
         last_renew_error: None,
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 
@@ -70,6 +71,7 @@ async fn the_grpc_response_advertises_forced_v1_with_the_force() {
                     node_ids: vec!["d1".to_owned()],
                 })),
                 include_held: false,
+                host_group: String::new(),
             },
         )
         .expect("the force is made");

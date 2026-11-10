@@ -25,6 +25,13 @@ export function createClient(call) {
       removeRecord: (request) => call("hostkeeper.operator.v1.Enrollment/RemoveRecord", request),
       openRecord: (request) => call("hostkeeper.operator.v1.Enrollment/OpenRecord", request),
     }),
+    hostGroups: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.HostGroups/List", request),
+      get: (request) => call("hostkeeper.operator.v1.HostGroups/Get", request),
+      put: (request) => call("hostkeeper.operator.v1.HostGroups/Put", request),
+      remove: (request) => call("hostkeeper.operator.v1.HostGroups/Remove", request),
+      move: (request) => call("hostkeeper.operator.v1.HostGroups/Move", request),
+    }),
     hosts: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Hosts/List", request),
       get: (request) => call("hostkeeper.operator.v1.Hosts/Get", request),

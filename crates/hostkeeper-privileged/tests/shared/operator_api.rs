@@ -124,6 +124,7 @@ impl OperatorApi {
                 services: approval.services.iter().map(|s| (*s).to_owned()).collect(),
                 replace: approval.replace,
                 reason: approval.reason.to_owned(),
+                host_group: String::new(),
             },
             "ApproveResponse"
         )
@@ -361,6 +362,7 @@ impl OperatorApi {
             ReleasesClient.converge,
             ConvergeRequest {
                 service: service.to_owned(),
+                host_group: String::new(),
             },
             "ConvergeResponse"
         )

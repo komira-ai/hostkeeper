@@ -481,6 +481,7 @@ async fn an_update_plan_position_is_written_within_kbfs_readers(readers: &Reader
     let pause = hostkeeper_proto::hostkeeper::operator::v1::PauseRequest {
         service: "kbf".to_owned(),
         reason: "waiting for the maintainers".to_owned(),
+        host_group: String::new(),
     };
     let by =
         hostkeeper_coordinator::operator::Caller::Operator("operator".parse().expect("a name"));

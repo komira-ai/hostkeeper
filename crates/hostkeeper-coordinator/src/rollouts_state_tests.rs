@@ -805,6 +805,7 @@ async fn nothing_is_written_while_halted_bad_paused_or_quiet() {
             proto::PauseRequest {
                 service: WEB.to_owned(),
                 reason: "look first".to_owned(),
+                host_group: String::new(),
             },
         )
         .expect("paused");
@@ -821,6 +822,7 @@ async fn nothing_is_written_while_halted_bad_paused_or_quiet() {
             proto::ResumeRequest {
                 service: WEB.to_owned(),
                 reason: "looked".to_owned(),
+                host_group: String::new(),
             },
         )
         .expect("resumed");

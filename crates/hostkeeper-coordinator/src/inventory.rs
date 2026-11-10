@@ -407,6 +407,7 @@ fn record_proto(
             .platform
             .map_or(agent::Platform::Unspecified, platform_proto)
             .into(),
+        host_group: String::new(),
     }
 }
 

@@ -664,6 +664,7 @@ fn forced_scenario(name: &str, unadvertise: bool) -> Forced {
                     node_ids: vec!["host-1".to_owned()],
                 })),
                 include_held: false,
+                host_group: String::new(),
             },
         )
         .expect("the force is accepted");

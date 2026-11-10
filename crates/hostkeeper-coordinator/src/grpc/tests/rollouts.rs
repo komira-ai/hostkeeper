@@ -102,6 +102,7 @@ fn pause_request(service: &str, reason: &str) -> proto::PauseRequest {
     proto::PauseRequest {
         service: service.to_owned(),
         reason: reason.to_owned(),
+        host_group: String::new(),
     }
 }
 
@@ -109,6 +110,7 @@ fn resume_request(service: &str, reason: &str) -> proto::ResumeRequest {
     proto::ResumeRequest {
         service: service.to_owned(),
         reason: reason.to_owned(),
+        host_group: String::new(),
     }
 }
 
@@ -116,6 +118,7 @@ fn advance_request(service: &str, reason: &str) -> proto::AdvanceRequest {
     proto::AdvanceRequest {
         service: service.to_owned(),
         reason: reason.to_owned(),
+        host_group: String::new(),
     }
 }
 

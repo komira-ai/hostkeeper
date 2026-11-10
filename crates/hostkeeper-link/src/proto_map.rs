@@ -17,7 +17,8 @@
 //! reason (`TRUSTED_ROOT_REASON_NONE` for a root that needs no attention); a heartbeat with no
 //! report of the root leaves the age out and the reason unspecified, which the coordinator reads
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
-//! JSON route has no field for them either, nor for a service's installer.
+//! JSON route has no field for them either, nor for a service's installer. No facts generation
+//! goes out: the daemon does not announce `facts-v1`.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -27,7 +28,8 @@
 //! daemon's grammars read every word of it. The `repositories` set is kept as decoded, with no check of it: the daemon judges it. An `update`, `force` or `install` carries the `target`
 //! entry as decoded (see [`Entry`]), with no check of it: the daemon judges it. Any other order (a verb the daemon does not run, no verb, or a word the
 //! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
-//! why, for the link to log.
+//! why, for the link to log. The `facts` of a reply are not read: a coordinator sends them only
+//! to a daemon that announced `facts-v1`, which this one does not.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -81,6 +83,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
                 root.reason.map_or(pb::TrustedRootReason::None, root_reason)
             })
             .into(),
+        facts_generation: None,
     })
 }
 
@@ -246,6 +249,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         halt_generations,
         acks,
         repositories,
+        facts: _,
     } = response;
     let features = features
         .iter()

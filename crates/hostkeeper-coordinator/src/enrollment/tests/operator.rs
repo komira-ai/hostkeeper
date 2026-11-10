@@ -151,6 +151,7 @@ async fn an_operator_enrolls_a_real_daemon_request_end_to_end() {
                 services: vec!["kbf".to_owned()],
                 replace: false,
                 reason: "racked in row 4".to_owned(),
+                host_group: String::new(),
             },
         )
         .expect("approved");

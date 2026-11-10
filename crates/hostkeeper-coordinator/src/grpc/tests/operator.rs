@@ -202,6 +202,7 @@ fn audit(
         reason: reason.map(str::to_owned),
         at_unix: None,
         by_name: Some("operator".to_owned()),
+        host_group: None,
     })
 }
 

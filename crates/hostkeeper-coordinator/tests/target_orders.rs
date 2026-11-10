@@ -688,6 +688,7 @@ async fn a_force_to_a_version_set_with_targets_follows_the_pick() {
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;
@@ -811,6 +812,7 @@ async fn a_force_of_a_release_with_no_archive_orders_the_hosts_picked_an_entry()
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;

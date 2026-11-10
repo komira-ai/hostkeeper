@@ -11,6 +11,7 @@ mod enrollment;
 mod force;
 mod gateway;
 mod heartbeat;
+mod host_group_requests;
 mod hosts;
 mod install;
 mod limits;

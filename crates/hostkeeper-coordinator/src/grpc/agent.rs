@@ -42,6 +42,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         halt_generations: answer.halts.into_iter().collect(),
         acks: crate::verdict_file::to_proto(&answer.acks),
         repositories: None,
+        facts: None,
     }
 }
 

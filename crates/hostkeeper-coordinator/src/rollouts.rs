@@ -425,6 +425,7 @@ pub(crate) fn plan_proto(
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),
         finished: view.finished(),
         waiting_on,
+        host_group: String::new(),
     }
 }
 

@@ -80,6 +80,7 @@ fn record(platform: Platform) -> op::InventoryRecord {
         used_by_request_id: String::new(),
         used_unix: 0,
         platform: platform.into(),
+        host_group: String::new(),
     }
 }
 

@@ -244,6 +244,7 @@ pub fn approval(key: &HostKey, host: &str) -> ApproveRequest {
         services: vec!["kbf".to_owned()],
         replace: false,
         reason: "new rack".to_owned(),
+        host_group: String::new(),
     }
 }
 

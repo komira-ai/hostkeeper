@@ -42,7 +42,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 const FIELDS: [(&str, &[(&str, u32)]); 11] = [
     (
         "hostkeeper.operator.v1.AdvanceRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.AdvanceResponse",
@@ -50,7 +50,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
     ),
     (
         "hostkeeper.operator.v1.PauseRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.PauseResponse",
@@ -58,7 +58,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
     ),
     (
         "hostkeeper.operator.v1.ResumeRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.ResumeResponse",
@@ -77,6 +77,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
             ("pause_reason", 8),
             ("finished", 9),
             ("waiting_on", 10),
+            ("host_group", 11),
         ],
     ),
     (
@@ -120,6 +121,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
             ("slots_held", 6),
             ("marks", 7),
             ("plan", 8),
+            ("host_group", 9),
         ],
     ),
 ];
@@ -148,6 +150,8 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "not_paused",
                 "store_failed",
                 "audit_unavailable",
+                "ambiguous_host_group",
+                "not_in_host_group",
             ],
         ),
         (
