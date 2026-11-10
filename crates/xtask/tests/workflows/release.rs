@@ -92,7 +92,12 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 3] = ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"];
+pub const SHIPPED_BINARIES: [&str; 4] = [
+    "hostkeeper",
+    "hostkeeper-coordinator",
+    "hostkeeper-mdm",
+    "hostkeeper-coordinator-update",
+];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
 /// starts; each must also pass `--no-cache`.
@@ -156,12 +161,17 @@ pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
 
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's and the MDM kit's on the two Linux platforms. Each has a
-/// bundle and an attested SBOM (`<program>-<version>-<platform>.cdx.json`).
-pub const TARBALLS: [(&str, &[&str]); 3] = [
+/// every platform, the coordinator's, the MDM kit's and the coordinator updater's on the two
+/// Linux platforms. Each has a bundle and an attested SBOM
+/// (`<program>-<version>-<platform>.cdx.json`).
+pub const TARBALLS: [(&str, &[&str]); 4] = [
     ("hostkeeper", &PLATFORMS),
     ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
     ("hostkeeper-mdm", &["linux-x86_64", "linux-arm64"]),
+    (
+        "hostkeeper-coordinator-update",
+        &["linux-x86_64", "linux-arm64"],
+    ),
 ];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and

@@ -252,7 +252,7 @@ archives is moved instead (10.6).
 by the shared release machinery as tierstore's are, and its deployment updates it. Nothing of it changes here but
 `--release-channel`, which its deployment stops passing at 10.5 and A25 deletes.
 Its deployment updates it from every published release by itself: the coordinator's machine runs
-`xtask coordinator-update` from a timer, and a release waits until the coordinator runs it
+`hostkeeper-coordinator-update` (a release asset) from a timer, and a release waits until the coordinator runs it
 before it sets the hosts ([coordinator-update.md](../deploy/coordinator-update.md), which weighs
 this against making the coordinator a hostkeeper service).
 

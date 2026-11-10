@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `hostkeeper-pxe X.Y.Z`, with no commit |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the coordinator updater's `hostkeeper-coordinator-update X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `hostkeeper-pxe X.Y.Z`, with no commit |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -28,8 +28,8 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 `<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
 `<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
-`<rpm-arch>` is `x86_64` or `aarch64`. The debs, the rpms, the coordinator and the MDM kit's
-binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
+`<rpm-arch>` is `x86_64` or `aarch64`. The debs, the rpms, the coordinator, the MDM kit's
+binary and the coordinator updater's are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
@@ -49,6 +49,8 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
+| `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz` | the coordinator updater's binary, `hostkeeper-coordinator-update`, which the machine that runs the coordinator's container runs from a timer to roll the container forward to each attested release ([coordinator-update.md](coordinator-update.md)) |
+| `hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
 | `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, loads the daemon's job when launchd does not have it loaded and leaves a loaded one alone, so that an install the daemon itself runs never stops it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested. Also hostkeeper's native package on macOS: the release puts it in the `testing` directory of the installers |
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
@@ -140,6 +142,9 @@ hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm.sigstore.json
 hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 hostkeeper-mdm-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-mdm-<version>-<linux-platform>.cdx.json
+hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz
+hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz.sigstore.json
+hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
 hostkeeper-<version>-macos-arm64.pkg
 hostkeeper-<version>-macos-arm64.pkg.sigstore.json
 hello_<version>_<deb-arch>.deb
@@ -299,8 +304,9 @@ Refuse when: the same as step 3, or the bundle is absent.
 ### 5. SBOM attestation (optional)
 
 The SBOM is attested as well. Verify the binary tarball (the daemon's, the coordinator's
-`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`, or the MDM kit's
-`hostkeeper-mdm-<version>-<linux-platform>.tar.gz`) with the same identity flags as step 3 and
+`hostkeeper-coordinator-<version>-<linux-platform>.tar.gz`, the MDM kit's
+`hostkeeper-mdm-<version>-<linux-platform>.tar.gz`, or the coordinator updater's
+`hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`) with the same identity flags as step 3 and
 with `--predicate-type` set to the CycloneDX predicate type that `attest-sbom` records:
 
 ```sh
@@ -334,6 +340,10 @@ For the MDM kit, unpack `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` and r
 `./hostkeeper-mdm --version`; its output is, exactly,
 `hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>`.
 
+For the coordinator updater, unpack `hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`
+and run `./hostkeeper-coordinator-update --version`; its output is, exactly,
+`hostkeeper-coordinator-update <X.Y.Z>+<first 12 hex digits of $PIN>`.
+
 For the command line, `hkctl-<version>` is one bash script for every platform, with nothing to
 unpack. Make it executable under its own name and run it:
 
@@ -360,7 +370,8 @@ Before anything is published, the `verify` job of `release.yml`, on the files of
   released. Step 4 runs without `--custom-trusted-root`: the runner fetches the trusted root
   itself. Each command gets `--format json` added, so that the attestations it verified are read
   back, and each must name this commit and the file's SHA-256;
-- runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's and the MDM kit's
+- runs step 6 on the linux-x86_64 binaries, the daemon's, the coordinator's, the MDM kit's and
+  the coordinator updater's
   (`cargo xtask release check-binary`); `cargo xtask release check` holds `hkctl-<version>` to the
   expected output of step 6 too, by its one version line, without running it.
 
@@ -453,4 +464,6 @@ Do not use a release when any of these holds:
 - the build ran on a self-hosted runner;
 - the binary's `--version` differs from `hostkeeper <X.Y.Z>+<first 12 hex digits of $PIN>`
   (`hostkeeper-coordinator <X.Y.Z>+<first 12 hex digits of $PIN>` for the coordinator,
-  `hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>` for the MDM kit).
+  `hostkeeper-mdm <X.Y.Z>+<first 12 hex digits of $PIN>` for the MDM kit,
+  `hostkeeper-coordinator-update <X.Y.Z>+<first 12 hex digits of $PIN>` for the coordinator
+  updater).

@@ -550,6 +550,7 @@ fn passes(c: &Conditions, result: &str, cancelled: bool) -> bool {
     let context = Context {
         names: BTreeMap::from([("needs.test-shard.result".to_owned(), result.to_owned())]),
         cancelled,
+        failed: false,
     };
     let runs = match &c.job {
         // GitHub's default: success() of the needs, false in a cancelled run.
@@ -596,6 +597,7 @@ fn the_gate_check_passes_only_when_every_shard_passed_in_a_run_not_cancelled() {
             let context = Context {
                 names: BTreeMap::from([("needs.test-shard.result".to_owned(), result.to_owned())]),
                 cancelled,
+                failed: false,
             };
             assert!(
                 holds(c.job.as_deref().expect("an if"), &context).expect("the gate's if"),
