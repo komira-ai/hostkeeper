@@ -12,6 +12,7 @@ use hyper::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use hyper::{Method, Request, StatusCode};
 
 use super::support::{Served, enrollment_in, peer, raw, served_built, updater};
+use crate::host_groups_support::{SELF, body, enroll_host, move_of, put_of};
 use crate::http::{Peer, Surface};
 use crate::marks_support::operator;
 use crate::repositories_support::{credential_in, private, repository};
@@ -557,4 +558,73 @@ async fn a_group_the_repository_does_not_list_is_not_served() {
         (StatusCode::NOT_FOUND, NOT_FOUND.as_bytes())
     );
     assert_eq!(set.fake.dials(), 0);
+}
+
+/// Proves: once the store holds a host group, a host is served the paths of the group its
+/// enrollment record holds, not the role its certificate names: `d1`, whose certificate names
+/// `daemon` and whose record is moved into `storage`, is served `storage`'s path and refused
+/// `daemon`'s; `d2`, enrolled and in no group, is refused both; before any group exists the
+/// certificate's role still decides.
+///
+/// Catches: a group-mode host that is refused the suite its own repository set names, because
+/// the route read the role of its certificate.
+#[tokio::test]
+async fn in_group_mode_a_host_is_served_the_group_its_record_holds() {
+    let fake = FakeOrigin::new();
+    let dir = scratch("serve-group-mode");
+    let file = credential_in(dir.path(), "priv-credential", TOKEN);
+    let client = RepositoryOrigin::new(fake.roots())
+        .expect("a client")
+        .with_dial(fake.dial(Arc::new(serving)));
+    let mut enrollment = None;
+    let served = served_built("serve-group-mode", |scratch, clock| {
+        let held = enrollment_in(scratch);
+        enrollment = Some(Arc::clone(&held));
+        Rig::start(scratch, clock)
+            .with_enrollment(held)
+            .with_repository_origin(client)
+    });
+    let enrollment = enrollment.expect("enrollment");
+    served
+        .coordinator
+        .repositories_put(
+            &operator(),
+            proto::PutRepositoryRequest {
+                repository: Some(private("priv", URI, &["daemon", "storage"], 1, &file)),
+                reason: "for a test".to_owned(),
+            },
+        )
+        .expect("put");
+    enroll_host(&enrollment, "d1");
+    enroll_host(&enrollment, "d2");
+    let status = |who: &Peer, group: &'static str| {
+        let coordinator = Arc::clone(&served.coordinator);
+        let who = who.clone();
+        async move {
+            let request = Request::builder()
+                .uri(format!("/repositories/priv/dists/{group}/InRelease"))
+                .body(Full::new(Bytes::new()))
+                .expect("a request");
+            raw(&coordinator, Surface::Heartbeat, &who, request).await.0
+        }
+    };
+    let (d1, d2) = (host("d1", "daemon"), host("d2", "daemon"));
+    assert_eq!(status(&d1, "daemon").await, StatusCode::OK);
+
+    served
+        .coordinator
+        .host_groups_put(&operator(), put_of(body("storage", &[SELF], None), None))
+        .expect("put group");
+    served
+        .coordinator
+        .host_groups_move(&operator(), move_of("d1", "storage"))
+        .expect("moved");
+
+    assert_eq!(status(&d1, "daemon").await, StatusCode::NOT_FOUND);
+    // The origin has no such file, and says so with a 500 in this fake: the group was served.
+    assert_eq!(status(&d1, "storage").await, StatusCode::BAD_GATEWAY);
+    assert!(fake.heard()[1].starts_with("GET /apt/dists/storage/InRelease "));
+    assert_eq!(status(&d2, "daemon").await, StatusCode::NOT_FOUND);
+    assert_eq!(status(&d2, "storage").await, StatusCode::NOT_FOUND);
+    assert_eq!(fake.heard().len(), 2);
 }

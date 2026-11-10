@@ -537,16 +537,28 @@ impl Coordinator {
     }
 
     /// Notes that the daemon of `who` announces `target-v1`, lists `apt` and runs each service the
-    /// coordinator manages with it, as its heartbeat over gRPC says it.
+    /// coordinator manages, and each package a host group lists, with it, as its heartbeat over
+    /// gRPC says it.
     pub(crate) fn hear_apt(&self, who: &crate::identity::Identity) {
+        let listed: std::collections::BTreeSet<String> = self
+            .services
+            .names()
+            .map(str::to_owned)
+            .chain(
+                self.desired
+                    .host_groups()
+                    .0
+                    .values()
+                    .flat_map(|group| group.packages.clone()),
+            )
+            .collect();
         let request = agent::HeartbeatRequest {
             features: vec![TARGET_FEATURE.to_owned()],
             installers: vec!["apt".to_owned()],
-            services: self
-                .services
-                .names()
+            services: listed
+                .into_iter()
                 .map(|name| agent::ServiceBeat {
-                    name: name.to_owned(),
+                    name,
                     installer: Some("apt".to_owned()),
                     ..agent::ServiceBeat::default()
                 })

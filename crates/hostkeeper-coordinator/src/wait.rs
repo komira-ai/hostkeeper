@@ -28,6 +28,7 @@ use tokio::sync::{OwnedSemaphorePermit, Semaphore, watch};
 use tokio::time::Instant;
 
 use crate::converge::{Convergence, State};
+use crate::group_converge::Scope;
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
 
@@ -48,6 +49,9 @@ pub enum WaitRefused {
     /// [`MAX_WAITS`] waits are held already.
     #[error("too many waits are held")]
     TooMany,
+    /// The host group named is not held or does not list the service.
+    #[error("the service is not in the host group")]
+    NotInHostGroup,
 }
 
 /// The waits of one coordinator: the signal that something may have changed, and the slots.
@@ -100,10 +104,18 @@ impl Waits {
     }
 }
 
-/// A wait the coordinator holds: its service and its slot, given back when it is dropped.
+/// A wait the coordinator holds: what it waits on and its slot, given back when it is dropped.
 pub(crate) struct Held<'a> {
-    def: &'a ServiceDef,
+    target: Target<'a>,
     _slot: OwnedSemaphorePermit,
+}
+
+/// What a wait reads at each turn.
+enum Target<'a> {
+    /// A service of the rollout file.
+    Service(&'a ServiceDef),
+    /// A package in the groups `scope` reaches, which a `Put` may change while the wait is held.
+    Groups { package: String, scope: Scope },
 }
 
 /// What a read of `convergence` says of a wait for `version`: its end, or `None` to go on.
@@ -119,20 +131,56 @@ pub(crate) fn outcome_of(convergence: &Convergence, version: &str) -> Option<Wai
 }
 
 impl Coordinator {
-    /// A slot for a wait on `service`.
+    /// A slot for a wait on `service` in the host group `host_group` (empty: every group that
+    /// lists it, once the coordinator holds one).
     ///
     /// # Errors
     /// [`WaitRefused::UnknownService`]: the coordinator manages no such service;
+    /// [`WaitRefused::NotInHostGroup`]: the group is unknown or does not list it;
     /// [`WaitRefused::TooMany`]: [`MAX_WAITS`] waits are held already.
-    pub(crate) fn hold_wait(&self, service: &str) -> Result<Held<'_>, WaitRefused> {
-        let def = self
-            .services
-            .get(service)
-            .ok_or(WaitRefused::UnknownService)?;
+    pub(crate) fn hold_wait(
+        &self,
+        service: &str,
+        host_group: &str,
+    ) -> Result<Held<'_>, WaitRefused> {
+        let target = match self.scope_of(host_group, service)? {
+            Scope::Service => Target::Service(
+                self.services
+                    .get(service)
+                    .ok_or(WaitRefused::UnknownService)?,
+            ),
+            scope => Target::Groups {
+                package: service.to_owned(),
+                scope,
+            },
+        };
         let slot = Arc::clone(&self.waits.slots)
             .try_acquire_owned()
             .map_err(|_| WaitRefused::TooMany)?;
-        Ok(Held { def, _slot: slot })
+        Ok(Held {
+            target,
+            _slot: slot,
+        })
+    }
+
+    /// What a read of the convergence `held` waits on says of a wait for `version`: its end, if it
+    /// ends the wait, and the convergence read. With host groups, a wait that reaches no group
+    /// with a desired version ends as `NO_DESIRED`.
+    fn read_wait(&self, held: &Held<'_>, version: &str) -> (Option<WaitOutcome>, Convergence) {
+        match &held.target {
+            Target::Service(def) => {
+                let convergence = self.convergence_of_def(def);
+                (outcome_of(&convergence, version), convergence)
+            }
+            Target::Groups { package, scope } => {
+                let reading = self.read_groups(package, scope, Some(version));
+                let outcome = match reading.pairs {
+                    0 => Some(WaitOutcome::NoDesired),
+                    _ => outcome_of(&reading.convergence, version),
+                };
+                (outcome, reading.convergence)
+            }
+        }
     }
 
     /// Waits, for at most `wait` (on tokio's clock), until a read of the convergence of the
@@ -149,8 +197,8 @@ impl Coordinator {
         // Subscribed before the first read: a change after it is seen by the next.
         let mut changes = self.waits.changes.subscribe();
         loop {
-            let convergence = self.convergence_of_def(held.def);
-            if let Some(outcome) = outcome_of(&convergence, version) {
+            let (ended, convergence) = self.read_wait(held, version);
+            if let Some(outcome) = ended {
                 return (outcome, convergence);
             }
             #[cfg(test)]
@@ -158,9 +206,8 @@ impl Coordinator {
             tokio::select! {
                 Ok(()) = changes.changed() => {}
                 () = tokio::time::sleep_until(deadline) => {
-                    let convergence = self.convergence_of_def(held.def);
-                    let outcome = outcome_of(&convergence, version).unwrap_or(WaitOutcome::Deadline);
-                    return (outcome, convergence);
+                    let (ended, convergence) = self.read_wait(held, version);
+                    return (ended.unwrap_or(WaitOutcome::Deadline), convergence);
                 }
             }
         }

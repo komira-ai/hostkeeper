@@ -52,6 +52,7 @@ pub(crate) fn settle(ops: &OpsStore, services: &Services, fleet: &mut Fleet, id:
         let mut audit = AuditEntry::new(COORDINATOR, action);
         audit.service = Some(service.clone());
         audit.node_id = Some(id.to_string());
+        audit.host_group = services.group().map(ToString::to_string);
         let cleared = ops.change(Write::BeforeMemory, audit, |state| {
             state
                 .assignments

@@ -154,6 +154,10 @@ pub struct ServiceDef {
     /// none. Whether the registry holds it is not checked here: a registry is changed while the
     /// file stands.
     pub repository: String,
+    /// The host group whose policy and place in the group's list this definition stands for, when
+    /// it was made for a decision by group ([`crate::group_scope`]); none for a service of the
+    /// rollout file.
+    pub(crate) scope: Option<crate::group_scope::GroupScope>,
 }
 
 /// The repository a service names when its table has no `repository`.
@@ -162,7 +166,6 @@ pub const DEFAULT_REPOSITORY: &str = "komira";
 impl ServiceDef {
     /// A service named `name` that runs on the roles `roles`, with every other setting at its
     /// default.
-    #[cfg(test)]
     pub(crate) fn new(name: &str, roles: &[&str]) -> Self {
         Self {
             name: name.to_owned(),
@@ -178,6 +181,7 @@ impl ServiceDef {
             min_version: None,
             defer_backoff: DeferBackoff::default(),
             repository: DEFAULT_REPOSITORY.to_owned(),
+            scope: None,
         }
     }
 
@@ -390,6 +394,7 @@ fn service_def(
         min_version,
         defer_backoff,
         repository,
+        scope: None,
     })
 }
 
@@ -453,7 +458,6 @@ impl Services {
     }
 
     /// The services `defs` and nothing else.
-    #[cfg(test)]
     pub(crate) fn from_defs(defs: Vec<ServiceDef>) -> Self {
         Self {
             defs: defs
@@ -461,6 +465,14 @@ impl Services {
                 .map(|def| (def.name.clone(), def))
                 .collect(),
         }
+    }
+
+    /// The host group these services were made for ([`crate::group_scope`]): none for the
+    /// services of a rollout file and for no services at all.
+    pub(crate) fn group(&self) -> Option<&crate::host_groups::GroupName> {
+        self.defs
+            .values()
+            .find_map(|def| def.scope.as_ref().map(|scope| &scope.group))
     }
 
     /// Every service the coordinator manages, by name.

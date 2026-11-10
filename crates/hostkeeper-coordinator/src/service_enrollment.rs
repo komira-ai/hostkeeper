@@ -68,10 +68,12 @@ impl Coordinator {
 
     /// With enrollment, notes that the heartbeat `beat` of `host`, heard as `node` at `now`,
     /// reported a service serving ([`Enrollment::note_serving`], which keeps the first since the
-    /// host's approval), when it did: a service of this coordinator that counts the host as
-    /// present, other than the agent itself, healthy, with no update of it under way.
+    /// host's approval), when it did: a service of `services` (those the heartbeat is decided
+    /// over: the rollout file's, or the host's group's) that counts the host as present, other than
+    /// the agent itself, healthy, with no update of it under way.
     pub(super) fn note_serving(
         &self,
+        services: &crate::services::Services,
         host: &hostkeeper_wire::HostId,
         node: &Node,
         beat: &Heartbeat,
@@ -85,8 +87,7 @@ impl Coordinator {
             one.health == Health::Healthy
                 && one.updating.is_none()
                 && !runs_itself(node, &one.name)
-                && self
-                    .services
+                && services
                     .get(&one.name)
                     .is_some_and(|def| membership(def, host, node, ops, now) == Membership::Present)
         });
@@ -159,7 +160,9 @@ impl Coordinator {
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
         let unknown = crate::trusted_root::TrustedRootSaid::default();
-        self.reply_to(who, beat, false, (Turn::Hold, unknown));
+        let fleet = self.lock_fleet();
+        let basis = self.basis_of(&host);
+        self.reply_to(fleet, who, beat, false, (Turn::Hold, unknown), &basis);
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
             self.running.forget(&host);

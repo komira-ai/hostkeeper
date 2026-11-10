@@ -38,6 +38,9 @@
 //! goes to each host it orders at every heartbeat until the host runs the version, is running the force, or
 //! reported a verdict of it ([`crate::orders`]); a host that reported the force failed is not
 //! ordered again, and a second force orders it again.
+//!
+//! Once the coordinator holds a host group the force is a deployment to groups (`group_force.rs`):
+//! it sets the group's desired version and keeps its marks in the group.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -50,6 +53,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::host_groups::GroupName;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
 use crate::picks::Pick;
@@ -151,6 +155,12 @@ pub struct Plan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownTarget;
 
+impl From<UnknownTarget> for proto::ReleasesRefusal {
+    fn from(UnknownTarget: UnknownTarget) -> Self {
+        Self::UnknownTarget
+    }
+}
+
 /// Whom a force of `def` to `version` with `targets` orders in `fleet` at `now`: the hosts of
 /// the service the targets name, less the held pairs (unless `include_held`), the hosts whose
 /// daemon did not announce [`FEATURE`] and those the pick finds no entry for. A pure function: it
@@ -171,7 +181,7 @@ pub fn plan(
     let mut plan = Plan::default();
     let members = || {
         fleet
-            .hosts_of(service)
+            .hosts_in(def)
             .filter(|(_, host)| def.roles.contains(host.role_name()))
     };
     let targeted: Vec<(HostId, Version)> = match targets {
@@ -219,7 +229,7 @@ pub fn plan(
     }
     for other in services.defs() {
         let name = other.name.as_str();
-        for (id, host) in fleet.occupants_of(name) {
+        for (id, host) in fleet.occupants_in(other) {
             let forced = name == service && plan.ordered.contains(id);
             if !forced && fleet.holds_slot(name, id, host, now) {
                 plan.passed.push(format!("{id}:{name}"));
@@ -243,6 +253,8 @@ fn unordered(service: &str, version: &Version, id: &HostId, fleet: &Fleet) -> Op
 
 /// What a force writes to the ops file, as the call and its [`Plan`] decided it.
 struct Forcing<'a> {
+    /// The host group whose package is forced; none for a service of the rollout file.
+    group: Option<&'a GroupName>,
     service: &'a str,
     version: &'a Version,
     release: &'a Release,
@@ -276,62 +288,66 @@ impl Forcing<'_> {
     }
 
     /// Makes the force's changes to `state` and answers its audit entries, in order: `force`,
-    /// then `unmark_bad`, `mark_bad` and `clear_halt` as they apply.
+    /// then `unmark_bad`, `mark_bad` and `clear_halt` as they apply. For a group's package the
+    /// marks are the group's (the halt, the force and their generations) beside the package's
+    /// versions marked bad ([`OpsState::edit_marks_in`]), and the entries name the group.
     fn apply(&self, state: &mut OpsState) -> Vec<AuditEntry> {
         let (service, version) = (self.service, self.version);
         let entry = |action: &str, reason: String| {
             let mut entry = AuditEntry::new(self.by, action);
             entry.service = Some(service.to_owned());
+            entry.host_group = self.group.map(ToString::to_string);
             entry.reason = Some(reason);
             entry
         };
         let mut entries = vec![entry("force", self.summary())];
-        let marks = state.services.entry(service.to_owned()).or_default();
-        marks.force_generation = marks.force_generation.saturating_add(1);
-        marks.halt_generation = marks.halt_generation.saturating_add(1);
-        if marks.bad.contains(version) {
-            marks.bad.retain(|bad| bad != version);
-            marks.bad_by_force.retain(|bad| bad != version);
-            entries.push(entry("unmark_bad", format!("{version} is forced")));
-        }
-        for left in &self.plan.left {
-            if !marks.bad.contains(left) {
-                marks.bad.push(left.clone());
-                marks.bad_by_force.push(left.clone());
+        state.edit_marks_in(self.group, service, |marks| {
+            marks.force_generation = marks.force_generation.saturating_add(1);
+            marks.halt_generation = marks.halt_generation.saturating_add(1);
+            if marks.bad.contains(version) {
+                marks.bad.retain(|bad| bad != version);
+                marks.bad_by_force.retain(|bad| bad != version);
+                entries.push(entry("unmark_bad", format!("{version} is forced")));
+            }
+            for left in &self.plan.left {
+                if !marks.bad.contains(left) {
+                    marks.bad.push(left.clone());
+                    marks.bad_by_force.push(left.clone());
+                    entries.push(entry(
+                        "mark_bad",
+                        format!("{left} is left by the force to {version}"),
+                    ));
+                }
+            }
+            if let Some(halt) = marks.halt.take() {
+                let seen = std::mem::take(&mut marks.halt_seen);
+                for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
+                    marks.halt_acked.retain(|ack| ack.node_id != report.node_id);
+                    marks.halt_acked.push(report);
+                }
                 entries.push(entry(
-                    "mark_bad",
-                    format!("{left} is left by the force to {version}"),
+                    "clear_halt",
+                    format!("cleared by the force to {version}"),
                 ));
             }
-        }
-        if let Some(halt) = marks.halt.take() {
-            let seen = std::mem::take(&mut marks.halt_seen);
-            for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
-                marks.halt_acked.retain(|ack| ack.node_id != report.node_id);
-                marks.halt_acked.push(report);
-            }
-            entries.push(entry(
-                "clear_halt",
-                format!("cleared by the force to {version}"),
-            ));
-        }
-        marks.force = Some(ForceRecord {
-            version: version.clone(),
-            generation: marks.force_generation,
-            reason: self.reason.to_owned(),
-            by: self.by.to_owned(),
-            digest: match self.release {
-                Release::Package(digest) => digest.clone(),
-                Release::Index(record) => record.digest.clone(),
-            },
-            release_index: match self.release {
-                Release::Package(_) => None,
-                Release::Index(record) => Some(record.clone()),
-            },
-            halt_generation: marks.halt_generation,
-            targets: self.targets.clone(),
-            include_held: self.include_held,
-            hosts: self.plan.ordered.iter().map(ToString::to_string).collect(),
+            marks.force = Some(ForceRecord {
+                version: version.clone(),
+                generation: marks.force_generation,
+                reason: self.reason.to_owned(),
+                by: self.by.to_owned(),
+                digest: match self.release {
+                    Release::Package(digest) => digest.clone(),
+                    Release::Index(record) => record.digest.clone(),
+                },
+                release_index: match self.release {
+                    Release::Package(_) => None,
+                    Release::Index(record) => Some(record.clone()),
+                },
+                halt_generation: marks.halt_generation,
+                targets: self.targets.clone(),
+                include_held: self.include_held,
+                hosts: self.plan.ordered.iter().map(ToString::to_string).collect(),
+            });
         });
         entries
     }
@@ -339,7 +355,7 @@ impl Forcing<'_> {
 
 /// The targets of a force request, checked: a fleet target must confirm the service by name, a
 /// role must be a role name, a host list must name one host at least, each a node id.
-fn targets_of(
+pub(crate) fn targets_of(
     service: &str,
     targets: Option<Targets>,
 ) -> Result<ForceTargets, proto::ReleasesRefusal> {
@@ -407,24 +423,40 @@ pub(crate) fn end_by_setter(
     set_by: &str,
 ) -> Result<bool, OpsError> {
     let ended = ops.decide_change(Write::BeforeMemory, |state| {
-        let force = state
-            .services
-            .get_mut(service)
-            .and_then(|marks| marks.force.take_if(|force| force.version != *version))
-            .ok_or(Kept::Standing)?;
-        let mut entry = AuditEntry::new(actor, "force_ended");
-        entry.service = Some(service.to_owned());
-        entry.reason = Some(format!(
-            "{version} set by {set_by}; the force to {} ends",
-            force.version
-        ));
-        Ok::<_, Kept>(entry)
+        end(state, None, service, version, actor, set_by).ok_or(Kept::Standing)
     });
     match ended {
         Ok(_) => Ok(true),
         Err(Kept::Standing) => Ok(false),
         Err(Kept::Store(why)) => Err(why),
     }
+}
+
+/// Ends the standing force of `service` in `state` as [`end_by_setter`] does, and answers the
+/// audit entry of the end; `None` when no force of another version stands. A force of a service
+/// made for a host group stands in the group.
+pub(crate) fn end(
+    state: &mut OpsState,
+    group: Option<&crate::host_groups::GroupName>,
+    service: &str,
+    version: &Version,
+    actor: &str,
+    set_by: &str,
+) -> Option<AuditEntry> {
+    let ends =
+        |marks: &mut crate::ops::ServiceOps| marks.force.take_if(|force| force.version != *version);
+    let force = match group {
+        None => state.services.get_mut(service).and_then(ends),
+        Some(_) => state.edit_marks_in(group, service, ends),
+    }?;
+    let mut entry = AuditEntry::new(actor, "force_ended");
+    entry.service = Some(service.to_owned());
+    entry.host_group = group.map(ToString::to_string);
+    entry.reason = Some(format!(
+        "{version} set by {set_by}; the force to {} ends",
+        force.version
+    ));
+    Some(entry)
 }
 
 impl Coordinator {
@@ -444,6 +476,12 @@ impl Coordinator {
         request: proto::ForceRequest,
     ) -> Result<proto::ForceResponse, proto::ReleasesRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.force_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::ReleasesRefusal::NotInHostGroup);
+        }
         if request.service == SELF_SERVICE {
             return Err(proto::ReleasesRefusal::SelfService);
         }
@@ -489,8 +527,7 @@ impl Coordinator {
             request.include_held,
             &fleet,
             now,
-        )
-        .map_err(|UnknownTarget| proto::ReleasesRefusal::UnknownTarget)?;
+        )?;
         // The desired state and the force's entries are one commit: a force whose commit fails
         // changes nothing, in storage or in memory. A registered digest comes only with a desired
         // state CI set, so there is one; its limits are kept.
@@ -504,6 +541,7 @@ impl Coordinator {
         let marks = self.ops.marks(&def.name);
         let staged = self.desired.stage(&def.name, wanted, |v| kept(&marks, v));
         let forcing = Forcing {
+            group: None,
             service: &def.name,
             version: &version,
             release: &release,
@@ -551,3 +589,6 @@ fn recorded(release: &Stored) -> Option<Release> {
         .or_else(|| Digest::parse(&stored).ok())
         .map(Release::Package)
 }
+
+#[path = "group_force.rs"]
+mod groups;

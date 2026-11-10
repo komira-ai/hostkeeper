@@ -364,7 +364,10 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_ROLLOUT_ELSEWHERE"
     | "GATE_REASON_NO_TARGET"
     | "GATE_REASON_NO_BUILD_FOR_HOST"
-    | "GATE_REASON_INSTALLER_DROPPED";
+    | "GATE_REASON_INSTALLER_DROPPED"
+    | "GATE_REASON_INSTALL_ORDER"
+    | "GATE_REASON_MOVING"
+    | "GATE_REASON_UNINSTALL_ORDER";
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }
   export interface GetHostGroupResponse {
     hostGroup?: hostkeeper_operator_v1.HostGroupState;

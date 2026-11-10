@@ -455,7 +455,10 @@ duplicate claim or a renewal, or whose record names no role. Approving by hand d
 record used. An approval names the request, its key hash, the host's role, the services to assign (each one
 the coordinator's rollout file defines; none is allowed) and a reason. The role is required even
 when the record names one: the record's role is shown, not applied. The certificate is not in the
-answer: the host takes it at its next poll, within seconds.
+answer: the host takes it at its next poll, within seconds. Where the coordinator holds host
+groups ([hostgroups.md](hostgroups.md)), the role and the services an approval names place
+nothing: the host is in no group and is ordered nothing until `hkctl host-groups move` puts it in
+one.
 
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
@@ -672,9 +675,9 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no role | give one field, within the maximum, for a record with a role |
 | `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
-| `services_retired` | INVALID_ARGUMENT | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
-| `host_group_differs` | FAILED_PRECONDITION | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
-| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` with `--host-group` naming a group the coordinator does not hold; this release's coordinator holds no host group, so it refuses every `--host-group` | leave out `--host-group`; name the role with `--role` |
+| `services_retired` | INVALID_ARGUMENT | only a coordinator that holds host groups gives it; this release's coordinator never gives it, since `approve` and `add-record` do not place by group yet | none in this release |
+| `host_group_differs` | FAILED_PRECONDITION | only a coordinator that holds host groups gives it; this release's coordinator never gives it, since `approve` and `add-record` do not place by group yet | none in this release |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` with `--host-group` naming a group the coordinator does not hold; `approve` and `add-record` do not place by group yet, so this release's coordinator refuses every `--host-group`, also where it holds groups | leave out `--host-group`; name the role with `--role`, and put the host in a group with `hkctl host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
 
 ## Refusals of the host's calls
 

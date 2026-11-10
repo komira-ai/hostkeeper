@@ -444,14 +444,26 @@ fn numbering_continues(subject: &dyn Subject) -> Outcome {
 fn audit_pages(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
     let state = OpsState::default();
-    let held = lines(1, 12);
+    // The lines numbered 1 to 8 name a host group: `alpha` for the odd ones, `beta` for 2 and 6.
+    let held: Vec<AuditLine> = lines(1, 12)
+        .into_iter()
+        .map(|line| {
+            let mut logged = line.into_logged();
+            logged.entry.host_group = match logged.entry.seq {
+                1..=8 if logged.entry.seq % 2 == 1 => Some("alpha".to_owned()),
+                2 | 6 => Some("beta".to_owned()),
+                _ => None,
+            };
+            AuditLine::of(&logged.entry, logged.at_unix.unwrap_or_default())
+        })
+        .collect();
     live.commit(&Commit {
         ops: Some((&state, &state)),
         audit: &held,
         ..Commit::default()
     })
     .map_err(|why| format!("the commit failed: {why}"))?;
-    let filters: [(&str, Filter<'_>); 8] = [
+    let filters: [(&str, Filter<'_>); 10] = [
         ("every", Filter::default()),
         (
             "by",
@@ -503,6 +515,21 @@ fn audit_pages(subject: &dyn Subject) -> Outcome {
                 ..Filter::default()
             },
         ),
+        (
+            "group",
+            Filter {
+                host_group: Some("alpha"),
+                ..Filter::default()
+            },
+        ),
+        (
+            "group and service",
+            Filter {
+                host_group: Some("beta"),
+                service: Some("kbf"),
+                ..Filter::default()
+            },
+        ),
     ];
     for (name, filter) in filters {
         for (since_seq, limit, newest) in [(0, 5, false), (4, 3, false), (0, 4, true), (9, 5, true)]
@@ -533,6 +560,27 @@ fn audit_pages(subject: &dyn Subject) -> Outcome {
                 )
             })?;
         }
+    }
+    for (group, seqs) in [
+        ("alpha", vec![1, 3, 5, 7]),
+        ("beta", vec![2, 6]),
+        ("gamma", vec![]),
+    ] {
+        let page = live
+            .audit_page(&Query {
+                since_seq: 0,
+                limit: 50,
+                newest: false,
+                filter: Filter {
+                    host_group: Some(group),
+                    ..Filter::default()
+                },
+            })
+            .map_err(|why| format!("a page could not be read: {why}"))?;
+        let found: Vec<u64> = page.iter().map(|logged| logged.entry.seq).collect();
+        check(found == seqs, || {
+            format!("the lines of {group} are {found:?}")
+        })?;
     }
     Ok(())
 }

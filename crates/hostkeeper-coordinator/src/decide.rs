@@ -2,7 +2,9 @@
 //! now (`docs/design/host-updates.md`; design 5.4 and 5.7).
 //!
 //! A pure function of the services, their desired states, the fleet the heartbeats built, the
-//! host and the time, decided per host and service. A host runs the services the coordinator
+//! host and the time, decided per host and service. In group mode ([`crate::group_scope`]) the
+//! services are the packages of the host's group, made with the group's policy, and the desired
+//! states are the group's: the rules are the same. A host runs the services the coordinator
 //! assigns to it ([`crate::assignment`]: by its role in the rollout file, with the operator's
 //! entries on top), and nothing else: a service not assigned to the host is never ordered,
 //! whether the host runs it or not, unless an operator's `Unassign` ordered the host to
@@ -28,8 +30,10 @@
 //! 5. the host did not decline an update to this version within its wait
 //!    ([`crate::defer`]; a deferral is not a failure, holds no slot, and a new desired
 //!    version lifts it);
-//! 6. the service's update plan lets the host go now ([`crate::stages::gate`]): its rollout is
-//!    live, or fewer other services' rollouts are than the coordinator's `--live-rollouts`
+//! 6. in a host group, an install waits while a package listed before it is not installed on the
+//!    host and can be (`install_order`, [`crate::install_order`]), so the host takes no place in
+//!    the plan; then the service's update plan lets the host go now ([`crate::stages::gate`]):
+//!    its rollout is live, or fewer other services' rollouts are than the coordinator's `--live-rollouts`
 //!    (`rollout_elsewhere`); the plan is not paused (`paused`); and the host holds a free place
 //!    of the plan's current stage (the hosts that started count first; the free places go to
 //!    the eligible hosts that have not started, by node id, passing over a host that is
@@ -48,6 +52,13 @@
 //!    selector, not announcing it) still holds its slot until its beats or its order's age free
 //!    it ([`Fleet::occupants_of`]).
 //!
+//! A host moved into its group ([`crate::moving`]) is told [`Gate::Moving`] for every package, before
+//! every rule above but a halt, until the group's plans admit it and, if its daemon announced
+//! `facts-v1`, it has reported the generation of its facts. Once admitted, its installs and
+//! updates wait for its uninstalls (`moving`), and the plan's gate (rule 6 from `stages::gate`, and
+//! the `rollout_elsewhere` and `no_slot` of an uninstall) is not asked of the packages and
+//! versions it was admitted to; every other rule holds as for any host.
+//!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
 //! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
 //! minimum version that applies to the host ([`Gate::BelowMinVersion`]: its own, else its
@@ -57,7 +68,9 @@
 //!
 //! An uninstall is ordered to a host that lists the service, is not assigned it, and has an
 //! uninstall intent for it, under the halt, the hold, the quiet start, the one update at a time
-//! on the host (rule 2) and the other services' live rollouts (`rollout_elsewhere`); one that
+//! on the host (rule 2) and the other services' live rollouts (`rollout_elsewhere`); in a host
+//! group it also takes a slot of the group's `max_updating` (`no_slot`), and a host's intents are
+//! offered lowest generation first ([`crate::group_scope`]); one that
 //! failed is left for the operator, and one the host declined waits
 //! out its backoff, keyed by the version the host runs.
 //!
@@ -95,7 +108,8 @@ use serde::Serialize;
 
 use crate::agent_service::runs_itself;
 use crate::desired::Desired;
-use crate::fleet::Fleet;
+use crate::fleet::{Fleet, Host};
+use crate::install_order;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::INSTALL_FEATURE;
 use crate::registry::Digest;
@@ -168,6 +182,18 @@ pub enum Gate {
     /// The service's rollout is not live and other services' are, as many as the coordinator's
     /// `--live-rollouts` lets be.
     RolloutElsewhere,
+    /// In a host group ([`crate::group_scope`]): a package listed before this one is not installed
+    /// on the host yet, and can be ([`crate::install_order`]). The install waits, and takes no
+    /// place of its plan.
+    InstallOrder,
+    /// In a host group: a package whose uninstall goes before this one's, because the group listed
+    /// it after this one, is still on the host ([`crate::install_order::uninstall_waits`]). The
+    /// uninstall waits.
+    UninstallOrder,
+    /// In a host group: the host was moved into its group and its move has not started or is not
+    /// over. It is ordered nothing until the group's plans admit it and its daemon has reported
+    /// its facts, and its installs and updates wait for its uninstalls ([`crate::moving`]).
+    Moving,
 }
 
 /// A question that does not apply to this host and service: there is nothing to decide. The
@@ -299,6 +325,9 @@ pub fn decide_marked(
     let Some(def) = services.get(service) else {
         return Decision::Skip(Skip::NotAMember);
     };
+    if def.scope.is_some() && fleet.holds_moving(id) {
+        return Decision::Gate(Gate::Moving);
+    }
     let member = !fleet.is_excluded(service, id) && fleet.is_assigned(def, id);
     if !member
         && !fleet.is_excluded(service, id)
@@ -331,17 +360,81 @@ fn order_or_hold(
     id: &HostId,
     now: Duration,
 ) -> Decision {
-    let service = def.name.as_str();
-    // What the fleet kept of a service the host's last heartbeat no longer lists is no word of it.
-    let host = fleet.get_in(service, id).filter(|_| {
+    let Considered {
+        hold,
+        order,
+        installed,
+        ..
+    } = consider(def, desired, bad, fleet, id, now);
+    hold.or_else(|| {
+        (def.scope.is_some() && fleet.is_moving(id) && fleet.uninstalls_pending(services, id))
+            .then_some(Decision::Gate(Gate::Moving))
+    })
+    .or_else(|| {
+        (!installed && install_order::waits(services, def, all, fleet, id, now))
+            .then_some(Decision::Gate(Gate::InstallOrder))
+    })
+    .or_else(|| {
+        // A host admitted to the plan at this version has its place: it goes past the gate.
+        let admitted = fleet.admitted_at(def, id) == Some(&desired.version);
+        stages::gate(services, all, def, desired, fleet, id, now)
+            .filter(|_| !admitted)
+            .map(Decision::Gate)
+    })
+    .or(order)
+    .unwrap_or(Decision::Skip(Skip::NoDigest))
+}
+
+/// What the rules before the plan make of one host and one assigned service.
+pub(crate) struct Considered {
+    /// The first of those rules that holds the host back.
+    pub(crate) hold: Option<Decision>,
+    /// The update or install the host is ordered when none does and the plan lets it go.
+    order: Option<Decision>,
+    /// Whether the host runs the service.
+    pub(crate) installed: bool,
+    /// Whether the host cannot be ordered the desired version at all, whatever the gates say: its
+    /// agent cannot take the order, the release lists nothing for it, or the fleet has no word of
+    /// the service from it.
+    pub(crate) unreachable: bool,
+}
+
+/// What the fleet kept of the service `service` on the host `id`, none for a service the host's
+/// last heartbeat no longer lists: that is no word of it.
+pub(crate) fn heard<'a>(fleet: &'a Fleet, service: &str, id: &HostId) -> Option<&'a Host> {
+    fleet.get_in(service, id).filter(|_| {
         fleet
             .node(id)
             .is_none_or(|node| node.announced.contains_key(service))
-    });
+    })
+}
+
+/// Whether the host `id` runs `service`, at any version.
+pub(crate) fn installed_on(fleet: &Fleet, service: &str, id: &HostId) -> bool {
+    heard(fleet, service, id).is_some_and(|h| h.beat.health != Health::Absent)
+}
+
+/// The rules of the decision that come before the plan, for the host `id`, the assigned `def`
+/// and its desired state, in their order.
+pub(crate) fn consider(
+    def: &ServiceDef,
+    desired: &Desired,
+    bad: &[Version],
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> Considered {
+    let service = def.name.as_str();
+    let host = heard(fleet, service, id);
     // A host the service has no word of is told to install it only when its agent lists every
     // service it runs: from any other, a missing entry says nothing.
     if host.is_none() && !fleet.announced(id, HEARTBEAT_V2) {
-        return Decision::Skip(Skip::NotAMember);
+        return Considered {
+            hold: Some(Decision::Skip(Skip::NotAMember)),
+            order: None,
+            installed: false,
+            unreachable: true,
+        };
     }
     let beat = host.map(|h| &h.beat);
     let installed = beat.is_some_and(|b| b.health != Health::Absent);
@@ -416,18 +509,26 @@ fn order_or_hold(
             Decision::Skip(Skip::Deferred),
         ),
     ];
-    rules
+    let hold = rules
         .into_iter()
-        .find_map(|(holds, why)| holds.then_some(why))
-        .or_else(|| stages::gate(services, all, def, desired, fleet, id, now).map(Decision::Gate))
-        .or(order)
-        .unwrap_or(Decision::Skip(Skip::NoDigest))
+        .find_map(|(holds, why)| holds.then_some(why));
+    let unreachable = (!installed && !fleet.announced(id, INSTALL_FEATURE))
+        || installed_not_run
+        || unpicked.is_some()
+        || order.is_none();
+    Considered {
+        hold,
+        order,
+        installed,
+        unreachable,
+    }
 }
 
 /// The uninstall of `def` the host `id` is ordered by `order_id`, or the first rule that holds
 /// it back: the host must still list the service, and the hold, the quiet start, the one update
-/// at a time on the host, its failure or deferral of this uninstall and the other services' live
-/// rollouts hold it.
+/// at a time on the host, its failure or deferral of this uninstall, an uninstall of a package of
+/// its group that goes before it (`uninstall_order`) and the other services' live rollouts hold
+/// it.
 fn uninstall(
     services: &Services,
     def: &ServiceDef,
@@ -469,11 +570,20 @@ fn uninstall(
                 .is_some_and(|until| now < until),
             Decision::Skip(Skip::Deferred),
         ),
+        (
+            install_order::uninstall_waits(services, def, fleet, id),
+            Decision::Gate(Gate::UninstallOrder),
+        ),
     ];
     rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why))
-        .or_else(|| stages::uninstall_gate(services, all, service, fleet, now).map(Decision::Gate))
+        .or_else(|| {
+            // A host admitted to its move has its place in the group: it goes past the gate.
+            stages::uninstall_gate(services, all, def, fleet, id, now)
+                .filter(|_| !fleet.is_admitted(id))
+                .map(Decision::Gate)
+        })
         .unwrap_or(Decision::Uninstall {
             order_id,
             running: host.beat.version.clone(),

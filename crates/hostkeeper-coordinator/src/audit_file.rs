@@ -235,6 +235,7 @@ pub(crate) struct Filter<'a> {
     pub(crate) actions: &'a [&'a str],
     pub(crate) service: Option<&'a str>,
     pub(crate) node_id: Option<&'a str>,
+    pub(crate) host_group: Option<&'a str>,
 }
 
 impl Filter<'_> {
@@ -245,6 +246,7 @@ impl Filter<'_> {
             && (self.actions.is_empty() || self.actions.contains(&entry.action.as_str()))
             && (self.service.is_none() || entry.service.as_deref() == self.service)
             && (self.node_id.is_none() || entry.node_id.as_deref() == self.node_id)
+            && (self.host_group.is_none() || entry.host_group.as_deref() == self.host_group)
     }
 }
 

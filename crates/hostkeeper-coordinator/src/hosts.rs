@@ -25,6 +25,9 @@
 //! update's record final ([`Coordinator::final_report`]). It sends the host no `uninstall`.
 //!
 //! All three take the operator token only, as every call of [`crate::operator`] does.
+//!
+//! Once the coordinator holds a host group, a host's `host_group`, and its `role` with it, name the
+//! group its enrollment records.
 
 use std::collections::BTreeSet;
 use std::sync::PoisonError;
@@ -135,6 +138,7 @@ impl Coordinator {
             .map_err(unreadable(proto::HostsRefusal::StoreFailed))?;
         let (mut hosts, shown) = self.page_hosts(page, enrolled);
         self.show_inventory_with(&mut hosts, &shown);
+        self.show_groups(&mut hosts);
         Ok(proto::ListHostsResponse {
             hosts,
             next_page_token,
@@ -180,8 +184,29 @@ impl Coordinator {
         let mut hosts = [host];
         self.show_running(&mut hosts[0], &id, enrolled.as_ref());
         self.show_inventory_with(&mut hosts, &[enrolled]);
+        self.show_groups(&mut hosts);
         let [host] = hosts;
         Ok(proto::GetHostResponse { host: Some(host) })
+    }
+
+    /// Names the host group of each of `hosts` as the enrollment store records it, in
+    /// `host_group` and, for readers that predate groups, in `role`; a host in none is left as it
+    /// is. Nothing, in a coordinator that holds no group.
+    fn show_groups(&self, hosts: &mut [proto::Host]) {
+        if !self.desired.in_group_mode() {
+            return;
+        }
+        for host in hosts {
+            let group = host
+                .node_id
+                .parse::<HostId>()
+                .ok()
+                .and_then(|id| self.membership_of(&id));
+            if let Some((group, _)) = group {
+                host.role = group.to_string();
+                host.host_group = group.to_string();
+            }
+        }
     }
 
     /// Fills in each of `hosts` from the host inventory, `enrolled` being what the enrollment

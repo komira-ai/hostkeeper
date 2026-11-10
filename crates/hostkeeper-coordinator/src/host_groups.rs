@@ -4,8 +4,11 @@
 //! operations state (the minimum version, the last good version, the halt and its reports and
 //! generation, the standing force and its generation, the update plan's position).
 //!
-//! This is the stored form only. Nothing decides by it yet: placement, the decision by group and
-//! the `HostGroups` calls are built on it later, and until then no write puts a group in it.
+//! This is the stored form, and what writes it is the `HostGroups` calls
+//! ([`crate::operator_host_groups`], [`crate::host_move`]) and the deployments to a group
+//! (`Releases.SetDesired` naming a group, and the coordinator's own rollback). The
+//! decision by group reads it ([`crate::group_scope`]): the marks of one (group, package) are read
+//! and written as the marks of a service ([`crate::ops::OpsState::marks_in`]).
 //!
 //! The groups and their desired versions are part of the desired state ([`crate::desired::Held`]),
 //! kept in the state file under the top-level key `host_groups`; the marks are part of the
@@ -32,7 +35,7 @@ use crate::canary::Canary;
 use crate::defer::DeferBackoff;
 use crate::desired::MAX_COUNT;
 use crate::force::{ForceRecord, SELF_SERVICE};
-use crate::ops::{Halt, HaltAck};
+use crate::ops::{Halt, HaltAck, OpsState, ServiceOps};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::rollouts::Rollout;
 use crate::stages::{Advance, Plan, RawStage};
@@ -238,6 +241,27 @@ impl Policy {
         Plan::read(stages, canary).map_err(|why| PolicyError { key: "stages", why })
     }
 
+    /// The keys whose value differs between `self` and `other`, in the order of the policy.
+    pub(crate) fn changed_keys(&self, other: &Self) -> Vec<&'static str> {
+        [
+            ("stages", self.stages != other.stages),
+            ("canary", self.canary != other.canary),
+            ("bake_beats", self.bake_beats != other.bake_beats),
+            ("rollback", self.rollback != other.rollback),
+            (
+                "rollback_after_failed",
+                self.rollback_after_failed != other.rollback_after_failed,
+            ),
+            ("defer_backoff", self.defer_backoff != other.defer_backoff),
+            ("max_updating", self.max_updating != other.max_updating),
+            ("min_up", self.min_up != other.min_up),
+            ("live_rollouts", self.live_rollouts != other.live_rollouts),
+        ]
+        .into_iter()
+        .filter_map(|(key, changed)| changed.then_some(key))
+        .collect()
+    }
+
     /// Whether every key is in its range (section 3), the ranges of the rollout file and of the
     /// desired state's limits.
     ///
@@ -330,6 +354,54 @@ fn is_default_policy(policy: &Policy) -> bool {
     *policy == Policy::default()
 }
 
+/// Why a list of packages is refused.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum ListError {
+    /// The list is empty or longer than [`MAX_PACKAGES`].
+    Count(usize),
+    /// A package's name breaks its rule.
+    Package(String),
+    /// A package is listed twice.
+    Twice(String),
+    /// `hostkeeper` is not listed.
+    HostkeeperNotListed,
+}
+
+impl From<ListError> for GroupError {
+    fn from(why: ListError) -> Self {
+        match why {
+            ListError::Count(n) => Self::Packages(n),
+            ListError::Package(name) => Self::Package(name),
+            ListError::Twice(name) => Self::Twice(name),
+            ListError::HostkeeperNotListed => Self::HostkeeperNotListed,
+        }
+    }
+}
+
+/// Whether `packages` is a group's list (section 1.1): 1 to [`MAX_PACKAGES`] package names, none
+/// twice, `hostkeeper` among them. An empty list is refused for its count.
+///
+/// # Errors
+/// [`ListError`]: the first rule it breaks, in that order.
+pub(crate) fn check_packages(packages: &[String]) -> Result<(), ListError> {
+    if !(1..=MAX_PACKAGES).contains(&packages.len()) {
+        return Err(ListError::Count(packages.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for package in packages {
+        if !is_package_name(package) {
+            return Err(ListError::Package(package.clone()));
+        }
+        if !seen.insert(package.as_str()) {
+            return Err(ListError::Twice(package.clone()));
+        }
+    }
+    if !seen.contains(SELF_SERVICE) {
+        return Err(ListError::HostkeeperNotListed);
+    }
+    Ok(())
+}
+
 /// Why a group is refused.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum GroupError {
@@ -365,21 +437,7 @@ impl HostGroup {
     /// # Errors
     /// [`GroupError`]: the first rule it breaks.
     pub(crate) fn check(&self) -> Result<(), GroupError> {
-        if !(1..=MAX_PACKAGES).contains(&self.packages.len()) {
-            return Err(GroupError::Packages(self.packages.len()));
-        }
-        let mut seen = BTreeSet::new();
-        for package in &self.packages {
-            if !is_package_name(package) {
-                return Err(GroupError::Package(package.clone()));
-            }
-            if !seen.insert(package.as_str()) {
-                return Err(GroupError::Twice(package.clone()));
-            }
-        }
-        if !seen.contains(SELF_SERVICE) {
-            return Err(GroupError::HostkeeperNotListed);
-        }
+        check_packages(&self.packages)?;
         self.policy.check()?;
         if self.generation == 0 {
             return Err(GroupError::Generation("the group"));
@@ -516,6 +574,176 @@ impl GroupsMarks {
             }
         }
         Ok(())
+    }
+}
+
+impl OpsState {
+    /// The marks of `package` in `group`: the default ones for a pair that has none.
+    pub(crate) fn group_marks(&self, group: &GroupName, package: &str) -> GroupMarks {
+        self.host_groups
+            .0
+            .get(group)
+            .and_then(|packages| packages.get(package))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Takes the marks of every package of `group` that `kept` does not list out of the state,
+    /// but each one's minimum version, which only `Services.SetMinVersion` changes.
+    pub(crate) fn drop_group_packages(&mut self, group: &GroupName, kept: &[String]) {
+        let Some(packages) = self.host_groups.0.get_mut(group) else {
+            return;
+        };
+        for (package, marks) in packages.iter_mut() {
+            if !kept.contains(package) {
+                *marks = GroupMarks {
+                    min_version: marks.min_version.take(),
+                    ..GroupMarks::default()
+                };
+            }
+        }
+        self.host_groups = std::mem::take(&mut self.host_groups).without_defaults();
+    }
+
+    /// Takes every mark of `group` out of the state.
+    pub(crate) fn drop_group(&mut self, group: &GroupName) {
+        self.host_groups.0.remove(group);
+    }
+
+    /// The marks of `service` as a decision in `group` reads them: with no group, the service's
+    /// own; with one, the group's halt, last good version and force beside the package's versions
+    /// marked bad and failure acknowledgements, which are the package's in every group.
+    pub(crate) fn marks_in(&self, group: Option<&GroupName>, service: &str) -> ServiceOps {
+        let own = self.services.get(service).cloned().unwrap_or_default();
+        let Some(group) = group else {
+            return own;
+        };
+        let marks = self.group_marks(group, service);
+        ServiceOps {
+            halt: marks.halt,
+            halt_acked: marks.halt_acked,
+            halt_seen: marks.halt_seen,
+            halt_generation: marks.halt_generation,
+            last_good: marks.last_good,
+            force: marks.force,
+            force_generation: marks.force_generation,
+            ..own
+        }
+    }
+
+    /// The standing halt of `service` as a decision in `group` reads it, without copying the marks.
+    pub(crate) fn halt_in(&self, group: Option<&GroupName>, service: &str) -> Option<&Halt> {
+        match group {
+            None => self.services.get(service)?.halt.as_ref(),
+            Some(group) => self.host_groups.0.get(group)?.get(service)?.halt.as_ref(),
+        }
+    }
+
+    /// The halt reports an operator acknowledged for `service`, as a decision in `group` reads them,
+    /// without copying the marks.
+    pub(crate) fn halt_acked_in(&self, group: Option<&GroupName>, service: &str) -> &[HaltAck] {
+        let acked = match group {
+            None => self.services.get(service).map(|marks| &marks.halt_acked),
+            Some(group) => self
+                .host_groups
+                .0
+                .get(group)
+                .and_then(|packages| packages.get(service))
+                .map(|marks| &marks.halt_acked),
+        };
+        acked.map_or(&[], Vec::as_slice)
+    }
+
+    /// How many halts of `service` an operator has cleared, as a decision in `group` reads it.
+    pub(crate) fn halt_generation_in(&self, group: Option<&GroupName>, service: &str) -> u64 {
+        match group {
+            None => self
+                .services
+                .get(service)
+                .map_or(0, |marks| marks.halt_generation),
+            Some(group) => self
+                .host_groups
+                .0
+                .get(group)
+                .and_then(|packages| packages.get(service))
+                .map_or(0, |marks| marks.halt_generation),
+        }
+    }
+
+    /// Edits the marks [`Self::marks_in`] reads, and writes them back to where each belongs
+    /// ([`Self::put_marks_in`]). Answers what `edit` answers.
+    pub(crate) fn edit_marks_in<R>(
+        &mut self,
+        group: Option<&GroupName>,
+        service: &str,
+        edit: impl FnOnce(&mut ServiceOps) -> R,
+    ) -> R {
+        let mut marks = self.marks_in(group, service);
+        let made = edit(&mut marks);
+        self.put_marks_in(group, service, marks);
+        made
+    }
+
+    /// Keeps `marks` as the marks of `service` as a decision in `group` reads them: with no group,
+    /// the service's own; with one, the group's own to the group's marks (its minimum version and
+    /// plan position stay) and the package's to the package's.
+    fn put_marks_in(&mut self, group: Option<&GroupName>, service: &str, marks: ServiceOps) {
+        let Some(group) = group else {
+            self.services.insert(service.to_owned(), marks);
+            return;
+        };
+        let kept = self
+            .host_groups
+            .0
+            .entry(group.clone())
+            .or_default()
+            .entry(service.to_owned())
+            .or_default();
+        kept.halt = marks.halt;
+        kept.halt_acked = marks.halt_acked;
+        kept.halt_seen = marks.halt_seen;
+        kept.halt_generation = marks.halt_generation;
+        kept.last_good = marks.last_good;
+        kept.force = marks.force;
+        kept.force_generation = marks.force_generation;
+        let own = self.services.entry(service.to_owned()).or_default();
+        own.bad = marks.bad;
+        own.failure_acked = marks.failure_acked;
+        own.bad_by_force = marks.bad_by_force;
+    }
+
+    /// Where the update plan of `service` stands in `group`; with no group, as the plans of the
+    /// services alone are kept.
+    pub(crate) fn rollout_in(&self, group: Option<&GroupName>, service: &str) -> Option<Rollout> {
+        match group {
+            None => self.rollouts.get(service).cloned(),
+            Some(group) => {
+                Some(self.group_marks(group, service).rollout).filter(|rollout| !rollout.is_empty())
+            }
+        }
+    }
+
+    /// Keeps `rollout` as where the update plan of `service` stands in `group`.
+    pub(crate) fn set_rollout_in(
+        &mut self,
+        group: Option<&GroupName>,
+        service: &str,
+        rollout: Rollout,
+    ) {
+        match group {
+            None => {
+                self.rollouts.insert(service.to_owned(), rollout);
+            }
+            Some(group) => {
+                self.host_groups
+                    .0
+                    .entry(group.clone())
+                    .or_default()
+                    .entry(service.to_owned())
+                    .or_default()
+                    .rollout = rollout;
+            }
+        }
     }
 }
 

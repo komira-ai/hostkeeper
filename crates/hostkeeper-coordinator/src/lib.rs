@@ -36,7 +36,10 @@
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
 //! - `host_groups`: the stored form of the host groups (their packages, policy, generation and
-//!   desired versions) and of each (group, package)'s marks, which nothing decides by yet;
+//!   desired versions) and of each (group, package)'s marks, which the decision by group reads
+//!   (`group_scope`: what a heartbeat is decided over, with `group_converge`, `moving` and
+//!   `install_order`); [`operator_host_groups`] and [`host_move`] are the `HostGroups` calls that
+//!   write them, with `group_uninstall`, the uninstall intents a change of a group writes;
 //! - [`order_terms`]: the order id, try and package digest an update answer carries to an agent
 //!   that announced `order-v1`, over a transport that carries typed orders (the JSON route
 //!   carries no order);
@@ -125,14 +128,22 @@ pub(crate) mod facts;
 mod features;
 pub mod fleet;
 pub mod force;
+pub(crate) mod group_converge;
+mod group_halt;
+pub(crate) mod group_reach;
+pub(crate) mod group_scope;
+pub(crate) mod group_uninstall;
 pub mod grpc;
 pub mod halt;
 pub(crate) mod health;
 pub mod holds;
+pub(crate) mod host_group_proto;
 pub(crate) mod host_groups;
+pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
+pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
 pub mod jti_file;
@@ -141,9 +152,11 @@ mod live;
 pub mod lock;
 pub mod mdm;
 pub mod membership;
+pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
 pub mod operator_enrollment;
+pub mod operator_host_groups;
 pub mod operator_mdm;
 pub mod operator_repositories;
 pub mod ops;
@@ -248,6 +261,26 @@ mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;
 #[cfg(test)]
+mod group_calls_tests;
+#[cfg(test)]
+mod group_converge_tests;
+#[cfg(test)]
+mod group_decision_support;
+#[cfg(test)]
+mod group_decision_tests;
+#[cfg(test)]
+mod group_force_tests;
+#[cfg(test)]
+mod group_incident_tests;
+#[cfg(test)]
+mod group_install_order_tests;
+#[cfg(test)]
+mod group_marks_tests;
+#[cfg(test)]
+mod group_set_desired_tests;
+#[cfg(test)]
+mod group_uninstall_tests;
+#[cfg(test)]
 mod halt_membership_tests;
 #[cfg(test)]
 mod halt_race_tests;
@@ -257,6 +290,22 @@ mod holds_calls_tests;
 mod holds_tests;
 #[cfg(test)]
 mod host_cert_state_tests;
+#[cfg(test)]
+mod host_group_list_tests;
+#[cfg(test)]
+mod host_group_move_tests;
+#[cfg(test)]
+mod host_group_proto_tests;
+#[cfg(test)]
+mod host_group_put_policy_tests;
+#[cfg(test)]
+mod host_group_put_tests;
+#[cfg(test)]
+mod host_group_remove_tests;
+#[cfg(test)]
+mod host_groups_access_tests;
+#[cfg(test)]
+mod host_groups_support;
 #[cfg(test)]
 mod host_held_tests;
 #[cfg(test)]
@@ -285,6 +334,10 @@ mod marks_support;
 mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
+#[cfg(test)]
+mod moving_facts_tests;
+#[cfg(test)]
+mod moving_tests;
 #[cfg(test)]
 mod one_live_update_coordinator_tests;
 #[cfg(test)]
@@ -342,6 +395,8 @@ mod repository_origin_support;
 mod repository_origin_tests;
 #[cfg(test)]
 mod repository_private_tests;
+#[cfg(test)]
+mod repository_push_group_tests;
 #[cfg(test)]
 mod repository_push_private_tests;
 #[cfg(test)]
