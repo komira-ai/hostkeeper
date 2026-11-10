@@ -54,6 +54,7 @@ use std::time::{Duration, Instant};
 
 use clap::{Args, Parser, Subcommand};
 use futures::future::{Either, select};
+use hostkeeper_enrollment::ca::HOST_VALIDITY_SECS;
 use hostkeeper_enrollment::enroll::DEFAULT_MAX_PENDING;
 use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::validity::SystemClock;
@@ -113,6 +114,10 @@ const KEY_REFETCH: Duration = Duration::from_secs(30);
 
 /// How long fetching the issuer's discovery document or keys may take.
 const KEY_FETCH_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The shortest `--host-cert-validity-secs`: a minute, so that half life (when the daemon
+/// renews) is six of its 5-second steps away from the issuance.
+pub const HOST_CERT_VALIDITY_FLOOR_SECS: u64 = 60;
 
 /// `hostkeeper-coordinator`: tells each host's updater which version to run, each service by
 /// its update plan, one service's rollout at a time.
@@ -305,6 +310,17 @@ pub struct Serve {
     /// host posting its waiting request again is still answered.
     #[arg(long, requires = "ca_key_file", value_parser = clap::value_parser!(u64).range(1..))]
     pub max_pending_enrollments: Option<u64>,
+    /// How long each host certificate the CA issues or renews is valid, in seconds: from 60
+    /// (the daemon renews at half life, and looks every 5 seconds) to 604800, the CA's cap of 7
+    /// days, which is the default. A certificate already issued keeps its validity; the next
+    /// issuance or renewal takes the new one.
+    #[arg(
+        long,
+        default_value_t = HOST_VALIDITY_SECS,
+        requires = "ca_key_file",
+        value_parser = clap::value_parser!(u64).range(HOST_CERT_VALIDITY_FLOOR_SECS..=HOST_VALIDITY_SECS)
+    )]
+    pub host_cert_validity_secs: u64,
     /// How long an enrollment request waits for an operator before it expires: a whole number
     /// and a unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second. An expired request
     /// is no longer approved, and its host is listed unenrolled; the host's key posted again
@@ -611,6 +627,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             )?
             .with_max_pending(max_pending)
             .with_request_ttl(flags.enrollment_request_ttl)
+            .with_host_validity_secs(flags.host_cert_validity_secs)
             // The gate, when the coordinator runs it, says whether a Mac is enrolled and
             // supervised; without it no device is known.
             .with_mac(MacPolicy {

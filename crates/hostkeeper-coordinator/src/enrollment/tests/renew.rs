@@ -4,13 +4,14 @@
 use std::sync::Arc;
 
 use bytes::Bytes;
+use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_proto::hostkeeper::agent::v1::{CoordinatorRefusal, RenewRequest, RenewResponse};
 use http_body_util::Full;
 use prost::Message;
 use x509_parser::prelude::{FromDer, X509Certificate};
 
 use super::support::{HostKey, NOW, PATIENCE, Rig, approve, body_of, enroll_request, enrolled};
-use crate::enrollment::{Method, RpcError, call};
+use crate::enrollment::{Method, RpcError, call, os_random};
 
 fn renewal(key: &HostKey) -> RenewRequest {
     RenewRequest { csr_der: key.csr() }
@@ -133,4 +134,41 @@ fn a_replaced_key_and_a_duplicate_host_cannot_renew() {
         enrollment.renew(Some(current.as_slice()), renewal(&other)),
         Err(RpcError::Refused(CoordinatorRefusal::RenewalNotAllowed))
     );
+}
+
+/// Catches an enrollment given a host validity (`--host-cert-validity-secs`) that issues or
+/// renews for another time: the certificate a poll issues and the one a renewal signs are both
+/// valid that long from their signing, and the renewed one is for the same host and key.
+#[test]
+fn a_short_validity_reaches_the_issued_and_the_renewed_certificate() {
+    let rig = Rig::configured("renew-short", Arc::new(RealFs), os_random(), |enrollment| {
+        enrollment.with_host_validity_secs(60)
+    });
+    let enrollment = &rig.enrollment;
+    assert_eq!(enrollment.store().host_validity_secs(), 60);
+    let key = HostKey::new();
+    let current = enrolled(enrollment, &key, "machine-1", "s1");
+    let now = i64::try_from(NOW).expect("a time");
+    let (subject, serial, start, end) = read(&current);
+    assert_eq!(
+        (subject.as_str(), start, end),
+        ("CN=host:s1", now, now + 60)
+    );
+
+    // Half life: the daemon renews.
+    rig.clock.set(NOW + 30);
+    let renewed = enrollment
+        .renew(Some(current.as_slice()), renewal(&key))
+        .expect("renewed");
+    let (subject, renewed_serial, start, end) = read(&renewed.certificate_der);
+    assert_eq!(
+        (subject.as_str(), start, end),
+        ("CN=host:s1", now + 30, now + 90)
+    );
+    assert_ne!(renewed_serial, serial);
+    let key_of = |der: &[u8]| {
+        let (_, parsed) = X509Certificate::from_der(der).expect("a certificate");
+        parsed.public_key().raw.to_vec()
+    };
+    assert_eq!(key_of(&renewed.certificate_der), key_of(&current));
 }

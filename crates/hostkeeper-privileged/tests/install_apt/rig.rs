@@ -231,8 +231,8 @@ impl Rig {
         }
         let (repo, trees, config_dir, work, world) =
             (&dirs[0], &dirs[1], &dirs[2], &dirs[3], &dirs[5]);
-        let entry_key = Key::new(&base.join("gpg-entry"), "entry");
-        let other_key = Key::new(&base.join("gpg-other"), "other");
+        let entry_key = Key::new("entry");
+        let other_key = Key::new("other");
         let keyring = config_dir.join("hkaptfix.gpg");
         entry_key.export(&keyring);
         fs::write(

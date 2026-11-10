@@ -84,7 +84,7 @@ fn a_p256_request_gets_a_seven_day_client_certificate() {
         assert_eq!(verified.key().key_hash(), host.key_hash());
         let cert = ca
             .ca
-            .issue_host(&host_id("web-1"), verified.key(), 7)
+            .issue_host(&host_id("web-1"), verified.key(), HOST_VALIDITY_SECS, 7)
             .expect("issued");
         assert_eq!(
             (cert.serial, cert.not_before, cert.not_after),
@@ -107,6 +107,39 @@ fn a_p256_request_gets_a_seven_day_client_certificate() {
         assert_eq!(parsed.raw_serial(), [7]);
         assert_eq!(parsed.public_key().raw, host.p256().spki_der());
     }
+}
+
+/// Catches `issue_host` signing for another time than the validity it is given, and taking a
+/// validity of 0 or over the 7-day cap instead of refusing it.
+#[test]
+fn a_host_certificate_is_valid_for_the_time_asked_up_to_the_cap() {
+    let ca = TestCa::new("host-validity");
+    let host = HostKey::new();
+    for (secs, serial) in [(1, 2), (60, 3), (HOST_VALIDITY_SECS, 4)] {
+        let cert = ca
+            .ca
+            .issue_host(&host_id("web-1"), &host.p256(), secs, serial)
+            .expect("issued");
+        assert_eq!((cert.not_before, cert.not_after), (NOW, NOW + secs));
+        let parsed = parse(&cert.der);
+        assert_eq!(
+            parsed.validity().not_after.timestamp(),
+            (NOW + secs) as i64,
+            "{secs}"
+        );
+    }
+    assert_eq!(
+        ca.ca.issue_host(&host_id("web-1"), &host.p256(), 0, 5),
+        Err(SignError::EmptyValidity)
+    );
+    assert_eq!(
+        ca.ca
+            .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS + 1, 5),
+        Err(SignError::ValidityOverCap {
+            requested: HOST_VALIDITY_SECS + 1,
+            cap: HOST_VALIDITY_SECS,
+        })
+    );
 }
 
 /// Catches the CA signing a key of another type or curve: P-384, Ed25519 and RSA requests
@@ -226,7 +259,7 @@ fn requested_extensions_are_never_copied() {
     let verified = check_request(&csr).expect("extensions are allowed in a request");
     let cert = ca
         .ca
-        .issue_host(&host_id("web-2"), verified.key(), 9)
+        .issue_host(&host_id("web-2"), verified.key(), HOST_VALIDITY_SECS, 9)
         .expect("issued");
     let parsed = parse(&cert.der);
     assert_eq!(purposes(&parsed), (false, true, false));
@@ -341,7 +374,7 @@ fn the_server_certificate_is_server_auth_only_and_chains_to_the_ca() {
         .expect("server certificate");
     let client = ca
         .ca
-        .issue_host(&host_id("web-1"), &host.p256(), 3)
+        .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS, 3)
         .expect("client certificate");
     let parsed = parse(&server.der);
     assert_eq!(purposes(&parsed), (true, false, false));

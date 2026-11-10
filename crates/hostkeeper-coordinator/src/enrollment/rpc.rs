@@ -341,7 +341,10 @@ impl Enrollment {
             return Err(refused(CoordinatorRefusal::RenewalNotAllowed));
         }
         let serial = self.store.allocate_serial().map_err(rpc_error)?;
-        let certificate = self.ca.issue_host(&host, &key, serial).map_err(rpc_error)?;
+        let certificate = self
+            .ca
+            .issue_host(&host, &key, self.store.host_validity_secs(), serial)
+            .map_err(rpc_error)?;
         tracing::info!(host_id = %host, serial, "renewed a host certificate");
         self.audit(audit_entry(
             ACTION_RENEWED,
