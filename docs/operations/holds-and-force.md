@@ -107,7 +107,7 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   at its own desired version, with one `halt` entry for each group that names it. A group that is
   halted already is left as it is, and `already_halted` is the answer only when every group was.
   `Releases.ClearHalt` clears the halt of every group that has one, one `clear_halt` entry each.
-  The alert's message names the group; groups whose halt has the same host, version and check are
+  The alert's message names the group; groups whose halt has the same service, host and version are
   one alert that names them all.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
