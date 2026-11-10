@@ -3,7 +3,9 @@
 # hostkeeper and of `hello`, the example service of examples/hello, the `hostkeeper-coordinator`
 # binary as a tarball with its SBOM, its container image (`.image.tar`, an OCI image layout) and
 # its deb and rpm (packaging/coordinator/nfpm.yaml, the static build with a systemd unit),
-# and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
+# the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM, and the
+# `hostkeeper-coordinator-update` binary (the coordinator updater, Linux-only, a static build) as
+# a tarball with its SBOM;
 # for linux-x86_64 the deb of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
 # crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`);
@@ -30,6 +32,8 @@
 #   hostkeeper-coordinator-<version>.image.json
 #   hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
+#   hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz
+#   hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
 #   hostkeeper-<version>-macos-arm64.pkg
 #   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg   mdm_<version>_amd64.deb
 #   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
@@ -42,8 +46,9 @@
 # first-parent commits of main since the commit that last changed it). Every build job writes it
 # into the workspace (`release set-version`) and builds with RELEASE_COMMIT set to the commit, so
 # `hostkeeper --version` prints `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator --version`
-# prints `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm --version` prints
-# `hostkeeper-mdm X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
+# prints `hostkeeper-coordinator X.Y.Z+<12 hex>`, `hostkeeper-mdm --version` prints
+# `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update --version` prints
+# `hostkeeper-coordinator-update X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
 # `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` is built from the same workspace, so it carries the
 # release version (`hello --version` prints `hello X.Y.Z`); its failing build, started with
 # `--fail-ready`, is named `<version>-fail-ready`, and its server answers `/version` with that
@@ -248,11 +253,12 @@ jobs:
       - name: Keep the lock file as written
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
       # RELEASE_COMMIT is a build input of the binaries (crates/hostkeeper-daemon/src/stamp.rs,
-      # crates/hostkeeper-coordinator/src/stamp.rs, crates/hostkeeper-mdm/src/stamp.rs), not
-      # configuration they read when they run. hostkeeper-pxe, which the Linux packages carry,
-      # has no stamp: its --version is the workspace's version alone. The coordinator and the MDM
-      # kit's binary are built for the runner's gnu target into target/release; hostkeeper and
-      # hostkeeper-pxe for the musl target into target/$MUSL_TARGET/release.
+      # crates/hostkeeper-coordinator/src/stamp.rs, crates/hostkeeper-mdm/src/stamp.rs,
+      # crates/xtask/src/stamp.rs), not configuration they read when they run. hostkeeper-pxe,
+      # which the Linux packages carry, has no stamp: its --version is the workspace's version
+      # alone. The coordinator and the MDM kit's binary are built for the runner's gnu target into
+      # target/release; hostkeeper, hostkeeper-pxe and hostkeeper-coordinator-update for the musl
+      # target into target/$MUSL_TARGET/release.
       - name: Build hostkeeper-coordinator and hostkeeper-mdm
         env:
           RELEASE_COMMIT: ${{ github.sha }}
@@ -261,6 +267,12 @@ jobs:
         env:
           RELEASE_COMMIT: ${{ github.sha }}
         run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      # The coordinator updater is static, so it runs on whatever Linux the coordinator's machine
+      # is.
+      - name: Build hostkeeper-coordinator-update (static)
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p xtask --bin hostkeeper-coordinator-update
       # The coordinator's deb and rpm carry its static build, so one package runs on every
       # release of its family; the tarball and the image keep the gnu build above.
       - name: Build hostkeeper-coordinator (static, for its Linux packages)
@@ -278,6 +290,8 @@ jobs:
         run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper-coordinator" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper-mdm "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: hostkeeper-coordinator-update says the version and the commit
+        run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: SBOM
         run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
       - name: The SBOM step left Cargo.lock unchanged
@@ -289,6 +303,8 @@ jobs:
         run: cp crates/hostkeeper-coordinator/hostkeeper-coordinator_bin.cdx.json "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.cdx.json"
       - name: Name the SBOM of hostkeeper-mdm
         run: cp crates/hostkeeper-mdm/hostkeeper-mdm_bin.cdx.json "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.cdx.json"
+      - name: Name the SBOM of hostkeeper-coordinator-update
+        run: cp crates/xtask/hostkeeper-coordinator-update_bin.cdx.json "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.cdx.json"
       # The commit time is the one time the tarball holds, so its bytes depend on its inputs.
       - name: The commit time
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
@@ -298,6 +314,8 @@ jobs:
         run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper-coordinator | gzip -n > "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.tar.gz"
       - name: Tarball of hostkeeper-mdm
         run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper-mdm | gzip -n > "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: Tarball of hostkeeper-coordinator-update
+        run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C "target/$MUSL_TARGET/release" -cf - hostkeeper-coordinator-update | gzip -n > "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz"
       # The pinned gh of this architecture, checked against its pin and installed for this job,
       # and the Sigstore trusted root as it prints it. `gh attestation trusted-root` fetches the
       # roots of the Sigstore public-good instance and of GitHub's instance through their TUF
@@ -370,6 +388,8 @@ jobs:
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
       - name: The binary tarball holds no dynamically linked program
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: The coordinator updater's tarball holds no dynamically linked program
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz"
       # The coordinator's deb and rpm (packaging/coordinator/nfpm.yaml) take the static program
       # and the operator web app from target/nfpm-coordinator/: ui/ with every directory 0755
       # and every file 0644, as the image holds it.
@@ -431,6 +451,9 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper-mdm
       - name: The packaged hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-mdm" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper-coordinator-update
+      - name: The packaged hostkeeper-coordinator-update says the version and the commit
+        run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$GITHUB_SHA"
       # The native packages of the services (docs/design/packages-native.md, items A20 and A21):
       # hello's .deb and its failing build's, and on linux-x86_64 mdm's, read back by
       # check-linux-pkg --service: the package named for the service, every entry root's and not
@@ -920,7 +943,8 @@ jobs:
           if-no-files-found: error
 
   # Push to main only: build provenance for every summed file, an SBOM attestation for each
-  # binary tarball (hostkeeper's, the coordinator's and hostkeeper-mdm's), and a provenance
+  # binary tarball (hostkeeper's, the coordinator's, hostkeeper-mdm's and
+  # hostkeeper-coordinator-update's), and a provenance
   # attestation of each attested file alone (each binary tarball, package, deb, rpm, image and pkg, netboot.json and hkctl), whose bundle is copied beside
   # it as `<file>.sigstore.json` for a host that verifies without GitHub.
   attest:
@@ -968,6 +992,10 @@ jobs:
           sbom-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-x86_64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+          sbom-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
           subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
@@ -978,6 +1006,10 @@ jobs:
         with:
           subject-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+          sbom-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
@@ -1006,6 +1038,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-x86_64.tar.gz.sigstore.json"
+      - id: coordinator-update-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+      - name: Name the bundle of the tarball of hostkeeper-coordinator-update for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.coordinator-update-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-update-${V}-linux-x86_64.tar.gz.sigstore.json"
       - id: hello-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1094,6 +1134,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-arm64.tar.gz.sigstore.json"
+      - id: coordinator-update-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+      - name: Name the bundle of the tarball of hostkeeper-coordinator-update for linux-arm64
+        env:
+          BUNDLE: ${{ steps.coordinator-update-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-update-${V}-linux-arm64.tar.gz.sigstore.json"
       - id: hello-deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

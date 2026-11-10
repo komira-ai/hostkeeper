@@ -4,8 +4,8 @@
 //!
 //! - the version `X.Y.Z` ([`Version`]) and the tag `v<X.Y.Z>` ([`Version::tag`]);
 //! - the text a shipped binary prints for `--version`, `hostkeeper X.Y.Z+<12 hex>`
-//!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm
-//!   X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
+//!   ([`stamp_string`]), `hostkeeper-coordinator X.Y.Z+<12 hex>`, `hostkeeper-mdm
+//!   X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update X.Y.Z+<12 hex>` ([`stamp_of`]), and [`RELEASE_COMMIT`], the build-time input that carries
 //!   the commit;
 //! - the identity that signs every attestation: [`SIGNER_WORKFLOW`] on [`SIGNER_REF`] of
 //!   [`REPO`], on a hosted runner;
@@ -16,7 +16,8 @@
 //! ([`Platform::RELEASED`]): one package per OS and CPU family. A release ships every one of them,
 //! and a release missing one is refused. macos-arm64 also ships the
 //! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
-//! the coordinator ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries four
+//! the coordinator ([`COORDINATOR`]), the MDM kit's binary ([`MDM`]) and the coordinator
+//! updater's ([`COORDINATOR_UPDATE`]). A release carries four
 //! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
 //! `examples/hello`, hello's failing build, and `mdm`, the MDM server stack, for linux-x86_64
 //! only ([`Package::platforms`]); each is a native package ([`Package::native_name`]) and the
@@ -76,6 +77,12 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 /// as a tarball with its SBOM.
 pub(crate) const MDM: &str = "hostkeeper-mdm";
 
+/// The asset stem of the coordinator updater's binary, and the name of that binary: the machine
+/// that runs the coordinator's container runs it from a timer (docs/deploy/coordinator-update.md),
+/// installed from this asset, never built there. Released for the two Linux platforms only, as a
+/// tarball with its SBOM.
+pub(crate) const COORDINATOR_UPDATE: &str = "hostkeeper-coordinator-update";
+
 /// The name of the MDM server stack's service package (docs/design/two-programs.md section 6.2):
 /// its package name and its program `mdm`, which prints
 /// `mdm X.Y.Z+<12 hex>` for `--version`. Built for linux-x86_64 only: the pinned tools it carries
@@ -94,11 +101,17 @@ pub(crate) const HKCTL: &str = hostkeeper_hkctl::PROGRAM;
 
 /// The binaries a release ships, by file name: each prints `<name> X.Y.Z+<12 hex>` for
 /// `--version` ([`stamp_of`]).
-pub(crate) const PROGRAMS: [&str; 3] = [PROGRAM, COORDINATOR, MDM];
+pub(crate) const PROGRAMS: [&str; 4] = [PROGRAM, COORDINATOR, MDM, COORDINATOR_UPDATE];
 
 /// The binaries `release check-binary` holds to their stamp ([`stamp_of`]): the shipped binaries
 /// of [`PROGRAMS`] and `mdm`, the program the mdm package carries as `bin/mdm`.
-pub(crate) const STAMPED: [&str; 4] = [PROGRAMS[0], PROGRAMS[1], PROGRAMS[2], MDM_SERVICE];
+pub(crate) const STAMPED: [&str; 5] = [
+    PROGRAMS[0],
+    PROGRAMS[1],
+    PROGRAMS[2],
+    PROGRAMS[3],
+    MDM_SERVICE,
+];
 
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
@@ -342,7 +355,8 @@ pub(crate) fn stamp_string(version: &Version, commit: &Commit) -> String {
 
 /// The text the shipped binary `program` (one of [`STAMPED`]) prints for `--version`:
 /// `<program> X.Y.Z+<12 hex>`. The coordinator's is `hostkeeper-coordinator X.Y.Z+<12 hex>`, the
-/// MDM kit's `hostkeeper-mdm X.Y.Z+<12 hex>`.
+/// MDM kit's `hostkeeper-mdm X.Y.Z+<12 hex>`, the coordinator updater's
+/// `hostkeeper-coordinator-update X.Y.Z+<12 hex>`.
 pub(crate) fn stamp_of(program: &str, version: &Version, commit: &Commit) -> String {
     format!("{program} {version}+{}", commit.short())
 }
@@ -585,6 +599,8 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 /// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
 ///   its SBOM;
+/// - `hostkeeper-coordinator-update-<v>-<p>.tar.gz`, the coordinator updater's binary, and
+///   `hostkeeper-coordinator-update-<v>-<p>.cdx.json`, its SBOM;
 ///
 /// and on macOS `hostkeeper-<v>-macos-arm64.pkg`, the installer ([`installer_name`]);
 ///
@@ -593,7 +609,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on linux-x86_64 (attested);
 /// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
-/// the bundle of each binary tarball (the three programs'), Linux package, installer, native
+/// the bundle of each binary tarball (the four programs'), Linux package, installer, native
 /// package and image; when both Linux platforms are given, once, the coordinator's image index
 /// `hostkeeper-coordinator-<v>.image.json` ([`super::image_index`]) and its bundle; and once,
 /// [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>` (the command line,
@@ -630,9 +646,11 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
                 format!("{COORDINATOR}-{version}-1.{rpm}.rpm"),
                 format!("{COORDINATOR}-{version}-{p}.image.tar"),
                 format!("{MDM}-{version}-{p}.tar.gz"),
+                format!("{COORDINATOR_UPDATE}-{version}-{p}.tar.gz"),
             ]);
             names.push(format!("{COORDINATOR}-{version}-{p}.cdx.json"));
             names.push(format!("{MDM}-{version}-{p}.cdx.json"));
+            names.push(format!("{COORDINATOR_UPDATE}-{version}-{p}.cdx.json"));
         }
         if platform == Platform::MacosArm64 {
             attested.push(installer_name(version));

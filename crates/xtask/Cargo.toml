@@ -7,8 +7,8 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 description = "The CI steps of this repository (cargo xtask <verb>)."
-# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's other one is a
-# program of its tests.
+# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's one shipped
+# program is `hostkeeper-coordinator-update`, and the others are programs of its tests.
 default-run = "xtask"
 
 [dependencies]
@@ -74,6 +74,18 @@ thiserror.workspace = true
 ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
+
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+# The coordinator's machine runs it from a timer (docs/deploy/coordinator-update.md): each release
+# ships it, stamped like the other binaries, as an attested tarball for the two Linux platforms
+# (`hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`), so nothing is built on that
+# machine. It only forwards to the library's `coordinator_update_main`.
+[[bin]]
+name = "hostkeeper-coordinator-update"
+path = "src/bin/hostkeeper-coordinator-update.rs"
 
 # The program the hook test (tests/native_hook.rs) puts in a native package's tree and starts
 # through its hook: it prints what it was started with. A program of the tests, not shipped: it is

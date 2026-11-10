@@ -2,8 +2,8 @@
 //! (`docs/deploy/coordinator/hostkeeper-coordinator-update.{timer,service}`): the timer starts
 //! the service, and the service's command is one the verb's own flag parser accepts, with the
 //! download directory the unit gives it write access to; and that command, run as committed
-//! (the installed xtask is this crate's binary, the two paths under `/var/lib` and `/etc` are
-//! scratch ones), updates a coordinator, leaves an up-to-date one alone, and rolls a new one
+//! (the installed `hostkeeper-coordinator-update` is this crate's binary of that name, the release
+//! asset's program; the two paths under `/var/lib` and `/etc` are scratch ones), updates a coordinator, leaves an up-to-date one alone, and rolls a new one
 //! that is not ready back. Its `gh` and `curl` are the test program `tests/bin/gh_fixture.rs`,
 //! which answers the release, the Docker Engine API and the coordinator's version route from
 //! scratch files: no network, no docker, no gh.
@@ -20,7 +20,10 @@ use serde_json::{Value, json};
 use sha2::Digest;
 use testdir::TestDir;
 
-const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
+const UPDATER: &str = env!("CARGO_BIN_EXE_hostkeeper-coordinator-update");
+
+/// Where the runbook installs the release asset's program, the path the committed unit starts.
+const INSTALLED: &str = "/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update";
 const GH: &str = env!("CARGO_BIN_EXE_xtask-gh-fixture");
 const COMMIT: &str = "0771c30f87f375ffd8b39e8b4630cd6ea377b764";
 const OLD_ID: &str = "0ld0000000000000";
@@ -51,15 +54,15 @@ fn unit_value<'a>(unit: &'a str, section: &str, key: &str) -> Option<&'a str> {
     found
 }
 
-/// What the verb's parser makes of `args` (the words after `xtask`).
+/// What the program's parser makes of `args` (the words after the program).
 fn parse(args: &[&str]) -> Result<clap::ArgMatches, clap::Error> {
-    let mut argv = vec!["cargo xtask"];
+    let mut argv = vec!["hostkeeper-coordinator-update"];
     argv.extend(args);
-    xtask::test_support::cli().try_get_matches_from(argv)
+    xtask::test_support::coordinator_update_cli().try_get_matches_from(argv)
 }
 
 #[test]
-fn the_timer_starts_the_committed_unit_whose_command_the_verbs_parser_accepts() {
+fn the_timer_starts_the_committed_unit_whose_command_the_programs_parser_accepts() {
     // Catches: a timer that starts another unit, fires on a calendar instead of after each run
     // ends (so two runs could overlap), a unit whose command the verb does not parse (a flag
     // renamed or dropped, a URL that is not https), a download directory the sandbox does not let
@@ -101,13 +104,11 @@ fn the_timer_starts_the_committed_unit_whose_command_the_verbs_parser_accepts() 
     let mut words = exec.split_whitespace();
     assert_eq!(
         words.next(),
-        Some("/usr/local/libexec/hostkeeper/xtask"),
-        "the installed xtask"
+        Some(INSTALLED),
+        "the installed release asset's program"
     );
     let args: Vec<&str> = words.collect();
-    let matches = parse(&args).expect("the verb parses the unit's command");
-    let (verb, flags) = matches.subcommand().expect("a verb");
-    assert_eq!(verb, "coordinator-update");
+    let flags = parse(&args).expect("the program parses the unit's command");
     let dir = flags
         .get_one::<PathBuf>("download_dir")
         .expect("--download-dir");
@@ -260,10 +261,7 @@ fn machine(name: &str) -> Machine {
     let unit = deploy_file("hostkeeper-coordinator-update.service");
     let exec = unit_value(&unit, "Service", "ExecStart").expect("the unit's ExecStart");
     let mut words = exec.split_whitespace().map(str::to_owned);
-    assert_eq!(
-        words.next().as_deref(),
-        Some("/usr/local/libexec/hostkeeper/xtask")
-    );
+    assert_eq!(words.next().as_deref(), Some(INSTALLED));
     let mut args: Vec<String> = words.collect();
     let ca = root.join("coordinator-ca.pem");
     std::fs::write(&ca, "the CA").expect("write the CA");
@@ -373,7 +371,7 @@ impl Machine {
     }
 
     fn run(&self) -> std::process::Output {
-        Command::new(XTASK)
+        Command::new(UPDATER)
             .args(&self.args)
             .env("PATH", &self.bin)
             .output()
@@ -520,4 +518,80 @@ fn the_committed_command_rolls_back_a_coordinator_that_is_not_ready_and_marks_th
         std::fs::read_to_string(m.downloads.join("failed-v0.1.219")).expect("the marker"),
         "v0.1.219 did not become ready within 1 checks: the old container runs again\n"
     );
+}
+
+/// The program's own output for `args`, run in `dir`: exit status, stdout, stderr.
+fn program(dir: &Path, args: &[&str]) -> (Option<i32>, String, String) {
+    let out = Command::new(UPDATER)
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .expect("run hostkeeper-coordinator-update");
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
+}
+
+#[test]
+fn a_missing_download_directory_exits_1_and_a_url_that_is_not_https_exits_2() {
+    // Catches: a main that does not pass the outcome through as the exit status, a missing
+    // download directory made or run against (the run is refused before docker or GitHub is
+    // asked anything), a refusal without the program's name, or a URL that is not https read as
+    // a failure, not a usage error.
+    let d = TestDir::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "cu-unit-exit");
+    let url = ["--coordinator-url", "https://coordinator.example.com:8444"];
+    let (code, out, err) = program(
+        &d,
+        &[
+            "--download-dir",
+            "missing",
+            url[0],
+            url[1],
+            "--ca-file",
+            "ca.pem",
+        ],
+    );
+    assert_eq!(
+        (code, out.as_str(), err.as_str()),
+        (
+            Some(1),
+            "",
+            "hostkeeper-coordinator-update: --download-dir missing: not a directory\n"
+        )
+    );
+    assert!(!d.join("missing").exists());
+    let (code, out, err) = program(
+        &d,
+        &[
+            "--download-dir",
+            ".",
+            "--coordinator-url",
+            "http://coordinator.example.com:8444",
+            "--ca-file",
+            "ca.pem",
+        ],
+    );
+    assert_eq!((code, out.as_str()), (Some(2), ""));
+    assert!(err.contains("not an https://<host>[:<port>] URL"), "{err}");
+}
+
+#[test]
+fn the_program_prints_its_stamp_for_version() {
+    // Catches: `--version` not reaching the parser, going to stderr, or not carrying the stamp
+    // `cargo xtask release check-binary` holds the release asset to: `hostkeeper-coordinator-update
+    // <crate version>`, followed for a release build (one given RELEASE_COMMIT) by `+` and the
+    // first 12 digits of that commit.
+    let d = TestDir::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "cu-unit-version");
+    let (code, out, err) = program(&d, &["--version"]);
+    let version = env!("CARGO_PKG_VERSION");
+    let want = match option_env!("RELEASE_COMMIT") {
+        Some(commit) => format!(
+            "hostkeeper-coordinator-update {version}+{}\n",
+            &commit[..12]
+        ),
+        None => format!("hostkeeper-coordinator-update {version}\n"),
+    };
+    assert_eq!((code, out, err), (Some(0), want, String::new()));
 }

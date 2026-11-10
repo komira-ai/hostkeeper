@@ -194,7 +194,7 @@ impl World {
             coordinator_url: "https://coordinator.example.com:8444".to_owned(),
             ca_file: PathBuf::from("/etc/ca.pem"),
             platform: Platform::LinuxX86_64,
-            version: None,
+            target_version: None,
             ready_checks: 3,
             check_every_secs: 5,
             stop_timeout_secs: 30,
@@ -336,13 +336,13 @@ fn the_new_container_is_created_with_the_rebased_body_before_the_old_one_is_stop
 
 #[test]
 fn a_coordinator_at_least_the_target_is_left_alone() {
-    // Proves: a running version equal to the target, or newer than a `--version` older than it,
+    // Proves: a running version equal to the target, or newer than a `--target-version` older than it,
     // reports up to date and downloads, loads and changes nothing.
     for (running, version) in [("0.1.219", None), ("0.1.220", Some(v("0.1.219")))] {
         let mut w = world("cu-uptodate");
         w.probe = FakeProbe::new(Probed::Running(v(running)), Vec::new());
         let mut flags = w.flags();
-        flags.version = version;
+        flags.target_version = version;
         let lines = w.update_with(&flags).expect("up to date");
         assert_eq!(
             lines,
@@ -440,13 +440,13 @@ fn a_version_route_that_cannot_be_read_refuses_the_run_and_changes_nothing() {
 #[test]
 fn an_older_wanted_version_keeps_its_downloads_when_newer_ones_are_there() {
     // Proves: the version just installed is never pruned, even when two newer download
-    // directories are there (an operator's `--version` of an older release).
+    // directories are there (an operator's `--target-version` of an older release).
     let mut w = world("cu-prune-installed");
     for newer in ["v0.1.230", "v0.1.231"] {
         std::fs::create_dir(w.download.join(newer)).expect("a newer download");
     }
     let mut flags = w.flags();
-    flags.version = Some(v("0.1.218"));
+    flags.target_version = Some(v("0.1.218"));
     w.probe = FakeProbe::new(
         Probed::Running(v("0.1.100")),
         vec![Probed::Running(v("0.1.218"))],
@@ -468,16 +468,16 @@ fn an_older_wanted_version_keeps_its_downloads_when_newer_ones_are_there() {
 
 #[test]
 fn the_target_is_the_wanted_version_or_the_newest_published_release() {
-    // Proves: `--version` picks that release, a draft or an unpublished one is no release, and a
+    // Proves: `--target-version` picks that release, a draft or an unpublished one is no release, and a
     // repository with no release (or one that cannot be listed) refuses.
     let mut w = world("cu-choose");
     let mut flags = w.flags();
-    flags.version = Some(v("0.1.220"));
+    flags.target_version = Some(v("0.1.220"));
     assert_eq!(
         w.update_with(&flags).expect_err("a draft").to_string(),
         "komira-ai/hostkeeper has no published release v0.1.220"
     );
-    flags.version = Some(v("0.1.218"));
+    flags.target_version = Some(v("0.1.218"));
     w.probe = FakeProbe::new(
         Probed::Running(v("0.1.100")),
         vec![Probed::Running(v("0.1.218"))],
