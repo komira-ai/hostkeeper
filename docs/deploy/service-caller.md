@@ -121,6 +121,13 @@ What the lint holds the template to, as it holds `hello-desired.yml`:
 - and every rule of a workflow of this repository: `permissions: {}` at the top, each action
   pinned to a full commit, a GitHub-hosted runner, and each download retried.
 
+**Host groups.** The template passes no host group. `host_group` is an input of the CI client
+from the release after v0.1.184, the revision the template pins; until the pin moves to a
+release whose client takes it, a caller cannot pass it, and the set is one deployment to each
+group that lists the service. A service listed by more than one group is therefore rolled to
+all of them by one call, each by its own group's policy; chaining them (a canary group, a wait,
+then the next group) is a caller's change that comes with the move of the pin.
+
 ## The checklist
 
 Before the first run, in this order. Items 4 to 7 are made once by the coordinator's operator or
@@ -149,16 +156,21 @@ the tailnet's admin, not by the service's CI.
 3. **The repository holds the release.** The package repository serves `my-service` at
    `<X.Y.Z>` before the workflow runs: a host ordered a version the repository does not hold
    fails to install it and retries until it arrives.
-4. **The coordinator manages the service.** The rollout file has a `[[service]]` table for
-   `my-service`, with its roles and its plan ([Rollout plans](../operations/rollout-plans.md));
-   otherwise the set is refused (`unknown_service`).
+4. **The coordinator manages the service.** A host group lists `my-service`
+   ([Host groups](../operations/hostgroups.md)), and the group's policy is its plan
+   ([Rollout plans](../operations/rollout-plans.md)); otherwise the set is refused
+   (`not_in_host_group`). On a coordinator that holds no group, the rollout file has a
+   `[[service]]` table for `my-service`, with its roles and its plan, and the set is otherwise
+   refused (`unknown_service`).
 5. **The allow-list entry.** The coordinator's `--oidc-config` file has a `[[remote_operator]]`
    entry for the service's repository ([The allow-list entry](ci-client.md#the-allow-list-entry)):
    its `repository` and `repository_id`, `job_workflow_ref` naming
    `komira-ai/hostkeeper/.github/workflows/set-desired.yml@` and the commit of the template's
    `uses:` line, `refs = ["refs/heads/main"]`, `event_names = ["workflow_dispatch"]`,
    `runner_environment = "github-hosted"`, the `audience` the service passes, and
-   `services = ["my-service"]`. Restart the coordinator after the change.
+   `services = ["my-service"]`, and optionally `host_groups`, the groups the token may deploy to
+   (left out, any group that lists the service; a set naming another group is refused `forbidden`).
+   Restart the coordinator after the change.
 6. **The repository variables.** The service's repository sets `HOSTKEEPER_COORDINATOR_URL`,
    `HOSTKEEPER_COORDINATOR_CA`, `HOSTKEEPER_CI_AUDIENCE`, and `HOSTKEEPER_TAILNET_TAG` to
    `tag:ci`, and for the join `HOSTKEEPER_TAILNET_CLIENT_ID`, `HOSTKEEPER_TAILNET_AUDIENCE` and
@@ -173,6 +185,7 @@ the tailnet's admin, not by the service's CI.
 8. **The first run.** Dispatch the workflow from `main` with a released version. It ends with
    `reason` `converged` once the fleet runs the version (or `not_converged` after half an hour,
    the roll going on). `hkctl releases get-release --service my-service --version <X.Y.Z>`
+   (with `--host-group <group>` to ask as one group, which must list the service)
    answers the targets the coordinator stored. A refusal names its token
    ([When it fails](ci-client.md#when-it-fails)); fix what it names before you run it again.
 9. **Moving the pin.** The pin is three values that change together, in one reviewed pull request

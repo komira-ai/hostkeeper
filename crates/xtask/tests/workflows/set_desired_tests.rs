@@ -11,7 +11,7 @@ use super::{with_in, workflows_dir};
 
 /// A CI client that keeps every rule: the download, the three provenance checks, the install and
 /// the version check, then the join, the CA, the request, the two calls and the outputs, all
-/// after the check of the tailnet tag. Its job's `runs-on` is on line 27; its steps are, from 1:
+/// after the check of the tailnet tag. Its job's `runs-on` is on line 31; its steps are, from 1:
 /// tailnet-tag, download, checksum, attestation, commit, install, version, tailnet, ca, request,
 /// set-desired, wait, outputs.
 pub(super) const CLIENT: &str = "\
@@ -22,6 +22,10 @@ on:
       hostkeeper_commit:
         type: string
         required: true
+      host_group:
+        type: string
+        required: false
+        default: \"\"
       max_polls:
         type: number
         default: 180
@@ -98,6 +102,7 @@ jobs:
         continue-on-error: true
         env:
           SERVICE: ${{ inputs.service }}
+          HOST_GROUP: ${{ inputs.host_group }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
@@ -109,6 +114,7 @@ jobs:
             releases set-desired \\
             --service \"$SERVICE\" \\
             --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
             2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
       - id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
@@ -116,6 +122,7 @@ jobs:
         env:
           SERVICE: ${{ inputs.service }}
           VERSION: ${{ inputs.version }}
+          HOST_GROUP: ${{ inputs.host_group }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
@@ -129,6 +136,7 @@ jobs:
             --service \"$SERVICE\" \\
             --version \"$VERSION\" \\
             --wait-secs \"${MAX_POLLS}0\" \\
+            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
             2> \"$RUNNER_TEMP/hkctl-wait.err\"
       - id: outputs
         if: ${{ always() }}
@@ -162,6 +170,7 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
         continue-on-error: true
         env:
           SERVICE: ${{ inputs.service }}
+          HOST_GROUP: ${{ inputs.host_group }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
@@ -173,6 +182,7 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
             releases set-desired \\
             --service \"$SERVICE\" \\
             --request \"$RUNNER_TEMP/hkctl-request.json\" \\
+            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\
             2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
 ";
 
@@ -401,6 +411,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "job set-desired: privileged on pull_request (`id-token: write`)",
             "`on` is not `workflow_call` alone",
             "no input `max_polls` of `type: number`",
+            "no input `host_group` of `type: string` with `required: false` and `default: \"\"`",
             "the output `desired_version` of `workflow_call` is not `${{ jobs.set-desired.outputs.desired_version }}`",
             "the output `converged` of `workflow_call` is not `${{ jobs.set-desired.outputs.converged }}`",
             "the output `reason` of `workflow_call` is not `${{ jobs.set-desired.outputs.reason }}`",
@@ -418,7 +429,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "    runs-on: ubuntu-24.04\n",
             "    runs-on: ubuntu-24.04\n    secrets: inherit\n",
         ),
-        &["line 28: `secrets: inherit` hands every secret of the caller on"],
+        &["line 32: `secrets: inherit` hands every secret of the caller on"],
     );
     assert_client(
         &with_in(
@@ -434,7 +445,7 @@ fn the_workflow_has_no_pull_request_target_and_no_inherited_secrets() {
             "ci.yml",
             &with_in(CLIENT, "      id-token: write\n", "    secrets: inherit\n")
         ),
-        ["line 30: `secrets: inherit` hands every secret of the caller on"]
+        ["line 34: `secrets: inherit` hands every secret of the caller on"]
     );
 }
 
@@ -829,14 +840,14 @@ fn the_join_action_is_pinned_federated_and_names_no_secret() {
         (
             "tailscale/github-action@v4",
             &[
-                "line 65: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
+                "line 69: `uses: tailscale/github-action@v4` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),
         (
             "tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005",
             &[
-                "line 65: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
+                "line 69: `uses: tailscale/github-action@d1b6cd204f8dceda5b3eaad7f1f767be39005` is not pinned to a 40-digit lowercase commit SHA",
                 unpinned,
             ],
         ),

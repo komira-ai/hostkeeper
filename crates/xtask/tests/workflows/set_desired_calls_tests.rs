@@ -6,7 +6,9 @@
 
 use super::lint::entry;
 use super::set_desired::{ALWAYS_IF, CALL_STEPS, ORDERED, WAIT_IF};
-use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, command};
+use super::set_desired_calls::{
+    CALLS, Call, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, command, step_call_problems,
+};
 use super::set_desired_tests::{CLIENT, CLIENT_BLOCK, assert_client, moved, real, step_ids};
 use super::with_in;
 use super::yaml::{self, Node, Value};
@@ -15,6 +17,8 @@ use super::yaml::{self, Node, Value};
 const AUDIENCE: &str = "            --github-oidc-audience \"$AUDIENCE\" \\\n";
 /// The set step's response flag.
 const SET_RESPONSE: &str = "            --response-file \"$RUNNER_TEMP/hkctl-set.json\" \\\n";
+/// The line of both calls that passes the host group only when it is not empty.
+const HOST_GROUP_WORD: &str = "            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"} \\\n";
 /// The wait step's bound.
 const WAIT_SECS: &str = "            --wait-secs \"${MAX_POLLS}0\" \\\n";
 
@@ -191,10 +195,8 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
     // The diagnostics not sent anywhere: the outputs step reads nothing and the log shows them.
     assert_client(
         &set_with(
-            &format!(
-                "--request \"$RUNNER_TEMP/hkctl-request.json\" \\\n            {SET_REDIRECT}\n"
-            ),
-            "--request \"$RUNNER_TEMP/hkctl-request.json\"\n",
+            &format!("{HOST_GROUP_WORD}            {SET_REDIRECT}\n"),
+            "            ${HOST_GROUP:+\"--host-group=$HOST_GROUP\"}\n",
         ),
         &[no_err],
     );
@@ -544,12 +546,12 @@ fn the_calls_name_the_callers_service_and_version_and_the_outputs_reach_the_call
         &set_with("          AUDIENCE: ${{ inputs.audience }}\n", ""),
         &["step 11 (`set-desired`)'s `AUDIENCE` is not `${{ inputs.audience }}`"],
     );
-    let wait_version = "          VERSION: ${{ inputs.version }}\n          COORDINATOR_URL";
+    let wait_version = "          VERSION: ${{ inputs.version }}\n          HOST_GROUP";
     assert_client(
         &with_in(
             CLIENT,
             wait_version,
-            "          VERSION: ${{ inputs.service }}\n          COORDINATOR_URL",
+            "          VERSION: ${{ inputs.service }}\n          HOST_GROUP",
         ),
         &["step 12 (`wait`)'s `VERSION` is not `${{ inputs.version }}`"],
     );
@@ -736,4 +738,249 @@ fn a_set_that_succeeds_succeeds_and_shows_what_hkctl_wrote() {
         run_set_step("success-warning", warning, 0),
         (Some(0), warning.to_owned(), warning.to_owned())
     );
+}
+
+/// Runs the call step `id` of the real `set-desired.yml`, under the runner's shell, with a fake
+/// hkctl that records its arguments, one per line, with `HOST_GROUP` set to `host_group` (unset
+/// when `None`): the arguments the step gave hkctl after the method's other flags, from
+/// `--host-group` on or from the redirect.
+fn host_group_args(name: &str, id: &str, host_group: Option<&str>) -> Vec<String> {
+    use std::os::unix::fs::PermissionsExt;
+    let doc = yaml::load(&real()).expect("set-desired.yml parses");
+    let steps = match entry(&doc, "jobs")
+        .and_then(|jobs| entry(jobs, "set-desired"))
+        .and_then(|job| entry(job, "steps"))
+        .map(|s| &s.value)
+    {
+        Some(Value::Seq(steps)) => steps,
+        _ => panic!("the job set-desired has steps"),
+    };
+    let step = steps
+        .iter()
+        .find(|s| entry(s, "id").and_then(Node::as_str) == Some(id))
+        .expect("the call step");
+    let script = entry(step, "run").and_then(Node::as_str).expect("its run");
+    let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("host-group-run");
+    let root = super::testdir::TestDir::under(&base, name);
+    let bin = root.join("hkctl-bin");
+    std::fs::create_dir_all(&bin).expect("make the fake's directory");
+    let fake = bin.join("hkctl");
+    std::fs::write(
+        &fake,
+        "#!/bin/bash\nprintf '%s\\n' \"$@\" > \"$RUNNER_TEMP/args\"\n",
+    )
+    .expect("write the fake hkctl");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let mut command = std::process::Command::new("bash");
+    command
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", script])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("RUNNER_TEMP", &*root)
+        .env("SERVICE", "hostkeeper")
+        .env("VERSION", "1.2.3")
+        .env("MAX_POLLS", "18")
+        .env("COORDINATOR_URL", "https://coordinator.example")
+        .env("AUDIENCE", "hostkeeper-ci");
+    if let Some(group) = host_group {
+        command.env("HOST_GROUP", group);
+    }
+    let out = command.output().expect("run bash");
+    assert_eq!(out.status.code(), Some(0), "{out:?}");
+    std::fs::read_to_string(root.join("args"))
+        .expect("the recorded arguments")
+        .lines()
+        .skip_while(|l| *l != "releases")
+        .skip(2)
+        .map(|l| l.replace(&*root.to_string_lossy(), "$RUNNER_TEMP"))
+        .collect()
+}
+
+#[test]
+fn an_empty_host_group_gives_hkctl_no_argument_and_a_group_gives_exactly_one() {
+    // Catches: an empty `host_group` sending `--host-group=` (a request field an older
+    // coordinator refuses), and a group split into two words, quoted wrongly or dropped, in
+    // either call.
+    for id in ["set-desired", "wait"] {
+        let unset = host_group_args(&format!("{id}-unset"), id, None);
+        let empty = host_group_args(&format!("{id}-empty"), id, Some(""));
+        assert_eq!(unset, empty, "{id}");
+        assert!(unset.starts_with(&["--service".to_owned(), "hostkeeper".to_owned()]));
+        assert!(unset.iter().all(|a| !a.contains("host-group")), "{unset:?}");
+        let web = host_group_args(&format!("{id}-web"), id, Some("web"));
+        assert_eq!(web[..web.len() - 1], unset[..], "{id}");
+        assert_eq!(web.last().map(String::as_str), Some("--host-group=web"));
+    }
+}
+
+#[test]
+fn the_host_group_is_passed_only_as_the_one_conditional_word_in_both_calls() {
+    // Catches: a call that gives `--host-group` whatever the input (an empty group would send an
+    // empty field a coordinator older than its client refuses), the word missing, given twice,
+    // naming another variable or placed after the redirect, and the variable not taken from the
+    // `host_group` input; in the wait as well as the set.
+    let word = "${HOST_GROUP:+\"--host-group=$HOST_GROUP\"}";
+    let once = |who: &str| format!("{who} does not pass `{word}` exactly once after its fields");
+    let unconditional = |who: &str| {
+        format!(
+            "{who} passes `--host-group` unconditionally: an empty `HOST_GROUP` must send no field, so pass it only as the one word `{word}`"
+        )
+    };
+    let set = "step 11 (`set-desired`)";
+    let wait = "step 12 (`wait`)";
+    assert_client(
+        &set_with(
+            HOST_GROUP_WORD,
+            "            --host-group \"$HOST_GROUP\" \\\n",
+        ),
+        &[&unconditional(set), &once(set)],
+    );
+    assert_client(
+        &with_in(
+            CLIENT,
+            &format!("{WAIT_SECS}{HOST_GROUP_WORD}"),
+            &format!("{WAIT_SECS}            --host-group=web \\\n"),
+        ),
+        &[&unconditional(wait), &once(wait)],
+    );
+    assert_client(&set_with(HOST_GROUP_WORD, ""), &[&once(set)]);
+    assert_client(
+        &CLIENT.replace(HOST_GROUP_WORD, ""),
+        &[&once(set), &once(wait)],
+    );
+    assert_client(
+        &set_with(
+            HOST_GROUP_WORD,
+            &format!("{HOST_GROUP_WORD}{HOST_GROUP_WORD}"),
+        ),
+        &[&once(set)],
+    );
+    let stranger = |who: &str, w: &str| {
+        format!("{who} passes `{w}`, which is not a conditional flag of the call")
+    };
+    assert_client(
+        &set_with(
+            "HOST_GROUP:+\"--host-group=$HOST_GROUP",
+            "OTHER:+\"--host-group=$OTHER",
+        ),
+        &[
+            &stranger(set, "${OTHER:+\"--host-group=$OTHER\"}"),
+            &once(set),
+        ],
+    );
+    assert_client(
+        &set_with("--host-group=$HOST_GROUP", "--group=$HOST_GROUP"),
+        &[
+            &stranger(set, "${HOST_GROUP:+\"--group=$HOST_GROUP\"}"),
+            &once(set),
+        ],
+    );
+    // A second conditional word beside the group's: the call passes no flag the table does not
+    // name, conditional or not.
+    assert_client(
+        &set_with(
+            HOST_GROUP_WORD,
+            &format!("{HOST_GROUP_WORD}            ${{OTHER:+\"--write-id=$OTHER\"}} \\\n"),
+        ),
+        &[&stranger(set, "${OTHER:+\"--write-id=$OTHER\"}")],
+    );
+    // After the redirect the word is no longer between the fields and the redirect.
+    assert_client(
+        &set_with(
+            &format!("{HOST_GROUP_WORD}            {SET_REDIRECT}\n"),
+            &format!(
+                "            {SET_REDIRECT} \\\n            ${{HOST_GROUP:+\"--host-group=$HOST_GROUP\"}}\n"
+            ),
+        ),
+        &[
+            "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-set.err`, the file the outputs step reads",
+        ],
+    );
+    // The variable comes from the input, in both steps.
+    assert_client(
+        &set_with(
+            "          HOST_GROUP: ${{ inputs.host_group }}\n",
+            "          HOST_GROUP: web\n",
+        ),
+        &["step 11 (`set-desired`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
+    );
+    assert_client(
+        &with_in(
+            CLIENT,
+            "          HOST_GROUP: ${{ inputs.host_group }}\n          COORDINATOR_URL: ${{ inputs.coordinator_url }}\n          AUDIENCE: ${{ inputs.audience }}\n          MAX_POLLS",
+            "          COORDINATOR_URL: ${{ inputs.coordinator_url }}\n          AUDIENCE: ${{ inputs.audience }}\n          MAX_POLLS",
+        ),
+        &["step 12 (`wait`)'s `HOST_GROUP` is not `${{ inputs.host_group }}`"],
+    );
+}
+
+#[test]
+fn an_optional_flag_must_be_a_flag_of_the_command() {
+    // Catches: a conditional word for a flag the method does not take, which hkctl would refuse
+    // as a usage error exactly when the input is not empty.
+    let doc = yaml::load(CLIENT).expect("the fixture parses");
+    let steps = match entry(&doc, "jobs")
+        .and_then(|jobs| entry(jobs, "set-desired"))
+        .and_then(|job| entry(job, "steps"))
+        .map(|s| &s.value)
+    {
+        Some(Value::Seq(steps)) => steps,
+        _ => panic!("the job set-desired has steps"),
+    };
+    let step = steps
+        .iter()
+        .find(|s| entry(s, "id").and_then(Node::as_str) == Some("set-desired"))
+        .expect("the set step");
+    let call = Call {
+        optional: &[("--no-such-flag", "HOST_GROUP")],
+        ..CALLS[0]
+    };
+    let word = "${HOST_GROUP:+\"--no-such-flag=$HOST_GROUP\"}";
+    assert_eq!(
+        step_call_problems("the set", step, &call),
+        [
+            "the set passes `${HOST_GROUP:+\"--host-group=$HOST_GROUP\"}`, which is not a conditional flag of the call".to_owned(),
+            format!(
+                "the set passes `{word}`, but `--no-such-flag` is not a flag of `releases set-desired`"
+            ),
+            format!("the set does not pass `{word}` exactly once after its fields"),
+        ]
+    );
+}
+
+#[test]
+fn the_host_group_input_is_a_string_that_defaults_to_empty_and_is_not_required() {
+    // Catches: an input that sends a group when the caller names none (a default other than
+    // empty), one the caller must pass, one of another type, and one missing.
+    let no_input =
+        "no input `host_group` of `type: string` with `required: false` and `default: \"\"`";
+    for (from, to) in [
+        ("        default: \"\"\n", "        default: web\n"),
+        ("        default: \"\"\n", ""),
+        (
+            "        required: false\n        default: \"\"\n",
+            "        required: true\n        default: \"\"\n",
+        ),
+        (
+            "        required: false\n        default: \"\"\n",
+            "        default: \"\"\n",
+        ),
+    ] {
+        assert_client(&with_in(CLIENT, from, to), &[no_input]);
+    }
+    let block =
+        "      host_group:\n        type: string\n        required: false\n        default: \"\"\n";
+    assert_client(&with_in(CLIENT, block, ""), &[no_input]);
+    assert_client(
+        &with_in(
+            CLIENT,
+            block,
+            &block.replace("type: string", "type: number"),
+        ),
+        &[no_input],
+    );
+    // The real file passes the same rule.
+    let real = real();
+    assert!(real.contains("      host_group:\n        description:"));
+    assert_client(&real, &[]);
 }

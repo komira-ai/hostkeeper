@@ -14,7 +14,12 @@
 //! pass each flag of
 //! its `fields` after the method exactly once with exactly its value (the set: the service and
 //! [`REQUEST_FILE`], which the request step writes; the wait: the service, the version and
-//! [`WAIT_SECS`]); or a variable of [`CALL_ENV`] its command names is not given in its `env` as
+//! [`WAIT_SECS`]); or it does not pass each flag of its `optional` as the one word
+//! `${VAR:+"--flag=$VAR"}` ([`optional_word`]) exactly once, between its fields and its redirect
+//! (the host group: hkctl writes every flag it is given into the request, and a coordinator older
+//! than its client refuses a field it does not know, so an empty input must send no flag at all),
+//! or gives such a flag as a field, unconditionally, or passes a word of that form that is not
+//! one of its `optional`, or an optional flag is not a flag of the command; or a variable of [`CALL_ENV`] its command names is not given in its `env` as
 //! that input.
 //!
 //! The outputs step is refused when its `env` does not give each of [`OUTPUTS_ENV`] exactly or
@@ -30,14 +35,16 @@ use super::set_desired::{CLIENT_STEP, PROGRAM, WAIT_STEP, logical_lines, text, v
 use super::yaml::Node;
 
 /// One call step: its `id`, the method of `releases` it calls, the files of its answer and of
-/// its diagnostics, the flags of the method it passes with their values, and the redirect that
-/// ends its command line and sends its diagnostics to `err`.
+/// its diagnostics, the flags of the method it passes with their values, the flags it passes only
+/// when their variable is not empty (flag and variable), and the redirect that ends its command
+/// line and sends its diagnostics to `err`.
 pub struct Call {
     pub step: &'static str,
     pub method: &'static str,
     pub response: &'static str,
     pub err: &'static str,
     pub fields: &'static [(&'static str, &'static str)],
+    pub optional: &'static [(&'static str, &'static str)],
     pub redirect: &'static str,
 }
 
@@ -55,6 +62,7 @@ pub const CALLS: [Call; 2] = [
         response: "$RUNNER_TEMP/hkctl-set.json",
         err: "$RUNNER_TEMP/hkctl-set.err",
         fields: &[("--service", "$SERVICE"), ("--request", REQUEST_FILE)],
+        optional: &[HOST_GROUP],
         redirect: SET_REDIRECT,
     },
     Call {
@@ -67,17 +75,32 @@ pub const CALLS: [Call; 2] = [
             ("--version", "$VERSION"),
             WAIT_SECS,
         ],
+        optional: &[HOST_GROUP],
         redirect: r#"2> "$RUNNER_TEMP/hkctl-wait.err""#,
     },
 ];
 /// What a call step's `env` gives each variable its command names, exactly: the caller's inputs.
-pub const CALL_ENV: [(&str, &str); 5] = [
+pub const CALL_ENV: [(&str, &str); 6] = [
     ("SERVICE", "${{ inputs.service }}"),
     ("VERSION", "${{ inputs.version }}"),
     ("COORDINATOR_URL", "${{ inputs.coordinator_url }}"),
     ("AUDIENCE", "${{ inputs.audience }}"),
     ("MAX_POLLS", MAX_POLLS_INPUT),
+    ("HOST_GROUP", "${{ inputs.host_group }}"),
 ];
+/// The flag both calls pass only when the `host_group` input is not empty, and its variable.
+pub const HOST_GROUP: (&str, &str) = ("--host-group", "HOST_GROUP");
+
+/// The one word that passes `flag` with the value of `var` when `var` is not empty and nothing
+/// when it is: bash expands it to no argument or to the one argument `--flag=<value>`.
+pub fn optional_word(flag: &str, var: &str) -> String {
+    format!("${{{var}:+\"{flag}=${var}\"}}")
+}
+
+/// Whether `word` is written as an optional flag, `${VAR:+...}`, of any variable and flag.
+fn is_optional_like(word: &str) -> bool {
+    word.starts_with("${") && word.contains(":+")
+}
 /// The service of hkctl both calls are methods of.
 pub const SERVICE: &str = "releases";
 /// The global flags each call passes before the service, with their values: the private
@@ -250,13 +273,47 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
             ));
         }
     }
-    if rest.get(2 + field_took..) != Some(&words(call.redirect)[..]) {
+    let tail = rest.get(2 + field_took..).unwrap_or_default();
+    let lead = tail.iter().take_while(|w| is_optional_like(w)).count();
+    let like = tail.iter().filter(|w| is_optional_like(w)).count();
+    if lead != like || tail.get(lead..) != Some(&words(call.redirect)[..]) {
         problems.push(format!(
             "{who} does not end with `{}`, which sends its diagnostics to `{}`, the file the outputs step reads",
             call.redirect, call.err
         ));
     }
+    let own: Vec<String> = call
+        .optional
+        .iter()
+        .map(|(flag, var)| optional_word(flag, var))
+        .collect();
+    for word in tail.iter().filter(|w| is_optional_like(w)) {
+        if !own.iter().any(|o| o == word) {
+            problems.push(format!(
+                "{who} passes `{word}`, which is not a conditional flag of the call"
+            ));
+        }
+    }
     let after = rest.get(2..2 + field_took).unwrap_or_default();
+    for (flag, var) in call.optional {
+        let word = optional_word(flag, var);
+        if !known.iter().any(|k| k == flag) {
+            problems.push(format!(
+                "{who} passes `{word}`, but `{flag}` is not a flag of `{SERVICE} {}`",
+                call.method
+            ));
+        }
+        if !values(after, flag).is_empty() {
+            problems.push(format!(
+                "{who} passes `{flag}` unconditionally: an empty `{var}` must send no field, so pass it only as the one word `{word}`"
+            ));
+        }
+        if tail.iter().filter(|w| **w == word).count() != 1 {
+            problems.push(format!(
+                "{who} does not pass `{word}` exactly once after its fields"
+            ));
+        }
+    }
     for (flag, want) in call.fields {
         if values(after, flag) != [*want] {
             problems.push(format!(
