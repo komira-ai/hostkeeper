@@ -47,7 +47,7 @@ one credential is the OIDC token GitHub issues to the job.
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds
    no other token right; it joins no tailnet.
 5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
-   the condition of `targets` and only when its release is the newest published). The coordinator is updated by its own machine
+   the same condition as `targets`, plus that its release is the newest published). The coordinator is updated by its own machine
    (`hostkeeper-coordinator-update`, a release asset, on a timer there, [coordinator-update.md](coordinator-update.md)),
    not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
    same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from

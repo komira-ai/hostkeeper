@@ -502,7 +502,8 @@ jobs:
   #          attempts 2 and 3 are skipped when attempt 1 landed, and any job it needs that
   #          failed, at any depth, still stops it. The release's targets name no other channel
   #          (no rpm entry): the workflow lint holds these needs to the channels of the targets
-  #          the real `release targets` writes (crates/xtask/tests/workflows/desired.rs).
+  #          the real `release targets` writes (crates/xtask/tests/workflows/desired.rs, and
+  #          desired_channels_tests.rs beside it).
   #          The join, when HOSTKEEPER_TAILNET_CLIENT_ID is set, asks for the tag of the
   #          repository variable HOSTKEEPER_TAILNET_TAG (`tag:ci`), the one the federation's trust
   #          credential issues; the client checks it at its first step, with or without the join,

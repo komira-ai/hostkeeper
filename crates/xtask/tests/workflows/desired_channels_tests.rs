@@ -337,6 +337,12 @@ fn set_desired_runs_once_each_channel_holds_the_release_and_not_otherwise() {
         ),
         case("no apt write ran with its settings", &[], Run::Going, false),
         case(
+            "attempt 1 lost the race and nothing followed",
+            &[(W1, "true")],
+            Run::Going,
+            false,
+        ),
+        case(
             "attempt 3 lost the race too, and failed",
             &[(W1, "true"), (W2, "true"), (W3, "true")],
             Run::Failed,
