@@ -40,7 +40,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::Adapters;
 use hostkeeper_daemon::boot::BOOT_ID_FILE;
-use hostkeeper_daemon::cli::{HostFiles, host_ports};
+use hostkeeper_daemon::cli::{DEFAULT_FACTS_FILE, HostFiles, host_ports};
 use hostkeeper_daemon::start::Settings;
 use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print, print_args};
@@ -194,12 +194,14 @@ fn slot_labels() -> [Label; 2] {
 }
 
 /// The places of the host this rig takes over: the daemon's programs, its pki and placed
-/// state, and the plists of hello's two slots.
+/// state, its default facts file (a daemon started without `--facts-file`, as the across-release
+/// rig's must be, writes it), and the plists of hello's two slots.
 fn taken_places() -> Vec<PathBuf> {
     let mut places = vec![
         PathBuf::from(LIBRARY_DIR),
         PathBuf::from(PKI_DIR),
         PathBuf::from(PLACED_DIR),
+        PathBuf::from(DEFAULT_FACTS_FILE),
     ];
     places.extend(slot_labels().map(|label| plist_link(&label)));
     places
