@@ -423,6 +423,47 @@ fn release_channel_sync_without_its_channel_or_trust_list_fails_with_status_1_an
 }
 
 #[test]
+fn coordinator_update_without_its_download_directory_fails_with_status_1_and_a_bad_url_status_2() {
+    // Catches: a missing download directory made or run against (the request is refused before
+    // docker or GitHub is asked anything), or a URL that is not https read as a failure, not a
+    // usage error.
+    let d = dir("coordinator-update");
+    let url = ["--coordinator-url", "https://coordinator.example.com:8444"];
+    let o = run(
+        &d,
+        &[
+            "coordinator-update",
+            "--download-dir",
+            "missing",
+            url[0],
+            url[1],
+            "--ca-file",
+            "ca.pem",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert_eq!(
+        stderr(&o),
+        "xtask: --download-dir missing: not a directory\n"
+    );
+    assert!(!d.join("missing").exists());
+    let o = run(
+        &d,
+        &[
+            "coordinator-update",
+            "--download-dir",
+            ".",
+            "--coordinator-url",
+            "http://coordinator.example.com:8444",
+            "--ca-file",
+            "ca.pem",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert_eq!(stdout(&o), "");
+}
+
+#[test]
 fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_status_2() {
     // Catches: a rebuilt package written over a staged one, a release lacking a required
     // platform staged, or a name outside the daemon's grammar reported as a failure (status 1)

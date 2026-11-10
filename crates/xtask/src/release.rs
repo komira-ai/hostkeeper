@@ -78,10 +78,10 @@
 
 mod channel_host;
 mod channel_stage;
-mod check;
+pub(crate) mod check;
 mod check_binary;
 mod check_image_ui;
-mod compare_images;
+pub(crate) mod compare_images;
 pub(crate) mod contract;
 #[cfg(test)]
 mod doc_tests;

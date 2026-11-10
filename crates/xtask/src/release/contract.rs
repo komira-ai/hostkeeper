@@ -278,6 +278,11 @@ impl Repo {
     pub(crate) fn as_str(&self) -> &str {
         &self.0
     }
+
+    /// This repository, [`REPO`].
+    pub(crate) fn hostkeeper() -> Repo {
+        Repo(REPO.to_owned())
+    }
 }
 
 impl FromStr for Repo {
