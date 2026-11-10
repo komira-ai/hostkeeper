@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="img" aria-label="Components of the console broker: operator client and coordinator and relay inside the hostkeeper box; BMC, Mac, ipmitool, browser and NanoHUB outside it.">
-<title>Components: what hostkeeper runs for the console broker</title>
-<desc>The operator's client, the coordinator's console module and the relay are hostkeeper. The BMC, the Mac, ipmitool, the browser and NanoHUB are not.</desc>
-<defs><marker id="console-broker-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="console-broker-components-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 700" width="1300" height="700" role="img" aria-label="Components of the console: the coordinator, the web UI and the MDM gate inside the hostkeeper box; browser, ipmitool, subnet route, BMC, Mac and NanoHUB outside it.">
+<title>Components: what hostkeeper runs for the console</title>
+<desc>The coordinator with its console module, the web UI it serves and the MDM gate inside it are hostkeeper. The browser, ipmitool, the tailnet route, the BMC, the Mac and NanoHUB are not.</desc>
+<defs><marker id="console-broker-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
 .box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,66 +20,70 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="760" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">Console broker components: the box is exactly what hostkeeper runs</text>
-<rect x="20" y="60" width="760" height="620" rx="8" class="tb"/>
-<text x="36" y="84" class="b" text-anchor="start">hostkeeper (all of it is this repository)</text>
-<rect x="40" y="110" width="200" height="100" rx="5" class="box"/>
-<text x="140.0" y="132" class="b" text-anchor="middle">hostkeeper console</text>
-<text x="140.0" y="150" class="t-m" text-anchor="middle">client verb on the</text>
-<text x="140.0" y="166" class="t-m" text-anchor="middle">operator's machine</text>
-<text x="140.0" y="182" class="t-m" text-anchor="middle">local port 127.0.0.1</text>
-<rect x="300" y="110" width="220" height="240" rx="5" class="box-b"/>
-<text x="410.0" y="132" class="b" text-anchor="middle">Coordinator (dev box)</text>
-<text x="410.0" y="150" class="t-m" text-anchor="middle">console module:</text>
-<text x="410.0" y="166" class="t-m" text-anchor="middle">Console/* RPCs, operators file,</text>
-<text x="410.0" y="182" class="t-m" text-anchor="middle">session table, splice,</text>
-<text x="410.0" y="198" class="t-m" text-anchor="middle">console listener</text>
-<text x="410.0" y="214" class="t-m" text-anchor="middle">tokens + audit-only append,</text>
-<text x="410.0" y="230" class="t-m" text-anchor="middle">inventory, credential file (D5)</text>
-<rect x="560" y="110" width="200" height="100" rx="5" class="box-o"/>
-<text x="660.0" y="132" class="b" text-anchor="middle">Console relay</text>
-<text x="660.0" y="150" class="t-m" text-anchor="middle">unprivileged, lab host</text>
-<text x="660.0" y="166" class="t-m" text-anchor="middle">resolver, ipmitool port,</text>
-<text x="660.0" y="182" class="t-m" text-anchor="middle">SID login, TCP dials</text>
-<rect x="560" y="260" width="200" height="80" rx="5" class="box-o"/>
-<text x="660.0" y="282" class="b" text-anchor="middle">hostkeeper daemon</text>
-<text x="660.0" y="300" class="t-m" text-anchor="middle">not involved in the</text>
-<text x="660.0" y="316" class="t-m" text-anchor="middle">console path (D1)</text>
-<rect x="300" y="400" width="220" height="100" rx="5" class="box-b"/>
-<text x="410.0" y="422" class="b" text-anchor="middle">MDM gate (in coordinator)</text>
-<text x="410.0" y="440" class="t-m" text-anchor="middle">EnableRemoteDesktop</text>
-<text x="410.0" y="456" class="t-m" text-anchor="middle">(designed, C11)</text>
-<path d="M240,160 L300,160" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="270" y="150" class="t-m lbl" text-anchor="middle">tailnet, TLS</text>
-<path d="M560,140 L520,140" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
-<text x="540" y="130" class="t-m lbl" text-anchor="middle">held poll</text>
-<path d="M560,180 L520,180" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="540" y="198" class="t-m lbl" text-anchor="middle">data conn</text>
-<path d="M410,350 L410,400" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<rect x="820" y="110" width="340" height="60" rx="5" class="box"/>
-<text x="990.0" y="132" class="b" text-anchor="middle">BMC (lab LAN)</text>
-<text x="990.0" y="150" class="t-m" text-anchor="middle">UDP 623 RMCP+ / HTTPS 443</text>
-<rect x="820" y="200" width="340" height="60" rx="5" class="box"/>
-<text x="990.0" y="222" class="b" text-anchor="middle">Mac (lab LAN)</text>
-<text x="990.0" y="240" class="t-m" text-anchor="middle">TCP 5900 Screen Sharing</text>
-<rect x="820" y="290" width="340" height="60" rx="5" class="box-p"/>
-<text x="990.0" y="312" class="b" text-anchor="middle">ipmitool (child of the relay)</text>
-<text x="990.0" y="330" class="t-m" text-anchor="middle">not hostkeeper</text>
-<rect x="820" y="400" width="340" height="60" rx="5" class="box"/>
-<text x="990.0" y="422" class="b" text-anchor="middle">NanoHUB (MDM host)</text>
-<text x="990.0" y="440" class="t-m" text-anchor="middle">API on loopback (Q1)</text>
-<rect x="40" y="260" width="200" height="60" rx="5" class="box-p"/>
-<text x="140.0" y="282" class="b" text-anchor="middle">Browser / VNC viewer</text>
-<text x="140.0" y="300" class="t-m" text-anchor="middle">connects to 127.0.0.1</text>
-<path d="M140,260 L140,210" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="190" y="240" class="t-m lbl" text-anchor="middle">local port</text>
-<path d="M760,140 L820,140" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="790" y="128" class="t-m lbl" text-anchor="middle">RMCP+, TLS</text>
-<path d="M760,220 L820,230" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="790" y="208" class="t-m lbl" text-anchor="middle">RFB</text>
-<path d="M760,170 L820,310" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
-<path d="M520,450 L820,430" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
-<text x="670" y="455" class="t-m lbl" text-anchor="middle">loopback only today</text>
-<text x="20" y="712" class="t-m" text-anchor="start">Solid: a byte stream or request. Dashed: a held poll, or a path blocked until Q1 is answered. The lab LAN is never routed onto the tailnet.</text>
+<rect x="0" y="0" width="1300" height="700" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Console components: the dashed orange box is exactly what hostkeeper runs</text>
+<rect x="250" y="56" width="540" height="620" rx="8" class="tb"/>
+<text x="266" y="80" class="b" text-anchor="start">hostkeeper (this repository)</text>
+<rect x="270" y="100" width="240" height="120" rx="5" class="box"/>
+<text x="390.0" y="122" class="b" text-anchor="middle">Web UI (ui/)</text>
+<text x="390.0" y="140" class="t-m" text-anchor="middle">device list: Console, Desktop links</text>
+<text x="390.0" y="156" class="t-m" text-anchor="middle">host page: Power, Boot device</text>
+<text x="390.0" y="172" class="t-m" text-anchor="middle">vendored xterm.js and noVNC</text>
+<text x="390.0" y="188" class="t-m" text-anchor="middle">bearer token in memory only</text>
+<rect x="270" y="250" width="240" height="270" rx="5" class="box-b"/>
+<text x="390.0" y="272" class="b" text-anchor="middle">Coordinator</text>
+<text x="390.0" y="290" class="t-m" text-anchor="middle">operator API: Console/*</text>
+<text x="390.0" y="306" class="t-m" text-anchor="middle">console module: sessions,</text>
+<text x="390.0" y="322" class="t-m" text-anchor="middle">WebSocket route, serial and</text>
+<text x="390.0" y="338" class="t-m" text-anchor="middle">RFB bridges, SOL child</text>
+<text x="390.0" y="354" class="t-m" text-anchor="middle">--console-operators-file</text>
+<text x="390.0" y="370" class="t-m" text-anchor="middle">--console-targets-file</text>
+<text x="390.0" y="386" class="t-m" text-anchor="middle">--console-bmc-credential-file</text>
+<text x="390.0" y="402" class="t-m" text-anchor="middle">audit file + audit-only append</text>
+<text x="390.0" y="418" class="t-m" text-anchor="middle">inventory (bmc_mac), tokens file,</text>
+<text x="390.0" y="434" class="t-m" text-anchor="middle">host groups, Mac allowlist</text>
+<rect x="270" y="540" width="500" height="110" rx="5" class="box-b"/>
+<text x="520.0" y="562" class="b" text-anchor="middle">MDM gate (linked into the coordinator)</text>
+<text x="520.0" y="580" class="t-m" text-anchor="middle">--mdm-baseline-file: group baseline at enrollment step 3</text>
+<text x="520.0" y="596" class="t-m" text-anchor="middle">ProfileList re-apply, EnableRemoteDesktop (supervised only)</text>
+<text x="520.0" y="612" class="t-m" text-anchor="middle">RestartDevice / ShutDownDevice for Mac power</text>
+<rect x="20" y="100" width="190" height="120" rx="5" class="box-p"/>
+<text x="115.0" y="122" class="b" text-anchor="middle">Operator's browser</text>
+<text x="115.0" y="140" class="t-m" text-anchor="middle">runs the UI, xterm.js, noVNC</text>
+<text x="115.0" y="156" class="t-m" text-anchor="middle">tailnet, TLS to the</text>
+<text x="115.0" y="172" class="t-m" text-anchor="middle">coordinator's private listener</text>
+<rect x="850" y="90" width="430" height="60" rx="5" class="box-p"/>
+<text x="1065.0" y="112" class="b" text-anchor="middle">ipmitool (child of the coordinator)</text>
+<text x="1065.0" y="130" class="t-m" text-anchor="middle">not hostkeeper code; password in its environment</text>
+<rect x="850" y="190" width="430" height="70" rx="5" class="box-p"/>
+<text x="1065.0" y="212" class="b" text-anchor="middle">Tailscale subnet route + ACL (configuration)</text>
+<text x="1065.0" y="230" class="t-m" text-anchor="middle">one lab host advertises &lt;lab-subnet&gt;; only the coordinator's tag</text>
+<text x="1065.0" y="246" class="t-m" text-anchor="middle">may reach BMC UDP 623 and Mac TCP 5900</text>
+<rect x="850" y="310" width="200" height="70" rx="5" class="box"/>
+<text x="950.0" y="332" class="b" text-anchor="middle">BMC (each server)</text>
+<text x="950.0" y="350" class="t-m" text-anchor="middle">RMCP+ SOL, COM2 = ttyS1</text>
+<rect x="1080" y="310" width="200" height="70" rx="5" class="box"/>
+<text x="1180.0" y="332" class="b" text-anchor="middle">Mac</text>
+<text x="1180.0" y="350" class="t-m" text-anchor="middle">Screen Sharing, RFB 5900</text>
+<rect x="850" y="520" width="430" height="70" rx="5" class="box-p"/>
+<text x="1065.0" y="542" class="b" text-anchor="middle">NanoHUB (MDM server)</text>
+<text x="1065.0" y="560" class="t-m" text-anchor="middle">API on loopback today; APNs push to the Mac</text>
+<path d="M210,140 L270,140" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="240" y="130" class="t-m lbl" text-anchor="middle">page</text>
+<path d="M210,190 L270,330" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="200" y="262" class="t-m lbl" text-anchor="middle">API, WebSocket</text>
+<path d="M510,300 L850,125" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="700" y="195" class="t-m lbl" text-anchor="middle">spawn, pipes</text>
+<path d="M1065,150 L1065,190" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="1115" y="175" class="t-m lbl" text-anchor="middle">UDP 623</text>
+<path d="M510,420 L850,235" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="720" y="360" class="t-m lbl" text-anchor="middle">TCP 5900 (Mac)</text>
+<path d="M950,260 L950,310" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<path d="M1180,260 L1180,310" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<path d="M770,595 L850,555" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="810" y="590" class="t-m lbl" text-anchor="middle">HTTP API</text>
+<path d="M1180,520 L1180,380" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="1230" y="450" class="t-m lbl" text-anchor="middle">MDM commands</text>
+<path d="M390,520 L390,540" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="20" y="696" class="t-m" text-anchor="start">The hostkeeper daemon is not on any console path. The network path is drawn outside the box on purpose: it is configuration, or nothing if the coordinator host has a lab-LAN interface.</text>
 </svg>

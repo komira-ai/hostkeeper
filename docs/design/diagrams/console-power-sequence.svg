@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 623" width="1200" height="623" role="img" aria-label="Time runs down the page across the operator client, coordinator, relay and the BMC. The reason is required for off, cycle, reset and persistent boot changes.">
-<title>Power action: one typed RPC, one audit line, one IPMI command</title>
-<desc>Time runs down the page across the operator client, coordinator, relay and the BMC. The reason is required for off, cycle, reset and persistent boot changes.</desc>
-<defs><marker id="console-power-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="console-power-sequence-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 626" width="1200" height="626" role="img" aria-label="Time runs down the page across the browser, coordinator, ipmitool and the BMC. The audit line is written before the command is sent; the MAC check is in the same session.">
+<title>Power: one typed call, one audit line, one IPMI session</title>
+<desc>Time runs down the page across the browser, coordinator, ipmitool and the BMC. The audit line is written before the command is sent; the MAC check is in the same session.</desc>
+<defs><marker id="console-power-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
 .box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,54 +20,41 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="623" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">Power action: one typed RPC, one audit line, one IPMI command</text>
-<path d="M130,76 L130,593" class="life"/>
-<path d="M400,76 L400,593" class="life"/>
-<path d="M680,76 L680,593" class="life"/>
-<path d="M960,76 L960,593" class="life"/>
-<rect x="55" y="44" width="150" height="32" rx="5" class="box"/>
-<text x="130" y="65" class="b" text-anchor="middle">Operator client</text>
-<rect x="325" y="44" width="150" height="32" rx="5" class="box-b"/>
-<text x="400" y="65" class="b" text-anchor="middle">Coordinator</text>
-<rect x="605" y="44" width="150" height="32" rx="5" class="box-o"/>
-<text x="680" y="65" class="b" text-anchor="middle">Relay (lab host)</text>
-<rect x="885" y="44" width="150" height="32" rx="5" class="box"/>
-<text x="960" y="65" class="b" text-anchor="middle">BMC (UDP 623)</text>
-<path d="M130,110 L400,110" class="ln" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="144" cy="96" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="144" y="100" class="b" font-size="12" text-anchor="middle">1</text>
-<text x="265" y="90" class="t-m lbl" text-anchor="middle">Console/Power(node, cycle, reason)</text>
-<rect x="290" y="150" width="220" height="28" rx="5" class="box-o"/>
-<text x="400" y="168" class="t-m" text-anchor="middle">operators file, audit line</text>
-<circle cx="275" cy="164" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="275" y="168" class="b" font-size="12" text-anchor="middle">2</text>
-<path d="M400,218 L680,218" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="414" cy="204" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="414" y="208" class="b" font-size="12" text-anchor="middle">3</text>
-<text x="540" y="198" class="t-m lbl" text-anchor="middle">command (held poll)</text>
-<rect x="570" y="258" width="220" height="28" rx="5" class="box-o"/>
-<text x="680" y="276" class="t-m" text-anchor="middle">MAC -&gt; address, RMCP ping, verify</text>
-<circle cx="555" cy="272" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="555" y="276" class="b" font-size="12" text-anchor="middle">4</text>
-<path d="M680,326 L400,326" class="ln" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="666" cy="312" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="666" y="316" class="b" font-size="12" text-anchor="middle">5</text>
-<text x="540" y="306" class="t-m lbl" text-anchor="middle">dial back (Upgrade), then credential</text>
-<path d="M680,380 L960,380" class="ln" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="694" cy="366" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="694" y="370" class="b" font-size="12" text-anchor="middle">6</text>
-<text x="820" y="360" class="t-m lbl" text-anchor="middle">ipmitool chassis power status, then cycle</text>
-<path d="M960,434 L680,434" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="946" cy="420" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="946" y="424" class="b" font-size="12" text-anchor="middle">7</text>
-<text x="820" y="414" class="t-m lbl" text-anchor="middle">accepted</text>
-<path d="M680,488 L400,488" class="ln" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="666" cy="474" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="666" y="478" class="b" font-size="12" text-anchor="middle">8</text>
-<text x="540" y="468" class="t-m lbl" text-anchor="middle">result (closed enum)</text>
-<path d="M400,542 L130,542" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
-<circle cx="386" cy="528" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="386" y="532" class="b" font-size="12" text-anchor="middle">9</text>
-<text x="265" y="522" class="t-m lbl" text-anchor="middle">accepted by the BMC</text>
+<rect x="0" y="0" width="1200" height="626" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Power: one typed call, one audit line, one IPMI session</text>
+<path d="M150,92 L150,586" class="life"/>
+<path d="M450,92 L450,586" class="life"/>
+<path d="M750,92 L750,586" class="life"/>
+<path d="M1050,92 L1050,586" class="life"/>
+<rect x="40" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="150" y="64" class="b" text-anchor="middle">Operator's browser</text>
+<text x="150" y="82" class="t-m" text-anchor="middle">the web UI page</text>
+<rect x="340" y="44" width="220" height="48" rx="5" class="box-b"/>
+<text x="450" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="450" y="82" class="t-m" text-anchor="middle">operator API + console module</text>
+<rect x="640" y="44" width="220" height="48" rx="5" class="box-p"/>
+<text x="750" y="64" class="b" text-anchor="middle">ipmitool</text>
+<text x="750" y="82" class="t-m" text-anchor="middle">child of the coordinator</text>
+<rect x="940" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="1050" y="64" class="b" text-anchor="middle">BMC</text>
+<text x="1050" y="82" class="t-m" text-anchor="middle">UDP 623, lab LAN</text>
+<path d="M150,140 L450,140" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<text x="300" y="133" class="t-m lbl" text-anchor="middle">1. POST Console/Power(host, cycle, reason) + Bearer   [T]</text>
+<rect x="241.0" y="174" width="418.0" height="28" rx="5" class="box-o"/>
+<text x="450" y="192" class="t-m" text-anchor="middle">2. token, operators file, reason, audit line power_action   [F]</text>
+<path d="M450,236 L750,236" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<text x="600" y="229" class="t-m lbl" text-anchor="middle">3. spawn exec: password in environment</text>
+<path d="M750,284 L1050,284" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<text x="900" y="277" class="t-m lbl" text-anchor="middle">4. RMCP+ session; lan print   [~28 exchanges]</text>
+<path d="M1050,332 L750,332" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<text x="900" y="325" class="t-m lbl" text-anchor="middle">5. BMC MAC</text>
+<rect x="588.25" y="366" width="323.5" height="28" rx="5" class="box-o"/>
+<text x="750" y="384" class="t-m" text-anchor="middle">6. MAC = record's bmc_mac, else address_mismatch</text>
+<path d="M750,428 L1050,428" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<text x="900" y="421" class="t-m lbl" text-anchor="middle">7. chassis power status; on if off, else cycle   [2 exchanges]</text>
+<path d="M750,476 L450,476" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<text x="600" y="469" class="t-m lbl" text-anchor="middle">8. closed result enum</text>
+<path d="M450,524 L150,524" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<text x="300" y="517" class="t-m lbl" text-anchor="middle">9. accepted by the BMC (not the host's state)</text>
+<text x="20" y="608" class="t-m" text-anchor="start">A Mac takes the same call through the MDM gate: RestartDevice or ShutDownDevice, supervised Macs only, answered when queued.</text>
 </svg>

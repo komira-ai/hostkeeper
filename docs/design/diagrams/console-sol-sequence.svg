@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 785" width="1200" height="785" role="img" aria-label="Time runs down the page across the operator client, coordinator, relay and the BMC. The coordinator writes the audit line before the relay is commanded; the credential reaches the relay only after it attaches.">
-<title>Open SOL: from the operator's terminal to the first byte of the node's serial console</title>
-<desc>Time runs down the page across the operator client, coordinator, relay and the BMC. The coordinator writes the audit line before the relay is commanded; the credential reaches the relay only after it attaches.</desc>
-<defs><marker id="console-sol-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="console-sol-sequence-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 674" width="1200" height="674" role="img" aria-label="Time runs down the page across the browser, coordinator, ipmitool and the BMC. The audit line is written before the device is contacted; the MAC check runs in the same IPMI session as the console.">
+<title>Console open: from the Console link to the first byte of the node's serial port</title>
+<desc>Time runs down the page across the browser, coordinator, ipmitool and the BMC. The audit line is written before the device is contacted; the MAC check runs in the same IPMI session as the console.</desc>
+<defs><marker id="console-sol-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
 .box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
@@ -20,66 +20,43 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 .t-m{fill:#5A5A57;font-size:12px}
 .lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
 </style>
-<rect x="0" y="0" width="1200" height="785" fill="#FFFFFF"/>
-<text x="20" y="28" class="b" font-size="16" text-anchor="start">Open SOL: from the operator's terminal to the first byte of the node's serial console</text>
-<path d="M130,76 L130,755" class="life"/>
-<path d="M400,76 L400,755" class="life"/>
-<path d="M680,76 L680,755" class="life"/>
-<path d="M960,76 L960,755" class="life"/>
-<rect x="55" y="44" width="150" height="32" rx="5" class="box"/>
-<text x="130" y="65" class="b" text-anchor="middle">Operator client</text>
-<rect x="325" y="44" width="150" height="32" rx="5" class="box-b"/>
-<text x="400" y="65" class="b" text-anchor="middle">Coordinator</text>
-<rect x="605" y="44" width="150" height="32" rx="5" class="box-o"/>
-<text x="680" y="65" class="b" text-anchor="middle">Relay (lab host)</text>
-<rect x="885" y="44" width="150" height="32" rx="5" class="box"/>
-<text x="960" y="65" class="b" text-anchor="middle">BMC (UDP 623)</text>
-<path d="M130,110 L400,110" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="144" cy="96" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="144" y="100" class="b" font-size="12" text-anchor="middle">1</text>
-<text x="265" y="90" class="t-m lbl" text-anchor="middle">Upgrade + bearer token (console listener)</text>
-<rect x="290" y="150" width="220" height="28" rx="5" class="box-o"/>
-<text x="400" y="168" class="t-m" text-anchor="middle">operators file, busy check, audit line</text>
-<circle cx="275" cy="164" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="275" y="168" class="b" font-size="12" text-anchor="middle">2</text>
-<path d="M400,218 L680,218" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="414" cy="204" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="414" y="208" class="b" font-size="12" text-anchor="middle">3</text>
-<text x="540" y="198" class="t-m lbl" text-anchor="middle">open cmd, session id, MAC (held poll)</text>
-<rect x="570" y="258" width="220" height="28" rx="5" class="box-o"/>
-<text x="680" y="276" class="t-m" text-anchor="middle">MAC -&gt; address, RMCP ping, verify</text>
-<circle cx="555" cy="272" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="555" y="276" class="b" font-size="12" text-anchor="middle">4</text>
-<path d="M680,326 L400,326" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="666" cy="312" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="666" y="316" class="b" font-size="12" text-anchor="middle">5</text>
-<text x="540" y="306" class="t-m lbl" text-anchor="middle">dial back (Upgrade), then credential</text>
-<path d="M680,380 L960,380" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="694" cy="366" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="694" y="370" class="b" font-size="12" text-anchor="middle">6</text>
-<text x="820" y="360" class="t-m lbl" text-anchor="middle">ipmitool RMCP+ session (-C 3)</text>
-<path d="M680,434 L960,434" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="694" cy="420" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="694" y="424" class="b" font-size="12" text-anchor="middle">7</text>
-<text x="820" y="414" class="t-m lbl" text-anchor="middle">sol activate</text>
-<path d="M400,488 L130,488" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="386" cy="474" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="386" y="478" class="b" font-size="12" text-anchor="middle">8</text>
-<text x="265" y="468" class="t-m lbl" text-anchor="middle">101 Switching Protocols</text>
-<path d="M960,542 L680,542" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="946" cy="528" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="946" y="532" class="b" font-size="12" text-anchor="middle">9</text>
-<text x="820" y="522" class="t-m lbl" text-anchor="middle">console bytes</text>
-<path d="M680,596 L130,596" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="666" cy="582" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="666" y="586" class="b" font-size="12" text-anchor="middle">10</text>
-<text x="405" y="576" class="t-m lbl" text-anchor="middle">spliced via coordinator</text>
-<path d="M130,650 L960,650" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="144" cy="636" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="144" y="640" class="b" font-size="12" text-anchor="middle">11</text>
-<text x="545" y="630" class="t-m lbl" text-anchor="middle">keystrokes, same path in reverse</text>
-<path d="M130,704 L400,704" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
-<circle cx="144" cy="690" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
-<text x="144" y="694" class="b" font-size="12" text-anchor="middle">12</text>
-<text x="265" y="684" class="t-m lbl" text-anchor="middle">close or idle: deactivate, close line</text>
+<rect x="0" y="0" width="1200" height="674" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Console open: from the Console link to the first byte of the node's serial port</text>
+<path d="M150,92 L150,634" class="life"/>
+<path d="M450,92 L450,634" class="life"/>
+<path d="M750,92 L750,634" class="life"/>
+<path d="M1050,92 L1050,634" class="life"/>
+<rect x="40" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="150" y="64" class="b" text-anchor="middle">Operator's browser</text>
+<text x="150" y="82" class="t-m" text-anchor="middle">the web UI page</text>
+<rect x="340" y="44" width="220" height="48" rx="5" class="box-b"/>
+<text x="450" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="450" y="82" class="t-m" text-anchor="middle">operator API + console module</text>
+<rect x="640" y="44" width="220" height="48" rx="5" class="box-p"/>
+<text x="750" y="64" class="b" text-anchor="middle">ipmitool</text>
+<text x="750" y="82" class="t-m" text-anchor="middle">child of the coordinator</text>
+<rect x="940" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="1050" y="64" class="b" text-anchor="middle">BMC</text>
+<text x="1050" y="82" class="t-m" text-anchor="middle">UDP 623, lab LAN</text>
+<path d="M150,140 L450,140" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="300" y="133" class="t-m lbl" text-anchor="middle">1. POST Console/Open(host, reason) + Bearer   [T + F]</text>
+<rect x="275.65" y="174" width="348.7" height="28" rx="5" class="box-o"/>
+<text x="450" y="192" class="t-m" text-anchor="middle">2. token, operators file, target address, audit line</text>
+<path d="M450,236 L150,236" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="300" y="229" class="t-m lbl" text-anchor="middle">3. session id (256 bits), expires_in_s</text>
+<path d="M150,284 L450,284" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="300" y="277" class="t-m lbl" text-anchor="middle">4. WebSocket upgrade, bearer in subprotocol   [3T]</text>
+<path d="M450,332 L750,332" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="600" y="325" class="t-m lbl" text-anchor="middle">5. spawn: password in environment, not argv</text>
+<path d="M750,380 L1050,380" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="900" y="373" class="t-m lbl" text-anchor="middle">6. RMCP+ session; lan print: MAC = record?   [~28 exchanges]</text>
+<path d="M750,428 L1050,428" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="900" y="421" class="t-m lbl" text-anchor="middle">7. sol set bit rate if not 115.2; sol activate</text>
+<path d="M1050,476 L150,476" class="ln-d" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="600" y="469" class="t-m lbl" text-anchor="middle">8. serial bytes: BMC &gt; ipmitool &gt; coordinator &gt; xterm</text>
+<path d="M150,524 L1050,524" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="600" y="517" class="t-m lbl" text-anchor="middle">9. keystrokes, the same path in reverse</text>
+<path d="M150,572 L450,572" class="ln" marker-end="url(#console-sol-sequence-ak)"/>
+<text x="300" y="565" class="t-m lbl" text-anchor="middle">10. close, tab closed or idle: sol deactivate, close line</text>
+<text x="20" y="656" class="t-m" text-anchor="start">T browser-coordinator round trip, F audit fsync, exchange = one IPMI request and answer (R + B). Figures in section 11.1.</text>
 </svg>
