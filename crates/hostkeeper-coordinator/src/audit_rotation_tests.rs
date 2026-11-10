@@ -30,6 +30,8 @@ fn line(seq: u64) -> AuditLine {
         action: "exclude".to_owned(),
         detail: Detail {
             host_group: None,
+            subject: None,
+            source: None,
             service: Some("kbf".to_owned()),
             node_id: Some("s2".to_owned()),
             reason: None,

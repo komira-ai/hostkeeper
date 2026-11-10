@@ -223,6 +223,34 @@ fn the_release_before_reads_the_ops_file_of_a_halted_and_cleared_farm() {
     assert_eq!(halts["services"]["kbf"]["halt_seen"][0]["node_id"], "s2");
 }
 
+/// Proves: an entry with a subject and a source, in the ring of the ops file, leaves the file as
+/// the release before reads it (it refuses a key it does not know), and the ring in memory keeps
+/// both.
+///
+/// Catches: `subject` or `source` written to the ops file, where the release before would refuse
+/// the whole file on a rollback (B8).
+#[test]
+fn the_release_before_reads_an_ops_file_whose_ring_holds_a_subject_and_a_source() {
+    let dir = scratch("ops-prev-subject");
+    let path = dir.path().join("ops.json");
+    let store = OpsStore::open(&path).expect("a store");
+    let mut entry = AuditEntry::new("admin", "password_reset");
+    entry.subject = Some("alice".to_owned());
+    entry.source = Some("192.0.2.7:4000".to_owned());
+    store
+        .change(Write::BeforeMemory, entry, |_| {})
+        .expect("written");
+    let ops = text(&path);
+    assert_eq!(previous::reads(&ops), Ok(()), "{ops}");
+    assert!(
+        !ops.contains("alice") && !ops.contains("192.0.2.7"),
+        "{ops}"
+    );
+    let kept = store.state().audit.pop().expect("the ring entry");
+    assert_eq!(kept.subject.as_deref(), Some("alice"));
+    assert_eq!(kept.source.as_deref(), Some("192.0.2.7:4000"));
+}
+
 /// Catches: anything of a halt lost between a write and the next start: the state read from
 /// the two files is the state written, reports, kept reports and generation included.
 #[test]
