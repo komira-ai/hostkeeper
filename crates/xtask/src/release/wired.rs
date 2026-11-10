@@ -46,7 +46,6 @@ impl<E: Exec> Adapters for Wired<E> {
             git: &self.git,
             runs: &self.gh,
             store: &self.gh,
-            source: &self.gh,
             verifier: &self.gh,
             run_version: &self.version_of,
             pkgbuild: &self.pkgbuild,

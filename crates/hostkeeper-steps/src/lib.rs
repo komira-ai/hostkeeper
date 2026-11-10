@@ -22,7 +22,7 @@
 //!   behind: all but the ones `current` and `previous` name and the ones the caller protects
 //!   ([`prune_plan`], [`Layout::prune`]).
 //! - [`seal`] is the seal file of an unpacked package version, and [`tree_digest`] the digest
-//!   it holds (both public formats, docs/package-format.md).
+//!   it holds (both public formats, docs/tree-digest.md).
 //! - [`force`] is the journal of a hookless `force` ([`ForceRecord`]), an optional field of the
 //!   step record; a force that stops a running update flags its record `forced`, and the runner
 //!   then closes it `forced_over` and launches nothing more.
@@ -64,6 +64,7 @@ pub use launcher::{
     AdditiveCall, BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher, ToolCall,
     ToolExit, ToolNetwork,
 };
+pub use order_util::PreviousHook;
 pub use prune::{
     PRUNE_PREFIX, Protected, PruneInputs, PrunePlan, PruneReport, PruneStep, prune_plan,
 };

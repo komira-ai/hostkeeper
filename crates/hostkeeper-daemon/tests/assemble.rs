@@ -174,6 +174,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
         report.stages,
         [
             Stage::UnlinkRegistrationSocket,
+            Stage::ClearPolicyRcD,
             Stage::BeforeRecords,
             Stage::Reconcile,
             Stage::ReadRecords,
@@ -181,6 +182,7 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass_and_reconcile() {
             Stage::ResumeUninstalls,
             Stage::RunUpdates,
             Stage::RestartWatchers,
+            Stage::StartRunUnits,
             Stage::BootSteps,
             Stage::Ready,
         ]
@@ -520,6 +522,7 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let unit = "updater-web-prepare-1";
     let call = StepCall {
         service: "web",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Prepare,
             artifact: Some(rig.packages.join("web")),

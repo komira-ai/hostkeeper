@@ -40,6 +40,7 @@ fn secs(n: u64) -> Bound {
 fn call<'a>(rig: &'a Rig, unit: &'a str, step: Step, params: &Path, bound: Bound) -> StepCall<'a> {
     StepCall {
         service: SERVICE,
+        hook_args: &[],
         invocation: Invocation {
             step,
             // `prepare` is given a staged release; the fixture only reads its params.

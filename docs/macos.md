@@ -35,7 +35,7 @@ A quarantined entry, an unsigned binary or an invalid signature fails the order:
 made (the tool could not run, was killed or did not finish) is `Deferred`, class
 `environment`, reason `verify_unavailable`: the package is not judged bad. In every failing
 case the staging directory is removed and nothing is sealed or published. On Linux neither check
-runs. [package-format.md](package-format.md) has the rule as part of the package format.
+runs.
 
 ### Live leases: `leases_live`
 
@@ -310,13 +310,11 @@ uninstall boots out each `run` label, then removes every placed link.
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
-`hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, hostkeeper's own package `.tar.zst` (its
-`manifest.toml` and `bin/hostkeeper`, and no `units/`), and the installer pkg
-`hostkeeper-<v>-macos-arm64.pkg`. It also ships the packages of `hello`, the example service of
-`examples/hello`, and of its failing build, for macos-arm64: `bin/hello`, `manifest.toml` and
-`units/hello.a.plist` and `units/hello.b.plist`, the plists of its two slots rendered by
-`hostkeeper_launchd::service_plist`; `hello` carries the same ad-hoc code signature as the
-hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
+`hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, and the installer pkg
+`hostkeeper-<v>-macos-arm64.pkg`. It also ships hello's `.pkg`, `hello-<v>-macos-arm64.pkg`, for
+the example service of `examples/hello`: `hello` carries the same ad-hoc code signature as the
+hostkeeper binary, and the plists of its two slots are rendered by
+`hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, on each push to `main` and by hand, never on a pull request.
 
 The pkg is the first install of a Mac. It installs exactly five files and one empty directory,

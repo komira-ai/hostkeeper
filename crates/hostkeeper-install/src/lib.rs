@@ -29,6 +29,7 @@ pub mod installer;
 pub mod lock;
 pub mod macos_pkg;
 pub mod outcome;
+pub mod program;
 pub mod repository;
 pub mod tools;
 

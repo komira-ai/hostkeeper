@@ -154,6 +154,27 @@ pub fn package(version: &str) -> Deb {
         .link("usr/lib/web/current", "../../bin/web")
 }
 
+/// Where the hooked package installs its hook program.
+pub const HOOK_PROGRAM: &str = "usr/lib/web/web";
+
+/// The package of the service at `version` whose hook program is [`HOOK_PROGRAM`], and which
+/// installs `/usr/bin/web` as a link to it (so the manifest may name either path).
+pub fn hooked_package(version: &str) -> Deb {
+    package(version)
+        .without(PROGRAM)
+        .file(HOOK_PROGRAM, 0o755, "#!/bin/sh\nexit 0\n")
+        .link(PROGRAM, "/usr/lib/web/web")
+}
+
+/// The package of the service at `version` with no `[Install]` section in its unit.
+pub fn unlinked_package(version: &str) -> Deb {
+    package(version).file(
+        &format!("usr/lib/systemd/system/{UNIT}"),
+        0o644,
+        "[Unit]\nDescription=web\n[Service]\nExecStart=/usr/bin/web\n",
+    )
+}
+
 /// The manifest of an entry of the service: its unit, the built-in steps (no hook command), the
 /// installer's bounds.
 pub fn manifest() -> Manifest {
@@ -192,6 +213,15 @@ pub fn entry(package_version: &str, pin: &str) -> Target {
         package_version: Some(package_version.to_owned()),
         ..Target::default()
     }
+}
+
+/// [`entry`] whose manifest names `command` as its hook.
+pub fn hooked_entry(package_version: &str, pin: &str, command: &[&str]) -> Target {
+    let mut target = entry(package_version, pin);
+    if let Some(hook) = target.manifest.as_mut().and_then(|m| m.hook.as_mut()) {
+        hook.command = command.iter().map(|word| (*word).to_owned()).collect();
+    }
+    target
 }
 
 /// `order` with `entry` as its target.
@@ -234,7 +264,7 @@ pub mod seen {
     use hostkeeper_placed::testing::{Event, UnitCall};
     use hostkeeper_proto::hostkeeper::agent::v1::Order;
 
-    use super::{AptRig, Inst, SERVICE, entry, with_entry};
+    use super::{AptRig, Inst, SERVICE, entry, hooked_entry, with_entry};
     use crate::support::{install, update};
 
     /// A reply that ran to `Succeeded` now, with no reason.
@@ -328,6 +358,34 @@ pub mod seen {
         with_entry(
             update(SERVICE, version, pin, order_try),
             &entry(package_version, pin),
+        )
+    }
+
+    /// [`install_of`] whose manifest names `command` as its hook.
+    pub fn install_hooked(
+        version: &str,
+        package_version: &str,
+        pin: &str,
+        order_try: u64,
+        command: &[&str],
+    ) -> Order {
+        with_entry(
+            install(SERVICE, version, pin, order_try),
+            &hooked_entry(package_version, pin, command),
+        )
+    }
+
+    /// [`update_of`] whose manifest names `command` as its hook.
+    pub fn update_hooked(
+        version: &str,
+        package_version: &str,
+        pin: &str,
+        order_try: u64,
+        command: &[&str],
+    ) -> Order {
+        with_entry(
+            update(SERVICE, version, pin, order_try),
+            &hooked_entry(package_version, pin, command),
         )
     }
 

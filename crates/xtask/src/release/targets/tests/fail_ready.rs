@@ -64,8 +64,8 @@ fn the_failing_builds_entry_is_never_picked_for_a_normal_set() {
 #[test]
 fn the_failing_builds_entry_names_its_suite_its_tilde_version_and_its_debs_digest() {
     // Catches: the failing build's entry naming the release's repository entry or version, the
-    // release's `.deb` digest, a list for macOS (it has no `.pkg`), or a manifest other than the
-    // failing build's archive's.
+    // release's `.deb` digest, a list for macOS (it has no `.pkg`), or a manifest other than
+    // hello's.
     let (_root, dist) = both("targets-fail-ready");
     let got =
         answered(&targets(&request(&dist, Package::HelloFailReady, None)).expect("the targets"));

@@ -35,19 +35,11 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 |---|---|
 | `hostkeeper-<version>-<platform>.tar.gz` | the daemon binary |
 | `hostkeeper-<version>-<platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-<platform>.tar.zst` | the hostkeeper self-update package: `manifest.toml`, `bin/hostkeeper` and, on Linux, `units/hostkeeper.service` (the macOS package has no unit) |
-| `hostkeeper-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hello-<version>-<platform>.tar.zst` | the package of `hello`, the example service of `examples/hello`: `manifest.toml`, `bin/hello` and, on Linux, `units/hello@.service`, on macOS `units/hello.a.plist` and `units/hello.b.plist` |
-| `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
-| `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `mdm-<version>-linux-x86_64.tar.zst` | the package of `mdm`, the MDM server stack as a service hostkeeper installs (docs/design/two-programs.md section 6.2), for linux-x86_64 only: `manifest.toml`, `bin/mdm` (its hook and its operator verbs, built from `crates/hostkeeper-mdm`, which prints `mdm X.Y.Z+<first 12 hex digits of the commit>` for `--version`), the pinned servers and lego under `bin/` (`caddy`, `depserver`, `depsyncer`, `lego`, `nanohub`, `scepserver`, each taken out of its upstream archive after the archive matched its pin in `crates/hostkeeper-mdm-core/pins.txt`), and its units under `units/` |
-| `mdm-<version>-linux-x86_64.tar.zst.sha256` | the SHA-256 of that package |
-| `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, its hook at `/usr/lib/hello/hostkeeper-hook`, and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`, installed disabled; no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
+| `hello_<version>_<deb-arch>.deb` | hello's native package (docs/design/packages-native.md section 10.2): the program at `/usr/lib/hello/hello`, which the release entry's hook command names (`/usr/lib/hello/hello update-hook`), and the two slots' units `hello@a.service` and `hello@b.service` in `/usr/lib/systemd/system/`; it has no maintainer script and no dependency. The release publishes it to the `testing` suite of the project's apt repository ([package-repositories.md](package-repositories.md)) |
 | `hello_<version>-fail-ready_<deb-arch>.deb` | the `.deb` of hello's failing build, for the Linux platforms: the hello package above with the service version `<version>-fail-ready` and the units started with `--fail-ready`. Its file name carries the service version; the `Version` of its `control` is the Debian version `<version>~fail.ready`, which sorts below `<version>`, so apt never takes it for the release. The release publishes it to the `testing-fail` suite of the project's apt repository, which lists it alone. It has no `.pkg` |
-| `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program and its hook under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`, `Disabled`; signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, as the installer is, not notarized, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
-| `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers and its hook in `/usr/lib/mdm/`, and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)), installed disabled; no maintainer script. Published to the `testing` suite like hello's |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment. Also hostkeeper's native package on Linux: the release publishes it to the `testing` suite and its targets list it before the archive (docs/design/packages-native.md, item A23) |
+| `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program (which the entry's hook command names, `/Library/Application Support/hello/bin/hello update-hook`) under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`; signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, as the installer is, not notarized, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
+| `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers in `/usr/lib/mdm/` (the entry's hook command is `/usr/lib/mdm/mdm update-hook`), and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)); it has no maintainer script. Published to the `testing` suite like hello's |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment. Also hostkeeper's native package on Linux: the release publishes it to the `testing` suite and its targets list it (docs/design/packages-native.md) |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
@@ -57,21 +49,13 @@ binary are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm` | the coordinator's rpm package, with the same files |
 | `hostkeeper-mdm-<version>-<linux-platform>.tar.gz` | the MDM kit's binary, `hostkeeper-mdm` (`crates/hostkeeper-mdm`), which sets up and migrates the MDM server stack on its Linux host |
 | `hostkeeper-mdm-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
-| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, loads the daemon's job when launchd does not have it loaded and leaves a loaded one alone, so that an install the daemon itself runs never stops it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested. Also hostkeeper's native package on macOS: the release puts it in the `testing` directory of the installers and its targets list it before the archive |
-| `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
-| `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
-| `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
-| `mdm-index.json` | the release index of the mdm package (`service` `mdm`, `version` `<version>`), which lists linux-x86_64 alone |
+| `hostkeeper-<version>-macos-arm64.pkg` | the installer of a Mac's first install: `/usr/local/bin/hostkeeper` (0755), `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist` (0644), the log directory `/var/log/hostkeeper` (0755) and its rotation `/etc/newsyslog.d/hostkeeper.conf` (0644), the pinned `gh` at `/usr/local/lib/hostkeeper/gh` (0755) and the Sigstore trusted root at `/usr/local/lib/hostkeeper/trusted_root.json` (0644), owned by root and wheel; a distribution pkg (`productbuild` around the component pkg); the component's one script, a `postinstall`, loads the daemon's job when launchd does not have it loaded and leaves a loaded one alone, so that an install the daemon itself runs never stops it (the plist's program is `/usr/local/bin/hostkeeper daemon`, which at each start points `/var/lib/updater/state/hostkeeper/bin/current` at itself when that starts nothing, writes `/etc/hostkeeper/hostkeeper.toml` from the MDM's managed preferences unless that file exists, and runs `current`); signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, not notarized, attested. Also hostkeeper's native package on macOS: the release puts it in the `testing` directory of the installers |
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
-| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.tar.zst`, `.deb` (the services' native ones included), `.rpm`, `.image.tar` and `.pkg` (hello's included), of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
+| `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.deb` (the services' native ones included), `.rpm`, `.image.tar` and `.pkg` (hello's included), of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
 
-Each index has the same schema. An index is a lookup, not a trust anchor: it has no bundle of its
-own, and a host trusts a package for its own attestation and manifest, never for its entry in the
-index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
-Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
-`netboot.json` is attested with a bundle of its own, unlike the indexes: it is the trust anchor of
+`netboot.json` is attested with a bundle of its own: it is the trust anchor of
 the boot files it pins, which come from Canonical, not from this release. `hostkeeper-pxe fetch`
 (item N8 of docs/design/network-install.md, `crates/hostkeeper-pxe`) verifies that attestation
 before it reads a pin in it.
@@ -102,8 +86,7 @@ SHA-256 is that digest; each platform's manifest is the one of its `.image.tar`,
 digest. A tag can be moved; a digest cannot, so a deployment pins the digest.
 
 A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
-lacks any of them, and each index lists the package of each, but for `mdm-index.json`, which
-lists the one platform the mdm package is built for. Each pkg, the installer and hello's, carries an installer signature
+lacks any of them,; the mdm package is built for one. Each pkg, the installer and hello's, carries an installer signature
 by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`,
 under Apple's Developer ID Certification Authority and Apple Root CA, with a trusted timestamp;
 the release signs it before it sums and attests it, so `SHA256SUMS` and the attestation name the
@@ -117,7 +100,10 @@ hello's, and neither asks for notarization; a double click on a downloaded copy 
 Gatekeeper, so install the installer by MDM or with `sudo installer -pkg`.
 Names are added, never renamed, so a consumer ignores assets it does not know. A name is removed only when its asset is
 withdrawn: the Arch Linux package (`hostkeeper-<version>-1-<rpm-arch>.pkg.tar.zst`) is no longer
-built, by the maintainers' ruling that the Linux packages are deb and rpm.
+built, by the maintainers' ruling that the Linux packages are deb and rpm; hostkeeper's own archive
+packages (`.tar.zst`, with their `.sha256` and attestation bundles) and the four release indexes
+(`index.json`, `hello-index.json`, `hello-fail-ready-index.json`, `mdm-index.json`) are no longer
+built, because every package is a native one.
 
 ### Every name
 
@@ -129,10 +115,6 @@ check` refuses a directory that holds any other), and a test keeps this list equ
 
 ```text
 SHA256SUMS
-index.json
-hello-index.json
-hello-fail-ready-index.json
-mdm-index.json
 netboot.json
 netboot.json.sigstore.json
 hkctl-<version>
@@ -140,9 +122,6 @@ hkctl-<version>.sigstore.json
 hostkeeper-<version>-<platform>.tar.gz
 hostkeeper-<version>-<platform>.tar.gz.sigstore.json
 hostkeeper-<version>-<platform>.cdx.json
-hostkeeper-<version>-<platform>.tar.zst
-hostkeeper-<version>-<platform>.tar.zst.sigstore.json
-hostkeeper-<version>-<platform>.tar.zst.sha256
 hostkeeper_<version>_<deb-arch>.deb
 hostkeeper_<version>_<deb-arch>.deb.sigstore.json
 hostkeeper-<version>-1.<rpm-arch>.rpm
@@ -163,15 +142,6 @@ hostkeeper-mdm-<version>-<linux-platform>.tar.gz.sigstore.json
 hostkeeper-mdm-<version>-<linux-platform>.cdx.json
 hostkeeper-<version>-macos-arm64.pkg
 hostkeeper-<version>-macos-arm64.pkg.sigstore.json
-hello-<version>-<platform>.tar.zst
-hello-<version>-<platform>.tar.zst.sigstore.json
-hello-<version>-<platform>.tar.zst.sha256
-hello-<version>-fail-ready-<platform>.tar.zst
-hello-<version>-fail-ready-<platform>.tar.zst.sigstore.json
-hello-<version>-fail-ready-<platform>.tar.zst.sha256
-mdm-<version>-linux-x86_64.tar.zst
-mdm-<version>-linux-x86_64.tar.zst.sigstore.json
-mdm-<version>-linux-x86_64.tar.zst.sha256
 hello_<version>_<deb-arch>.deb
 hello_<version>_<deb-arch>.deb.sigstore.json
 hello_<version>-fail-ready_<deb-arch>.deb
@@ -221,8 +191,7 @@ host and run on any Linux distribution. `check-linux-pkg` refuses a package that
 file with an interpreter (`PT_INTERP`) or a needed library (`DT_NEEDED`), and a package that
 declares a dependency (a deb's `Depends` or `Pre-Depends`, an rpm's requirement other than
 `rpmlib(...)`). The build job also runs it, without `--staged`, on
-the binary tarball `hostkeeper-<version>-<platform>.tar.gz` and on hostkeeper's package
-`hostkeeper-<version>-<platform>.tar.zst`, so none of them holds a dynamically linked program.
+the binary tarball `hostkeeper-<version>-<platform>.tar.gz`, so it does not hold a dynamically linked program.
 
 Bumping the pin: set the workflow-level `GH_VERSION` in `artifacts.yml` to the new release and both `gh-sha256`
 values of the build job's matrix to the SHA-256s of `gh_<version>_linux_amd64.tar.gz` and
@@ -308,7 +277,7 @@ gh attestation trusted-root > trusted_root.jsonl
 This saved root is only for checking a release by hand. A hostkeeper host needs no such step: its
 root ships in the packages (see [The trusted root on a host](#the-trusted-root-on-a-host)).
 
-Then, for each `.tar.gz`, `.tar.zst`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and `netboot.json`,
+Then, for each `.tar.gz`, `.deb`, `.rpm`, `.image.tar` and `.pkg`, and `netboot.json`,
 you use, with the bundle released next to it (the other assets have no bundle and are verified online, step 3):
 
 ```sh
@@ -379,32 +348,6 @@ What it proves: the binary was built from the pinned commit and reports the vers
 
 Refuse when: the output differs in any character.
 
-### 7. Release index digest for desired state
-
-```sh
-grep "  <service>-index.json$" release/SHA256SUMS
-sha256sum release/<service>-index.json
-cat release/hostkeeper-<version>-<platform>.tar.zst.sha256
-sha256sum release/hostkeeper-<version>-<platform>.tar.zst
-```
-
-(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages.)
-
-The digest of the index in the first two outputs is equal, and the index lists, for
-`<platform>`, the package file and the digest in the last two outputs, which are equal. These
-are what CI puts in the desired state with the version (design section 4.7): the index text and
-its SHA-256, so that each host is ordered the package of its own platform. The coordinator
-checks the index against its digest and keeps each platform's package digest; the daemon checks
-the index it fetches against the digest before it reads it, then the package against the
-index, and checks an attestation for the package, before it reads the archive. A fleet of one
-platform may put the one package digest in the desired state instead.
-
-What it proves: the digest placed in desired state is the digest of the verified index, and the
-index lists the attested package.
-
-Refuse when: the digests differ, the index lists another digest for the package than the package
-has, or the package did not pass step 3 or step 4.
-
 ## What the release workflow runs
 
 Before anything is published, the `verify` job of `release.yml`, on the files of the commit's
@@ -446,18 +389,20 @@ packages:
 
 - The release commits the root, as `gh attestation trusted-root` prints it, at
   `packaging/sigstore/trusted_root.json`.
-- hostkeeper's own package (`hostkeeper-<version>-<platform>.tar.zst`) carries that file as
-  `files/trusted_root.json`. The daemon reads it from
-  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, so each update of
-  hostkeeper brings the root of its release.
-- The host's own copy is at `/usr/lib/hostkeeper/trusted_root.json` on Linux, where the Linux
-  packages put it ([What the Linux packages check packages with](#what-the-linux-packages-check-packages-with)),
-  and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it. It is
-  the root of a host before its first update of hostkeeper, and the place to copy a root by hand.
+- hostkeeper's native packages install it: at `/usr/lib/hostkeeper/trusted_root.json` on Linux,
+  where the `.deb` and the `.rpm` put it ([What the Linux packages check packages with](#what-the-linux-packages-check-packages-with)),
+  and at `/usr/local/lib/hostkeeper/trusted_root.json` on a Mac, where the installer pkg puts it.
+  Each update of hostkeeper's package brings the root of its release, and this is also the place
+  to copy a root by hand.
+- Legacy: a host that ran hostkeeper from its own archive package, before the move to native
+  packages, may still hold that archive's copy, `files/trusted_root.json`, at
+  `/var/lib/hostkeeper/packages/hostkeeper/current/files/trusted_root.json`, and the daemon still
+  reads it there. No release builds that package any more (docs/design/packages-native.md,
+  section 10.7).
 
 When both files are present, the daemon uses the one written last; a tie in the same second goes
-to the packaged one. A root an operator copies after a rotation therefore takes over from the
-one an older package carried. The choice goes by when each file reached the host, not by what
+to the archive's copy. A root an operator copies after a rotation therefore takes over from the
+one an older archive carried. The choice goes by when each file reached the host, not by what
 it holds. A later update or rollback of hostkeeper to a version that carries an older root
 brings that root back into use, and so does a copy that keeps its source's time (`cp -p`,
 `rsync -t`). Copy with plain `cp` or `install`, and copy again after such a rollback. When

@@ -87,9 +87,8 @@ yaml.org
 =o.v1.update.target
 =hostkeeper.release.v1.force.target
 =hostkeeper.release.v1.order.target
-# systemd targets in packaging/linux/hostkeeper.service and its test, and in the channel sync's
-# units of docs/deploy/channel-sync, and in the repository installer's tests of a unit's enablement
-# (`target` is a top-level domain), not hosts.
+# systemd targets in packaging/linux/hostkeeper.service and its test, and in the repository
+# installer's tests of a unit's enablement (`target` is a top-level domain), not hosts.
 =default.target
 =graphical.target
 =multi-user.target

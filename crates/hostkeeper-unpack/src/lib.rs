@@ -20,8 +20,8 @@
 //! # Public formats
 //!
 //! The archive rules, the mode normalisation, the tree digest, the seal file and the names on
-//! disk are formats other releases read; docs/package-format.md describes them and they change
-//! additively only. The tree digest is [`hostkeeper_steps::tree_digest`] and the seal is
+//! disk are formats other releases read; docs/tree-digest.md describes the tree digest, the seal
+//! and the names on disk, and they change additively only. The tree digest is [`hostkeeper_steps::tree_digest`] and the seal is
 //! [`hostkeeper_steps::seal`], so that the step runner, which checks a version before it runs
 //! anything from it, reads them with no dependency on this crate:
 //!

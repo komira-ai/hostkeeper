@@ -284,6 +284,8 @@ fn order(
         staged: sealed("2.0.0"),
         previous: previous.map(sealed),
         hook_binary: PathBuf::from("bin/hook"),
+        hook_args: Vec::new(),
+        previous_hook: None,
         bounds: Bounds {
             prepare_secs: 1,
             cutover_secs: 1,

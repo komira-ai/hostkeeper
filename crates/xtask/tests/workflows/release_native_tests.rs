@@ -86,8 +86,8 @@ fn build_job_makes_and_checks_the_failing_builds_deb_in_dist() {
     let text = workflow("artifacts.yml");
     for (old, new, want) in [
         (
-            "--binary target/release/hello --out dist\n      - name: hello's .deb has",
-            "--binary target/release/hello --out native\n      - name: hello's .deb has",
+            "--binary target/release/hello --out dist\n      - name: hello's .deb is",
+            "--binary target/release/hello --out native\n      - name: hello's .deb is",
             FAIL_READY_DEB_RUNS[0],
         ),
         (

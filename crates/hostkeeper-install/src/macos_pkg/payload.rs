@@ -1,12 +1,12 @@
 //! The payload of a component (packages-repositories.md section 4.7, `stage` steps 5 and 6): its
 //! `Bom`, as `lsbom -p fmug` lists it, and the expanded payload list the same paths with the
 //! same kinds, modes and owners; every entry is root's, of group `wheel` or `admin`, with no
-//! setuid, setgid or sticky bit, writable by neither group nor others, no device or fifo, and at
-//! a path of the payload rule; every `run` label is the plist of its path in the payload, of that
-//! `Label`, `Disabled`, whose program is a file of the payload. hostkeeper's own `.pkg` is held to
-//! its own list of paths instead, and its job need not be `Disabled` ([`super::own`]).
+//! setuid, setgid or sticky bit, writable by neither group nor others, no device or fifo (the
+//! sealed tree is walked by checks that trust only those accounts and modes); the paths are the
+//! package's own to choose. Every `run` label is the plist of its path in the payload, of that
+//! `Label`, whose program is a file of the payload.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use hostkeeper_launchd::Label;
@@ -17,18 +17,6 @@ use crate::host::{GID_ADMIN, GID_WHEEL, Kind, Meta};
 /// The arguments of `lsbom` after which the `Bom`'s path comes: path, mode, uid and gid, one entry
 /// a line, tab-separated.
 pub const LSBOM_ARGS: [&str; 2] = ["-p", "fmug"];
-
-/// The directories above a service's payload, which a payload may list as directories only.
-pub const ABOVE: [&str; 3] = [
-    "/Library",
-    "/Library/Application Support",
-    "/Library/LaunchDaemons",
-];
-
-/// Where a service's files go: `/Library/Application Support/<service>`.
-pub fn service_dir(service: &str) -> String {
-    format!("/Library/Application Support/{service}")
-}
 
 /// Where a `run` label's plist goes.
 pub fn plist_path(label: &Label) -> String {
@@ -56,24 +44,12 @@ pub enum PayloadError {
     Mode(String, u32),
     #[error("{0} is a device, a fifo or a socket")]
     Special(String),
-    #[error("{0} is outside {1}/ and the run labels' plists")]
-    Outside(String, String),
-    #[error("{0} is not on hostkeeper's own package's list")]
-    OutsideOwn(String),
-    #[error(
-        "{0} is {1:?} with mode {2:o}, and hostkeeper's own package lists {3:?} with mode {4:o}"
-    )]
-    OwnEntry(String, Kind, u32, Kind, u32),
-    #[error("{0} must be a directory")]
-    NotDir(String),
     #[error("the run label {0} has no plist {1} in the payload")]
     NoPlist(String, String),
     #[error("{0} is no property list of a job: {1}")]
     BadPlist(String, String),
     #[error("{0} has the Label {1:?}, not {2:?}")]
     Label(String, String, String),
-    #[error("{0} is not Disabled")]
-    NotDisabled(String),
     #[error("{0} names the program {1:?}, which is no file of the payload")]
     Program(String, String),
 }
@@ -107,18 +83,12 @@ pub fn parse_bom(listing: &str) -> Result<BTreeMap<String, Meta>, PayloadError> 
     Ok(entries)
 }
 
-/// Checks the `Bom`'s entries against the expanded payload's and against the rules of an entry.
+/// Checks the `Bom`'s entries against the expanded payload's and every entry against [`owned`].
 pub fn check(
     bom: &BTreeMap<String, Meta>,
     payload: &BTreeMap<String, Meta>,
-    service: &str,
-    run: &[Label],
 ) -> Result<(), PayloadError> {
-    let plists: BTreeSet<String> = run.iter().map(plist_path).collect();
-    let home = service_dir(service);
-    check_with(bom, payload, &|path, meta| {
-        entry(path, meta, &home, &plists)
-    })
+    check_with(bom, payload, &owned)
 }
 
 /// [`check`] with the rule of one entry given: the `Bom` and the payload list the same paths with
@@ -162,34 +132,13 @@ pub fn owned(path: &str, meta: &Meta) -> Result<(), PayloadError> {
     Ok(())
 }
 
-fn entry(
-    path: &str,
-    meta: &Meta,
-    home: &str,
-    plists: &BTreeSet<String>,
-) -> Result<(), PayloadError> {
-    owned(path, meta)?;
-    let under_home = path == home || path.starts_with(&format!("{home}/"));
-    if ABOVE.contains(&path) {
-        return match meta.kind {
-            Kind::Dir => Ok(()),
-            _ => Err(PayloadError::NotDir(path.into())),
-        };
-    }
-    if under_home || (plists.contains(path) && meta.kind == Kind::File) {
-        return Ok(());
-    }
-    Err(PayloadError::Outside(path.into(), home.into()))
-}
-
 /// Checks each `run` label's plist in the expanded payload at `payload` (which stands for `/`):
-/// its `Label`, `Disabled` true when `disabled` (not for hostkeeper's own job, which its script loads: [`super::own`]), and a program (`Program`, else the first of `ProgramArguments`)
-/// that is a file of `bom`.
+/// its `Label` and a program (`Program`, else the first of `ProgramArguments`) that is a file of
+/// `bom`.
 pub fn check_jobs(
     payload: &Path,
     bom: &BTreeMap<String, Meta>,
     run: &[Label],
-    disabled: bool,
 ) -> Result<(), PayloadError> {
     for label in run {
         let path = plist_path(label);
@@ -212,10 +161,6 @@ pub fn check_jobs(
                 found.into(),
                 label.as_str().into(),
             ));
-        }
-        let not_disabled = job.get("Disabled").and_then(Value::as_boolean) != Some(true);
-        if disabled & not_disabled {
-            return Err(PayloadError::NotDisabled(path));
         }
         let program = program(job).unwrap_or_default();
         if bom.get(program).map(|meta| meta.kind) != Some(Kind::File) {

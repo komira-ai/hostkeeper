@@ -111,16 +111,14 @@ fn stderr(o: &Output) -> String {
     String::from_utf8_lossy(&o.stderr).into_owned()
 }
 
-const HELLO_FILES: [&str; 4] = [
+const HELLO_FILES: [&str; 3] = [
     "/usr/lib/hello/hello",
-    "/usr/lib/hello/hostkeeper-hook",
     "/usr/lib/systemd/system/hello@a.service",
     "/usr/lib/systemd/system/hello@b.service",
 ];
 
-const MDM_FILES: [&str; 10] = [
+const MDM_FILES: [&str; 9] = [
     "/usr/lib/mdm/mdm",
-    "/usr/lib/mdm/hostkeeper-hook",
     "/usr/lib/systemd/system/mdm-cert-renew.service",
     "/usr/lib/systemd/system/mdm-cert.service",
     "/usr/lib/systemd/system/mdm-cert.timer",
@@ -156,7 +154,7 @@ fn check_apt_of_hello_on_arm64_installs_hello_from_testing_and_holds_it_to_its_v
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(
         stdout(&o),
-        "check-apt: hello 1.2.3 installed from the suite testing on arm64; it says \"hello 1.2.3\"; its 4 files are there; the service is not enabled and not running\n"
+        "check-apt: hello 1.2.3 installed from the suite testing on arm64; it says \"hello 1.2.3\"; its 3 files are there; the service is not enabled and not running\n"
     );
     assert_eq!(
         m.calls(),
@@ -184,7 +182,7 @@ fn check_apt_of_mdm_on_amd64_installs_mdm_from_testing_and_holds_it_to_its_versi
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     assert_eq!(
         stdout(&o),
-        "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 10 files are there; the service is not enabled and not running\n"
+        "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 9 files are there; the service is not enabled and not running\n"
     );
     assert_eq!(m.calls(), install_calls(&m.root, "mdm", "/usr/lib/mdm/mdm"));
 }

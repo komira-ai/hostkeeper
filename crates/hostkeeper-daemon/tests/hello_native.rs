@@ -48,7 +48,9 @@ const FAIL_URI: &str = "file:/srv/hostkeeper-apt-fail";
 const RELEASE: &str = "1.2.3";
 const FAIL_SERVICE_VERSION: &str = "1.2.3-fail-ready";
 const FAIL_DEB_VERSION: &str = "1.2.3~fail.ready";
-const HOOK: &str = "usr/lib/hello/hostkeeper-hook";
+/// hello's program, which the entry's hook command names with `update-hook`, as `release targets`
+/// writes it.
+const PROGRAM: &str = "/usr/lib/hello/hello";
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex
@@ -177,6 +179,8 @@ impl HelloLauncher {
 
 impl StepLauncher for HelloLauncher {
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
+        // The entry's hook command is hello's program with `update-hook`, its leading argument.
+        assert_eq!(call.hook_args, ["update-hook".to_owned()]);
         let args: Vec<OsString> = call.invocation.to_args();
         let host = Host {
             runner: &self.fake,
@@ -220,11 +224,13 @@ fn unit(slot: &str, fail_ready: bool) -> String {
     )
 }
 
-/// hello's `.deb` at `version`: the program, the hook and one unit per slot.
+/// hello's `.deb` at `version`: the program and one unit per slot.
 fn hello_deb(version: &str, fail_ready: bool) -> Deb {
-    let deb = Deb::new(SERVICE, version, "amd64")
-        .file("usr/lib/hello/hello", 0o755, "#!/bin/sh\n")
-        .file(HOOK, 0o755, "#!/bin/sh\nexit 0\n");
+    let deb = Deb::new(SERVICE, version, "amd64").file(
+        PROGRAM.trim_start_matches('/'),
+        0o755,
+        "#!/bin/sh\n",
+    );
     ["a", "b"].into_iter().fold(deb, |deb, slot| {
         deb.file(
             &format!("usr/lib/systemd/system/hello@{slot}.service"),
@@ -263,6 +269,7 @@ fn entry(repository: &str, package_version: &str, pin: &str, record_dir: &Path) 
             health_url: Some(format!("http://127.0.0.1:{PORT}/readyz")),
             params: params.into_iter().collect(),
             hook: Some(Hook {
+                command: vec![PROGRAM.to_owned(), "update-hook".to_owned()],
                 timeout_secs: Some(StepBounds {
                     prepare: 30,
                     cutover: 60,

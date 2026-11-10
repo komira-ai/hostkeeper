@@ -91,7 +91,7 @@ fn only_the_update_and_the_download_fetch_and_both_are_confined() {
         .expect("removed");
     let work = env.work();
     let calls = env.host.calls();
-    assert_eq!(calls.len(), 17);
+    assert_eq!(calls.len(), 16);
     for call in &calls {
         let fetching = call.label == "apt-get update" || call.label == "apt-get download";
         let expected = if fetching {
@@ -126,24 +126,19 @@ fn only_the_update_and_the_download_fetch_and_both_are_confined() {
     );
 }
 
-/// Proves the dpkg-deb runs are confined: reading the fields writes nothing, reading the control
-/// members writes the control directory only and the extraction writes the tree only, and each
-/// run's bound is the stage's.
+/// Proves the dpkg-deb runs are confined: reading the fields writes nothing and the extraction
+/// writes the tree only, each run's bound is the stage's, and no run reads the control members.
 #[test]
-fn dpkg_deb_runs_write_only_the_control_directory_and_the_tree() {
+fn dpkg_deb_runs_write_only_the_tree_and_read_no_control_members() {
     let env = Env::new("apt-confined");
     let (_, staging) = env.staged(&deb(V1), &["mdm.service"]);
     let field = &env.host.calls_of("dpkg-deb --field")[0].run;
     assert_eq!(field.writable, Some(Vec::new()));
-    let control = &env.host.calls_of("dpkg-deb --control")[0].run;
-    assert_eq!(control.writable, Some(vec![env.work().join("control")]));
+    assert!(env.host.calls_of("dpkg-deb --control").is_empty());
+    assert!(!env.work().join("control").exists());
     let extract = &env.host.calls_of("dpkg-deb --extract")[0].run;
     assert_eq!(extract.writable, Some(vec![staging.join("tree")]));
-    for label in [
-        "dpkg-deb --field",
-        "dpkg-deb --control",
-        "dpkg-deb --extract",
-    ] {
+    for label in ["dpkg-deb --field", "dpkg-deb --extract"] {
         assert_eq!(env.host.calls_of(label)[0].run.bound_secs, STAGE_SECS);
     }
     let arch = &env.host.calls_of("dpkg --print-architecture")[0].run;

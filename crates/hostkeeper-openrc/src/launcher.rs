@@ -272,7 +272,12 @@ impl<'a> Program<'a> {
         Program {
             unit: call.unit,
             executable: call.executable,
-            args: call.invocation.to_args(),
+            args: call
+                .hook_args
+                .iter()
+                .map(OsString::from)
+                .chain(call.invocation.to_args())
+                .collect(),
             params: call.invocation.params.as_deref(),
             bound: call.bound,
         }

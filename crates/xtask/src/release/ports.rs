@@ -2,7 +2,7 @@
 //! traits, so that every verb runs in a test against fakes (`fakes`).
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
-//! ([`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`], [`Verifier`]), `check_binary::VersionOf`
+//! ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]), `check_binary::VersionOf`
 //! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too), `mdm_fetch::CurlCli`
 //! ([`Download`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
@@ -157,16 +157,6 @@ pub(crate) trait Verifier {
     ) -> Result<Vec<Attestation>, PortError>;
 }
 
-/// Where `release channel-sync` reads the published releases of a repository and their assets:
-/// reads only, of public release assets.
-pub(crate) trait ReleaseSource {
-    /// Every release, drafts included (the caller leaves drafts out).
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError>;
-    /// Writes the asset `name` of the release `tag` to `dir/<name>`. `name` is a plain file name
-    /// (no `/`, no glob character); `dir` exists and does not hold it.
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError>;
-}
-
 /// What a program printed and how it ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Said {
@@ -260,7 +250,6 @@ pub(crate) struct Ports<'a> {
     pub(crate) git: &'a dyn GitHistory,
     pub(crate) runs: &'a dyn GitHubRuns,
     pub(crate) store: &'a dyn ReleaseStore,
-    pub(crate) source: &'a dyn ReleaseSource,
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,

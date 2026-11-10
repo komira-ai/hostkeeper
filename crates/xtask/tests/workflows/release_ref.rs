@@ -30,7 +30,7 @@
 //! read.
 //!
 //! A job that needs a verb newer than [`FLOOR`] runs it from a checkout of the workflow's own
-//! commit (as the job `channel` of `release.yml` did for `release channel-host`), or waits
+//! commit, or waits
 //! until a release that has the verb is published and [`FLOOR`] and [`SURFACE_FILE`] move to it:
 //! [`surface`] of that release's `xtask::test_support::cli()`, run from a checkout of its tag,
 //! with the header line the test of the file names.

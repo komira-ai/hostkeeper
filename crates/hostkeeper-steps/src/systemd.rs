@@ -153,7 +153,10 @@ pub fn command(call: &StepCall<'_>) -> Result<Vec<OsString>, LaunchError> {
         &[],
         &[],
         call.executable,
-        call.invocation.to_args(),
+        call.hook_args
+            .iter()
+            .map(OsString::from)
+            .chain(call.invocation.to_args()),
     ))
 }
 

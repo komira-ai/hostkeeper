@@ -1,6 +1,6 @@
-//! The `mdm` package hook as the `.deb` runs it: the daemon runs the tree's
-//! `usr/lib/mdm/hostkeeper-hook`, which runs `usr/lib/mdm/mdm update-hook` beside it, with the
-//! daemon's version directory as the staged release. Run as that path, the program is the
+//! The `mdm` package hook as the `.deb` runs it: the daemon runs the manifest's `hook.command`,
+//! `/usr/lib/mdm/mdm update-hook`, from the tree, with the daemon's version directory as the
+//! staged release. Run as that path, the program is the
 //! `.deb`'s build: `prepare` checks the staged release's binaries in `tree/usr/lib/mdm`, makes
 //! the CA with the `scepserver` there, and the settings may give `MDM_BIN` only as
 //! `/usr/lib/mdm`. The same staged release run as the archive's program is refused.
@@ -36,7 +36,7 @@ fn staged(program: &str) -> String {
 /// and its `scepserver` making the CA.
 fn deb_host() -> FakeHost {
     let host = package_host();
-    for program in ["scepserver", "lego", "nanohub", "mdm", "hostkeeper-hook"] {
+    for program in ["scepserver", "lego", "nanohub", "mdm"] {
         host.put_file(&staged(program), 0o755, (0, 0), program.as_bytes());
     }
     host.reply(&[&staged("lego"), "run", "--help"], 0, LEGO_HELP);

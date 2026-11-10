@@ -293,6 +293,9 @@ pub struct Call {
     pub label: String,
     /// Whether the installer lock was held while it ran.
     pub locked: bool,
+    /// The text of the host root's `usr/sbin/policy-rc.d` and its mode while it ran; `None`:
+    /// no file, or no host root watched.
+    pub policy: Option<(String, u32)>,
 }
 
 struct Rule {
@@ -315,6 +318,8 @@ pub struct FakeHost {
     state: Mutex<State>,
     lock_path: PathBuf,
     events: Events,
+    /// The host's root, whose policy file each call records.
+    root: Mutex<Option<PathBuf>>,
 }
 
 /// The name a run goes by in the fake's record.
@@ -427,7 +432,21 @@ impl FakeHost {
             state: Mutex::new(State::default()),
             lock_path: lock_path.to_path_buf(),
             events,
+            root: Mutex::new(None),
         }
+    }
+
+    /// Makes each call record the policy file under `root`.
+    pub fn watch_root(&self, root: &Path) {
+        *self.root.lock().expect("the root") = Some(root.to_path_buf());
+    }
+
+    fn policy(&self) -> Option<(String, u32)> {
+        let root = self.root.lock().expect("the root").clone()?;
+        let path = root.join("usr/sbin/policy-rc.d");
+        let text = fs::read_to_string(&path).ok()?;
+        let mode = fs::metadata(&path).ok()?.permissions().mode() & 0o7777;
+        Some((text, mode))
     }
 
     /// Changes the model or the faults.
@@ -546,12 +565,14 @@ impl Tools for FakeHost {
     fn run(&self, run: &Run) -> Result<ToolOutput, ToolError> {
         let label = label(run);
         let locked = self.lock_is_held();
+        let policy = self.policy();
         self.event(format!("run {label}"));
         let mut s = self.state.lock().expect("the fake's state");
         s.calls.push(Call {
             run: run.clone(),
             label: label.clone(),
             locked,
+            policy,
         });
         for rule in s.rules.iter_mut().filter(|r| r.label == label) {
             if rule.skip == 0 {
@@ -570,7 +591,6 @@ impl Tools for FakeHost {
             "dpkg-query" => query(&s, run),
             "apt-mark hold" | "apt-mark unhold" => mark(&mut s, run),
             "dpkg-deb --field" => deb_field(&s, run),
-            "dpkg-deb --control" => deb_control(&s, run),
             "dpkg-deb --extract" => deb_extract(&s, run),
             "systemctl daemon-reload" => out(0, "", ""),
             other => out(127, "", &format!("the fake does not know {other}\n")),
@@ -896,20 +916,6 @@ fn deb_field(s: &State, run: &Run) -> ToolOutput {
         text.push_str(&format!("{key}: {value}\n"));
     }
     out(0, &text, "")
-}
-
-fn deb_control(s: &State, run: &Run) -> ToolOutput {
-    let Some(deb) = model_of(s, run) else {
-        return out(2, "", "dpkg-deb: error: not a Debian format archive\n");
-    };
-    let dir = PathBuf::from(&run.args[2]);
-    let made = std::iter::once("control".to_owned())
-        .chain(deb.members.iter().cloned())
-        .try_for_each(|name| fs::write(dir.join(name), "#!/bin/sh\n"));
-    match made {
-        Ok(()) => out(0, "", ""),
-        Err(e) => out(2, "", &format!("dpkg-deb: error: {e}\n")),
-    }
 }
 
 fn deb_extract(s: &State, run: &Run) -> ToolOutput {

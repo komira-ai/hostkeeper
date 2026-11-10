@@ -379,7 +379,7 @@ async fn the_releases_of_the_move_are_accepted() {
     let mut booted = apt("2.0-1", 'a');
     let hook = booted.manifest.as_mut().and_then(|m| m.hook.as_mut());
     let hook = hook.expect("a hook");
-    assert!(hook.command.is_empty());
+    assert_eq!(hook.command[0], "/usr/bin/web");
     hook.boot = Some("restore".to_owned());
     set(&rig, "2.0", x86(vec![booted, web(ARCHIVE, 'f')])).await;
 }

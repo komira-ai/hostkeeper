@@ -56,9 +56,11 @@ pub enum Reason {
     PackageTooLarge,
     /// The index named the pin, but the downloaded file is other bytes.
     StoreDigestMismatch,
-    /// The package's control fields, its tree or the entry's manifest break a rule of `stage`.
+    /// The package's control fields or the entry's manifest break a rule of `stage`, or the hook
+    /// program the manifest names is not an executable regular file of the package.
     ManifestInvalid,
-    /// The package carries a maintainer script (packages-native.md section 10.2).
+    /// No longer produced: a package may carry maintainer scripts. The token stays so a report
+    /// of an older daemon still parses.
     PackageScripts,
     /// Another service records the same package.
     PackageConflict,

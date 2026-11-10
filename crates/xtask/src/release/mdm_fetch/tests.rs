@@ -5,10 +5,10 @@ use hostkeeper_mdm_core::pins::{Pins, PinsError, Tool};
 use sha2::{Digest, Sha256};
 
 use super::*;
-use crate::release::fakes::{FakeDownload, FakeExec, FakeHistory, scratch};
+use crate::release::fakes::{FakeDownload, FakeExec, scratch};
 use crate::release::ports::Adapters;
+use crate::release::run_with;
 use crate::release::tests::{text, verb};
-use crate::release::{run, run_with};
 
 /// A pin table over three-byte archives named for each tool, so a test knows every byte: the
 /// pins and what each URL serves.
@@ -315,42 +315,10 @@ fn curl_refuses_a_url_that_is_not_https_and_a_path_that_is_not_utf8_and_names_a_
 }
 
 #[test]
-fn package_and_mdm_fetch_reach_the_mdm_verbs_with_their_directory_of_archives() {
-    // Catches: `--service mdm` or `--archives` not reaching the package verb (an mdm package
-    // refused for want of archives it was given, or built from none), or `mdm-fetch` not
-    // reaching the download port with its directory.
-    let mut h = FakeHistory::default();
-    let c = h.commit(None, &[("VERSION", Some("0.1\n"))]);
-    let d = scratch("release-package-mdm");
-    let binary = d.join("mdm");
-    std::fs::write(&binary, b"the mdm program").expect("write");
+fn mdm_fetch_reaches_the_download_port_with_its_directory() {
+    // Catches: `mdm-fetch` not reaching the download port with its directory.
+    let d = scratch("release-mdm-fetch-verb");
     let archives = d.join("archives");
-    let out_dir = d.join("out");
-    let args = [
-        "package",
-        "--service",
-        "mdm",
-        "--platform",
-        "linux-x86_64",
-        "--version",
-        "0.1.2",
-        "--commit",
-        c.as_str(),
-        "--binary",
-        text(&binary),
-        "--archives",
-        text(&archives),
-        "--out",
-        text(&out_dir),
-    ];
-    let out = run(verb(&args), || crate::release::fakes::Fakes::over(h));
-    // The built-in pins are read and the first archive they name is not in the directory.
-    assert!(
-        matches!(&out, Err(Error::Io { what, .. })
-            if what.starts_with(&format!("read {}", archives.display()))),
-        "{out:?}"
-    );
-
     let fakes = crate::release::tests::empty();
     let out = run_with(
         verb(&["mdm-fetch", "--dir", text(&archives)]),
