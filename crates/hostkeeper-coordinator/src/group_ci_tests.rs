@@ -278,11 +278,21 @@ async fn a_limited_token_reads_the_groups_it_may_not_deploy_to() {
     farm.world.seed_desired("beta", "web", "1.0");
     let coordinator = farm.world.coordinator();
 
-    coordinator
+    let beta = coordinator
         .convergence_in("beta", "web")
         .expect("beta is read");
-    coordinator
+    assert_eq!(
+        beta.desired,
+        Some(version("1.0")),
+        "beta's own desired version"
+    );
+    let across = coordinator
         .convergence(Some(&ci_token()), "web")
         .await
         .expect("the package is read");
+    assert_eq!(
+        across.desired,
+        Some(version("1.0")),
+        "the one group with a desired version of web is beta's, which the limited token reads"
+    );
 }

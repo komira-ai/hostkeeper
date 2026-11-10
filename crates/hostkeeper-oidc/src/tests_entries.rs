@@ -378,36 +378,21 @@ async fn an_entry_may_name_its_host_groups() {
     );
 }
 
-/// A `host_groups` name that is not a host group name is refused at load with the key and the
-/// value: uppercase, a leading digit, 33 bytes, a trailing or doubled `-`.
-#[test]
-fn a_host_group_name_outside_the_grammar_is_refused() {
-    let long = "a".repeat(33);
-    for bad in ["Canary", "1st", "a_b", "a-", "a--b", long.as_str()] {
-        let text = entry(
-            "[remote_operator]",
-            "4242",
-            WORKFLOW,
-            &format!("host_groups = [\"canary\", \"{bad}\"]"),
-        );
-        let why = AllowList::parse(&text).expect_err(bad).to_string();
-        assert_eq!(
-            why,
-            format!(
-                "remote_operator: host_groups holds {bad:?}, which is not a host group name \
-                 (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with - \
-                 or holding --)"
-            )
-        );
-    }
-    let longest = "a".repeat(32);
-    let ok = entry(
+/// A `host_groups` name is carried as written: whether it is a host group name is the
+/// coordinator's check at start, so this crate keeps no grammar of its own.
+#[tokio::test]
+async fn a_host_group_name_is_carried_as_written() {
+    let text = entry(
         "[remote_operator]",
         "4242",
         WORKFLOW,
-        &format!("host_groups = [\"{longest}\"]"),
+        "host_groups = [\"Canary\", \"a--b\"]",
     );
-    assert!(AllowList::parse(&ok).is_ok());
+    let who = verifier(&text).verify(&token(|_| {})).await.expect("ok");
+    assert_eq!(
+        who.host_groups,
+        Some(vec!["Canary".to_owned(), "a--b".to_owned()])
+    );
 }
 
 /// An empty or padded `host_groups` entry is refused as an empty or padded `services` entry

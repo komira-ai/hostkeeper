@@ -20,7 +20,6 @@ testkit = ["dep:rcgen"]
 base64.workspace = true
 bytes.workspace = true
 futures.workspace = true
-hostkeeper-wire = { path = "../hostkeeper-wire" }
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1"] }
 hyper-util = { workspace = true, features = ["tokio"] }

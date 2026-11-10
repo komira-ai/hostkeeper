@@ -78,6 +78,16 @@ pub enum StartError {
         /// The service it names.
         service: String,
     },
+    /// An allow-list entry's `host_groups` holds a name that is not a host group name.
+    #[error(
+        "--oidc-config: entry {entry} names the host group {name:?}, which is not a host group name (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with - or holding --)"
+    )]
+    OidcEntryHostGroup {
+        /// The entry, counting from 1.
+        entry: usize,
+        /// The name it gives.
+        name: String,
+    },
     /// The OIDC key fetcher could not be made.
     #[error("the issuer's keys: {0}")]
     Keys(#[source] KeySourceError),
