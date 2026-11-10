@@ -14,7 +14,7 @@ fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), what each host's daemon last said it runs (migration `0006`, the table `enrollment_host_running`, section 3.6), the registry of package repositories (migration `0007`, section 3.2, from [packages-repositories.md](packages-repositories.md) section 3), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
-nothing implements it yet.
+nothing implements it yet. The placement tables (`assignments`, the role scope of `min_versions`) and the per-service keying of `desired` and the plan's position are superseded by [hostgroups.md](hostgroups.md) section 8 (migration `0007`).
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
 small Linux servers. The coordinator's durable state moves from its files into that database. The file lock goes, and a

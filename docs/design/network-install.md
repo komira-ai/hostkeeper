@@ -37,7 +37,7 @@ The machine is then racked and powered on, as every machine is. Its firmware tri
 up in the pending list, matched to the record. The machine's console shows the key hash of the request.
 
 2. The operator compares that key hash with the one in the UI, approves the request, and the coordinator installs the
-   services assigned to the host or its role, as it does today.
+   services assigned to the host or its role, as it does today. (Superseded by [hostgroups.md](hostgroups.md): the host runs its HostGroup's packages; the record and the approval name the group.)
 
 That is two manual steps for each machine. A machine whose firmware does not try network boot before its disk needs a
 third, once: someone picks network boot in its firmware's boot menu. Three things are done once per farm: the

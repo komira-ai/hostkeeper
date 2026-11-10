@@ -64,7 +64,7 @@ Apple Business Manager (ABM).
    are assigned to the host as an operator's approval assigns its own (**Built**, task M9:
    `Coordinator::enroll`). The host then receives its certificate. Its services come from its
    role or host assignment, through `install` orders on the same path as a Linux host (design
-   section 5.7). The gate removes the nonce profile.
+   section 5.7). The gate removes the nonce profile. (Superseded by [hostgroups.md](hostgroups.md) section 1.2: the allowlist entry names the host's HostGroup, and `services` is refused.)
 
 The operator's single question about a Mac is whether its serial is on the allowlist. A Mac that
 fails any condition does not fail closed into a broken state. Its request waits, pending, for an
