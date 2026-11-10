@@ -1,0 +1,103 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1279" width="1200" height="1279" role="img" aria-label="From a purchase on the org Apple account to a hostkeeper daemon approved by the coordinator, with the MDM server inside the coordinator.">
+<title>ADE enrollment end to end: power on to an approved Mac</title>
+<desc>The Mac is bought on the org account and ABM assigns it to the coordinator. The coordinator syncs, defines the ADE profile and assigns it. At Activate the Mac gets the profile, fetches the enrollment profile from the coordinator, gets a per-serial identity by SCEP, authenticates, and the gate asks for DeviceInformation and SecurityInfo and sends the baseline: config profile, device name, remote desktop, hostkeeper pkg. The daemon requests enrollment and the coordinator auto-approves it from the ABM record, the inventory and the one-time nonce.</desc>
+<defs><marker id="coordinator-mdm-ade-enrollment-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-ade-enrollment-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="1279" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">ADE enrollment end to end: power on to an approved Mac</text>
+<rect x="30" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="136" y="64" class="b" text-anchor="middle">Apple</text>
+<text x="136" y="80" class="t-m" text-anchor="middle">ABM, ADE, APNs</text>
+<path d="M136,92 L136,1265" class="life"/>
+<rect x="262" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="368" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="368" y="80" class="t-m" text-anchor="middle">Setup Assistant, then macOS</text>
+<path d="M368,92 L368,1265" class="life"/>
+<rect x="494" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="600" y="64" class="b" text-anchor="middle">Coordinator: MDM</text>
+<text x="600" y="80" class="t-m" text-anchor="middle">listener, queue, SCEP, APNs</text>
+<path d="M600,92 L600,1265" class="life"/>
+<rect x="726" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="832" y="64" class="b" text-anchor="middle">Coordinator: gate</text>
+<text x="832" y="80" class="t-m" text-anchor="middle">device record, baseline</text>
+<path d="M832,92 L832,1265" class="life"/>
+<rect x="958" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="1064" y="64" class="b" text-anchor="middle">Coordinator: enrollment</text>
+<text x="1064" y="80" class="t-m" text-anchor="middle">inventory, approvals, CA</text>
+<path d="M1064,92 L1064,1265" class="life"/>
+<rect x="20" y="112" width="1160" height="24" rx="4" class="box-p"/>
+<text x="32" y="129" class="b" text-anchor="start">A. Before power on (no operator action but the purchase)</text>
+<path d="M136,166 L182,166 L182,178 L138,178" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="190" y="174" class="t-m lbl" text-anchor="start">1. Mac is added to the org ABM; default assignment names our MDM server</text>
+<path d="M600,214 L136,214" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="368" y="208" class="t-m lbl" text-anchor="middle">2. ABM sync: POST /devices/sync (cursor)</text>
+<path d="M136,254 L600,254" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="368" y="248" class="t-m lbl" text-anchor="middle">3. new serial</text>
+<path d="M600,294 L136,294" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="368" y="288" class="t-m lbl" text-anchor="middle">4. PUT /profile/devices (ADE profile, serial)</text>
+<rect x="20" y="310" width="1160" height="24" rx="4" class="box-p"/>
+<text x="32" y="327" class="b" text-anchor="start">B. Setup Assistant on the LAN (public-CA TLS name, no client certificate yet)</text>
+<path d="M368,372 L136,372" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="252" y="366" class="t-m lbl" text-anchor="middle">5. Activate Mac: asks for the ADE profile</text>
+<path d="M136,412 L368,412" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="252" y="406" class="t-m lbl" text-anchor="middle">6. profile: url = https://mdm.example.com/enroll</text>
+<path d="M368,452 L600,452" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="446" class="t-m lbl" text-anchor="middle">7. POST /enroll (device info signed by Apple)</text>
+<rect x="370" y="468" width="459" height="25" rx="4" class="box-o"/>
+<text x="600" y="483" class="t-m" text-anchor="middle">serial must be in the ABM table; make one-time SCEP challenge for it</text>
+<path d="M600,525 L368,525" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="519" class="t-m lbl" text-anchor="middle">8. enrollment profile: com.apple.mdm + SCEP payload, supervised</text>
+<path d="M368,565 L600,565" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="559" class="t-m lbl" text-anchor="middle">9. SCEP: GetCACaps, GetCACert, PKIOperation (RSA 2048)</text>
+<path d="M600,605 L368,605" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="599" class="t-m lbl" text-anchor="middle">10. identity certificate, subject names the serial</text>
+<path d="M368,645 L600,645" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="639" class="t-m lbl" text-anchor="middle">11. PUT /checkin Authenticate, then TokenUpdate</text>
+<rect x="406" y="661" width="389" height="25" rx="4" class="box-o"/>
+<text x="600" y="676" class="t-m" text-anchor="middle">enrollment row: token, PushMagic, topic, certificate hash</text>
+<rect x="20" y="694" width="1160" height="24" rx="4" class="box-p"/>
+<text x="32" y="711" class="b" text-anchor="start">C. The gate and the baseline (commands over one connection each time the Mac is pushed)</text>
+<path d="M600,756 L832,756" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="716" y="750" class="t-m lbl" text-anchor="middle">12. Event::TokenUpdate (a call, no webhook)</text>
+<path d="M832,796 L600,796" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="716" y="790" class="t-m lbl" text-anchor="middle">13. enqueue DeviceInformation, SecurityInfo</text>
+<path d="M600,836 L136,836" class="ln-o" marker-end="url(#coordinator-mdm-ade-enrollment-ao)"/>
+<text x="368" y="830" class="t-m lbl" text-anchor="middle">14. APNs push (mdm, PushMagic)</text>
+<path d="M368,876 L600,876" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="870" class="t-m lbl" text-anchor="middle">15. PUT /mdm Idle; replies carry the answers</text>
+<path d="M832,916 L1064,916" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="948" y="910" class="t-m lbl" text-anchor="middle">16. status: enrolled, supervised, via DEP</text>
+<path d="M832,956 L600,956" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="716" y="950" class="t-m lbl" text-anchor="middle">17. enqueue: config profile, Settings name, EnableRemoteDesktop, hostkeeper pkg</text>
+<path d="M368,996 L600,996" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="484" y="990" class="t-m lbl" text-anchor="middle">18. GET /pkg/&lt;sha256&gt;.pkg (streamed, digest checked)</text>
+<rect x="20" y="1012" width="1160" height="24" rx="4" class="box-p"/>
+<text x="32" y="1029" class="b" text-anchor="start">D. Daemon enrollment (existing protocol, nothing new on the wire)</text>
+<path d="M368,1074 L1064,1074" class="ln-o" marker-end="url(#coordinator-mdm-ade-enrollment-ao)"/>
+<text x="716" y="1068" class="t-m lbl" text-anchor="middle">19. daemon: Enroll request (key, serial)</text>
+<path d="M832,1114 L368,1114" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
+<text x="600" y="1108" class="t-m lbl" text-anchor="middle">20. nonce profile bound to that request</text>
+<path d="M368,1154 L1064,1154" class="ln-o" marker-end="url(#coordinator-mdm-ade-enrollment-ao)"/>
+<text x="716" y="1148" class="t-m lbl" text-anchor="middle">21. daemon: Enroll request again with the nonce</text>
+<rect x="595" y="1170" width="581" height="25" rx="4" class="box-o"/>
+<text x="886" y="1185" class="t-m" text-anchor="middle">approve if: serial in ABM, supervised, via DEP, inventory or default group, nonce valid</text>
+<path d="M1064,1227 L368,1227" class="ln-od" marker-end="url(#coordinator-mdm-ade-enrollment-ao)"/>
+<text x="716" y="1221" class="t-m lbl" text-anchor="middle">22. host certificate; heartbeats begin</text>
+</svg>
