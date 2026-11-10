@@ -17,10 +17,13 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::Daemon;
-use hostkeeper_daemon::link_adapters::{DaemonRecords, recorded};
+use hostkeeper_daemon::link_adapters::{
+    DaemonObserver, DaemonRecords, OWN_UNIT_NOT_LOADED, recorded,
+};
 use hostkeeper_daemon::own_package::OwnActivate;
 use hostkeeper_link::{
-    Entry, Order, OrderId, OrderRef, Outcome, PackageDigest, ServiceRecords, Target, Verb,
+    Entry, Health, Liveness, Order, OrderId, OrderRef, Outcome, PackageDigest, ServiceObserver,
+    ServiceRecords, Target, Verb,
 };
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
 use hostkeeper_steps::Settled;
@@ -227,6 +230,78 @@ fn a_host_the_deb_installed_reports_the_install_of_its_release_and_converges() {
     );
     let convergence = convergence_of(&coordinator, HK);
     assert_eq!(convergence["state"], "converged", "{convergence}");
+}
+
+/// Catches the daemon whose own unit the service manager no longer loads (a unit link an earlier
+/// move left hides the package's) heartbeating its own service absent: the coordinator read
+/// that as no package installed and ordered the install of the release that runs, which the
+/// daemon refused `already_installed`. Through the real heartbeat loop and coordinator, a host
+/// at hostkeeper's desired release whose unit becomes not found sends its own service
+/// unhealthy at the version it runs, with the detail `own_unit_not_loaded` from the daemon's
+/// observer, and is ordered nothing.
+#[test]
+fn a_daemon_whose_own_unit_is_not_found_reports_it_unhealthy_and_is_ordered_nothing() {
+    let s = SelfRig::bootstrapped("converge-own-unit-gone");
+    let dir = Scratch::new("converge-own-unit-gone-coordinator");
+    let coordinator = coordinator_over(dir.path(), HK, BAKE);
+    set_release(&coordinator, HK, NEW, &s.entry_of(HK, NEW));
+    s.runs(own_unit(), OLD, 100);
+    let mut host = Host::of(
+        Arc::new(s.daemon_running_as(OLD, own_unit())),
+        &coordinator,
+        None,
+    );
+    host.beat();
+    assert!(host.dispatch.run_next());
+    drop(host);
+    s.runs(own_unit(), NEW, 101);
+    let daemon = Arc::new(s.daemon_running_as(NEW, own_unit()));
+    assert_eq!(settled(&daemon), Settled::Confirmed);
+    let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
+    host.beat();
+    host.beat();
+    assert_eq!(convergence_of(&coordinator, HK)["state"], "converged");
+
+    s.rig
+        .manager
+        .set(own_unit(), hostkeeper_observe::ActiveState::NotFound, None);
+    let observed = DaemonObserver::new(Arc::clone(&daemon)).observe(&hk());
+    assert_eq!(
+        (
+            observed.liveness,
+            observed.health,
+            observed.health_detail.as_deref()
+        ),
+        (
+            Liveness::Running,
+            Health::Unhealthy,
+            Some(OWN_UNIT_NOT_LOADED)
+        )
+    );
+    let from = host.ordered().len();
+    host.beat();
+    host.beat();
+
+    let sent = host.sent.lock().expect("the log is not poisoned").clone();
+    let own = sent
+        .last()
+        .expect("a heartbeat")
+        .services
+        .iter()
+        .find(|service| service.name == HK)
+        .cloned()
+        .expect("hostkeeper in the heartbeat");
+    assert_eq!(
+        (own.health, own.version.as_str()),
+        (pb::Health::Unhealthy as i32, NEW)
+    );
+    assert_eq!(host.ordered()[from..], [None, None]);
+    let on_host = hk_on_host(&coordinator);
+    assert_eq!(on_host.health, pb::Health::Unhealthy as i32, "{on_host:?}");
+    assert_eq!(
+        on_host.last_update.map(|last| last.reason),
+        Some(String::new())
+    );
 }
 
 /// Catches a fallback the coordinator never hears of, whichever way the wait was written: the

@@ -93,8 +93,9 @@ pub const ALERT_WATCHER: &str = "watcher_interrupted";
 /// The alert of a `boot` step that failed or could not be run.
 pub const ALERT_BOOT_STEP: &str = "boot_step_failed";
 /// The alert of a readiness notice that could not be sent, a package directory that could not be
-/// listed (for the sweep of leftovers or for the boot steps), a sweep that failed, or an archive
-/// version that could not be deleted.
+/// listed (for the sweep of leftovers or for the boot steps), a sweep that failed, an archive
+/// version that could not be deleted, or a dangling unit link an earlier move left that could not
+/// be removed.
 pub const ALERT_START: &str = "start_incomplete";
 
 /// The log line of an alert: error level, with its `alert=` field. The daemon logs it through
@@ -282,6 +283,9 @@ pub struct BootReport {
     /// The archive versions the start deleted, or could not, after the boot pass
     /// ([`crate::archive_versions`]).
     pub archive_versions: Vec<ArchiveVersion>,
+    /// The dangling unit links an earlier move left that the start removed, before the boot
+    /// pass ([`crate::unit_links`]).
+    pub unit_links: Vec<std::path::PathBuf>,
     /// How the readiness notice went: `None` before it was sent.
     pub ready: Option<Result<(), String>>,
     /// What the start settled of the update of hostkeeper itself that waited for the restart

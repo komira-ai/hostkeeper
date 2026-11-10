@@ -87,6 +87,11 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
 apart.
 
+The daemon's own service is the one exception to the first row: observed `absent` while its package is installed
+(the service manager finds no unit, as a unit left in `/etc/systemd/system/` that hides the package's leaves it), the
+daemon reports it `HEALTH_UNHEALTHY`, reason `own_unit_not_loaded`, running, since it is that process
+(`crates/hostkeeper-daemon/src/link_adapters.rs`); `HEALTH_ABSENT` would read as not installed to the coordinator.
+
 ## The thin modules
 
 Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`, `HealthClient`,
