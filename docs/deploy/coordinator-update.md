@@ -3,7 +3,10 @@
 The machine that runs the coordinator's container installs every published release of hostkeeper
 on its own. A systemd timer on that machine runs `hostkeeper-coordinator-update` every five minutes;
 the program, a release asset of its own, downloads the release's image, checks it as [verify-a-release.md](verify-a-release.md) says,
-loads it, and replaces the container, keeping the old one until the new one is ready. A release
+loads it, and replaces the container, keeping the old one until the new one is ready. It needs no
+GitHub token: `komira-ai/hostkeeper` is public, so the program reads the release list and the
+release assets at GitHub's public URLs, and checks each attestation offline, from the release's
+bundle, with a pinned `gh` and the Sigstore trusted root, as the daemon's verifier does. A release
 that sets the hosts waits until the coordinator answers `GET /v1/version` with that release's
 version, so the hosts are set only by a coordinator that knows the release's requests.
 
@@ -18,7 +21,10 @@ Each step is one line of the report (the journal); a refusal fails the unit with
 changes nothing.
 
 1. The target version: `--target-version`, else the newest published (not draft) release `vX.Y.Z` of
-   `komira-ai/hostkeeper`.
+   `komira-ai/hostkeeper`, from `GET https://api.github.com/repos/komira-ai/hostkeeper/releases?per_page=100`
+   with no token, once a run. The list and its `ETag` are kept in the download directory
+   (`releases.json`, `releases.etag`), and the next run asks with `If-None-Match`: GitHub's
+   `304 Not Modified` is answered from the kept list, with nothing downloaded again.
 2. The container (`--container`, default `hostkeeper-coordinator`) must exist and run. A container
    named `<name>-next` must not exist.
 3. The running version: the coordinator's `GET <url>/v1/version`, or, for a coordinator too old to
@@ -31,10 +37,18 @@ changes nothing.
 4. A file `failed-v<target>` in the download directory refuses the version (see "A failed
    version").
 5. The image tarball, its bundle and `SHA256SUMS` are downloaded to `<download dir>/v<target>/`
-   (a file already there is kept and checked again). The tarball must be the sum `SHA256SUMS`
-   lists, and its attestation must verify online and from its bundle as made by
-   `komira-ai/hostkeeper`'s `artifacts.yml` on `refs/heads/main` (GitHub-hosted) for the release's
-   commit. Nothing is loaded otherwise.
+   from `https://github.com/komira-ai/hostkeeper/releases/download/v<target>/<name>` (following
+   its redirects, `https://` only; a file already there is kept and checked again). The tarball
+   must be the sum `SHA256SUMS` lists, and its attestation must verify offline from its bundle as
+   made by `komira-ai/hostkeeper`'s `artifacts.yml` on `refs/heads/main` (GitHub-hosted) for the
+   release's commit: the pinned `gh` (`--gh`) runs `gh attestation verify <tarball> --bundle
+   <bundle> --custom-trusted-root <--trusted-root> --repo komira-ai/hostkeeper --signer-workflow
+   komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main
+   --source-digest <commit> --deny-self-hosted-runners` (with the issuer and predicate the
+   daemon names), with no token, no environment of the program's and a proxy that refuses every
+   connection, in `<download dir>/.gh`; and what it verified is checked again. `gh` and the
+   trusted root must be owned by root (or by the unit's user) and writable by no one else, as
+   must their directories. Nothing is loaded otherwise.
 6. The tarball's manifest digest and config digest are read from it.
 7. `docker load` of the tarball, then the id of `hostkeeper-coordinator:<target>` must be one of
    the two digests (the containerd image store reports the manifest's, the classic store the
@@ -58,34 +72,59 @@ changes nothing.
 Only a successful update removes old downloads, keeping the newest two `v*` directories and the
 one it just installed.
 
+GitHub limits requests without a token by address (60 an hour to its API). A run asks for the
+list once, and the timer runs every five minutes. When GitHub answers that the limit is used up
+(`429`, or `403` with `x-ratelimit-remaining: 0` or a `Retry-After`), to the list or to a
+download, the run stops there, changes nothing, reports `GitHub's limit of requests without a
+token is used up (...): nothing changed; the next run tries again` and exits 0: the next run (the
+next timer tick) tries again, and keeps what was already downloaded.
+
 ## Install
 
 On the machine that runs the coordinator's container:
 
-1. Install the program from a release, never from a build on this machine. `gh` (2.102 or newer)
-   and `curl` must be on the `PATH`. `<V>` is the release, `X.Y.Z`; `<P>` is `linux-x86_64` or
-   `linux-arm64`, the machine's platform; `<commit>` is the full commit you pin the release to
-   (`$PIN` in [verify-a-release.md](verify-a-release.md)). `gh` needs the token of step 4 for
-   these commands (`export GH_TOKEN=<token>` in this shell). In an empty directory:
+1. Install the program, the pinned `gh` and the Sigstore trusted root from a release, never from
+   a build on this machine, with no token: everything is public. `curl` must be on the `PATH`,
+   and the program trusts GitHub's certificates by the CA bundle file
+   `/etc/ssl/certs/ca-certificates.crt` (Debian and Ubuntu; `--ca-bundle` names another), never
+   by an environment variable.
+   `<V>` is the release, `X.Y.Z`; `<P>` is `linux-x86_64` or `linux-arm64`, the machine's
+   platform, and `<A>` is `amd64` or `arm64` for it; `<commit>` is the full commit you pin the
+   release to (`$PIN` in [verify-a-release.md](verify-a-release.md)); `<GV>` and `<GH-SHA256>`
+   are the `gh` version and the SHA-256 of its archive for `<A>` that `.github/workflows/artifacts.yml`
+   pins at `<commit>` (`GH_VERSION`, and `gh-sha256` of the build matrix's row for `<P>`). In an
+   empty directory:
 
    ```sh
-   gh release download v<V> --repo komira-ai/hostkeeper \
-     --pattern hostkeeper-coordinator-update-<V>-<P>.tar.gz --pattern SHA256SUMS
+   get() { curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location "$@"; }
+   for f in hostkeeper-coordinator-update-<V>-<P>.tar.gz hostkeeper-coordinator-update-<V>-<P>.tar.gz.sigstore.json SHA256SUMS; do
+     get --remote-name "https://github.com/komira-ai/hostkeeper/releases/download/v<V>/$f"
+   done
    grep ' hostkeeper-coordinator-update-<V>-<P>.tar.gz$' SHA256SUMS | sha256sum --check
-   gh attestation verify hostkeeper-coordinator-update-<V>-<P>.tar.gz \
-     --repo komira-ai/hostkeeper \
+   get --output gh.tar.gz "https://github.com/cli/cli/releases/download/v<GV>/gh_<GV>_linux_<A>.tar.gz"
+   echo '<GH-SHA256>  gh.tar.gz' | sha256sum --check
+   tar -xzf gh.tar.gz --strip-components=2 gh_<GV>_linux_<A>/bin/gh
+   get --output trusted_root.json "https://raw.githubusercontent.com/komira-ai/hostkeeper/<commit>/packaging/sigstore/trusted_root.json"
+   mkdir gh-home
+   env -i PATH=/usr/bin:/bin HOME="$PWD/gh-home" GH_CONFIG_DIR="$PWD/gh-home/config" GH_PROMPT_DISABLED=1 \
+     HTTPS_PROXY=http://127.0.0.1:9 HTTP_PROXY=http://127.0.0.1:9 ALL_PROXY=http://127.0.0.1:9 \
+     ./gh attestation verify hostkeeper-coordinator-update-<V>-<P>.tar.gz \
+     --bundle hostkeeper-coordinator-update-<V>-<P>.tar.gz.sigstore.json \
+     --custom-trusted-root trusted_root.json --repo komira-ai/hostkeeper \
      --signer-workflow komira-ai/hostkeeper/.github/workflows/artifacts.yml \
      --source-ref refs/heads/main --source-digest <commit> --deny-self-hosted-runners
    tar -xzf hostkeeper-coordinator-update-<V>-<P>.tar.gz hostkeeper-coordinator-update
-   install -d -o root -g root -m 0755 /usr/local/libexec/hostkeeper
-   install -o root -g root -m 0755 hostkeeper-coordinator-update /usr/local/libexec/hostkeeper/
+   install -d -o root -g root -m 0755 /usr/local/libexec/hostkeeper /usr/local/lib/hostkeeper
+   install -o root -g root -m 0755 hostkeeper-coordinator-update gh /usr/local/libexec/hostkeeper/
+   install -o root -g root -m 0644 trusted_root.json /usr/local/lib/hostkeeper/
    /usr/local/libexec/hostkeeper/hostkeeper-coordinator-update --version
    ```
 
-   The attestation is checked as the program checks the image: made by `komira-ai/hostkeeper`'s
-   `artifacts.yml` on `refs/heads/main`, on a GitHub-hosted runner, for the release's commit. The
-   last line must print `hostkeeper-coordinator-update <V>+<first 12 hex digits of the commit>`.
-   Stop at the first command that fails.
+   The attestation is checked as the program checks the image: offline, from the bundle, made by
+   `komira-ai/hostkeeper`'s `artifacts.yml` on `refs/heads/main`, on a GitHub-hosted runner, for
+   the release's commit. The trusted root is the one the release's commit carries (the daemon's
+   packages carry the same file). The last line must print `hostkeeper-coordinator-update
+   <V>+<first 12 hex digits of the commit>`. Stop at the first command that fails.
 2. Create the user and join the group `docker`:
 
    ```sh
@@ -95,10 +134,7 @@ On the machine that runs the coordinator's container:
 
 3. Put the CA the coordinator's private listener's certificate chains to at
    `/etc/hostkeeper/coordinator-ca.pem` (mode 0644, owned by root).
-4. Write `/etc/hostkeeper/coordinator-update.env` (mode 0600, owned by root) with one line,
-   `GH_TOKEN=<token>`: a GitHub token that reads public repositories and nothing else. It is `gh`'s
-   credential; the program reads no environment variable.
-5. Copy the two files of `coordinator/` to `/etc/systemd/system/`, set `--coordinator-url` in the
+4. Copy the two files of `coordinator/` to `/etc/systemd/system/`, set `--coordinator-url` in the
    service to the coordinator's private listener, and `--container` if the container has another
    name.
 
@@ -119,13 +155,23 @@ container keeps running the version it has.
 A machine set up before the program was a release asset (it ran `xtask coordinator-update`, built
 on that machine): do step 1, copy `coordinator/hostkeeper-coordinator-update.service` again (its
 `ExecStart` now starts `/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update`, whose flag
-for a target release is `--target-version`), set `--coordinator-url` as in step 5, run
+for a target release is `--target-version`), set `--coordinator-url` as in step 4, run
 `systemctl daemon-reload`, and remove `/usr/local/libexec/hostkeeper/xtask` unless the database
 backup timer of [coordinator/README.md](coordinator/README.md) still runs it.
 
+A machine set up when the program needed a token (a unit with
+`EnvironmentFile=/etc/hostkeeper/coordinator-update.env`, `gh` on the `PATH` logged in with it):
+do step 1 with this release, copy `coordinator/hostkeeper-coordinator-update.service` again (it
+reads no environment file), set `--coordinator-url` as in step 4, run `systemctl daemon-reload`,
+and remove `/etc/hostkeeper/coordinator-update.env`; then revoke the token. An older program
+under the new unit, with no token, cannot read the release list: install the program of this
+release or a newer one first.
+
 The program does not update itself: it keeps the version installed in step 1 while it rolls the
 container forward. To take a newer one, run step 1 again with that release; the timer's next run
-uses it.
+uses it. The same goes for the trusted root: when Sigstore rotates a key, the releases signed
+after it are refused (see the refusal table) until step 1 is run again with a release whose
+commit carries the new root.
 
 A release whose job `coordinator` fails with `no coordinator updater reported this release (is
 the timer installed?)` waited 30 minutes and the coordinator never answered that it runs the
@@ -139,8 +185,8 @@ container with the host's root mounted. So the unit's user is a dedicated one th
 else and logs in nowhere, the sandbox of the unit (`ProtectSystem=strict`, one writable directory,
 `NoNewPrivileges`) limits what the program itself can touch, and the program only ever loads an image that
 the release signer, which every daemon of the farm trusts, attested for the release's commit and
-whose SHA-256 is the one in `SHA256SUMS`. A compromised GitHub token of the kind in the env file
-can read public data only.
+whose SHA-256 is the one in `SHA256SUMS`. The unit holds no credential: it reads only public
+URLs, and checks attestations offline.
 
 ## What a refusal means
 
@@ -151,7 +197,10 @@ can read public data only.
 | `container <name>-next exists` | An earlier run was cut short, between creating the new container and the end of the swap. Read its logs (`docker logs <name>-next`) and `docker ps -a` to see which container serves; remove `<name>-next` (`docker rm -f <name>-next`) only when `<name>` runs. If `<name>` is gone and `<name>-next` ran the new version, `docker rename <name>-next <name>`. |
 | `the image of <name> is not in docker` | The old container's image was deleted, so what the image supplied cannot be told from what the container sets. Deploy by hand. |
 | `<file> says v<V> did not become ready ...` | See "A failed version". |
-| `<tar> (online)` or `(offline)` lines: no attestation, signed by another workflow, another ref or commit | The image is not the release's attested one. Nothing was loaded. Look at the release; run `gh attestation verify` as [verify-a-release.md](verify-a-release.md) says. |
+| `<tar> (offline): ...` lines: no attestation, signed by another workflow, another ref or commit, `Error: verifying with issuer ...` | The image is not the release's attested one, or the trusted root is older than the key that signed it. Nothing was loaded. Look at the release; run `gh attestation verify` as [verify-a-release.md](verify-a-release.md) says. If it verifies there, the trusted root is stale: run step 1 of "Install" again with the release. |
+| `<tar> (offline): gh attestation verify (offline): --gh is not trusted: ...` (or `--trusted-root`) | `gh` or the trusted root is not owned by root (or the unit's user), or someone else can write it or its directory. Nothing was run. Install them again as step 1 of "Install" says. |
+| `GitHub's limit of requests without a token is used up (...): nothing changed; the next run tries again` (exit 0) | Not a refusal: another program behind the same address spent GitHub's limit. The next run tries again; nothing to do unless it lasts. |
+| `GET https://api.github.com/...: HTTP <status>` or `download <name> of v<V>: GET ...: HTTP <status>` | GitHub did not serve the list or the asset. Nothing changed. The next run tries again; look at GitHub's status if it lasts. |
 | `<tar>: its SHA-256 is ..., SHA256SUMS says ...` | The download is not the release's file (a cut-short or altered copy). Remove `<download dir>/v<V>/` and let the next run download it again. |
 | `the image docker loaded is not the verified one` | After `docker load`, the id of `hostkeeper-coordinator:<V>` is neither digest of the tarball. Nothing was created. Remove the image (`docker rmi hostkeeper-coordinator:<V>`) and look at the docker version and image store. |
 | `<name> could not be stopped` | `<name>-next` was deleted and `<name>` left as it was. Look at `docker ps`. |

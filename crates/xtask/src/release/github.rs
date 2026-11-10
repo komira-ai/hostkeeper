@@ -290,11 +290,7 @@ impl<E: Exec> Gh<E> {
     /// The newest 100 releases of `repo`, drafts included.
     fn list_releases(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
         let (value, what) = self.api(&format!("repos/{repo}/releases?per_page=100"))?;
-        let r = Reader { what: &what };
-        r.list(&value, "the reply")?
-            .iter()
-            .map(|release| parse_release(&r, release))
-            .collect()
+        releases_of(&value, &what)
     }
 }
 
@@ -362,36 +358,69 @@ impl<E: Exec> Verifier for Gh<E> {
         bundle: Option<&Path>,
         commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError> {
-        let mut args = vec![
-            "attestation",
-            "verify",
-            utf8_path("gh attestation verify", file)?,
-        ];
-        if let Some(bundle) = bundle {
-            args.push("--bundle");
-            args.push(utf8_path("gh attestation verify", bundle)?);
-        }
-        args.extend([
-            "--repo",
-            &signer.repo,
-            "--signer-workflow",
-            &signer.workflow,
-        ]);
-        if let Some(source_ref) = signer.exact_ref() {
-            args.extend(["--source-ref", source_ref]);
-        }
-        args.extend(["--source-digest", commit.as_str()]);
-        if signer.signers.hosted_runner {
-            args.push("--deny-self-hosted-runners");
-        }
-        args.extend(["--format", "json"]);
-        let (value, what) = self.json(&args)?;
-        let r = Reader { what: &what };
-        r.list(&value, "the reply")?
-            .iter()
-            .map(|element| parse_attestation(&r, element))
-            .collect()
+        let args = verify_args(signer, file, bundle, &[], commit)?;
+        let words: Vec<&str> = args.iter().map(String::as_str).collect();
+        let (value, what) = self.json(&words)?;
+        attestations_of(&value, &what)
     }
+}
+
+/// The arguments of `gh attestation verify` for `file` by `signer` at `commit`: `--bundle` when
+/// one is given, then `extra` (the coordinator updater's `--custom-trusted-root <file>` and the
+/// issuer and predicate its offline check names), then the signer, ref, commit and runner flags
+/// and `--format json`.
+pub(crate) fn verify_args(
+    signer: &Signer,
+    file: &Path,
+    bundle: Option<&Path>,
+    extra: &[&str],
+    commit: &Commit,
+) -> Result<Vec<String>, PortError> {
+    let mut args = vec![
+        "attestation",
+        "verify",
+        utf8_path("gh attestation verify", file)?,
+    ];
+    if let Some(bundle) = bundle {
+        args.push("--bundle");
+        args.push(utf8_path("gh attestation verify", bundle)?);
+    }
+    args.extend(extra);
+    args.extend([
+        "--repo",
+        &signer.repo,
+        "--signer-workflow",
+        &signer.workflow,
+    ]);
+    if let Some(source_ref) = signer.exact_ref() {
+        args.extend(["--source-ref", source_ref]);
+    }
+    args.extend(["--source-digest", commit.as_str()]);
+    if signer.signers.hosted_runner {
+        args.push("--deny-self-hosted-runners");
+    }
+    args.extend(["--format", "json"]);
+    Ok(args.into_iter().map(str::to_owned).collect())
+}
+
+/// The attestations in what `gh attestation verify --format json` printed; `what` names the
+/// command in each error.
+pub(crate) fn attestations_of(value: &Value, what: &str) -> Result<Vec<Attestation>, PortError> {
+    let r = Reader { what };
+    r.list(value, "the reply")?
+        .iter()
+        .map(|element| parse_attestation(&r, element))
+        .collect()
+}
+
+/// The releases in the JSON of GitHub's `GET /repos/<repo>/releases`; `what` names the request
+/// in each error.
+pub(crate) fn releases_of(value: &Value, what: &str) -> Result<Vec<Release>, PortError> {
+    let r = Reader { what };
+    r.list(value, "the reply")?
+        .iter()
+        .map(|release| parse_release(&r, release))
+        .collect()
 }
 
 #[cfg(test)]

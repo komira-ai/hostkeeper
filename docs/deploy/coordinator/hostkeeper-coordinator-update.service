@@ -7,25 +7,32 @@
 #   - the program of the release asset hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz,
 #     checked first (its SHA256SUMS line and its attestation, docs/deploy/coordinator-update.md,
 #     "Install"), as /usr/local/libexec/hostkeeper/hostkeeper-coordinator-update, mode 0755, owned
-#     by root; nothing is built on this machine. `gh` and `curl` on the PATH;
+#     by root; nothing is built on this machine. `curl` on the PATH, and the system's CA bundle
+#     at /etc/ssl/certs/ca-certificates.crt (or --ca-bundle set to it): GitHub's certificates
+#     must chain to it;
+#   - the pinned gh as /usr/local/libexec/hostkeeper/gh (mode 0755) and the Sigstore trusted root
+#     as /usr/local/lib/hostkeeper/trusted_root.json (mode 0644), each owned by root in a
+#     directory owned by root that no one else can write: the program checks each attestation
+#     offline with them, with no token;
 #   - a system user `hostkeeper-coordinator-update` in the group `docker`, with
-#     /var/lib/hostkeeper-coordinator-update as its home (the download directory; gh and the
-#     attestation verifier keep their caches there). Membership of `docker` is root on this
-#     machine: the user is a dedicated one, and the program loads only an image the release signer
-#     attested;
+#     /var/lib/hostkeeper-coordinator-update as its home (the download directory, which also
+#     keeps the last release list, its ETag, and gh's scratch home `.gh`). Membership of `docker`
+#     is root on this machine: the user is a dedicated one, and the program loads only an image
+#     the release signer attested;
 #   - the CA the coordinator's private listener's certificate chains to, as
 #     /etc/hostkeeper/coordinator-ca.pem, mode 0644, owned by root;
-#   - /etc/hostkeeper/coordinator-update.env, mode 0600, owned by root, holding one line
-#     `GH_TOKEN=<token>`: a GitHub token that can read public repositories and nothing else. It
-#     is gh's credential; the program reads no environment variable;
 #   - the URL of --coordinator-url below set to the coordinator's private listener, and the
 #     container's name (--container, default hostkeeper-coordinator) if it is another.
+# No token and no environment file: the program reads GitHub's public URLs and reads no
+# environment variable.
 # Then `systemctl enable --now hostkeeper-coordinator-update.timer`.
 #
 # A run that refuses something (no container, a stopped one, a leftover hostkeeper-coordinator-next,
 # a release that fails its check, a version marked failed) changes nothing and fails: `systemctl
-# status` and the journal show the reason. A new version that did not become ready is rolled back
-# to the old container and marked by failed-v<version> in the download directory.
+# status` and the journal show the reason. A run that meets GitHub's limit of requests without a
+# token changes nothing and succeeds, saying so in the journal; the next run tries again. A new
+# version that did not become ready is rolled back to the old container and marked by
+# failed-v<version> in the download directory.
 [Unit]
 Description=Update the coordinator's container to the newest attested release
 Wants=network-online.target
@@ -37,7 +44,6 @@ User=hostkeeper-coordinator-update
 Group=hostkeeper-coordinator-update
 SupplementaryGroups=docker
 StateDirectory=hostkeeper-coordinator-update
-EnvironmentFile=/etc/hostkeeper/coordinator-update.env
 ExecStart=/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update --download-dir /var/lib/hostkeeper-coordinator-update --coordinator-url https://coordinator.example.com:8444 --ca-file /etc/hostkeeper/coordinator-ca.pem
 NoNewPrivileges=yes
 PrivateTmp=yes

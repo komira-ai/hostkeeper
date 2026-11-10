@@ -199,6 +199,11 @@ impl World {
             check_every_secs: 5,
             stop_timeout_secs: 30,
             curl: "curl".to_owned(),
+            gh: PathBuf::from(GH),
+            trusted_root: PathBuf::from(TRUSTED_ROOT),
+            ca_bundle: PathBuf::from(public::CA_BUNDLE),
+            github_api_url: public::API.to_owned(),
+            github_url: public::SITE.to_owned(),
         }
     }
 
@@ -261,7 +266,7 @@ fn a_ready_update_replaces_the_container_and_reports_each_step() {
             "coordinator-update: target v0.1.219".to_owned(),
             "coordinator-update: hostkeeper-coordinator runs v0.1.218".to_owned(),
             format!(
-                "coordinator-update: {} is the release's image: it matches SHA256SUMS and its attestation verified online and from its bundle",
+                "coordinator-update: {} is the release's image: it matches SHA256SUMS and its attestation verified offline from its bundle",
                 dir.join(&tar).display()
             ),
             format!(
@@ -302,17 +307,15 @@ fn a_ready_update_replaces_the_container_and_reports_each_step() {
         ["failed-v0.1.216", "v0.1.218", "v0.1.219"].map(str::to_owned)
     );
     assert!(w.engine.exists(NAME) && !w.engine.exists(NEXT) && !w.engine.exists(OLD_ID));
-    // The release's files are the ones the attestation was asked about, online and offline.
+    // The release's files are the ones the attestation was asked about, offline from the
+    // bundle only: nothing asks GitHub for the attestation, which would need a token.
     assert_eq!(
         *w.verifier.calls.borrow(),
-        vec![
-            format!("online {tar}"),
-            format!("offline {tar} {tar}.sigstore.json")
-        ]
+        vec![format!("offline {tar} {tar}.sigstore.json")]
     );
     assert_eq!(
         *w.verifier.signers.borrow(),
-        vec![Signer::hostkeeper().workflow; 2]
+        vec![Signer::hostkeeper().workflow]
     );
     assert_eq!(dir_names(&dir).len(), 3);
 }
@@ -605,8 +608,9 @@ fn a_version_that_failed_before_stays_refused_until_its_marker_is_removed() {
 #[test]
 fn a_release_that_does_not_check_out_is_refused_before_anything_is_loaded() {
     // Proves: a sum that is not the file's, a sums file that lacks the image, an attestation
-    // refused online or only offline, one by another commit, a download that fails and a release
-    // with no commit each refuse, with the problem named, and docker loads nothing.
+    // the bundle does not verify, one by another commit, one by another signer workflow, one
+    // that does not name the file, a download that fails and a release with no commit each
+    // refuse, with the problem named, and docker loads nothing.
     let tar = image_name(&v("0.1.219"), Platform::LinuxX86_64);
     let other_commit = nth_commit(8).to_string();
     let wrong = {
@@ -615,23 +619,24 @@ fn a_release_that_does_not_check_out_is_refused_before_anything_is_loaded() {
             Ok(vec![good_attestation(file, &other)])
         }))
     };
-    let offline_only = FakeVerifier::with(Box::new(|file, bundle| match bundle {
-        None => Ok(vec![good_attestation(file, &nth_commit(7).to_string())]),
+    let bad_bundle = FakeVerifier::with(Box::new(|_, bundle| match bundle {
+        None => panic!("the check is offline only"),
         Some(_) => Err(PortError::new("verify", "the bundle is not valid")),
     }));
-    let never = FakeVerifier::with(Box::new(|_, _| {
-        Err(PortError::new("verify", "no attestation"))
+    let other_signer = FakeVerifier::with(Box::new(|file, _| {
+        let mut a = good_attestation(file, &nth_commit(7).to_string());
+        a.signer_workflow = "komira-ai/kbf/.github/workflows/artifacts.yml".to_owned();
+        Ok(vec![a])
     }));
+    let other_file = FakeVerifier::with(Box::new(|file, _| {
+        let mut a = good_attestation(file, &nth_commit(7).to_string());
+        a.subjects = vec!["0".repeat(64)];
+        Ok(vec![a])
+    }));
+    let none = FakeVerifier::with(Box::new(|_, _| Ok(Vec::new())));
     let cases: Vec<(FakeVerifier, Option<Vec<u8>>, String)> = vec![
         (
-            never,
-            None,
-            format!(
-                "{tar} (online): verify: no attestation\n{tar} (offline): verify: no attestation"
-            ),
-        ),
-        (
-            offline_only,
+            bad_bundle,
             None,
             format!("{tar} (offline): verify: the bundle is not valid"),
         ),
@@ -639,11 +644,27 @@ fn a_release_that_does_not_check_out_is_refused_before_anything_is_loaded() {
             wrong,
             None,
             format!(
-                "{tar} (online): attests the commit {other_commit}, not the pin {}\n{tar} (offline): attests the commit {other_commit}, not the pin {}",
-                commit(),
+                "{tar} (offline): attests the commit {other_commit}, not the pin {}",
                 commit()
             ),
         ),
+        (
+            other_signer,
+            None,
+            format!(
+                "{tar} (offline): signed by komira-ai/kbf/.github/workflows/artifacts.yml, not {}",
+                Signer::hostkeeper().workflow
+            ),
+        ),
+        (
+            other_file,
+            None,
+            format!(
+                "{tar} (offline): does not name the file's SHA-256 {}",
+                sha(&image_tar())
+            ),
+        ),
+        (none, None, format!("{tar} (offline): no attestation")),
     ];
     for (verifier, _, want) in cases {
         let mut w = world("cu-attest");
@@ -905,58 +926,3 @@ fn the_program_needs_an_existing_download_directory_and_runs_docker_through_curl
 
 mod flags;
 mod replace;
-
-#[test]
-fn github_releases_lists_from_the_store_and_downloads_an_asset_by_its_release_url() {
-    // Proves: the list is the release store's, and an asset is fetched from
-    // `https://github.com/<repo>/releases/download/<tag>/<name>` into `<dir>/<name>`; a failed
-    // fetch is the download's error.
-    use crate::release::fakes::{FakeDownload, FakeStore};
-    let root = scratch("cu-github-releases");
-    let store = FakeStore::default();
-    store.insert(Release {
-        tag: "v0.1.219".to_owned(),
-        commit: commit(),
-        draft: false,
-        assets: Vec::new(),
-    });
-    let url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/SHA256SUMS";
-    let mut fetch = FakeDownload::default();
-    fetch.served.insert(url.to_owned(), b"the sums".to_vec());
-    let releases = GitHubReleases {
-        store: &store,
-        fetch: &fetch,
-    };
-    let repo = Repo::hostkeeper();
-    let listed = releases.list(&repo).expect("the list");
-    assert_eq!(
-        listed.iter().map(|r| r.tag.as_str()).collect::<Vec<_>>(),
-        ["v0.1.219"]
-    );
-    releases
-        .download(&repo, "v0.1.219", "SHA256SUMS", &root)
-        .expect("the download");
-    assert_eq!(
-        std::fs::read(root.join("SHA256SUMS")).expect("the file"),
-        b"the sums"
-    );
-    let missing = releases
-        .download(&repo, "v0.1.219", "missing", &root)
-        .expect_err("not served");
-    assert_eq!(
-        missing.to_string(),
-        "curl https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/missing: exit status 22"
-    );
-    assert_eq!(
-        fetch
-            .calls
-            .borrow()
-            .iter()
-            .map(|(u, _)| u.as_str())
-            .collect::<Vec<_>>(),
-        [
-            url,
-            "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.219/missing"
-        ]
-    );
-}

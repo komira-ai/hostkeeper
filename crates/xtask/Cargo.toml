@@ -49,10 +49,13 @@ lzma-rs.workspace = true
 # The RPM header reader of `channels rpm` (the repository's `primary.xml`, the signature
 # header), and the builder its tests make packages with.
 rpm.workspace = true
-# The TLS of `channels assume`'s token request: the ring provider ureq is built with, and the
-# host's roots.
+# The TLS of `channels assume`'s token request and of `hostkeeper-coordinator-update`'s fetches
+# from GitHub: the ring provider ureq is built with; the host's roots (`channels assume`).
 rustls.workspace = true
 rustls-native-certs.workspace = true
+# The effective uid `hostkeeper-coordinator-update` trusts its `gh` and trusted root to be owned
+# by, besides root.
+rustix = { workspace = true, features = ["process"] }
 # The zstd decoder of `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
 # Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
@@ -70,7 +73,8 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
-# The OIDC token request of `channels assume` (the runner's, over HTTPS).
+# The OIDC token request of `channels assume` (the runner's, over HTTPS); the release list and
+# assets `hostkeeper-coordinator-update` reads from GitHub's public URLs.
 ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
@@ -159,6 +163,12 @@ jaq-core.workspace = true
 jaq-json.workspace = true
 jaq-std.workspace = true
 saphyr-parser.workspace = true
+# The coordinator updater's tests serve the release over HTTPS on loopback, with a CA and a
+# server certificate made at run time.
+rcgen.workspace = true
+# The coordinator updater's offline `gh` gets the environment the daemon's verifier gives it
+# (`hostkeeper_package::gh::GhVerifier::env`), which a test holds it to.
+hostkeeper-package = { path = "../hostkeeper-package" }
 
 [lints]
 workspace = true
