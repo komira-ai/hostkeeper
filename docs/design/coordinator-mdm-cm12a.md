@@ -50,10 +50,10 @@ Apple's public roots are fetchable from `https://www.apple.com/certificateauthor
 not stored here. That shows the root fixtures are the right trust anchors for a real Apple-issued chain, and that a chain needs the intermediate supplied.
 
 **Not proved.** The device-identity chain of an ADE blob (the intermediates a Mac's "device certificate" carries) was not verified: no blob exists. The
-intermediate CA for device certificates (the "Apple iPhone Device CA" family named in community sources) is **not** among the certificates Apple publishes on
-the page above, and the guessed URL for it returned 404. So a coordinator cannot rely on a published intermediate bundle. The design must take the
-intermediates from the PKCS#7 itself (the blob carries its chain, per community sources, unverified) and anchor only at the Apple root. The first capture
-settles that. `cms` in the workspace has no chain or signature-verify API (the `scep` spike, gaps 1 and 3), so CM12c writes the verification by hand.
+intermediate CA for device certificates (the "Apple iPhone Device CA" family named in community sources) was not found among the certificates Apple lists on
+the page above, and one guessed URL for it returned 404. Whether Apple publishes it elsewhere is unverified. The design anchors at the Apple root; the
+first capture decides between taking the intermediates from the PKCS#7 (the blob carries its chain, per community sources, unverified) and shipping a
+pinned intermediate bundle. `cms` in the workspace has no chain or signature-verify API (the `scep` spike, gaps 1 and 3), so CM12c writes the verification by hand.
 
 ## `/enroll` response signing (item 11)
 
@@ -100,8 +100,8 @@ enrollment out and re-enrollment of that Mac needs no operator click. A wipe tha
 ## What this changes in the design
 
 - Section 4.2: the capture is still the gate; record the three ways to get it, recommend the setup-gated raw-body log of the first deployed coordinator,
-  and state that the device intermediates are not published by Apple.
-- Section 4.1 and item 11: CMS-signing of the `/enroll` response is expected not to be needed (inferred); CM12c's signing step is conditional on the first capture.
+  and state that the device intermediates were not found on Apple's CA page (unverified whether published).
+- Section 4.1 and item 11: CMS-signing of the `/enroll` response may not be needed (one Mac, macOS 27.0.x, inferred; item 11 stays open); CM12c's signing step is conditional on the first capture.
 - Section 4.1 and items 5 and 10: the profile keeps `SignMessage true`; the TLS client certificate is optional evidence.
 - Section 12: items 4, 10 and 12 stay open with the reasons above; items 5 and 11 move forward as stated.
 
@@ -112,3 +112,5 @@ enrollment out and re-enrollment of that Mac needs no operator click. A wipe tha
 - What the MDM client does on 401, 403 and 410.
 - Whether a Mac sends `CheckOut` on removal or wipe.
 - That an ADE enrollment accepts an unsigned `/enroll` response (inferred from one enrolled Mac).
+
+**Item 5 caveat.** The client-auth mode is measured from configuration and the journal. That `Mdm-Signature` verifies against the device identity is inferred from NanoHUB accepting the requests; one captured `/checkin` request, committed as a redacted fixture, is wanted before CM11a relies on it.

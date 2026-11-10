@@ -182,7 +182,7 @@ hint list holds the MDM CA (and any issuer the migration trusts). Verify with th
 
 **Is the `/enroll` response signed?** For ADE, Apple's text may require the returned enrollment profile to be CMS-signed. If so the signing
 key is a second use of the public TLS key that the coordinator reads, and the signing is a task in CM12c. Not established; section 12, item 11.
-The capture that decides it is the same capture as for the device blob (CM12a). The live stack's Mac enrolled with an unsigned response, so the expectation is that signing is not needed (inferred, [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md)).
+The capture that decides it is the same capture as for the device blob (CM12a). The live stack's Mac enrolled with an unsigned response, so signing may not be needed. This rests on one Mac and one macOS version (27.0.x), and the POST was not seen (inferred, [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md)). CM12c keeps the signing step, built conditionally on the first capture; item 11 stays open.
 
 **An unknown enrollment.** What a Mac does with `401`, `403` or `410` from `/mdm` is not the same: some are read by the MDM client as
 "this server no longer manages me" and remove management. The status for an enrollment the table does not know is chosen from Apple's
@@ -222,7 +222,7 @@ the LAN cannot ask for a challenge for a serial it does not own. The blob carrie
 challenge being bound to the UDID and to a serial whose ABM `profile_status` is `pushed` limits what a replay buys, and the nonce (4.6) is
 the gate after it. Rules, which fail closed:
 
-- Task **CM12a** first captures the real POST from the farm Mac and proves that the chain verifies. It comes before any `/enroll` code. The note [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md) records that the capture could not be made on the farm Macs (one is not in ABM, the other is enrolled), lists three ways to get it, and recommends a setup-gated raw-body log in the first deployed coordinator. Apple does not publish the device-identity intermediates, so verification anchors at the Apple root and takes the intermediates from the blob.
+- Task **CM12a** first captures the real POST from the farm Mac and proves that the chain verifies. It comes before any `/enroll` code. The note [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md) records that the capture could not be made on the farm Macs (one is not in ABM, the other is enrolled), lists three ways to get it, and recommends a setup-gated raw-body log in the first deployed coordinator. The device-identity intermediates were not found on Apple's CA page (one guessed URL returned 404); whether Apple publishes them elsewhere is unverified (inferred). Verification anchors at the Apple root. The first capture decides between taking the intermediates from the blob and shipping a pinned intermediate bundle; neither is settled.
 - If it cannot be verified, `/enroll` **issues no challenge on its own**: the request waits as an operator click (the same place a
   `no_group` request waits), because a serial is not a secret and "the serial is in the ABM table" alone would let a LAN peer who knows one
   obtain an identity.
@@ -854,14 +854,14 @@ Not verified. A claim in this document that depends on one of these is marked, a
 2. Whether `IdentityCertificateUUID` accepts an ACME identity during ADE (CM16).
 3. Whether macOS renews a SCEP identity inside the MDM payload on its own (4.2).
 4. Whether the signature of the ADE POST can be verified against Apple's root with what the Mac sends (4.2). CM12a could not capture a POST (see its note); open.
-5. Answered by CM12a: the live profile sets `SignMessage true` and the live proxy requests no TLS client certificate. The new profile keeps `SignMessage true`; the listener accepts either (4.1).
+5. Measured by CM12a from configuration: the live profile sets `SignMessage true` and the live proxy requests no TLS client certificate. That NanoHUB, run with `-ca`, accepts the requests is the only evidence that `Mdm-Signature` verifies against the device identity; that is inferred. The new profile keeps `SignMessage true`; the listener accepts either (4.1). Before CM11a relies on it, one real `/checkin` request (headers and body) is captured through a logging tap and committed as a redacted fixture for CM5. Open.
 6. mdmcert.download's request and reply formats, whether the coordinator may post the request itself, and that it still operates (4.4).
 7. Whether a Mac that is enrolled but unknown to the table re-runs `Authenticate` on a refusal (section 6, lesson 3).
 8. Whether the community mdmcert service is operating today and whether Apple grants the vendor CSR signing certificate to an organization that
    manages only its own fleet.
 9. The licence of KMFDDM, to copy its declaration store design for CM15.
 10. Whether a macOS client offers its identity given the root hints of 4.1 (CM11a). Not tested; the live `SignMessage true` mode does not depend on it.
-11. Whether the ADE `/enroll` response must be CMS-signed (4.1; CM12a). Supported "no" by the live enrollment (an unsigned response enrolled m3ultra-1); the POST was not seen, so inferred.
+11. Whether the ADE `/enroll` response must be CMS-signed (4.1; CM12a). The live enrollment suggests "no" for one Mac on macOS 27.0.x (an unsigned response enrolled m3ultra-1); the POST was not seen, so this is inferred and stays open. CM12c keeps signing as a conditional step.
 12. What the MDM client does on `401`, `403` and `410` from `/mdm` (4.1; before CM11a).
 13. Whether a Mac polls on any schedule of its own (4.3); the design does not depend on it.
 14. `instant-acme`'s TLS backend and licence under the workspace's `ring` provider, and GoDaddy's API for TXT records (the call, its minimum
