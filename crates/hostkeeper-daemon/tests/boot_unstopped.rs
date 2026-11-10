@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_boot;
+mod support_host;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -19,7 +19,7 @@ use hostkeeper_hook::Step;
 use hostkeeper_steps::CrashPoint;
 use hostkeeper_steps::record::State;
 use support::{alerting, crash_at, d, lines, name, ok};
-use support_boot::Bench;
+use support_host::NativeHost;
 
 /// Catches a daemon that exits, lets go of the service, or rewrites the record when a step of
 /// the start pass cannot be stopped: `alpha`'s resumed `prepare` runs past its bound and the
@@ -31,10 +31,10 @@ use support_boot::Bench;
 /// Once stops work again, the next start stops the unit first and finishes the update.
 #[test]
 fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
-    let rig = Bench::new("boot-unstopped");
-    rig.add("alpha", "2.0.0");
-    rig.add("alpha", "3.0.0");
-    rig.add("beta", "2.0.0");
+    let rig = NativeHost::new("boot-unstopped");
+    rig.add_staged("alpha", "2.0.0");
+    rig.add_staged("alpha", "3.0.0");
+    rig.add_staged("beta", "2.0.0");
     let (first, _) = rig.booted();
     drop(first);
     // The daemon dies right after the first record of `alpha`'s update: `prepare` is pending.

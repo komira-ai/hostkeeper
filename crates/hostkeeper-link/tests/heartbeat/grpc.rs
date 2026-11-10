@@ -21,7 +21,7 @@ use hostkeeper_coordinator::listen::connection;
 use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_link::testing::{FakeLink, RecordingLog, identity};
 use hostkeeper_link::{
-    ANNOUNCED, Acknowledged, AsyncConn, CoordinatorLink, EndpointError, Feature, GrpcDial,
+    ANNOUNCED, Acknowledged, AsyncConn, CoordinatorLink, EndpointError, Entry, Feature, GrpcDial,
     GrpcLinkError, GrpcMtlsLink, Health, Heartbeat, LinkError, MAX_HEARTBEAT_BYTES, NegotiatedLink,
     Order, OrderRef, OrderResult, Outcome, Platform, Reason, Reply, ServiceFacts, Target, TcpDial,
     TrustFault, Unsendable, Verb,
@@ -34,7 +34,9 @@ use sha2::{Digest, Sha256};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
 use tokio_rustls::TlsAcceptor;
 
-use crate::coordinator::{OPERATOR, PATIENCE, call, coordinator, serve_coordinator};
+use crate::coordinator::{
+    OPERATOR, PATIENCE, apt_entry, call, coordinator, serve_coordinator, set_web_release,
+};
 use crate::tls::{COORDINATOR, Ca, Farm, Leaf, PipeTransport, Pki, config, config_text, link};
 use crate::verdict;
 use crate::{digest, order_id, reply, service, version};
@@ -92,14 +94,14 @@ impl GrpcDial for PendingDial {
 /// The coordinator's side: a runtime of the test's own that serves each connection queued on a
 /// dial with the coordinator's listener code, over the TLS of `leaf`, which asks for a client
 /// certificate of `client_ca`.
-struct Server {
+pub(crate) struct Server {
     runtime: tokio::runtime::Runtime,
     tls: TlsSource,
     coordinator: Arc<Coordinator>,
 }
 
 impl Server {
-    fn new(leaf: &Leaf, client_ca: &Ca, coordinator: &Arc<Coordinator>) -> Server {
+    pub(crate) fn new(leaf: &Leaf, client_ca: &Ca, coordinator: &Arc<Coordinator>) -> Server {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(1)
             .enable_all()
@@ -121,12 +123,12 @@ impl Server {
     }
 
     /// The coordinator of `farm`, over `coordinator`.
-    fn of(farm: &Farm, coordinator: &Arc<Coordinator>) -> Server {
+    pub(crate) fn of(farm: &Farm, coordinator: &Arc<Coordinator>) -> Server {
         Server::new(&farm.coordinator, &farm.ca, coordinator)
     }
 
     /// Serves the next call of `dial`: a new connection queued on it, ended by the client.
-    fn accept(&self, dial: &DuplexDial) {
+    pub(crate) fn accept(&self, dial: &DuplexDial) {
         let (client, server) = tokio::io::duplex(1 << 20);
         dial.queue(client);
         self.runtime.spawn(connection(
@@ -191,25 +193,22 @@ pub(crate) fn web_beat() -> Heartbeat {
     beat(vec![facts("web", "1.0")])
 }
 
-/// What the coordinator of [`coordinator`] answers a host running `web` at 1.0: the update to
-/// 2.0 with its terms, the features both sides know, and the halt generation of `web`.
+/// The heartbeat of a host running `web` at 1.0 from the package manager `apt`, whose daemon
+/// lists `apt` (sent on the gRPC route only).
+fn apt_web_beat() -> Heartbeat {
+    let mut running = facts("web", "1.0");
+    running.installer = Some("apt".to_owned());
+    Heartbeat {
+        installers: vec!["apt".to_owned()],
+        ..beat(vec![running])
+    }
+}
+
+/// What the coordinator of [`coordinator`] answers a host running `web` at 1.0 over the JSON
+/// route, which carries no order: the features both sides know and the halt generation of `web`.
 fn expected_reply() -> Reply {
-    let hash: String = Sha256::digest(b"web\n2.0")
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect();
     Reply {
-        order: Some(Order {
-            id: order_id(&format!("update-{}", &hash[..32])),
-            order_try: 1,
-            verb: Verb::Update(Target {
-                service: service("web"),
-                version: version("2.0"),
-                digest: digest(),
-                index_digest: None,
-                entry: None,
-            }),
-        }),
+        order: None,
         features: vec![
             Feature::DeferredV1,
             Feature::HaltV1,
@@ -222,6 +221,26 @@ fn expected_reply() -> Reply {
         ],
         halt_generations: vec![(service("web"), 1)],
         acknowledged: Vec::new(),
+    }
+}
+
+/// The update order of `web` to 2.0 that gRPC carries to a daemon that lists `apt`: the order id,
+/// try and digest, and the `apt` entry of the release ([`apt_entry`]).
+fn apt_order() -> Order {
+    let hash: String = Sha256::digest(b"web\n2.0")
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Order {
+        id: order_id(&format!("update-{}", &hash[..32])),
+        order_try: 1,
+        verb: Verb::Update(Target {
+            service: service("web"),
+            version: version("2.0"),
+            digest: digest(),
+            index_digest: None,
+            entry: Some(Entry::new(apt_entry())),
+        }),
     }
 }
 
@@ -247,15 +266,18 @@ fn hosts_of_web(coordinator: &Coordinator) -> BTreeSet<String> {
 /// Catches a gRPC link whose request or reading of the response differs from the JSON route's:
 /// two coordinators built identically are sent the same facts, one over the JSON link and one
 /// over the gRPC link (HTTP/2 over mutual TLS, through the coordinator's listener code), and
-/// both answer with the same reply, which is the update of `web` to 2.0 with the order id, try
-/// and digest, the features both sides know (`grpc-v1` among them) and the halt generation.
+/// both answer with the same reply but for the order (the features both sides know, `grpc-v1`
+/// among them, and the halt generation); gRPC carries the update of `web` to 2.0 with the order
+/// id, try, digest and the `apt` entry of the release, and the JSON route, which is frozen,
+/// carries no order.
 #[test]
 fn the_grpc_link_returns_the_same_reply_as_the_json_link_for_the_same_coordinator_state() {
     let farm = Farm::new();
     let pki = Pki::with_bundle("grpc-same-reply", &farm.ca.pem);
-    let beat = web_beat();
+    let beat = apt_web_beat();
 
     let (_json_dir, json_coordinator) = fresh("grpc-same-reply-json");
+    set_web_release(&json_coordinator);
     let transport = Arc::new(PipeTransport::default());
     let log = Arc::new(RecordingLog::default());
     let json = link(&farm, &pki, &transport, &log);
@@ -264,14 +286,24 @@ fn the_grpc_link_returns_the_same_reply_as_the_json_link_for_the_same_coordinato
     json_server.join().expect("the server").expect("a request");
 
     let (_grpc_dir, grpc_coordinator) = fresh("grpc-same-reply-grpc");
+    set_web_release(&grpc_coordinator);
     let server = Server::of(&farm, &grpc_coordinator);
     let dial = Arc::new(DuplexDial::default());
     let grpc = grpc_link(&farm, &pki, &dial, &log);
     server.accept(&dial);
     let from_grpc = grpc.heartbeat(&farm.host.identity(), &beat);
 
+    // Equal but for the order: gRPC carries the typed order with its entry, the frozen JSON route none.
     assert_eq!(from_json, Ok(expected_reply()));
-    assert_eq!(from_grpc, from_json);
+    let from_grpc = from_grpc.expect("a reply over gRPC");
+    assert_eq!(from_grpc.order, Some(apt_order()));
+    assert_eq!(
+        Reply {
+            order: None,
+            ..from_grpc
+        },
+        expected_reply()
+    );
     assert_eq!(dial.dialed(), [(COORDINATOR.to_owned(), 8443)]);
     assert_eq!(log.lines(), Vec::<String>::new());
     assert_eq!(

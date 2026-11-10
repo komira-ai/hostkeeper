@@ -5,7 +5,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::runner::REASON_HALT_CLEARED;
 use hostkeeper_steps::{CrashPoint, RecordStore};
 use support::{Rig, name};
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 fn succeeded() -> Reply {
     Reply::Finished {
@@ -50,7 +50,7 @@ fn cleared() -> State {
 const BASE: &str = "1.9.0";
 
 /// `web` installed at [`BASE`], with 2.0.0 and 2.1.0 published to order next.
-fn installed(farm: &Farm) -> Daemon {
+fn installed(farm: &NativeHost) -> Daemon {
     for version in [BASE, "2.0.0", "2.1.0"] {
         farm.publish("web", version);
     }
@@ -61,7 +61,7 @@ fn installed(farm: &Farm) -> Daemon {
 
 /// `web` halted by its hook (an update to 2.0.0 whose `prepare` exits 76), held under halt
 /// generation `persisted` (no file for 0), with a package 2.1.0 to order next.
-fn halted(farm: &Farm, persisted: u64) -> Daemon {
+fn halted(farm: &NativeHost, persisted: u64) -> Daemon {
     let rig = farm.rig();
     let daemon = installed(farm);
     rig.launcher.exits("web", Step::Prepare, &[76]);
@@ -116,7 +116,7 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
         (0, 0, false),
     ];
     for (persisted, asked, lifts) in rows {
-        let farm = Farm::new(&format!("clear-row-{persisted}-{asked}"));
+        let farm = NativeHost::new(&format!("clear-row-{persisted}-{asked}"));
         let rig = farm.rig();
         let daemon = halted(&farm, persisted);
         let (halt_before, record_before) = (bytes(rig, HELD_HALT_FILE), bytes(rig, RECORD_FILE));
@@ -163,7 +163,7 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
 /// on the same directories still refuses 4 and lifts 5.
 #[test]
 fn clear_halt_generation_survives_a_restart() {
-    let farm = Farm::new("clear-restart");
+    let farm = NativeHost::new("clear-restart");
     let rig = farm.rig();
     let daemon = halted(&farm, 3);
     assert!(daemon.clear_halt(&name("web"), 4).is_ok());
@@ -183,7 +183,7 @@ fn clear_halt_generation_survives_a_restart() {
 /// would decide alone.
 #[test]
 fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_the_resend() {
-    let farm = Farm::new("clear-crash");
+    let farm = NativeHost::new("clear-crash");
     let rig = farm.rig();
     drop(halted(&farm, 3));
     let dies = farm
@@ -214,7 +214,7 @@ fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_t
 /// leaving the held generation as it was, and the same `clear_halt` lifts once it can be.
 #[test]
 fn a_held_halt_that_cannot_be_written_refuses_and_the_resend_lifts() {
-    let farm = Farm::new("clear-unwritable");
+    let farm = NativeHost::new("clear-unwritable");
     let rig = farm.rig();
     let daemon = halted(&farm, 0);
     let blocker = rig.state.join("web").join(format!("{HELD_HALT_FILE}.tmp"));
@@ -231,7 +231,7 @@ fn a_held_halt_that_cannot_be_written_refuses_and_the_resend_lifts() {
 /// step, it is `busy` and nothing is written.
 #[test]
 fn clear_halt_on_a_service_with_a_running_step_is_busy() {
-    let farm = Farm::new("clear-busy");
+    let farm = NativeHost::new("clear-busy");
     let rig = farm.rig();
     farm.publish("web", BASE);
     farm.publish("web", "2.0.0");
@@ -258,7 +258,7 @@ fn clear_halt_on_a_service_with_a_running_step_is_busy() {
 /// text, and neither the file nor the halt record changes.
 #[test]
 fn clear_halt_with_a_garbage_held_halt_file_names_the_error_and_lifts_nothing() {
-    let farm = Farm::new("clear-garbage");
+    let farm = NativeHost::new("clear-garbage");
     let rig = farm.rig();
     let daemon = halted(&farm, 0);
     fs::write(rig.state.join("web").join(HELD_HALT_FILE), "seven\n").expect("garbage");
@@ -319,7 +319,7 @@ fn clear_halt_of_a_record_that_cannot_be_cleared_names_why_and_writes_nothing() 
 /// `stale_halt_generation`.
 #[test]
 fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
-    let farm = Farm::new("clear-order");
+    let farm = NativeHost::new("clear-order");
     let daemon = halted(&farm, 0);
     let lifted = Reply::Finished {
         verdict: Verdict::Deferred {
@@ -343,7 +343,7 @@ fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
 /// nothing.
 #[test]
 fn a_halt_generation_from_the_heartbeat_lifts_the_halt_record() {
-    let farm = Farm::new("clear-heartbeat");
+    let farm = NativeHost::new("clear-heartbeat");
     let rig = farm.rig();
     let daemon = Arc::new(halted(&farm, 0));
     let halts = DaemonHalts::new(Arc::clone(&daemon));

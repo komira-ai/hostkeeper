@@ -12,7 +12,7 @@
 
 mod support;
 mod support_apt;
-mod support_orders;
+mod support_host;
 
 use std::sync::Arc;
 
@@ -28,7 +28,7 @@ use hostkeeper_proto::hostkeeper::agent::v1::{Abort, Order, order};
 use hostkeeper_steps::record::{PARAMS_FILE, Record, State};
 use hostkeeper_steps::runner::{REASON_ABORTED, REASON_UNSTOPPABLE};
 use support::{alerting, d, lines, name, snapshot, update};
-use support_orders::{Host, pv};
+use support_host::{NativeHost, pv};
 
 /// The reply of an order that ended `Halt` for `reason`.
 fn halted(reason: &str) -> Reply {
@@ -86,14 +86,14 @@ fn abort_of(daemon: &Arc<Daemon>, service: &str) -> Spawned<Result<Aborted, Refu
 }
 
 /// `service` at `version` with an unbounded `prepare` (`prepare = 0`), installed over the base.
-fn unbounded(rig: &Host, service: &str, version: &str) {
+fn unbounded(rig: &NativeHost, service: &str, version: &str) {
     let text = manifest(service, version).replace("prepare = 600", "prepare = 0");
     rig.manifest(service, version, &text);
     rig.add(service, version);
 }
 
 /// The record of `service`, which must be there.
-fn record(rig: &Host, service: &str) -> Record {
+fn record(rig: &NativeHost, service: &str) -> Record {
     rig.record(service).expect("a step record")
 }
 
@@ -101,7 +101,7 @@ fn record(rig: &Host, service: &str) -> Record {
 /// `alpha` 2.0.0 whose `prepare` ran past its bound and could not be stopped, so its runner
 /// stopped `Unstopped` and its service is locked for good. Every stop of `alpha` fails until the
 /// test allows it.
-fn unstopped(rig: &Host) -> Arc<Daemon> {
+fn unstopped(rig: &NativeHost) -> Arc<Daemon> {
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "3.0.0");
     rig.add("beta", "2.0.0");
@@ -142,7 +142,7 @@ fn unstopped(rig: &Host) -> Arc<Daemon> {
 /// and another service's order that waited for the step lock meanwhile ran to its end.
 #[test]
 fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
-    let rig = Host::new("abort-unbounded");
+    let rig = NativeHost::new("abort-unbounded");
     unbounded(&rig, "web", "2.0.0");
     rig.add("web", "2.1.0");
     rig.add("beta", "2.0.0");
@@ -187,7 +187,7 @@ fn abort_stops_an_unbounded_prepare_and_halts_the_order() {
 /// the update ends `Halt` `aborted_by_operator`.
 #[test]
 fn abort_between_two_steps_ends_the_order_before_the_next_step_launches() {
-    let rig = Host::new("abort-between");
+    let rig = NativeHost::new("abort-between");
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
@@ -226,7 +226,7 @@ enum Missing {
 /// The scenario of [`abort_while_the_runner_waits_between_two_steps_stops_nothing_and_launches_nothing_more`],
 /// with `missing` left out.
 fn abort_while_waiting(rig_name: &str, missing: Missing) {
-    let rig = Host::new(rig_name);
+    let rig = NativeHost::new(rig_name);
     rig.add("web", "2.0.0");
     rig.launcher.exits("web", Step::Verify, &[75]);
     let sleep = rig.clock.park_next_sleep();
@@ -299,7 +299,7 @@ fn a_wait_for_an_abort_that_never_waits_for_the_order_fails_naming_the_abort() {
 /// lets go of the lock, so the next order is `halted`.
 #[test]
 fn abort_that_cannot_stop_the_unit_marks_unstoppable() {
-    let rig = Host::new("abort-unstoppable");
+    let rig = NativeHost::new("abort-unstoppable");
     let daemon = unstopped(&rig);
     let alpha = name("alpha");
     let other = daemon.order(&rig.update("alpha", "3.0.0", 2));
@@ -338,7 +338,7 @@ fn abort_that_cannot_stop_the_unit_marks_unstoppable() {
 /// `aborted_by_operator` after three calls, and nothing is alerted.
 #[test]
 fn abort_retries_a_stop_that_fails_then_works() {
-    let rig = Host::new("abort-retry");
+    let rig = NativeHost::new("abort-retry");
     let daemon = unstopped(&rig);
     rig.launcher.allow_stops("alpha");
     rig.launcher.fail_stops_times("alpha", 2);
@@ -356,7 +356,7 @@ fn abort_retries_a_stop_that_fails_then_works() {
 /// `aborted_by_operator`, and the service's lock is let go.
 #[test]
 fn abort_of_an_unstopped_service_whose_unit_has_since_exited_halts_aborted_by_operator() {
-    let rig = Host::new("abort-exited");
+    let rig = NativeHost::new("abort-exited");
     let daemon = unstopped(&rig);
     rig.launcher.allow_stops("alpha");
     let before = rig.launcher.stops().len();
@@ -372,7 +372,7 @@ fn abort_of_an_unstopped_service_whose_unit_has_since_exited_halts_aborted_by_op
 /// order and as a call, and every file of the state directory is as it was.
 #[test]
 fn abort_with_no_step_running_is_refused_and_writes_nothing() {
-    let rig = Host::new("abort-idle");
+    let rig = NativeHost::new("abort-idle");
     rig.add("fresh", "2.0.0");
     rig.add("done", "2.0.0");
     rig.add("later", "2.0.0");
@@ -414,7 +414,7 @@ fn abort_with_no_step_running_is_refused_and_writes_nothing() {
 fn abort_by_coordinator_order_and_by_daemon_abort_end_in_the_same_state() {
     let mut ended = Vec::new();
     for by_order in [true, false] {
-        let rig = Host::new(if by_order {
+        let rig = NativeHost::new(if by_order {
             "abort-by-order"
         } else {
             "abort-by-call"
@@ -461,7 +461,7 @@ fn abort_by_coordinator_order_and_by_daemon_abort_end_in_the_same_state() {
 /// its record and unit untouched by the abort.
 #[test]
 fn abort_takes_no_step_lock_and_touches_only_its_service() {
-    let rig = Host::new("abort-only");
+    let rig = NativeHost::new("abort-only");
     unbounded(&rig, "alpha", "2.0.0");
     rig.add("beta", "2.0.0");
     let alpha_gate = rig.launcher.hold_until_stopped("alpha", Step::Prepare);
@@ -502,7 +502,7 @@ fn abort_takes_no_step_lock_and_touches_only_its_service() {
 /// which find nothing running.
 #[test]
 fn a_resent_abort_order_is_answered_from_the_first_answer() {
-    let rig = Host::new("abort-resend");
+    let rig = NativeHost::new("abort-resend");
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold_until_stopped("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
@@ -539,7 +539,7 @@ fn a_resent_abort_order_is_answered_from_the_first_answer() {
 #[test]
 fn abort_of_a_running_step_that_cannot_be_stopped_closes_it_unstoppable_and_the_order_keeps_the_lock()
  {
-    let rig = Host::new("abort-running-unstoppable");
+    let rig = NativeHost::new("abort-running-unstoppable");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     rig.launcher.fail_stops("web");
@@ -569,7 +569,7 @@ fn abort_of_a_running_step_that_cannot_be_stopped_closes_it_unstoppable_and_the_
 /// is `store_failed`, and its lock stays held too.
 #[test]
 fn abort_refuses_a_held_lock_its_record_does_not_name() {
-    let rig = Host::new("abort-not-named");
+    let rig = NativeHost::new("abort-not-named");
     rig.add("web", "2.0.0");
     let daemon = rig.daemon();
     assert_eq!(daemon.order(&rig.update("web", "2.0.0", 1)), succeeded());
@@ -584,7 +584,7 @@ fn abort_refuses_a_held_lock_its_record_does_not_name() {
     assert_eq!(refused.refusal, Refusal::NothingRunning);
     assert!(daemon.ctx().locks.holder(&web).expect("held").stuck);
 
-    let rig = Host::new("abort-record-gone");
+    let rig = NativeHost::new("abort-record-gone");
     let daemon = unstopped(&rig);
     std::fs::remove_file(rig.state.join("alpha").join("step-record.json")).expect("removed");
     let refused = daemon.abort(&name("alpha")).expect_err("no record");
@@ -604,7 +604,7 @@ fn abort_refuses_a_held_lock_its_record_does_not_name() {
 /// the abort closes the record and lets the lock go, then answers `store_failed` for the file.
 #[test]
 fn an_unstopped_abort_whose_params_file_cannot_be_removed_still_lets_the_lock_go() {
-    let rig = Host::new("abort-params-stuck");
+    let rig = NativeHost::new("abort-params-stuck");
     let daemon = unstopped(&rig);
     rig.launcher.allow_stops("alpha");
     let params = rig.state.join("alpha").join(PARAMS_FILE);

@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_orders;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
@@ -22,10 +22,10 @@ use hostkeeper_steps::{Clock, Finished, ForceFailure, ForceVerdict};
 use support::force::{UNIT, WEB, asked_active, calls, failed, link_of, set, started, token_of};
 use support::{OWN, config, d, digest, force, lines, name, roots, snapshot};
 use support_apt::with_entry;
-use support_orders::{Host, runs, succeeded};
+use support_host::{NativeHost, runs, succeeded};
 
 /// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
-fn web(rig: &Host, version: &str) {
+fn web(rig: &NativeHost, version: &str) {
     rig.pin(WEB, version);
 }
 
@@ -34,7 +34,7 @@ fn web(rig: &Host, version: &str) {
 /// each is refused with its token, and nothing is asked, placed or written.
 #[test]
 fn force_is_refused_for_hostkeeper_and_without_a_registered_digest() {
-    let rig = Host::new("force-refused");
+    let rig = NativeHost::new("force-refused");
     let daemon = rig.daemon();
     assert_eq!(
         daemon.order(&rig.force("hostkeeper", "2.0.0", 1, 1)),
@@ -82,7 +82,7 @@ fn force_skips_only_busy_and_the_standing_halt() {
     assert_eq!(Checks::for_force().skipped(), [Check::Busy, Check::Halt]);
     assert!(Checks::hooked().skipped().is_empty());
 
-    let rig = Host::new("force-checks");
+    let rig = NativeHost::new("force-checks");
     let daemon = rig.daemon();
     let too_new =
         manifest(WEB, "2.4.0").replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
@@ -112,7 +112,7 @@ fn force_skips_only_busy_and_the_standing_halt() {
     assert!(!rig.state.join(WEB).join(RECORD_FILE).exists());
 
     // Busy: the unfinished update holds every other update off, and the force stops it.
-    let rig = Host::new("force-busy");
+    let rig = NativeHost::new("force-busy");
     rig.add(WEB, "1.0.0");
     web(&rig, "3.0.0");
     let (daemon, _) = rig.booted();
@@ -125,7 +125,7 @@ fn force_skips_only_busy_and_the_standing_halt() {
     assert_eq!(rig.launcher.stops(), ["updater-web-prepare-1"]);
 
     // The halt: a halted service refuses every update, and the force of the held generation runs.
-    let rig = Host::new("force-halted");
+    let rig = NativeHost::new("force-halted");
     rig.add(WEB, "1.0.0");
     web(&rig, "3.0.0");
     let (daemon, _) = rig.booted();
@@ -151,12 +151,12 @@ fn force_skips_only_busy_and_the_standing_halt() {
 /// `placed.json`.
 #[test]
 fn force_to_an_older_version_is_accepted_with_no_local_floor() {
-    let rig = Host::new("force-older");
+    let rig = NativeHost::new("force-older");
     let daemon = rig.daemon();
     web(&rig, "3.0.0");
     web(&rig, "2.0.0");
     rig.forced(&daemon, "3.0.0", 1);
-    let paths = |rig: &Host| -> Vec<std::path::PathBuf> {
+    let paths = |rig: &NativeHost| -> Vec<std::path::PathBuf> {
         let mut paths: Vec<_> = snapshot(&rig.state)
             .into_iter()
             .map(|(path, _)| path)
@@ -182,7 +182,7 @@ fn force_to_an_older_version_is_accepted_with_no_local_floor() {
 /// `current` and the record as they were.
 #[test]
 fn force_fetches_and_verifies_before_it_stops_anything() {
-    let rig = Host::new("force-fetch");
+    let rig = NativeHost::new("force-fetch");
     let daemon = rig.daemon();
     web(&rig, "1.0.0");
     rig.forced(&daemon, "1.0.0", 1);
@@ -230,7 +230,7 @@ fn force_fetches_and_verifies_before_it_stops_anything() {
 /// and runs; and a force of `api` with generation 2 runs and leaves its hold at 2.
 #[test]
 fn force_over_a_standing_halt_lifts_the_halt() {
-    let rig = Host::new("force-lift");
+    let rig = NativeHost::new("force-lift");
     for service in [WEB, "api"] {
         rig.add(service, "1.0.0");
         rig.pin(service, "3.0.0");
@@ -285,7 +285,7 @@ fn force_over_a_standing_halt_lifts_the_halt() {
 /// nothing is placed or switched.
 #[test]
 fn a_halt_lift_that_cannot_be_written_stops_the_force() {
-    let rig = Host::new("force-lift-fails");
+    let rig = NativeHost::new("force-lift-fails");
     let daemon = rig.daemon();
     web(&rig, "2.0.0");
     fs::create_dir_all(rig.state.join(WEB).join("held-halt.tmp")).expect("a directory in the way");
@@ -301,7 +301,7 @@ fn a_halt_lift_that_cannot_be_written_stops_the_force() {
 /// `forced_over`, with no `rollback` launched and its params file gone, and the force then runs.
 #[test]
 fn force_stops_a_running_step_and_closes_its_record_forced_over() {
-    let rig = Host::new("force-over");
+    let rig = NativeHost::new("force-over");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -345,7 +345,7 @@ fn force_stops_a_running_step_and_closes_its_record_forced_over() {
 /// log holds that one run and that one stop.
 #[test]
 fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
-    let rig = Host::new("force-prepare");
+    let rig = NativeHost::new("force-prepare");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -389,7 +389,7 @@ fn force_interrupts_a_running_prepare_and_the_runner_launches_no_rollback() {
 /// its bytes and no unit of `api` is stopped; `api`'s update then ends as it would have.
 #[test]
 fn force_does_not_wait_for_another_services_step() {
-    let rig = Host::new("force-other");
+    let rig = NativeHost::new("force-other");
     rig.add("api", "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -414,7 +414,7 @@ fn force_does_not_wait_for_another_services_step() {
 /// the same force again is `running`, and an update of `api` runs to its end.
 #[test]
 fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_not_queued() {
-    let rig = Host::new("force-busy-not-queued");
+    let rig = NativeHost::new("force-busy-not-queued");
     web(&rig, "2.0.0");
     rig.add("api", "1.0.0");
     let (daemon, _) = rig.booted();
@@ -446,7 +446,7 @@ fn force_takes_the_service_lock_only_and_a_second_order_for_the_service_is_busy_
 /// old `run` units, the switch of `current`, `daemon-reload`, and the starts of the target's.
 #[test]
 fn force_runs_the_steps_in_the_documented_order() {
-    let rig = Host::new("force-order");
+    let rig = NativeHost::new("force-order");
     let daemon = rig.daemon();
     rig.manifest(
         WEB,
@@ -478,7 +478,7 @@ fn force_runs_the_steps_in_the_documented_order() {
 /// ships is not started.
 #[test]
 fn force_starts_exactly_the_units_the_target_lists() {
-    let rig = Host::new("force-starts");
+    let rig = NativeHost::new("force-starts");
     let daemon = rig.daemon();
     rig.manifest(WEB, "1.0.0", &runs(WEB, "1.0.0", &["web-old.service"]));
     rig.ship(WEB, "2.0.0", "web-extra.service");
@@ -510,7 +510,7 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
         .into_iter()
         .flat_map(|lost| cases.clone().into_iter().map(move |case| (lost, case)))
     {
-        let rig = Host::new("force-wait");
+        let rig = NativeHost::new("force-wait");
         if lost {
             rig.clock.lose_boot_id();
         }
@@ -536,7 +536,7 @@ fn force_waits_for_every_unit_to_be_active_within_force_start_secs() {
 /// nothing and runs to `Succeeded`.
 #[test]
 fn force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recovers() {
-    let rig = Host::new("force-recovers");
+    let rig = NativeHost::new("force-recovers");
     let daemon = rig.daemon();
     let two = "web-two.service";
     web(&rig, "1.0.0");
@@ -572,7 +572,7 @@ fn force_with_unit_that_fails_to_start_reports_failed_and_a_second_force_recover
 /// on the target and no unit started.
 #[test]
 fn force_records_daemon_reload_failed_with_the_host_on_the_target() {
-    let rig = Host::new("force-reload-fails");
+    let rig = NativeHost::new("force-reload-fails");
     let daemon = rig.daemon();
     web(&rig, "1.0.0");
     web(&rig, "2.0.0");
@@ -603,7 +603,7 @@ fn force_records_daemon_reload_failed_with_the_host_on_the_target() {
 /// before the commit, with `current` where it was.
 #[test]
 fn a_force_whose_units_cannot_be_stopped_fails_before_the_switch() {
-    let rig = Host::new("force-stop-fails");
+    let rig = NativeHost::new("force-stop-fails");
     web(&rig, "1.0.0");
     web(&rig, "2.0.0");
     rig.forced(&rig.daemon(), "1.0.0", 1);
@@ -624,7 +624,7 @@ fn a_force_whose_units_cannot_be_stopped_fails_before_the_switch() {
 /// nothing is switched; the step stays flagged.
 #[test]
 fn a_force_that_cannot_stop_the_running_step_changes_nothing_else() {
-    let rig = Host::new("force-unstopped");
+    let rig = NativeHost::new("force-unstopped");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -659,7 +659,7 @@ fn a_force_that_cannot_stop_the_running_step_changes_nothing_else() {
 /// has stopped that step's unit, the force takes the lock over and runs.
 #[test]
 fn a_force_takes_over_the_lock_of_a_step_that_could_not_be_stopped() {
-    let rig = Host::new("force-take-over");
+    let rig = NativeHost::new("force-take-over");
     rig.add(WEB, "1.0.0");
     web(&rig, "2.0.0");
     let (daemon, _) = rig.booted();
@@ -688,7 +688,7 @@ fn a_force_takes_over_the_lock_of_a_step_that_could_not_be_stopped() {
 /// unfinished record keeps its bytes and its unit is not stopped.
 #[test]
 fn a_force_while_no_hooked_step_runs_sets_no_forced_flag() {
-    let rig = Host::new("force-no-flag");
+    let rig = NativeHost::new("force-no-flag");
     rig.add(WEB, "1.0.0");
     rig.add("api", "1.0.0");
     web(&rig, "2.0.0");
@@ -718,7 +718,7 @@ fn a_force_while_no_hooked_step_runs_sets_no_forced_flag() {
 /// directory the linker reaches is the daemon's own.
 #[test]
 fn the_rig_links_into_the_daemons_packages_directory() {
-    let rig = Host::new("force-rig");
+    let rig = NativeHost::new("force-rig");
     let placement = Placement {
         roots: roots(),
         fs: rig.placed_fs.clone(),

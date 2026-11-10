@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_boot;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
@@ -24,7 +24,7 @@ use hostkeeper_observe::{
 };
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 use support::{OWN, d};
-use support_boot::Bench;
+use support_host::NativeHost;
 
 /// The digest the running executable of the tests' live service has.
 const RUNNING: [u8; 32] = [7; 32];
@@ -33,7 +33,7 @@ const RUNNING: [u8; 32] = [7; 32];
 const URL: &str = "http://127.0.0.1:9301/healthz";
 
 /// The daemon of `rig` running as `unit`, its binary directory under the rig's state directory.
-fn own_service(rig: &Bench, unit: &str) -> OwnService {
+fn own_service(rig: &NativeHost, unit: &str) -> OwnService {
     OwnService {
         unit: unit.to_owned(),
         binary_dir: binary_dir(&rig.state),
@@ -46,7 +46,7 @@ fn name(text: &str) -> ServiceName {
 
 /// `service` at `version` with one run unit, `<service>.service`, and `current` naming it; its
 /// manifest has the health URL [`URL`] when `health` is set.
-fn installed(rig: &Bench, service: &str, version: &str, health: bool) {
+fn installed(rig: &NativeHost, service: &str, version: &str, health: bool) {
     let unit = format!("{service}.service");
     let mut text = manifest(service, version) + &format!("\n[units]\nrun = [\"{unit}\"]\n");
     if health {
@@ -71,7 +71,7 @@ fn stat() -> ExeStat {
 /// heartbeat reports; a service with no `current` has no observation and no health.
 #[test]
 fn status_reports_the_observation_and_the_installed_version_per_service() {
-    let rig = Bench::new("observer-status");
+    let rig = NativeHost::new("observer-status");
     installed(&rig, "live", "1.0.0", true);
     installed(&rig, "stopped", "1.0.0", false);
     rig.stage("bare", "1.0.0");
@@ -142,7 +142,7 @@ fn status_reports_the_observation_and_the_installed_version_per_service() {
 /// service, the lock shown as held, before the step is released.
 #[test]
 fn an_observation_never_waits_for_a_running_step() {
-    let rig = Bench::new("observer-unlocked");
+    let rig = NativeHost::new("observer-unlocked");
     rig.add_units(
         "web",
         support::BASE,
@@ -151,7 +151,7 @@ fn an_observation_never_waits_for_a_running_step() {
         &[],
     );
     rig.store.link("web", "current", support::BASE);
-    rig.add("web", "2.0.0");
+    rig.add_staged("web", "2.0.0");
     rig.manager
         .set("web.service", ActiveState::Active, Some(4242));
     rig.process.set(4242, 77, stat(), RUNNING);
@@ -196,7 +196,7 @@ fn an_observation_never_waits_for_a_running_step() {
 /// units and health URL of its manifest.
 #[test]
 fn a_service_with_no_current_or_an_unreadable_manifest_is_not_observed() {
-    let rig = Bench::new("observer-input");
+    let rig = NativeHost::new("observer-input");
     let observer = &rig.observer;
     let (packages, web) = (&rig.packages, name("web"));
     let bin = &binary_dir(&rig.state);
@@ -387,7 +387,7 @@ fn the_heartbeat_health_and_the_reason_say_what_the_observation_says() {
 /// health URL nothing.
 #[test]
 fn the_host_observer_answers_without_asking_the_host() {
-    let rig = Bench::new("host-observer");
+    let rig = NativeHost::new("host-observer");
     let observer = host_observer(&rig.packages, OWN, &own_service(&rig, MAIN_UNIT));
     let input = |current: Option<Current>| ServiceInput {
         service: "web".to_owned(),

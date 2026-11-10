@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -15,11 +15,11 @@ use hostkeeper_daemon::{Outcome, Reply};
 use hostkeeper_hook::Verdict;
 use hostkeeper_placed::testing::{Event, FaultFs, FsWrite, Log};
 use support::uninstall;
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 /// A host with `web` installed from a package that runs a unit, with an `uninstall` bound.
-fn installed(name: &str) -> Farm {
-    let farm = Farm::new(name);
+fn installed(name: &str) -> NativeHost {
+    let farm = NativeHost::new(name);
     farm.publish_placed("web", "1.0.0", Some(300));
     let reply = farm.daemon().order(&farm.install("web", "1.0.0", 1));
     assert!(
@@ -50,7 +50,7 @@ fn removed(log: &Log) -> BTreeSet<PathBuf> {
 
 /// Whether nothing of `web` is left on the host: no package directory, state directory,
 /// installed package, enablement link, record of its installer or tombstone.
-fn gone(farm: &Farm) -> bool {
+fn gone(farm: &NativeHost) -> bool {
     let rig = farm.rig();
     let record = rig.placed_record();
     !rig.packages.join("web").exists()

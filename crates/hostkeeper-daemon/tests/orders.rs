@@ -3,7 +3,7 @@
 
 mod support;
 mod support_apt;
-mod support_orders;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
@@ -23,7 +23,7 @@ use hostkeeper_steps::record::{Loaded, RECORD_FILE};
 use hostkeeper_steps::{RecordStore, tree_digest};
 use support::{d, digest, force_rollback, update};
 use support_apt::with_entry;
-use support_orders::{Host, pv};
+use support_host::{NativeHost, pv};
 
 fn succeeded() -> Reply {
     Reply::Finished {
@@ -48,7 +48,7 @@ fn name(text: &str) -> ServiceName {
 }
 
 /// The step record of `service`, which must be there.
-fn record_of(rig: &Host, service: &str) -> Box<hostkeeper_steps::Record> {
+fn record_of(rig: &NativeHost, service: &str) -> Box<hostkeeper_steps::Record> {
     match RecordStore::new(&rig.state.join(service))
         .load()
         .expect("load")
@@ -58,7 +58,7 @@ fn record_of(rig: &Host, service: &str) -> Box<hostkeeper_steps::Record> {
     }
 }
 
-fn no_record(rig: &Host, service: &str) -> bool {
+fn no_record(rig: &NativeHost, service: &str) -> bool {
     !rig.state.join(service).join(RECORD_FILE).exists()
 }
 
@@ -66,7 +66,7 @@ fn no_record(rig: &Host, service: &str) -> bool {
 /// `invalid_order` with a text that names its field, before anything is asked or written.
 #[test]
 fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
-    let rig = Host::new("malformed");
+    let rig = NativeHost::new("malformed");
     let daemon = rig.daemon();
     let ok = support::d();
     let long_version = "1".repeat(256);
@@ -207,8 +207,8 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
 /// own version is `daemon_too_old`, and nothing runs, is staged or is written.
 #[test]
 fn min_hostkeeper_above_the_running_daemon_is_refused() {
-    let rig = Host::new("too-old");
-    rig.running("web", support::BASE);
+    let rig = NativeHost::new("too-old");
+    rig.seeded("web", support::BASE);
     let daemon = rig.daemon();
     let text = manifest("web", "2.0.0")
         .replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
@@ -225,9 +225,9 @@ fn min_hostkeeper_above_the_running_daemon_is_refused() {
 /// and a `force_rollback` of the same package runs.
 #[test]
 fn an_update_below_the_running_version_is_refused_but_force_rollback_is_accepted() {
-    let rig = Host::new("below");
+    let rig = NativeHost::new("below");
     let daemon = rig.daemon();
-    rig.running("web", "1.10.0");
+    rig.seeded("web", "1.10.0");
     rig.add("web", "1.9.0");
     assert_eq!(
         daemon.order(&rig.update("web", "1.9.0", 1)),
@@ -250,7 +250,7 @@ fn an_update_below_the_running_version_is_refused_but_force_rollback_is_accepted
 /// waits for the step lock, and both end).
 #[test]
 fn a_second_order_while_one_runs_is_busy() {
-    let rig = Host::new("busy");
+    let rig = NativeHost::new("busy");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "3.0.0");
     rig.add("beta", "2.0.0");
@@ -288,7 +288,7 @@ fn a_second_order_while_one_runs_is_busy() {
 /// answered `Running`, and once it ended with its recorded verdict; the hook ran once.
 #[test]
 fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
-    let rig = Host::new("resend");
+    let rig = NativeHost::new("resend");
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
@@ -315,7 +315,7 @@ fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
 /// step record, and runs nothing.
 #[test]
 fn resend_after_daemon_death_returns_the_recorded_verdict() {
-    let rig = Host::new("death");
+    let rig = NativeHost::new("death");
     rig.add("web", "2.0.0");
     let order = rig.update("web", "2.0.0", 4);
     rig.launcher.exits("web", Step::Prepare, &[1]);
@@ -344,7 +344,7 @@ fn resend_after_daemon_death_returns_the_recorded_verdict() {
 /// Catches a same-try order with another version being run or answered from the record.
 #[test]
 fn same_try_with_a_different_version_is_try_conflict() {
-    let rig = Host::new("conflict-v");
+    let rig = NativeHost::new("conflict-v");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
@@ -362,7 +362,7 @@ fn same_try_with_a_different_version_is_try_conflict() {
 /// Catches a same-try order with another digest being taken for a resend.
 #[test]
 fn same_try_with_a_different_digest_is_try_conflict() {
-    let rig = Host::new("conflict-d");
+    let rig = NativeHost::new("conflict-d");
     rig.add("web", "2.0.0");
     let daemon = rig.daemon();
     assert_eq!(daemon.order(&rig.update("web", "2.0.0", 3)), succeeded());
@@ -381,7 +381,7 @@ fn same_try_with_a_different_digest_is_try_conflict() {
 /// another package and for the same one.
 #[test]
 fn a_lower_try_is_stale_try() {
-    let rig = Host::new("stale");
+    let rig = NativeHost::new("stale");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
@@ -397,7 +397,7 @@ fn a_lower_try_is_stale_try() {
 /// keeps its try.
 #[test]
 fn a_higher_try_runs_once_the_last_order_ended() {
-    let rig = Host::new("higher");
+    let rig = NativeHost::new("higher");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
@@ -416,7 +416,7 @@ fn a_higher_try_runs_once_the_last_order_ended() {
 /// try resumes the unfinished order, stopping its unit by name first.
 #[test]
 fn a_higher_try_during_an_unfinished_different_package_is_busy() {
-    let rig = Host::new("unfinished");
+    let rig = NativeHost::new("unfinished");
     rig.add("web", "2.0.0");
     rig.add("web", "3.0.0");
     rig.launcher.lose("web", Step::Cutover);
@@ -445,8 +445,8 @@ fn a_higher_try_during_an_unfinished_different_package_is_busy() {
 /// still runs.
 #[test]
 fn a_halt_record_holds_every_later_order_for_the_service_and_no_other() {
-    let rig = Host::new("halt");
-    rig.running("alpha", "1.0.0");
+    let rig = NativeHost::new("halt");
+    rig.seeded("alpha", "1.0.0");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "2.1.0");
     rig.add("beta", "2.0.0");
@@ -489,8 +489,8 @@ fn a_halt_record_holds_every_later_order_for_the_service_and_no_other() {
 /// and the record.
 #[test]
 fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
-    let rig = Host::new("five");
-    let old = rig.running("web", "1.0.0");
+    let rig = NativeHost::new("five");
+    let old = rig.seeded("web", "1.0.0");
     let new = rig.add("web", "2.0.0");
     let old_digest = tree_digest(&old).expect("the old tree");
     let daemon = rig.daemon();
@@ -526,8 +526,8 @@ fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
 /// `rollback` runs, the verdict is failed before the commit.
 #[test]
 fn a_failed_prepare_reports_failed_before_commit_and_runs_rollback() {
-    let rig = Host::new("prep-fail");
-    rig.running("web", "1.0.0");
+    let rig = NativeHost::new("prep-fail");
+    rig.seeded("web", "1.0.0");
     rig.add("web", "2.0.0");
     rig.launcher.exits("web", Step::Prepare, &[1]);
     let daemon = rig.daemon();
@@ -549,7 +549,7 @@ fn a_failed_prepare_reports_failed_before_commit_and_runs_rollback() {
 /// `prepare` that exits 75 is rolled back and deferred, and one that exits 76 halts at once.
 #[test]
 fn exit_75_reports_deferred_and_exit_76_reports_halt() {
-    let rig = Host::new("exits");
+    let rig = NativeHost::new("exits");
     rig.add("alpha", "2.0.0");
     rig.add("beta", "2.0.0");
     rig.launcher.exits("alpha", Step::Prepare, &[75]);
@@ -586,7 +586,7 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
 /// another service and the status still work.
 #[test]
 fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
-    let rig = Host::new("unstopped");
+    let rig = NativeHost::new("unstopped");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "3.0.0");
     rig.add("beta", "2.0.0");
@@ -642,7 +642,7 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
 /// step starts only after the held service's last step, and no two runs overlap.
 #[test]
 fn lock_order_is_service_then_step() {
-    let rig = Host::new("lock-order");
+    let rig = NativeHost::new("lock-order");
     rig.add("alpha", "2.0.0");
     rig.add("beta", "2.0.0");
     let alpha_gate = rig.launcher.hold("alpha", Step::Verify);
@@ -680,7 +680,7 @@ fn lock_order_is_service_then_step() {
 /// its token and nothing runs.
 #[test]
 fn a_record_that_cannot_be_read_stops_the_services_orders() {
-    let rig = Host::new("records");
+    let rig = NativeHost::new("records");
     let daemon = rig.daemon();
     let rows = [
         ("corrupt", Refusal::RecordUnreadable),
@@ -710,9 +710,9 @@ fn a_record_that_cannot_be_read_stops_the_services_orders() {
 /// `release_unreadable` before anything runs.
 #[test]
 fn the_release_an_order_replaces_is_current_or_previous() {
-    let rig = Host::new("previous");
-    let old = rig.running("web", "1.0.0");
-    rig.running("web", "2.0.0");
+    let rig = NativeHost::new("previous");
+    let old = rig.seeded("web", "1.0.0");
+    rig.seeded("web", "2.0.0");
     let daemon = rig.daemon();
     assert_eq!(daemon.order(&rig.update("web", "2.0.0", 1)), succeeded());
     let rec = record_of(&rig, "web");
@@ -737,7 +737,7 @@ fn the_release_an_order_replaces_is_current_or_previous() {
 /// nothing runs.
 #[test]
 fn a_state_directory_that_cannot_be_written_refuses_the_order() {
-    let rig = Host::new("readonly");
+    let rig = NativeHost::new("readonly");
     rig.add("web", "2.0.0");
     fs::create_dir_all(&rig.state).expect("the state dir");
     std::os::unix::fs::symlink("nowhere", rig.state.join("web")).expect("a dangling link");
@@ -751,8 +751,8 @@ fn a_state_directory_that_cannot_be_written_refuses_the_order() {
 /// written.
 #[test]
 fn a_version_the_repository_does_not_list_is_deferred_and_writes_no_record() {
-    let rig = Host::new("unlisted");
-    rig.running("web", "1.0.0");
+    let rig = NativeHost::new("unlisted");
+    rig.seeded("web", "1.0.0");
     let entry = Target {
         digest: d(),
         package_version: Some(pv("9.9.9")),
@@ -789,7 +789,7 @@ fn declared_params_refuse_what_a_params_file_may_not_hold() {
 /// are refused `halt_unreadable`, and another service's run.
 #[test]
 fn a_held_halt_that_cannot_be_read_stops_that_services_orders() {
-    let rig = Host::new("halt-garbage");
+    let rig = NativeHost::new("halt-garbage");
     rig.add("web", "2.0.0");
     rig.add("api", "2.0.0");
     fs::create_dir_all(rig.state.join("web")).expect("the service dir");

@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_orders;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
@@ -19,17 +19,17 @@ use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::{CrashPoint, Finished, ForceFailure, ForcePhase, ForceVerdict};
 use support::force::{HostState, UNIT, WEB, failed, host_state};
 use support::{crash_at, lines};
-use support_orders::{Host, runs, succeeded};
+use support_host::{NativeHost, runs, succeeded};
 
 /// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
-fn web(rig: &Host, version: &str) {
+fn web(rig: &NativeHost, version: &str) {
     rig.pin(WEB, version);
 }
 
 /// `web` at 1.0.0, forced there, with 2.0.0 beside it: a target that drops a `run` unit of 1.0.0
 /// and adds one.
-fn installed(name: &str) -> Host {
-    let rig = Host::new(name);
+fn installed(name: &str) -> NativeHost {
+    let rig = NativeHost::new(name);
     rig.manifest(
         WEB,
         "1.0.0",
@@ -46,7 +46,7 @@ fn installed(name: &str) -> Host {
 
 /// The daemon restarted on the rig's state: its start pass, then the coordinator's resend of the
 /// force of 2.0.0, whose answer is returned.
-fn restarted(rig: &Host) -> Reply {
+fn restarted(rig: &NativeHost) -> Reply {
     let (daemon, _) = rig.booted();
     daemon.order(&rig.force(WEB, "2.0.0", 2, 0))
 }
@@ -110,7 +110,7 @@ fn a_forced_host_that_crashes_resumes_the_force() {
 /// with the force's try and package is `try_conflict` too.
 #[test]
 fn a_resend_of_a_finished_force_is_answered_from_the_record() {
-    let rig = Host::new("force-resend");
+    let rig = NativeHost::new("force-resend");
     let daemon = rig.daemon();
     web(&rig, "2.0.0");
     web(&rig, "2.1.0");
@@ -157,7 +157,7 @@ fn forced_of(daemon: &Daemon) -> Option<ForcedResult> {
 /// the step record says `forced` with the order's id.
 #[test]
 fn force_reports_its_verdict_in_the_next_heartbeat_read() {
-    let rig = Host::new("force-report");
+    let rig = NativeHost::new("force-report");
     rig.add(WEB, "0.9.0");
     web(&rig, "1.0.0");
     rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &["web-two.service"]));
@@ -222,7 +222,7 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     );
 }
 
-fn versions(rig: &Host) -> Vec<String> {
+fn versions(rig: &NativeHost) -> Vec<String> {
     let mut versions: Vec<String> = fs::read_dir(rig.packages.join(WEB))
         .expect("web's packages")
         .map(|entry| entry.expect("an entry").path())
@@ -243,7 +243,7 @@ fn versions(rig: &Host) -> Vec<String> {
 /// `Succeeded`, with an alert.
 #[test]
 fn force_prunes_to_current_and_previous_only_when_current_moved() {
-    let rig = Host::new("force-prune");
+    let rig = NativeHost::new("force-prune");
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
         web(&rig, version);
     }
@@ -273,7 +273,7 @@ fn force_prunes_to_current_and_previous_only_when_current_moved() {
 }
 
 /// The unfinished force record of `web` a crash after its first write leaves.
-fn crashed_after_started(name: &str) -> Host {
+fn crashed_after_started(name: &str) -> NativeHost {
     let rig = installed(name);
     let seam = crash_at(Some(CrashPoint::AfterWrite(1)), Arc::new(AtomicU64::new(0)));
     let first = rig

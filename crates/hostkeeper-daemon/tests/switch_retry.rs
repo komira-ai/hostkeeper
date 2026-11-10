@@ -9,7 +9,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -21,7 +21,7 @@ use hostkeeper_steps::{ToolCall, ToolExit};
 use support::alerting;
 use support::lines;
 use support_apt::{bridge, seen};
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 const WEB: &str = "web";
 
@@ -34,7 +34,7 @@ const WHY: &str =
 
 /// Makes each of the next `refusals` runs of `systemctl daemon-reload` exit 5 with [`REFUSED`];
 /// every other run, and every reload after those, is answered by the fake host.
-fn refuse_reloads(farm: &Farm, refusals: u32) {
+fn refuse_reloads(farm: &NativeHost, refusals: u32) {
     let left = AtomicU32::new(refusals);
     let host = bridge(Arc::clone(&farm.apt.host));
     farm.rig()
@@ -78,7 +78,7 @@ fn failed_in_verify() -> Reply {
 /// nothing else is.
 #[test]
 fn a_refused_reload_in_the_switch_back_is_tried_again_and_the_rollback_runs_once() {
-    let farm = Farm::new("switch-retry-reload");
+    let farm = NativeHost::new("switch-retry-reload");
     let rig = farm.rig();
     for version in ["1.0.0", "2.0.0"] {
         farm.publish(WEB, version);
@@ -158,7 +158,7 @@ fn a_refused_reload_in_the_switch_back_is_tried_again_and_the_rollback_runs_once
 /// is not.
 #[test]
 fn a_switch_back_refused_on_four_tries_works_on_its_fifth() {
-    let farm = Farm::new("switch-retry-last");
+    let farm = NativeHost::new("switch-retry-last");
     let rig = farm.rig();
     for version in ["1.0.0", "2.0.0"] {
         farm.publish(WEB, version);
@@ -202,7 +202,7 @@ fn a_switch_back_refused_on_four_tries_works_on_its_fifth() {
 /// record still at `rollback`, not run, and the last failure logged as `order_interrupted`.
 #[test]
 fn a_switch_back_that_keeps_failing_is_tried_five_times_then_stops_the_update_link_failed() {
-    let farm = Farm::new("switch-retry-exhausted");
+    let farm = NativeHost::new("switch-retry-exhausted");
     let rig = farm.rig();
     for version in ["1.0.0", "2.0.0"] {
         farm.publish(WEB, version);

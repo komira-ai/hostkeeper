@@ -7,7 +7,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::fs;
 use std::path::PathBuf;
@@ -26,7 +26,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::ClearRecordRequest;
 use hostkeeper_steps::record::{PARAMS_FILE, RECORD_FILE};
 use support::coordinated::{Host, coordinator_of, on_host};
 use support::{Rig, Scratch, d, name, snapshot};
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 /// A record of the step runner's committed fixtures of schema 1 (and one of schema 2).
 fn fixture(file: &str) -> String {
@@ -138,7 +138,7 @@ fn a_clear_record_or_abort_order_of_a_bad_service_name_is_invalid_order() {
 /// byte for byte as they were; and the next order of the service runs as generation 1.
 #[test]
 fn a_clear_record_order_clears_a_corrupt_record_and_nothing_else() {
-    let farm = Farm::new("clear-corrupt");
+    let farm = NativeHost::new("clear-corrupt");
     let rig = farm.rig();
     for version in ["0.9.0", "1.0.0", "2.0.0"] {
         farm.publish("web", version);

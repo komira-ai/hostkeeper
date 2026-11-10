@@ -10,7 +10,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
@@ -27,7 +27,7 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, ToolCall, ToolExit};
 use support::{OWN, Rig, config, ok};
 use support_apt::bridge;
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 /// The service and the port its package names: only a value the fake probe receives, no socket
 /// is opened.
@@ -244,7 +244,7 @@ impl StepLauncher for HelloLauncher {
 /// its record in `record_dir`, the program of a `.deb` of hello and the unit template with the
 /// two slots it runs; its hook is the
 /// program at the fixed path of the package, which the launcher of this test never starts.
-fn publish_hello(farm: &Farm, version: &str, record_dir: &Path) {
+fn publish_hello(farm: &NativeHost, version: &str, record_dir: &Path) {
     let platform = hostkeeper_config::platform::Platform::current();
     let manifest = MANIFEST
         .replace(
@@ -334,7 +334,7 @@ fn steps(ran: &[Ran]) -> Vec<Step> {
 /// links as the design says.
 #[test]
 fn hello_installs_updates_and_rolls_a_failing_release_back() {
-    let farm = Farm::new("hello-farm");
+    let farm = NativeHost::new("hello-farm");
     let rig = farm.rig();
     let record_dir = rig.scratch.path().join("hello-record");
     // Absent: the hook makes its own record directory on its first step, as on a host.

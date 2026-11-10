@@ -4,7 +4,7 @@
 
 mod support;
 mod support_apt;
-mod support_boot;
+mod support_host;
 
 use std::fs;
 use std::io;
@@ -28,7 +28,7 @@ use support::{
     IRREVERSIBLE, OWN, alerting, crash_after_writing, crash_at, d, finished, lines, name, ok,
 };
 use support_apt::open_up;
-use support_boot::Bench;
+use support_host::NativeHost;
 
 fn failed(phase: Phase) -> Finished {
     finished(
@@ -51,8 +51,8 @@ fn rebooted_deferred() -> Finished {
 
 /// A booted daemon runs `web`'s update to 2.0.0 until the launcher loses the run of `step`: the
 /// daemon dies with that step's unit alive, its record `running`.
-fn lost_in(rig: &Bench, step: Step) {
-    rig.add("web", "2.0.0");
+fn lost_in(rig: &NativeHost, step: Step) {
+    rig.add_staged("web", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("web", step);
     let reply = daemon.order(&rig.update("web", "2.0.0", 1));
@@ -60,7 +60,7 @@ fn lost_in(rig: &Bench, step: Step) {
 }
 
 /// A new daemon's start pass, with the launcher's calls from now on in a log.
-fn restart(rig: &Bench) -> (Daemon, BootReport, Log) {
+fn restart(rig: &NativeHost) -> (Daemon, BootReport, Log) {
     let log = Log::default();
     rig.launcher.log_to(log.clone());
     let (daemon, report) = rig.booted();
@@ -79,7 +79,7 @@ fn web(report: &BootReport) -> &ServiceBoot {
 /// the unit is stopped by name, then the step runs again, and the update ends as it would have.
 #[test]
 fn a_daemon_restart_in_the_same_boot_stops_the_unit_and_reruns_the_step() {
-    let rig = Bench::new("boot-same-boot");
+    let rig = NativeHost::new("boot-same-boot");
     lost_in(&rig, Step::Prepare);
     let (_, report, log) = restart(&rig);
     assert!(!report.rebooted);
@@ -101,7 +101,7 @@ fn a_daemon_restart_in_the_same_boot_stops_the_unit_and_reruns_the_step() {
 /// rolled back, and the update is `Deferred` with the reason `rebooted`.
 #[test]
 fn a_reboot_during_prepare_rolls_back_and_reports_deferred_rebooted() {
-    let rig = Bench::new("boot-prepare-reboot");
+    let rig = NativeHost::new("boot-prepare-reboot");
     lost_in(&rig, Step::Prepare);
     rig.reboot();
     let (_, report, log) = restart(&rig);
@@ -120,7 +120,7 @@ fn a_reboot_during_prepare_rolls_back_and_reports_deferred_rebooted() {
 /// `Failed(before_commit)`.
 #[test]
 fn a_reboot_before_commit_during_cutover_rolls_back_before_any_unit_starts() {
-    let rig = Bench::new("boot-cutover-reboot");
+    let rig = NativeHost::new("boot-cutover-reboot");
     lost_in(&rig, Step::Cutover);
     rig.reboot();
     let (_, report, log) = restart(&rig);
@@ -139,7 +139,7 @@ fn a_reboot_before_commit_during_cutover_rolls_back_before_any_unit_starts() {
 /// new release) and the update goes on with `verify`; nothing is rolled back.
 #[test]
 fn a_reboot_after_commit_continues_with_the_next_step() {
-    let rig = Bench::new("boot-commit-reboot");
+    let rig = NativeHost::new("boot-commit-reboot");
     rig.launcher
         .replies("web", Step::Prepare, &[(0, IRREVERSIBLE)]);
     lost_in(&rig, Step::Cutover);
@@ -161,7 +161,7 @@ fn a_reboot_after_commit_continues_with_the_next_step() {
 /// each runs again, and the update ends as it would have.
 #[test]
 fn a_reboot_during_rollback_or_cleanup_runs_it_again() {
-    let rig = Bench::new("boot-rollback-reboot");
+    let rig = NativeHost::new("boot-rollback-reboot");
     rig.launcher.exits("web", Step::Verify, &[1]);
     lost_in(&rig, Step::Rollback);
     rig.reboot();
@@ -170,7 +170,7 @@ fn a_reboot_during_rollback_or_cleanup_runs_it_again() {
     assert_eq!(web(&report).verdict(), Some(failed(Phase::GateRelease)));
     assert_eq!(calls(&log), ["run updater-web-rollback-1"]);
 
-    let rig = Bench::new("boot-cleanup-reboot");
+    let rig = NativeHost::new("boot-cleanup-reboot");
     lost_in(&rig, Step::Cleanup);
     rig.reboot();
     let (_, report, log) = restart(&rig);
@@ -184,7 +184,7 @@ fn a_reboot_during_rollback_or_cleanup_runs_it_again() {
 /// update succeeds.
 #[test]
 fn the_verify_window_restarts_after_a_reboot() {
-    let rig = Bench::new("boot-verify-window");
+    let rig = NativeHost::new("boot-verify-window");
     rig.launcher
         .replies("web", Step::Cutover, &[(0, IRREVERSIBLE)]);
     lost_in(&rig, Step::Verify);
@@ -216,7 +216,7 @@ fn the_verify_window_restarts_after_a_reboot() {
 /// recorded verdict.
 #[test]
 fn resend_after_a_death_during_the_boot_pass_returns_the_recorded_verdict() {
-    let rig = Bench::new("boot-resend");
+    let rig = NativeHost::new("boot-resend");
     lost_in(&rig, Step::Prepare);
     let record = rig.state.join("web").join(RECORD_FILE);
     let dying = rig
@@ -245,9 +245,9 @@ fn resend_after_a_death_during_the_boot_pass_returns_the_recorded_verdict() {
 
 /// `alpha` and `beta` each have an unfinished update: `alpha` lost in `prepare`, `beta` in
 /// `cutover`.
-fn two_unfinished(rig: &Bench) {
-    rig.add("alpha", "2.0.0");
-    rig.add("beta", "2.0.0");
+fn two_unfinished(rig: &NativeHost) {
+    rig.add_staged("alpha", "2.0.0");
+    rig.add_staged("beta", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("alpha", Step::Prepare);
     rig.launcher.lose("beta", Step::Cutover);
@@ -257,7 +257,7 @@ fn two_unfinished(rig: &Bench) {
     }
 }
 
-fn boot_id(rig: &Bench) -> String {
+fn boot_id(rig: &NativeHost) -> String {
     fs::read_to_string(rig.state.join(BOOT_ID_FILE)).expect("the boot id")
 }
 
@@ -266,7 +266,7 @@ fn boot_id(rig: &Bench) -> String {
 /// start still reads both records as after a boot.
 #[test]
 fn the_new_boot_id_is_written_only_after_every_record_was_read() {
-    let rig = Bench::new("boot-unread");
+    let rig = NativeHost::new("boot-unread");
     two_unfinished(&rig);
     let record = rig.state.join("beta").join(RECORD_FILE);
     let aside = rig.state.join("beta").join("aside.json");
@@ -319,7 +319,7 @@ fn the_new_boot_id_is_written_only_after_every_record_was_read() {
 /// death of the daemon.
 #[test]
 fn a_daemon_killed_between_reading_records_and_writing_the_boot_id_reads_them_as_after_a_boot() {
-    let rig = Bench::new("boot-killed-before-id");
+    let rig = NativeHost::new("boot-killed-before-id");
     lost_in(&rig, Step::Prepare);
     rig.reboot();
     let log = Log::default();
@@ -340,7 +340,7 @@ fn a_daemon_killed_between_reading_records_and_writing_the_boot_id_reads_them_as
     assert_eq!(web(&report).verdict(), Some(rebooted_deferred()));
     assert_eq!(calls(&log), ["run updater-web-rollback-1"]);
 
-    let rig = Bench::new("boot-killed-after-id");
+    let rig = NativeHost::new("boot-killed-after-id");
     lost_in(&rig, Step::Cutover);
     rig.reboot();
     let mut report = BootReport::default();
@@ -363,7 +363,7 @@ fn a_daemon_killed_between_reading_records_and_writing_the_boot_id_reads_them_as
 /// corrupt, `beta` runs to its verdict, and the readiness notice goes out.
 #[test]
 fn a_corrupt_record_holds_only_its_service() {
-    let rig = Bench::new("boot-corrupt");
+    let rig = NativeHost::new("boot-corrupt");
     two_unfinished(&rig);
     fs::write(rig.state.join("alpha").join(RECORD_FILE), "{").expect("corrupt it");
     let log = Log::default();
@@ -387,7 +387,7 @@ fn a_corrupt_record_holds_only_its_service() {
 /// step), its update is `Deferred` `journal_unavailable`, and the daemon still comes ready.
 #[test]
 fn a_record_that_cannot_be_written_runs_no_hook() {
-    let rig = Bench::new("boot-enospc");
+    let rig = NativeHost::new("boot-enospc");
     let restore = support::manifest_with("web", "1.0.0", r#"boot = "restore""#);
     rig.add_with("web", "1.0.0", &restore);
     rig.store.link("web", "current", "1.0.0");
@@ -436,7 +436,7 @@ fn a_record_that_cannot_be_written_runs_no_hook() {
 /// held as `record_newer`, unchanged, and the boot id is written all the same.
 #[test]
 fn the_boot_id_file_is_a_bare_id_and_an_unknown_future_record_schema_is_held() {
-    let rig = Bench::new("boot-id-file");
+    let rig = NativeHost::new("boot-id-file");
     assert!(boot_changed(&rig.state, &*rig.clock));
     fs::create_dir_all(&rig.state).expect("the state dir");
     commit_boot(&rig.state, &*rig.clock).expect("write the boot id");
@@ -465,7 +465,7 @@ fn the_boot_id_file_is_a_bare_id_and_an_unknown_future_record_schema_is_held() {
 /// written, and the file keeps the old id.
 #[test]
 fn an_unreadable_boot_id_is_a_boot_and_is_never_written() {
-    let rig = Bench::new("boot-id-unreadable");
+    let rig = NativeHost::new("boot-id-unreadable");
     fs::create_dir_all(&rig.state).expect("the state dir");
     assert!(boot_changed(&rig.state, &*rig.clock));
     rig.clock.lose_boot_id();
@@ -493,7 +493,7 @@ fn an_unreadable_boot_id_is_a_boot_and_is_never_written() {
 /// after a boot, rolls the cut-off `prepare` back and reports `Deferred` `rebooted`.
 #[test]
 fn a_start_whose_boot_id_cannot_be_read_reports_a_reboot_and_runs_no_hook() {
-    let rig = Bench::new("boot-id-unknown-start");
+    let rig = NativeHost::new("boot-id-unknown-start");
     lost_in(&rig, Step::Prepare);
     rig.clock.lose_boot_id();
     let log = Log::default();
@@ -535,7 +535,7 @@ fn a_start_whose_boot_id_cannot_be_read_reports_a_reboot_and_runs_no_hook() {
 /// and the readiness notice.
 #[test]
 fn the_start_runs_its_parts_in_order_with_before_records_first() {
-    let rig = Bench::new("boot-order");
+    let rig = NativeHost::new("boot-order");
     let notifier = FakeNotifier::new(Log::default());
     let started = start::startup_notifying(&rig.settings(), rig.ports(), OWN, &*notifier)
         .expect("the daemon starts");
@@ -562,7 +562,7 @@ fn the_start_runs_its_parts_in_order_with_before_records_first() {
 /// stopped, the update is left as it was.
 #[test]
 fn a_release_changed_under_an_unfinished_update_halts_it() {
-    let rig = Bench::new("boot-changed");
+    let rig = NativeHost::new("boot-changed");
     lost_in(&rig, Step::Cutover);
     open_up(&rig.packages.join("web/2.0.0"));
     fs::write(rig.packages.join("web/2.0.0/extra"), "x").expect("change the tree");
@@ -591,21 +591,21 @@ fn a_release_changed_under_an_unfinished_update_halts_it() {
 /// unresumable and nothing of it runs.
 #[test]
 fn an_update_that_cannot_be_rebuilt_is_held() {
-    let rig = Bench::new("boot-no-params");
+    let rig = NativeHost::new("boot-no-params");
     lost_in(&rig, Step::Prepare);
     fs::remove_file(rig.state.join("web/params.toml")).expect("remove the params");
     let (_, report, log) = restart(&rig);
     assert!(matches!(web(&report).outcome, Outcome::Unresumable(_)));
     assert!(calls(&log).is_empty());
 
-    let rig = Bench::new("boot-no-package");
+    let rig = NativeHost::new("boot-no-package");
     lost_in(&rig, Step::Prepare);
     open_up(&rig.packages.join("web/2.0.0"));
     fs::remove_dir_all(rig.packages.join("web/2.0.0")).expect("remove the package");
     let (_, report, _) = restart(&rig);
     assert!(matches!(web(&report).outcome, Outcome::Unresumable(_)));
 
-    let rig = Bench::new("boot-old-daemon");
+    let rig = NativeHost::new("boot-old-daemon");
     lost_in(&rig, Step::Prepare);
     let old = hostkeeper_config::manifest::HostkeeperVersion {
         major: 0,
@@ -625,7 +625,7 @@ fn an_update_that_cannot_be_rebuilt_is_held() {
 /// is and reported busy.
 #[test]
 fn an_update_whose_service_is_locked_at_the_start_is_left_busy() {
-    let rig = Bench::new("boot-locked");
+    let rig = NativeHost::new("boot-locked");
     lost_in(&rig, Step::Prepare);
     let daemon = rig.daemon();
     let package = Package {
@@ -654,7 +654,7 @@ fn an_update_whose_service_is_locked_at_the_start_is_left_busy() {
 /// a package directory that cannot be listed runs no boot step, and the notice still goes out.
 #[test]
 fn what_the_start_cannot_list_is_an_error_or_an_alert() {
-    let rig = Bench::new("boot-unlisted");
+    let rig = NativeHost::new("boot-unlisted");
     fs::write(&rig.state, "not a directory").expect("a file");
     let error = rig.daemon().boot_pass().expect_err("refused");
     assert!(
@@ -665,7 +665,7 @@ fn what_the_start_cannot_list_is_an_error_or_an_alert() {
         "{error}"
     );
 
-    let rig = Bench::new("boot-packages-unlisted");
+    let rig = NativeHost::new("boot-packages-unlisted");
     fs::remove_dir(&rig.packages).expect("the empty packages directory");
     fs::write(&rig.packages, "not a directory").expect("a file");
     let (daemon, mut report) = rig.booted();
@@ -693,8 +693,8 @@ fn an_alert_is_one_error_line_with_its_alert_field() {
 /// stops nothing, an update runs to its verdict and every write is counted.
 #[test]
 fn a_store_seam_that_stops_nothing_changes_nothing() {
-    let rig = Bench::new("boot-seam");
-    rig.add("web", "2.0.0");
+    let rig = NativeHost::new("boot-seam");
+    rig.add_staged("web", "2.0.0");
     let count = Arc::new(AtomicU64::new(0));
     let daemon = rig.daemon().with_stores(crash_at(None, count.clone()));
     assert_eq!(
@@ -719,7 +719,7 @@ fn a_store_seam_that_stops_nothing_changes_nothing() {
 /// halt cannot be written either, no hook runs and the update is `journal_unavailable`.
 #[test]
 fn a_release_with_a_link_in_it_halts_the_update_and_a_halt_needs_its_record() {
-    let rig = Bench::new("boot-link");
+    let rig = NativeHost::new("boot-link");
     lost_in(&rig, Step::Cutover);
     open_up(&rig.packages.join("web/2.0.0"));
     std::os::unix::fs::symlink("nowhere", rig.packages.join("web/2.0.0/link")).expect("a link");
@@ -728,7 +728,7 @@ fn a_release_with_a_link_in_it_halts_the_update_and_a_halt_needs_its_record() {
     assert_eq!(web(&report).verdict(), Some(halted));
     assert_eq!(calls(&log), ["stop updater-web-cutover-1"]);
 
-    let rig = Bench::new("boot-halt-unwritten");
+    let rig = NativeHost::new("boot-halt-unwritten");
     lost_in(&rig, Step::Prepare);
     open_up(&rig.packages.join("web/2.0.0"));
     fs::write(rig.packages.join("web/2.0.0/extra"), "x").expect("change the tree");
@@ -752,8 +752,8 @@ fn a_release_with_a_link_in_it_halts_the_update_and_a_halt_needs_its_record() {
 /// update of that service runs.
 #[test]
 fn a_service_named_boot_id_keeps_its_directory_and_takes_orders() {
-    let rig = Bench::new("boot-named-boot-id");
-    rig.add("boot-id", "2.0.0");
+    let rig = NativeHost::new("boot-named-boot-id");
+    rig.add_staged("boot-id", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("boot-id", Step::Prepare);
     let reply = daemon.order(&rig.update("boot-id", "2.0.0", 1));
@@ -764,7 +764,7 @@ fn a_service_named_boot_id_keeps_its_directory_and_takes_orders() {
     assert!(rig.state.join("boot-id").is_dir());
     assert_eq!(boot_id(&rig), "boot-1");
 
-    rig.add("boot-id", "3.0.0");
+    rig.add_staged("boot-id", "3.0.0");
     let reply = daemon.order(&rig.update("boot-id", "3.0.0", 2));
     assert_eq!(
         reply,
@@ -782,7 +782,7 @@ fn a_service_named_boot_id_keeps_its_directory_and_takes_orders() {
 /// verdict.
 #[test]
 fn a_daemon_killed_between_two_rewrites_reads_both_as_after_a_boot() {
-    let rig = Bench::new("boot-two-rewrites");
+    let rig = NativeHost::new("boot-two-rewrites");
     two_unfinished(&rig);
     rig.reboot();
     let dying = rig.daemon().with_stores(crash_at(
@@ -827,14 +827,14 @@ fn a_daemon_killed_between_two_rewrites_reads_both_as_after_a_boot() {
 #[test]
 fn stale_entries_of_the_boot_id_are_cleared_or_keep_the_old_boot_id() {
     let tmp = format!("{BOOT_ID_FILE}.tmp");
-    let rig = Bench::new("boot-stale-file");
+    let rig = NativeHost::new("boot-stale-file");
     fs::create_dir_all(&rig.state).expect("the state dir");
     fs::write(rig.state.join(&tmp), "stale").expect("a stale file");
     let target = rig.scratch.path().join("target");
     fs::write(&target, "kept").expect("a target");
     let (_, report) = rig.booted();
     assert!(report.boot_id_written);
-    let rig2 = Bench::new("boot-stale-link");
+    let rig2 = NativeHost::new("boot-stale-link");
     fs::create_dir_all(&rig2.state).expect("the state dir");
     std::os::unix::fs::symlink(&target, rig2.state.join(&tmp)).expect("a stale link");
     let (_, report) = rig2.booted();
@@ -843,7 +843,7 @@ fn stale_entries_of_the_boot_id_are_cleared_or_keep_the_old_boot_id() {
     assert_eq!(boot_id(&rig2), "boot-1");
 
     for (case, blocked) in [("dir", tmp.as_str()), ("id-dir", BOOT_ID_FILE)] {
-        let rig = Bench::new(&format!("boot-stale-{case}"));
+        let rig = NativeHost::new(&format!("boot-stale-{case}"));
         lost_in(&rig, Step::Prepare);
         fs::remove_file(rig.state.join(BOOT_ID_FILE)).expect("no boot id");
         fs::create_dir_all(rig.state.join(blocked).join("inside")).expect("a directory");
@@ -871,7 +871,7 @@ fn stale_entries_of_the_boot_id_are_cleared_or_keep_the_old_boot_id() {
 /// a cut-off `rollback` whose attempt is the largest count runs again and the update ends.
 #[test]
 fn a_record_of_another_service_is_held_and_a_full_attempt_count_is_kept() {
-    let rig = Bench::new("boot-misfiled");
+    let rig = NativeHost::new("boot-misfiled");
     two_unfinished(&rig);
     let mut alpha = rig.record("alpha").expect("alpha's record");
     alpha.service = "beta".to_owned();
@@ -890,7 +890,7 @@ fn a_record_of_another_service_is_held_and_a_full_attempt_count_is_kept() {
     assert_eq!(notifier.sent(), 1);
     drop(started);
 
-    let rig = Bench::new("boot-full-attempt");
+    let rig = NativeHost::new("boot-full-attempt");
     rig.launcher.exits("web", Step::Verify, &[1]);
     lost_in(&rig, Step::Rollback);
     let mut rec = rig.record("web").expect("a record");

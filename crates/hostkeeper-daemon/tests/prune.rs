@@ -5,7 +5,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -28,7 +28,7 @@ use hostkeeper_steps::{
 };
 use support::force::{WEB, failed, link_of, succeeded};
 use support::{OWN, PENDING_LINE, Rig, alerting, config, lines, name, roots, snapshot};
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 /// A version, from a literal.
 fn version(text: &str) -> Version {
@@ -45,7 +45,7 @@ fn package(verb: HookedVerb, version_text: &str) -> Package {
 }
 
 /// A daemon on the host, linking through `fs` and pruning with `prune`.
-fn daemon_on(farm: &Farm, fs: Arc<FaultFs>, prune: Arc<dyn Prune>) -> Daemon {
+fn daemon_on(farm: &NativeHost, fs: Arc<FaultFs>, prune: Arc<dyn Prune>) -> Daemon {
     let ports = Ports {
         placement: Placement { roots: roots(), fs },
         prune,
@@ -55,20 +55,20 @@ fn daemon_on(farm: &Farm, fs: Arc<FaultFs>, prune: Arc<dyn Prune>) -> Daemon {
 }
 
 /// A daemon on the host whose prune is the host's, behind a recorder.
-fn pruning(farm: &Farm) -> (Daemon, Arc<RecordingPrune>) {
+fn pruning(farm: &NativeHost) -> (Daemon, Arc<RecordingPrune>) {
     let pruner = RecordingPrune::new();
     let daemon = daemon_on(farm, farm.rig().placed_fs.clone(), pruner.clone());
     (daemon, pruner)
 }
 
 /// `version` of `web`, with the one unit it runs, published to order next.
-fn web(farm: &Farm, version_text: &str) {
+fn web(farm: &NativeHost, version_text: &str) {
     farm.publish(WEB, version_text);
 }
 
 /// `daemon` forces `web` to `version_text` with `order_try`, and that runs to `Succeeded`; then
 /// the log of placed writes and unit calls is cleared.
-fn forced(farm: &Farm, daemon: &Daemon, version_text: &str, order_try: u64) {
+fn forced(farm: &NativeHost, daemon: &Daemon, version_text: &str, order_try: u64) {
     assert_eq!(
         daemon.order(&farm.force(WEB, version_text, order_try, 0)),
         succeeded(),
@@ -119,7 +119,7 @@ fn strings(names: &[&str]) -> Vec<String> {
 
 /// `web` forced to 1.0.0, then to 2.0.0, each fetched just before: `current` 2.0.0, `previous`
 /// 1.0.0.
-fn two_forced(farm: &Farm, daemon: &Daemon) {
+fn two_forced(farm: &NativeHost, daemon: &Daemon) {
     web(farm, "1.0.0");
     forced(farm, daemon, "1.0.0", 1);
     web(farm, "2.0.0");
@@ -204,7 +204,7 @@ fn a_confirmed_switch_leaves_exactly_current_and_previous() {
 /// repository for nothing; a force to A, fetched again, gives (A, B), C and its seal deleted.
 #[test]
 fn the_design_table_rows_hold_in_sequence() {
-    let farm = Farm::new("prune-table");
+    let farm = NativeHost::new("prune-table");
     let rig = farm.rig();
     let (daemon, _) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -244,7 +244,7 @@ fn the_design_table_rows_hold_in_sequence() {
 /// `previous` being B, the version left, and C is deleted.
 #[test]
 fn a_switch_after_a_rollback_keeps_the_version_rolled_back_from() {
-    let farm = Farm::new("prune-after-rollback");
+    let farm = NativeHost::new("prune-after-rollback");
     let rig = farm.rig();
     let (daemon, _) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -310,7 +310,7 @@ fn second_prune(daemon: &Daemon) -> &'static str {
 }
 
 /// A daemon whose force lock point is a [`Racer`].
-fn racing(farm: &Farm) -> (Arc<Daemon>, Arc<Racer>) {
+fn racing(farm: &NativeHost) -> (Arc<Daemon>, Arc<Racer>) {
     let racer = Arc::new(Racer {
         packages: farm.rig().packages.clone(),
         ..Racer::default()
@@ -332,7 +332,7 @@ fn racing(farm: &Farm) -> (Arc<Daemon>, Arc<Racer>) {
 /// has the lock. A force to a version an update staged and never switched to keeps that tree.
 #[test]
 fn a_prune_racing_a_force_never_removes_the_target() {
-    let farm = Farm::new("prune-race");
+    let farm = NativeHost::new("prune-race");
     let rig = farm.rig();
     let (daemon, racer) = racing(&farm);
     two_forced(&farm, &daemon);
@@ -350,7 +350,7 @@ fn a_prune_racing_a_force_never_removes_the_target() {
     assert_eq!(versions(rig), ["2.0.0", "3.0.0"]);
     assert_eq!(second_prune(&daemon), "pruned");
 
-    let farm = Farm::new("prune-race-staged");
+    let farm = NativeHost::new("prune-race-staged");
     let rig = farm.rig();
     let (daemon, racer) = racing(&farm);
     two_forced(&farm, &daemon);
@@ -370,7 +370,7 @@ fn a_prune_racing_a_force_never_removes_the_target() {
 /// finished update to 3.0.0 that replaced 2.0.0; returns that record. 1.0.0 to 3.0.0 are
 /// installed in turn by orders of a daemon that prunes nothing, and 4.0.0 is a version staged and
 /// never switched to.
-fn recorded(farm: &Farm) -> Record {
+fn recorded(farm: &NativeHost) -> Record {
     let rig = farm.rig();
     for text in ["1.0.0", "2.0.0", "3.0.0"] {
         web(farm, text);
@@ -407,7 +407,7 @@ fn confirm(daemon: &Daemon) -> Option<PruneReport> {
 /// extra. A seal that does not read names no release.
 #[test]
 fn prune_never_removes_the_previous_release_of_an_unfinished_record() {
-    let farm = Farm::new("prune-unfinished");
+    let farm = NativeHost::new("prune-unfinished");
     let rig = farm.rig();
     let mut rec = recorded(&farm);
     let daemon = daemon_on(&farm, rig.placed_fs.clone(), Arc::new(LayoutPrune));
@@ -446,7 +446,7 @@ fn prune_never_removes_the_previous_release_of_an_unfinished_record() {
 /// whose target is 4.0.0 keeps it; with the force's verdict written, 4.0.0 goes.
 #[test]
 fn prune_never_removes_the_target_of_a_switch_under_way() {
-    let farm = Farm::new("prune-under-way");
+    let farm = NativeHost::new("prune-under-way");
     let rig = farm.rig();
     let mut rec = recorded(&farm);
     let daemon = daemon_on(&farm, rig.placed_fs.clone(), Arc::new(LayoutPrune));
@@ -477,7 +477,7 @@ fn prune_never_removes_the_target_of_a_switch_under_way() {
 /// again, neither prunes, and the next confirmed switch, a force to 4.0.0, deletes it.
 #[test]
 fn a_staged_but_unswitched_tree_survives_until_the_next_confirmed_switch() {
-    let farm = Farm::new("prune-staged");
+    let farm = NativeHost::new("prune-staged");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -502,7 +502,7 @@ fn a_staged_but_unswitched_tree_survives_until_the_next_confirmed_switch() {
 /// closed `forced_over` by a force prunes nothing itself (the force then prunes once).
 #[test]
 fn a_failed_or_deferred_update_prunes_nothing() {
-    let farm = Farm::new("prune-not-confirmed");
+    let farm = NativeHost::new("prune-not-confirmed");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -544,7 +544,7 @@ fn a_failed_or_deferred_update_prunes_nothing() {
         );
     }
 
-    let farm = Farm::new("prune-forced-over");
+    let farm = NativeHost::new("prune-forced-over");
     let rig = farm.rig();
     for version_text in ["0.9.0", "1.0.0", "2.0.0"] {
         web(&farm, version_text);
@@ -621,7 +621,7 @@ impl Prune for Probe {
 /// replaced, now `previous` (design section 4.7: 1.0.0 goes when 3.0.0 is confirmed).
 #[test]
 fn a_promotion_pending_success_counts_as_confirmed() {
-    let farm = Farm::new("prune-promotion");
+    let farm = NativeHost::new("prune-promotion");
     let rig = farm.rig();
     let probe = Arc::new(Probe {
         launcher: rig.launcher.clone(),
@@ -649,7 +649,7 @@ fn a_promotion_pending_success_counts_as_confirmed() {
 /// nothing.
 #[test]
 fn a_version_that_cannot_be_staged_prunes_nothing() {
-    let farm = Farm::new("prune-unstageable");
+    let farm = NativeHost::new("prune-unstageable");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -682,7 +682,7 @@ fn a_version_that_cannot_be_staged_prunes_nothing() {
 /// the end; the other service's update then finishes.
 #[test]
 fn prune_does_not_take_the_step_lock() {
-    let farm = Farm::new("prune-step-lock");
+    let farm = NativeHost::new("prune-step-lock");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     let daemon = Arc::new(daemon);
@@ -714,7 +714,7 @@ fn prune_does_not_take_the_step_lock() {
 /// versions, and the next confirmed switch removes what was left.
 #[test]
 fn a_failed_removal_is_reported_and_does_not_fail_the_update() {
-    let farm = Farm::new("prune-removal-fails");
+    let farm = NativeHost::new("prune-removal-fails");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -744,7 +744,7 @@ fn a_failed_removal_is_reported_and_does_not_fail_the_update() {
 /// told to keep the version switched to.
 #[test]
 fn prune_adds_no_persisted_field() {
-    let farm = Farm::new("prune-no-field");
+    let farm = NativeHost::new("prune-no-field");
     let rig = farm.rig();
     let (daemon, pruner) = pruning(&farm);
     two_forced(&farm, &daemon);
@@ -779,7 +779,7 @@ fn prune_adds_no_persisted_field() {
 /// alert, with nothing deleted.
 #[test]
 fn a_record_that_cannot_be_read_prunes_nothing() {
-    let farm = Farm::new("prune-unreadable");
+    let farm = NativeHost::new("prune-unreadable");
     let rig = farm.rig();
     let rec = recorded(&farm);
     let (daemon, alerts) = alerting(daemon_on(
@@ -833,7 +833,7 @@ fn a_record_that_cannot_be_read_prunes_nothing() {
 /// service with no installer recorded has its old versions deleted.
 #[test]
 fn a_service_of_an_installer_without_steps_prunes_nothing() {
-    let farm = Farm::new("prune-installer");
+    let farm = NativeHost::new("prune-installer");
     let rig = farm.rig();
     recorded(&farm);
     let (daemon, alerts) = alerting(daemon_on(

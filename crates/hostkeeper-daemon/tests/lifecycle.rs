@@ -3,7 +3,7 @@
 
 mod support;
 mod support_apt;
-mod support_hooked;
+mod support_host;
 
 use std::fs;
 use std::path::PathBuf;
@@ -18,11 +18,11 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_placed::error::Owner;
 use hostkeeper_placed::{PlacedError, Tombstone};
 use support::{alerting, lines, name, snapshot, uninstall};
-use support_hooked::Farm;
+use support_host::NativeHost;
 
 /// `service` installed at 1.0.0 from a package that runs a unit, with an `uninstall` bound, and
 /// 2.0.0 of it published to force.
-fn installed(farm: &Farm, daemon: &hostkeeper_daemon::Daemon, service: &str) {
+fn installed(farm: &NativeHost, daemon: &hostkeeper_daemon::Daemon, service: &str) {
     farm.publish_placed(service, "1.0.0", Some(300));
     farm.publish_placed(service, "2.0.0", Some(300));
     let reply = daemon.order(&farm.install(service, "1.0.0", 1));
@@ -121,7 +121,7 @@ fn each_failure_of_linking_has_its_token() {
 /// under way `installing`, each with nothing on disk changed.
 #[test]
 fn force_is_refused_while_a_service_is_tombstoned() {
-    let farm = Farm::new("force-refused");
+    let farm = NativeHost::new("force-refused");
     let rig = farm.rig();
     let daemon = Arc::new(farm.daemon());
     installed(&farm, &daemon, "web");
@@ -169,7 +169,7 @@ fn force_is_refused_while_a_service_is_tombstoned() {
 /// `running`, one being installed `installing`, one with only a staged version `absent`.
 #[test]
 fn status_reports_removing_while_an_uninstall_is_unfinished() {
-    let farm = Farm::new("status-removing");
+    let farm = NativeHost::new("status-removing");
     let rig = farm.rig();
     let daemon = Arc::new(farm.daemon());
     installed(&farm, &daemon, "web");
@@ -265,7 +265,7 @@ fn status_reports_removing_while_an_uninstall_is_unfinished() {
 /// refused the same, the start resumes no uninstall and alerts, and `Status` still answers.
 #[test]
 fn a_placed_json_that_cannot_be_read_holds_every_change() {
-    let farm = Farm::new("placed-garbled");
+    let farm = NativeHost::new("placed-garbled");
     let rig = farm.rig();
     rig.running("web", "1.0.0");
     rig.running("api", "1.0.0");
@@ -300,7 +300,7 @@ fn a_placed_json_that_cannot_be_read_holds_every_change() {
 /// `uninstall` bound, is interrupted with nothing removed, and stays.
 #[test]
 fn a_tombstone_whose_release_cannot_run_the_hook_is_interrupted() {
-    let farm = Farm::new("tombstone-unrunnable");
+    let farm = NativeHost::new("tombstone-unrunnable");
     let rig = farm.rig();
     let daemon = farm.daemon();
     installed(&farm, &daemon, "web");

@@ -15,7 +15,6 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_install::repository::tree::hook_path;
-use hostkeeper_proto::hostkeeper::agent::v1::{Order, order::Verb};
 use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Manifest, Param, StepBounds, Target, param,
 };
@@ -206,34 +205,5 @@ impl Versions {
         let path = self.root.join(service).join(link);
         drop(fs::remove_file(&path));
         std::os::unix::fs::symlink(version, &path).expect("the link");
-    }
-
-    /// `order` for the version of its service that is on the host: its entry is the `target.json`
-    /// the version was staged for, as an order from the coordinator carries it, and the version
-    /// is sealed with the order's package digest when it has no seal yet, so that the daemon
-    /// finds it as the sealed version of that entry and stages nothing.
-    pub fn entered(&self, mut order: Order) -> Order {
-        let (service, version, digest) = match order.verb.as_ref() {
-            Some(Verb::Install(a)) => (&a.service, &a.version, &a.package_digest),
-            Some(Verb::Update(a)) => (&a.service, &a.version, &a.package_digest),
-            Some(Verb::ForceRollback(a)) => (&a.service, &a.version, &a.package_digest),
-            Some(Verb::Force(a)) => (&a.service, &a.version, &a.package_digest),
-            other => panic!("no target to set on {other:?}"),
-        };
-        let dir = self.root.join(service).join(version);
-        let entry = hostkeeper_daemon::target::read(&dir)
-            .expect("target.json reads")
-            .expect("a version staged with a target.json");
-        if fs::symlink_metadata(self.root.join(service).join(format!("{version}.seal"))).is_err() {
-            self.seal(service, version, digest);
-        }
-        match order.verb.as_mut() {
-            Some(Verb::Install(a)) => a.target = Some(entry),
-            Some(Verb::Update(a)) => a.target = Some(entry),
-            Some(Verb::ForceRollback(a)) => a.target = Some(entry),
-            Some(Verb::Force(a)) => a.target = Some(entry),
-            _ => {}
-        }
-        order
     }
 }

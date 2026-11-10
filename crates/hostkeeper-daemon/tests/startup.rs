@@ -3,7 +3,7 @@
 
 mod support;
 mod support_apt;
-mod support_boot;
+mod support_host;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -21,7 +21,7 @@ use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepLauncher};
 use support::{CONFIG, OWN, Rig, snapshot};
-use support_boot::Bench;
+use support_host::NativeHost;
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
@@ -241,8 +241,8 @@ fn the_unwired_ports_refuse_everything() {
     assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
     assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
     assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
-    let rig = Bench::new("unwired");
-    rig.add("web", "2.0.0");
+    let rig = NativeHost::new("unwired");
+    rig.add_staged("web", "2.0.0");
     let order = rig.update("web", "2.0.0", 1);
     let mut ports = rig.ports();
     ports.launcher = Arc::new(ToolsOnly(Arc::clone(&rig.launcher)));
