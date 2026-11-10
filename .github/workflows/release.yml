@@ -40,15 +40,22 @@
 #          successfully, so a release whose image push or set-desired failed is tried again by
 #          the next run, every job of it idempotent; it waits for such a run still going, and
 #          stops after three such runs of the release in a row (then a maintainer re-runs the
-#          failed jobs once the cause is fixed).
+#          failed jobs once the cause is fixed). A commit not yet released whose own verify job
+#          failed in each of its last three release runs is passed over, its line naming those
+#          runs, and the newer commits are released without it: the jobs after verify wait for
+#          every verify of the run, so a verify that can never pass would otherwise hold every
+#          release after it for ever.
 # verify   read-only, per release: refuses a commit that is not on main or lacks a successful
 #          push run of each required workflow (cargo xtask release locate), downloads the files
 #          of its artifacts run, checks them against SHA256SUMS, verifies every attestation
 #          online as a deployment does and every bundle offline as a host does
-#          (cargo xtask release check), and runs the downloaded linux-x86_64 binaries, which
+#          (cargo xtask release check, the released commit's own, which holds the files to
+#          exactly that commit's assets), and runs the downloaded linux-x86_64 binaries, which
 #          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
 #          X.Y.Z+<12 hex>`, `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update
-#          X.Y.Z+<12 hex>` (cargo xtask release check-binary). These are the commands of
+#          X.Y.Z+<12 hex>` (cargo xtask release check-binary); the coordinator updater's only in
+#          a release whose build made its tarball, since a release of a commit from before it has
+#          none (crates/xtask/tests/workflows/release_assets.rs). These are the commands of
 #          docs/deploy/verify-a-release.md, and a test keeps the two the same
 #          (crates/xtask/src/release/doc_tests.rs).
 # publish  the one job that holds `contents: write`, per release: creates a draft release at the
@@ -234,7 +241,12 @@ jobs:
         run: cargo xtask release check dist --version "$RELEASE_VERSION" --commit "$COMMIT"
       # The runner is linux-x86_64: the binaries of those tarballs run here, unpacked outside
       # dist. The linux-arm64 and macos-arm64 binaries were run and checked the same way by their
-      # own build jobs.
+      # own build jobs. A binary newer than the oldest commit a release can be of (the floor
+      # release of crates/xtask/tests/workflows/release_assets.rs) is unpacked and run only when
+      # the release's own build made its tarball: this file is main's, while the commit released
+      # may predate the binary. `release check` above, the commit's own, has already held dist to
+      # exactly that commit's assets, so a commit that ships the binary and lacks its tarball
+      # failed there.
       - run: mkdir "$RUNNER_TEMP/binary"
       - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper
       - name: hostkeeper says the version and the commit it is released under
@@ -245,8 +257,10 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-mdm
       - name: hostkeeper-mdm says the version and the commit it is released under
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-mdm" "$RELEASE_VERSION" "$COMMIT"
-      - run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator-update
+      - if: ${{ hashFiles(format('dist/hostkeeper-coordinator-update-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
+        run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator-update
       - name: hostkeeper-coordinator-update says the version and the commit it is released under
+        if: ${{ hashFiles(format('dist/hostkeeper-coordinator-update-{0}-linux-x86_64.tar.gz', env.RELEASE_VERSION)) != '' }}
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
