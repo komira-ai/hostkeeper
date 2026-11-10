@@ -1,6 +1,5 @@
-//! `stage` of hostkeeper's own `.pkg` (packages-native.md section 10.4): the script `postinstall`
-//! allowed, the payload held to its own list, and the job need not be `Disabled`; and every
-//! other package keeping the checks of section 4.7.
+//! `stage` of hostkeeper's own `.pkg` (packages-native.md section 10.4): a package like any other,
+//! with its script `postinstall` and its job not `Disabled`, whose payload is held to no list.
 
 use hostkeeper_install::macos_pkg::own;
 
@@ -15,7 +14,8 @@ fn daemon_plist() -> String {
     job_plist(&own::identifier(), "/usr/local/bin/hostkeeper", None)
 }
 
-/// hostkeeper's own package at 1.0: its list with the script `postinstall`, as a product archive.
+/// hostkeeper's own package at 1.0: the entries `cargo xtask release macos-pkg` lays out, with
+/// the script `postinstall`, as a product archive.
 fn own_pkg() -> FakePkg {
     let mut pkg = FakePkg::standard(OWN_SERVICE, &own::identifier(), "1.0");
     pkg.payload.clear();
@@ -80,11 +80,20 @@ fn staged_own(what: &str, pkg: FakePkg, run: &[&str]) {
     }
 }
 
-/// Proves hostkeeper's own `.pkg`, holding exactly its list and the script `postinstall` (in the
-/// component's `Scripts` and its `PackageInfo`), stages: as a product archive and as a bare
-/// component, and with its job (a `run` label of the order) not `Disabled`.
+/// Stages `pkg` as hostkeeper's own package, which must succeed.
+fn staged_own_at(what: &str, pkg: FakePkg) {
+    let rig = Rig::new("stage-own-at");
+    rig.mac.add(pkg);
+    let order = order_for(&rig, OWN_SERVICE, &own::identifier(), &[]);
+    let (result, _) = rig.try_stage(&order, "hostkeeper-1.0");
+    result.unwrap_or_else(|e| panic!("{what}: {e}"));
+}
+
+/// Proves hostkeeper's own `.pkg`, holding the entries the release lays out and the script
+/// `postinstall` (in the component's `Scripts` and its `PackageInfo`), stages: as a product
+/// archive and as a bare component, and with its job (a `run` label of the order) not `Disabled`.
 #[test]
-fn hostkeepers_own_pkg_with_its_list_and_its_postinstall_stages() {
+fn hostkeepers_own_pkg_with_its_entries_and_its_postinstall_stages() {
     staged_own("a product archive", own_pkg(), &[]);
     let mut component = own_pkg();
     component.product = false;
@@ -93,63 +102,62 @@ fn hostkeepers_own_pkg_with_its_list_and_its_postinstall_stages() {
     staged_own("the job run, not Disabled", own_pkg(), &[label.as_str()]);
 }
 
-/// Proves the list is exact: a path outside it, a listed path of another mode or kind, and an
-/// entry the path rule of a service would allow are `manifest_invalid`, naming the entry.
+/// Proves the package has no list of paths: a file beside the binary, a directory a service's
+/// rule would not allow, the binary with another mode and a directory where the release has a
+/// file stage as for any package.
 #[test]
-fn an_entry_outside_the_own_list_is_manifest_invalid() {
+fn an_entry_outside_the_release_layout_stages() {
     let binary = "/usr/local/bin/hostkeeper";
-    let cases: Vec<(&str, FakePkg, String)> = vec![
+    let cases: Vec<(&str, FakePkg)> = vec![
         (
             "a file beside the binary",
             own_pkg().put("/usr/local/bin/extra", Content::File(b"x".to_vec()), 0o755),
-            "/usr/local/bin/extra is not on hostkeeper's own package's list".into(),
         ),
         (
-            "a directory of the rule for a service",
+            "a directory above a service's",
             own_pkg().put("/Library/Application Support", Content::Dir, 0o755),
-            "/Library/Application Support is not on hostkeeper's own package's list".into(),
-        ),
-        (
-            "a setuid binary",
-            own_pkg().put(binary, Content::File(b"x".to_vec()), 0o4755),
-            format!(
-                "{binary} has mode 4755: a setuid, setgid or sticky bit, or writable by group or others"
-            ),
         ),
         (
             "the binary with another mode",
             own_pkg().put(binary, Content::File(b"x".to_vec()), 0o700),
-            format!(
-                "{binary} is File with mode 700, and hostkeeper's own package lists File with mode 755"
-            ),
         ),
         (
             "a directory with another mode",
             own_pkg().put("/usr/local/lib", Content::Dir, 0o700),
-            "/usr/local/lib is Dir with mode 700, and hostkeeper's own package lists Dir with mode 755"
-                .into(),
         ),
         (
-            "a directory where the list has a file",
+            "a directory where the release has a file",
             own_pkg().put(binary, Content::Dir, 0o755),
-            format!(
-                "{binary} is Dir with mode 755, and hostkeeper's own package lists File with mode 755"
-            ),
         ),
     ];
-    for (what, pkg, detail) in cases {
-        let err = refused_as_own(what, pkg);
-        assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
-        assert_eq!(err.detail(), detail, "{what}");
+    for (what, pkg) in cases {
+        staged_own_at(what, pkg);
     }
 }
 
-/// Proves only `postinstall` is allowed: a `preinstall` or `postupgrade` beside it or alone in
-/// the component's `Scripts`, a `preinstall` or `preupgrade` element in the `PackageInfo`, and a
-/// `Scripts` beside the component are `package_scripts`, and a `Distribution` script element is
-/// `manifest_invalid`, for hostkeeper's own package.
+/// Proves the mode rule of the sealed tree still holds for the package: a setuid binary is
+/// `manifest_invalid`, naming the entry.
 #[test]
-fn only_the_postinstall_script_is_allowed_to_hostkeepers_own_pkg() {
+fn a_setuid_binary_is_manifest_invalid() {
+    let binary = "/usr/local/bin/hostkeeper";
+    let err = refused_as_own(
+        "a setuid binary",
+        own_pkg().put(binary, Content::File(b"x".to_vec()), 0o4755),
+    );
+    assert_eq!(err.reason(), Reason::ManifestInvalid, "{err}");
+    assert_eq!(
+        err.detail(),
+        format!(
+            "{binary} has mode 4755: a setuid, setgid or sticky bit, or writable by group or others"
+        )
+    );
+}
+
+/// Proves every script is allowed: a `preinstall` or `postupgrade` beside the `postinstall` or
+/// alone in the component's `Scripts`, a `preinstall` or `preupgrade` element in the
+/// `PackageInfo`, and a `Scripts` beside the component stage.
+#[test]
+fn every_script_is_allowed_to_hostkeepers_own_pkg() {
     let scripts_of = |files: &[&str]| {
         let mut pkg = own_pkg();
         pkg.script_files = files.iter().map(|f| (*f).to_owned()).collect();
@@ -165,64 +173,44 @@ fn only_the_postinstall_script_is_allowed_to_hostkeepers_own_pkg() {
     };
     let mut beside = own_pkg();
     beside.extras = vec!["Scripts".into()];
-    let mut script_element = own_pkg();
-    script_element.distribution = Some(script_element.distribution_text().replace(
-        "</installer-gui-script>",
-        "<script>x</script></installer-gui-script>",
-    ));
-    let cases: Vec<(&str, FakePkg, Reason, &str)> = vec![
+    let cases: Vec<(&str, FakePkg)> = vec![
         (
             "a preinstall beside the postinstall",
             scripts_of(&["postinstall", "preinstall"]),
-            Reason::PackageScripts,
-            "the package carries a script: the component's \"Scripts\" holds \"postinstall\", \"preinstall\", not \"postinstall\" alone",
         ),
-        (
-            "a postupgrade alone",
-            scripts_of(&["postupgrade"]),
-            Reason::PackageScripts,
-            "the package carries a script: the component's \"Scripts\" holds \"postupgrade\", not \"postinstall\" alone",
-        ),
-        (
-            "a preinstall element",
-            element("preinstall"),
-            Reason::PackageScripts,
-            "the package carries a script: the PackageInfo has a <preinstall> element",
-        ),
-        (
-            "a preupgrade element",
-            element("preupgrade"),
-            Reason::PackageScripts,
-            "the package carries a script: the PackageInfo has a <preupgrade> element",
-        ),
-        (
-            "a Scripts beside the component",
-            beside,
-            Reason::PackageScripts,
-            "the package carries a script: the product archive holds \"Scripts\"",
-        ),
-        (
-            "a Distribution script element",
-            script_element,
-            Reason::ManifestInvalid,
-            "the Distribution has a <script> element",
-        ),
+        ("a postupgrade alone", scripts_of(&["postupgrade"])),
+        ("a preinstall element", element("preinstall")),
+        ("a preupgrade element", element("preupgrade")),
+        ("a Scripts beside the component", beside),
     ];
-    for (what, pkg, reason, detail) in cases {
-        let err = refused_as_own(what, pkg);
-        assert_eq!(err.reason(), reason, "{what}: {err}");
-        assert_eq!(err.detail(), detail, "{what}");
+    for (what, pkg) in cases {
+        staged_own_at(what, pkg);
     }
 }
 
-/// Proves the exception is for hostkeeper's own package alone: its script in a package of another
-/// service with the daemon's identifier, and in the service `hostkeeper` under another
-/// identifier, is `package_scripts`, and its payload under either is held to the rule of section
-/// 4.7 (the daemon's plist is not a job the order runs).
+/// Proves a Distribution script element is still `manifest_invalid` for hostkeeper's own
+/// package: it decides what installs.
 #[test]
-fn the_exception_is_not_another_packages() {
+fn a_distribution_script_element_is_manifest_invalid() {
+    let mut pkg = own_pkg();
+    pkg.distribution = Some(pkg.distribution_text().replace(
+        "</installer-gui-script>",
+        "<script>x</script></installer-gui-script>",
+    ));
+    let err = refused_as_own("a Distribution script element", pkg);
+    assert_eq!(err.reason(), Reason::ManifestInvalid, "{err}");
+    assert_eq!(err.detail(), "the Distribution has a <script> element");
+}
+
+/// Proves the package is no exception and no special case: the same package under another
+/// service, and under the service `hostkeeper` with another identifier, stages like any other.
+#[test]
+fn the_package_of_another_service_or_identifier_stages_alike() {
     let id = own::identifier();
-    let scripted = |service: &str, identifier: &str| {
+    for (what, service, identifier) in [
+        ("another service", SERVICE, id.as_str()),
+        ("another identifier", OWN_SERVICE, IDENTIFIER),
+    ] {
         let mut pkg = own_pkg();
         pkg.service = service.into();
         pkg.identifier = identifier.into();
@@ -230,34 +218,10 @@ fn the_exception_is_not_another_packages() {
             &format!("identifier=\"{id}\""),
             &format!("identifier=\"{identifier}\""),
         ));
-        pkg
-    };
-    for (what, service, identifier) in [
-        ("another service", SERVICE, id.as_str()),
-        ("another identifier", OWN_SERVICE, IDENTIFIER),
-    ] {
-        let err = refused(what, scripted(service, identifier), service, identifier);
-        assert_eq!(err.reason(), Reason::PackageScripts, "{what}: {err}");
-        assert_eq!(
-            err.detail(),
-            "the package carries a script: the component holds \"Scripts\"",
-            "{what}"
-        );
-        let mut bare = scripted(service, identifier);
-        bare.component_extras.clear();
-        bare.package_info = Some(
-            bare.package_info_text()
-                .replace(WITH_POSTINSTALL, "<scripts/>"),
-        );
-        let err = refused(what, bare, service, identifier);
-        assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
-        let home = format!("/Library/Application Support/{service}");
-        assert_eq!(
-            err.detail(),
-            format!(
-                "/Library/LaunchDaemons/{id}.plist is outside {home}/ and the run labels' plists"
-            ),
-            "{what}"
-        );
+        let rig = Rig::new("stage-not-own");
+        rig.mac.add(pkg);
+        let order = order_for(&rig, service, identifier, &[]);
+        let (result, _) = rig.try_stage(&order, "hostkeeper-1.0");
+        result.unwrap_or_else(|e| panic!("{what}: {e}"));
     }
 }

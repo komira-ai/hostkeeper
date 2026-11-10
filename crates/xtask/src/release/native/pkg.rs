@@ -3,14 +3,15 @@
 //!
 //! The file is `hello-<version>-macos-arm64.pkg` (`<version>-fail-ready` for the failing build),
 //! a distribution pkg: `pkgbuild` builds the component `hello.pkg` from the payload with no
-//! scripts directory, so the component has no script, and `productbuild` wraps it as the one
+//! scripts directory (hostkeeper does not require that of a package; it is how this build is
+//! made, and the check holds the build to it), so the component has no script, and `productbuild` wraps it as the one
 //! package of the product, unsigned (packages-repositories.md section 4.7: the release machinery
 //! signs a service's `.pkg`). The component's identifier is [`IDENTIFIER`], its version the
 //! version text, its install location `/`, and every entry is owned by root (`--ownership
 //! recommended`).
 //!
 //! The payload is exactly [`super::hello::pkg_files`] and the directories above them, each 0755:
-//! the program and the hook in `/Library/Application Support/hello/`, and the two jobs' plists in
+//! the program in `/Library/Application Support/hello/`, and the two jobs' plists in
 //! `/Library/LaunchDaemons/`, each with `Disabled` true.
 //!
 //! The check takes the directory `pkgutil --expand` made of the product: it holds exactly the
@@ -19,15 +20,15 @@
 //! `PackageInfo` and `Payload` (no `Scripts`). `PackageInfo` names the identifier, the version
 //! and the install location `/` and no script. `Payload` holds exactly the entries above with
 //! their modes and bytes, each owned by root and of group wheel or admin; an entry outside the
-//! service's paths is named as such ([`pkg_path_problem`]); each plist parses with its job's
+//! build's files is named as such; each plist parses with its job's
 //! label, `Disabled` true, and a program that is a file of the payload.
 
 use std::collections::BTreeMap;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
+use super::DIR_MODE;
 use super::hello::{self, File, LAUNCH_DAEMONS, NAME, PKG_DIR};
-use super::{DIR_MODE, HOOK};
 use crate::release::Error;
 use crate::release::contract::{Platform, Version};
 use crate::release::file_sha256;
@@ -98,42 +99,6 @@ fn payload(files: Vec<File>) -> BTreeMap<String, Want> {
         );
     }
     want
-}
-
-/// Why a service's `.pkg` must not install the payload path `path` (from `/`, without the
-/// leading `/`), if it must not (packages-repositories.md section 4.7): files and directories
-/// under `Library/Application Support/<service>/`, one plist `Library/LaunchDaemons/<label>.plist`
-/// per job, whose label is the service's name or starts with it and a dot, and the directories
-/// above those as directories.
-pub(crate) fn pkg_path_problem(service: &str, path: &str, dir: bool) -> Option<String> {
-    let own = format!("Library/Application Support/{service}");
-    if path == own || path.starts_with(&format!("{own}/")) {
-        return None;
-    }
-    if [
-        "",
-        "Library",
-        "Library/Application Support",
-        "Library/LaunchDaemons",
-    ]
-    .contains(&path)
-    {
-        return match dir {
-            true => None,
-            false => Some("a directory of the host, which the pkg may list only as one".to_owned()),
-        };
-    }
-    let job = path
-        .strip_prefix("Library/LaunchDaemons/")
-        .and_then(|name| name.strip_suffix(".plist"))
-        .filter(|label| *label == service || label.starts_with(&format!("{service}.")));
-    match job {
-        Some(label) if !dir && !label.contains('/') => None,
-        _ => Some(format!(
-            "outside the paths of a pkg of {service}: /Library/Application Support/{service}/ and \
-             its jobs' plists /Library/LaunchDaemons/{service}[.*].plist"
-        )),
-    }
 }
 
 /// What `release macos-pkg --service hello` builds the pkg from.
@@ -275,10 +240,8 @@ fn payload_problems(
         let what = format!("/{path}");
         let (kind, mode) = (entry.mode & TYPE_BITS, entry.mode & !TYPE_BITS);
         let Some(wanted) = want.remove(path) else {
-            let why = pkg_path_problem(NAME, path, kind == TYPE_DIR)
-                .unwrap_or_else(|| "not a file of hello's pkg".to_owned());
             problems.push(format!(
-                "{what} ({:?}) is in the payload: {why}",
+                "{what} ({:?}) is in the payload: not a file of hello's pkg",
                 entry.name
             ));
             continue;
@@ -375,8 +338,8 @@ pub(crate) fn check(
     }
     Ok(vec![format!(
         "check-macos-pkg: {} is a product of the one component {COMPONENT} ({IDENTIFIER} \
-         {version}), with no script, which installs exactly {PKG_DIR}/bin/{NAME}, the hook \
-         {PKG_DIR}/{HOOK} and the disabled jobs {}, owned by root",
+         {version}), with no script, which installs exactly {PKG_DIR}/bin/{NAME} and the \
+         disabled jobs {}, owned by root",
         expanded.display(),
         hello::SLOTS
             .map(|slot| format!("{LAUNCH_DAEMONS}/{NAME}.{slot}.plist"))

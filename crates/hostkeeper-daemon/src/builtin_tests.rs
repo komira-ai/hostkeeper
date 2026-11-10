@@ -1,4 +1,4 @@
-//! The built-in steps of a repository version with no hook program: what each step does to the
+//! The built-in steps of a repository version with no hook command: what each step does to the
 //! run units, what the clock and the observer decide, and the exits a failure or a deferral gives.
 
 use std::fs;
@@ -142,6 +142,8 @@ impl Rig {
             staged,
             previous: before,
             hook_binary: PathBuf::from("bin/hook"),
+            hook_args: Vec::new(),
+            previous_hook: None,
             bounds: Bounds {
                 prepare_secs: 60,
                 cutover_secs: 60,

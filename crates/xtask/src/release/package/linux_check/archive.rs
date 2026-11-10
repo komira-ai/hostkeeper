@@ -125,30 +125,18 @@ pub(super) fn deb(bytes: &[u8]) -> Result<Contents, Error> {
         .remove("/control")
         .ok_or_else(|| bad("control.tar.gz has no ./control"))?;
     let text = String::from_utf8_lossy(&control.data).into_owned();
-    let mut others: Vec<String> = members
-        .into_iter()
-        .filter(|(path, file)| !(path == "/" && file.mode & TYPE_MASK == DIRECTORY))
-        .map(|(path, _)| path.trim_start_matches('/').to_owned())
-        .collect();
-    others.insert(0, "control".to_owned());
     Ok(Contents {
         kind: Kind::Deb,
         files,
         depends: control_depends(&text),
         control: Some(Control {
-            members: others,
             package: control_field(&text, "package"),
         }),
     })
 }
 
-/// The type bits of a mode.
-const TYPE_MASK: u32 = 0o170_000;
-
-/// What a deb's control archive holds: the names of its members (`control` first, then the
-/// others by name, without the `./` directory) and the value of its `Package` field.
+/// What a deb's control archive holds that is read: the value of its `Package` field.
 pub(super) struct Control {
-    pub(super) members: Vec<String>,
     pub(super) package: Option<String>,
 }
 

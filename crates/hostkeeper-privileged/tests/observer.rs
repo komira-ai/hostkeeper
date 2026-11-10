@@ -88,6 +88,7 @@ fn fixture_digest(rig: &Rig) -> [u8; 32] {
         .expect("write the params");
     let call = StepCall {
         service: SERVICE,
+        hook_args: &[],
         invocation: hostkeeper_hook::Invocation {
             step: Step::Verify,
             artifact: None,

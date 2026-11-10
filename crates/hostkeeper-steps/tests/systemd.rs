@@ -75,6 +75,7 @@ fn invocation(step: Step, params: &str) -> Invocation {
 fn call<'a>(executable: &'a Path, unit: &'a str, step: Step, bound: Bound) -> StepCall<'a> {
     StepCall {
         service: "svc",
+        hook_args: &[],
         invocation: invocation(step, "/var/lib/state/svc/params.toml"),
         executable,
         unit,
@@ -137,6 +138,46 @@ fn the_command_is_exactly_the_documented_line() {
             "/var/lib/state/svc/params.toml",
         ]
     );
+}
+
+/// The hook command's leading arguments come between the executable and the step, for a step
+/// that carries the staged release too; with none, the step follows the executable at once.
+#[test]
+fn the_hook_args_are_given_before_the_step() {
+    let exe = Path::new("/var/lib/releases/svc/abc/hook");
+    let hook_args = ["update-hook".to_owned(), "--fast".to_owned()];
+    let unit = unit_name("svc", Step::Prepare, 3);
+    let mut with = call(exe, &unit, Step::Prepare, Bound::Unbounded);
+    with.hook_args = &hook_args;
+    assert_eq!(
+        args(&with)[7..],
+        [
+            "--",
+            "/var/lib/releases/svc/abc/hook",
+            "update-hook",
+            "--fast",
+            "prepare",
+            "/var/lib/releases/svc/abc",
+            "--params",
+            "/var/lib/state/svc/params.toml",
+        ]
+    );
+    let unit = unit_name("svc", Step::Verify, 4);
+    let mut with = call(exe, &unit, Step::Verify, secs(30));
+    with.hook_args = &hook_args[..1];
+    assert_eq!(
+        args(&with)[7..],
+        [
+            "--",
+            "/var/lib/releases/svc/abc/hook",
+            "update-hook",
+            "verify",
+            "--params",
+            "/var/lib/state/svc/params.toml",
+        ]
+    );
+    let without = call(exe, &unit, Step::Verify, secs(30));
+    assert_eq!(args(&without)[9], "verify");
 }
 
 /// Catches any confinement coming back: for every step, bounded and unbounded, there is exactly

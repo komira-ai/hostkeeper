@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use super::{COMPONENT, IDENTIFIER, Request, build, check, payload, pkg_name, pkg_path_problem};
+use super::{COMPONENT, IDENTIFIER, Request, build, check, payload, pkg_name};
 use crate::release::Error;
 use crate::release::contract::Version;
 use crate::release::fakes::{FakePkgbuild, scratch, tree_of};
@@ -124,7 +124,6 @@ fn the_pkg_is_built_with_no_scripts_from_exactly_hellos_payload() {
             "Library/Application Support/hello/",
             "Library/Application Support/hello/bin/",
             "Library/Application Support/hello/bin/hello",
-            "Library/Application Support/hello/hostkeeper-hook",
             "Library/LaunchDaemons/",
             "Library/LaunchDaemons/hello.a.plist",
             "Library/LaunchDaemons/hello.b.plist",
@@ -144,12 +143,9 @@ fn the_pkg_is_built_with_no_scripts_from_exactly_hellos_payload() {
             .mode()
             & 0o7777
     };
-    assert_eq!(
-        mode("Library/Application Support/hello/hostkeeper-hook"),
-        0o755
-    );
+    assert_eq!(mode("Library/Application Support/hello/bin/hello"), 0o755);
     assert_eq!(mode("Library/LaunchDaemons/hello.a.plist"), 0o644);
-    assert_eq!(tree_of(&root).len(), 9);
+    assert_eq!(tree_of(&root).len(), 8);
     assert!(
         build(&fakes, &request).is_err(),
         "a stage that exists is refused"
@@ -238,8 +234,8 @@ fn a_plist_not_disabled_an_entry_outside_the_paths_and_a_wrong_owner_are_refused
         [
             "/Library/LaunchDaemons/hello.a.plist: not the bytes release macos-pkg writes",
             "/Library/LaunchDaemons/hello.a.plist: Disabled is not true, so launchd would load the job at boot before hostkeeper enables it",
-            "/Library/LaunchDaemons/sshd.plist (\"./Library/LaunchDaemons/sshd.plist\") is in the payload: outside the paths of a pkg of hello: /Library/Application Support/hello/ and its jobs' plists /Library/LaunchDaemons/hello[.*].plist",
-            "/usr (\"./usr\") is in the payload: outside the paths of a pkg of hello: /Library/Application Support/hello/ and its jobs' plists /Library/LaunchDaemons/hello[.*].plist",
+            "/Library/LaunchDaemons/sshd.plist (\"./Library/LaunchDaemons/sshd.plist\") is in the payload: not a file of hello's pkg",
+            "/usr (\"./usr\") is in the payload: not a file of hello's pkg",
             "/Library/Application Support/hello/extra (\"./Library/Application Support/hello/extra\") is in the payload: not a file of hello's pkg",
         ]
     );
@@ -268,34 +264,6 @@ fn another_version_identifier_or_a_missing_entry_is_refused() {
     );
 }
 
-#[test]
-fn a_pkg_path_is_the_services_directory_its_jobs_plists_or_a_directory_above() {
-    // Catches: the payload rule of section 4.7 widened or narrowed.
-    for (path, dir) in [
-        ("", true),
-        ("Library", true),
-        ("Library/LaunchDaemons", true),
-        ("Library/Application Support/hello", true),
-        ("Library/Application Support/hello/bin/hello", false),
-        ("Library/LaunchDaemons/hello.plist", false),
-        ("Library/LaunchDaemons/hello.a.plist", false),
-    ] {
-        assert_eq!(pkg_path_problem("hello", path, dir), None, "{path}");
-    }
-    for (path, dir) in [
-        ("Library", false),
-        ("Library/LaunchDaemons/hello.a.plist", true),
-        ("Library/LaunchDaemons/helloworld.plist", false),
-        ("Library/LaunchDaemons/sub/hello.a.plist", false),
-        ("Library/LaunchDaemons/hello.a/b.plist", false),
-        ("Library/LaunchAgents/hello.plist", false),
-        ("usr/local/bin/hello", false),
-        ("Library/Application Support/hellox/x", false),
-    ] {
-        assert!(pkg_path_problem("hello", path, dir).is_some(), "{path}");
-    }
-}
-
 /// The index of the entry named `name` in `list`.
 fn index_of(list: &[Vec<u8>], name: &str) -> usize {
     list.iter()
@@ -306,17 +274,17 @@ fn index_of(list: &[Vec<u8>], name: &str) -> usize {
 #[test]
 fn a_wanted_entry_of_another_owner_type_or_mode_is_refused_naming_each() {
     // Catches: a file of the package another account owns, a directory where a file goes, and a
-    // hook that is not executable.
+    // plist that is executable.
     let d = scratch("native-pkg-attributes");
     let bin = binary(&d);
     let mut list = entries(false, 0);
     let program = "./Library/Application Support/hello/bin/hello";
     let at = index_of(&list, program);
     list[at] = odc_entry(program, 0o100_755, 501, 20, BINARY);
-    let hook = "./Library/Application Support/hello/hostkeeper-hook";
-    let at = index_of(&list, hook);
-    let text = crate::release::native::hook_wrapper("bin/hello");
-    list[at] = odc_entry(hook, 0o100_644, 0, 0, text.as_bytes());
+    let plist_a = "./Library/LaunchDaemons/hello.a.plist";
+    let at = index_of(&list, plist_a);
+    let text = crate::release::native::hello::plist("a", false).expect("plist");
+    list[at] = odc_entry(plist_a, 0o100_755, 0, 0, text.as_bytes());
     let plist = "./Library/LaunchDaemons/hello.b.plist";
     let at = index_of(&list, plist);
     list[at] = dir_entry(plist);
@@ -325,7 +293,7 @@ fn a_wanted_entry_of_another_owner_type_or_mode_is_refused_naming_each() {
         problems(check(&at, &version(), false, &bin)),
         [
             "/Library/Application Support/hello/bin/hello: owned by uid 501 and gid 20, not root and wheel or admin",
-            "/Library/Application Support/hello/hostkeeper-hook: mode 644, not 755",
+            "/Library/LaunchDaemons/hello.a.plist: mode 755, not 644",
             "/Library/LaunchDaemons/hello.b.plist: of type 40000, not 100000",
         ]
     );
