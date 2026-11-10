@@ -196,7 +196,8 @@ pub struct Serve {
     /// listens on every interface of the coordinator's network namespace. Give it only in a
     /// namespace whose interfaces are loopback and one private network, such as a container's
     /// on one overlay network, where the address of that interface is not known before the
-    /// container starts. Callers still need a token or a certificate; no address is trusted.
+    /// container starts. No address is trusted: what needs a token without the flag needs it
+    /// with the flag.
     /// An address of one interface is taken with it as without it.
     #[arg(long)]
     pub private_listen_wildcard: bool,

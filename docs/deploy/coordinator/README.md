@@ -86,10 +86,11 @@ loopback and one private network (for example a container on one overlay network
 nothing that should not reach it), does not know that network's address before it starts; for it,
 `--private-listen-wildcard` takes a wildcard `--private-listen`, and the private listener listens
 on every interface of the namespace. On the host's network, as here, do not give it: the private
-listener would be on every network the host is on. With it or without, every call on the private
-listener still needs an operator token, CI's OIDC token or a certificate (no address is
-trusted), an address of one interface is taken as given, and `--lan-listen` and `--health-listen`
-are checked as before.
+listener would be on every network the host is on. With it or without, the private listener
+trusts no address: every call that reads or changes state still needs an operator token or CI's
+OIDC token, and what it answers with none (`GET /v1/version`, and the files of `--ui-dir`) it
+answers to any peer that reaches it, as on an address of one interface. An address of one
+interface is taken as given, and `--lan-listen` and `--health-listen` are checked as before.
 
 The coordinator gets no compose `healthcheck`: compose runs one inside the container, which has
 no shell or client. To probe it from the machine, add `--health-listen` with a loopback address
