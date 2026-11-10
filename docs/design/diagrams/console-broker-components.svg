@@ -1,6 +1,6 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 700" width="1300" height="700" role="img" aria-label="Components of the console: the coordinator, the web UI and the MDM gate inside the hostkeeper box; browser, ipmitool, subnet route, BMC, Mac and NanoHUB outside it.">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 700" width="1300" height="700" role="img" aria-label="Components of the console: the coordinator, the web UI and the MDM gate inside the hostkeeper box; browser, ipmitool, lab LAN, BMC, Mac and NanoHUB outside it.">
 <title>Components: what hostkeeper runs for the console</title>
-<desc>The coordinator with its console module, the web UI it serves and the MDM gate inside it are hostkeeper. The browser, ipmitool, the tailnet route, the BMC, the Mac and NanoHUB are not.</desc>
+<desc>The coordinator with its console module, the web UI it serves and the MDM gate inside it are hostkeeper. The browser, ipmitool, the lab LAN, the BMC, the Mac and NanoHUB are not.</desc>
 <defs><marker id="console-broker-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -56,9 +56,9 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="1065.0" y="112" class="b" text-anchor="middle">ipmitool (child of the coordinator)</text>
 <text x="1065.0" y="130" class="t-m" text-anchor="middle">not hostkeeper code; password in its environment</text>
 <rect x="850" y="190" width="430" height="70" rx="5" class="box-p"/>
-<text x="1065.0" y="212" class="b" text-anchor="middle">Tailscale subnet route + ACL (configuration)</text>
-<text x="1065.0" y="230" class="t-m" text-anchor="middle">one lab host advertises &lt;lab-subnet&gt;; only the coordinator's tag</text>
-<text x="1065.0" y="246" class="t-m" text-anchor="middle">may reach BMC UDP 623 and Mac TCP 5900</text>
+<text x="1065.0" y="212" class="b" text-anchor="middle">Lab LAN, direct (no route, no ACL)</text>
+<text x="1065.0" y="230" class="t-m" text-anchor="middle">the coordinator's host has interfaces on both</text>
+<text x="1065.0" y="246" class="t-m" text-anchor="middle">lab subnets and dials BMC UDP 623, Mac TCP 5900</text>
 <rect x="850" y="310" width="200" height="70" rx="5" class="box"/>
 <text x="950.0" y="332" class="b" text-anchor="middle">BMC (each server)</text>
 <text x="950.0" y="350" class="t-m" text-anchor="middle">RMCP+ SOL, COM2 = ttyS1</text>
@@ -85,5 +85,5 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M1180,520 L1180,380" class="ln" marker-end="url(#console-broker-components-ak)"/>
 <text x="1230" y="450" class="t-m lbl" text-anchor="middle">MDM commands</text>
 <path d="M390,520 L390,540" class="ln" marker-end="url(#console-broker-components-ak)"/>
-<text x="20" y="696" class="t-m" text-anchor="start">The hostkeeper daemon is not on any console path. The network path is drawn outside the box on purpose: it is configuration, or nothing if the coordinator host has a lab-LAN interface.</text>
+<text x="20" y="696" class="t-m" text-anchor="start">The hostkeeper daemon is not on any console path. The lab LAN is outside the box on purpose: it is the network, not hostkeeper code. A subnet route is needed only if the coordinator moves off it.</text>
 </svg>

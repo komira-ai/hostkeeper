@@ -11,14 +11,14 @@ A server that has stopped answering can only be fixed from its BMC, and a Mac th
 
 The motivating incident: node-02 was force-rebooted, came back at the PXE menu, and needed its boot order changed. The BMCs sit on the lab LAN, not on the tailnet. Fixing it meant going to the lab, or logging in to some other machine on the LAN first and opening the BMC web UI from there.
 
-The coordinator already knows which machine is which: each server's data MAC and BMC MAC are in its inventory record (**Built**: `crates/hostkeeper-coordinator/src/inventory.rs`, `Hosts.Get` and `Hosts.List`). It stores no address, it has no route to the lab LAN, and nothing in it carries an interactive byte stream (section 4).
+The coordinator already knows which machine is which: each server's data MAC and BMC MAC are in its inventory record (**Built**: `crates/hostkeeper-coordinator/src/inventory.rs`, `Hosts.Get` and `Hosts.List`). It stores no address, and nothing in it carries an interactive byte stream (section 4).
 
 ## 2. Goals and non-goals
 
 Decisions in brief:
 
 1. **Everything goes through the coordinator.** No relay binary or role, no command line, no new hostkeeper daemon code, no daemon-to-coordinator stream. Authentication and audit are at the coordinator and nowhere else.
-2. **The coordinator reaches the lab LAN itself.** Default: a Tailscale subnet route advertised by one lab host, with an ACL that grants only the coordinator's tag the BMC and Mac ports. Alternative: no route at all, if the coordinator's host has an interface on the lab LAN (section 9.1).
+2. **The coordinator reaches the lab LAN itself.** Default: direct. The coordinator's host has interfaces on both lab subnets (**Measured**), so it dials the BMCs (UDP 623) and the Macs (TCP 5900) itself; no Tailscale subnet route and no ACL rule. Alternative, only for a coordinator moved off the lab LAN: a subnet route with an ACL (section 9.1).
 3. **Linux servers: Console only.** IPMI 2.0 Serial over LAN (SOL) bridged by the coordinator over a WebSocket to an in-page terminal (xterm.js). The serial port is the second one, COM2 = `ttyS1`, on every Linux server (section 5). Power and boot device are typed calls (`Console/Power`, `Console/SetBootDevice`) with a reason and an audit line.
 4. **Macs: Desktop only.** noVNC in the page, bridged by the coordinator to RFB on TCP 5900. Power is MDM `RestartDevice` and `ShutDownDevice` through the gate, supervised Macs only. **Apple Silicon Macs have no BMC and no serial console: a hung or unbooted Mac has no remote console.**
 5. **The BMC's HTML5 KVM is dropped from the build** (fragile, section 6.2).
@@ -126,7 +126,7 @@ Screen Sharing is RFB on TCP 5900. Auth runs inside the stream (Apple's types, i
 | D5 | Where is the one BMC credential? | `--console-bmc-credential-file`: a secret file read by `hostkeeper_wire::secret::read_secret`, mode 0600 or 0400 (as `--mdm-api-key-file`), re-read on the TLS-reload tick. A newtype with a redacting `Debug` and no `Display` or `Serialize`. It goes to the child's environment and nowhere else: not to the browser, a log or an error. | The owner's decision. A flag naming a file satisfies S1 and S2. |
 | D6 | How do SOL and power run? | `ipmitool -I lanplus -C <cipher> -L <privilege> -N <timeout> -R <retries>` as a child of the coordinator, the password with `-E` (environment), never `-P` (argv). Timeout and retries are flags (`--console-ipmi-timeout-s` 1, `--console-ipmi-retries` 2) so the worst case in section 11 is a sum. The result maps to a closed error enum; the tool's stderr is never echoed (it contains the user name). Spawn is behind a port with a scripted double. A native RMCP+ client is later. No Redfish. | The workspace pins `ipmi-rs` to its device-file connection only and leaves out its RMCP+ client (root `Cargo.toml`). A native client is weeks; `ipmitool` is days and was measured working. Every tunable is config with a default from the start. |
 | D7 | The BMC's web page | Dropped from the build (section 6.2). | Fragile; serial and typed power cover the incident. Adding a kind later is additive (B8). |
-| D8 | Where is a device's address, and how is it checked? | `--console-targets-file` (TOML): `[[target]]` with `mac` and `address`. For a Linux server `mac` is the BMC MAC (the record's `bmc_mac`); for a Mac it is a data MAC from the record or the Mac's tailnet name as `address`. Addresses are DHCP reservations. **Before each command to a BMC the coordinator runs `ipmitool lan print`, in the same session as the command, and compares the MAC with the record's `bmc_mac`;** a difference is `address_mismatch` and nothing is sent. | The coordinator cannot read a neighbour table across a routed subnet, and the daemon cannot report a BMC address a down node would not be there to report. A new inventory field is refused by the previous release once written (section 4); a new file read only by the new release breaks nothing on rollback (B8). A power command at the wrong BMC power-cycles the wrong server, hence the check on every command. |
+| D8 | Where is a device's address, and how is it checked? | `--console-targets-file` (TOML): `[[target]]` with `mac` and `address`. For a Linux server `mac` is the BMC MAC (the record's `bmc_mac`); for a Mac it is a data MAC from the record or the Mac's tailnet name as `address`. Addresses are DHCP reservations. **Before each command to a BMC the coordinator runs `ipmitool lan print`, in the same session as the command, and compares the MAC with the record's `bmc_mac`;** a difference is `address_mismatch` and nothing is sent. | A neighbour table is a poor source (section 9.2), and the daemon cannot report a BMC address a down node would not be there to report. A new inventory field is refused by the previous release once written (section 4); a new file read only by the new release breaks nothing on rollback (B8). A power command at the wrong BMC power-cycles the wrong server, hence the check on every command. |
 | D9 | Who may open a console? | `--console-operators-file` (TOML): `[[operator]]` with `name` (a token name) and `power` (default true; false allows opening a console but not power or boot-device calls). Absent file or name means no console. The tokens file is not changed. | A key in `[[token]]` is refused by the previous release (`deny_unknown_fields`), which breaks rollback (B8). Whether this is enough for off, cycle and reset is Q3. |
 | D10 | Mac power | `Console/Power` on a Mac maps `restart` and `shutdown` to MDM `RestartDevice` and `ShutDownDevice` through the gate, to a supervised Mac only (`not_supervised` otherwise). The call is answered when the command is queued. | The owner's direction; the gate already knows supervision. A Mac has no other power control. |
 | D11 | Two operators on one device | One session per host, held by the coordinator. A second open is refused `console_busy`, naming the holder's token name and start time. The operator closes the first (`Console/Close`, audited with the closer's name) and opens again. No takeover flag. | A BMC allows one SOL payload; deciding in the coordinator is predictable and audited. |
@@ -136,7 +136,7 @@ Screen Sharing is RFB on TCP 5900. Auth runs inside the stream (Apple's types, i
 
 ![Components: what hostkeeper runs for the console](diagrams/console-broker-components.svg)
 
-The dashed orange box is exactly what hostkeeper runs: the coordinator with its console module, the web UI it serves, and the MDM gate linked into it. Outside it: the operator's browser, `ipmitool` (a program the coordinator starts), the tailnet and its subnet route (configuration, section 9), the BMC, the Mac and NanoHUB. The hostkeeper daemon is on no console path.
+The dashed orange box is exactly what hostkeeper runs: the coordinator with its console module, the web UI it serves, and the MDM gate linked into it. Outside it: the operator's browser, `ipmitool` (a program the coordinator starts), the lab LAN, which the coordinator's host is directly on (section 9), the BMC, the Mac and NanoHUB. The hostkeeper daemon is on no console path.
 
 New code, all **Designed**:
 
@@ -161,23 +161,25 @@ The WebSocket route is on the private listener's `Surface::Control`, the UI's ow
 
 ### 9.1 The network path
 
-The coordinator reaches the BMCs (UDP 623) and the Macs (TCP 5900), which are on the lab LAN. Two ways, both configuration and no hostkeeper code; **the default is the route**.
+The coordinator reaches the BMCs (UDP 623) and the Macs (TCP 5900), which are on the lab LAN. Both are configuration and no hostkeeper code.
 
-**Default: a Tailscale subnet route with an ACL.**
+**Default: direct.** The coordinator's host has interfaces on both lab subnets, the BMC subnet and the servers' data subnet (**Measured**, 2026-11-10), and the farm Mac is on the lab LAN as well as the tailnet (**Measured**). The coordinator dials the reserved addresses straight over the lab LAN. No subnet route, no router host, no ACL rule and no tailnet change. The operator's browser still reaches the coordinator over the tailnet, and the BMCs and Macs are never exposed to it. A Mac is dialled at its lab address, not its tailnet name, so the path does not depend on the tailnet being up.
 
-1. A lab host that is always on advertises the lab subnet (`--advertise-routes=<lab-subnet>`, IP forwarding on); a second lab host advertises the same route so the path survives one being power-cycled (Tailscale fails over between routers of one route; the failover time is **Unverified**, C0). Subnet traffic is source-translated by default, so the BMCs need no route back.
+**Alternative: a Tailscale subnet route with an ACL,** for a coordinator moved off the lab LAN.
+
+1. A lab host that is always on advertises the lab subnet (`--advertise-routes=<lab-subnet>`, IP forwarding on); a second lab host advertises the same route so the path survives one being power-cycled (Tailscale fails over between routers of one route; the failover time is **Unverified**). Subnet traffic is source-translated by default, so the BMCs need no route back.
 2. The coordinator's host accepts the route (`--accept-routes`).
 3. The tailnet policy grants **only the coordinator's tag** the BMC and Mac addresses and ports: one rule, `src: tag:<coordinator>`, `dst: <bmc-range>:623` plus `<mac-range>:5900`, and no rule that grants any other member the subnet. DHCP reservations in two contiguous blocks keep it to two ranges.
 
-**Alternative: no route.** If the coordinator's host has an interface on the lab LAN, the coordinator dials the addresses directly and steps 1 to 3 are skipped. It is not the default only because the coordinator's host (the dev box) is not known to have one (Q1).
-
 Rejected: a route with no ACL (any tailnet member could reach every BMC with only the shared password between them and power); a relay or the daemon as a forwarder (the owner's direction; the root daemon would gain a listener); our own site-to-site WireGuard; one route per BMC.
 
-What it costs: a round trip to a device is the tailnet leg plus the lab leg (**R**, section 11), and every IPMI exchange pays it. The coordinator's tailnet identity is now a guard (section 13).
+What it costs: direct, nothing beyond the lab LAN's own round trip (**R**, section 11). The coordinator's host must stay on the lab LAN; moving it makes every device `device_unreachable` until the alternative is set up.
 
 ### 9.2 The address
 
-`--console-targets-file` maps a MAC to an address (D8). The BMCs and Macs hold DHCP reservations, so the address does not move; the operator writes it once beside the inventory record. That is the whole of "lookup": no scan, no probe, no neighbour table. Verification is the `lan print` check of D8 on every BMC command; a host without a `bmc_mac` in its record is `no_bmc_mac`, refused (this is why C0 adds the records).
+`--console-targets-file` maps a MAC to an address (D8). The BMCs and Macs hold DHCP reservations, so the address does not move; the operator writes it once beside the inventory record. That is the whole of "lookup": no scan, no probe, no neighbour table.
+
+The coordinator now shares a layer-2 segment with the BMCs, so mapping the record's `bmc_mac` to an address from its own neighbour table (with a probe to fill it) is possible. **It is not taken**, because it is the more fragile option: a neighbour table holds only hosts spoken to recently, so it needs a probe sweep of the subnet (`arping` or ping needs `CAP_NET_RAW` and a coordinator image with the tool); a BMC may ignore ICMP; the coordinator's host has several addresses on one interface, so the right subnet and interface must be chosen; a powered-off or unplugged BMC is simply absent, which a configured address reports as `device_unreachable` and a sweep reports as an unknown host; and it works only on the lab LAN, so it would not survive the alternative of section 9.1. The reservation file is one small TOML file, written once and checked by `lan print` on every command. Verification is the `lan print` check of D8 on every BMC command; a host without a `bmc_mac` in its record is `no_bmc_mac`, refused (this is why C0 adds the records).
 
 A Mac's screen is not tied to a MAC: RFB carries none and the Mac's own login authenticates the connection, so a wrong address reaches the wrong Mac's login prompt and nothing more.
 
@@ -214,7 +216,7 @@ Macs already enrolled before this change (the farm's) get the baseline on their 
 
 Common to all: a unary call arrives on the connection the UI already holds (HTTP/2, warm), one round trip. A WebSocket needs a new connection: TCP plus TLS 1.3 is two round trips, the upgrade one more. Every budget is a sum of named terms; no probe, poll or dial-back term. Values are **Inferred** until C0 measures **T** and **R** and counts the exchanges.
 
-Terms. **T**: a browser-to-coordinator round trip over the tailnet. **R**: a coordinator-to-device round trip through the route. **F**: one audit fsync. **B**: a BMC's service time per IPMI exchange. **S**: exchanges to set up an RMCP+ session (capabilities, open session, RAKP 1 to 4, set privilege; about 8). **L**: exchanges of `ipmitool lan print` (about 20, **Inferred**: it reads each LAN parameter in turn; the same MAC is one exchange as a raw read, a fallback C0 evaluates if L dominates). **N**: a lost packet, the `-N` timeout. Example values: T = 30 ms, R = 25 ms, F = 10 ms, B = 0.1 s, so one exchange R + B = 0.125 s.
+Terms. **T**: a browser-to-coordinator round trip over the tailnet. **R**: a coordinator-to-device round trip on the lab LAN (direct; through the route in the alternative). **F**: one audit fsync. **B**: a BMC's service time per IPMI exchange. **S**: exchanges to set up an RMCP+ session (capabilities, open session, RAKP 1 to 4, set privilege; about 8). **L**: exchanges of `ipmitool lan print` (about 20, **Inferred**: it reads each LAN parameter in turn; the same MAC is one exchange as a raw read, a fallback C0 evaluates if L dominates). **N**: a lost packet, the `-N` timeout. Example values: T = 30 ms, R = 25 ms, F = 10 ms, B = 0.1 s, so one exchange R + B = 0.125 s.
 
 ### 11.1 Console open (serial)
 
@@ -258,15 +260,15 @@ Not on an operator's path. From the config profile's `Acknowledged`, the gate qu
 |---|---|
 | SOL shows nothing | The host's console is not on `ttyS1`, or no getty (section 5.2). Blank terminal, no error; the page's "no output yet" note after `--console-quiet-s`; the fix is the install baseline. |
 | SOL shows the OS but not the BIOS screens | BIOS console redirection to COM2 is off or on another port; the one-time BIOS setting C0 checks on all six nodes. |
-| BMC unreachable (powered off, cable, wrong subnet, route down, ACL) | Close 4001 after `--console-connect-timeout-s`; if every BMC fails the same way, check the subnet router first. |
-| Subnet router down | The second advertising host takes the route; with both down every device is `device_unreachable`. |
+| BMC unreachable (powered off, cable, wrong address) | Close 4001 after `--console-connect-timeout-s`; if every BMC fails the same way, check that the coordinator's host is still on the lab LAN. |
+| Alternative only: subnet router down, or ACL wrong | The second advertising host takes the route; with both down every device is `device_unreachable`. |
 | Address wrong, or the lease moved | The `lan print` MAC differs from the record: `address_mismatch`, nothing sent. A Mac at a wrong address reaches another Mac's login and nothing more. |
 | Host unknown; no target; no `bmc_mac`; several records match | `host_not_found`, `no_address`, `no_bmc_mac`, `ambiguous_record`, each a closed error naming the fix. |
 | Coordinator restart | All sessions end with 4010 and their `ipmitool` children die. The BMC keeps the SOL payload until its own timeout, so the next open sees `bmc_sol_busy` for a while (**Unverified** how long). On start the coordinator writes `console_coordinator_start`; any `console_open` before it with no close ended there. No second coordinator exists. |
 | SOL held at the BMC by someone outside | `sol activate` reports it: `bmc_sol_busy`. The coordinator does not deactivate a session it did not start. |
 | BMC has no free session slot | `bmc_busy`. Commands to one BMC are serialized by the coordinator, so a burst of power clicks queues. |
 | Two operators on one device | D11: `console_busy` naming the holder. |
-| Shared-NIC BMC | A BMC in shared-NIC mode answers on the host's NIC and may be unreachable from the route if the router is that host itself (the lab's NIC mode is unmeasured, C0). |
+| Shared-NIC BMC | A BMC in shared-NIC mode answers on the host's NIC and may be unreachable from the coordinator if the coordinator is that host itself, or, in the alternative, from the route if the router is that host (the lab's NIC mode is unmeasured, C0). |
 | Wrong shared credential | `bmc_auth_failed`, with no text from the tool; fix the file and the reload tick. |
 | Credential in logs or errors | Only in the child's environment. A test formats every wire struct that can carry it and asserts the output has no credential; a wrong-password test asserts the whole message by exact equality (T13). |
 | Operator token revoked mid-session | Tokens and the operators file are re-read every `--tls-reload-secs`; that name's sessions close with 4008 and `sol deactivate` is run. |
@@ -286,7 +288,7 @@ Not on an operator's path. From the config profile's `Acknowledged`, the gate qu
 
 - **A compromised coordinator:** raw BMC power and serial on every server, every Mac's screen (the Mac's login still stands), the shared BMC password, and the baseline file. There is no relay host besides it.
 - **A stolen operator token in the operators file:** the same consoles; the audit shows its name. A serial console is a login on the host, whose own accounting records what is done there.
-- **The tailnet policy** is part of the guard: a rule that grants another member the lab subnet exposes every BMC to a holder of the shared password, with no coordinator check and no audit. The ops doc states the one rule it needs (C9).
+- **The tailnet policy,** only in the alternative: a rule that grants another member the lab subnet exposes every BMC to a holder of the shared password, with no coordinator check and no audit. The default has no such rule; the coordinator's host is the only path.
 - **Anyone on the lab LAN:** the IPMI 2.0 RAKP exchange lets a party who captures a handshake guess the password offline, and one shared password is one password for every BMC. The lab LAN is trusted and the password must be long and random. The `lan print` MAC check ties an address to a BMC.
 - **The subprotocol header** carries the token once at the upgrade, over TLS, on the tailnet, and is never echoed or logged.
 
@@ -311,7 +313,7 @@ Smallest usable first. Interfaces land before the code that uses them (P7). Size
 
 | # | Task | Size | Needs |
 |---|---|---|---|
-| C0 | Lab spike, no code merged, results written into this document: inventory records (BMC MACs) for the six nodes; the subnet route and ACL on two lab hosts (or the lab-LAN interface answer); DHCP reservations; measure T, R, the exchange counts S and L and every **Inferred** figure; a byte sent to `ttyS1` seen over SOL; BIOS console redirection to COM2 on all six; GRUB and getty change by hand on one node; `ipmitool` power, `lan print`, `exec` and SOL through pipes against a pty, escape handling, output buffering; UEFI or legacy boot mode; shared-NIC question; Screen Sharing through a plain TCP-to-WebSocket forward with noVNC, with a user logged in and at the login window, and its first-frame time; `wss` against `'self'` in Chrome, Firefox and Safari, and the CSP needs of xterm.js and noVNC. | S | none |
+| C0 | Lab spike, no code merged, results written into this document: inventory records (BMC MACs) for the six nodes; DHCP reservations; measure T, R, the exchange counts S and L and every **Inferred** figure; a byte sent to `ttyS1` seen over SOL; BIOS console redirection to COM2 on all six; GRUB and getty change by hand on one node; `ipmitool` power, `lan print`, `exec` and SOL through pipes against a pty, escape handling, output buffering; UEFI or legacy boot mode; shared-NIC question; Screen Sharing through a plain TCP-to-WebSocket forward with noVNC, with a user logged in and at the login window, and its first-frame time; `wss` against `'self'` in Chrome, Firefox and Safari, and the CSP needs of xterm.js and noVNC. | S | none |
 | C1 | `console.proto` (`Open`, `Power`, `SetBootDevice`, `List`, `Close`; no behaviour), the operators, targets and credential file parsers, the audit-only append with its tests, the audit action names. Additive; compat baseline and generated client updated. | M | none |
 | C2 | The `ipmitool` port, the `hostkeeper-console` crate's session types, `Console/Power` and `Console/SetBootDevice`, `List`, `Close`, the `lan print` check, `--console-*` flags, and the **Power and Boot device section on the host page** (no WebSocket). **First usable slice: the node-02 class of incident is fixed from the browser or the API.** | M | C1 |
 | C3 | MDM baseline: `--mdm-baseline-file`, the group baseline in enrollment step 3, `ProfileList` re-apply on `TokenUpdate` and every `--mdm-baseline-check-s`, `EnableRemoteDesktop` (supervised only), `RestartDevice` and `ShutDownDevice`, `baseline_pending`, `COMMAND_TYPES` 5 to 9, pinned tests; Mac power in `Console/Power`. | M | C1 |
@@ -320,7 +322,7 @@ Smallest usable first. Interfaces land before the code that uses them (P7). Size
 | C6 | Mac **Desktop** page: noVNC vendored, the Desktop link in the device list, the Mac Power buttons. | M | C3, C5 |
 | C7 | Linux **Console** page: xterm.js vendored, the Console link, the terminal and the "no output yet" note. | M | C5 |
 | C8 | Install baseline for `ttyS1`: the seed's GRUB serial lines, the farm install configuration, [network-install.md](../operations/network-install.md) and its board check; the golden moves. | S | none |
-| C9 | `docs/operations/console.md`: the route and ACL rule, DHCP reservations, the three files, `ipmitool` in the coordinator's image, BMC bit rate and BIOS COM2 setting, moving the six nodes to the baseline, the subnet-router runbook. | S | C7 |
+| C9 | `docs/operations/console.md`: the direct path and its requirement that the coordinator's host stays on the lab LAN (the route and ACL rule as the alternative), DHCP reservations, the three files, `ipmitool` in the coordinator's image, BMC bit rate and BIOS COM2 setting, moving the six nodes to the baseline. | S | C7 |
 
 Later, not scheduled: native RMCP+ SOL and power in place of `ipmitool` (L, only if the tool becomes a burden); an SSH-backed Terminal link for Macs; a switched PDU outlet for hard-hung Macs; a plain link to the BMC's web UI in a new tab.
 
@@ -328,8 +330,7 @@ Stale text to fix (T19, P10): in the pull request of C2, [hostkeeper-design.md](
 
 ## 16. Open questions
 
-- **Q1.** The network path. Does the coordinator's host (the dev box) have an interface on the lab LAN (then no route or ACL is needed)? If not, which two always-on lab hosts advertise the route, who approves the route and the ACL rule, and who runs the DHCP server that holds the reservations?
-- **Q2.** Is the farm Mac on the lab LAN, the tailnet or both (its target address is its tailnet name if on it)?
+- **Q1.** Gate counts, awaiting the owner's confirmation. The direction said `COMMAND_TYPES` 5 to 6; section 10 counts 9 (`EnableRemoteDesktop`, `ProfileList`, `RestartDevice`, `ShutDownDevice`) because `ProfileList` is a command, not a `DeviceInformation` query. C3 is not sized until the owner confirms the count and the names are read from Apple's reference.
+- **Q2.** Who runs the DHCP server that holds the reservations for the BMCs and Macs, and who writes them? (The network path and the farm Mac's placement are answered: section 9.1.)
 - **Q3.** Is the operators file enough for `off`, `cycle` and `reset`, or do those need a second operator's confirmation? The design assumes enough: the audit line and the reason that every call requires are the check.
-- **Q0.** Gate counts, awaiting the owner's confirmation. The direction said `COMMAND_TYPES` 5 to 6; section 10 counts 9 (`EnableRemoteDesktop`, `ProfileList`, `RestartDevice`, `ShutDownDevice`) because `ProfileList` is a command, not a `DeviceInformation` query. C3 is not sized until the owner confirms the count and the names are read from Apple's reference.
 - **Q4.** May `ui/vendor/` carry xterm.js (MIT) and noVNC (MPL-2.0, file-level copyleft, files unmodified)? R6 speaks of crates; this is the first vendored browser code, pinned by digest.
