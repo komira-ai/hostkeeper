@@ -729,18 +729,40 @@ impl MacSelfHost {
     }
 
     /// Waits until a heartbeat of the daemon at `agent` reports hostkeeper at `version` with the
-    /// order's `last_update` succeeded.
+    /// order's `last_update` succeeded. The daemon settles a waiting self-update at its start,
+    /// before its first heartbeat, so the heartbeat comes only once that settlement is whole: the
+    /// record confirmed and `next` removed after it.
     pub fn reports_succeeded(&self, agent: &str, version: &str) {
-        wait("a heartbeat reports the order succeeded", || {
+        self.reports("the order succeeded", agent, |service| {
+            service["version"] == version && service["last_update"]["outcome"] == "succeeded"
+        });
+    }
+
+    /// Waits until a heartbeat of the daemon at `agent` reports the order's `last_update` of
+    /// hostkeeper failed, [`FALLBACK_REASON`]. Only a daemon that started after the fallback
+    /// sends it: the hand-over at its start lists the version bad, settles the record and
+    /// removes `next`, in that order, before the daemon runs, so the heartbeat comes only once
+    /// all three are written. The service's version is not asked: it is what the package's
+    /// `current` names, which the hand-over does not decide.
+    pub fn reports_fell_back(&self, agent: &str) {
+        self.reports("the order fell back", agent, |service| {
+            let last = &service["last_update"];
+            last["outcome"] == "failed" && last["reason"] == FALLBACK_REASON
+        });
+    }
+
+    /// Waits until a heartbeat of the daemon at `agent` lists hostkeeper with the `last_update`
+    /// of order [`ORDER`] and `listed` holds for that entry; fails naming `what` when none did.
+    fn reports(&self, what: &str, agent: &str, listed: impl Fn(&Value) -> bool) {
+        wait(&format!("a heartbeat reports {what}"), || {
             self.check_not_stuck();
             self.beats().iter().any(|beat| {
                 beat["agent"]["version"] == agent
                     && beat["services"].as_array().is_some_and(|services| {
                         services.iter().any(|service| {
                             service["name"] == HK
-                                && service["version"] == version
                                 && service["last_update"]["order_id"] == ORDER
-                                && service["last_update"]["outcome"] == "succeeded"
+                                && listed(service)
                         })
                     })
             })

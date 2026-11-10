@@ -28,7 +28,7 @@ mod e2e;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use e2e::coordinator::CoordinatorHandle;
 use e2e::hello::{
@@ -370,8 +370,18 @@ fn failed_verify_rolls_back(rig: &Rig) {
     rig.wait_converged(V2);
 }
 
+/// `placed.json`, `Null` when there is none (an empty record is removed with its last path).
+fn placed(rig: &Rig) -> Value {
+    fs::read(rig.host.fixture().join("placed").join("placed.json"))
+        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
+        .unwrap_or(Value::Null)
+}
+
 /// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
-/// coordinator lists hello uninstalling on no host, both plists are gone from
+/// coordinator lists hello uninstalling on no host and the daemon dropped hello's tombstone from
+/// `placed.json` (the last write of the uninstall, after the package directory and the records
+/// are removed; the coordinator's list follows the heartbeats, so either may come first and the
+/// wait holds for both), both plists are gone from
 /// `/Library/LaunchDaemons`, launchd holds neither job, the program and its directory are gone,
 /// `pkgutil` forgot the receipt, hello's package directory is gone with every version, link and
 /// seal in it, `placed.json` holds no record of hello and no tombstone, the hook's slot markers
@@ -389,7 +399,9 @@ fn uninstall(rig: &Rig) {
                         .is_none_or(|hosts| hosts.is_empty())
                 })
         });
-        uninstalling_none && !rig.host.service_dir().exists()
+        uninstalling_none
+            && !rig.host.service_dir().exists()
+            && placed(rig)["uninstalling"][SERVICE].is_null()
     });
 
     for slot in SLOTS {
@@ -410,10 +422,7 @@ fn uninstall(rig: &Rig) {
         "hello's package directory is gone"
     );
     // An empty record is removed with its last entry; one that is left holds nothing of hello.
-    let placed: PathBuf = rig.host.fixture().join("placed").join("placed.json");
-    let placed: Value = fs::read(placed)
-        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
-        .unwrap_or(Value::Null);
+    let placed = placed(rig);
     assert_eq!(
         placed["installed"][SERVICE],
         Value::Null,

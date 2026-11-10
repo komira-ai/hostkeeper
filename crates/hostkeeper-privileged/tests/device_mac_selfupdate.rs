@@ -93,10 +93,13 @@ fn assert_staged_for_the_entry(host: &MacSelfHost) {
 /// switch), `previous` [`N`] and no `next`, the new daemon reporting itself and hostkeeper at
 /// [`NEXT`] with the order succeeded, the version staged for the entry of the order, and the
 /// package installed at [`NEXT`] (the receipt, the program installer put at `/usr/local/bin/`,
-/// `current` of the packages directory and the daemon's record).
+/// `current` of the packages directory and the daemon's record). The new binary confirms the
+/// record before it removes `next`, so the binary directory is read only after its heartbeat,
+/// which it sends once both are done.
 fn assert_restarted_into_next(host: &MacSelfHost, old_pid: u32) {
     let rec = host.settled(NEXT);
     assert_succeeded(&rec, NEXT);
+    host.reports_succeeded(NEXT, NEXT);
     let pid = host.runs(NEXT);
     assert_ne!(pid, old_pid, "launchd started a new process");
     assert_eq!(
@@ -104,7 +107,6 @@ fn assert_restarted_into_next(host: &MacSelfHost, old_pid: u32) {
         Some(N)
     );
     assert_eq!(host.layout().next().expect("next"), None);
-    host.reports_succeeded(NEXT, NEXT);
     assert_staged_for_the_entry(host);
     host.assert_installed(NEXT);
 }
@@ -178,7 +180,9 @@ fn an_install_of_the_running_version_is_succeeded_without_a_restart() {
 /// settles the update `Failed` after the commit, of class release, `self_update_fallback`, lists
 /// [`NEXT`] bad, and the job runs [`N`] again, `current` never moved (no `previous`, no `next`)
 /// and the package still installed at [`N`] (the receipt, the program and `current` of the
-/// packages directory).
+/// packages directory). The old binary settles the record before it removes `next`, and runs as
+/// the daemon only after both: the binary directory is read once its heartbeat reports the
+/// fallback.
 #[test]
 fn a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd() {
     let host = MacSelfHost::new("badnext", Plan::InstalledFailingNext);
@@ -199,6 +203,7 @@ fn a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd() {
     );
     assert_eq!(rec.progress.awaiting_restart, None, "{rec:?}");
     assert!(host.next_is_bad());
+    host.reports_fell_back(N);
     host.runs(N);
     assert_eq!(host.layout().previous().expect("previous"), None);
     assert_eq!(host.layout().next().expect("next"), None);
