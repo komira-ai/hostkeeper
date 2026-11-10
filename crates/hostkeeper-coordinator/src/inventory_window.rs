@@ -1,9 +1,10 @@
 //! The approval window of an inventory record, and `Enrollment.OpenRecord`: the part of
 //! [`crate::inventory`] that makes a record the approval of the host it was entered for.
 //!
-//! A record that names a role is added with a window ([`RecordWindow::end`]): until the end the
-//! caller named, for the seconds the caller named, or for the coordinator's
-//! `--record-approve-for`, and never for longer than `--record-approve-max`. While the window is
+//! A record that names a host group or a role ([`InventoryRecord::group`]) is added with a
+//! window ([`RecordWindow::end`]): until the end the caller named, for the seconds the caller
+//! named, or for the coordinator's `--record-approve-for`, and never for longer than
+//! `--record-approve-max`. While the window is
 //! open and no approval used the record, a pending request that matches the record exactly is
 //! approved by the coordinator itself ([`crate::enrollment::Enrollment::approve_by_record`]);
 //! that approval marks the record used ([`RecordUse`]), and a used record approves nothing
@@ -88,12 +89,12 @@ impl RecordWindow {
 
     /// The end of the window of a record opened at `now`, in unix seconds: `until` when it is
     /// given, `now` and `for_secs` on when that is, else the default; 0 for a record that
-    /// names no role (`has_role` false) and asks for none.
+    /// names no host group nor role (`has_role` false) and asks for none.
     ///
     /// # Errors
     /// `invalid_window`: both `until` and `for_secs` given, an `until` that is not after
     /// `now`, an `until` or a `for_secs` that makes the window longer than the most, or any
-    /// window asked for a record that names no role.
+    /// window asked for a record that names no host group nor role.
     pub(super) fn end(
         &self,
         until: u64,
@@ -174,7 +175,7 @@ impl Coordinator {
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_request` (the reason),
     /// `no_record`, `invalid_window` (see [`RecordWindow::end`]; also a record that names no
-    /// role), `record_used`, `store_failed` (also when the enrolled hosts, or what the store
+    /// group nor role), `record_used`, `store_failed` (also when the enrolled hosts, or what the store
     /// holds for the host id, cannot be read: nothing is written then), `audit_unavailable`.
     pub fn open_record(
         &self,
@@ -209,7 +210,7 @@ impl Coordinator {
                 if record.used.is_some() {
                     return Err(RecordUsed);
                 }
-                if record.role.is_empty() {
+                if record.group().is_empty() {
                     return Err(InvalidWindow);
                 }
                 let end = window.end(
@@ -233,7 +234,7 @@ impl Coordinator {
                 Ok(audit)
             })?;
         let (record, enrolled) = kept.ok_or(proto::EnrollmentRefusal::StoreFailed)?;
-        let shown = record_proto(&record, enrolled, held, now);
+        let shown = record_proto(&record, enrolled, held, now, self.desired.in_group_mode());
         self.approve_waiting(&record.host_id);
         Ok(proto::OpenRecordResponse {
             record: Some(shown),
@@ -248,6 +249,9 @@ impl Coordinator {
         let Some(enrollment) = self.enrollment() else {
             return;
         };
+        // Under the lock `HostGroups.Remove` checks the records under: the record's group is
+        // not removed while it approves.
+        let _fleet = self.lock_fleet();
         let records = self.ops.read(|state| state.inventory.clone());
         enrollment.approve_matching(host_id, &records);
     }

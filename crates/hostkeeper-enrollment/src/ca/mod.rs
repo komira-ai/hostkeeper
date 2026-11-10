@@ -17,8 +17,8 @@ pub mod profile;
 
 pub use bundle::{CaBundle, HostCertificate, PollBundle};
 pub use issue::{
-    CA_VALIDITY_SECS, Ca, Certificate, HOST_VALIDITY_SECS, SERVER_VALIDITY_CAP_SECS, ServerNames,
-    SignError, SignRequest, Signer, Subject,
+    CA_VALIDITY_SECS, Ca, Certificate, DEFAULT_HOST_ROLE_URI_PREFIX, HOST_ROLE, HOST_VALIDITY_SECS,
+    SERVER_VALIDITY_CAP_SECS, ServerNames, SignError, SignRequest, Signer, Subject,
 };
 pub use key::{CaError, CaFiles};
 pub use profile::{

@@ -7,6 +7,7 @@
 //! peer certificate, and no socket is opened.
 
 mod approve;
+mod approve_groups;
 mod approve_refusals;
 mod audit;
 mod by_record;
@@ -20,10 +21,12 @@ mod inventory_approve;
 mod list;
 mod mac;
 mod mac_binding;
+mod mac_groups;
 mod mac_restart;
 mod nonces;
 mod open_record;
 mod operator;
+mod records_groups;
 mod refusals;
 mod reject;
 mod renew;

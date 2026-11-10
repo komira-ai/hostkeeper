@@ -18,7 +18,7 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Linux host | the daemon runs each step through `SystemdLauncher` | — |
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
-| placing hello on hosts | a host group that lists hello (`HostGroups.Put`, `examples/hello/host-group.json`), `HostGroups.Move` for a host to get into it, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host; approving a host into a group (`Approve` names no group yet) |
+| placing hello on hosts | a host group that lists hello (`HostGroups.Put`, `examples/hello/host-group.json`), an approval into it (`Enrollment.Approve` or an inventory record naming the group) or `HostGroups.Move` for a host to get into it, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
 | placing hello by a role, on a coordinator that holds no group | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign | the same heartbeat link |
 | setting the desired version | `hkctl releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
 | taking hello out with uninstall | the daemon's uninstall verb, hello's `uninstall` step, a `Put` of the group without hello, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
@@ -150,15 +150,17 @@ its group lists and no others, the rollout file's `roles`, `selector` and policy
 roll nothing, and a host in no group is ordered nothing, until it is moved into one. A coordinator
 that already holds groups gets `farm` beside them.
 
-A host gets into the group by `Move`:
+A host already enrolled gets into the group by `Move`:
 
 ```sh
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     host-groups move --node-id <host> --host-group farm --reason "a host of the proof"
 ```
 
-`Approve` does not name a group yet, so a host enrolled after this is moved the same way. The
-host is then moving: at its heartbeats it is admitted into the plans of the group's packages,
+A host enrolled after this is approved into the group instead, by an approval or an inventory
+record naming it (`hkctl enrollment approve --host-group farm`,
+[enrollment.md](operations/enrollment.md)), and installs the group's packages in order from its
+first heartbeat. A moved host is then moving: at its heartbeats it is admitted into the plans of the group's packages,
 and ordered to install the packages of the group in the order of the list, once the group has a
 desired version for them ([hostgroups.md](operations/hostgroups.md#moving-a-host)). The install
 goes only to a daemon that announces `install-v1`; the daemon's heartbeat loop announces it and

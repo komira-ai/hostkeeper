@@ -102,6 +102,11 @@ pub use error::StartError;
 mod secs;
 use secs::{record_window_secs, request_ttl_secs};
 
+/// The start's check of the Mac serial allowlist against the host groups the store holds.
+#[path = "config_mac.rs"]
+mod mac;
+use mac::check_allowlist;
+
 /// The start's state files, opened as one backend once the markers a stop left beside them are
 /// settled.
 #[path = "config_state.rs"]
@@ -341,8 +346,10 @@ pub struct Serve {
     #[arg(long, default_value = "7d", value_parser = record_window_secs)]
     pub record_approve_max: u64,
     /// The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id
-    /// prefix, role and services of each: a TOML file of `[[mac]]` entries (`serial`,
-    /// `host_id_prefix`, `role`, `services`). Without it no Mac is approved by its nonce.
+    /// prefix and host group of each: a TOML file of `[[mac]]` entries (`serial`,
+    /// `host_id_prefix`, `host_group`; an entry written before groups names a `role`, read as
+    /// the group, and `services`, which a coordinator that holds a host group refuses at start).
+    /// Without it no Mac is approved by its nonce.
     #[arg(long, requires = "ca_key_file")]
     pub mac_serial_allowlist: Option<PathBuf>,
     /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
@@ -591,12 +598,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map(MacAllowlist::load)
                 .transpose()?
                 .unwrap_or_default();
-            if let Some(unknown) = allowlist
-                .services()
-                .find(|service| coordinator.services.get(service.as_str()).is_none())
-            {
-                return Err(StartError::MacService(unknown.as_str().to_owned()));
-            }
+            check_allowlist(&allowlist, &coordinator)?;
             // The LAN listener's address, an IPv4 one written as IPv6 named as IPv4.
             let lan_ips: Vec<_> = flags
                 .lan_listen
@@ -636,6 +638,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             .with_max_pending(max_pending)
             .with_request_ttl(flags.enrollment_request_ttl)
             .with_host_validity_secs(flags.host_cert_validity_secs)
+            .with_host_role_uri_prefix(coordinator.prefixes().host_role())
             // The gate, when the coordinator runs it, says whether a Mac is enrolled and
             // supervised; without it no device is known.
             .with_mac(MacPolicy {

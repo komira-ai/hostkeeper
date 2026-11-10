@@ -187,6 +187,7 @@ fn a_recorded_approval_needs_replace_for_a_duplicate_claim_and_keeps_its_record(
             request_id: id,
             host_id: "web-2".to_owned(),
             role: "web".to_owned(),
+            host_group: String::new(),
             services: vec!["api".to_owned()],
             replace: true,
             approver: "alice".to_owned(),

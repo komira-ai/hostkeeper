@@ -364,9 +364,14 @@ impl Coordinator {
     }
 
     /// `HostGroups.Remove`: removes the group, its desired versions and its marks. No enrolled
-    /// host may be in it or moving into it, and no inventory record may name it. Audited as
-    /// `host_group_remove`. (The pending enrollment requests and the Mac allowlist, which the
-    /// proto also names, hold no host group yet.)
+    /// host may be in it or moving into it (an approval puts its host in its group as it is
+    /// written, so an approved request whose host has not yet polled counts), no inventory
+    /// record may name it, by its group or its role ([`InventoryRecord::group`]), and no entry
+    /// of the Mac allowlist. Checked under the fleet's lock, which `Enrollment.Approve`,
+    /// `Enrollment.AddRecord` and an approval by a record hold while they check and write the
+    /// group they name, so none lands in a group being removed. Audited as `host_group_remove`.
+    ///
+    /// [`InventoryRecord::group`]: crate::inventory::InventoryRecord::group
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the name or the reason),
@@ -391,8 +396,10 @@ impl Coordinator {
             state
                 .inventory
                 .iter()
-                .any(|record| record.host_group == name.as_str())
-        });
+                .any(|record| record.group() == name.as_str())
+        }) || self
+            .enrollment()
+            .is_some_and(|enrollment| enrollment.mac_names_group(name.as_str()));
         let (staged, ()) = self.desired.stage_host_groups(|held| {
             if !held.0.contains_key(&name) {
                 return Err(Refusal::UnknownHostGroup);
