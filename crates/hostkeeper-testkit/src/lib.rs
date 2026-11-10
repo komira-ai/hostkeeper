@@ -27,6 +27,11 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
 
+/// How many numbers one scratch directory tries before it gives up: far more than the stale
+/// directories of one name a reused target directory holds, and few enough that a fault which
+/// makes every try look taken fails the test at once instead of hanging it.
+const ATTEMPTS: u64 = 1024;
+
 /// The variable that names the tests' Postgres server, as `postgres://<user>@<host>:<port>/<db>`.
 pub const POSTGRES_URL_VAR: &str = "HOSTKEEPER_TEST_POSTGRES_URL";
 
@@ -125,7 +130,7 @@ impl Scratch {
             ));
         }
         let pid = base36(u64::from(std::process::id()));
-        unique(base, &format!("{name}-{pid}"), &NEXT)
+        unique(base, &format!("{name}-{pid}"), &NEXT, ATTEMPTS)
     }
 
     /// The directory.
@@ -135,19 +140,26 @@ impl Scratch {
 }
 
 /// Creates `base`, when it is missing, and the new directory `base/<stem>-<n>`, `n` in base 36
-/// taken from `next`: the first number whose directory `make` creates. Each directory there
-/// takes a number, and there are finitely many, so the search ends. `base` is made before the
-/// search, never in it: a base that is a file fails `create_dir_all` with `AlreadyExists` too,
-/// which no number can get past.
-fn unique(base: &Path, stem: &str, next: &AtomicU64) -> io::Result<Scratch> {
+/// taken from `next`: the first number whose directory `make` creates, a fresh number for each
+/// try. After `attempts` numbers that were all taken, it fails with `AlreadyExists`, saying so:
+/// the search never runs without end. `base` is made before the search, never in it: a base
+/// that is a file fails `create_dir_all` with `AlreadyExists` too, which no number can get past.
+fn unique(base: &Path, stem: &str, next: &AtomicU64, attempts: u64) -> io::Result<Scratch> {
     std::fs::create_dir_all(base)?;
-    loop {
+    for _ in 0..attempts {
         let n = next.fetch_add(1, Ordering::Relaxed);
         match make(base, &format!("{stem}-{}", base36(n))) {
             Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
             made => return made,
         }
     }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "no free scratch directory {}-<n> in {attempts} numbers",
+            base.join(stem).display()
+        ),
+    ))
 }
 
 /// Creates the new directory `base/<leaf>` in the directory `base`.
@@ -310,7 +322,7 @@ mod tests {
             std::fs::write(parent.path().join(stale).join("kept"), stale).expect("write");
         }
         let next = AtomicU64::new(0);
-        let fresh = unique(parent.path(), "left", &next).expect("a fresh directory");
+        let fresh = unique(parent.path(), "left", &next, ATTEMPTS).expect("a fresh directory");
         assert_eq!(fresh.path(), parent.path().join("left-2"));
         assert_eq!(next.load(Ordering::Relaxed), 3);
         let entries: Vec<_> = std::fs::read_dir(fresh.path()).expect("list").collect();
@@ -336,17 +348,15 @@ mod tests {
             std::fs::create_dir(parent.path().join(format!("raced-{stale}"))).expect("stale");
         }
         let next = AtomicU64::new(0);
-        let start = std::sync::Barrier::new(2 * CALLERS);
         let made: Vec<Scratch> = std::thread::scope(|scope| {
             let callers: Vec<_> = (0..2 * CALLERS)
                 .map(|i| {
-                    let (parent, next, start) = (parent.path(), &next, &start);
+                    let (parent, next) = (parent.path(), &next);
                     scope.spawn(move || {
-                        start.wait();
                         if i % 2 == 0 {
                             Scratch::under(parent, "raced")
                         } else {
-                            unique(parent, "raced", next)
+                            unique(parent, "raced", next, ATTEMPTS)
                         }
                     })
                 })
@@ -367,6 +377,30 @@ mod tests {
         }
     }
 
+    /// Catches a search that runs without end when every number it tries is taken: after its
+    /// attempts it fails with `AlreadyExists`, naming the directory, having taken exactly that
+    /// many numbers and made nothing.
+    #[test]
+    fn a_search_whose_every_number_is_taken_fails_after_its_attempts() {
+        let parent = Scratch::under(&base("testkit-unit"), "full").expect("parent");
+        for taken in ["full-0", "full-1", "full-2"] {
+            std::fs::create_dir(parent.path().join(taken)).expect("a taken directory");
+        }
+        let next = AtomicU64::new(0);
+        let refused = unique(parent.path(), "full", &next, 3).expect_err("all taken");
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "no free scratch directory {}-<n> in 3 numbers",
+                parent.path().join("full").display()
+            )
+        );
+        assert_eq!(next.load(Ordering::Relaxed), 3);
+        let made = std::fs::read_dir(parent.path()).expect("list").count();
+        assert_eq!(made, 3);
+    }
+
     /// Catches an error other than an existing directory being retried with the next number
     /// (a search that never ends) or reported as made: a name too long for one path component
     /// fails at the first number.
@@ -374,7 +408,8 @@ mod tests {
     fn an_error_other_than_an_existing_directory_ends_the_search() {
         let parent = Scratch::under(&base("testkit-unit"), "too-long").expect("parent");
         let next = AtomicU64::new(0);
-        let refused = unique(parent.path(), &"n".repeat(300), &next).expect_err("too long");
+        let refused =
+            unique(parent.path(), &"n".repeat(300), &next, ATTEMPTS).expect_err("too long");
         assert_ne!(refused.kind(), io::ErrorKind::AlreadyExists, "{refused}");
         assert_eq!(next.load(Ordering::Relaxed), 1);
         let made: Vec<_> = std::fs::read_dir(parent.path()).expect("list").collect();
@@ -410,7 +445,7 @@ mod tests {
         // `create_dir_all` reports a file in the way as `AlreadyExists`: that error ends the
         // call at once, taking no number, rather than sending it on to the next one for good.
         let next = AtomicU64::new(0);
-        let refused = unique(&file, "inside", &next).expect_err("a file is no base");
+        let refused = unique(&file, "inside", &next, ATTEMPTS).expect_err("a file is no base");
         assert_ne!(refused.kind(), io::ErrorKind::NotFound, "{refused}");
         assert_eq!(next.load(Ordering::Relaxed), 0);
     }
