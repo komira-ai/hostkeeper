@@ -415,7 +415,13 @@ impl Rig {
         Dirs {
             state: self.state.clone(),
             packages: self.packages.clone(),
+            facts: self.facts_file(),
         }
+    }
+
+    /// The host's facts file of the rig: beside its packages directory, as on a host.
+    pub fn facts_file(&self) -> PathBuf {
+        self.packages.with_file_name("facts.json")
     }
 
     /// A daemon on the rig's directories, with no dead-men.
@@ -428,6 +434,7 @@ impl Rig {
             config: self.config.clone(),
             state_dir: self.state.clone(),
             packages_dir: self.packages.clone(),
+            facts_file: self.facts_file(),
             run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
         }

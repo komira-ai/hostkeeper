@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, PoisonError};
 
+use hostkeeper_daemon::cli::DEFAULT_FACTS_FILE;
 use hostkeeper_privileged::{SYSTEMD_RUNTIME_DIR, check_host};
 use hostkeeper_steps::record::RECORD_FILE;
 use hostkeeper_steps::systemd::SYSTEMCTL;
@@ -122,13 +123,16 @@ pub struct HostRoot {
 }
 
 /// The fixed places of the host the rig takes over: the daemon's configuration (its repository
-/// entries), the programs a released daemon trusts, and the daemon's pki and placed state.
-fn taken_places() -> [PathBuf; 4] {
+/// entries), the programs a released daemon trusts, the daemon's pki and placed state, and its
+/// default facts file (a daemon a released unit starts, with no `--facts-file`, writes it once
+/// it runs this build).
+fn taken_places() -> [PathBuf; 5] {
     [
         PathBuf::from(CONFIG_DIR),
         PathBuf::from(LIBRARY_DIR),
         PathBuf::from(PKI_DIR),
         PathBuf::from(PLACED_DIR),
+        PathBuf::from(DEFAULT_FACTS_FILE),
     ]
 }
 
@@ -425,6 +429,7 @@ impl Drop for HostRoot {
         for dir in [CONFIG_DIR, LIBRARY_DIR, PKI_DIR, PLACED_DIR] {
             let _ = fs::remove_dir_all(dir);
         }
+        let _ = fs::remove_file(DEFAULT_FACTS_FILE);
         for (place, aside) in &self.saved {
             let _ = fs::rename(aside, place);
         }

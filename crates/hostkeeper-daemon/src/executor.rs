@@ -108,6 +108,8 @@ pub struct Dirs {
     /// A directory per service with its version directories and the `current` and `previous`
     /// links.
     pub packages: PathBuf,
+    /// The host's facts file, which the heartbeat loop writes ([`crate::facts_file`]).
+    pub facts: PathBuf,
 }
 
 /// What every verb works with.

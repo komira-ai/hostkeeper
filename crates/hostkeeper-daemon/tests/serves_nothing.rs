@@ -85,6 +85,7 @@ fn rerooted(rig: &Rig) -> Settings {
         config: rig.config.clone(),
         state_dir: rig.state.clone(),
         packages_dir: rig.packages.clone(),
+        facts_file: rig.packages.with_file_name("facts.json"),
         run_dir: rig.run_dir.clone(),
         // The scratch config is owned by the user running the tests, not by root.
         trusted_uid: support::my_uid(),

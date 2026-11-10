@@ -596,6 +596,8 @@ hosted_runner = true
         text(&state),
         "--packages-dir".to_owned(),
         text(&packages),
+        "--facts-file".to_owned(),
+        text(&state.with_file_name("facts.json")),
     ];
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let _booted = bootstrap(&daemon, &argv, root);

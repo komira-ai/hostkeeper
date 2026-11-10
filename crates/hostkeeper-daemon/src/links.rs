@@ -11,7 +11,8 @@
 //! it once the boot work is over and the readiness notice was sent, so neither loop runs while
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
 //! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
-//! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`].
+//! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
+//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]).
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -57,6 +58,7 @@ use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
+use crate::facts_file::FactsFile;
 use crate::link_adapters::{
     DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, NoTrustedRoot,
 };
@@ -196,6 +198,11 @@ impl Links {
                     Arc::clone(&self.log),
                 )
                 .map(|push| Arc::new(push) as Arc<dyn RepositorySink>),
+                facts: Some(Arc::new(FactsFile::new(
+                    ctx.dirs.facts.clone(),
+                    PLATFORM,
+                    Arc::clone(&self.log),
+                ))),
             },
         )
     }

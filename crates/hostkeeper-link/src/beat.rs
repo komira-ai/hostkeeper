@@ -13,8 +13,9 @@
 //! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
 //! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
 //! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
-//! `installers`; a service's `installer` ([`ServiceFacts::installer`]) and the repositories report
-//! ([`Heartbeat::repositories`]) likewise.
+//! `installers`; a service's `installer` ([`ServiceFacts::installer`]), the repositories report
+//! ([`Heartbeat::repositories`]) and the facts generation ([`Heartbeat::facts_generation`])
+//! likewise.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
@@ -72,6 +73,12 @@ pub enum Feature {
     /// the others it is announced only by a daemon with a repository configuration to manage
     /// (not a Mac): it is not in [`ANNOUNCED`], and the loop adds it ([`REPOSITORIES`]).
     RepositoriesV1,
+    /// `facts-v1`: the daemon writes the host's facts the coordinator sends
+    /// ([`crate::PushedFacts`]) to its facts file before it acts on the order of the same reply,
+    /// and reports the generation the file holds ([`Heartbeat::facts_generation`]). Like
+    /// `repositories-v1` it is announced only by a daemon with a facts file ([`crate::FactsSink`]):
+    /// the loop adds it ([`FACTS`]).
+    FactsV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
@@ -94,6 +101,10 @@ pub const ANNOUNCED: [Feature; 11] = [
 /// The feature a daemon with a [`crate::RepositorySink`] announces after [`ANNOUNCED`].
 pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
 
+/// The feature a daemon with a [`crate::FactsSink`] announces after [`ANNOUNCED`] (and
+/// [`REPOSITORIES`], when it announces that).
+pub const FACTS: Feature = Feature::FactsV1;
+
 impl Feature {
     /// Its wire name.
     pub const fn as_str(self) -> &'static str {
@@ -110,6 +121,7 @@ impl Feature {
             Feature::ClearRecordV1 => "clear-record-v1",
             Feature::TargetV1 => "target-v1",
             Feature::RepositoriesV1 => "repositories-v1",
+            Feature::FactsV1 => "facts-v1",
         }
     }
 
@@ -117,7 +129,7 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
-            .chain([REPOSITORIES])
+            .chain([REPOSITORIES, FACTS])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -348,6 +360,10 @@ pub struct Heartbeat {
     /// What the daemon's repository configuration holds; none from a daemon that has none to
     /// manage. Sent over gRPC only, and counted toward the bound on both.
     pub repositories: Option<RepositoriesReport>,
+    /// The generation of the facts the daemon's facts file holds; none from a daemon that has
+    /// no facts file or has written none yet. Sent over gRPC only, and counted toward the bound
+    /// on both.
+    pub facts_generation: Option<u64>,
 }
 
 impl Heartbeat {
@@ -397,6 +413,9 @@ impl Heartbeat {
                     "refused": refused,
                 }),
             );
+        }
+        if let Some(generation) = self.facts_generation {
+            beat.insert("facts_generation".to_owned(), generation.into());
         }
         Value::Object(beat)
     }

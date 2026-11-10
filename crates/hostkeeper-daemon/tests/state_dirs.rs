@@ -20,6 +20,7 @@ fn settings(root: &Path) -> Settings {
         config: root.join("hostkeeper.toml"),
         state_dir: root.join("var/lib/updater/state"),
         packages_dir: root.join("var/lib/hostkeeper/packages"),
+        facts_file: root.join("var/lib/hostkeeper/facts.json"),
         run_dir: root.join("run"),
         trusted_uid: 0,
     }

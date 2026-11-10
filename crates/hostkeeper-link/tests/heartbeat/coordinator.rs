@@ -335,6 +335,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     };
     assert_eq!(
         json.heartbeat(&farm.host.identity(), &beat),
@@ -353,6 +354,7 @@ fn a_reply_from_the_real_coordinator_maps_to_the_loops_reply() {
             halt_generations: vec![(service("web"), 1)],
             acknowledged: Vec::new(),
             repositories: None,
+            facts: None,
         })
     );
     server.join().expect("the server").expect("a request");

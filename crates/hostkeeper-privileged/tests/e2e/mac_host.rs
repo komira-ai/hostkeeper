@@ -33,6 +33,7 @@ use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
 use hostkeeper_daemon::boot::BOOT_ID_FILE;
+use hostkeeper_daemon::cli::DEFAULT_FACTS_FILE;
 use hostkeeper_install::macos_pkg::receipt;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print, print_args};
 use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
@@ -165,10 +166,11 @@ fn slot_labels() -> [Label; 2] {
     SLOTS.map(label)
 }
 
-/// The places of the host this rig takes over: the directory hello's package installs in, and
-/// the plists of hello's two slots.
+/// The places of the host this rig takes over: the directory hello's package installs in, the
+/// plists of hello's two slots, and the daemon's default facts file (a daemon started without
+/// `--facts-file` writes it).
 fn taken_places() -> Vec<PathBuf> {
-    let mut places = vec![PathBuf::from(SUPPORT)];
+    let mut places = vec![PathBuf::from(SUPPORT), PathBuf::from(DEFAULT_FACTS_FILE)];
     places.extend(SLOTS.map(plist_path));
     places
 }
@@ -342,6 +344,8 @@ impl MacHost {
             text(self.state()),
             "--packages-dir".to_owned(),
             text(self.packages()),
+            "--facts-file".to_owned(),
+            text(self.base.join("facts.json")),
             "--heartbeat-secs".to_owned(),
             "1".to_owned(),
         ];

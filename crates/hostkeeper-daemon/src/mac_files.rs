@@ -188,7 +188,7 @@ fn render_to(
             cap,
         });
     }
-    replace(target, file.as_bytes(), trusted_uid).map_err(|error| match error {
+    replace(target, file.as_bytes(), trusted_uid, TEMPORARY).map_err(|error| match error {
         Replace::NotAFile => MacFilesError::NotAFile {
             path: target.to_path_buf(),
         },
@@ -200,7 +200,7 @@ fn render_to(
 }
 
 /// Why [`replace`] stopped.
-enum Replace {
+pub(crate) enum Replace {
     /// Something other than a regular file is at the path.
     NotAFile,
     /// A filesystem call failed.
@@ -213,9 +213,18 @@ impl From<io::Error> for Replace {
     }
 }
 
+/// The name the temporary file of a rendered file starts with ([`replace`]).
+const TEMPORARY: &str = "hostkeeper-mac-files";
+
 /// Makes `target` hold `bytes`, owned by `owner` with mode 0644, as the module's steps 4 and 5
-/// say.
-fn replace(target: &Path, bytes: &[u8], owner: u32) -> Result<Rendered, Replace> {
+/// say, through a temporary file in its directory named after `temporary` and the process
+/// (`.<temporary>.<pid>.tmp`). The facts file is written the same way ([`crate::facts_file`]).
+pub(crate) fn replace(
+    target: &Path,
+    bytes: &[u8],
+    owner: u32,
+    temporary: &str,
+) -> Result<Rendered, Replace> {
     match fs::symlink_metadata(target) {
         Ok(meta) if meta.file_type().is_file() => {
             let sound = (meta.uid() == owner) & (meta.mode() & 0o7777 == 0o644);
@@ -235,7 +244,7 @@ fn replace(target: &Path, bytes: &[u8], owner: u32) -> Result<Rendered, Replace>
         .recursive(true)
         .mode(0o755)
         .create(parent)?;
-    let path = parent.join(temporary_name());
+    let path = parent.join(temporary_name(temporary));
     match fs::remove_file(&path) {
         Err(error) if error.kind() != io::ErrorKind::NotFound => return Err(Replace::Io(error)),
         _ => {}
@@ -254,9 +263,9 @@ fn replace(target: &Path, bytes: &[u8], owner: u32) -> Result<Rendered, Replace>
     Ok(Rendered::Written)
 }
 
-/// The name of the temporary file, in the target's directory.
-fn temporary_name() -> String {
-    format!(".hostkeeper-mac-files.{}.tmp", std::process::id())
+/// The name of the temporary file named after `temporary`, in the target's directory.
+fn temporary_name(temporary: &str) -> String {
+    format!(".{temporary}.{}.tmp", std::process::id())
 }
 
 /// Removes the file at its path when dropped, so that no failure leaves it behind; after a rename

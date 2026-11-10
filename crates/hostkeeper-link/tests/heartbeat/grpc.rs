@@ -186,6 +186,7 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -223,6 +224,7 @@ fn expected_reply() -> Reply {
         halt_generations: vec![(service("web"), 1)],
         acknowledged: Vec::new(),
         repositories: None,
+        facts: None,
     }
 }
 

@@ -66,6 +66,7 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     }
 }
 

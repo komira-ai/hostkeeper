@@ -129,7 +129,12 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
         )),
     };
     let config = DaemonConfig::parse(CONFIG).expect("the config");
-    let dirs = Dirs { state, packages };
+    let facts = packages.with_file_name("facts.json");
+    let dirs = Dirs {
+        state,
+        packages,
+        facts,
+    };
     (Daemon::new(config, dirs, ports, OWN), names, scratch)
 }
 
