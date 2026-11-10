@@ -90,6 +90,10 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
   release is restoring the dump taken before it. The tables of placement by roles stay as they
   are.
+- **MDM tables.** Migration `0009` adds the tables of the MDM server inside the coordinator
+  (`mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices`, `abm_state`). Nothing writes
+  them yet. `0009` says older releases may run on it (the release before never reads these tables),
+  so going back one release needs no restore.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a

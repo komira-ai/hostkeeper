@@ -25,6 +25,11 @@ mod devices;
 mod dsn;
 mod generations;
 mod groups;
+#[allow(
+    dead_code,
+    reason = "the MDM tables land before the code that uses them (CM6; CM11a, CM12c and CM13 call them)"
+)]
+pub(crate) mod mdm;
 pub(crate) mod migrate;
 mod records;
 mod releases;
