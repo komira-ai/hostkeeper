@@ -160,7 +160,7 @@ fn a_row_that_does_not_read_stops_the_start_naming_the_record() {
         "database:accounts: the record alice: missing field `enabled`; the coordinator does not guess which users and tokens exist, so fix or remove the file to start"
     );
     db.run("DELETE FROM users").expect("cleared");
-    let record = r#"{"hash": "$argon2id$x", "enabled": true, "created_by": "x", "created_at": 1}"#;
+    let record = r#"{"hash": "$argon2id$v=19$m=1,t=1,p=1$c2FsdA$aGFzaA", "enabled": true, "created_by": "x", "created_at": 1}"#;
     let token = format!(
         r#"{{"sha256": "{}", "created_by": "x", "created_at": 1}}"#,
         "a".repeat(64)
@@ -210,7 +210,7 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
         .change(|memory| {
             memory.with_user(crate::accounts::User {
                 name: "zed".to_owned(),
-                hash: "$argon2id$memory".to_owned(),
+                hash: "$argon2id$v=19$m=1,t=1,p=1$bWVt$aGFzaA".to_owned(),
                 enabled: true,
                 created_by: "alice".to_owned(),
                 created_at: 1,
@@ -222,7 +222,7 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
     let taken = store.snapshot();
     assert_eq!(
         taken.user("zed").map(|u| u.hash.as_str()),
-        Some("$argon2id$memory"),
+        Some("$argon2id$v=19$m=1,t=1,p=1$bWVt$aGFzaA"),
         "a row memory changed since stays as memory has it"
     );
     assert!(taken.user("alice").is_some() && taken.token("ci-ops").is_some());

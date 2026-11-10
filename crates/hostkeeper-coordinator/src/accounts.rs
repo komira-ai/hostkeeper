@@ -80,8 +80,10 @@ pub enum AccountsError {
     /// The change would leave no enabled user.
     #[error("the last enabled user cannot be disabled or deleted")]
     LastEnabled,
-    /// A password hash is not a PHC string of a sensible length.
-    #[error("the password hash of {0} is not a PHC string of at most {MAX_HASH_BYTES} bytes")]
+    /// A password hash is not an Argon2id PHC string of a sensible length.
+    #[error(
+        "the password hash of {0} is not an Argon2id PHC string of at most {MAX_HASH_BYTES} bytes"
+    )]
     Hash(String),
     /// The `sha256` of a token is not 64 lowercase hex digits.
     #[error("the sha256 of the token {0} is not 64 lowercase hex digits")]
@@ -97,7 +99,7 @@ pub enum AccountsError {
 }
 
 /// A user as the store keeps it. `name` is the key of the record and is not in its JSON.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct User {
     /// The name, which the audit's `by` is.
     #[serde(skip)]
@@ -127,6 +129,24 @@ pub struct User {
     pub last_login_at: Option<u64>,
 }
 
+impl std::fmt::Debug for User {
+    /// Every field but the hash: a `{:?}` of a user must not put the hash in a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("User")
+            .field("name", &self.name)
+            .field("hash", &"<redacted>")
+            .field("enabled", &self.enabled)
+            .field("must_change", &self.must_change)
+            .field("initial_expires_at", &self.initial_expires_at)
+            .field("initial_id", &self.initial_id)
+            .field("initial_void", &self.initial_void)
+            .field("created_by", &self.created_by)
+            .field("created_at", &self.created_at)
+            .field("last_login_at", &self.last_login_at)
+            .finish()
+    }
+}
+
 /// An API token as the store keeps it. `name` is the key of the record and is not in its JSON.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ApiToken {
@@ -142,12 +162,44 @@ pub struct ApiToken {
 }
 
 /// Everything the store holds of the operator's users and API tokens, by name.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Accounts {
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     users: BTreeMap<String, User>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     tokens: BTreeMap<String, ApiToken>,
+}
+
+impl std::fmt::Debug for Accounts {
+    /// The counts alone: the names and records stay out of a log.
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Accounts")
+            .field("users", &self.users.len())
+            .field("tokens", &self.tokens.len())
+            .finish()
+    }
+}
+
+/// Why a stored value does not read, without the value: for a value of the wrong type or form
+/// the reader's text quotes it, and in a field of a user that is the password hash.
+fn read_why(error: &serde_json::Error) -> String {
+    let text = error.to_string();
+    if error.classify() == serde_json::error::Category::Data && !text.starts_with("missing field") {
+        "a field has a value of the wrong type or form".to_owned()
+    } else {
+        text
+    }
+}
+
+/// Whether `hash` is an Argon2id PHC string of a sensible length: `$argon2id$v=..$params$salt$hash`
+/// of PHC characters only.
+fn is_phc_argon2id(hash: &str) -> bool {
+    hash.len() <= MAX_HASH_BYTES
+        && hash.starts_with("$argon2id$v=")
+        && hash.bytes().filter(|&b| b == b'$').count() >= 5
+        && hash.bytes().all(|b| {
+            b.is_ascii_alphanumeric() || matches!(b, b'$' | b'=' | b',' | b'+' | b'/' | b'.' | b'-')
+        })
 }
 
 /// The name `name` as a name of a user or a token.
@@ -176,7 +228,7 @@ impl Accounts {
             if tokens.contains_key(name) {
                 return Err(AccountsError::Taken(name.clone()));
             }
-            if !user.hash.starts_with('$') || user.hash.len() > MAX_HASH_BYTES {
+            if !is_phc_argon2id(&user.hash) {
                 return Err(AccountsError::Hash(name.clone()));
             }
         }
@@ -261,7 +313,8 @@ impl Accounts {
     ///
     /// # Errors
     /// [`AccountsError::NoUser`]: there is none. [`AccountsError::Hash`]: `edit` left a hash that
-    /// is not a PHC string.
+    /// is not an Argon2id PHC string. [`AccountsError::LastEnabled`]: `edit` disabled the only
+    /// enabled user.
     pub fn with_user_edited(
         &self,
         name: &str,
@@ -271,9 +324,14 @@ impl Accounts {
         let user = users
             .get_mut(name)
             .ok_or_else(|| AccountsError::NoUser(name.to_owned()))?;
+        let was_enabled = user.enabled;
         edit(user);
         name.clone_into(&mut user.name);
-        Self::new(users, self.tokens.clone())
+        let edited = Self::new(users, self.tokens.clone())?;
+        if was_enabled && edited.enabled_users() == 0 {
+            return Err(AccountsError::LastEnabled);
+        }
+        Ok(edited)
     }
 
     /// The accounts with the user `name` enabled or disabled.
@@ -355,13 +413,13 @@ impl Accounts {
         let mut kept_users = BTreeMap::new();
         for (name, value) in users {
             let user = serde_json::from_value(value)
-                .map_err(|e| refused(format!("the record {name}: {e}")))?;
+                .map_err(|e| refused(format!("the record {name}: {}", read_why(&e))))?;
             kept_users.insert(name, user);
         }
         let mut kept_tokens = BTreeMap::new();
         for (name, value) in tokens {
             let token = serde_json::from_value(value)
-                .map_err(|e| refused(format!("the record {name}: {e}")))?;
+                .map_err(|e| refused(format!("the record {name}: {}", read_why(&e))))?;
             kept_tokens.insert(name, token);
         }
         Self::new(kept_users, kept_tokens).map_err(|why| refused(why.to_string()))
@@ -389,7 +447,7 @@ pub(crate) fn parse_file(path: &Path, bytes: &[u8]) -> Result<Accounts, Accounts
         path: path.to_owned(),
         why,
     };
-    let held: Accounts = serde_json::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
+    let held: Accounts = serde_json::from_slice(bytes).map_err(|e| refused(read_why(&e)))?;
     Accounts::new(held.users, held.tokens).map_err(|why| refused(why.to_string()))
 }
 

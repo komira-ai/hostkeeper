@@ -105,21 +105,34 @@ fn a_name_is_one_name_of_the_token_grammar_for_a_user_or_a_token() {
 }
 
 /// Proves: a user record holds a PHC string and nothing else in the hash's place: text that does
-/// not start with `$`, such as a plaintext password, and a string over 512 bytes are refused, on
-/// creation and when an edit leaves one.
+/// that is not `$argon2id$v=..` with its parameters, salt and hash (a plaintext password that
+/// starts with `$`, another algorithm, too few parts, a character outside PHC) and a string over
+/// 512 bytes are refused, on creation and when an edit leaves one.
 ///
 /// Catches: a plaintext password written into the store because a caller passed it for its hash.
 #[test]
 fn a_hash_that_is_not_a_phc_string_is_refused() {
     let held = with(&["alice"]);
-    for bad in ["hunter2hunter2", "", &format!("${}", "a".repeat(512))] {
+    let long = format!("{HASH}{}", "a".repeat(512));
+    for bad in [
+        "hunter2hunter2",
+        "",
+        "$plain",
+        "$ecret-passw0rd",
+        "$1$salt$aGFzaA",
+        "$2y$10$abcdefghijklmnopqrstuuabcdefghijklmnopqrstuvwxyz01234",
+        "$pbkdf2-sha256$i=1$c2FsdA$aGFzaA",
+        "$argon2id$v=19$m=1,t=1,p=1$c2FsdA",
+        "$argon2id$v=19$m=1,t=1,p=1$c2 FsdA$aGFzaA",
+        long.as_str(),
+    ] {
         let refused = held.with_user(User {
             hash: bad.to_owned(),
             ..user("bob")
         });
         assert_eq!(
             refused.expect_err("refused").to_string(),
-            "the password hash of bob is not a PHC string of at most 512 bytes"
+            "the password hash of bob is not an Argon2id PHC string of at most 512 bytes"
         );
         let edited = held.with_user_edited("alice", |u| u.hash = bad.to_owned());
         assert!(matches!(edited, Err(AccountsError::Hash(name)) if name == "alice"));
@@ -358,11 +371,15 @@ fn a_file_that_breaks_a_rule_is_refused_naming_the_file_and_the_reason() {
             "missing field `enabled` at line 1 column 33".to_owned(),
         ),
         (
+            r#"{"users": {"alice": {"hash": "x", "enabled": true, "created_by": "x", "created_at": "$argon2id$secret"}}}"#.to_owned(),
+            "a field has a value of the wrong type or form".to_owned(),
+        ),
+        (
             format!(
                 r#"{{"users": {{"alice": {}}}}}"#,
                 record.replace(HASH, "hunter2")
             ),
-            "the password hash of alice is not a PHC string of at most 512 bytes".to_owned(),
+            "the password hash of alice is not an Argon2id PHC string of at most 512 bytes".to_owned(),
         ),
         (
             format!(r#"{{"users": {{"Alice": {record}}}}}"#),
@@ -548,4 +565,71 @@ fn records_are_read_under_their_keys_and_refused_by_the_place_that_held_them() {
     let mut users = BTreeMap::new();
     users.insert("alice".to_owned(), user("alice"));
     assert!(Accounts::new(users, BTreeMap::new()).is_ok());
+}
+
+/// Proves: an edit that disables the only enabled user is refused as `with_enabled` refuses it,
+/// whatever closure makes it, while an edit of another field, or one that disables a user when
+/// another stays enabled, is allowed.
+///
+/// Catches: an admin screen that resets and disables the only admin in one edit, leaving nobody
+/// able to sign in.
+#[test]
+fn an_edit_that_disables_the_last_enabled_user_is_refused() {
+    let held = with(&["alice", "zed"])
+        .with_enabled("alice", false)
+        .expect("one is disabled");
+    let refused = held.with_user_edited("zed", |u| {
+        u.must_change = true;
+        u.enabled = false;
+    });
+    assert!(
+        matches!(refused, Err(AccountsError::LastEnabled)),
+        "{refused:?}"
+    );
+    let kept = held
+        .with_user_edited("zed", |u| u.must_change = true)
+        .expect("another field");
+    assert!(kept.user("zed").is_some_and(|u| u.must_change));
+    let both = with(&["alice", "zed"]);
+    assert_eq!(
+        both.with_user_edited("zed", |u| u.enabled = false)
+            .expect("alice stays")
+            .enabled_users(),
+        1
+    );
+}
+
+/// Proves: neither `{:?}` of a user, of the accounts, nor of the error of a record whose field has
+/// the wrong type shows the password hash: the user's prints `<redacted>`, the accounts' print
+/// counts, and the read error does not quote the value.
+///
+/// Catches: a password hash in a log through a `dbg!`, an `assert` message or a startup error.
+#[test]
+fn a_password_hash_is_not_in_the_debug_text_or_the_error_of_a_record() {
+    let held = with(&["alice"]);
+    let alice = held.user("alice").expect("alice");
+    for text in [
+        format!("{alice:?}"),
+        format!("{held:?}"),
+        format!("{:?}", Some(&held)),
+    ] {
+        assert!(!text.contains("argon2id"), "{text}");
+    }
+    assert!(format!("{alice:?}").contains("hash: \"<redacted>\""));
+    assert_eq!(format!("{held:?}"), "Accounts { users: 1, tokens: 0 }");
+    let refused = Accounts::of_records(
+        Path::new("database/accounts"),
+        [(
+            "alice".to_owned(),
+            serde_json::json!({
+                "hash": HASH, "enabled": true, "created_by": "x", "created_at": HASH
+            }),
+        )],
+        std::iter::empty(),
+    )
+    .expect_err("a wrong type");
+    assert_eq!(
+        refused.to_string(),
+        "database/accounts: the record alice: a field has a value of the wrong type or form; the coordinator does not guess which users and tokens exist, so fix or remove the file to start"
+    );
 }
