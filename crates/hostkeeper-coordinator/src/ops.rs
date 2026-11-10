@@ -106,7 +106,7 @@ use crate::ops_file;
 use crate::rollouts::Rollout;
 use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
 
-pub use crate::operate::{OperateError, operate};
+pub use crate::operate::OperateError;
 
 pub(crate) use crate::operate::label;
 
@@ -305,7 +305,8 @@ pub struct AuditEntry {
     /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
     /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan
     /// enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
-    /// `rollout_resume` (an operator's); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
+    /// `rollout_resume` (an operator's); the host groups': `host_group_put`, `host_group_remove` and
+    /// `host_move` (an operator's `HostGroups` calls); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's

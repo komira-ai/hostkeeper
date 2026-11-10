@@ -66,7 +66,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
-| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file, the desired version of each service, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file and the host groups, the desired version of each service, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
@@ -119,17 +119,18 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
   linking), B28 (hookless force), B23 (the `install` and `uninstall` orders in the daemon, and
   the assignment of services by the coordinator: roles in the rollout file, and the operator
-  API's `Services.Assign` and `Services.Unassign`, which are served).
+  API's `Services.Assign` and `Services.Unassign`, which are served), and the first part of host
+  groups (HG1 to HG3 of [hostgroups.md](docs/design/hostgroups.md): the coordinator holds groups,
+  places each host by its group, decides and rolls out by group, and moves a host between
+  groups; [docs/operations/hostgroups.md](docs/operations/hostgroups.md) says what is built).
 - **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals), and the
   coordinator's state in Postgres (items C1 to C6 of
   [coordinator-storage.md](docs/design/coordinator-storage.md); the lab's coordinator runs on it).
 - **Enrollment.** Built: B16 (certificate authority, enrollment and renewal), B17 (approval).
   Planned: B21 (adopting hosts that run kbf's agent).
-- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler
-  but the five of `HostGroups` (`HostGroups.List`, `HostGroups.Get`, `HostGroups.Put`,
-  `HostGroups.Remove`, `HostGroups.Move`), declared ahead of the coordinator's host groups, which
-  answer `UNIMPLEMENTED`), B10 (the generated command line: `hkctl`, over the gateway),
+- **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler),
+  B10 (the generated command line: `hkctl`, over the gateway),
   B24 (the CI client), B25 (the UI).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a

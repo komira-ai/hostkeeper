@@ -95,3 +95,33 @@ async fn a_grpc_heartbeat_is_answered_the_facts_until_the_daemon_reports_them() 
     assert_eq!(code, 200);
     assert!(answered.get("facts").is_none(), "{answered}");
 }
+
+/// Proves: the facts generation a heartbeat over gRPC reports is kept for the move of the host
+/// ([`crate::moving`]): a daemon that announced `facts-v1` and reported none, or a generation
+/// other than the current one, is awaited; one that reported the current one, and one that did
+/// not announce the feature, are not.
+///
+/// Catches: a heartbeat over gRPC whose report of the facts is not read, so that a moving host
+/// is held for good or not at all.
+#[tokio::test]
+async fn a_grpc_heartbeat_reports_the_generation_a_move_waits_for() {
+    let farm = farm("facts-reported").await;
+    let who = updater("d1", "daemon");
+    let host = crate::testutil::id("d1");
+    let current = farm.coordinator.ops().facts_generation("d1");
+    let awaited = || farm.coordinator.lock_fleet().facts.awaits(&host, current);
+
+    beat(&farm.coordinator, &who, &heartbeat(None)).await;
+    assert!(awaited());
+    beat(&farm.coordinator, &who, &heartbeat(Some(current + 1))).await;
+    assert!(awaited());
+    beat(&farm.coordinator, &who, &heartbeat(Some(current))).await;
+    assert!(!awaited());
+
+    beat(&farm.coordinator, &who, &heartbeat(None)).await;
+    assert!(awaited());
+    let mut plain = heartbeat(None);
+    plain.features = vec!["heartbeat-v2".to_owned()];
+    beat(&farm.coordinator, &who, &plain).await;
+    assert!(!awaited());
+}

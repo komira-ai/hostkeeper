@@ -172,37 +172,6 @@ const fn default_max_updating(role: &str) -> u32 {
     }
 }
 
-/// The limits in the order the format writes them.
-fn write_max_updating<S: serde::Serializer>(limits: &RoleLimits, s: S) -> Result<S::Ok, S::Error> {
-    s.collect_map(limits.ordered(&FORMAT_ROLES))
-}
-
-/// The minimums in the order the format writes them. The format requires `storage` and
-/// `frontend`, so a state that names neither writes them as 0, which is what none means.
-fn write_min_up<S: serde::Serializer>(limits: &RoleLimits, s: S) -> Result<S::Ok, S::Error> {
-    s.collect_map(limits.min_up_written().ordered(&FORMAT_MIN_UP))
-}
-
-impl RoleLimits {
-    /// The minimums as the format writes them: `storage` and `frontend` named, 0 when not set.
-    pub(crate) fn min_up_written(&self) -> RoleLimits {
-        let mut written = self.clone();
-        for role in FORMAT_MIN_UP {
-            written.0.entry(role.to_owned()).or_insert(0);
-        }
-        written
-    }
-}
-
-/// The limits as written, with the format's four roles filled in with their defaults.
-fn read_max_updating<'de, D: serde::Deserializer<'de>>(d: D) -> Result<RoleLimits, D::Error> {
-    let mut limits = RoleLimits::deserialize(d)?;
-    for (role, n) in RoleLimits::max_updating_default().0 {
-        limits.0.entry(role).or_insert(n);
-    }
-    Ok(limits)
-}
-
 /// The desired state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -525,6 +494,11 @@ impl Held {
 
 #[path = "desired_file.rs"]
 mod file;
+#[path = "desired_limits.rs"]
+mod limits;
+use limits::{read_max_updating, write_max_updating, write_min_up};
+#[path = "desired_groups.rs"]
+mod groups;
 pub(crate) use file::{encode, parse_file};
 
 /// Why the state file could not be read or written.

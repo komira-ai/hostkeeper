@@ -1,6 +1,5 @@
-//! Every RPC of the command table is served but those [`PENDING`] lists, the five of
-//! `HostGroups`, which answer `UNIMPLEMENTED`. A method added to a proto without a handler
-//! cannot pass unnoticed.
+//! Every RPC of the command table is served but those [`PENDING`] lists, which answer
+//! `UNIMPLEMENTED`; none is. A method added to a proto without a handler cannot pass unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -53,15 +52,15 @@ const HOST_GROUPS: [&str; 5] = [
     "/hostkeeper.operator.v1.HostGroups/Move",
 ];
 
-/// Proves: [`PENDING`] lists exactly the five methods of `HostGroups`, and each is a method of
+/// Proves: no method is [`PENDING`], and each of the five methods of `HostGroups` is a method of
 /// the compiled descriptor set (the command table lists it), so a path misspelt here or a method
 /// the proto drops cannot hide behind the excuse.
 #[test]
-fn only_the_host_groups_methods_are_pending_and_each_is_in_the_descriptor_set() {
-    assert_eq!(PENDING, &HOST_GROUPS[..]);
-    for path in PENDING {
+fn nothing_is_pending_and_each_host_groups_method_is_in_the_descriptor_set() {
+    assert_eq!(PENDING, &[] as &[&str]);
+    for path in HOST_GROUPS {
         assert!(
-            COMMANDS.iter().any(|command| command.path == *path),
+            COMMANDS.iter().any(|command| command.path == path),
             "{path} is a method of the descriptor set"
         );
     }
@@ -82,20 +81,20 @@ async fn every_rpc_answers_something_other_than_unimplemented() {
     assert_eq!(found, Vec::<&str>::new(), "RPCs with no handler");
 }
 
-/// Proves: each method [`PENDING`] lists answers `UNIMPLEMENTED` with an empty message and no
-/// response message on the private listener, with the operator token and with no token at all
-/// (the refusal comes before any caller check and changes nothing), and the heartbeat listener
-/// does not serve it either.
+/// Proves: a method of a service its listener does not serve answers `UNIMPLEMENTED` with an
+/// empty message and no response message, with the operator token and with no token at all (the
+/// refusal comes before any caller check and changes nothing): the methods of `HostGroups` on the
+/// heartbeat listener, and a method of a service that does not exist on the private one.
 #[tokio::test]
-async fn each_pending_method_answers_unimplemented_with_nothing_else() {
+async fn a_method_the_listener_does_not_serve_answers_unimplemented_with_nothing_else() {
     let served = served("grpc-pending-host-groups");
-    for path in PENDING {
-        for (surface, bearer) in [
-            (Surface::Control, Some(OPERATOR)),
-            (Surface::Control, None),
-            (Surface::Heartbeat, Some(OPERATOR)),
-            (Surface::Heartbeat, None),
-        ] {
+    let invented = "/hostkeeper.operator.v1.NoSuchService/List";
+    let cases = HOST_GROUPS
+        .iter()
+        .map(|path| (*path, Surface::Heartbeat))
+        .chain([(invented, Surface::Control)]);
+    for (path, surface) in cases {
+        for bearer in [Some(OPERATOR), None] {
             let request = grpc_request(path, (), bearer);
             let (code, message, body) = call(&served.coordinator, surface, &None, request).await;
             assert_eq!(

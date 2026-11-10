@@ -83,8 +83,9 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `host_group_packages`, `group_desired`, `group_min_versions`, `group_services`,
   `group_rollouts`, `group_rollout_done`) and a `host_group` column to `enrollment_hosts` (with
   `moving_from` and `facts_generation`), `enrollment_requests` (`approved_host_group`), `inventory`
-  and `audit`; a row written before has `NULL` there and is read as naming no group. This release
-  keeps the groups but places no host by them yet. `0008` says older releases must not run on it:
+  and `audit`; a row written before has `NULL` there and is read as naming no group. While the
+  database holds a group the coordinator places hosts by groups ([hostgroups.md](hostgroups.md));
+  without one it places by roles as before. `0008` says older releases must not run on it:
   a coordinator of the release before is refused on a database that has it (`the database's
   schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
   release is restoring the dump taken before it. The tables of placement by roles stay as they

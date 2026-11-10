@@ -19,6 +19,10 @@
 //! host takes it, and so do the services an operator's enrollment approval names
 //! ([`crate::operator_enrollment`]). No call but `Unassign` with `uninstall` orders an
 //! uninstall.
+//!
+//! Once the coordinator holds a host group, `Assign` and `Unassign` are refused
+//! `placed_by_host_group`, a minimum version of a role scope is the group's, and `List` answers by
+//! group (`group_assign.rs`).
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::{assignment, min_version};
@@ -99,6 +103,27 @@ fn settled(state: &mut OpsState) -> Result<(), Refusal> {
         return Err(Refusal::InvalidRequest);
     }
     Ok(())
+}
+
+/// The hosts `def` is assigned to and counts, each with what it last reported, the minimum
+/// version that applies to it and the holds that hold the pair.
+fn assigned_hosts(fleet: &Fleet, state: &OpsState, def: &ServiceDef) -> Vec<proto::AssignedHost> {
+    fleet
+        .nodes()
+        .filter(|(id, _)| fleet.is_assigned(def, id) && !fleet.is_excluded(&def.name, id))
+        .map(|(id, node)| proto::AssignedHost {
+            node_id: id.to_string(),
+            role: node.role.clone(),
+            installed_version: fleet
+                .get_in(&def.name, id)
+                .filter(|host| host.beat.health != Health::Absent)
+                .map(|host| host.beat.version.to_string()),
+            min_version: fleet.min_version(def, id).map(ToString::to_string),
+            holds: holding(&state.holds, &def.name, id.as_str(), &node.role)
+                .map(hold_proto)
+                .collect(),
+        })
+        .collect()
 }
 
 /// One change of an assignment: the service, the change, and its audit entry.
@@ -249,6 +274,9 @@ impl Coordinator {
         request: proto::AssignRequest,
     ) -> Result<proto::AssignResponse, Refusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return Err(Refusal::PlacedByHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -287,6 +315,9 @@ impl Coordinator {
         request: proto::UnassignRequest,
     ) -> Result<proto::UnassignResponse, Refusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return Err(Refusal::PlacedByHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -329,8 +360,7 @@ impl Coordinator {
     ) -> Result<proto::SetMinVersionResponse, Refusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(Refusal::UnknownService)?;
         let min = request.min_version.ok_or(Refusal::InvalidRequest)?;
         let scope = min_scope_of(min.scope)?;
@@ -343,9 +373,15 @@ impl Coordinator {
                     .ok_or(Refusal::InvalidRequest)?,
             ),
         };
+        if self.desired.in_group_mode()
+            && let Scope::Role(group) = &scope
+        {
+            return self.set_group_min_version(by, &def.name, group, version);
+        }
         let mut fleet = self.lock_fleet();
         self.ops.read(|state| self.known(&fleet, state, &scope))?;
-        let above = self.desired.get(&def.name).is_some_and(|desired| {
+        let ceiling = self.desired_for_scope(&fleet, &scope, &def.name);
+        let above = ceiling.is_some_and(|desired| {
             version
                 .as_ref()
                 .is_some_and(|floor| !desired.version.at_least(floor))
@@ -356,7 +392,7 @@ impl Coordinator {
         let said = version
             .as_ref()
             .map_or_else(|| "none".to_owned(), ToString::to_string);
-        let audit = audited(by, "set_min_version", def, &scope, &format!(": {said}"));
+        let audit = audited(by, "set_min_version", &def, &scope, &format!(": {said}"));
         let done = self.ops.try_change(Write::BeforeMemory, audit, |state| {
             let entries = state.assignments.entry(def.name.clone()).or_default();
             rules::set_min_version(entries, &scope, version);
@@ -384,11 +420,14 @@ impl Coordinator {
         caller.operator()?;
         let fleet = self.lock_fleet();
         let state = self.ops.state();
-        let services = self
-            .services
-            .defs()
-            .map(|def| self.entry_of(&fleet, &state, def))
-            .collect();
+        let services = if self.desired.in_group_mode() {
+            self.entries_in_groups(&fleet, &state)
+        } else {
+            self.services
+                .defs()
+                .map(|def| self.entry_of(&fleet, &state, def))
+                .collect()
+        };
         Ok(proto::ListServicesResponse {
             services,
             holds: state.holds.iter().map(hold_proto).collect(),
@@ -398,22 +437,7 @@ impl Coordinator {
     /// What `Services.List` says of `def`.
     fn entry_of(&self, fleet: &Fleet, state: &OpsState, def: &ServiceDef) -> proto::ServiceEntry {
         let entries = state.assignments.get(&def.name);
-        let assigned: Vec<proto::AssignedHost> = fleet
-            .nodes()
-            .filter(|(id, _)| fleet.is_assigned(def, id) && !fleet.is_excluded(&def.name, id))
-            .map(|(id, node)| proto::AssignedHost {
-                node_id: id.to_string(),
-                role: node.role.clone(),
-                installed_version: fleet
-                    .get_in(&def.name, id)
-                    .filter(|host| host.beat.health != Health::Absent)
-                    .map(|host| host.beat.version.to_string()),
-                min_version: fleet.min_version(def, id).map(ToString::to_string),
-                holds: holding(&state.holds, &def.name, id.as_str(), &node.role)
-                    .map(hold_proto)
-                    .collect(),
-            })
-            .collect();
+        let assigned = assigned_hosts(fleet, state, def);
         let scoped = |scope: assignment::Scope, entry: &Entry| proto::Assignment {
             scope: Some(scope),
             removed: *entry == Entry::Exclude,
@@ -474,3 +498,6 @@ impl Coordinator {
         }
     }
 }
+
+#[path = "group_assign.rs"]
+mod groups;

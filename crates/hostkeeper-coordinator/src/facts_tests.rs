@@ -61,7 +61,13 @@ fn generation(rig: &Rig, host: &str) -> u64 {
 
 /// Operates on a bare ops store: `body` as the operator.
 fn act(store: &OpsStore, body: &str) -> Result<AuditEntry, crate::ops::OperateError> {
-    crate::operate::operate(store, &kbf_services(), "operator", body.as_bytes())
+    crate::operate::operate(
+        store,
+        &kbf_services(),
+        &crate::host_groups::HostGroups::default(),
+        "operator",
+        body.as_bytes(),
+    )
 }
 
 fn set_labels(node: &str, set: &str) -> String {

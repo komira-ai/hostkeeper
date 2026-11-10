@@ -6,6 +6,13 @@ touched on the hosts. Every call below takes the operator token only: a CI token
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing. Every change is
 an entry of the audit log, under the name of the token that made it.
 
+This page is the placement of a coordinator that holds no host group. Once it holds one, the groups
+place every package ([hostgroups.md](hostgroups.md)): `Assign` and `Unassign` are refused
+`placed_by_host_group`, the rollout file's `roles` and `selector` and the entries below place
+nothing, and a host runs the packages of its group. The uninstall intents of this page are the
+ones a group's `Put` and `Move` write, and they are carried out as the Uninstall section says;
+`SetMinVersion` of a role sets the minimum version of the group of that name.
+
 ## What a host is assigned
 
 The rollout file is the base: a service is assigned to the hosts of the roles its `roles` list

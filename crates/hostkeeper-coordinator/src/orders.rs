@@ -32,8 +32,10 @@ use hostkeeper_wire::wire::PackageDigest;
 use prost::Message as _;
 
 use crate::fleet::Fleet;
+use crate::force::ForceRecord;
 use crate::ops::OpsState;
 use crate::registry::Digest;
+use crate::services::Services;
 
 /// The feature a daemon announces to be sent an `abort`.
 pub const ABORT_FEATURE: &str = "abort-v1";
@@ -287,13 +289,15 @@ impl Order {
 
 /// The operator's order for the host `id` at this heartbeat, if one is due: an abort queued for
 /// it first, then a clear-record queued for it (each taken, so it is sent once), then the force
-/// of the first of `services` (the order the gate goes by) whose standing force orders the host
-/// and is not done there.
+/// of the first of `names` (the order the gate goes by) whose standing force orders the host
+/// and is not done there. The force of a package of a host group stands in the group's marks, and
+/// a coordinator that holds a group reads no other.
 pub(crate) fn next(
     fleet: &mut Fleet,
     state: &OpsState,
     id: &HostId,
-    services: &[&str],
+    services: &Services,
+    names: &[&str],
 ) -> Option<Order> {
     if fleet.announced(id, ABORT_FEATURE)
         && let Some((service, order_id)) = fleet.take_abort(id)
@@ -308,15 +312,30 @@ pub(crate) fn next(
     if !fleet.announced(id, crate::force::FEATURE) {
         return None;
     }
-    services
-        .iter()
-        .find_map(|service| force_for(fleet, state, service, id))
+    names.iter().find_map(|service| {
+        let force = standing(fleet, state, services, service)?;
+        force_for(fleet, service, force, id)
+    })
 }
 
-/// The force of `service` for the host `id`, if its standing force orders the host and the
-/// host neither runs the version, nor is running the force, nor reported a verdict of it.
-fn force_for(fleet: &Fleet, state: &OpsState, service: &str, id: &HostId) -> Option<Order> {
-    let force = state.services.get(service)?.force.as_ref()?;
+/// The standing force of `service`: its group's for a package of a host group; none, in a
+/// coordinator that holds a group, for a package of no group; else the service's.
+fn standing<'a>(
+    fleet: &Fleet,
+    state: &'a OpsState,
+    services: &Services,
+    service: &str,
+) -> Option<&'a ForceRecord> {
+    match services.get(service).and_then(|def| def.group()) {
+        Some(group) => state.host_groups.0.get(group)?.get(service)?.force.as_ref(),
+        None if fleet.in_group_mode() => None,
+        None => state.services.get(service)?.force.as_ref(),
+    }
+}
+
+/// The order of the standing force `force` of `service` for the host `id`, if it orders the host
+/// and the host neither runs the version, nor is running the force, nor reported a verdict of it.
+fn force_for(fleet: &Fleet, service: &str, force: &ForceRecord, id: &HostId) -> Option<Order> {
     let host = fleet.get_in(service, id)?;
     let order_id = force.order_id();
     let reported = host

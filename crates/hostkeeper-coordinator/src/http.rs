@@ -100,6 +100,10 @@ pub const MAX_OPERATOR_BYTES: usize = 4096;
 /// [`MAX_OPERATOR_BYTES`].
 pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
 
+/// The most bytes of a `HostGroups.Put` request read, on the gRPC route and the JSON gateway: a
+/// group lists up to 64 packages of up to 255 bytes and names a policy.
+pub const MAX_HOST_GROUPS_PUT_BYTES: usize = 64 * 1024;
+
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
 
@@ -225,7 +229,9 @@ where
                 Err(ConvergenceError::Refused(CiRefused::Unavailable)) => {
                     error(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
                 }
-                Err(ConvergenceError::UnknownService) => error(StatusCode::NOT_FOUND, "not_found"),
+                Err(ConvergenceError::UnknownService | ConvergenceError::NotInHostGroup) => {
+                    error(StatusCode::NOT_FOUND, "not_found")
+                }
             }
         }
         (Surface::Heartbeat, _, HEARTBEAT_PATH)
@@ -398,8 +404,10 @@ where
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(
-            why
-            @ (SetError::Invalid(_) | SetError::UnparseableVersion | SetError::TargetInvalid(_)),
+            why @ (SetError::Invalid(_)
+            | SetError::UnparseableVersion
+            | SetError::TargetInvalid(_)
+            | SetError::LimitsInHostGroup),
         ) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
@@ -409,7 +417,9 @@ where
             | SetError::BadVersion
             | SetError::DigestConflict
             | SetError::ReleaseExists
-            | SetError::RepositoryUnknown),
+            | SetError::RepositoryUnknown
+            | SetError::NotInHostGroup
+            | SetError::AmbiguousHostGroup),
         ) => {
             tracing::warn!(%why, "refused a desired state");
             error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))

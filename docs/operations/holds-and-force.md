@@ -6,6 +6,10 @@ stages of a rollout, and `Rollouts.Advance`, `Pause` and `Resume`, are in
 `unauthorized`, and a refused call changes nothing. Every change is an entry of the audit log,
 under the name of the token that made it; `Audit.List` reads the log back.
 
+Where the coordinator holds host groups ([hostgroups.md](hostgroups.md)), a service is rolled out
+once for each group that lists it, and the calls below act on a group or on each group that lists
+the service. Each section says what it does there; what it says without a mention holds as it is.
+
 ## Holds
 
 `Services.Hold` holds a service on one host, on every host of a role, or on the whole fleet,
@@ -16,7 +20,10 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
   pair as `held`.
 - A hold carries no version. The host keeps running what it runs, and never learns of the hold.
 - A role hold is matched against the host's role each time the coordinator decides, so a host
-  that joins the role later is held, and one that leaves it is released.
+  that joins the role later is held, and one that leaves it is released. Where the coordinator
+  holds host groups, a host's role is the name of its group: a hold of the role `web` holds the
+  hosts of the group `web` (and of no other group), and a role that names no group is refused
+  `unknown_host_group`. A hold of a host, or of the whole fleet, is as before.
 - A held pair takes no update slot, is in no stage of the service's update plan (it takes no
   place in a stage and does not count towards one being done), never holds back a bake, and is
   left out of the convergence and of the hosts an automatic rollback is counted against, so it
@@ -34,6 +41,12 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
 The ops file gains a `holds` key once a hold is set. A coordinator of an earlier release refuses
 to start on such a file rather than ignore the holds; a file that never held one keeps the shape
 earlier releases read.
+
+In a host group a host is also told, as the status shows it, `install_order` (a package listed
+before this one is not installed on the host yet), `uninstall_order` (a package whose uninstall
+goes first is still on the host) or `moving` (the host was moved into its group and its plans have
+not admitted it, or its uninstalls are not done); none of them is a failure, and
+[hostgroups.md](hostgroups.md) says when each applies.
 
 ## A platform the release has no package for
 
@@ -84,11 +97,19 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
   reads. No host is ordered it again, and CI cannot set it, until `UnmarkBad` or a force lifts
   the mark. A version marked bad halts the plan (every host is told `bad`). A second mark of the same version is refused with `already_bad`.
+  The mark is the package's: in host groups a version marked bad is bad in every group, so a
+  build that fails in one group is not rolled on to the next.
 - `Releases.Halt` halts a service by hand, as a host's halt report does: no host of it is
   ordered until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
   line logged once when it appears). A service with
   no desired version has nothing to halt and is refused with `invalid_request`; a service that
-  is halted already, with `already_halted`.
+  is halted already, with `already_halted`. In host groups a halt is a group's: the call names no
+  group, and halts the service in every group that lists it and has a desired version of it, each
+  at its own desired version, with one `halt` entry for each group that names it. A group that is
+  halted already is left as it is, and `already_halted` is the answer only when every group was.
+  `Releases.ClearHalt` clears the halt of every group that has one, one `clear_halt` entry each.
+  The alert's message names the group; groups whose halt has the same service, host and version are
+  one alert that names them all.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.
@@ -136,6 +157,23 @@ a role, or a list of hosts. The coordinator refuses, changing nothing:
 | `no_digest` | CI never registered a package digest or a release index for the version |
 | `confirm_mismatch` | a fleet-wide force whose `confirm_service` is not the service |
 | `unknown_target` | a role the service does not run on, or a host the coordinator has not heard from |
+| `not_in_host_group` | in host groups: `host_group` names a group that does not list the service or that no group has the name of, or no group lists the service |
+
+In host groups a force is a deployment to a group: it sets the group's desired version and the
+force stands in that group's marks. The call names the group in `host_group`, which must list the
+service (`not_in_host_group`), or names none:
+
+- the whole fleet is the whole group, or each group that lists the service when none is named;
+- a role names a group, and one that differs from `host_group` is `unknown_target`;
+- hosts must each be in the group, else `unknown_target`; with no group named, the call is one
+  force for each distinct group of the hosts, and a host the coordinator has not heard from, or in
+  no group, refuses the whole call.
+
+A force that reaches several groups is one change, with one `force` entry for each group (naming
+it) and the `unmark_bad`, `mark_bad` and `clear_halt` entries of its group after it. A refusal for
+any group (a version below the `min_version` of one, for example) changes nothing for any. The
+force of a group ends when another version is set in that group, or another force replaces it;
+the force of another group is not touched. The reply lists the hosts and entries of every group.
 
 Otherwise it sets the desired version to the target, records the force, lifts the bad mark of
 the target, marks bad each version a targeted host leaves on a downgrade (from the versions the

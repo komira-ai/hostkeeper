@@ -37,11 +37,11 @@ use crate::stages::{HostState, current};
 pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Duration) -> bool {
     let service = def.name.as_str();
     let slot = fleet
-        .ordered_unseen(service, now)
-        .any(|o| !fleet.is_forced(service, o))
+        .ordered_unseen_in(def, now)
+        .any(|o| !fleet.is_forced_in(def, o))
         || fleet
-            .occupants_of(service)
-            .filter(|(o, _)| !fleet.is_forced(service, o))
+            .occupants_in(def)
+            .filter(|(o, _)| !fleet.is_forced_in(def, o))
             .any(|(o, h)| {
                 h.beat.updating.is_some()
                     || (h.beat.promotion_pending && !fleet.is_held(service, o))
@@ -49,7 +49,7 @@ pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Dur
                     || want.is_some_and(|w| is_baking(def, w, fleet, o, h, now))
             });
     slot || want.is_some_and(|want| {
-        !fleet.is_stopped(service, &want.version) && {
+        !fleet.is_stopped_in(def, &want.version) && {
             let view = current(def, want, fleet, now);
             view.under_way() && !view.members.iter().any(|m| m.state == HostState::Failed)
         }
@@ -77,7 +77,7 @@ fn is_baking(
         .as_ref()
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == want.version);
     !failed
-        && !fleet.is_stopped(service, &want.version)
+        && !fleet.is_stopped_in(def, &want.version)
         && !fleet.is_held(service, id)
         && !fleet.is_excluded(service, id)
         && fleet.is_baking(service, id, host, &want.version, def.bake_beats, now)
@@ -96,7 +96,8 @@ pub(crate) fn live_elsewhere(
     now: Duration,
 ) -> Option<Vec<String>> {
     let live = |def: &ServiceDef| is_live(def, all.get(&def.name), fleet, now);
-    if services.get(service).is_some_and(live) {
+    let own = services.get(service);
+    if own.is_some_and(live) {
         return None;
     }
     let others: Vec<String> = services
@@ -105,5 +106,6 @@ pub(crate) fn live_elsewhere(
         .filter(|def| live(def))
         .map(|def| def.name.clone())
         .collect();
-    (others.len() >= fleet.live_rollouts()).then_some(others)
+    let limit = own.map_or(fleet.live_rollouts(), |def| fleet.live_limit(def));
+    (others.len() >= limit).then_some(others)
 }

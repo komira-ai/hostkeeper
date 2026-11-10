@@ -13,15 +13,14 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::converge::role_counts;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
+use crate::group_scope::Basis;
 use crate::halt;
-use crate::holds::on_bad_version;
 use crate::identity::Identity;
-use crate::membership::{Standing, members, standing};
-use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::membership::{Standing, standing};
+use crate::ops::{AuditEntry, OperateError, OpsError, OpsStore};
 use crate::order_terms::Terms;
 use crate::orders::Order;
 use crate::reconcile::reconcile;
@@ -95,13 +94,25 @@ pub enum SetError {
     /// A repository entry names a repository the registry does not hold ([`crate::repositories`]).
     #[error("repository_unknown: a repository entry names a repository the registry lacks")]
     RepositoryUnknown,
+    /// The set names a host group that does not exist or does not list the package, or names none
+    /// and no group lists it.
+    #[error("not_in_host_group: no such group lists the package")]
+    NotInHostGroup,
+    /// The set names `if_generation` and no group, and more than one group lists the package.
+    #[error("ambiguous_host_group: more than one group lists the package")]
+    AmbiguousHostGroup,
+    /// The set carries `max_updating` or `min_up`, which are a group's policy.
+    #[error("limits_in_host_group: the limits are the group's policy")]
+    LimitsInHostGroup,
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
     /// `unparseable_version`, `bad_version`, `digest_conflict`, `release_exists`,
-    /// `repository_unknown`), of its release index (`index_invalid`, `index_digest_mismatch`) or
-    /// of its targets (`target_invalid`), which the answer says; `None` for every other error.
+    /// `repository_unknown`), of its release index (`index_invalid`, `index_digest_mismatch`), of
+    /// its targets (`target_invalid`) or of its host group (`not_in_host_group`,
+    /// `ambiguous_host_group`, `limits_in_host_group`), which the answer says; `None` for every
+    /// other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -113,6 +124,9 @@ impl SetError {
             Self::TargetInvalid(_) => Some("target_invalid"),
             Self::ReleaseExists => Some("release_exists"),
             Self::RepositoryUnknown => Some("repository_unknown"),
+            Self::NotInHostGroup => Some("not_in_host_group"),
+            Self::AmbiguousHostGroup => Some("ambiguous_host_group"),
+            Self::LimitsInHostGroup => Some("limits_in_host_group"),
             Self::Unauthorized(_)
             | Self::Unavailable
             | Self::Store(_)
@@ -157,6 +171,9 @@ pub enum ConvergenceError {
     /// The coordinator manages no such service.
     #[error("no such service")]
     UnknownService,
+    /// The host group named is not held or does not list the service.
+    #[error("the service is not in the host group")]
+    NotInHostGroup,
 }
 
 /// What `POST /v1/desired` answers: the state as stored, and, only when there are any, the
@@ -384,39 +401,6 @@ impl Coordinator {
         self
     }
 
-    /// Whether the fleet's lock, which every decision and order is made under, is held now.
-    #[cfg(test)]
-    pub(crate) fn fleet_held(&self) -> bool {
-        use std::sync::TryLockError;
-        matches!(self.fleet.try_lock(), Err(TryLockError::WouldBlock))
-    }
-
-    /// Tells `waits` [`SetProgress::Waits`] each time CI's set of a desired state finds the
-    /// fleet's lock held and waits for it.
-    #[cfg(test)]
-    pub(crate) fn tell_when_set_waits(&self, waits: std::sync::mpsc::Sender<SetProgress>) {
-        *self
-            .set_waits
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner) = Some(waits);
-    }
-
-    /// The fleet's lock, for CI's set of a desired state. Under test, a set that finds the
-    /// lock held first says so to the test that asked ([`Self::tell_when_set_waits`]); then it
-    /// waits for the lock, as every build does.
-    fn lock_fleet_for_set(&self) -> std::sync::MutexGuard<'_, Fleet> {
-        #[cfg(test)]
-        self.set_waits
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .filter(|_| self.fleet_held())
-            .for_each(|waits| {
-                let _ = waits.send(SetProgress::Waits);
-            });
-        self.lock_fleet()
-    }
-
     /// The fleet's lock, which every decision and order is made under, with the operator's
     /// marks the decisions read refreshed from the ops store ([`crate::holds::marks_of`]). The
     /// lock order is the fleet's, then the ops store's.
@@ -531,7 +515,13 @@ impl Coordinator {
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, (turn, root));
+        // The fleet's lock is taken before the host's group is read: a `HostGroups.Move` of the
+        // host runs under that lock, so the group this heartbeat is decided over is never one
+        // the host has been moved out of since it was read.
+        let fleet = self.lock_fleet();
+        let basis = self.basis_of(&who.host_id);
+        let (reply, order, terms, acks) =
+            self.reply_to(fleet, who, beat, orders, (turn, root), &basis);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -544,7 +534,7 @@ impl Coordinator {
         // The generations only to an agent that announced `halt-v1` and a coordinator that
         // advertises it: an older agent's strict reader refuses the field.
         let halts = if sends("halts", features.as_deref()) {
-            halt::generations(&self.ops, &self.services)
+            halt::generations(&self.ops, &basis.services)
         } else {
             BTreeMap::new()
         };
@@ -570,17 +560,20 @@ impl Coordinator {
 
     fn reply_to(
         &self,
+        mut fleet: std::sync::MutexGuard<'_, Fleet>,
         who: Identity,
         mut beat: Heartbeat,
         orders: bool,
         (turn, trusted_root): (Turn, crate::trusted_root::TrustedRootSaid),
+        basis: &Basis<'_>,
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
-        let own = crate::agent_service::own_beat(&self.services, &mut beat);
+        let own = crate::agent_service::own_beat(&basis.services, &mut beat);
+        let role = basis.role_of(&who);
         let legacy = self.legacy_for(&beat);
         let announced = beat.services.clone().unwrap_or_default();
         let node = Node {
-            role: who.role.name().to_owned(),
+            role: role.clone(),
             features: beat.agent_features.clone(),
             agent: beat.agent.clone(),
             platform: beat.platform,
@@ -596,10 +589,10 @@ impl Coordinator {
             trusted_root,
             skewed_beats: 0,
         };
-        // The halts are noted under the fleet's lock, which every decision and order below is
-        // made under: a halt is never raised between another heartbeat's decision to order and
-        // its order. The lock order is the fleet's, then the ops store's, as everywhere.
-        let mut fleet = self.lock_fleet();
+        // `fleet` is the fleet's lock, taken by the caller before the basis was read: every
+        // decision and order below is made under it, so a halt is never raised between another
+        // heartbeat's decision to order and its order. The lock order is the fleet's, then the
+        // ops store's, as everywhere.
         // An agent acknowledged its verdicts is read as still reporting the last one, so every
         // rule below reads what it read while the agent resent it.
         let acking =
@@ -609,7 +602,7 @@ impl Coordinator {
             .clear_records
             .take_verdicts(&who.host_id, legacy, &mut beat);
         let mut heard = if acking {
-            let wanted = |name: &str| self.desired.get(name).map(|want| want.version);
+            let wanted = |name: &str| self.desired_in(basis, name).map(|want| want.version);
             let (heard, superseded) =
                 verdict_file::fill(&self.verdicts, legacy, &who.host_id, &mut beat, &wanted);
             for name in superseded {
@@ -628,13 +621,13 @@ impl Coordinator {
         };
         let announced = beat.services.clone().unwrap_or_default();
         self.tend_store(now);
-        let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
+        let held = halt::note(&self.ops, &basis.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
-        self.note_serving(&who.host_id, &node, &beat, &ops, now);
+        self.note_serving(&basis.services, &who.host_id, &node, &beat, &ops, now);
         self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
-        for def in self.services.defs() {
+        for def in basis.services.defs() {
             if standing(def, &who.host_id, &node, &ops, now) == Standing::Dropped {
                 fleet.forget_in(&def.name, &who.host_id);
             }
@@ -651,27 +644,27 @@ impl Coordinator {
                 .is_some_and(|entries| entries.uninstall.contains_key(who.host_id.as_str()))
         };
         // Only a verdict the fleet takes in is stored and acknowledged.
-        heard.retain(|(name, _)| match self.services.get(name) {
+        heard.retain(|(name, _)| match basis.services.get(name) {
             Some(def) => counted(def) || dropped(def),
             None => Some(name.as_str()) == legacy,
         });
         if let Some(name) = legacy {
-            match self.services.get(name) {
+            match basis.services.get(name) {
                 Some(def) if dropped(def) => {
-                    fleet.record_outside_in(name, who.host_id.clone(), &who.role, beat, now);
+                    fleet.record_outside_in(name, who.host_id.clone(), &role, beat, now);
                 }
                 top if top.is_none_or(counted) => {
-                    fleet.record_in(name, who.host_id.clone(), who.role.clone(), beat, now);
+                    fleet.record_named_in(name, who.host_id.clone(), &role, beat, now);
                 }
                 _ => {}
             }
         }
         for one in announced.iter().chain(&own) {
-            match self.services.get(&one.name) {
-                Some(def) if counted(def) => fleet.record_in(
+            match basis.services.get(&one.name) {
+                Some(def) if counted(def) => fleet.record_named_in(
                     &one.name,
                     who.host_id.clone(),
-                    who.role.clone(),
+                    &role,
                     one.as_heartbeat(platform),
                     now,
                 ),
@@ -685,7 +678,7 @@ impl Coordinator {
                     fleet.record_outside_in(
                         &one.name,
                         who.host_id.clone(),
-                        &who.role,
+                        &role,
                         one.as_heartbeat(platform),
                         now,
                     );
@@ -697,32 +690,33 @@ impl Coordinator {
         if turn == Turn::Hold {
             return (ServiceReply::Nothing, None, None, Vec::new());
         }
-        crate::intents::settle(&self.ops, &self.services, &mut fleet, &who.host_id);
+        crate::intents::settle(&self.ops, &basis.services, &mut fleet, &who.host_id);
         let mut names: Vec<&str> = legacy
             .into_iter()
             .chain(announced.iter().map(|one| one.name.as_str()))
             .collect();
         // Stable: services of one priority keep the order above.
-        names.sort_by_key(|name| Reverse(self.services.get(name).map_or(0, |def| def.priority)));
+        names.sort_by_key(|name| Reverse(basis.services.get(name).map_or(0, |def| def.priority)));
         // The hosts' words are in: record the last good versions and roll back what failed,
         // before the orders below read the desired states.
-        for def in names.iter().filter_map(|name| self.services.get(name)) {
+        for def in names.iter().filter_map(|name| basis.services.get(name)) {
             // Only the verdicts about the desired version count, and not those an override
             // acknowledged; the others are forgotten.
-            if let Some(want) = self.desired.get(&def.name) {
+            if let Some(want) = self.desired_in(basis, &def.name) {
                 let acked = self.ops.marks(&def.name).failure_acked;
-                fleet.keep_verdicts_of(&def.name, &want.version, &acked);
+                fleet.keep_verdicts_in(def, &want.version, &acked);
             }
             reconcile(def, &self.ops, &self.desired, &mut fleet, now);
         }
+        self.step_move(&mut fleet, basis, &who.host_id, now);
         // The verdicts are durable before the answer acknowledges them, and before any order.
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
         // The operator's orders go first, past the gate, to a transport that carries them.
         if orders
             && !fleet.store_lost
-            && let Some(order) = self
-                .ops
-                .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
+            && let Some(order) = self.ops.read(|state| {
+                crate::orders::next(&mut fleet, state, &who.host_id, &basis.services, &names)
+            })
         {
             return (ServiceReply::Nothing, Some(order), None, acks);
         }
@@ -730,6 +724,7 @@ impl Coordinator {
             who: &who,
             legacy,
             held: &held,
+            basis,
             orders,
             now,
         };
@@ -816,7 +811,8 @@ impl Coordinator {
     /// [`OperateError`].
     pub fn operate(&self, bearer: Option<&str>, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let by = self.operator(bearer)?;
-        let entry = ops::operate(&self.ops, &self.services, by.as_str(), body)?;
+        let groups = self.desired.host_groups();
+        let entry = crate::operate::operate(&self.ops, &self.services, &groups, by.as_str(), body)?;
         self.reconcile();
         Ok(entry)
     }
@@ -876,44 +872,17 @@ impl Coordinator {
             .defs()
             .map(|def| {
                 let desired = self.desired.get(&def.name);
-                let roles = role_counts(def, desired.as_ref(), fleet, now);
-                let hosts: Vec<ServiceHostStatus> = fleet
-                    .hosts_of(&def.name)
-                    .map(|(id, host)| ServiceHostStatus {
-                        host: host_status(fleet, &def.name, id, host, now),
-                        hold: halt::decide(
-                            &self.ops,
-                            &self.services,
-                            &all,
-                            &def.name,
-                            fleet,
-                            id,
-                            now,
-                        )
-                        .why(),
-                        held_on_bad_version: on_bad_version(fleet, &ops, &def.name, id),
-                    })
-                    .collect();
-                let up = hosts.iter().filter(|h| h.host.up).count();
-                let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
-                let members = members(def, fleet, &ops, desired.as_ref(), now);
-                let convergence = convergence_of(def, desired.as_ref(), fleet, &ops, now);
-                let plan = self.plan_in(def, desired.as_ref(), &all, &ops, fleet, now);
-                let status = ServiceStatus {
-                    plan,
-                    desired,
-                    roles,
-                    hosts,
-                    members,
-                    up,
-                    slots_held,
-                    convergence,
-                };
+                let status = self.status_of(def, &self.services, &all, desired, fleet, &ops, now);
                 (def.name.clone(), status)
             })
             .collect();
+        let groups = self
+            .desired
+            .in_group_mode()
+            .then(|| self.group_statuses(fleet, &ops, now));
         Status {
             per_service,
+            groups,
             ops: ops.without_defaults(),
             desired: self
                 .legacy
@@ -952,5 +921,7 @@ pub(crate) mod ci_calls;
 mod enrollment_calls;
 #[path = "service_orders.rs"]
 mod gate_orders;
+#[path = "service_groups.rs"]
+mod group_calls;
 #[path = "service_store.rs"]
 mod store_calls;

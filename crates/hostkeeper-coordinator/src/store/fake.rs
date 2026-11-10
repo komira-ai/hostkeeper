@@ -65,6 +65,14 @@ impl Fake {
         fake
     }
 
+    /// A fake that holds `held` as the committed desired state.
+    #[must_use]
+    pub(crate) fn holding_desired(held: desired::Held) -> Self {
+        let fake = Self::new();
+        fake.lock().desired = held;
+        fake
+    }
+
     /// A fake that holds nothing and keeps write records ([`Backend::keeps_write_records`]), as
     /// the Postgres store does.
     #[must_use]

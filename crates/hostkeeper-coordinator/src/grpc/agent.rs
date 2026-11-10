@@ -86,6 +86,7 @@ impl Api for AgentService {
                 .hear_installers(&identity, request.get_ref());
             self.coordinator
                 .hear_repositories(&identity, request.get_ref());
+            self.coordinator.hear_facts(&identity, request.get_ref());
         }
         let host_id = identity.host_id.clone();
         let facts = (!retiring)

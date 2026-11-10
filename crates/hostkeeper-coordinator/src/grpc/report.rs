@@ -24,6 +24,7 @@ use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Node;
 use crate::force::ForceRecord;
 use crate::holds::holding;
+use crate::host_groups::GroupName;
 use crate::membership::{HostCounts, Member, Membership};
 use crate::operator::{entry_proto, hold_proto};
 use crate::ops::{FailureAck, Halt, HaltAck, OpsState, ServiceOps};
@@ -36,15 +37,26 @@ fn count<T: TryInto<u32>>(n: T) -> u32 {
 }
 
 /// The status as `Releases.Status` answers it: every service in name order, or only `only` when
-/// it is not empty (none when the coordinator manages no such service).
+/// it is not empty (none when the coordinator manages no such service). A coordinator that holds
+/// host groups answers one service for each package of each group, in the order of the group's
+/// name and then the package's, `host_group` naming the group; `only` names a package then.
 pub(crate) fn status(status: &Status, only: &str) -> proto::StatusResponse {
-    proto::StatusResponse {
-        services: status
+    let wanted = |name: &str| only.is_empty() || name == only;
+    let services = match &status.groups {
+        None => status
             .per_service
             .iter()
-            .filter(|(name, _)| only.is_empty() || name.as_str() == only)
-            .map(|(name, one)| service_status(name, one, &status.ops))
+            .filter(|(name, _)| wanted(name))
+            .map(|(name, one)| service_status(name, None, one, &status.ops))
             .collect(),
+        Some(groups) => groups
+            .iter()
+            .filter(|((_, package), _)| wanted(package))
+            .map(|((group, package), one)| service_status(package, Some(group), one, &status.ops))
+            .collect(),
+    };
+    proto::StatusResponse {
+        services,
         quiet: status.quiet,
         services_dropped: status.services_dropped,
         facts_dropped: status
@@ -78,9 +90,22 @@ pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
     }
 }
 
-/// One service of the status, with the ops state's marks and the force that stands.
-fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::ServiceStatus {
-    let marks = ops.services.get(name);
+/// One service of the status, with the ops state's marks and the force that stands: those of the
+/// package in `group`, for a service made for one.
+fn service_status(
+    name: &str,
+    group: Option<&GroupName>,
+    one: &ServiceStatus,
+    ops: &OpsState,
+) -> proto::ServiceStatus {
+    let own;
+    let marks = match group {
+        None => ops.services.get(name),
+        Some(group) => {
+            own = ops.marks_in(Some(group), name);
+            Some(&own)
+        }
+    };
     let mut converged = convergence(&one.convergence);
     converged.force = marks.and_then(|m| m.force.as_ref()).map(force_record);
     proto::ServiceStatus {
@@ -96,7 +121,7 @@ fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::Ser
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
         plan: one.plan.clone(),
-        host_group: String::new(),
+        host_group: group.map(ToString::to_string).unwrap_or_default(),
     }
 }
 
@@ -547,6 +572,9 @@ fn gate_of(gate: Gate) -> proto::GateReason {
         Gate::StageWait => proto::GateReason::StageWait,
         Gate::BelowMinUp => proto::GateReason::BelowMinUp,
         Gate::RolloutElsewhere => proto::GateReason::RolloutElsewhere,
+        Gate::InstallOrder => proto::GateReason::InstallOrder,
+        Gate::UninstallOrder => proto::GateReason::UninstallOrder,
+        Gate::Moving => proto::GateReason::Moving,
     }
 }
 

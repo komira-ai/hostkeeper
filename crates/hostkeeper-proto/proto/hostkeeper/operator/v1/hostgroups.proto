@@ -6,9 +6,7 @@
 // other services in operator.proto. This file is the same package and API, kept apart so that
 // each file stays short.
 //
-// Served by: the coordinator, on its control listener, as operator.proto says, once it holds
-// host groups. A coordinator that does not answers every call of `HostGroups` `UNIMPLEMENTED`
-// with an empty message, and changes nothing.
+// Served by: the coordinator, on its control listener, as operator.proto says.
 //
 // Authentication: `HostGroups` takes the operator token only; no CI token reaches it (see
 // operator.proto).
