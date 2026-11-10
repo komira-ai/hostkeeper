@@ -529,15 +529,16 @@ Before the first machine, check `serve`'s start line and the answer set's count 
 
 **Step 1. Record the machine.** From the chassis label: its data MACs, its BMC MAC and its
 serial, as in [enrollment.md](enrollment.md#record-the-server). Record the MAC of the farm-LAN
-NIC the firmware boots from among the data MACs. Give the record its host id and its role: the
-record is the approval, so the machine that matches it, within its window and once, is enrolled
+NIC the firmware boots from among the data MACs. Give the record its host id and its host group
+(one the coordinator holds, [hostgroups.md](hostgroups.md); on a coordinator that holds none, its
+role, `--role`): the record is the approval, so the machine that matches it, within its window and once, is enrolled
 with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval)). The window is
 24 hours unless you give `--approve-for-secs` or `--approve-until-unix`; enter the record shortly
 before the machine boots.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    enrollment add-record --host-id web-17 --role web \
+    enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --platform linux_x86_64 \
     --approve-for-secs 43200 \
@@ -567,8 +568,8 @@ gets no install: its MAC left the answer set at its seed fetch, and from then on
 request keeps it out, after a restart of `serve` too. Its daemon makes its key, posts its
 request, and its console shows the key hash.
 
-**Step 2. Check that it enrolled.** The coordinator approves the request itself, as `web-17` with
-the record's role, and the daemon takes its certificate at its next poll. No approve is run. The
+**Step 2. Check that it enrolled.** The coordinator approves the request itself, as `web-17` in
+the record's host group, and the daemon takes its certificate at its next poll. No approve is run. The
 daemon logs `enrolled as host:web-17`, and the record is used: `list-records` shows it
 `RECORD_STATE_USED`, with the request that used it.
 
@@ -594,12 +595,14 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
-    --role web --services api --reason "network install, key checked on the console"
+    --host-group web --reason "network install, key checked on the console"
 ```
 
 A request that matches a record another request also matches is `contested` and cannot be
 approved until the other is rejected ([enrollment.md](enrollment.md#the-pending-request-and-its-match)).
-The coordinator then orders the services assigned to the host or its role, as for every host.
+The coordinator then orders the packages of the host's group, in the group's order, as for every
+host ([hostgroups.md](hostgroups.md)); a coordinator that holds no host group orders the services
+assigned to the host or its role.
 
 **A further step, on a board that does not try network boot first:** pick its UEFI network boot
 entry once in the firmware's boot menu, over the BMC's remote console, when it powers on.
@@ -653,7 +656,7 @@ the machine's row in [What has been checked](#what-has-been-checked).
 
 ## Reinstall a known host
 
-The host keeps its host id, role and services; its install disk is written anew, and it gets a
+The host keeps its host id and its host group; its install disk is written anew, and it gets a
 new key. Only the disk `install-disk` matches is written: other disks, such as a storage node's
 data disks, are not touched by the installer. In router mode the record must have a platform;
 to set one on a record, remove the record and add it again.
@@ -692,17 +695,19 @@ to set one on a record, remove the record and add it again.
    once more at its next network boot.
 4. The new daemon posts a request with a new key. Its MACs are bound to the enrolled host, so the
    request is `duplicate_claim`, pending with an alert, and matches the host's record. Compare the
-   console's key hash and approve with `--replace true`, the role and the services again:
+   console's key hash and approve with `--replace true` and the host's group again (another group
+   is refused `host_group_differs`; on a coordinator that holds no host group, the role and the
+   services again):
 
    ```
    hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
        enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
-       --host-id web-17 --role web --services api --replace true \
+       --host-id web-17 --host-group web --replace true \
        --reason "web-17 reinstalled from the network, key checked on the console"
    ```
 
-5. The coordinator orders an `install` of each assigned service, since the new host reports none
-   installed. The old key's certificate is refused at once (`forbidden` at its heartbeat,
+5. The coordinator orders an `install` of each package of the host's group, in its order, since
+   the new host reports none installed. The old key's certificate is refused at once (`forbidden` at its heartbeat,
    `renewal_not_allowed` at its renewal); nothing has to be revoked by hand.
 
 A host that is retired instead (`hosts retire`, [enrollment.md](enrollment.md#retire-a-node))

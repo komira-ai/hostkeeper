@@ -23,8 +23,9 @@ most 64 KiB; the gateway serves each call at `POST /hostkeeper.operator.v1.HostG
 | `policy` | How every package of the group rolls out (see Policy below). |
 | `generation` | 1 for a new group, and one more for each `Put` that replaces it. |
 
-A group names no host: a host is in a group because its enrollment record says so
-(`HostGroups.Move`). A group lists packages, not versions: the versions are the group's desired
+A group names no host: a host is in a group because its enrollment record says so, put there by
+its approval ([Enrolling a host into a group](#enrolling-a-host-into-a-group)) and changed later
+only by `HostGroups.Move`. A group lists packages, not versions: the versions are the group's desired
 versions, set with `Releases.SetDesired` (Deployments below). A package can be listed by many
 groups, and a host runs it at its own group's desired version. A package's minimum version in a
 group is not part of the group: only `Services.SetMinVersion` writes it, and `Put` neither reads
@@ -39,12 +40,18 @@ start. In group mode:
 - A host runs the packages its group lists and no others. What the rollout file's `roles`,
   `selector` and `priority` say, and the operator's assignments, place nothing any more.
   `Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`, before anything is
-  read. The services an approval names still write assignment entries, which place nothing.
+  read, and an approval that names services is refused `services_retired`.
+- A host is put in its group when it is approved: by the group `Approve` names, the group of the
+  inventory record that approves it, or the group of its Mac allowlist entry
+  ([Enrolling a host into a group](#enrolling-a-host-into-a-group)). After that only `Move`
+  changes it.
 - A host in no group is ordered nothing: no install, no update, no uninstall. It keeps running
-  what it runs. A newly approved host is in no group until `Move` puts it in one.
+  what it runs. A host is in none when it was approved before the coordinator held a group, until
+  `Move` puts it in one.
 - The role the coordinator's fleet records for a host is the name of its group (empty for a host in
   none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
-  `host_group`; a host in none keeps the role it was approved for and an empty `host_group`. The slots of a package
+  `host_group` (an approval by group writes the group's name as the host's role, too); a host in
+  none keeps the role it was approved for and an empty `host_group`. The slots of a package
   (`max_updating`), its `min_up` and its stages count the hosts of one group, so two groups never
   wait on each other; a hold of a role holds the group of that name.
 - The rollout file is still read at start. It gives a package what a package has alone: its
@@ -56,7 +63,8 @@ start. In group mode:
 - A package a host runs that its group does not list, and no uninstall intent covers (it was
   installed by hand, or by an earlier placement), is never ordered. `Hosts.Get` still shows it.
 - A private repository is served to a host under the name of its group, the one its record holds,
-  not the role its certificate names: the suite a host is sent
+  never a role from its certificate (a host certificate names the fixed role `host`, which means
+  nothing, [enrollment-coordinator.md](../enrollment-coordinator.md)): the suite a host is sent
   ([repository-keys.md](repository-keys.md)) and the paths it may read are of that group. A host
   in no group reads none.
 
@@ -115,19 +123,41 @@ operator's reason: `new group`, `packages +<added> -<taken out>`, `reordered` (t
 stayed changed order), `policy <keys that changed>` or `no change`, joined by `; ` and followed by
 `: ` and yours, for example `packages +hello-config-web; policy bake_beats: add the web config`.
 
-**Remove.** A group that a host is in or moving into, or that an inventory record names, is
-`not_empty`. Removing the last group ends group mode. The entry is `host_group_remove`.
+**Remove.** A group that a host is in or moving into, that an inventory record names (by its
+group, or by its role for a record added before the coordinator held groups), or that an entry of
+the Mac allowlist names, is `not_empty`; an approved host is in its group from its approval, before
+it first polls. The check runs under the lock an approval and `AddRecord` check their group
+under, so neither lands in a group being removed. Removing the last group ends group mode. The entry is `host_group_remove`.
 
 **Move.** The entry is `host_move`, about the host (`node_id`) and the new group (`host_group`),
 with the reason `from <old> to <new>: <yours>`, or `into <new>: <yours>` for a host that was in
 none. The answer names the group the host was in. `unknown_host` is a host that is not enrolled
 or is denied, and the checks run in the order of the table.
 
+## Enrolling a host into a group
+
+In group mode every approval puts its host in a group, which must be one the coordinator holds
+(`unknown_host_group`) ([enrollment.md](enrollment.md)):
+
+- `hkctl enrollment add-record --host-group <group>`: the record is the approval, and the
+  coordinator puts the host it approves in the record's group. A record added before the
+  coordinator held groups names its group by its role; one whose role no group has approves
+  nothing, and its request waits for an operator.
+- `hkctl enrollment approve --host-group <group>`: the operator's approval. It names no
+  `--services` (`services_retired`).
+- A Mac approved by its MDM nonce goes into the `host_group` of its entry of
+  `--mac-serial-allowlist` ([enrollment-coordinator.md](../enrollment-coordinator.md#a-mac-approved-by-its-nonce)).
+
+`--role` is read as the group's name where `--host-group` is left out, so scripts that name roles
+keep working once the groups have the roles' names. The approval's audit entry names the group,
+and the host's facts generation is raised by it. A renewal keeps the host's group, and an approval
+with `--replace` keeps the group of the host it replaces: naming another group is
+`host_group_differs`.
+
 ## Moving a host
 
-`Approve` and `AddRecord` do not name a group yet: `--host-group` on either is refused
-`unknown_host_group`. So a host gets into a group by `Move`, and a host in a group is changed to
-another by `Move`.
+A host in a group is changed to another by `Move`, and a host approved before the coordinator held
+groups is put in one by `Move`.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -199,8 +229,8 @@ A host's facts (its id, its group, its labels) are sent in the answer to its hea
 whole, until the host reports their generation. The generation is the number of the newest audit
 entry that changed the facts of the host: `host_move`, `set_labels`, an approval or a replacing
 approval, or, if none since the coordinator opened its audit log, the number of its last entry.
-The group in the facts is the one the host's record holds, or, for a host in none, the role it
-was approved for. Nothing is stored for the generation: it follows from the audit log, so a
+The group in the facts is the one the host's record holds (an approval by group writes it), or,
+for a host in none, the role it was approved for. Nothing is stored for the generation: it follows from the audit log, so a
 restart resends every host its facts once and the daemon, which writes the file only on a change,
 writes nothing.
 
@@ -321,11 +351,9 @@ the plan they are about.
 
 ## Not built yet
 
-- Approval by group: `Approve` and `AddRecord` name no group, the services an approval names are
-  not refused, and the Mac allowlist names no group. A new host is in no group until `Move`.
 - The migration of roles, the rollout file and assignments into groups, and the refusal of
   `--rollout-file`. Until then, putting the first group is the whole fleet changing from placement
-  by roles to placement by groups: every host is in no group, and runs what it runs but is ordered
-  nothing, until it is moved.
+  by roles to placement by groups: every host enrolled before it is in no group, and runs what it
+  runs but is ordered nothing, until it is moved.
 
 Each is a later build item of the design ([hostgroups.md](../design/hostgroups.md), section 12).

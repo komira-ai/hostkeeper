@@ -17,6 +17,12 @@
 //!   the host id, role and services of the serial's allowlist entry, and the nonce is consumed
 //!   in that approval's write. The coordinator then assigns the entry's services to the host
 //!   as it does an operator approval's ([`crate::service::Coordinator::enroll`]).
+//! - From a coordinator that holds host groups (`docs/design/hostgroups.md` section 1.2), the
+//!   approval puts the Mac in the entry's host group and assigns nothing. The start refuses an
+//!   allowlist whose entry names `services` or a group the coordinator does not hold; should
+//!   the coordinator come to hold groups after its start, an entry that names services, or a
+//!   group it does not hold, is refused as an operator's approval would be
+//!   (`services_retired`, `unknown_host_group`), and the Mac stays pending.
 //! - A Mac wiped after its approval comes back with a new key, and its host id is held by the
 //!   old one. The nonce approval takes it over, audited `enroll_replace`, when the gate says
 //!   the device's current enrollment began after the old key's approval and the old key's own
@@ -33,13 +39,14 @@
 //! [[mac]]
 //! serial = "C02XK1ABJG5J"
 //! host_id_prefix = "mac-"
-//! role = "build"
-//! services = ["builder"]
+//! host_group = "build"
 //! ```
 //!
 //! The host id is the prefix followed by the serial in lower case; each must make a host id,
-//! the role and the services must follow their rules, and a serial is listed once, or the
-//! start stops.
+//! the group must follow the rule of a group's name, and a serial is listed once, or the start
+//! stops. An entry written before groups names a `role` instead, read as the group's name, and
+//! may name `services`, which only a coordinator that holds no group assigns; an entry that
+//! names both a `role` and a `host_group` names one name.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -57,6 +64,7 @@ use serde::Deserialize;
 use super::Enrollment;
 use super::approve::{Checked, refusal_of};
 use super::device_state::{DeviceState, NoDeviceState};
+use super::groups::group_in;
 use crate::ops::AuditEntry;
 
 /// The approver a Mac approved by its nonce is recorded under.
@@ -169,7 +177,11 @@ fn is_serial(serial: &str) -> bool {
 pub struct MacAllowEntry {
     /// The host id: the entry's prefix and the serial in lower case.
     pub host_id: HostId,
+    /// The entry's `host_group`, or its `role`: the group a coordinator that holds groups puts
+    /// the Mac in, and the role one that holds none approves it as.
     pub role: Role,
+    /// The services a coordinator that holds no group assigns; one that holds groups refuses
+    /// an entry that names any.
     pub services: Vec<ServiceName>,
 }
 
@@ -201,6 +213,9 @@ struct AllowFile {
 struct AllowRow {
     serial: String,
     host_id_prefix: String,
+    #[serde(default)]
+    host_group: String,
+    #[serde(default)]
     role: String,
     #[serde(default)]
     services: Vec<String>,
@@ -210,8 +225,9 @@ impl MacAllowlist {
     /// The allowlist the TOML `text` says.
     ///
     /// # Errors
-    /// [`AllowlistError::Invalid`]: not the file's shape, a serial listed twice, or a serial,
-    /// host id, role or service that breaks its rule.
+    /// [`AllowlistError::Invalid`]: not the file's shape, a serial listed twice, an entry that
+    /// names no `host_group` nor `role`, or two names, or a serial, host id, group or role, or
+    /// service that breaks its rule.
     pub fn parse(text: &str) -> Result<MacAllowlist, AllowlistError> {
         let invalid = AllowlistError::Invalid;
         let file: AllowFile = toml::from_str(text).map_err(|e| invalid(e.to_string()))?;
@@ -225,12 +241,27 @@ impl MacAllowlist {
             }
             let host = format!("{}{}", row.host_id_prefix, row.serial.to_ascii_lowercase());
             let host_id = HostId::parse(&host).map_err(|e| invalid(e.to_string()))?;
-            let role = row
-                .role
+            let name = match (row.host_group.as_str(), row.role.as_str()) {
+                ("", "") => {
+                    return Err(invalid(format!(
+                        "the entry of serial {} names no host_group",
+                        row.serial
+                    )));
+                }
+                (group, role) if !group.is_empty() && !role.is_empty() && group != role => {
+                    return Err(invalid(format!(
+                        "the entry of serial {} names host_group {group:?} and role {role:?}",
+                        row.serial
+                    )));
+                }
+                ("", role) => role,
+                (group, _) => group,
+            };
+            let role = name
                 .parse::<RoleName>()
                 .ok()
-                .and_then(|_| Role::parse(&row.role).ok())
-                .ok_or_else(|| invalid(format!("role {:?} breaks its rule", row.role)))?;
+                .and_then(|_| Role::parse(name).ok())
+                .ok_or_else(|| invalid(format!("host group {name:?} breaks its rule")))?;
             let services = row
                 .services
                 .iter()
@@ -270,6 +301,21 @@ impl MacAllowlist {
     pub fn services(&self) -> impl Iterator<Item = &ServiceName> {
         self.0.values().flat_map(|entry| entry.services.iter())
     }
+
+    /// The serial of the first entry that names services, for the start of a coordinator that
+    /// holds host groups to refuse.
+    #[must_use]
+    pub fn naming_services(&self) -> Option<&str> {
+        self.0
+            .iter()
+            .find(|(_, entry)| !entry.services.is_empty())
+            .map(|(serial, _)| serial.as_str())
+    }
+
+    /// The host group each entry names, in the order of the serials.
+    pub fn groups(&self) -> impl Iterator<Item = &str> {
+        self.0.values().map(|entry| entry.role.as_str())
+    }
 }
 
 /// The Mac path's configuration: the gate's port and the allowlist.
@@ -298,6 +344,12 @@ impl fmt::Debug for MacPolicy {
 }
 
 impl Enrollment {
+    /// Whether an entry of the Mac allowlist names the host group `name`: one that
+    /// `HostGroups.Remove` refuses to remove.
+    pub(crate) fn mac_names_group(&self, name: &str) -> bool {
+        self.mac.allowlist.groups().any(|group| group == name)
+    }
+
     /// A new nonce for the Mac of `serial` and its pending request `request_id` (the request's
     /// key hash), issued now and good for one hour and one approval of that request. Only its
     /// SHA-256 is recorded, with the serial and the request id; the bytes returned are the only
@@ -347,6 +399,20 @@ impl Enrollment {
         let Some(entry) = self.mac.allowlist.get(serial) else {
             return self.decline(request_id, serial, MacDecline::SerialNotAllowed);
         };
+        let host_group = match self.held_groups() {
+            None => None,
+            Some(_) if !entry.services.is_empty() => {
+                return self.mac_refused(
+                    request_id,
+                    Some(&entry.host_id),
+                    EnrollmentRefusal::ServicesRetired,
+                );
+            }
+            Some(held) => match group_in(entry.role.as_str(), "", &held) {
+                Ok(group) => group.map(|group| group.to_string()),
+                Err(refusal) => return self.mac_refused(request_id, Some(&entry.host_id), refusal),
+            },
+        };
         let status = match self.mac.device_state.status(serial) {
             Err(why) => {
                 tracing::warn!(%why, "the device-state gate gave no answer");
@@ -368,6 +434,7 @@ impl Enrollment {
                 role: entry.role.clone(),
                 services: entry.services.clone(),
                 replace: false,
+                host_group,
             },
             reason: MAC_REASON.to_owned(),
         };
@@ -386,7 +453,12 @@ impl Enrollment {
                 Ok(approval) => {
                     // Recorded as replacing when it took the Mac's own host id over.
                     checked.decision.replace = approval.replace;
-                    Ok(Ok(self.audited(&checked, &record, pending.claims.clone())))
+                    Ok(Ok(self.audited(
+                        &checked,
+                        &record,
+                        pending.claims.clone(),
+                        &approval.host_group,
+                    )))
                 }
                 Err(ApproveError::MacNonce(refusal)) => Ok(Err(MacDecline::from(refusal))),
                 Err(other) => Err(refusal_of(&other)),

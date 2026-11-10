@@ -31,7 +31,7 @@ use serde::{Deserialize, Serialize};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
-use crate::live::live_elsewhere;
+use crate::live::{Live, Why, live_elsewhere};
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{OpsError, OpsState, OpsStore, Write};
 use crate::reconcile::{COORDINATOR, entry};
@@ -411,7 +411,8 @@ impl Coordinator {
 
 /// The plan of `def` for its desired state `want` at `now` as `hostkeeper.operator.v1` says it,
 /// with why it waits: a halt or a bad version (`halted`), the pause, the quiet start and the other
-/// services' rollouts first (naming the services whose live rollouts hold it, `waiting_on`), then
+/// services' rollouts first (naming the services whose live rollouts hold it, `waiting_on`, and
+/// why each is live, `waiting_on_why`), then
 /// what the plan holds ([`View::wait`]).
 pub(crate) fn plan_proto(
     services: &crate::services::Services,
@@ -423,7 +424,7 @@ pub(crate) fn plan_proto(
     now: Duration,
 ) -> proto::RolloutPlan {
     let view = crate::stages::current(def, want, fleet, now);
-    let mut waiting_on = Vec::new();
+    let mut live_on = Vec::new();
     let waiting = if view.finished() {
         None
     } else if halted {
@@ -433,7 +434,7 @@ pub(crate) fn plan_proto(
     } else if fleet.is_quiet(now) {
         Some(Wait::Quiet)
     } else if let Some(live) = live_elsewhere(services, all, &def.name, fleet, now) {
-        waiting_on = live;
+        live_on = live;
         Some(Wait::RolloutElsewhere)
     } else {
         view.wait(def, want, fleet, now)
@@ -454,8 +455,28 @@ pub(crate) fn plan_proto(
         paused_by: view.paused.as_ref().map(|p| p.by.clone()),
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),
         finished: view.finished(),
-        waiting_on,
+        waiting_on: live_on.iter().map(|(name, _)| name.clone()).collect(),
         host_group: def.group().map(ToString::to_string).unwrap_or_default(),
+        waiting_on_why: live_on.into_iter().map(live_proto).collect(),
+    }
+}
+
+/// Why the service `name` is live, as `hostkeeper.operator.v1` says it.
+fn live_proto((name, live): (String, Live)) -> proto::LiveRollout {
+    let reason = match live.why {
+        Why::Updating => proto::LiveReason::Updating,
+        Why::PromotionPending => proto::LiveReason::PromotionPending,
+        Why::Ordered => proto::LiveReason::Ordered,
+        Why::Baking => proto::LiveReason::Baking,
+        Why::PlanUnderWay => proto::LiveReason::PlanUnderWay,
+    };
+    proto::LiveRollout {
+        service: name,
+        reason: reason.into(),
+        node_id: live
+            .host
+            .map(|id| id.as_str().to_owned())
+            .unwrap_or_default(),
     }
 }
 

@@ -229,7 +229,8 @@ struct ExtrasDropped {
 /// The coordinator.
 pub struct Coordinator {
     pub(crate) fleet: Mutex<Fleet>,
-    pub(crate) desired: DesiredStore,
+    /// Shared with enrollment, which places each approved host by its host groups.
+    pub(crate) desired: Arc<DesiredStore>,
     pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
@@ -292,7 +293,7 @@ impl Coordinator {
     ) -> Self {
         Self {
             fleet: Mutex::new(Fleet::new(clock(), QUIET_START)),
-            desired,
+            desired: Arc::new(desired),
             services: Services::default(),
             legacy: None,
             prefixes: SanPrefixes::default(),

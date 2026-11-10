@@ -129,8 +129,9 @@ enum EnrollmentRefusal {
   ENROLLMENT_REFUSAL_RECORD_USED = 23;
   // INVALID_ARGUMENT: `Approve` that names `services`: the host's group decides what it runs.
   ENROLLMENT_REFUSAL_SERVICES_RETIRED = 24;
-  // FAILED_PRECONDITION: `Approve` with `replace` that names another host group than the one the
-  // replaced host is in; `HostGroups.Move` moves a host.
+  // FAILED_PRECONDITION: `Approve` of a renewal, or with `replace` (a Mac taking its own host id
+  // over too), that names another host group than the one that host is in; `HostGroups.Move`
+  // moves a host.
   ENROLLMENT_REFUSAL_HOST_GROUP_DIFFERS = 25;
   // NOT_FOUND: `Approve` or `AddRecord` that names a host group the coordinator does not hold
   // (any, for a coordinator that holds none).
@@ -343,7 +344,7 @@ message ApproveRequest {
   bool replace = 6;
   string reason = 7;
   // The host group the host is in, which must exist (`unknown_host_group`; a coordinator that
-  // does not hold host groups refuses any). With `replace`, the group of the replaced host
+  // does not hold host groups refuses any). With a renewal or `replace`, the group of that host
   // (`host_group_differs`).
   string host_group = 8;
 }
