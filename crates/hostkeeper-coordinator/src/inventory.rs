@@ -495,13 +495,16 @@ fn record_of(
     held: Option<&HostGroups>,
 ) -> Result<InventoryRecord, proto::EnrollmentRefusal> {
     use proto::EnrollmentRefusal::{InvalidHostId, InvalidRequest, InvalidRole, UnknownHostGroup};
+    // A coordinator that holds no group refuses a group first, as it did before groups.
+    if held.is_none() && !request.host_group.is_empty() {
+        return Err(UnknownHostGroup);
+    }
     let host_id = request
         .host_id
         .parse::<HostId>()
         .map_err(|_| InvalidHostId)?
         .to_string();
     let (role, host_group) = match (held, request.role.as_str()) {
-        (None, _) if !request.host_group.is_empty() => return Err(UnknownHostGroup),
         (None, "") => (String::new(), String::new()),
         (None, text) => (
             text.parse::<RoleName>()

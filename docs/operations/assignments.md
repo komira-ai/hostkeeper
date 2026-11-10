@@ -31,8 +31,10 @@ later taken off it. `Unassign` of a scope the service is not assigned to is refu
 An operator's enrollment approval (`Enrollment.Approve`) assigns the services it names to the
 host it approves, by the same path as `Assign` of the host, with one `assign` entry per service
 after the approval's own. If that write fails, the approval stands, the coordinator logs it, and
-the operator assigns the services with `Services.Assign`. A Mac approved by its MDM nonce is not
-assigned its allowlist entry's services this way: assign them with `Services.Assign`.
+the operator assigns the services with `Services.Assign`. A Mac approved by its MDM nonce has its
+allowlist entry's services assigned the same way, by `mdm-nonce`. A coordinator that holds host
+groups refuses an approval that names services, and an allowlist entry that does
+([hostgroups.md](hostgroups.md#enrolling-a-host-into-a-group)).
 
 ## Install
 

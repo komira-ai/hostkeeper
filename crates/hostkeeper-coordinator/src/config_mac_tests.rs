@@ -235,3 +235,16 @@ async fn a_renewed_certificate_carries_the_same_host_role() {
         .expect("an enrolled host");
     assert_eq!((who.host_id.as_str(), who.role.as_str()), ("s1", "storage"));
 }
+
+/// Proves: the host-role prefix the CA writes when it is given none is the coordinator's default
+/// `--host-role-uri-prefix`, the one the certificate readers of `hostkeeper-wire` default to.
+///
+/// Catches: the two defaults drifting apart, so that a host certificate issued under the default
+/// names its role under another prefix than the readers look for.
+#[test]
+fn the_cas_default_host_role_prefix_is_the_readers() {
+    assert_eq!(
+        hostkeeper_enrollment::ca::DEFAULT_HOST_ROLE_URI_PREFIX,
+        hostkeeper_wire::identity::DEFAULT_HOST_ROLE_URI_PREFIX
+    );
+}

@@ -254,6 +254,12 @@ fn a_coordinator_with_no_group_refuses_a_host_group_and_keeps_a_role() {
         add(&world, add_naming("web", "storage")),
         Err(Refusal::UnknownHostGroup)
     );
+    // The group is refused before the other fields are read, as before groups.
+    let malformed = proto::AddRecordRequest {
+        host_id: "Not A Host".to_owned(),
+        ..add_naming("web", "")
+    };
+    assert_eq!(add(&world, malformed), Err(Refusal::UnknownHostGroup));
     assert_eq!(world.state(), before);
 
     let answer = add(&world, add_naming("", "storage")).expect("added");

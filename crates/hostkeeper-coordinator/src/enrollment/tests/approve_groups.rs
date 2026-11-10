@@ -386,6 +386,28 @@ fn a_coordinator_holding_no_group_refuses_a_host_group_and_approves_by_role() {
     still_pending(&world, &key, "s1");
     let audited = world.audit().len();
 
+    // The group is refused before the other fields are read, as before groups.
+    let malformed = ApproveRequest {
+        request_id: "not a key hash".to_owned(),
+        ..ask(&key, "s1", "storage", "web", &[])
+    };
+    assert_eq!(
+        approve(&world, malformed),
+        Err(EnrollmentRefusal::UnknownHostGroup)
+    );
+    assert_eq!(
+        world.audit_after(audited),
+        vec![operator_entry(
+            audited as u64 + 1,
+            "enroll_approve_refused",
+            None,
+            None,
+            "unknown_host_group",
+        )]
+    );
+    assert_eq!(unchanged(&world), before);
+    let audited = world.audit().len();
+
     let approved = approve(&world, ask(&key, "s1", "storage", "", &["web"]));
 
     assert_eq!(approved, Ok("s1".to_owned()));
@@ -444,4 +466,34 @@ fn without_enrollment_only_a_group_not_held_is_unknown() {
         coordinator.ops().audit_log().expect("the audit log").len(),
         audited
     );
+}
+
+/// Proves: a host approved into `web` counts as in it at once, before its first poll or
+/// heartbeat: `HostGroups.Remove` of `web` is refused `not_empty` and changes nothing, while an
+/// empty group beside it is removed.
+///
+/// Catches: a group removed between a host's approval into it and the host's first poll, which
+/// would leave the host placed in a group the coordinator no longer holds.
+#[test]
+fn a_group_a_host_was_just_approved_into_is_not_removed() {
+    let world = World::new("approve-group-remove");
+    world.put("web", &[SELF], None).expect("put");
+    world.put("spare", &[SELF], None).expect("put");
+    let key = post(&world, "machine-1");
+    approve(&world, ask(&key, "w1", "", "web", &[])).expect("approved");
+    let before = world.state();
+
+    let refused = world
+        .coordinator()
+        .host_groups_remove(&operator(), crate::host_groups_support::remove_of("web"));
+
+    assert_eq!(
+        refused.map(|_| ()),
+        Err(hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal::NotEmpty)
+    );
+    assert_eq!(world.state(), before);
+    world
+        .coordinator()
+        .host_groups_remove(&operator(), crate::host_groups_support::remove_of("spare"))
+        .expect("an empty group is removed");
 }

@@ -152,6 +152,10 @@ fn check(
     known: &dyn Fn(&str) -> bool,
     held: Option<&HostGroups>,
 ) -> Result<Asked, EnrollmentRefusal> {
+    // A coordinator that holds no group refuses a group first, as it did before groups.
+    if held.is_none() && !request.host_group.is_empty() {
+        return Err(EnrollmentRefusal::UnknownHostGroup);
+    }
     let invalid = EnrollmentRefusal::InvalidRequest;
     let request_id = KeyHash::from_hex(&request.request_id).ok_or(invalid)?;
     let key_sha256 = KeyHash::from_hex(&request.key_sha256).ok_or(invalid)?;
@@ -160,9 +164,6 @@ fn check(
         text => Some(HostId::parse(text).map_err(|_| EnrollmentRefusal::InvalidHostId)?),
     };
     let (role, services, host_group) = match held {
-        None if !request.host_group.is_empty() => {
-            return Err(EnrollmentRefusal::UnknownHostGroup);
-        }
         None => (
             role_of(&request.role).ok_or(EnrollmentRefusal::InvalidRole)?,
             services_of(&request.services, known).ok_or(EnrollmentRefusal::InvalidService)?,

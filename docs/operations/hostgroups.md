@@ -23,8 +23,9 @@ most 64 KiB; the gateway serves each call at `POST /hostkeeper.operator.v1.HostG
 | `policy` | How every package of the group rolls out (see Policy below). |
 | `generation` | 1 for a new group, and one more for each `Put` that replaces it. |
 
-A group names no host: a host is in a group because its enrollment record says so
-(`HostGroups.Move`). A group lists packages, not versions: the versions are the group's desired
+A group names no host: a host is in a group because its enrollment record says so, put there by
+its approval ([Enrolling a host into a group](#enrolling-a-host-into-a-group)) and changed later
+only by `HostGroups.Move`. A group lists packages, not versions: the versions are the group's desired
 versions, set with `Releases.SetDesired` (Deployments below). A package can be listed by many
 groups, and a host runs it at its own group's desired version. A package's minimum version in a
 group is not part of the group: only `Services.SetMinVersion` writes it, and `Put` neither reads

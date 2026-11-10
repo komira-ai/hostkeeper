@@ -813,3 +813,31 @@ fn a_host_role_prefix_that_is_not_ascii_signs_no_host_certificate() {
     );
     assert!(server.is_ok());
 }
+
+/// Proves: a host certificate in the form a release before this one issued (`CN=host:<id>` and
+/// no subjectAltName), signed by the CA's key, is still read as its host and its key.
+///
+/// Catches: a reader that came to require the fixed host role and so refuses every host still
+/// on a certificate issued before it, until that host renews.
+#[test]
+fn a_host_certificate_without_a_host_role_is_still_read() {
+    let test = TestCa::new("host-role-before");
+    let paths = files(test.dir.path());
+    let ca_key = KeyPair::try_from(std::fs::read(paths.key).expect("the CA key").as_slice())
+        .expect("a PKCS#8 key");
+    let issuer = rcgen::Issuer::new(subject("hostkeeper CA"), ca_key);
+    let host = HostKey::new();
+    let mut before = subject("host:web-1");
+    before.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    let der = before
+        .signed_by(&host.pair, &issuer)
+        .expect("signed")
+        .der()
+        .to_vec();
+    assert!(alt_names(&parse(&der)).is_empty());
+
+    let read = test.ca.bundle().host_certificate(&der).expect("read");
+
+    assert_eq!(read.host_id, host_id("web-1"));
+    assert_eq!(read.key.point(), host.p256().point());
+}
