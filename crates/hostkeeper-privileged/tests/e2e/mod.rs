@@ -67,8 +67,10 @@ pub mod pkg_build;
 /// The service of the fixture package, which is also its package; every unit of it starts with
 /// this name.
 pub const SERVICE: &str = "hostkeeper-ci-tierstore";
-/// The name of the host's repository entry of the fixture packages.
-pub const REPOSITORY_NAME: &str = "tierstore-fixture";
+/// The channel of the fixture packages' repository, `<registry name>-<suite>`: the name of the
+/// host's repository entry and the `repository` of the entries an order carries. The registry
+/// name is [`aptrepo::REGISTRY_NAME`], which the coordinator's rollout file names for the service.
+pub const REPOSITORY_NAME: &str = aptrepo::REPOSITORY;
 /// The fixture program, at `usr/bin/tierstore-like` in the package.
 pub const BINARY_NAME: &str = "tierstore-like";
 /// The template unit of the fixture's instances, `hostkeeper-ci-tierstore@<port>.service`.

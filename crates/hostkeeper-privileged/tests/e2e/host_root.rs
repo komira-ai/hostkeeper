@@ -29,9 +29,9 @@ use hostkeeper_privileged::{SYSTEMD_RUNTIME_DIR, check_host};
 use hostkeeper_steps::record::RECORD_FILE;
 use hostkeeper_steps::systemd::SYSTEMCTL;
 
-use super::REPOSITORY_NAME;
 use super::SERVICE;
 use super::aptrepo::AptRepo;
+use super::aptrepo::REGISTRY_NAME;
 
 /// The daemon program: `hostkeeper`, built with these tests (it holds `daemon`).
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
@@ -246,10 +246,12 @@ impl HostRoot {
     }
 
     /// Puts the entry of `repo`, the repository of the packages the test orders, where the
-    /// daemon reads its repository entries (`/etc/hostkeeper/repositories`, under the name
-    /// [`REPOSITORY_NAME`]). Call it before the daemon starts: it reads the directory once.
+    /// daemon reads its repository entries (`/etc/hostkeeper/repositories`), as the
+    /// coordinator's registry renders it under the name [`REGISTRY_NAME`] (so that the daemon
+    /// adopts the registry's set), and makes the host's apt trust the repository's https server.
+    /// Call it before the daemon starts: it reads the directory at its start.
     pub fn install_repository(&self, repo: &AptRepo) {
-        repo.install_entry(REPOSITORY_NAME);
+        repo.install_registered(REGISTRY_NAME);
     }
 
     /// Writes the daemon config at [`HostRoot::config_path`], mode 0600, owned by root.

@@ -1,7 +1,7 @@
-//! A static file server over HTTPS on `127.0.0.1`, for the cross-release rig's apt repository.
+//! A static file server over HTTPS on `127.0.0.1`, for the apt repositories of the device rigs.
 //!
-//! The registry takes `https://` repositories only, so the repository the rig builds in a
-//! directory is served from here: [`Server::start`] makes a throwaway CA and a server
+//! The coordinator's registry takes `https://` repositories only, so the repository a rig builds in
+//! a directory is served from here: [`Server::start`] makes a throwaway CA and a server
 //! certificate it signed (IP SAN `127.0.0.1`, server authentication), binds `127.0.0.1:0`, and
 //! answers `GET` and `HEAD` for the files below the directory on plain `std` threads over rustls.
 //! The files are read at each request, so a repository that grows while the server runs is served
@@ -9,7 +9,7 @@
 //! 404, any other method 405. HTTP/1.1, `Connection: close`, one request per connection.
 //!
 //! The server knows nothing of apt: [`Server::ca_pem`] is what the host's apt is told to trust
-//! (`super::deb`).
+//! (the cross-release rig's `deb`, and `aptrepo::AptRepo`).
 
 use std::fs;
 use std::io::{self, Read, Write};

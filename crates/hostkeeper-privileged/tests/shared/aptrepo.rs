@@ -10,9 +10,16 @@
 //! - **The repository** ([`AptRepo`]) is the one of the apt device test (`install_apt/repo.rs`:
 //!   the suite `hk`, its one component `main`, `InRelease` clear-signed by a key made for the
 //!   test) in a directory the test gives, which lists every package published so far.
-//! - **The host's entry** ([`AptRepo::install_entry`]) is the `.sources` file and keyring the
-//!   daemon reads at `/etc/hostkeeper/repositories/` (a fixed place of the daemon, with no flag),
-//!   which a test that starts the daemon as a program makes and takes away again.
+//! - **The host's entry** is the `.sources` file and keyring the daemon reads. A rig that sets a
+//!   release through the coordinator gives the host the entry as the coordinator's registry
+//!   renders it ([`AptRepo::install_registered`]: `<name>-<suite>.sources` and `<name>.gpg` in
+//!   `/etc/hostkeeper/repositories/`, the repository served over https by [`https::Server`] and
+//!   the host's apt told to trust its CA), and puts the same repository in the registry
+//!   ([`AptRepo::registry_entry`], `Repositories.Put`) before it sets anything: the coordinator
+//!   refuses a set of `apt` entries whose repository is not a channel of a registry entry
+//!   (`repository_unknown`), and pushes its registry to each daemon, which adopts a directory
+//!   that already holds exactly the files the registry renders. A rig that drives the daemon
+//!   without a coordinator makes a `file:` entry ([`AptRepo::install_entry_in`]).
 //! - **The entry of an order** ([`entry`]) is the one `apt` entry `release targets` writes for a
 //!   package: the repository's name, the package version, the `.deb`'s SHA-256 as the pin, no
 //!   location, no size and no attestation, and the manifest of the service (its package, `run`
@@ -28,7 +35,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Mutex, PoisonError};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{
@@ -39,10 +46,29 @@ use sha2::{Digest, Sha256};
 #[path = "../install_apt/repo.rs"]
 pub mod repo;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "the cross-release rig serves its own repository with the same server"
+)]
+#[path = "https.rs"]
+pub mod https;
+
+use hostkeeper_proto::hostkeeper::release::v1::Repository;
 use repo::{Key, SUITE, Signing, architecture, run, write_index};
 
 /// The directory of the host's repository entries, a fixed place of the daemon.
 pub const REPOSITORIES_DIR: &str = hostkeeper_install::repository::config::REPOSITORIES_DIR;
+/// The name of the repository in the coordinator's registry that the rigs register (the rollout
+/// file of a rig names it as its service's `repository`).
+pub const REGISTRY_NAME: &str = "hostkeeper";
+/// The channel of that repository, `<registry name>-<suite>`: the name of the host's entry (the
+/// stem of its `.sources` file) and the `repository` of the entries an order carries.
+pub const REPOSITORY: &str = "hostkeeper-hk";
+/// The drop-in of apt's configuration that makes apt trust the CA of the repository's https
+/// server, and the CA's file it names. Their names start with `99` and `hostkeeper-privileged`
+/// so that they are read last and are not a file of the system's.
+const APT_CONF: &str = "/etc/apt/apt.conf.d/99hostkeeper-privileged-test";
+const APT_CA: &str = "/etc/apt/hostkeeper-privileged-test-ca.pem";
 /// The `min_hostkeeper` of an entry's manifest: below every version a device test runs.
 pub const MIN_HOSTKEEPER: &str = "0.1.0";
 
@@ -97,6 +123,18 @@ pub struct AptRepo {
     trees: PathBuf,
     key: Key,
     stanzas: Mutex<Vec<Stanza>>,
+    /// The https server of `dir`, started by the first call that needs it.
+    server: OnceLock<https::Server>,
+}
+
+impl Drop for AptRepo {
+    /// Takes away the apt drop-in and the CA file, when [`AptRepo::trust_server`] made them.
+    fn drop(&mut self) {
+        if self.server.get().is_some() {
+            let _ = fs::remove_file(APT_CONF);
+            let _ = fs::remove_file(APT_CA);
+        }
+    }
 }
 
 /// Writes `bytes` at `path` below `root`, mode `mode`, making its directories.
@@ -177,6 +215,7 @@ impl AptRepo {
             trees,
             key,
             stanzas: Mutex::new(Vec::new()),
+            server: OnceLock::new(),
         }
     }
 
@@ -220,18 +259,13 @@ impl AptRepo {
         published
     }
 
-    /// The host's entry of this repository, `<name>.sources` and its keyring `<name>.gpg`, in
-    /// [`REPOSITORIES_DIR`] (root's, directory mode 0755, files 0644): where the daemon reads it
-    /// at its start. The directory and its parent are made when missing.
+    /// The host's `file:` entry of this repository, `<name>.sources` and its keyring `<name>.gpg`,
+    /// in `config` (root's, directory mode 0755, files 0644), for a daemon driven without a
+    /// coordinator whose repositories directory is `config` (its `Signed-By` names the keyring
+    /// there). The directory and its parent are made when missing.
     ///
     /// # Panics
     /// A file or a directory cannot be made.
-    pub fn install_entry(&self, name: &str) {
-        self.install_entry_in(Path::new(REPOSITORIES_DIR), name);
-    }
-
-    /// [`AptRepo::install_entry`] in `config`, for a daemon whose repositories directory is
-    /// `config` (its `Signed-By` names the keyring there).
     pub fn install_entry_in(&self, config: &Path, name: &str) {
         fs::create_dir_all(config).expect("the repository configuration directory");
         for dir in [config.parent().expect("its parent"), config] {
@@ -248,6 +282,75 @@ impl AptRepo {
         fs::set_permissions(&sources, fs::Permissions::from_mode(0o644)).expect("entry mode");
     }
 
+    /// The repository's https address, `https://127.0.0.1:<port>`: its directory is served from
+    /// there from the first call on, as long as the repository lives.
+    pub fn uri(&self) -> String {
+        let server = self.server.get_or_init(|| https::Server::start(&self.dir));
+        format!("https://127.0.0.1:{}", server.port())
+    }
+
+    /// The repository as the coordinator's registry holds it: the name `name`, the suite
+    /// [`SUITE`], its one component, its key, and its own https address ([`AptRepo::uri`]). The
+    /// channel of the entry is [`channel`] of `name`.
+    pub fn registry_entry(&self, name: &str) -> Repository {
+        self.registry_entry_at(name, &self.uri())
+    }
+
+    /// [`AptRepo::registry_entry`] for a repository that is served at `uri` by something else
+    /// (the network-install rig's channel).
+    pub fn registry_entry_at(&self, name: &str, uri: &str) -> Repository {
+        let keyring = self.keyring_bytes();
+        Repository {
+            name: name.to_owned(),
+            kind: "apt".to_owned(),
+            uri: uri.to_owned(),
+            suites: vec![SUITE.to_owned()],
+            components: vec!["main".to_owned()],
+            fingerprints: vec![self.key.fingerprint().to_owned()],
+            keyring,
+        }
+    }
+
+    /// The repository's public key as the binary keyring a registry entry carries.
+    fn keyring_bytes(&self) -> Vec<u8> {
+        let file = self.trees.join("keyring.gpg");
+        self.key.export(&file);
+        fs::read(&file).expect("read the exported keyring")
+    }
+
+    /// Makes the host's apt trust the CA of the repository's https server: a drop-in of apt's
+    /// configuration and the CA's file it names, both taken away when the repository is dropped.
+    ///
+    /// # Panics
+    /// A file cannot be written.
+    pub fn trust_server(&self) {
+        self.uri();
+        let ca = self.server.get().expect("the server").ca_pem();
+        fs::write(APT_CA, ca).expect("write the CA file");
+        fs::set_permissions(APT_CA, fs::Permissions::from_mode(0o644)).expect("its mode");
+        fs::write(
+            APT_CONF,
+            format!("Acquire::https::127.0.0.1::CaInfo \"{APT_CA}\";\n"),
+        )
+        .expect("write the apt drop-in");
+        fs::set_permissions(APT_CONF, fs::Permissions::from_mode(0o644)).expect("its mode");
+    }
+
+    /// The host's entry of this repository as the coordinator's registry renders the entry
+    /// [`AptRepo::registry_entry`] `name` (`<name>-<suite>.sources` and the keyring `<name>.gpg`,
+    /// hostkeeper-release's `registry::render`) in [`REPOSITORIES_DIR`, a fixed place of the
+    /// daemon], so that the daemon, pushed the entry, finds the directory as it would write it
+    /// and adopts it; and the host's apt told to trust the https server ([`AptRepo::trust_server`]).
+    /// The directory and its parent are made when missing.
+    ///
+    /// # Panics
+    /// A file or a directory cannot be made.
+    pub fn install_registered(&self, name: &str) {
+        let entry = self.registry_entry(name);
+        write_rendered(Path::new(REPOSITORIES_DIR), &entry);
+        self.trust_server();
+    }
+
     /// The public key of the repository, binary, into `path` (mode 0644): the keyring an entry's
     /// `Signed-By` names.
     pub fn export_keyring(&self, path: &Path) {
@@ -261,6 +364,39 @@ impl AptRepo {
             "Types: deb\nURIs: {uri}\nSuites: {SUITE}\nComponents: main\nSigned-By: {}\n",
             keyring.display()
         )
+    }
+}
+
+/// The channel of the registry entry `name` with the repository's suite: the name of the host's
+/// entry and the `repository` of the entries of an order.
+pub fn channel(name: &str) -> String {
+    format!("{name}-{SUITE}")
+}
+
+/// The files the registry renders for `entry` (one suite) in `config`, root's, directory mode
+/// 0755 and files 0644: `<name>.gpg` and `<name>-<suite>.sources` naming `config/<name>.gpg` as
+/// its `Signed-By`, byte for byte as `registry::render` writes them. `config` and its parent are
+/// made when missing.
+pub fn write_rendered(config: &Path, entry: &Repository) {
+    fs::create_dir_all(config).expect("the repository configuration directory");
+    for dir in [config.parent().expect("its parent"), config] {
+        fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
+    }
+    let keyring = format!("{}.gpg", entry.name);
+    put(config, &keyring, &entry.keyring, 0o644);
+    for suite in &entry.suites {
+        let text = format!(
+            "Types: deb\nURIs: {}\nSuites: {suite}\nComponents: {}\nSigned-By: {}/{keyring}\n",
+            entry.uri,
+            entry.components.join(" "),
+            config.display(),
+        );
+        put(
+            config,
+            &format!("{}-{suite}.sources", entry.name),
+            text.as_bytes(),
+            0o644,
+        );
     }
 }
 

@@ -56,6 +56,7 @@ use super::e2e::signer::FixtureSigner;
 use super::e2e::{HOST_ID, ROLE, wait_for};
 
 mod deb;
+#[path = "../shared/https.rs"]
 mod https;
 pub use deb::Built;
 pub mod linux;

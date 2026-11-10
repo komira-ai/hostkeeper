@@ -103,6 +103,13 @@ pub const INSTALLED: &str = "/usr/local/bin/hostkeeper";
 pub const ORDER: &str = "self-update-1";
 /// The order id of the install of the version that runs which makes a Mac an installed one.
 pub const SETUP_ORDER: &str = "setup-install-1";
+
+/// The try of `order`: [`SETUP_ORDER`] is try 1 and [`ORDER`], which follows it on the same
+/// service, try 2, since the daemon refuses an order whose try its step record already holds
+/// (`try_conflict`).
+pub fn try_of(order: &str) -> u64 {
+    if order == SETUP_ORDER { 1 } else { 2 }
+}
 /// The reason of the verdict of an update whose new binary has not run yet.
 const AWAITING_REASON: &str = "awaiting_restart";
 /// The reason of the verdict of a version whose new binary failed its tries.
@@ -551,7 +558,7 @@ impl MacSelfHost {
             .contains(NEXT)
     }
 
-    /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 1, in every
+    /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 2, in every
     /// reply from now on, by the entry of the release ([`MacSelfHost::entry`]).
     pub fn offer(&self, verb: &str, version: &str) {
         self.place_order(ORDER, verb, version);
@@ -586,7 +593,7 @@ impl MacSelfHost {
         let json = target::to_json(entry).expect("the entry as JSON");
         let order = serde_json::json!({
             "id": id,
-            "try": 1,
+            "try": try_of(id),
             "verb": verb,
             "service": HK,
             "version": version,
@@ -627,7 +634,7 @@ impl MacSelfHost {
             .collect()
     }
 
-    /// The newest `last_update` the heartbeats reported for hostkeeper's order `id`, try 1.
+    /// The newest `last_update` the heartbeats reported for hostkeeper's order `id` at its try ([`try_of`]).
     pub fn verdict(&self, id: &str) -> Option<Value> {
         self.beats().into_iter().rev().find_map(|beat| {
             beat["services"]
@@ -635,7 +642,7 @@ impl MacSelfHost {
                 .iter()
                 .filter(|service| service["name"] == HK)
                 .map(|service| service["last_update"].clone())
-                .find(|result| result["order_id"] == id && result["order_try"] == 1)
+                .find(|result| result["order_id"] == id && result["order_try"] == try_of(id))
         })
     }
 

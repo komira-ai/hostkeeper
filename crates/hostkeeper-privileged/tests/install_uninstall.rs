@@ -50,8 +50,9 @@ const UNIT_FILE: &str = "/usr/lib/systemd/system/hostkeeper-ci-fixture.service";
 const WANTS: &str = "/etc/systemd/system/multi-user.target.wants/hostkeeper-ci-fixture.service";
 /// The file the package installs, which says its version.
 const PLACED: &str = "/etc/hostkeeper-ci-fixture/fixture.conf";
-/// The name of the host's repository entry of the fixture packages.
-const REPOSITORY: &str = "fixture-ci";
+/// The channel of the fixture packages' repository: the name of the host's repository entry, which
+/// an order's entry names as its `repository`.
+const REPOSITORY: &str = aptrepo::REPOSITORY;
 /// The channel the daemon's config names: the loader requires one and nothing is fetched from it.
 const NO_CHANNEL: &str = "https://releases.example";
 /// The unit the package runs: the fixture's `serve`, as its main process.
@@ -157,7 +158,9 @@ impl Installed {
         .purging(&[SERVICE]);
         let scratch = bench.scratch().to_path_buf();
         let repo = AptRepo::new(&scratch, "fixture-ci");
-        repo.install_entry(REPOSITORY);
+        // The host's entry as the coordinator's registry renders it, and the registry's entry
+        // (put once the coordinator runs, before any set).
+        repo.install_registered(aptrepo::REGISTRY_NAME);
         let placed = PathBuf::from(PLACED);
         let (v1, v1_1, v2) = (
             package(&repo, "1.0.0"),
@@ -166,8 +169,18 @@ impl Installed {
         );
 
         // 1. An enrolled host that heartbeats.
-        let services = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n");
+        let services = format!(
+            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n\
+             repository = \"{}\"\n",
+            aptrepo::REGISTRY_NAME
+        );
         let mut coordinator = Coordinator::start(&scratch, &rollout(&services), &[]);
+        must(
+            "repositories put",
+            coordinator
+                .api()
+                .put_repository(repo.registry_entry(aptrepo::REGISTRY_NAME)),
+        );
         let mut daemon = Daemon::start(&scratch, &coordinator, NO_CHANNEL);
         coordinator.approve_first(NODE, &mut daemon);
         coordinator.wait_heard(NODE, &mut daemon);

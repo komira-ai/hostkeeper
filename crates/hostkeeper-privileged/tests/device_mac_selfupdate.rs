@@ -54,7 +54,7 @@ use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_steps::handover::HAND_OVER_TRIES;
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_testkit::Scratch;
-use mac_self_update::{FALLBACK_REASON, HK, MacSelfHost, N, NEXT, Plan};
+use mac_self_update::{FALLBACK_REASON, HK, MacSelfHost, N, NEXT, Plan, receipt_version};
 use serde_json::Value;
 
 fn succeeded() -> Verdict {
@@ -246,8 +246,9 @@ fn wait_converged(host: &MacSelfHost, coordinator: &CoordinatorHandle, version: 
 /// the installer's), so it reported it unhealthy, and the new binary reported no verdict for the
 /// update, so the coordinator kept the host's older verdict. The real coordinator in the test's
 /// process, whose rollout asks two healthy heartbeats of a host at its version, is set to [`N`]
-/// by the `macos-pkg` entry of its `.pkg` and orders the daemon the install of the version it
-/// runs (the pkg installed it); then it is set to [`NEXT`], orders the update, and the daemon
+/// by the `macos-pkg` entry of its `.pkg` and reads it converged with no order, since the daemon
+/// runs that version (its package not yet installed); then it is set to [`NEXT`], orders the
+/// update, and the daemon
 /// restarts into [`NEXT`] under launchd; the coordinator reads hostkeeper converged at [`NEXT`],
 /// the host up and healthy, its last update the update order's `Succeeded`, while the package is
 /// installed at [`NEXT`] and the job runs it.
@@ -272,7 +273,10 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
 
     coordinator.set_desired_targets_alone(HK, N, host.targets(N));
     wait_converged(&host, &coordinator, N);
-    host.assert_installed(N);
+    // The host already runs N, so the coordinator orders it nothing and no package is installed
+    // yet: the update to NEXT below is the first install of hostkeeper's package (no receipt and
+    // no record, which is no drift).
+    assert_eq!(receipt_version(), None, "{}", host.logs());
     assert_eq!(
         host.runs(N),
         old_pid,

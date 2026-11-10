@@ -16,7 +16,7 @@ use std::process;
 
 use serde_json::Value;
 
-use super::aptrepo::AptRepo;
+use super::aptrepo::{AptRepo, REGISTRY_NAME};
 use super::coordinator::CoordinatorHandle;
 use super::host_root::{DaemonUnit, HostRoot};
 use super::package::{BuiltPackage, FixtureVersion, PackageBuilder};
@@ -128,6 +128,9 @@ impl Scenario {
         }
 
         let coordinator = CoordinatorHandle::start(&host.base().join("coordinator"), SERVICE, ROLE);
+        // The coordinator refuses a set of `apt` entries for a repository its registry does not
+        // hold: the registry holds the repository the host's entry was made from.
+        coordinator.put_repository(repo.registry_entry(REGISTRY_NAME));
         host.write_config(&format!(
             "coordinator = \"{}\"\nca_sha256 = \"{}\"\n{CONFIG_TAIL}",
             coordinator.heartbeat_url(),

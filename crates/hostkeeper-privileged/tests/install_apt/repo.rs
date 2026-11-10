@@ -174,6 +174,15 @@ impl Key {
         key
     }
 
+    /// The primary key's fingerprint, upper-case hex: what a registry entry lists.
+    #[allow(
+        dead_code,
+        reason = "only the rigs that register the repository with the coordinator read it"
+    )]
+    pub fn fingerprint(&self) -> &str {
+        &self.fingerprint
+    }
+
     /// Stops the gpg-agent that a key generation or a signature started, so that its sockets do
     /// not stay in the test's directory between uses (a test that asserts the daemon left no
     /// socket there would find them); the next use starts it again.

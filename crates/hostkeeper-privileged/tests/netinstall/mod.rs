@@ -107,7 +107,10 @@ impl Rig {
         let bus = Bus::default();
         let sink = Arc::new(LineSink::new(&bus, &artifacts.join("router-dhcp.log")));
 
-        let services = format!("[[service]]\nname = \"{SERVICE}\"\nroles = [\"{ROLE}\"]\n");
+        let services = format!(
+            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{ROLE}\"]\nrepository = \"{}\"\n",
+            repositories::NAME
+        );
         let coordinator = Coordinator::start_on_lan(&scratch, &rollout(&services), &[], lan.host());
         let ca = TestCa::new("release channel CA");
         let channel = Channel::start_at(&ca, lan.host());
@@ -149,6 +152,15 @@ impl Rig {
             &Path::new(repositories::HOST_DIR).join(repositories::KEYRING),
         );
         let repository_files = repositories::files(&entry, &keyring_bytes);
+        // The registry holds the repository as the channel serves it: the coordinator refuses a
+        // set of `apt` entries for a repository it does not hold, and pushes it to the host,
+        // whose directory (the files above) is what the registry renders, so the daemon adopts it.
+        let registered = repo.registry_entry_at(repositories::NAME, &channel.url());
+        assert_eq!(registered.keyring, keyring_bytes, "the registry's keyring");
+        must(
+            "repositories put",
+            coordinator.api().put_repository(registered),
+        );
         let repositories = scratch.join("repositories");
         repositories::write(&repositories, &repository_files);
 

@@ -1,7 +1,9 @@
 //! The repository entries the installed host gets (`hostkeeper-pxe serve --repositories`,
 //! packages-repositories.md sections 3.1 and 3.2): a directory of the operator's, written by the
-//! test with the entry `komira-testing.sources` (the rig's apt repository, served by the channel on
-//! the LAN) and its keyring (the repository's key), and the check, over the operator account's
+//! test with the files the coordinator's registry renders for the entry [`NAME`] (the rig's apt
+//! repository, served by the channel on the LAN, which the rig puts in the registry):
+//! `komira-hk.sources` and the keyring `komira.gpg` (the repository's key), so that the daemon,
+//! pushed the registry, adopts them; and the check, over the operator account's
 //! SSH, that the installed system holds exactly those files in `/etc/hostkeeper/repositories/` as
 //! root's with mode 0644. That the daemon started on them is shown by its heartbeats, since it
 //! refuses to start on an entry its loader refuses; that it installs from them, by the fixture
@@ -12,11 +14,14 @@ use std::path::Path;
 use super::guest::Ssh;
 use crate::support::pair::put;
 
-/// The name of the keyring the entry names.
-pub const KEYRING: &str = "komira-archive-keyring.gpg";
-/// The name of the entry: the stem of its `.sources` file, which an order's entry names as its
-/// `repository`.
-pub const ENTRY: &str = "komira-testing";
+/// The name of the repository in the coordinator's registry, which the rollout file names as the
+/// fixture service's `repository`.
+pub const NAME: &str = "komira";
+/// The name of the keyring the entry names: `<name>.gpg`.
+pub const KEYRING: &str = "komira.gpg";
+/// The channel of the entry, `<name>-<suite>`: the stem of its `.sources` file, which an order's
+/// entry names as its `repository`.
+pub const ENTRY: &str = "komira-hk";
 
 /// Where the installed host keeps them.
 pub const HOST_DIR: &str = "/etc/hostkeeper/repositories";
