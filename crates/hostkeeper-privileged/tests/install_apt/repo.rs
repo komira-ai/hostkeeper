@@ -5,10 +5,11 @@
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
 /// The package, and the service: a name no runner image has.
@@ -114,11 +115,21 @@ pub struct Built {
     pub sha256: String,
 }
 
-/// A signing key in a home of its own. Its agent is stopped when it is dropped.
+/// A signing key in a home of its own, a short private directory of the system's temporary
+/// directory: gpg-agent makes its sockets there when the host has no `/run/user/<uid>` (as root on
+/// a runner), and a socket's path must fit in the 108 bytes of `sun_path`, which
+/// `S.gpg-agent.browser` below a test's scratch directory in the target directory need not.
+/// Its agent is stopped, and its home removed, when it is dropped.
 pub struct Key {
-    home: PathBuf,
+    // Removed when the key is dropped, after `Drop::drop` has stopped the agent.
+    home: Scratch,
     fingerprint: String,
 }
+
+/// The longest name of a socket gpg makes in its home (`gpgconf --list-dirs`).
+pub const LONGEST_SOCKET: &str = "S.gpg-agent.browser";
+/// The bytes of a unix socket's path, its closing NUL included (`sun_path` on Linux).
+pub const SUN_PATH: usize = 108;
 
 /// Runs `command`, which must exit 0, and answers its standard output.
 pub fn run(command: &mut Command) -> Vec<u8> {
@@ -136,15 +147,18 @@ pub fn run(command: &mut Command) -> Vec<u8> {
 }
 
 impl Key {
-    /// A new key with no passphrase and no expiry, its home `home` (made here, mode 0700).
-    pub fn new(home: &Path, name: &str) -> Key {
-        fs::create_dir(home).expect("make the key's home");
-        fs::set_permissions(home, fs::Permissions::from_mode(0o700)).expect("restrict the home");
+    /// A new key with no passphrase and no expiry, named `name`, its home a new directory
+    /// `gpg-<pid>-<n>` (mode 0700) of the system's temporary directory, whatever the depth of the
+    /// test's own scratch directory.
+    pub fn new(name: &str) -> Key {
+        let home = Scratch::under(&std::env::temp_dir(), "gpg").expect("make the key's home");
+        fs::set_permissions(home.path(), fs::Permissions::from_mode(0o700))
+            .expect("restrict the home");
         let gpg = |args: &[&str]| {
             let mut command = Command::new("gpg");
             command
                 .args(["--batch", "--no-tty", "--homedir"])
-                .arg(home)
+                .arg(home.path())
                 .args(args);
             command
         };
@@ -166,10 +180,7 @@ impl Key {
             .and_then(|rest| rest.split(':').nth(8))
             .expect("the key's fingerprint")
             .to_owned();
-        let key = Key {
-            home: home.to_path_buf(),
-            fingerprint,
-        };
+        let key = Key { home, fingerprint };
         key.stop_agent();
         key
     }
@@ -183,13 +194,21 @@ impl Key {
         &self.fingerprint
     }
 
-    /// Stops the gpg-agent that a key generation or a signature started, so that its sockets do
-    /// not stay in the test's directory between uses (a test that asserts the daemon left no
-    /// socket there would find them); the next use starts it again.
+    /// The key's gpg home.
+    #[allow(
+        dead_code,
+        reason = "only the test of the home's place reads it, not every file that includes this one"
+    )]
+    pub fn home(&self) -> &Path {
+        self.home.path()
+    }
+
+    /// Stops the gpg-agent that a key generation or a signature started, so that no agent of a
+    /// test stays running between uses or after it; the next use starts it again.
     fn stop_agent(&self) {
         let _ = Command::new("gpgconf")
             .arg("--homedir")
-            .arg(&self.home)
+            .arg(self.home.path())
             .args(["--kill", "gpg-agent"])
             .output();
     }
@@ -198,7 +217,7 @@ impl Key {
     pub fn export(&self, path: &Path) {
         let key = run(Command::new("gpg")
             .args(["--batch", "--no-tty", "--homedir"])
-            .arg(&self.home)
+            .arg(self.home.path())
             .args(["--export", &self.fingerprint]));
         fs::write(path, key).expect("write the keyring");
         fs::set_permissions(path, fs::Permissions::from_mode(0o644)).expect("keyring mode");
@@ -209,7 +228,7 @@ impl Key {
     fn clearsign(&self, release: &Path, into: &Path) {
         run(Command::new("gpg")
             .args(["--batch", "--no-tty", "--homedir"])
-            .arg(&self.home)
+            .arg(self.home.path())
             .args(["--pinentry-mode", "loopback", "--passphrase", ""])
             .args(["--local-user", &self.fingerprint, "--yes", "--clearsign"])
             .arg("--output")

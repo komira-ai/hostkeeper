@@ -209,7 +209,7 @@ impl AptRepo {
             fs::create_dir(made).expect("make a directory of the repository");
             fs::set_permissions(made, fs::Permissions::from_mode(0o755)).expect("its mode");
         }
-        let key = Key::new(&base.join("apt-gpg"), key_name);
+        let key = Key::new(key_name);
         AptRepo {
             dir,
             trees,
