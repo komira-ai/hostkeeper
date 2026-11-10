@@ -393,6 +393,11 @@ request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` w
 ([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
 posts did not install the pkg: read `/var/log/install.log` on the Mac.
 
+With `--mdm-baseline-file` the gate also sets up each Mac at enrollment (Screen Sharing and the
+profiles of the Mac's host group) and keeps it; `hkctl mdm list-devices` shows each Mac's
+`baseline_state`. A baseline failure never fails an enrollment
+([mdm-baseline.md](mdm-baseline.md)).
+
 A coordinator without those flags pushes no nonce: every Mac then waits for an operator, with
 `mac_nonce_presented` false, and is approved as a Linux request is. So does a Mac the gate does
 not see enrolled and supervised, or whose serial is not on `--mac-serial-allowlist`.

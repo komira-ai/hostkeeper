@@ -2,7 +2,7 @@
 //! component linked into the coordinator.
 //!
 //! - [`NanoHub`]: the client of NanoHUB's command queue, on loopback, with the API key read
-//!   from a file ([`ApiKey`]); it sends only the five [`COMMAND_TYPES`].
+//!   from a file ([`ApiKey`]); it sends only the seven [`COMMAND_TYPES`].
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
 //!   command result to.
 //! - [`Gate`]: the records of the devices, kept behind [`DeviceStore`] ([`FileDeviceStore`]: a
@@ -18,8 +18,13 @@
 //! - [`install`]: the pkg, linked in with [`Gate::with_install`]: the allowlist of pkg digests
 //!   ([`PkgAllowlist`]), the `InstallEnterpriseApplication` with its inline manifest
 //!   ([`pkg::manifest`]), and its re-send an hour after the Mac's last answer.
+//! - [`baseline`]: the enrollment baseline, linked in with [`Gate::with_baseline`]: per host
+//!   group, Screen Sharing (`EnableRemoteDesktop`, supervised Macs only) and profiles, sent
+//!   once the config profile is acknowledged, kept by a `ProfileList` check, and reported per
+//!   device by [`Gate::baseline_status`].
 
 mod answer;
+pub mod baseline;
 mod command;
 pub mod conformance;
 pub mod enroll;
@@ -35,9 +40,14 @@ mod store;
 pub mod webhook;
 
 pub use answer::{DeviceInformation, SecurityInfo};
+pub use baseline::{
+    ACTION_BASELINE, Baseline, BaselineError, BaselineState, BaselineStatus, DEFAULT_CHECK_SECS,
+    Item, ProfileItem,
+};
 pub use command::{
-    COMMAND_TYPES, Command, DEVICE_INFORMATION, INSTALL_ENTERPRISE_APPLICATION, INSTALL_PROFILE,
-    QUERIES, REMOVE_PROFILE, SECURITY_INFO,
+    COMMAND_TYPES, Command, DEVICE_INFORMATION, ENABLE_REMOTE_DESKTOP,
+    INSTALL_ENTERPRISE_APPLICATION, INSTALL_PROFILE, PROFILE_LIST, QUERIES, REMOVE_PROFILE,
+    SECURITY_INFO,
 };
 pub use enroll::{EnrollSide, Enrollments, EnrollmentsError, Nonce, Waiting};
 pub use event::{Event, EventError, parse as parse_event};
@@ -58,6 +68,7 @@ pub use profile::{
     STORES_FLAG, StoresProfile, StoresProfileError, nonce_profile,
 };
 pub use record::{
-    DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
+    BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord, Phase,
+    ProfileAnswer, ProfileCommand, Sent,
 };
 pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError, decode_record, encode_record};

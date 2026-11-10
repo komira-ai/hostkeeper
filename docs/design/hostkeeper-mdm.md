@@ -85,7 +85,7 @@ The figure follows the seven steps.
 | ABM server token | The upload is probably done (the depserver log shows the upload and account check calls) but unconfirmed. The token expiry has not been read. A read-only check with root on the MDM host settles both before the ADE profile is defined (task M7). |
 | ADE profile | Not defined. The `depsyncer` unit is disabled. |
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
-| Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Built**, the pkg (task M14): `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, with `--mdm-pkg-allowlist` and `--mdm-host` (sections 7.1 and 5.4). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
+| Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Built**, the pkg (task M14): `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, with `--mdm-pkg-allowlist` and `--mdm-host` (sections 7.1 and 5.4). **Built**, the enrollment baseline: `baseline.rs`, with `--mdm-baseline-file` (section 6.4). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
 | Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. The gate issues and pushes nonces (task M12), through `hostkeeper_mdm_gate::Enrollments` (`crates/hostkeeper-coordinator/src/enrollment/gate_port.rs`), and the daemon posts it back (M13). |
 | MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248, and (task M5) `push-cert` with the enrollment profile at `/enroll`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), `migrate --from`, and the pkg directory and its `/pkg/<sha256>.pkg` route. The live stack is still the old kit's until `migrate --apply` runs on the MDM host (task M7). |
 | Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall that loads the job (`docs/macos.md`), and the daemon's start writes the config from the managed preferences and seeds the binary directory (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-daemon/src/packaged.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
@@ -120,9 +120,10 @@ would widen the gate's API URL to HTTPS with a pinned CA, and it is not built sp
 enrolled Mac, and it can erase a Mac. So whoever holds the NanoHUB API key holds root on the Macs.
 Under design section 5.1 a compromised coordinator can already order any verb on any host. Linking
 the gate adds erase to that list, plus the install of any pkg the Mac accepts (a Developer ID pkg,
-if section 7 ends there). The gate's own code enqueues only five command types: `DeviceInformation`,
-`SecurityInfo`, `InstallProfile`, `RemoveProfile` and `InstallEnterpriseApplication`. A test
-pins that list (**Built**: `the_gate_enqueues_only_its_five_command_types` in
+if section 7 ends there). The gate's own code enqueues only seven command types: `DeviceInformation`,
+`SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`,
+`EnableRemoteDesktop` and `ProfileList`. A test
+pins that list (**Built**: `the_gate_enqueues_only_its_seven_command_types` in
 `crates/hostkeeper-mdm-gate/tests/gate.rs`). This bounds the code, not a thief of the key.
 The key is a file, mode 0600 and owned by the coordinator's user, named by a flag (rule S2).
 
@@ -513,6 +514,13 @@ a profile.
 - One Path A run on a real Mac is still needed, once, to prove the zero-touch flow and to measure
   it (section 11). It needs a Mac that may be wiped (question Q1).
 
+### 6.4 The enrollment baseline
+
+**Built**, `crates/hostkeeper-mdm-gate/src/baseline.rs`, `--mdm-baseline-file`: per host group (the
+role of the Mac's allowlist entry), Screen Sharing (`EnableRemoteDesktop`, supervised Macs only) and
+profiles, sent once the config profile is acknowledged and kept by a `ProfileList` check. A failure
+never fails enrollment. The whole text is [mdm-baseline.md](../operations/mdm-baseline.md).
+
 ## 7. The pkg: delivery and signature
 
 ### 7.1 Delivery by digest
@@ -832,7 +840,7 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `supervised_comes_from_device_information_and_nothing_else` | a check-in alone never makes a device supervised; `IsSupervised` false answers `device_not_supervised` | M8 |
 | `a_device_without_a_serial_is_unavailable` | an `Authenticate` and a `DeviceInformation` answer with no serial approve nothing | M8 |
 | `a_serial_under_two_enrollments_is_unavailable` | an ambiguous serial approves nothing | M8 |
-| `the_gate_enqueues_only_its_five_command_types` | the command list of section 3; a sixth type is refused before NanoHUB is called | M8 |
+| `the_gate_enqueues_only_its_seven_command_types` | the command list of section 3; an eighth type is refused before NanoHUB is called | M8 |
 | `a_device_record_survives_a_coordinator_restart` | the record is durable; a row that does not parse is refused at start, not read as enrolled | M8 |
 | `no_nonce_for_a_device_that_is_not_enrolled_and_supervised` | condition 1 | M12 |
 | `no_nonce_for_a_serial_off_the_allowlist` | condition 2 | M12 |
