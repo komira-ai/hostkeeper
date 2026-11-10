@@ -708,8 +708,9 @@ volumes:
 ```
 
 - **Host networking for both.** `--private-listen` and `--lan-listen` (network-install.md section 7) each refuse a
-  wildcard address and take one interface's address. In a bridge network the container has no
-  such address, so the coordinator uses the host's network and binds the addresses it binds today. Postgres then listens
+  wildcard address and take one interface's address (`--private-listen-wildcard` takes a wildcard `--private-listen`,
+  for a namespace of the coordinator's own whose interfaces are loopback and one private network; not this one). In
+  a bridge network the container has no such address, so the coordinator uses the host's network and binds the addresses it binds today. Postgres then listens
   on the host's loopback only, and is not reachable from any other machine.
 - **The image.** The release's image tar is checked against its attestation
   ([verify-a-release.md](../deploy/verify-a-release.md)) and loaded with `docker load`, which names it by the release's

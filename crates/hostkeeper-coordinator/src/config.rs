@@ -21,7 +21,8 @@
 //! `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
-//! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
+//! operator's; it takes the address of one interface, or with `--private-listen-wildcard` a
+//! wildcard address. With `--ui-dir` it also serves the static
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
 //! a directory ([`Serve::with_default_ui_dir`]).
@@ -104,6 +105,10 @@ pub use error::StartError;
 mod secs;
 use secs::{record_window_secs, request_ttl_secs};
 
+/// The start's checks of the listen addresses.
+#[path = "config_listen.rs"]
+mod listen;
+
 /// The start's check of the Mac serial allowlist against the host groups the store holds.
 #[path = "config_mac.rs"]
 mod mac;
@@ -182,11 +187,19 @@ pub struct Serve {
     /// The private listener (TLS): where CI sets the desired state and reads the convergence
     /// with its OIDC token, and where an operator reads the status and acts with a token. It
     /// takes the address of one interface (loopback, a tunnel or a management network): a
-    /// wildcard address is refused at start.
+    /// wildcard address is refused at start, unless --private-listen-wildcard is given.
     // The name this flag had, `--control-listen`, is a hidden alias; giving both is refused. It
     // is not in the doc comment above because that is the flag's help, which does not show it.
     #[arg(long, alias = "control-listen")]
     pub private_listen: SocketAddr,
+    /// Take a wildcard --private-listen (`0.0.0.0` or `[::]`): the private listener then
+    /// listens on every interface of the coordinator's network namespace. Give it only in a
+    /// namespace whose interfaces are loopback and one private network, such as a container's
+    /// on one overlay network, where the address of that interface is not known before the
+    /// container starts. Callers still need a token or a certificate; no address is trusted.
+    /// An address of one interface is taken with it as without it.
+    #[arg(long)]
+    pub private_listen_wildcard: bool,
     /// A third listener, on the farm LAN, for network-installed hosts, which have no tailnet:
     /// it serves what the heartbeat listener serves (`Enroll` and `Poll` with no client
     /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
@@ -463,7 +476,8 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` or `--lan-listen` is a wildcard address, `--health-listen` is not a
+/// `--private-listen` (without `--private-listen-wildcard`) or `--lan-listen` is a wildcard
+/// address, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
@@ -480,21 +494,7 @@ pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
 /// # Errors
 /// [`StartError`], as [`build`].
 pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<Parts, StartError> {
-    if flags.private_listen.ip().to_canonical().is_unspecified() {
-        return Err(StartError::PrivateListen(flags.private_listen));
-    }
-    if let Some(lan) = flags
-        .lan_listen
-        .filter(|lan| lan.ip().to_canonical().is_unspecified())
-    {
-        return Err(StartError::LanListen(lan));
-    }
-    if let Some(health) = flags
-        .health_listen
-        .filter(|health| !health.ip().to_canonical().is_loopback())
-    {
-        return Err(StartError::HealthListen(health));
-    }
+    listen::check_listen(flags)?;
     if flags.quiet_secs < QUIET_START.as_secs() {
         return Err(StartError::QuietBelowFloor {
             secs: flags.quiet_secs,

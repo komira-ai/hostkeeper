@@ -38,9 +38,9 @@ pub enum StartError {
     /// Neither is given.
     #[error("one of --tokens-file and --operator-token-file is required")]
     NoTokenFlag,
-    /// `--private-listen` is a wildcard address.
+    /// `--private-listen` is a wildcard address and `--private-listen-wildcard` is not given.
     #[error(
-        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
     )]
     PrivateListen(SocketAddr),
     /// `--lan-listen` is a wildcard address.
