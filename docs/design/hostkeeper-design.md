@@ -671,6 +671,7 @@ The hook drains inside `prepare`; the updater does not cut work at a deadline. T
 | Package version directory and seal | `/var/lib/hostkeeper/packages/<service>/<version>/`, `<version>.seal` | daemon unpack step | daemon, hooks (read-only) | mode 0555; only `current` and `previous` stay; contains `manifest.toml`, `bin/`, `units/`, `files/` |
 | `current` and `previous` links | `/var/lib/hostkeeper/packages/<service>/current`, `previous` | daemon | daemon, units through the placed links | switched by rename; `current` = the version the host runs |
 | Placed-path ownership record | `/var/lib/hostkeeper/placed.json` | daemon | daemon | path to owning service and source; temp, `fsync`, rename; the placed links themselves live at their system paths |
+| Facts file | `/var/lib/hostkeeper/facts.json` (`--facts-file`), on Linux and on a Mac | daemon, from the facts the coordinator sends (`facts-v1`) | the host's services and their config hooks | the host id, host group, platform and labels ([hostgroups.md](hostgroups.md) section 6.4); mode 0644, owned by root; temp, `fsync`, rename, only when its content changes, before the order of the same answer; a change runs nothing |
 | Service data | `/var/lib/<service>` | the service | the service | outside the package; the daemon never touches it |
 | Step record | `/var/lib/updater/state/<service>/step-record.json`, `params.toml` | daemon | daemon | schema 1; temp, `fsync`, rename, directory `fsync` |
 | Boot id | beside the step records | daemon | daemon | written after all records were read |

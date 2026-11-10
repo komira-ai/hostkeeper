@@ -152,6 +152,7 @@ fn request(n: u8, state: pb::RequestState) -> pb::Request {
         renewal_of: "web-0".to_owned(),
         state: state as i32,
         approved: Some(pb::Approval {
+            host_group: "web".to_owned(),
             host_id: "web-1".to_owned(),
             role: "web".to_owned(),
             services: vec!["api".to_owned(), "db".to_owned()],
@@ -172,6 +173,9 @@ fn request(n: u8, state: pb::RequestState) -> pb::Request {
 
 fn host(name: &str, key: &KeyHash) -> pb::Host {
     pb::Host {
+        facts_generation: None,
+        host_group: String::new(),
+        moving_from: None,
         schema: 1,
         host_id: name.to_owned(),
         key_hash: key.as_bytes().to_vec(),
@@ -214,6 +218,9 @@ fn every_kind() -> Vec<Record> {
             first_heartbeat_unix: Some(1_800_000_300),
             first_serving_unix: Some(1_800_000_360),
             running: Some(running("1.0", 1_800_000_380)),
+            host_group: "web".to_owned(),
+            moving_from: Some("db".to_owned()),
+            facts_generation: Some(4),
             ..host("web-1", &id)
         }),
         Record::Request(pb::Request {
@@ -425,8 +432,13 @@ fn serial(subject: &dyn Subject) -> Result<(), String> {
 
 fn host_marks(subject: &dyn Subject) -> Result<(), String> {
     let records = subject.open();
+    // In a group and moving, so that each mark below is seen to keep the group, the move and
+    // the facts' generation.
     let plain = pb::Host {
         services: vec!["api".to_owned(), "db".to_owned()],
+        host_group: "web".to_owned(),
+        moving_from: Some("db".to_owned()),
+        facts_generation: Some(2),
         ..host("web-1", &key(1))
     };
     records

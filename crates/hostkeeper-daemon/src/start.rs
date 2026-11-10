@@ -77,6 +77,8 @@ pub struct Settings {
     pub config: PathBuf,
     pub state_dir: PathBuf,
     pub packages_dir: PathBuf,
+    /// The host's facts file (`--facts-file`).
+    pub facts_file: PathBuf,
     /// The run directory, the host platform's (`hostkeeper_launchd::Platform`'s `run_dir`):
     /// `/run` on Linux, `/var/run` on macOS.
     pub run_dir: PathBuf,
@@ -274,6 +276,7 @@ pub fn startup_notifying(
     let dirs = Dirs {
         state: settings.state_dir.clone(),
         packages: settings.packages_dir.clone(),
+        facts: settings.facts_file.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
     daemon.clear_policy_rc_d(&mut report);

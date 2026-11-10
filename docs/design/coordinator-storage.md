@@ -6,7 +6,7 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0007`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0008`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
 `0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
@@ -14,7 +14,7 @@ fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
 sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), what each host's daemon last said it runs (migration `0006`, the table `enrollment_host_running`, section 3.6), the registry of package repositories (migration `0007`, section 3.2, from [packages-repositories.md](packages-repositories.md) section 3), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
-nothing implements it yet. The placement tables (`assignments`, the role scope of `min_versions`) and the per-service keying of `desired` and the plan's position are superseded by [hostgroups.md](hostgroups.md) section 8 (migration `0007`).
+nothing implements it yet. The placement tables (`assignments`, the role scope of `min_versions`) and the per-service keying of `desired` and the plan's position are superseded by [hostgroups.md](hostgroups.md) section 8 (migration `0008`, whose tables are built; nothing reads them yet).
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
 small Linux servers. The coordinator's durable state moves from its files into that database. The file lock goes, and a

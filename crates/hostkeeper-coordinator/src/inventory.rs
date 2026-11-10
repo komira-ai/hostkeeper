@@ -101,6 +101,10 @@ pub struct InventoryRecord {
     /// The role it is meant for.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
+    /// The host group it is meant for; empty when it names none. Written only when it names one,
+    /// so a file whose records name none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_group: String,
     /// The MACs of its data interfaces.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_macs: Vec<String>,
@@ -499,6 +503,7 @@ fn record_of(
     Ok(InventoryRecord {
         host_id,
         role,
+        host_group: String::new(),
         data_macs,
         bmc_mac,
         serial,

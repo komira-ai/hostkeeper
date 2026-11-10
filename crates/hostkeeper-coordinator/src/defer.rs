@@ -24,7 +24,7 @@ use std::time::Duration;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{DeferredReport, Heartbeat};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// The reason of a deferral of an order whose entry is of an installer the daemon does not list
 /// (docs/design/packages.md, section 3.3): it opens no wait.
@@ -37,7 +37,7 @@ pub const MAX_BACKOFF_SECS: u64 = 7 * 24 * 3600;
 pub const MAX_FACTOR: u32 = 16;
 
 /// How long a deferred host is left alone before it is ordered again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct DeferBackoff {
     /// The wait after the first deferral of a version, in seconds.
