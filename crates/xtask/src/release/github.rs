@@ -193,6 +193,20 @@ impl<E: Exec> GitHubRuns for Gh<E> {
             .collect()
     }
 
+    /// Every page of the list: a run of many releases has more jobs than one page holds.
+    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+        let path = format!("repos/{repo}/actions/runs/{run}/jobs?per_page=100");
+        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
+        let r = Reader { what: &what };
+        let mut names = Vec::new();
+        for page in r.list(&value, "the reply")? {
+            for job in r.list(&page["jobs"], "jobs")? {
+                names.push(r.string(&job["name"], "name")?);
+            }
+        }
+        Ok(names)
+    }
+
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError> {
         let (value, what) = self.api(&format!("repos/{repo}/compare/{MAIN}...{commit}"))?;
         let status = Reader { what: &what }.string(&value["status"], "status")?;

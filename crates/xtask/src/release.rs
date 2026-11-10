@@ -44,6 +44,8 @@
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
+//! - `push-image` ([`image_push`]): that layout pushed to the registry and read back by its
+//!   digest, byte for byte, an attempt that fails tried again after a wait.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
 //!   (`ui/`) at the path the coordinator serves by default, file for file, owned by root.
 //! - `plan` ([`plan`]): which commits since the last release are released, oldest first, and
@@ -92,6 +94,7 @@ pub(crate) mod git;
 mod github;
 mod hkctl;
 pub(crate) mod image_index;
+mod image_push;
 mod index;
 mod locate;
 mod macos_pkg;
@@ -113,19 +116,16 @@ mod targets;
 #[cfg(feature = "test-support")]
 pub mod test_support;
 mod version;
+mod wired;
 
 use std::fmt;
 use std::path::PathBuf;
 
-use crate::advisories::DenyCli;
-use check_binary::VersionOf;
 use contract::{Commit, Package, Platform, Repo, Service, Version};
 pub(crate) use files::{answer, file_sha256};
-use git::GitCli;
-use github::Gh;
-use macos_pkg::PkgbuildCli;
-use ports::{Adapters, Exec, PortError, Ports};
+use ports::{Adapters, PortError, Ports};
 pub(crate) use run_state::{RunState, state};
+use wired::Wired;
 
 /// Why a release verb failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -312,7 +312,8 @@ pub(crate) enum Verb {
     /// Linux platform: the program and its hook at `/usr/lib/<service>/`, the units in
     /// `/usr/lib/systemd/system/`, installed disabled, and no maintainer script
     /// (docs/design/packages-native.md section 10.2). mdm's is built for linux-x86_64 only, with
-    /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb`.
+    /// the pinned tools out of `--archives`. Writes `<service>_<version>_<arch>.deb` (the failing
+    /// build's control: `X.Y.Z~fail.ready`).
     Deb {
         /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).
         #[arg(long, value_enum)]
@@ -494,6 +495,18 @@ pub(crate) enum Verb {
         #[arg(long)]
         env_file: Option<PathBuf>,
     },
+    /// Push the layout of `image-layout` to the registry, tagged with the version, and refuse
+    /// it unless the registry then serves the release's image index by its digest, byte for
+    /// byte; an attempt that fails is tried again after a wait.
+    PushImage {
+        /// The release's files, which hold the image index.
+        dir: PathBuf,
+        #[arg(long)]
+        version: Version,
+        /// The layout `image-layout` wrote of those files.
+        #[arg(long)]
+        layout: PathBuf,
+    },
     /// Refuse the coordinator's OCI image tarball unless it holds the operator web app at
     /// /usr/share/hostkeeper-coordinator/ui: exactly the directories and files of `ui`, with
     /// their bytes, owned by root, files 0644 and directories 0755.
@@ -595,18 +608,17 @@ pub(crate) enum Verb {
         every_secs: Option<u64>,
     },
     /// Write the `targets` of the set that deploys a package of the release: for each Linux
-    /// platform its release index lists, the package's `.deb` alone, an `apt` entry of the
-    /// repository's testing suite whose manifest and `min_hostkeeper` are the archive's own
-    /// manifest's; no list for macOS while no daemon announces `macos-pkg`. Refused, every
-    /// problem named, unless the index, every Linux archive and its manifest, and every `.deb`
-    /// and its bundle check out and the entries pass the coordinator's checks; refused by name
-    /// for a package with no native package (hello's failing build). Prints `targets=<JSON>`.
+    /// platform its release index lists, the package's `.deb` alone, an `apt` entry whose manifest
+    /// and `min_hostkeeper` are the archive's own manifest's, of the testing suite; with
+    /// `--fail-ready`, of hello's failing build, of the `testing-fail` suite at `X.Y.Z~fail.ready`.
+    /// No list for macOS while no daemon announces `macos-pkg`. Refused, every problem named,
+    /// unless the index, every Linux archive and manifest, and every `.deb` and bundle check out
+    /// and the entries pass the coordinator's checks. Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
-        /// The entries of hello's failing build (`hello-fail-ready-index.json`). Refused for
-        /// hostkeeper and mdm.
+        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper and mdm.
         #[arg(long)]
         fail_ready: bool,
         /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.
@@ -910,6 +922,19 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
             version,
             commit,
         } => publish::publish(ports, &dir, &repo, &version, &commit),
+        Verb::PushImage {
+            dir,
+            version,
+            layout,
+        } => image_push::push(
+            ports.registry,
+            ports.wait,
+            &image_push::Request {
+                dir,
+                version,
+                layout,
+            },
+        ),
         Verb::ChannelSync {
             trust_list,
             channel_dir,
@@ -956,48 +981,6 @@ struct Lent<'a>(Ports<'a>);
 impl Adapters for Lent<'_> {
     fn ports(&self) -> Ports<'_> {
         self.0
-    }
-}
-
-/// The adapters wired over one [`Exec`]: git, gh (runs, issues, releases and attestations),
-/// the `--version` of a binary, `pkgbuild`, `curl` and `cargo deny`, each running its program through a copy of `exec`. The real
-/// ones (`real::connect`) are these over the process-starting `Exec`; a test wires them over a
-/// fake one.
-struct Wired<E> {
-    git: GitCli<E>,
-    gh: Gh<E>,
-    version_of: VersionOf<E>,
-    pkgbuild: PkgbuildCli<E>,
-    curl: mdm_fetch::CurlCli<E>,
-    deny: DenyCli<E>,
-}
-
-impl<E: Exec + Clone> Wired<E> {
-    fn new(exec: E) -> Wired<E> {
-        Wired {
-            git: GitCli::new(exec.clone()),
-            gh: Gh::new(exec.clone()),
-            version_of: VersionOf::new(exec.clone()),
-            pkgbuild: PkgbuildCli::new(exec.clone()),
-            curl: mdm_fetch::CurlCli::new(exec.clone()),
-            deny: DenyCli::new(exec),
-        }
-    }
-}
-
-impl<E: Exec> Adapters for Wired<E> {
-    fn ports(&self) -> Ports<'_> {
-        Ports {
-            git: &self.git,
-            runs: &self.gh,
-            store: &self.gh,
-            source: &self.gh,
-            verifier: &self.gh,
-            run_version: &self.version_of,
-            pkgbuild: &self.pkgbuild,
-            advisories: &self.deny,
-            download: &self.curl,
-        }
     }
 }
 

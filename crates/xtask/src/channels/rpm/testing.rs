@@ -287,7 +287,7 @@ impl World {
         (dist, signed)
     }
 
-    pub fn read(&self, suite: crate::channels::apt::state::Suite) -> std::path::PathBuf {
+    pub fn read(&self, suite: crate::channels::rpm::state::Suite) -> std::path::PathBuf {
         let out = self.dir("read");
         crate::channels::rpm::read::read(&self.aws, suite, BUCKET, &out).expect("read");
         out
@@ -295,7 +295,7 @@ impl World {
 
     pub fn index(
         &self,
-        suite: crate::channels::apt::state::Suite,
+        suite: crate::channels::rpm::state::Suite,
         current: &Path,
         version: &str,
     ) -> std::path::PathBuf {
@@ -315,7 +315,7 @@ impl World {
     }
 
     /// Signs the `repomd.xml` of each architecture below `next/<suite>`.
-    pub fn sign_repo(&self, suite: crate::channels::apt::state::Suite, next: &Path) {
+    pub fn sign_repo(&self, suite: crate::channels::rpm::state::Suite, next: &Path) {
         let key = self.root.join("repo-key");
         let pass = self.root.join("repo-pass");
         std::fs::write(&key, "KEY").expect("key");
@@ -336,7 +336,7 @@ impl World {
 
     pub fn write(
         &self,
-        suite: crate::channels::apt::state::Suite,
+        suite: crate::channels::rpm::state::Suite,
         next: &Path,
         version: Option<&str>,
         last: bool,
@@ -363,7 +363,7 @@ impl World {
     }
 
     /// Publishes `version` into `suite` the way the three jobs do: read, merge, sign, write.
-    pub fn publish(&self, suite: crate::channels::apt::state::Suite, version: &str) {
+    pub fn publish(&self, suite: crate::channels::rpm::state::Suite, version: &str) {
         let current = self.read(suite);
         let next = self.index(suite, &current, version);
         self.sign_repo(suite, &next);
