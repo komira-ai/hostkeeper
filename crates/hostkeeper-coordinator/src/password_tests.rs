@@ -410,3 +410,42 @@ fn clones_of_the_cap_share_it() {
     drop(held);
     assert!(other.try_acquire().is_some());
 }
+
+#[test]
+fn an_unreadable_stored_hash_spends_the_argon2_work_of_a_real_verify() {
+    let passwords = passwords();
+    let stored = passwords.hash("correct horse battery").unwrap();
+    assert_eq!(passwords.argon2_runs(), 0);
+    let _ = passwords.verify("wrong horse battery", &stored);
+    assert_eq!(passwords.argon2_runs(), 1);
+    for unreadable in ["", "placeholder", "$argon2id$garbage"] {
+        let before = passwords.argon2_runs();
+        assert_eq!(
+            passwords.verify("anything at all", &StoredHash::from(unreadable.to_owned())),
+            Verdict::Wrong
+        );
+        assert_eq!(passwords.argon2_runs(), before + 1, "{unreadable:?}");
+    }
+}
+
+#[test]
+fn a_password_over_the_cap_never_verifies_even_against_a_hash_of_itself() {
+    let passwords = passwords();
+    let long = "x".repeat(MAX_PASSWORD_BYTES + 1);
+    let stored = hash_under(cheap(), Algorithm::Argon2id, &long);
+    assert_eq!(passwords.verify(&long, &stored), Verdict::Wrong);
+    assert_eq!(passwords.verify(&long, &passwords.dummy), Verdict::Wrong);
+    assert_eq!(passwords.argon2_runs(), 2, "the work was still spent");
+}
+
+#[test]
+fn a_password_over_the_cap_never_verifies_against_the_hash_of_nothing() {
+    let passwords = passwords();
+    let empty = hash_under(cheap(), Algorithm::Argon2id, "");
+    assert_eq!(
+        passwords.verify("", &empty),
+        Verdict::Right { rehash: None }
+    );
+    let long = "y".repeat(MAX_PASSWORD_BYTES + 1);
+    assert_eq!(passwords.verify(&long, &empty), Verdict::Wrong);
+}

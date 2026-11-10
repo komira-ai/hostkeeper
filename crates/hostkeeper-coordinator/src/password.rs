@@ -135,6 +135,7 @@ pub struct Passwords {
     argon2: Argon2<'static>,
     pub(crate) dummy: StoredHash,
     verifies: AtomicU64,
+    argon2_runs: AtomicU64,
 }
 
 impl fmt::Debug for Passwords {
@@ -173,6 +174,7 @@ impl Passwords {
             argon2,
             dummy,
             verifies: AtomicU64::new(0),
+            argon2_runs: AtomicU64::new(0),
         })
     }
 
@@ -225,14 +227,25 @@ impl Passwords {
     #[must_use]
     pub fn verify(&self, password: &str, stored: &StoredHash) -> Verdict {
         self.verifies.fetch_add(1, Ordering::Relaxed);
-        let password = normalise(password);
+        // A password over the cap is never right, and is not normalised: the work stays
+        // bounded, and the fixed hash of `verify_absent` (one byte over the cap) cannot match.
+        let oversize = password.len() > MAX_PASSWORD_BYTES;
+        let password = if oversize {
+            String::new()
+        } else {
+            normalise(password)
+        };
+        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
         let Ok(parsed) = Phc::new(stored.as_str()) else {
+            // Nothing to verify against: spend one hash's work so the time does not say so.
+            let _ = hash_with(&self.argon2, &password);
             return Verdict::Wrong;
         };
-        if self
-            .argon2
-            .verify_password(password.as_bytes(), &parsed)
-            .is_err()
+        if oversize
+            || self
+                .argon2
+                .verify_password(password.as_bytes(), &parsed)
+                .is_err()
         {
             return Verdict::Wrong;
         }
@@ -255,6 +268,14 @@ impl Passwords {
     #[must_use]
     pub fn verifies(&self) -> u64 {
         self.verifies.load(Ordering::Relaxed)
+    }
+
+    /// How many times the Argon2 work ran inside verifies (a verify, or the same work spent
+    /// for a stored string that cannot be read). Counts work, where [`Passwords::verifies`]
+    /// counts calls.
+    #[must_use]
+    pub fn argon2_runs(&self) -> u64 {
+        self.argon2_runs.load(Ordering::Relaxed)
     }
 
     fn is_weaker(&self, parsed: &Phc) -> bool {
