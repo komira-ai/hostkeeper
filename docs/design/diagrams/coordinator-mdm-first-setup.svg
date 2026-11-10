@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 798" width="1200" height="798" role="img" aria-label="First-time MDM setup: the operator creates the push request, uploads Apple's certificate, registers the ABM key and uploads the token, sets the name, supplies the DNS credential; the coordinator obtains the TLS certificate and reports configured.">
+<title>First-time MDM setup, in the web UI</title>
+<desc>The operator works in the coordinator web UI. Each secret is uploaded once, sealed in the store and never returned. Apple, the signing service and the ACME CA are outside. When every record is present and valid the status becomes configured and the Devices page shows.</desc>
+<defs><marker id="coordinator-mdm-first-setup-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="798" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">First-time MDM setup, in the web UI</text>
+<rect x="30" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="165" y="64" class="b" text-anchor="middle">Operator</text>
+<text x="165" y="80" class="t-m" text-anchor="middle">web UI, MDM setup page</text>
+<path d="M165,92 L165,778" class="life"/>
+<rect x="320" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="455" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="455" y="80" class="t-m" text-anchor="middle">Mdm rpcs, sealed store, audit</text>
+<path d="M455,92 L455,778" class="life"/>
+<rect x="610" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="745" y="64" class="b" text-anchor="middle">Apple and signer</text>
+<text x="745" y="80" class="t-m" text-anchor="middle">mdmcert.download, push portal, ABM</text>
+<path d="M745,92 L745,778" class="life"/>
+<rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="1035" y="64" class="b" text-anchor="middle">ACME CA + DNS</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">provider API</text>
+<path d="M1035,92 L1035,778" class="life"/>
+<path d="M165,136 L455,136" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. open MDM setup: Mdm.Status (everything unset)</text>
+<path d="M165,178 L455,178" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="172" class="t-m lbl" text-anchor="middle">2. create push request (key + encryption key sealed)</text>
+<path d="M455,220 L165,220" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="214" class="t-m lbl" text-anchor="middle">3. CSR + encryption certificate (public parts)</text>
+<path d="M165,262 L745,262" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="455" y="256" class="t-m lbl" text-anchor="middle">4. mdmcert.download signs the CSR; Apple portal returns the PEM</text>
+<path d="M165,304 L455,304" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="298" class="t-m lbl" text-anchor="middle">5. upload push certificate (checks: key, topic, expiry)</text>
+<path d="M165,346 L455,346" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="340" class="t-m lbl" text-anchor="middle">6. download the ABM public key</text>
+<path d="M165,388 L745,388" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="455" y="382" class="t-m lbl" text-anchor="middle">7. ABM: register the key, download the token (.p7m)</text>
+<path d="M165,430 L455,430" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. upload token; GET /account proves it</text>
+<path d="M455,472 L745,472" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="600" y="466" class="t-m lbl" text-anchor="middle">9. GET /account (session)</text>
+<path d="M165,514 L455,514" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="508" class="t-m lbl" text-anchor="middle">10. set the MDM name: enrollment URL shown</text>
+<path d="M165,556 L455,556" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="550" class="t-m lbl" text-anchor="middle">11. TLS: upload DNS credential (or certificate + key)</text>
+<path d="M455,598 L1035,598" class="ln" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="745" y="592" class="t-m lbl" text-anchor="middle">12. ACME order, DNS-01 TXT record, finalize</text>
+<path d="M1035,640 L455,640" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="745" y="634" class="t-m lbl" text-anchor="middle">13. certificate for the name</text>
+<path d="M455,682 L165,682" class="ln-d" marker-end="url(#coordinator-mdm-first-setup-ak)"/>
+<text x="310" y="676" class="t-m lbl" text-anchor="middle">14. Status: configured; Devices page appears; first ABM sync</text>
+<rect x="190" y="724" width="530" height="25" rx="4" class="box-o"/>
+<text x="455" y="740" class="t-m" text-anchor="middle">every upload: validated, sealed (AES-256-GCM), one audit row, never returned</text>
+<rect x="190" y="760" width="530" height="25" rx="4" class="box-o"/>
+<text x="455" y="776" class="t-m" text-anchor="middle">needs a token with mdm_admin; reads need only the operator token</text>
+</svg>

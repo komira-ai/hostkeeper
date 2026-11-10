@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 700" width="1200" height="700" role="img" aria-label="The coordinator process holds the MDM listener, queue, SCEP CA, APNs sender and ABM client; Apple and the Macs are outside; nothing else runs on the MDM host.">
 <title>Components: what hostkeeper runs, with the MDM server inside the coordinator</title>
-<desc>One process, hostkeeper-coordinator, holds all MDM functions. Boxed outside it are Apple services, the public CA certificate files, the pkg directory and the Macs. No NanoHUB, NanoDEP, scepserver, Caddy or lego unit remains.</desc>
+<desc>One process, hostkeeper-coordinator, holds all MDM functions. Boxed outside it are Apple services, an ACME CA and DNS provider, the release channel, the pkg directory and the Macs. No NanoHUB, NanoDEP, scepserver, Caddy or lego unit remains; setup is done in the web UI and the Macs are on the LAN only.</desc>
 <defs><marker id="coordinator-mdm-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-components-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
 <style>
 .box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
@@ -28,7 +28,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="220" y="110" class="b" text-anchor="middle">Existing listeners (unchanged)</text>
 <text x="220" y="127" class="t-m" text-anchor="middle">heartbeat + LAN (host mTLS), private (operators, UI)</text>
 <text x="220" y="142" class="t-m" text-anchor="middle">the daemon enrollment and the gRPC API</text>
-<text x="220" y="157" class="t-m" text-anchor="middle">health</text>
+<text x="220" y="157" class="t-m" text-anchor="middle">health; the LAN one also serves the release channel</text>
 <rect x="430" y="90" width="370" height="96" rx="5" class="box-o"/>
 <text x="615" y="110" class="b" text-anchor="middle">MDM listener (--mdm-listen, LAN, :443)</text>
 <text x="615" y="127" class="t-m" text-anchor="middle">public-CA TLS name; no client certificate</text>
@@ -64,34 +64,40 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <text x="615" y="402" class="t-m" text-anchor="middle">inventory by serial, host groups, host CA,</text>
 <text x="615" y="417" class="t-m" text-anchor="middle">mac_auto_approve: ABM table replaces the allowlist</text>
 <text x="615" y="432" class="t-m" text-anchor="middle">nonce store</text>
+<text x="615" y="450" class="t-m" text-anchor="middle">MDM setup rpcs + UI page, ACME client,</text>
+<text x="615" y="465" class="t-m" text-anchor="middle">status and the configured state</text>
 <rect x="40" y="510" width="760" height="130" rx="5" class="box"/>
 <text x="420" y="530" class="b" text-anchor="middle">Store (Postgres, or files)</text>
 <text x="420" y="547" class="t-m" text-anchor="middle">existing: mdm_devices, inventory, enrollments   new, additive (migration 0009):</text>
-<text x="420" y="562" class="t-m" text-anchor="middle">mdm_enrollments, mdm_commands, mdm_identities (issued certificates), abm_devices, abm_state (cursor)</text>
-<text x="420" y="577" class="t-m" text-anchor="middle">files in --mdm-dir (0700, coordinator user): push cert + key, ABM token + key, MDM CA key</text>
+<text x="420" y="562" class="t-m" text-anchor="middle">mdm_enrollments, mdm_commands, mdm_identities, abm_devices, abm_state (cursor)</text>
+<text x="420" y="577" class="t-m" text-anchor="middle">mdm_secrets (AES-256-GCM sealed: push, ABM, MDM CA, ACME, DNS, TLS keys), mdm_settings</text>
+<text x="420" y="595" class="t-m" text-anchor="middle">one key file, --mdm-secrets-key-file, is the only secret outside the store</text>
 <rect x="860" y="48" width="320" height="620" rx="6" class="box-p"/>
 <text x="872" y="70" class="b" text-anchor="start">Outside hostkeeper</text>
 <rect x="880" y="100" width="280" height="80" rx="5" class="box-b"/>
 <text x="1020" y="120" class="b" text-anchor="middle">Macs</text>
 <text x="1020" y="137" class="t-m" text-anchor="middle">Setup Assistant on the LAN</text>
 <text x="1020" y="152" class="t-m" text-anchor="middle">MDM client, hostkeeper daemon</text>
-<text x="1020" y="167" class="t-m" text-anchor="middle">later: tailnet</text>
+<text x="1020" y="167" class="t-m" text-anchor="middle">lab LAN only, not on the tailnet</text>
 <rect x="880" y="220" width="280" height="80" rx="5" class="box"/>
 <text x="1020" y="240" class="b" text-anchor="middle">Apple</text>
 <text x="1020" y="257" class="t-m" text-anchor="middle">ABM, ADE (mdmenrollment.apple.com)</text>
 <text x="1020" y="272" class="t-m" text-anchor="middle">APNs (api.push.apple.com)</text>
+<rect x="880" y="310" width="280" height="48" rx="5" class="box"/>
+<text x="1020" y="330" class="b" text-anchor="middle">Release channel (upstream)</text>
+<text x="1020" y="346" class="t-m" text-anchor="middle">tailnet only; the coordinator proxies it to the LAN</text>
 <rect x="880" y="365" width="280" height="80" rx="5" class="box"/>
 <text x="1020" y="385" class="b" text-anchor="middle">Operator</text>
-<text x="1020" y="402" class="t-m" text-anchor="middle">hkctl mdm ... over the private listener:</text>
-<text x="1020" y="417" class="t-m" text-anchor="middle">push CSR, certs, ABM token, status</text>
+<text x="1020" y="402" class="t-m" text-anchor="middle">web UI "MDM setup" over the private listener:</text>
+<text x="1020" y="417" class="t-m" text-anchor="middle">push, ABM, name, TLS; then Devices</text>
 <rect x="880" y="480" width="280" height="70" rx="5" class="box"/>
-<text x="1020" y="500" class="b" text-anchor="middle">Public CA cert + key for the MDM name</text>
-<text x="1020" y="517" class="t-m" text-anchor="middle">files read by the MDM listener,</text>
-<text x="1020" y="532" class="t-m" text-anchor="middle">reloaded on the tick</text>
+<text x="1020" y="500" class="b" text-anchor="middle">ACME CA and DNS provider API</text>
+<text x="1020" y="517" class="t-m" text-anchor="middle">DNS-01 for the MDM name, out over HTTPS;</text>
+<text x="1020" y="532" class="t-m" text-anchor="middle">no lego, no Caddy</text>
 <rect x="880" y="570" width="280" height="70" rx="5" class="box"/>
 <text x="1020" y="590" class="b" text-anchor="middle">pkg directory (read-only)</text>
-<text x="1020" y="607" class="t-m" text-anchor="middle">hostkeeper pkg, Tailscale pkg, named by</text>
-<text x="1020" y="622" class="t-m" text-anchor="middle">digest in --mdm-installs-file</text>
+<text x="1020" y="607" class="t-m" text-anchor="middle">hostkeeper pkg, named by</text>
+<text x="1020" y="622" class="t-m" text-anchor="middle">digest in the installs setting</text>
 <path d="M880,140 L800,140" class="ln" marker-end="url(#coordinator-mdm-components-ak)"/>
 <text x="840" y="132" class="t-m lbl" text-anchor="middle">LAN</text>
 <path d="M800,275 L880,275" class="ln-o" marker-end="url(#coordinator-mdm-components-ao)"/>
