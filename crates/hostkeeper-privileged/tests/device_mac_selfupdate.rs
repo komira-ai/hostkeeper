@@ -296,11 +296,23 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
     host.assert_installed(NEXT);
 
     let mut last = None;
+    // Each change of the coordinator's row and of the heartbeat's entry of hostkeeper is printed,
+    // so that a wait that never ends shows which of them stayed short of the update.
+    let mut seen = String::new();
     wait_for(
         "the coordinator lists hostkeeper at the new version, healthy, with the update's verdict",
         COORDINATED,
         || {
             last = on_host(&coordinator);
+            let beat = coordinator.host(HOST_ID)["heartbeat"]["services"]
+                .as_array()
+                .and_then(|services| services.iter().find(|service| service["name"] == HK))
+                .cloned();
+            let now = format!("row {last:?}\nheartbeat {beat:?}");
+            if now != seen {
+                println!("{now}");
+                seen = now;
+            }
             last.as_ref().is_some_and(|row| {
                 row["installedVersion"] == NEXT
                     && row["health"] == "HEALTH_HEALTHY"
