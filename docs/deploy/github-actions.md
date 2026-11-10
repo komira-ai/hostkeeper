@@ -62,9 +62,19 @@ one credential is the OIDC token GitHub issues to the job.
    coordinator updater reported this release (<X.Y.Z>) (is the timer installed?)`; after anything
    else (000, no answer: the tailnet join, the CA or the URL variable), that the coordinator did
    not answer, with the last status.
-6. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`
-   and the package channels' writes of the release: the three attempts of `testing-apt-write`
-   and `testing-pkg-upload`). It runs only once the coordinator runs the release and every
+6. **Check again that no newer release is published** (job `no-downgrade` of `release.yml`,
+   under the condition of `set-desired` below, and needing every job it needs). `targets`
+   checked that once, but a re-run of an older release's failed jobs keeps `targets`' outputs:
+   without this check it would set the older release after a newer one was set, and move every
+   host back. The job lists the published releases again; when a higher version than the run's
+   is published it prints a warning annotation (`Not setting hostkeeper <X.Y.Z> as the desired
+   version on the coordinator: <newer> is published, ...`), ends green, and `set-desired` is
+   skipped. Its output `attempt` is the attempt of the run it ran in, and `set-desired` runs
+   only in that same attempt. A move back is an operator's step on the coordinator
+   ([Holds and force](../operations/holds-and-force.md)), never this workflow's.
+7. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`,
+   the package channels' writes of the release (the three attempts of `testing-apt-write`
+   and `testing-pkg-upload`) and `no-downgrade`). It runs only once the coordinator runs the release and every
    channel the targets point at holds it: one attempt of the apt write wrote the `testing`
    index with the `.deb`s in it (`conflict` `false`), and the pkg upload put the `.pkg` with
    its settings (`enabled` `true`). Before that a host would defer the release
@@ -82,13 +92,13 @@ one credential is the OIDC token GitHub issues to the job.
    list `hostkeeper`).
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
    the version, with `reason` `not_waited`.
-7. **The coordinator checks the call.** The allow-list entry must admit the token and name the
+8. **The coordinator checks the call.** The allow-list entry must admit the token and name the
    service `hostkeeper` ([below](#the-allow-list-entry)). A version below the
    service's `min_version`, or marked bad, is refused. A coordinator that holds host groups
    makes one deployment to each group that lists `hostkeeper` and the entry may deploy to (an
    entry with `host_groups` limits them); a refusal for any group writes nothing for any, and no
    group that lists it is `not_in_host_group`. Nothing changes on a refusal.
-8. **The update plan orders the hosts.** Each group's policy sets the plan of its hosts
+9. **The update plan orders the hosts.** Each group's policy sets the plan of its hosts
    ([below](#set-up-once-outside-ci)): `stages` (by default `[1, 10, 50, 100]`: the cumulative
    percent of the group's eligible hosts that run the version once each stage is done) and
    `canary` (a first stage of `count` hosts). The coordinator orders only the hosts of the first
@@ -102,7 +112,7 @@ one credential is the OIDC token GitHub issues to the job.
    update slot until it is healthy, and its stage is not done until an operator resolves it, so
    the next stage is not ordered the version meanwhile
    ([rollout-plans.md](../operations/rollout-plans.md); design, section 5.4).
-9. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
+10. **Each host updates itself.** At its next heartbeat an ordered host stages the `.deb` from its
    repository entry, checks it against the pinned SHA-256, and updates hostkeeper by the
    hand-over, installing the package once the new binary has confirmed itself
    ([packages-native.md](../design/packages-native.md), section 10.4).
@@ -241,9 +251,12 @@ new commit (above).
 ## When it fails
 
 A failure of any of the three jobs leaves the release published; only the deploy did not happen.
-Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs `targets`,
-`coordinator` and `set-desired` again (those that failed, and those that depend on them), and the
-call gets a new token.
+Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs the jobs that
+failed and those that depend on them (`no-downgrade` among them, which checks again that no newer
+release is published, then `set-desired`), and the call gets a new token. When `set-desired`
+itself failed, **Re-run failed jobs** re-runs it alone, and it is skipped: the check it ran after
+was made in an earlier attempt. Re-run the job `no-downgrade` instead (**Re-run job** on it),
+which re-runs `set-desired` after it.
 
 | job and step | what it means | what to do |
 |---|---|---|

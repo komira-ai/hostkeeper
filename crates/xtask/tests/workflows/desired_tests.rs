@@ -7,6 +7,7 @@ use super::desired::{
     DESIRED_IF, GATE, SET_DESIRED_IF, SET_IF, TARGETS_OUTPUTS, TARGETS_STEPS, caller_needs,
 };
 use super::lint::lint;
+use super::no_downgrade::GUARD_IF;
 use super::release::publish_problems;
 use super::{with_in, workflows};
 
@@ -65,7 +66,7 @@ fn set_desired_if() -> String {
 }
 
 /// The `needs:` line of the job set-desired.
-const SET_NEEDS: &str = "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]\n";
+const SET_NEEDS: &str = "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload, no-downgrade]\n";
 
 /// The problem of the job set-desired whose sorted needs are `got`.
 fn set_needs_problem(got: &[&str]) -> String {
@@ -117,11 +118,13 @@ fn the_deploy_is_turned_on_only_by_the_repository_variable_being_true() {
             format!("release.yml: job targets needs the exact `if: {DESIRED_IF}`"),
             format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
             format!("release.yml: job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
+            format!("release.yml: job no-downgrade needs the exact `if: {GUARD_IF}`"),
             format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
         ]
     );
+    assert!(GUARD_IF.contains(&gate));
     let text = release_yml().replace(&gate, &format!(" && vars.{GATE} != ''"));
-    assert_eq!(lint("release.yml", &text).len(), 5);
+    assert_eq!(lint("release.yml", &text).len(), 6);
 }
 
 #[test]

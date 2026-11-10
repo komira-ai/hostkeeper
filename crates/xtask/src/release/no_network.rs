@@ -35,7 +35,7 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 18] = [
+const PROCESS_TESTS: [(&str, &str); 19] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
     (
         "tests/coordinator_update_unit.rs",
@@ -68,6 +68,10 @@ const PROCESS_TESTS: [(&str, &str); 18] = [
     (
         "tests/workflows/desired_channels_tests.rs",
         "runs the xtask binary as a process on crafted packages, for the targets whose channels set-desired waits for",
+    ),
+    (
+        "tests/workflows/no_downgrade_tests.rs",
+        "runs the committed steps of release.yml's no-downgrade job with bash, with a fake gh",
     ),
     (
         "tests/workflows/set_desired_calls_tests.rs",

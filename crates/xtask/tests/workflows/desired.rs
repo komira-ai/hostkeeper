@@ -28,9 +28,10 @@
 //!   and holds `id-token: write` for the tailnet join alone);
 //! - [`JOB`] lacks the exact `if:` [`SET_DESIRED_IF`] ([`SET_IF`], and only once a write of each
 //!   channel the targets point at has landed), or does not need exactly `plan`, [`TARGETS_JOB`],
-//!   [`COORDINATOR_JOB`] and the jobs of [`CHANNEL_WRITES`] (it calls the coordinator only with
-//!   the release's targets, only once the coordinator runs the release, and only once each
-//!   channel lists the packages the targets pin), or its `with` does not set `service: hostkeeper`, the version
+//!   [`COORDINATOR_JOB`], the jobs of [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`] (it
+//!   calls the coordinator only with the release's targets, only once the coordinator runs the
+//!   release, only once each channel lists the packages the targets pin, and only when no newer
+//!   release is published, checked again in the same attempt of the run), or its `with` does not set `service: hostkeeper`, the version
 //!   and the targets from [`TARGETS_JOB`] ([`WITH_FROM_TARGETS`]), and `wait: false`; or passes
 //!   one of [`NOT_PASSED`]: a `package_digest` (one package for every host, whatever its
 //!   platform), a `release_index` or a `release_index_digest` (a release is set with no index).
@@ -72,8 +73,11 @@ pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref
 /// `true`, and one gated off says nothing), and the pkg upload ran with its settings (`enabled`
 /// `true`; gated off, it put nothing). `!cancelled() && !failure()` in place of the implicit
 /// `success()`: attempts 2 and 3 are skipped when attempt 1 landed, and a skipped job it needs
-/// would otherwise skip [`JOB`]; any failed job it needs, at any depth, still stops it.
-pub const SET_DESIRED_IF: &str = "${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' }}";
+/// would otherwise skip [`JOB`]; any failed job it needs, at any depth, still stops it. Last, the
+/// check of [`super::no_downgrade::JOB`], made in this same attempt of the run, found no newer
+/// release published (`set` `true`, `attempt` this run's): [`super::no_downgrade::GUARD_IF`]
+/// with [`super::no_downgrade::SET_TERMS`].
+pub const SET_DESIRED_IF: &str = "${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' && needs.no-downgrade.outputs.set == 'true' && needs.no-downgrade.outputs.attempt == github.run_attempt }}";
 
 /// The jobs of `release.yml` that put a release's native packages where the entries of its
 /// targets point, by entry: `(installer, the entry's repository or store, the jobs)`. An `apt`
@@ -218,6 +222,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     }
     problems.extend(targets_problems(job(doc, TARGETS_JOB)));
     problems.extend(super::coordinator_wait::problems(job(doc, COORDINATOR_JOB)));
+    problems.extend(super::no_downgrade::problems(doc));
     problems.extend(caller_problems(job(doc, JOB)));
     problems
 }
@@ -283,8 +288,8 @@ fn targets_problems(targets: Option<&Node>) -> Vec<String> {
     problems
 }
 
-/// The jobs [`JOB`] needs, sorted: `plan`, [`TARGETS_JOB`], [`COORDINATOR_JOB`] and every job of
-/// [`CHANNEL_WRITES`].
+/// The jobs [`JOB`] needs, sorted: `plan`, [`TARGETS_JOB`], [`COORDINATOR_JOB`], every job of
+/// [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`].
 pub fn caller_needs() -> Vec<&'static str> {
     let mut want = vec!["plan", TARGETS_JOB, COORDINATOR_JOB];
     want.extend(
@@ -292,6 +297,7 @@ pub fn caller_needs() -> Vec<&'static str> {
             .iter()
             .flat_map(|(_, _, jobs)| jobs.iter().copied()),
     );
+    want.push(super::no_downgrade::JOB);
     want.sort_unstable();
     want
 }

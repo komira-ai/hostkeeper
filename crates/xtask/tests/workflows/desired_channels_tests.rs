@@ -29,7 +29,7 @@ const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 const VERSION: &str = "0.1.251";
 
 /// The `needs:` line of `set-desired` in the repository's `release.yml`.
-const NEEDS_LINE: &str = "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]\n    if: ${{ !cancelled()";
+const NEEDS_LINE: &str = "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload, no-downgrade]\n    if: ${{ !cancelled()";
 
 fn release_yml() -> String {
     workflows()
@@ -273,6 +273,9 @@ fn context(outcome: &[(&str, &str)], run: Run) -> Context {
         ("needs.targets.outputs.newest", "true"),
         ("needs.coordinator.result", "success"),
         ("needs.testing-pkg-upload.outputs.enabled", "true"),
+        ("needs.no-downgrade.outputs.set", "true"),
+        ("needs.no-downgrade.outputs.attempt", "1"),
+        ("github.run_attempt", "1"),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_owned(), v.to_owned()))

@@ -76,15 +76,17 @@
 #          quarter of an hour. The one job that holds `packages: write`, with the job's own
 #          token; pushing the same release again changes nothing, so a re-run of the job, or the
 #          next run's plan, pushes it again.
-# targets, coordinator, set-desired
+# targets, coordinator, no-downgrade, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: write the targets of the newest release, wait until the
 #          coordinator runs at least that release (its own machine updates it; this workflow
 #          never changes it) and the package channels its targets point at list it (the apt
 #          suite `testing`, written by testing-apt-write; the installers' `testing` directory,
-#          by testing-pkg-upload), then set the release as hostkeeper's desired version on the
+#          by testing-pkg-upload), check again, in the same attempt of the run as the set, that
+#          no newer release is published (a re-run of an older release's jobs must not move the
+#          fleet back), then set the release as hostkeeper's desired version on the
 #          coordinator, by one call of the CI client (set-desired.yml) with an OIDC token. See
-#          the comment above the three jobs.
+#          the comment above the jobs.
 #
 # newest, testing-apt-*, testing-fail-apt-*, testing-rpm-*, testing-pkg-upload, check-apt,
 # check-rpm, check-pkg, promote-check, stable-apt-*, stable-rpm-*, promote-pkg
@@ -485,6 +487,47 @@ jobs:
           VERSION: ${{ needs.targets.outputs.version }}
         run: echo "::error::The coordinator did not say whether it runs this release ($VERSION) within 30 minutes; its last answer was HTTP $STATUS (000 is no answer). Check the tailnet join and the repository variables HOSTKEEPER_COORDINATOR_URL and HOSTKEEPER_COORDINATOR_CA. The hosts' desired version is not set."
 
+  # no-downgrade  read-only, right before set-desired, under its condition: whether this run's
+  #          release is still the newest published. targets checked that once, but a re-run of
+  #          an older release's failed jobs keeps targets' old outputs: a release published since
+  #          (and set) would be moved back to this one on every host. So this job needs every job
+  #          set-desired needs, and is re-run whenever one of them is; it lists the published
+  #          releases again, and when a higher X.Y.Z than this run's is published it says so in a
+  #          warning annotation, gives `set=false` and ends green, and set-desired is skipped: a
+  #          run of an older release never sets it. Its output `attempt` is the attempt of the
+  #          run it ran in, and set-desired runs only in that same attempt, so re-running
+  #          set-desired alone (its own failure, with **Re-run failed jobs**) skips it; re-run
+  #          this job instead, which re-runs set-desired after it. Moving the fleet back is an
+  #          operator's step on the coordinator, never this workflow's. Holds `contents: read`
+  #          alone; gh and its jq only, no checkout and no code of ours.
+  no-downgrade:
+    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      set: ${{ steps.newest.outputs.set }}
+      newest: ${{ steps.newest.outputs.newest }}
+      attempt: ${{ github.run_attempt }}
+    steps:
+      # `newest=` the highest published X.Y.Z, and `set=true` only when it is not higher than
+      # this run's version. No published release (or a failed list) fails the job.
+      - name: Whether this run's release is still the newest published
+        id: newest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.targets.outputs.version }}
+        run: gh release list --repo "$GITHUB_REPOSITORY" --exclude-drafts --limit 100 --json tagName --jq '[.[].tagName | select(test("^v[0-9]+\\.[0-9]+\\.[0-9]+$")) | ltrimstr("v") | split(".") | map(tonumber)] | max | "newest=\(map(tostring) | join("."))", "set=\(. <= (env.VERSION | split(".") | map(tonumber)))"' >> "$GITHUB_OUTPUT"
+      - name: Say that an older release is not set
+        if: ${{ steps.newest.outputs.set != 'true' }}
+        env:
+          VERSION: ${{ needs.targets.outputs.version }}
+          NEWEST: ${{ steps.newest.outputs.newest }}
+        run: |
+          echo "::warning::Not setting hostkeeper $VERSION as the desired version on the coordinator: $NEWEST is published, a newer release, and setting $VERSION would move every host back. This is a run of an older release (a re-run of its jobs, or a late run); the newest release's own run sets the fleet. A move back is an operator's step on the coordinator, never this workflow's."
+
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
   #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,
   #          `CLIENT_COMMIT`), the one hello-desired.yml pins too. It runs that release's hkctl:
@@ -503,14 +546,15 @@ jobs:
   #          failed, at any depth, still stops it. The release's targets name no other channel
   #          (no rpm entry): the workflow lint holds these needs to the channels of the targets
   #          the real `release targets` writes (crates/xtask/tests/workflows/desired.rs, and
-  #          desired_channels_tests.rs beside it).
+  #          desired_channels_tests.rs beside it). It needs no-downgrade too, and runs only
+  #          when that job said `set=true` in this same attempt of the run.
   #          The join, when HOSTKEEPER_TAILNET_CLIENT_ID is set, asks for the tag of the
   #          repository variable HOSTKEEPER_TAILNET_TAG (`tag:ci`), the one the federation's trust
   #          credential issues; the client checks it at its first step, with or without the join,
   #          so the variable must be set.
   set-desired:
-    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]
-    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' }}
+    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload, no-downgrade]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' && needs.no-downgrade.outputs.set == 'true' && needs.no-downgrade.outputs.attempt == github.run_attempt }}
     permissions:
       contents: read
       id-token: write
