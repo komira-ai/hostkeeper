@@ -6,6 +6,7 @@
 //! It answers `GET /healthz` and `HEAD /healthz` only, and `404 not_found` to any other path or
 //! method. The answer is `200` with the body `ok` when every listener the flags name is bound
 //! and serving and the store takes writes, and `503` with one reason token otherwise:
+//! `draining` from the stop signal until the process exits, whatever else holds,
 //! `starting` until every listener is bound, `not_writer` once another coordinator led the
 //! database this one's link to it was lost from (this one holds the single-writer lock no more,
 //! and stops), `store_unreachable` while the link to the database is lost. A `HEAD` is answered
@@ -20,7 +21,7 @@
 use std::convert::Infallible;
 use std::io;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -52,6 +53,9 @@ pub(crate) enum Verdict {
     NotWriter,
     /// The link to the database is lost. `503 store_unreachable`.
     StoreUnreachable,
+    /// The coordinator was told to stop and is on its way out: a load balancer sends it no new
+    /// connection. `503 draining`, from the stop signal until the process exits.
+    Draining,
 }
 
 impl Verdict {
@@ -63,6 +67,7 @@ impl Verdict {
             Self::Starting => "starting",
             Self::NotWriter => "not_writer",
             Self::StoreUnreachable => "store_unreachable",
+            Self::Draining => "draining",
         }
     }
 
@@ -71,35 +76,67 @@ impl Verdict {
     pub(crate) fn status(self) -> StatusCode {
         match self {
             Self::Ok => StatusCode::OK,
-            Self::Starting | Self::NotWriter | Self::StoreUnreachable => {
+            Self::Starting | Self::NotWriter | Self::StoreUnreachable | Self::Draining => {
                 StatusCode::SERVICE_UNAVAILABLE
             }
         }
     }
 }
 
-/// Whether every listener is bound and serving: set once by the start, after the last bind,
-/// and read by every answer of the health listener.
+/// Starting: not every listener is bound yet.
+const STARTING: u8 = 0;
+/// Every listener is bound and serving.
+const SERVING: u8 = 1;
+/// Told to stop.
+const DRAINING: u8 = 2;
+
+/// Where the coordinator is in its life, read by every answer of the health listener: starting,
+/// then serving once the start calls [`Serving::set`] after the last bind, then draining once
+/// the stop signal calls [`Serving::drain`]. It only moves forward: a set after a drain leaves
+/// it draining.
 #[derive(Clone, Debug, Default)]
-pub(crate) struct Serving(Arc<AtomicBool>);
+pub(crate) struct Serving(Arc<AtomicU8>);
 
 impl Serving {
-    /// Says that every listener is bound and serving.
+    /// Says that every listener is bound and serving, unless the coordinator is draining.
     pub(crate) fn set(&self) {
-        self.0.store(true, Ordering::SeqCst);
+        self.0.fetch_max(SERVING, Ordering::SeqCst);
     }
 
-    /// Whether [`Serving::set`] was called.
+    /// Says that the coordinator was told to stop: from now on it is draining.
+    pub(crate) fn drain(&self) {
+        self.0.store(DRAINING, Ordering::SeqCst);
+    }
+
+    /// Whether [`Serving::set`] or [`Serving::drain`] was called.
     #[must_use]
     pub(crate) fn is_set(&self) -> bool {
-        self.0.load(Ordering::SeqCst)
+        self.0.load(Ordering::SeqCst) != STARTING
+    }
+
+    /// Whether [`Serving::drain`] was called.
+    #[must_use]
+    pub(crate) fn is_draining(&self) -> bool {
+        self.0.load(Ordering::SeqCst) == DRAINING
     }
 }
 
-/// What the health listener says of `coordinator`, `serving` or not: [`Verdict::Starting`]
-/// first, then the store's health, from memory.
+/// Waits for `stop` (the stop signal), then says on `serving` that the coordinator is
+/// draining, whatever `stop` answered, and answers what it answered. The health listener says
+/// `draining` from then on, until the process exits.
+pub(crate) async fn drain_on<T>(stop: impl Future<Output = T>, serving: Serving) -> T {
+    let stopped = stop.await;
+    serving.drain();
+    stopped
+}
+
+/// What the health listener says of `coordinator`, `serving` or not: [`Verdict::Draining`]
+/// first, then [`Verdict::Starting`], then the store's health, from memory.
 #[must_use]
 pub(crate) fn verdict(coordinator: &Coordinator, serving: &Serving) -> Verdict {
+    if serving.is_draining() {
+        return Verdict::Draining;
+    }
     if !serving.is_set() {
         return Verdict::Starting;
     }
