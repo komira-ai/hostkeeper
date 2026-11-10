@@ -57,7 +57,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M368,372 L136,372" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
 <text x="252" y="366" class="t-m lbl" text-anchor="middle">5. Activate Mac: asks for the ADE profile</text>
 <path d="M136,412 L368,412" class="ln-d" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
-<text x="252" y="406" class="t-m lbl" text-anchor="middle">6. profile: url = https://mdm.internal.komira.dev/enroll</text>
+<text x="252" y="406" class="t-m lbl" text-anchor="middle">6. profile: url = https://mdm.example.com/enroll</text>
 <path d="M368,452 L600,452" class="ln" marker-end="url(#coordinator-mdm-ade-enrollment-ak)"/>
 <text x="484" y="446" class="t-m lbl" text-anchor="middle">7. POST /enroll (device info signed by Apple)</text>
 <rect x="370" y="468" width="459" height="25" rx="4" class="box-o"/>
