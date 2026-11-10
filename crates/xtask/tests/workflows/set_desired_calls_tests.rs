@@ -6,7 +6,7 @@
 
 use super::lint::entry;
 use super::set_desired::{ALWAYS_IF, CALL_STEPS, ORDERED, WAIT_IF};
-use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, SET_ON_FAILURE, command};
+use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, command};
 use super::set_desired_tests::{CLIENT, CLIENT_BLOCK, assert_client, moved, real, step_ids};
 use super::with_in;
 use super::yaml::{self, Node, Value};
@@ -187,53 +187,42 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
             "step 11 (`set-desired`) passes `--response-file`, which is not a flag of `releases set-desired`",
         ],
     );
-    let no_err = "step 11 (`set-desired`) does not end with `2> \"$RUNNER_TEMP/hkctl-set.err\" || { status=$?; cat \"$RUNNER_TEMP/hkctl-set.err\" >&2; exit \"$status\"; }`, the file the outputs step reads";
-    let set_err = "2> \"$RUNNER_TEMP/hkctl-set.err\"";
-    let tail = format!(" {SET_ON_FAILURE}");
-    // The diagnostics not sent to a file at all.
+    let no_err = "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-set.err`, the file the outputs step reads";
+    // The diagnostics not sent anywhere: the outputs step reads nothing and the log shows them.
     assert_client(
         &set_with(
             &format!(
-                "--request \"$RUNNER_TEMP/hkctl-request.json\" \\\n            {set_err}{tail}\n"
+                "--request \"$RUNNER_TEMP/hkctl-request.json\" \\\n            {SET_REDIRECT}\n"
             ),
             "--request \"$RUNNER_TEMP/hkctl-request.json\"\n",
         ),
         &[no_err],
     );
-    // Sent to the wait's file, which the outputs step does not read for the set.
-    assert_client(
-        &set_with(set_err, "2> \"$RUNNER_TEMP/hkctl-wait.err\""),
-        &[no_err],
-    );
-    assert_client(
-        &set_with(&format!("{set_err}{tail}"), &format!("2>&1{tail}")),
-        &[no_err],
-    );
-    // The set step as it was before it printed its diagnostics: a failure shows only hkctl's
-    // exit code in the step's own log.
-    assert_client(&set_with(&tail, ""), &[no_err]);
-    // A failure that prints the diagnostics but ends with another code than hkctl's, or with
-    // success, so the outputs step would read a set that failed as one that did not.
-    for (from, to) in [
-        ("exit \"$status\";", "exit 1;"),
-        ("exit \"$status\";", "true;"),
-        ("cat \"$RUNNER_TEMP/hkctl-set.err\" >&2;", ":;"),
-        (
-            "cat \"$RUNNER_TEMP/hkctl-set.err\" >&2;",
-            "cat \"$RUNNER_TEMP/hkctl-wait.err\" >&2;",
-        ),
+    for to in [
+        // The set step as it was: its own log shows only hkctl's exit code.
+        "2> \"$RUNNER_TEMP/hkctl-set.err\"",
+        // The wait's file, which the outputs step does not read for the set.
+        "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)",
+        // To the log alone: the outputs step reads no diagnostics.
+        "2>&1",
+        // To the file and to stdout, which carries only the mask line.
+        "2> >(tee \"$RUNNER_TEMP/hkctl-set.err\")",
+        // A tee that appends to a file a re-run of the job left.
+        "2> >(tee -a \"$RUNNER_TEMP/hkctl-set.err\" >&2)",
+        // A pipe: the step's code becomes tee's, and a failed set reads as a success.
+        "2>&1 | tee \"$RUNNER_TEMP/hkctl-set.err\"",
     ] {
-        assert_client(&set_with(&tail, &tail.replacen(from, to, 1)), &[no_err]);
+        assert_client(&set_with(SET_REDIRECT, to), &[no_err]);
     }
-    // The wait ends with its file and nothing more: the rule of its own end is unchanged.
+    // The wait ends with its file alone: the rule of its own end is unchanged.
     assert_client(
         &with_in(
             CLIENT,
             "2> \"$RUNNER_TEMP/hkctl-wait.err\"\n",
-            &format!("2> \"$RUNNER_TEMP/hkctl-wait.err\"{tail}\n"),
+            "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)\n",
         ),
         &[
-            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hkctl-wait.err\"`, the file the outputs step reads",
+            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hkctl-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-wait.err`, the file the outputs step reads",
         ],
     );
 }
@@ -735,9 +724,9 @@ fn a_failed_set_prints_hkctls_diagnostics_and_keeps_its_exit_code() {
 }
 
 #[test]
-fn a_set_that_succeeds_prints_nothing_and_succeeds() {
-    // Catches: the failure branch running after a success (a diagnostic printed, or the step
-    // ending with a code), and a warning on success lost from the file.
+fn a_set_that_succeeds_succeeds_and_shows_what_hkctl_wrote() {
+    // Catches: a success turned into a failure by the redirect, and a warning on success lost
+    // from the log or from the file.
     assert_eq!(
         run_set_step("success", "", 0),
         (Some(0), String::new(), String::new())
@@ -745,6 +734,6 @@ fn a_set_that_succeeds_prints_nothing_and_succeeds() {
     let warning = "hkctl: a warning\n";
     assert_eq!(
         run_set_step("success-warning", warning, 0),
-        (Some(0), String::new(), warning.to_owned())
+        (Some(0), warning.to_owned(), warning.to_owned())
     );
 }

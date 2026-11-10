@@ -32,7 +32,7 @@
 # step but the join reads it.
 #
 # Then the verified hkctl makes two calls, each one hkctl command that asks the runner for its
-# own OIDC token (`--github-oidc-audience`; a failed set then prints hkctl's diagnostics): `releases set-desired`, with the request the `request`
+# own OIDC token (`--github-oidc-audience`; the set's diagnostics also go to its log): `releases set-desired`, with the request the `request`
 # step wrote (the version and the targets; the coordinator checks them); and, when
 # `wait` is true and the set succeeded,
 # `releases wait-converged`, one call the coordinator holds until the fleet converges, the
@@ -253,9 +253,10 @@ jobs:
             > "$RUNNER_TEMP/hkctl-request.json"
 
       # The first step that requests an OIDC token for the coordinator. Its outcome, its answer
-      # and its diagnostics are read by the outputs step, so a failure goes on to it. When hkctl
-      # fails, the step prints the diagnostics it saved (the coordinator's code and its
-      # `refused: <token>` line) and ends with hkctl's exit code, so its own log names the cause.
+      # and its diagnostics are read by the outputs step, so a failure goes on to it. The
+      # diagnostics also go to the step's own log (`tee`), so a failed set names its cause there
+      # (the coordinator's code and its `refused: <token>` line); the step ends with hkctl's exit
+      # code.
       - name: Set the desired version
         id: set-desired
         continue-on-error: true
@@ -272,7 +273,7 @@ jobs:
             releases set-desired \
             --service "$SERVICE" \
             --request "$RUNNER_TEMP/hkctl-request.json" \
-            2> "$RUNNER_TEMP/hkctl-set.err" || { status=$?; cat "$RUNNER_TEMP/hkctl-set.err" >&2; exit "$status"; }
+            2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)
 
       # One held call, with a token of its own. `--wait-secs` is `max_polls` with a 0 appended,
       # ten times it, as text: no arithmetic is done on an input. The coordinator refuses a wait

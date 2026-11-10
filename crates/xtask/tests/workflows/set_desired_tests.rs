@@ -109,7 +109,7 @@ jobs:
             releases set-desired \\
             --service \"$SERVICE\" \\
             --request \"$RUNNER_TEMP/hkctl-request.json\" \\
-            2> \"$RUNNER_TEMP/hkctl-set.err\" || { status=$?; cat \"$RUNNER_TEMP/hkctl-set.err\" >&2; exit \"$status\"; }
+            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
       - id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
         continue-on-error: true
@@ -173,7 +173,7 @@ pub(super) const CLIENT_BLOCK: &str = "      - id: set-desired
             releases set-desired \\
             --service \"$SERVICE\" \\
             --request \"$RUNNER_TEMP/hkctl-request.json\" \\
-            2> \"$RUNNER_TEMP/hkctl-set.err\" || { status=$?; cat \"$RUNNER_TEMP/hkctl-set.err\" >&2; exit \"$status\"; }
+            2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)
 ";
 
 /// The join step of [`CLIENT`], whole.
