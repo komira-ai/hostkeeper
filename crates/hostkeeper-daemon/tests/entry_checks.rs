@@ -15,7 +15,7 @@ use hostkeeper_daemon::cli::{EXIT_CONFIG, HostFiles, SIGNERS_FILE, host_ports, l
 use hostkeeper_daemon::entry::MACOS_PKG_ATTESTED;
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_daemon::{Daemon, Ports, Refusal, Reply};
-use hostkeeper_hook::Verdict;
+use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_install::{Announcement, Family};
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_observe::fake::FakeCommandRunner;
@@ -313,11 +313,13 @@ fn an_order_without_an_entry_is_refused_before_any_port() {
     assert!(world.apt.rig.record("fresh").is_none());
 }
 
-/// Catches an entry of an installer the daemon announces but has no backend of being staged by
-/// another: a daemon that announces `macos-pkg` (a Mac's, once it is wired) and is ordered such an
-/// entry on this build refuses it `order_invalid`, naming the installer, nothing run.
+/// Catches an entry of `macos-pkg` being staged on a daemon that announces it but holds none of
+/// its ports (a daemon whose host is no Mac with its signers file, installer and pkgutil): the
+/// order ends `Failed` before the commit, `environment`, `io_error`, nothing run. (An
+/// installer's name this build has no steps of is no installer of the receipt check: it is
+/// never announced.)
 #[test]
-fn an_announced_installer_with_no_backend_is_order_invalid() {
+fn an_announced_installer_with_no_ports_is_failed_before_any_tool() {
     let world = World::new("entries-no-backend");
     let ports = Ports {
         announcement: Announcement {
@@ -332,11 +334,17 @@ fn an_announced_installer_with_no_backend_is_order_invalid() {
     mac.repository = None;
     mac.package_version = None;
     let reply = daemon.order(&world.install(&mac));
-    assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
-    let Reply::Refused { detail, .. } = &reply else {
-        panic!("a refusal: {reply:?}")
-    };
-    assert!(detail.contains("macos-pkg"), "{detail}");
+    assert_eq!(
+        reply,
+        Reply::Finished {
+            verdict: Verdict::Failed {
+                phase: Phase::BeforeCommit,
+                class: Class::Environment,
+            },
+            reason: Some("io_error".to_owned()),
+            resent: false,
+        }
+    );
     world.untouched();
 }
 
@@ -375,7 +383,7 @@ fn the_installers_announced_are_the_ones_the_receipt_check_lists() {
             RunnerLauncher::new(FakeCommandRunner::default(), SYSTEMCTL_DEADLINE),
         );
         fs::create_dir_all(&rig.packages).expect("the packages directory");
-        host_ports(&rig.settings(), host, OWN, adapters).expect("the ports")
+        host_ports(&config(), &rig.settings(), host, OWN, adapters).expect("the ports")
     };
     let none = ports(&host).announcement;
     assert!(none.names().is_empty());
@@ -424,7 +432,7 @@ fn an_unsound_signers_file_refuses_the_start_naming_the_file() {
         RunnerLauncher::new(FakeCommandRunner::default(), SYSTEMCTL_DEADLINE),
     );
     let host = mac_files(rig.scratch.path(), path.clone());
-    let error = host_ports(&rig.settings(), &host, OWN, adapters)
+    let error = host_ports(&config(), &rig.settings(), &host, OWN, adapters)
         .err()
         .expect("the start is refused");
     assert!(

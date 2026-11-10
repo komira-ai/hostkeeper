@@ -131,6 +131,9 @@ fn an_entry_written_reads_back_equal_and_the_file_is_read_only() {
         to_json(&written).expect("json")
     );
     assert_eq!(read(dir.path()).expect("read"), Some(written));
+    let marker = dir.path().join(MANIFEST_HOOK_FILE);
+    let meta = fs::metadata(&marker).expect("the marker");
+    assert_eq!((meta.len(), meta.permissions().mode() & 0o777), (0, 0o444));
 }
 
 /// Proves a second write into the same staging directory fails with an I/O error and leaves the
@@ -332,12 +335,61 @@ fn an_entry_without_a_hook_has_no_bounds_and_is_refused() {
     );
 }
 
-/// Proves the hook is the package's program at `tree/usr/lib/<package>/hostkeeper-hook` when that
-/// is a regular file, and no command (the built-in steps) when it is absent, a link or a
-/// directory, or when the entry names no package.
+/// The entry whose manifest names `command` as its hook.
+fn with_command(command: &[&str]) -> Target {
+    with_manifest(|manifest| {
+        manifest.hook.as_mut().expect("a hook").command =
+            command.iter().map(|word| (*word).to_owned()).collect();
+    })
+}
+
+/// Proves the hook command of the manifest is carried with its arguments and its program mapped
+/// to its copy in the sealed tree: the file itself, a file reached through an absolute link and
+/// one reached through a relative link all map to the real path inside `tree/`.
 #[test]
-fn the_hook_is_the_packages_program_only_when_it_is_a_regular_file() {
-    let dir = scratch("target-hook");
+fn the_hook_command_is_carried_with_its_program_mapped_into_the_tree() {
+    let dir = scratch("target-hook-command");
+    let tree = dir.path().join("tree");
+    fs::create_dir_all(tree.join("usr/lib/web")).expect("tree");
+    fs::create_dir_all(tree.join("usr/bin")).expect("bin");
+    fs::write(tree.join("usr/lib/web/web"), b"#!/bin/sh\n").expect("hook");
+    symlink("/usr/lib/web/web", tree.join("usr/bin/web")).expect("absolute link");
+    symlink("../lib/web/web", tree.join("usr/bin/rel")).expect("relative link");
+    let command = |words: &[&str]| {
+        of(dir.path(), &with_command(words))
+            .expect("accepted")
+            .hook
+            .command
+    };
+    let want = vec!["tree/usr/lib/web/web".to_owned(), "update-hook".to_owned()];
+    assert_eq!(command(&["/usr/lib/web/web", "update-hook"]), want);
+    assert_eq!(command(&["/usr/bin/web", "update-hook"]), want);
+    assert_eq!(command(&["/usr/bin/rel", "update-hook"]), want);
+    assert_eq!(
+        command(&["/usr/lib/web/web", "--fast", "x"]),
+        ["tree/usr/lib/web/web", "--fast", "x"]
+    );
+}
+
+/// Proves a hook program the tree does not hold maps to `tree/<its path>`, never to a path of the
+/// host, so the step runner's check of the hook finds nothing to run.
+#[test]
+fn a_hook_program_the_tree_lacks_maps_to_a_path_in_the_tree() {
+    let dir = scratch("target-hook-missing");
+    fs::create_dir_all(dir.path().join("tree")).expect("tree");
+    let entry = with_command(&["/usr/bin/true", "update-hook"]);
+    assert_eq!(
+        of(dir.path(), &entry).expect("accepted").hook.command,
+        ["tree/usr/bin/true", "update-hook"]
+    );
+}
+
+/// Proves an empty command reads the old fixed-path hook of a version an older daemon staged:
+/// `tree/usr/lib/<package>/hostkeeper-hook` when it is a regular file; no command (the built-in
+/// steps) when it is absent, a link or a directory, or when the entry names no package.
+#[test]
+fn an_empty_command_reads_the_old_fixed_path_hook_only_when_it_is_a_regular_file() {
+    let dir = scratch("target-hook-legacy");
     let hook = dir.path().join("tree/usr/lib/web");
     fs::create_dir_all(&hook).expect("tree");
     let command = |entry: &Target| of(dir.path(), entry).expect("accepted").hook.command;
@@ -357,6 +409,59 @@ fn the_hook_is_the_packages_program_only_when_it_is_a_regular_file() {
     fs::remove_file(hook.join("hostkeeper-hook")).expect("remove");
     fs::create_dir(hook.join("hostkeeper-hook")).expect("directory");
     assert!(command(&entry()).is_empty(), "a directory is no program");
+}
+
+/// Proves a version this daemon staged (its directory holds [`MANIFEST_HOOK_FILE`]) never runs
+/// the old fixed-path file: with an empty command it gets the built-in steps even when its
+/// package ships `usr/lib/<package>/hostkeeper-hook`. Catches the package's content choosing a
+/// hook the manifest did not name.
+#[test]
+fn a_version_this_daemon_staged_never_reads_the_old_fixed_path_hook() {
+    let dir = scratch("target-hook-marked");
+    let hook = dir.path().join("tree/usr/lib/web");
+    fs::create_dir_all(&hook).expect("tree");
+    fs::write(hook.join("hostkeeper-hook"), b"#!/bin/sh\n").expect("hook");
+    write(dir.path(), &entry()).expect("written");
+    assert!(
+        of(dir.path(), &entry())
+            .expect("accepted")
+            .hook
+            .command
+            .is_empty()
+    );
+}
+
+/// Proves the previous version's own hook is read from its sealed `target.json`: the program
+/// mapped into its tree and its own leading arguments; `None` for a version with no
+/// `target.json`, with no command, or whose entry cannot be read.
+#[test]
+fn the_previous_hook_is_the_previous_versions_own() {
+    let dir = scratch("target-previous-hook");
+    let service = ServiceName::new("web").expect("name");
+    let version = Version::new("1.0.0").expect("version");
+    let previous = |dir: &Path| previous_hook(dir, &service, &version, &OWN);
+    assert_eq!(previous(dir.path()), None, "no target.json");
+    let program = dir.path().join("tree/opt/web/bin");
+    fs::create_dir_all(&program).expect("tree");
+    fs::write(program.join("web"), b"#!/bin/sh\n").expect("program");
+    let hooked = with_manifest(|manifest| {
+        let hook = manifest.hook.as_mut().expect("a hook");
+        hook.command = vec!["/opt/web/bin/web".to_owned(), "hook".to_owned()];
+    });
+    write(dir.path(), &hooked).expect("written");
+    assert_eq!(
+        previous(dir.path()),
+        Some(hostkeeper_steps::PreviousHook {
+            binary: "tree/opt/web/bin/web".into(),
+            args: vec!["hook".to_owned()],
+        })
+    );
+    let builtin = scratch("target-previous-builtin");
+    write(builtin.path(), &entry()).expect("written");
+    assert_eq!(previous(builtin.path()), None, "no command");
+    let broken = scratch("target-previous-broken");
+    fs::write(broken.path().join(TARGET_FILE), b"not json").expect("written");
+    assert_eq!(previous(broken.path()), None, "unreadable");
 }
 
 /// Proves each kind of param becomes the TOML scalar of the same type, and a param with no value

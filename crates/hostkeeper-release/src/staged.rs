@@ -67,7 +67,8 @@ pub enum StagedError {
 }
 
 /// Checks the hook program and every `place` source of `manifest`, one already passed by
-/// [`crate::manifest::check`] (so each is a relative path of plain names), against the tree
+/// [`crate::manifest::check`] and, for a program, [`crate::manifest::check_hook_of`] for an entry that
+/// is not native (so each is a relative path of plain names), against the tree
 /// `entry` reads. A unit source and the program must be regular files; a file source may also be
 /// a directory, as a `[[files]]` source today.
 pub fn check(

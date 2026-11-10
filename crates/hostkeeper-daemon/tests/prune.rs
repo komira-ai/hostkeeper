@@ -844,7 +844,7 @@ fn a_service_of_an_installer_without_steps_prunes_nothing() {
     let placed = rig.scratch.path().join("placed/placed.json");
     let before = snapshot(&rig.packages);
     let mut expected = Vec::new();
-    for installer in ["macos-pkg", "hostkeeper-archive"] {
+    for installer in ["oci-image", "hostkeeper-archive"] {
         fs::write(
             &placed,
             format!(r#"{{"schema":1,"installed":{{"web":{{"installer":"{installer}"}}}}}}"#),

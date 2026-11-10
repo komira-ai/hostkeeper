@@ -8,7 +8,9 @@
 //! first `Release` only. A version older than the newest listed for a package of the product is refused, and so
 //! is the same version with other bytes. Everything is computed before anything is written; the
 //! new unsigned index goes to `<out>/dists/<suite>/` and the ETags it was built from to
-//! `<out>/etags.txt`. The `Date` is `--date`, seconds since the epoch.
+//! `<out>/etags.txt`. The `Date` is `--date`, seconds since the epoch. The packages are those the
+//! suite lists ([`super::package_files`]), each in the version form of the suite, and an index
+//! read from `<current>` is read in that form too.
 //!
 //! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
 //! (`crates/xtask/src/channels/apt/build.rs`), adapted to this repository (see [`crate::channels`]).
@@ -88,7 +90,7 @@ pub(super) fn read_index(dir: &Path, suite: Suite) -> Result<Current, Error> {
         let path = main.join(format!("binary-{arch}")).join("Packages");
         if let Ok(text) = std::fs::read_to_string(&path) {
             existing.extend(
-                index::parse_packages(&text)
+                index::parse_packages(&text, suite)
                     .map_err(|e| Error::Failed(format!("{}: {e}", path.display())))?,
             );
         }
@@ -135,10 +137,11 @@ pub fn build(r: &Request) -> Result<Vec<String>, Error> {
         ))
     })?;
     let mut added: Vec<Stanza> = Vec::new();
-    for (name, path) in package_files(r.debs, r.version)? {
+    for (name, path) in package_files(r.debs, r.version, r.suite)? {
         let bytes =
             std::fs::read(&path).map_err(Error::spawn(format!("read {}", path.display())))?;
-        let stanza = index::stanza_of(&bytes).map_err(|e| Error::Failed(format!("{name}: {e}")))?;
+        let stanza =
+            index::stanza_of(&bytes, r.suite).map_err(|e| Error::Failed(format!("{name}: {e}")))?;
         // The package's own control file decides the entry's file name; it must be this file.
         let fields = control::parse(&stanza.text)?;
         let filename = control::get(&fields, "Filename").unwrap_or_default();

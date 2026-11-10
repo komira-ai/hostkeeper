@@ -3,9 +3,10 @@
 //!
 //! [`check`] applies every rule that needs no host and no knowledge of the entry's installer;
 //! the coordinator runs it on every entry of a set (section 3.4). [`check_for`] adds the rules of
-//! the entry's installer, which only the daemon applies ([`crate::receipt`]), but for the one rule
-//! of the hook that depends on whether the installer is native ([`check_hook_of`]), which the
-//! coordinator applies too ([`crate::target::check_entry`]). Neither reads
+//! the entry's installer, which only the daemon applies ([`crate::receipt`]), but for the rules
+//! of the hook's program and boot step, which depend on whether the installer is native
+//! ([`check_hook_of`]) and which the coordinator applies too ([`crate::target::check_entry`]).
+//! Neither reads
 //! `min_hostkeeper` against a daemon: [`check`] only parses it. What needs the staged tree is in
 //! [`crate::staged`], which runs after the installer's `stage`.
 //!
@@ -79,11 +80,21 @@ pub enum ManifestError {
         /// The field.
         field: &'static str,
     },
-    /// `hook.command[0]` is not a relative path of plain names.
+    /// `hook.command[0]` of an entry that is not native is not a relative path of plain names.
     #[error(
         "hook.command names the program {program:?}, which {why}; it is a path relative to the tree"
     )]
     HookProgram {
+        /// The program as given.
+        program: String,
+        /// The rule of the path grammar it breaks.
+        why: PathError,
+    },
+    /// `hook.command[0]` of a native entry is not an absolute path of plain names.
+    #[error(
+        "hook.command names the program {program:?}, which {why}; on a native entry it is the absolute path of a file the package installs"
+    )]
+    NativeHookProgram {
         /// The program as given.
         program: String,
         /// The rule of the path grammar it breaks.
@@ -94,14 +105,8 @@ pub enum ManifestError {
         "hook.boot {0:?} is not the name of an additive step: 1 to 64 of a-z, 0-9 and `_`, and none of prepare, cutover, verify, rollback, cleanup, uninstall"
     )]
     Boot(String),
-    /// `hook.command` on a native entry ([`check_hook_of`]): the hook of a native package is its
-    /// program at a fixed path, which the caller of `SetDesired` does not choose.
-    #[error(
-        "hook.command is set on a native entry; a native package's hook is its program at its fixed path"
-    )]
-    NativeHookCommand,
-    /// `hook.boot` with an empty `command` on an entry that is not native
-    /// ([`check_hook_of`]): the built-in steps have no additive step.
+    /// `hook.boot` with an empty `command` ([`check_hook_of`]), whatever the installer: the
+    /// built-in steps have no additive step.
     #[error("hook.boot {0:?} needs a hook.command; the built-in steps have no boot step")]
     BootWithoutCommand(String),
     /// `hook.timeout_secs` is absent.
@@ -329,21 +334,35 @@ pub fn check_for(
     check_hook_of(installer.is_native(), manifest)
 }
 
-/// The rules of the hook that depend on whether the entry is native (packages-native.md section
-/// 10.2): a native package's hook is its program at its fixed path, so a native entry's
-/// `hook.command` is refused and its `hook.boot` allowed without one (the daemon refuses it at
-/// `stage` when the package has no hook); any other entry's `hook.boot` needs a `hook.command`,
-/// since the built-in steps have no boot step. The coordinator applies it to every entry
-/// ([`crate::target::check_entry`], native by [`crate::target::is_native_entry`]), the daemon in
-/// [`check_for`] (native by [`Installer::is_native`]).
+/// The rules of the hook that depend on the entry's installer. `hook.command` may be empty for
+/// every installer (the built-in steps). When it is not, its program is an absolute path of
+/// plain names (the file a native package installs) on a native entry, and a relative path of
+/// plain names (a file of the staged tree) on any other; its arguments are free. `hook.boot`
+/// needs a `hook.command` for every installer, since the built-in steps have no boot step. The
+/// coordinator applies it to every entry ([`crate::target::check_entry`], native by
+/// [`crate::target::is_native_entry`]), the daemon in [`check_for`] (native by
+/// [`Installer::is_native`]).
 pub fn check_hook_of(native: bool, manifest: &Manifest) -> Result<(), ManifestError> {
     let Some(hook) = &manifest.hook else {
         return Ok(());
     };
-    match (native, hook.command.is_empty(), &hook.boot) {
-        (true, false, _) => Err(ManifestError::NativeHookCommand),
-        (false, true, Some(name)) => Err(ManifestError::BootWithoutCommand(name.clone())),
-        _ => Ok(()),
+    let Some(program) = hook.command.first() else {
+        return match &hook.boot {
+            Some(name) => Err(ManifestError::BootWithoutCommand(name.clone())),
+            None => Ok(()),
+        };
+    };
+    let program = program.clone();
+    if native {
+        // A space is a path character here: a `.pkg` installs under `/Library/Application
+        // Support/`, and the program is run by its argument vector, never by a shell or a unit
+        // file's command line. Every other rule of the grammar holds.
+        check_path(&program.replace(' ', "_")).map_err(|why| ManifestError::NativeHookProgram {
+            program: program.clone(),
+            why,
+        })
+    } else {
+        check_relative(&program).map_err(|why| ManifestError::HookProgram { program, why })
     }
 }
 
@@ -371,16 +390,9 @@ fn counts(manifest: &Manifest) -> Result<(), ManifestError> {
     }
 }
 
-/// The hook: its program a relative path of plain names, its boot step's name, and its bounds as
-/// `[hook]` has them today. Whether it may have a program, and a boot step without one, is the
-/// installer's rule ([`check_hook_of`]).
+/// The hook: its boot step's name and its bounds as `[hook]` has them today. The shape of its
+/// program, and a boot step without one, depend on the installer ([`check_hook_of`]).
 fn check_hook(hook: &Hook) -> Result<(), ManifestError> {
-    if let Some(program) = hook.command.first() {
-        check_relative(program).map_err(|why| ManifestError::HookProgram {
-            program: program.clone(),
-            why,
-        })?;
-    }
     if let Some(name) = hook.boot.as_ref().filter(|name| !is_boot_step(name)) {
         return Err(ManifestError::Boot(name.clone()));
     }

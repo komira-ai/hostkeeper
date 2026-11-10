@@ -52,7 +52,7 @@ fn start(rig: &Rig, host: &HostFiles) -> Result<Ports, StartError> {
         &Platform::linux(),
         RunnerLauncher::new(FakeCommandRunner::default(), SYSTEMCTL_DEADLINE),
     );
-    host_ports(&rig.settings(), host, OWN, adapters)
+    host_ports(&daemon_config(), &rig.settings(), host, OWN, adapters)
 }
 
 /// Makes a Debian host under `root` whose apt tools are present and whose installed apt is

@@ -35,8 +35,8 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
 - **Manifest and target checks (A1; `crates/hostkeeper-release/tests/manifest.rs`).** One case per check of sections
   3.4 and 4.4: each field an installer requires missing, each it refuses present; an unknown installer; `min_hostkeeper`
   above the daemon (`daemon_too_old`, not `manifest_invalid`, even with another field wrong); every bound at 0 and at
-  its limit, and `verify_deadline_secs` one below `verify + rollback`; a hook path with `..`, `.`, a leading `/`,
-  through a link, a directory, missing from `tree/`; a hook `command` for `oci-image`; a unit name of another service,
+  its limit, and `verify_deadline_secs` one below `verify + rollback`; for `tarball` and `hostkeeper-archive`, a hook path with `..`, `.`, a leading `/`,
+  through a link, a directory, missing from `tree/`; for `apt` and `macos-pkg`, a hook program that is not absolute; a hook `command` for `oci-image`; a unit name of another service,
   without a suffix, with a bad instance; a container `unit` not in `run`; a file path under each refused prefix and one
   beside it; a volume host path outside `/var/lib/<service>/` or with `..`; a host port 1023 and 65536; a health URL
   to a non-loopback host; an `updater.` param; each count limit one under and one over; a manifest of 16 KiB and one
@@ -147,7 +147,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   `fetch_failed`; `signature` for each of apt's signature errors; `not_in_repository`, deferred, for a missing version
   and for a stanza of another architecture only; `package_digest_mismatch` for the index's digest; `store_digest_mismatch` for a downloaded file that is not the pin;
   `package_too_large` at `max_package_bytes` plus one, and a package of exactly `max_package_bytes` accepted;
-  `manifest_invalid` for each control field and for a `run` unit not in the tree, and a
+  `manifest_invalid` for each control field and for a hook program that is not an executable regular file of the tree, and a
   package of architecture `all` accepted; the simulation run before any download, and a held package updated;
   `dependency_missing`; `dependency_changes` for an extra install, upgrade, downgrade and removal in the simulation,
   and for a purge refused by a dependent; `package_manager_busy`; `dpkg_interrupted`; `dpkg_error` for a failing
@@ -183,8 +183,8 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   product archive of two components, a component not selected by default, a `Distribution` with a script, an
   identifier other than `package`, a version other than the order's, an `install-location` other than `/`, a
   `relocate`, a `bundle`, a `Bom` that lists a file the payload lacks and a payload file with a setuid bit the `Bom`
-  does not show, a `Bom` entry not owned by root, of group staff, group-writable, under `/usr/local` and under another
-  service's directory, a `run` label with no plist, one whose `Label` differs and one without `Disabled`;
+  does not show, a `Bom` entry not owned by root or of group staff, and a hook program that is not an executable regular file of the payload;
+  a `.pkg` with `preinstall` and `postinstall` scripts, a payload file in any directory, a plist without `Disabled` and a setuid or group-writable file are accepted;
   `package_conflict` for a second service with the same identifier and for a payload file a receipt of another
   identifier lists, while a file of the same identifier's receipt (installed by hand) and a file no receipt lists are
   installed over; `unsafe_directory` for a parent that another account owns or can write; `package_manager_busy` in
@@ -203,7 +203,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   repairs each and ends `Succeeded`, `drift_repaired`. The device tests, as root, against packages signed by an
   identity the test makes and trusts for the run, served from an `https` store on loopback (section 4.7 there): install,
   update, roll back with the store stopped and with the test's root taken out of the trust settings, and uninstall a
-  two-version `hello`; the installed plist's job shows disabled (`launchctl print-disabled system`) until `activate` enables it; an `installer
+  two-version `hello`; the job is loaded and started at `cutover`, and a `.pkg` whose `postinstall` bootstraps its job has it running before `cutover`; an `installer
   -pkg` of the older version by hand is put back and reported as drift; the job runs the installed program and the
   observer matches it to the tree; after the uninstall `pkgutil --pkgs` lists no `hello` and none of its payload files
   remain.
@@ -253,19 +253,25 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
 Every test runs with the fakes of the general rules above; real `apt`, `dpkg`, `apk`, `installer` and `pkgutil` run
 only in the device jobs, against a signed fixture repository and signed fixture packages on the runner's disk.
 
-- **The hook, scripts and paths (A7, A9, A27; `crates/hostkeeper-install/tests/apt.rs`, `macos_pkg.rs`, `apk.rs`).** A
-  package with `hostkeeper-hook` at its path runs it for each step with today's arguments, and one without it gets the
-  built-in steps; a hook path that is a link, a directory or not executable is `manifest_invalid`; `hook.boot` with no
-  hook in the package is `manifest_invalid` at `stage`; an entry with a non-empty `hook.command` is `manifest_invalid`.
-  A `.deb` whose control archive holds each of `preinst`, `postinst`, `prerm`, `postrm`, `config` and `triggers`, one
-  case each, a `.pkg` with a `Scripts` archive, and an `.apk` with a script, are `package_scripts` before anything is
-  installed; a `.deb` with only `control`, `md5sums` and `conffiles` goes on. A file at each allowed path goes on, and
-  one at each refused kind of path (an enablement link under `/etc/systemd/system/`, `/etc/cron.d/`,
-  `/etc/sudoers.d/`, a drop-in directory, a link or a unit not named for the service in `/usr/lib/systemd/system/`) is
-  `manifest_invalid`; a unit named for the service that is not in `run` goes on (packages-native.md section 10.2). Scripts in a package named `hostkeeper` for the
-  service `hostkeeper` go on; the same package set for another service, and another package set for `hostkeeper`, are
-  `package_scripts`. A `macos-pkg` order with an attestation is `order_invalid`, and one without is fetched and
-  installed with no `gh` run (the command port's record is empty).
+- **The hook, scripts and paths (A7, A9; `crates/hostkeeper-install/tests/apt.rs`, `macos_pkg.rs`).** An entry whose
+  `hook.command` is an absolute path of a file of the package, with leading arguments, runs the sealed copy of that file
+  in the version's `tree/` for each step with those arguments before the contract's, `prepare` before `activate`; the
+  rollback of an update runs the previous version's program from its kept tree, and a first install's rollback finds
+  it after the package was purged; a command that is a link inside the tree is followed inside the tree, not through
+  the host. An entry with an empty command gets the built-in steps. A command naming a missing file, a directory, a
+  link that leaves the tree or a file that is not executable is `manifest_invalid` at `stage`, with the command and the
+  reason in the failure text; `hook.boot` with no command is `manifest_invalid` for every installer; `params` with no
+  command goes on. A `.deb` whose control archive holds each of `preinst`, `postinst`, `prerm`, `postrm`, `config` and
+  `triggers`, one case each, and a `.pkg` with a `Scripts` archive, are accepted, and a file at any path, an enablement
+  link, a drop-in and a unit of another name go on. `policy-rc.d`: `/usr/sbin/policy-rc.d` exists with `exit 101` while
+  `apt-get install` runs for an install, an update, a downgrade and a rollback, and while each `dpkg --purge` try of
+  `remove` runs, and is absent afterwards after a success and after a failure; a stale file of hostkeeper's text is
+  removed at daemon start before any package-manager call; a `policy-rc.d` of an operator's own text is left in place,
+  not replaced and not removed. A run unit with no `[Install]`, and one with no unit file in the package, is started
+  at `cutover` and at every daemon start, one with `[Install]` targets gets its links, and one already enabled by the
+  package keeps its link. The tree copy's modes are normalized (a setuid file, a group-writable file and a foreign
+  owner in the `.deb` are stripped and changed in `tree/`). A `macos-pkg` order with an attestation is `order_invalid`,
+  and one without is fetched and installed with no `gh` run (the command port's record is empty).
 - **The coordinator (A18; `crates/hostkeeper-coordinator/tests/target_move.rs`, `crates/hostkeeper-release/tests/manifest/native.rs`).**
   The pick over a fleet of every kind of host: a host running the service from archives that lists `apt` is picked the
   `apt` entry wherever it stands in the list; one that lists no native installer of the list, and a daemon before
@@ -274,8 +280,8 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   native to a release with no native entry carries the archive entry, and one to a release with a native entry
   carries that. `hostkeeper`'s list: one native entry accepted, a native entry and one archive entry after it
   accepted, the archive entry first, two archive entries and two native entries each `target_invalid`. A `macos-pkg`
-  entry with an attestation, and a native entry with a hook command, are `target_invalid`; a native entry with `boot`
-  and an empty command is accepted. `Hosts.List` gives each host's services with their installer, for a host that
+  entry with an attestation, and a native entry whose hook command is not an absolute path, are `target_invalid`; a native entry with an
+  absolute hook command is accepted, and `boot` with an empty command is `target_invalid` for every installer. `Hosts.List` gives each host's services with their installer, for a host that
   heartbeats and for one that has not since the coordinator's start; `additions_hosts.rs` is the B8 test of the new
   field in both directions.
 - **hostkeeper's own update (A19; `crates/hostkeeper-daemon/tests/selfupdate_native.rs`, device tests
@@ -308,18 +314,18 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   the refusal of a rollback below the compiled table before anything is staged are
   `crates/hostkeeper-daemon/tests/selfupdate_native.rs`; the table's rows are `src/rollback_floor_tests.rs`; the step
   record's pending activate and its B8 test against the previous release's reader are
-  `crates/hostkeeper-steps/tests/selfupdate_activate.rs`; hostkeeper's own `.deb` and `.pkg` held to their own lists,
-  with their scripts, are `crates/hostkeeper-install/tests/apt/own.rs` and `tests/macos_pkg/own.rs`, tied to
-  `packaging/linux/nfpm.yaml` and the `.pkg` builder by `crates/xtask/tests/packaging/own_list.rs` and
-  `src/release/macos_pkg/own_tests.rs`.
+  `crates/hostkeeper-steps/tests/selfupdate_activate.rs`; hostkeeper's own `.deb` and `.pkg` take the same
+  path as any package, with their scripts; their texts are held by the packaging tests (below).
 - **Packaging (A20; `crates/xtask/tests/packaging/`, `check-linux-pkg`, `check-macos-pkg`).** `hello`'s `.deb` and
-  `.pkg`, its fail-ready build's, and `mdm`'s `.deb` carry the hook at its path, no script, files only at allowed paths
-  and units installed disabled; `check-linux-pkg` refuses a fixture `.deb` with a `postinst`; the `.pkg`'s postinstall
+  `.pkg`, its fail-ready build's, and `mdm`'s `.deb` carry the program their hook command names (the manifest's
+  `hook.command` of the release entry is that absolute path and `update-hook`), with no `hostkeeper-hook` wrapper;
+  `check-linux-pkg` accepts a fixture `.deb` with a `postinst`; the `.pkg`'s postinstall
   text is held byte for byte (`crates/hostkeeper-launchd/tests/postinstall.rs`, A19).
 - **Release workflows (A21, A23, A24; the workflow lint, `crates/xtask/src/release/targets/tests.rs`).** `release
   targets` writes the native entry before the archive one for each platform (A21, A23) and the native entry alone
-  (A24: the Linux `.deb`'s, no list for macOS while no daemon announces `macos-pkg`, and hello's failing build refused
-  by name); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
+  (A24: the Linux `.deb`'s and the macOS list's signed `.pkg` entry alone, which a Mac whose daemon announces
+  `macos-pkg` takes; hello's failing build only with `--fail-ready`, its entry of repository `komira-testing-fail` at
+  `X.Y.Z~fail.ready`, packages-native.md 10.10, `targets/tests/fail_ready.rs`); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
   every job that signs or puts the release's files checks them against `SHA256SUMS` and their attestations first, A23)
   and, from A24, refuses the channel wait and any index output while it keeps the `targets` job that `set-desired`
   needs (`desired.rs`, `desired_tests.rs`, `tailnet_join_tests.rs`; the job run with bash in `targets_run_tests.rs`,
@@ -350,7 +356,7 @@ section 3.3 (first listed, kept installer, no match, old daemon), each row of th
 every installer's four steps against crash, repeat, failure and removal. For a repository installer it also holds
 one case for every check of packages-repositories.md section 2.2, every refusal of its section 3.1, and every row of
 its section 4.5, which are all the outcomes that file names. For packages-native.md it holds one case for every check
-of its section 10.2's list and path rule, each new refusal (`package_scripts`, the move's `installer_changed`, the
+of its section 10.2's list, each new refusal (the hook program check, the move's `installer_changed`, the
 rollback below A19), each row of the pick with the move's exception, each step of hostkeeper's own update against
 crash, deferral, failure and repeat, the B8 tests in both directions for each format the change touches, and each
 stage's condition of 10.6. Each item's pull request names its tests (rule T8).

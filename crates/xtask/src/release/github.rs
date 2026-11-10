@@ -1,5 +1,4 @@
-//! The GitHub adapter: answers [`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`] and
-//! [`Verifier`] by running `gh`
+//! The GitHub adapter: answers [`GitHubRuns`], [`ReleaseStore`] and [`Verifier`] by running `gh`
 //! through an [`Exec`]. Every argument list and every parse of GitHub's JSON is here, so a test
 //! scripts the [`Exec`] with realistic JSON and checks them all without a network.
 //!
@@ -13,8 +12,8 @@ use serde_json::Value;
 use super::contract::{Commit, MAIN, Repo, Signer};
 use super::git::stdout_of;
 use super::ports::{
-    Attestation, Exec, GitHubRuns, Issue, PortError, Release, ReleaseSource, ReleaseStore, Run,
-    StoredAsset, Verifier,
+    Attestation, Exec, GitHubRuns, Issue, PortError, Release, ReleaseStore, Run, StoredAsset,
+    Verifier,
 };
 
 /// What `gh api` prints on stderr for a path GitHub does not have.
@@ -193,6 +192,20 @@ impl<E: Exec> GitHubRuns for Gh<E> {
             .collect()
     }
 
+    /// Every page of the list: a run of many releases has more jobs than one page holds.
+    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+        let path = format!("repos/{repo}/actions/runs/{run}/jobs?per_page=100");
+        let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
+        let r = Reader { what: &what };
+        let mut names = Vec::new();
+        for page in r.list(&value, "the reply")? {
+            for job in r.list(&page["jobs"], "jobs")? {
+                names.push(r.string(&job["name"], "name")?);
+            }
+        }
+        Ok(names)
+    }
+
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError> {
         let (value, what) = self.api(&format!("repos/{repo}/compare/{MAIN}...{commit}"))?;
         let status = Reader { what: &what }.string(&value["status"], "status")?;
@@ -325,30 +338,6 @@ impl<E: Exec> ReleaseStore for Gh<E> {
             "--repo",
             repo.as_str(),
             "--draft=false",
-        ])
-        .map(drop)
-    }
-}
-
-impl<E: Exec> ReleaseSource for Gh<E> {
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
-        self.list_releases(repo)
-    }
-
-    /// `gh release download` with the asset's name as its pattern: the caller passes a plain
-    /// name, which as a pattern matches only itself.
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
-        let dir = utf8_path("gh release download", dir)?;
-        self.call(&[
-            "release",
-            "download",
-            tag,
-            "--repo",
-            repo.as_str(),
-            "--pattern",
-            name,
-            "--dir",
-            dir,
         ])
         .map(drop)
     }

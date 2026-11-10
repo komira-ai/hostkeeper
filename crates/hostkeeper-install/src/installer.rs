@@ -22,7 +22,9 @@
 //!   on the version directory and the order's entry ([`crate::repository::RepositoryInstaller`]),
 //!   so the daemon runs them itself.
 //!
-//! `macos-pkg` (A9) has its module and is not registered: the daemon does not run it yet.
+//! `macos-pkg` (A9, [`crate::macos_pkg`]) is not registered here either: its steps are neither
+//! [`InstallerSteps`] nor a repository backend's, and the daemon runs them itself over its own
+//! ports (`hostkeeper_daemon::macos_pkg`).
 
 use hostkeeper_config::daemon::Sha256Hex;
 use hostkeeper_config::names::{ServiceName, Version};

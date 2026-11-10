@@ -1,7 +1,7 @@
 //! The test helpers the crates of this workspace share. A dev-dependency only.
 //!
-//! - [`Scratch`]: a directory a test owns, under a base the test names (its
-//!   `CARGO_TARGET_TMPDIR`), removed when it is dropped.
+//! - [`Scratch`]: a new directory a test owns, under a base the test names (its
+//!   `CARGO_TARGET_TMPDIR`), never one already there, removed when it is dropped.
 //!
 //! - [`HookMode`]: the exit code and last line a fixture hook ends with, for each behaviour a
 //!   test can pick.
@@ -26,6 +26,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static NEXT: AtomicU64 = AtomicU64::new(0);
+
+/// How many numbers one scratch directory tries before it gives up: far more than the stale
+/// directories of one name a reused target directory holds, and few enough that a fault which
+/// makes every try look taken fails the test at once instead of hanging it.
+const ATTEMPTS: u64 = 1024;
 
 /// The variable that names the tests' Postgres server, as `postgres://<user>@<host>:<port>/<db>`.
 pub const POSTGRES_URL_VAR: &str = "HOSTKEEPER_TEST_POSTGRES_URL";
@@ -102,27 +107,30 @@ impl HookMode {
 /// A new, empty directory that one test owns, removed when it is dropped.
 ///
 /// Its name is `<name>-<pid>-<n>`, with the process id and a number this process gives each
-/// directory, both in base 36 to keep paths short (a unix socket's path must fit in 108 bytes),
-/// so two tests, or two runs sharing one target directory, never get the same directory and
-/// never remove one another's.
+/// directory, both in base 36 to keep paths short (a unix socket's path must fit in 108 bytes).
+/// The directory is created exclusively: when one of that name is already there (a run before
+/// this one, with the same process id, left it in a target directory the next run reuses), the
+/// next number is tried, so two tests, or two runs sharing one target directory, never get the
+/// same directory and never remove one another's.
 #[derive(Debug)]
 pub struct Scratch(PathBuf);
 
 impl Scratch {
-    /// Creates `base/<name>-<pid>-<n>`, and `base` when it is missing. A directory that already
-    /// exists at that path is an error, never shared. `name` must stay one plain component of
-    /// a path inside `base`: an empty name, or one holding a `/` (an absolute path, `..`
-    /// above it, or a deeper path), is refused with `InvalidInput` before anything is made.
+    /// Creates `base/<name>-<pid>-<n>`, and `base` when it is missing, with the first number
+    /// `n` whose directory is not there yet: a directory that already exists is passed over,
+    /// never shared or emptied. `name` must stay one plain component of a path inside `base`:
+    /// an empty name, or one holding a `/` (an absolute path, `..` above it, or a deeper path),
+    /// is refused with `InvalidInput` before anything is made. Any other error than an existing
+    /// directory (a base that is a file, a name too long for a path component) is returned.
     pub fn under(base: &Path, name: &str) -> io::Result<Scratch> {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let pid = base36(u64::from(std::process::id()));
         if name.is_empty() || name.contains('/') {
             return Err(io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("a scratch name is one plain path component, not {name:?}"),
             ));
         }
-        make(base, &format!("{name}-{pid}-{}", base36(n)))
+        let pid = base36(u64::from(std::process::id()));
+        unique(base, &format!("{name}-{pid}"), &NEXT, ATTEMPTS)
     }
 
     /// The directory.
@@ -131,10 +139,32 @@ impl Scratch {
     }
 }
 
-/// Creates `base`, when it is missing, and the new directory `base/<leaf>`.
+/// Creates `base`, when it is missing, and the new directory `base/<stem>-<n>`, `n` in base 36
+/// taken from `next`: the first number whose directory `make` creates, a fresh number for each
+/// try. After `attempts` numbers that were all taken, it fails with `AlreadyExists`, saying so:
+/// the search never runs without end. `base` is made before the search, never in it: a base
+/// that is a file fails `create_dir_all` with `AlreadyExists` too, which no number can get past.
+fn unique(base: &Path, stem: &str, next: &AtomicU64, attempts: u64) -> io::Result<Scratch> {
+    std::fs::create_dir_all(base)?;
+    for _ in 0..attempts {
+        let n = next.fetch_add(1, Ordering::Relaxed);
+        match make(base, &format!("{stem}-{}", base36(n))) {
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => continue,
+            made => return made,
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        format!(
+            "no free scratch directory {}-<n> in {attempts} numbers",
+            base.join(stem).display()
+        ),
+    ))
+}
+
+/// Creates the new directory `base/<leaf>` in the directory `base`.
 fn make(base: &Path, leaf: &str) -> io::Result<Scratch> {
     let path = base.join(leaf);
-    std::fs::create_dir_all(base)?;
     // `create_dir`, not `create_dir_all`: a directory that already exists is an error.
     std::fs::create_dir(&path)?;
     Ok(Scratch(path))
@@ -280,6 +310,112 @@ mod tests {
         );
     }
 
+    /// Catches a stale directory of the same name (one a run before this one, with the same
+    /// process id, left in a target directory the next run reuses) failing the new scratch
+    /// directory, or being shared or emptied: the numbers it holds are passed over, the next
+    /// free one is taken, and the stale directories keep their contents.
+    #[test]
+    fn a_stale_directory_of_the_same_name_is_passed_over_and_left_alone() {
+        let parent = Scratch::under(&base("testkit-unit"), "stale").expect("parent");
+        for stale in ["left-0", "left-1"] {
+            std::fs::create_dir(parent.path().join(stale)).expect("a stale directory");
+            std::fs::write(parent.path().join(stale).join("kept"), stale).expect("write");
+        }
+        let next = AtomicU64::new(0);
+        let fresh = unique(parent.path(), "left", &next, ATTEMPTS).expect("a fresh directory");
+        assert_eq!(fresh.path(), parent.path().join("left-2"));
+        assert_eq!(next.load(Ordering::Relaxed), 3);
+        let entries: Vec<_> = std::fs::read_dir(fresh.path()).expect("list").collect();
+        assert!(entries.is_empty(), "{entries:?}");
+        for stale in ["left-0", "left-1"] {
+            let kept = std::fs::read(parent.path().join(stale).join("kept")).expect("read");
+            assert_eq!(kept, stale.as_bytes());
+        }
+        drop(fresh);
+        assert!(!parent.path().join("left-2").exists());
+        assert!(parent.path().join("left-0").is_dir());
+    }
+
+    /// Catches parallel callers of one name sharing a directory, or one of them failing because
+    /// another made its directory first: each of them gets a new directory of its own, through
+    /// `under` (the process's own numbers) and through one shared number source whose first
+    /// numbers stale directories hold, so that the callers race for the free ones.
+    #[test]
+    fn parallel_callers_of_one_name_each_get_their_own_directory() {
+        const CALLERS: usize = 16;
+        let parent = Scratch::under(&base("testkit-unit"), "parallel").expect("parent");
+        for stale in 0..4 {
+            std::fs::create_dir(parent.path().join(format!("raced-{stale}"))).expect("stale");
+        }
+        let next = AtomicU64::new(0);
+        let made: Vec<Scratch> = std::thread::scope(|scope| {
+            let callers: Vec<_> = (0..2 * CALLERS)
+                .map(|i| {
+                    let (parent, next) = (parent.path(), &next);
+                    scope.spawn(move || {
+                        if i % 2 == 0 {
+                            Scratch::under(parent, "raced")
+                        } else {
+                            unique(parent, "raced", next, ATTEMPTS)
+                        }
+                    })
+                })
+                .collect();
+            callers
+                .into_iter()
+                .map(|c| c.join().expect("the caller").expect("its directory"))
+                .collect()
+        });
+        let paths: std::collections::BTreeSet<_> = made.iter().map(|s| s.path()).collect();
+        assert_eq!(paths.len(), 2 * CALLERS, "{paths:?}");
+        for path in &paths {
+            assert_eq!(path.parent(), Some(parent.path()));
+            assert!(path.is_dir(), "{path:?}");
+            for stale in 0..4 {
+                assert_ne!(*path, parent.path().join(format!("raced-{stale}")));
+            }
+        }
+    }
+
+    /// Catches a search that runs without end when every number it tries is taken: after its
+    /// attempts it fails with `AlreadyExists`, naming the directory, having taken exactly that
+    /// many numbers and made nothing.
+    #[test]
+    fn a_search_whose_every_number_is_taken_fails_after_its_attempts() {
+        let parent = Scratch::under(&base("testkit-unit"), "full").expect("parent");
+        for taken in ["full-0", "full-1", "full-2"] {
+            std::fs::create_dir(parent.path().join(taken)).expect("a taken directory");
+        }
+        let next = AtomicU64::new(0);
+        let refused = unique(parent.path(), "full", &next, 3).expect_err("all taken");
+        assert_eq!(refused.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(
+            refused.to_string(),
+            format!(
+                "no free scratch directory {}-<n> in 3 numbers",
+                parent.path().join("full").display()
+            )
+        );
+        assert_eq!(next.load(Ordering::Relaxed), 3);
+        let made = std::fs::read_dir(parent.path()).expect("list").count();
+        assert_eq!(made, 3);
+    }
+
+    /// Catches an error other than an existing directory being retried with the next number
+    /// (a search that never ends) or reported as made: a name too long for one path component
+    /// fails at the first number.
+    #[test]
+    fn an_error_other_than_an_existing_directory_ends_the_search() {
+        let parent = Scratch::under(&base("testkit-unit"), "too-long").expect("parent");
+        let next = AtomicU64::new(0);
+        let refused =
+            unique(parent.path(), &"n".repeat(300), &next, ATTEMPTS).expect_err("too long");
+        assert_ne!(refused.kind(), io::ErrorKind::AlreadyExists, "{refused}");
+        assert_eq!(next.load(Ordering::Relaxed), 1);
+        let made: Vec<_> = std::fs::read_dir(parent.path()).expect("list").collect();
+        assert!(made.is_empty(), "{made:?}");
+    }
+
     /// Catches a name that grows a unix socket's path past its limit, or that two numbers
     /// share: each number has one short spelling.
     #[test]
@@ -306,5 +442,11 @@ mod tests {
         std::fs::write(&file, b"x").expect("write");
         let refused = Scratch::under(&file, "inside").expect_err("a file is no base");
         assert_ne!(refused.kind(), io::ErrorKind::NotFound, "{refused}");
+        // `create_dir_all` reports a file in the way as `AlreadyExists`: that error ends the
+        // call at once, taking no number, rather than sending it on to the next one for good.
+        let next = AtomicU64::new(0);
+        let refused = unique(&file, "inside", &next, ATTEMPTS).expect_err("a file is no base");
+        assert_ne!(refused.kind(), io::ErrorKind::NotFound, "{refused}");
+        assert_eq!(next.load(Ordering::Relaxed), 0);
     }
 }

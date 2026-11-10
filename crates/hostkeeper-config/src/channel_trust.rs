@@ -1,5 +1,6 @@
-//! The trust list of `release channel-sync` (docs/deploy/release-channel.md): the services the
-//! release channel stages, each from one repository and signed by one workflow.
+//! The trust list of the release channel's sync (its verb and runbook are retired,
+//! docs/design/packages-native.md section 10.5): the services the channel staged, each from one
+//! repository and signed by one workflow.
 //!
 //! ```toml
 //! [[service]]

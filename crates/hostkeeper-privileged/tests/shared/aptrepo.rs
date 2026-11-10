@@ -299,6 +299,9 @@ pub struct Service {
     pub health_url: Option<String>,
     /// The manifest's `params`, which only a hook reads.
     pub params: BTreeMap<String, Param>,
+    /// The manifest's `hook.command`: the program the package installs, by its absolute path, and
+    /// its leading arguments; empty for the built-in steps.
+    pub hook_command: Vec<String>,
     /// The bound of each step of the hook (the built-in steps when the package has no hook).
     pub steps: StepBounds,
     /// How long `verify` may keep deferring: at least `verify` plus `rollback`.
@@ -306,8 +309,8 @@ pub struct Service {
 }
 
 /// The `apt` entry of `published` for the service `service`: the one `release targets` writes for
-/// a package (the module says what is in it). The entry's `hook.command` is empty, as for every
-/// native installer: the hook is the package's own file, when it has one.
+/// a package (the module says what is in it). The entry's `hook.command` is the service's
+/// ([`Service::hook_command`]): the program the package installs as its hook, when it has one.
 pub fn entry(service: &Service, published: &Published) -> Target {
     Target {
         installer: "apt".to_owned(),
@@ -319,6 +322,7 @@ pub fn entry(service: &Service, published: &Published) -> Target {
             health_url: service.health_url.clone(),
             params: service.params.clone().into_iter().collect(),
             hook: Some(Hook {
+                command: service.hook_command.clone(),
                 timeout_secs: Some(service.steps),
                 verify_deadline_secs: service.verify_deadline_secs,
                 ..Hook::default()

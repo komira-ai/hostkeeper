@@ -13,12 +13,15 @@ mod signal;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::Step;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
     PruneStep, StepCall, StepExit, StepLauncher, ToolCall, ToolExit,
@@ -26,6 +29,7 @@ use hostkeeper_steps::{
 
 use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
+use crate::packages::{PackageError, Packages, Pinned};
 use crate::prune::Prune;
 use crate::watchers::Watchers;
 
@@ -167,6 +171,8 @@ pub struct Ran {
     pub executable: PathBuf,
     /// The staged release, given to `prepare` only.
     pub artifact: Option<PathBuf>,
+    /// The arguments given before the step.
+    pub hook_args: Vec<String>,
 }
 
 /// A step held inside the launcher, or a sleep held on the clock, until the test releases it.
@@ -428,6 +434,7 @@ impl StepLauncher for ScriptedLauncher {
             unit: call.unit.to_owned(),
             executable: call.executable.to_path_buf(),
             artifact: call.invocation.artifact.clone(),
+            hook_args: call.hook_args.to_vec(),
         });
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most_running.fetch_max(now, Ordering::SeqCst);
@@ -550,6 +557,92 @@ rollback = 600
 cleanup = 1300
 "#
     )
+}
+
+/// A package store that serves the artifacts a test gave it by their pin ([`Packages::pinned`]):
+/// the `.pkg` of a `macos-pkg` entry. It compares no digest beyond the one the artifact was
+/// added under; a test makes a fetch fail with [`FakePackages::fail`].
+pub struct FakePackages {
+    root: PathBuf,
+    failures: Mutex<BTreeMap<(String, String), PackageError>>,
+    asked: Mutex<Vec<(String, String)>>,
+    entries: Mutex<Vec<Option<Target>>>,
+    pinned: Mutex<BTreeMap<(String, String), Vec<u8>>>,
+}
+
+fn dir_0755(dir: &Path) {
+    fs::create_dir_all(dir).unwrap_or_default();
+    fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).unwrap_or_default();
+}
+
+impl FakePackages {
+    /// Serves artifacts into staging files under `packages_dir`.
+    pub fn new(packages_dir: &Path) -> Arc<FakePackages> {
+        Arc::new(FakePackages {
+            root: packages_dir.to_path_buf(),
+            failures: Mutex::default(),
+            asked: Mutex::default(),
+            entries: Mutex::default(),
+            pinned: Mutex::default(),
+        })
+    }
+
+    /// Makes the fetch of the artifact of `service` whose digest is `digest` fail with `error`.
+    pub fn fail(&self, service: &str, digest: &str, error: PackageError) {
+        lock(&self.failures).insert((service.to_owned(), digest.to_owned()), error);
+    }
+
+    /// Every artifact asked for, as (service, digest), in order.
+    pub fn asked(&self) -> Vec<(String, String)> {
+        lock(&self.asked).clone()
+    }
+
+    /// The entry of every artifact asked for, in the order of [`FakePackages::asked`].
+    pub fn entries(&self) -> Vec<Option<Target>> {
+        lock(&self.entries).clone()
+    }
+
+    /// Serves `bytes` as the artifact of `service` whose entry's digest is `digest`
+    /// ([`Packages::pinned`]); an entry with another digest is `package_digest_mismatch`
+    /// ([`PackageError::DigestMismatch`]).
+    pub fn add_pinned(&self, service: &str, digest: &str, bytes: &[u8]) {
+        lock(&self.pinned).insert((service.to_owned(), digest.to_owned()), bytes.to_vec());
+    }
+}
+
+impl Packages for FakePackages {
+    /// The bytes [`FakePackages::add_pinned`] gave for the entry's digest, written to a file
+    /// under the service's package directory that is removed when the answer is dropped; the
+    /// failure [`FakePackages::fail`] set for the service at the entry's digest wins. Each ask is
+    /// one of [`FakePackages::asked`], keyed by the digest, and its entry one of
+    /// [`FakePackages::entries`].
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
+        let key = (service.to_string(), entry.digest.clone());
+        lock(&self.entries).push(Some(entry.clone()));
+        lock(&self.asked).push(key.clone());
+        if let Some(failure) = lock(&self.failures).get(&key).cloned() {
+            return Err(failure);
+        }
+        let bytes = lock(&self.pinned)
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| PackageError::DigestMismatch(format!("no artifact of {}", key.1)))?;
+        let dir = self.root.join(service.as_str());
+        dir_0755(&dir);
+        let file = PinnedFile(dir.join(format!(".fetch-pinned-{}", entry.digest)));
+        fs::write(&file.0, bytes).map_err(|e| PackageError::Other(e.to_string()))?;
+        let path = file.0.clone();
+        Ok(Pinned::new(&path, Box::new(file)))
+    }
+}
+
+/// A file [`FakePackages::pinned`] wrote, removed when dropped.
+struct PinnedFile(PathBuf);
+
+impl Drop for PinnedFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
+    }
 }
 
 /// A signal of the service of each caller that begins to wait for the lock of a service to be

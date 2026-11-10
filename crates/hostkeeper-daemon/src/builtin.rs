@@ -1,5 +1,5 @@
 //! The daemon's built-in steps (packages-lifecycle.md section 6.3): the steps of a service whose
-//! version has no hook program, shipped code like an installer, which the step runner runs in
+//! version has no hook command, shipped code like an installer, which the step runner runs in
 //! place of a hook ([`hostkeeper_steps::StepRunner::with_builtin`]).
 //!
 //! | Step | Does |
@@ -9,8 +9,8 @@
 //! | `verify` | Passes when every `run` unit is active and the health URL, if any, answers 2xx; otherwise defers ([`VERIFY_RETRY_SECS`]), until the runner's verify window is over |
 //! | `rollback` | Restarts the `run` units of the release `current` was switched back to; for a first install, whose package the switch removed, nothing |
 //!
-//! They apply to a repository version (one with `target.json`, [`crate::target`]) whose package
-//! carries no hook. The daemon's own service runs [`BUILTIN_EXIT`], every step
+//! They apply to a repository version (one with `target.json`, [`crate::target`]) whose manifest
+//! names no hook command. The daemon's own service runs [`BUILTIN_EXIT`], every step
 //! exiting 0, whatever its version: its unit runs the daemon, and its new binary switches once it
 //! has started ([`crate::own_package`]); so does a version of another service without
 //! `target.json`.

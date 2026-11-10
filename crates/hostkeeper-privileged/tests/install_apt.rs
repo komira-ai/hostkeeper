@@ -21,6 +21,8 @@
 //! `parse` rely on is checked against the apt of the oldest and the newest Debian and Ubuntu
 //! the project lists. No test asserts how long anything took.
 
+#[path = "install_apt/anything.rs"]
+mod anything;
 #[path = "install_apt/containers.rs"]
 mod containers;
 #[path = "install_apt/daemon.rs"]
@@ -94,7 +96,7 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
     let (v1, v2) = (rig.order("1.0-1"), rig.order("2.0-1"));
     let (dir1, dir2) = (rig.staging("v1"), rig.staging("v2"));
     let staged = installer.stage(&v1, &dir1).expect("stage 1.0-1");
-    assert!(!staged.hook, "the fixture package has no hook");
+    assert!(!staged.hook, "the order names no hook program");
     assert!(dir1.join("tree/usr/bin/hkaptfix").is_file());
     assert!(
         dir1.join("apt").is_dir(),
@@ -377,29 +379,30 @@ fn a_reuploaded_package_is_a_digest_mismatch_and_a_missing_version_is_not_in_the
     assert_eq!(dpkg_version(), None);
 }
 
-/// Proves: `stage` refuses, with the reason the rule gives, a package whose control members hold a
-/// maintainer script (`package_scripts`), whose tree has a drop-in directory or a unit of another
-/// name in the unit directory (`manifest_invalid`), and whose dependency no repository has
-/// (`dependency_missing`); none of them installs anything.
+/// Proves: a package with a maintainer script, a drop-in directory of the unit, or a unit of
+/// another name stages and installs like any other (nothing about a package's contents is
+/// refused), and only a dependency no repository has is refused at `stage`
+/// (`dependency_missing`), installing nothing.
 ///
-/// Catches: a path rule that lets a drop-in or a unit of another name through, and a script that
-/// would run on the host.
+/// Catches: a stage that refuses a package for its shape, and a missing dependency that is let
+/// through to fail in dpkg.
 #[test]
-fn a_script_a_drop_in_a_foreign_unit_and_a_missing_dependency_are_refused_at_stage() {
-    let rig = Rig::new("apt-refused", Trust::Entry);
+fn a_script_a_drop_in_and_a_foreign_unit_install_and_a_missing_dependency_is_refused_at_stage() {
+    let rig = Rig::new("apt-any", Trust::Entry);
     let tools = rig.tools();
     let installer = rig.installer(&tools);
-    for (version, reason) in [
-        ("0.2-script", Reason::PackageScripts),
-        ("0.1-dropin", Reason::ManifestInvalid),
-        ("0.3-unit", Reason::ManifestInvalid),
-        ("0.9-dep", Reason::DependencyMissing),
-    ] {
-        let failure = installer
-            .stage(&rig.order(version), &rig.staging(version))
-            .expect_err(version);
-        assert_eq!(failure.reason(), reason, "{version}: {failure}");
+    for version in ["0.2-script", "0.1-dropin", "0.3-unit"] {
+        let (order, dir) = (rig.order(version), rig.staging(version));
+        installer.stage(&order, &dir).expect(version);
+        installer.activate(&order, &dir).expect(version);
+        assert_eq!(dpkg_version().as_deref(), Some(version));
+        installer.remove(&rig.service, 120).expect(version);
+        assert_eq!(dpkg_version(), None, "{version} is purged");
     }
+    let failure = installer
+        .stage(&rig.order("0.9-dep"), &rig.staging("0.9-dep"))
+        .expect_err("0.9-dep");
+    assert_eq!(failure.reason(), Reason::DependencyMissing, "{failure}");
     assert_eq!(dpkg_version(), None);
 }
 

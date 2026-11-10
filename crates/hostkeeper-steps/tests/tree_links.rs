@@ -1,5 +1,5 @@
 //! Links inside `tree/` of a version directory: hashed by their target text, accepted by the
-//! check only there, never followed, and never on the way to a hook (docs/package-format.md,
+//! check only there, never followed, and never on the way to a hook (docs/tree-digest.md,
 //! "The tree digest").
 
 mod support;

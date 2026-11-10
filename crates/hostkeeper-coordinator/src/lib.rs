@@ -72,6 +72,8 @@
 //! - [`http`] and [`listen`]: the two HTTP surfaces (the heartbeat surface and the private
 //!   surface of CI and the operator) and the TLS listeners under them; `health`, the plain
 //!   loopback listener of `--health-listen` that answers `GET /healthz` to a probe;
+//!   `version_route`, the private surface's `GET /v1/version`, which says which release the
+//!   coordinator is;
 //! - [`grpc`]: the gRPC services on those surfaces (`hostkeeper.agent.v1.Coordinator` on the
 //!   heartbeat one, `hostkeeper.operator.v1` on the private one), the JSON gateway of the
 //!   operator API, and the router that tells them from the frozen JSON routes;
@@ -156,6 +158,7 @@ pub mod trusted_root;
 pub mod ui;
 pub mod verdict_file;
 pub mod verdicts;
+pub(crate) mod version_route;
 pub(crate) mod wait;
 pub(crate) mod write_record;
 
@@ -361,3 +364,5 @@ mod unmark_tests;
 mod verdict_acks_tests;
 #[cfg(test)]
 mod verdict_file_tests;
+#[cfg(test)]
+mod version_route_tests;

@@ -98,11 +98,11 @@ pub fn container() -> Container {
     }
 }
 
-/// The hook of a native entry: the package's program at its fixed path, so no command, and a
-/// boot step.
+/// The hook of a native entry: a program the package installs, by its absolute path, and a boot
+/// step.
 pub fn native_hook() -> Hook {
     Hook {
-        command: Vec::new(),
+        command: vec!["/usr/bin/web".to_owned(), "update-hook".to_owned()],
         ..hook()
     }
 }

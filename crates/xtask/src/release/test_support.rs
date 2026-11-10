@@ -5,10 +5,9 @@ use std::path::Path;
 
 use clap::ValueEnum;
 
-use super::contract::{Commit, Platform, Service, Version};
+use super::contract::Version;
 use super::package::linux_check;
 use super::package::nfpm_stage::{self, Arch};
-use super::package::{Request, package_dated};
 
 /// The command line of `cargo xtask`, every verb with its flags, as the binary parses it: the
 /// workflow lint holds every `cargo xtask` call of a workflow to it.
@@ -77,61 +76,4 @@ pub fn nfpm_stage(
         out: out.to_path_buf(),
     };
     nfpm_stage::stage(&request).map_err(|e| e.to_string())
-}
-
-/// Builds the linux-x86_64 hostkeeper package of `version` as `cargo xtask release package`
-/// does, from `binary`, `unit` and `trusted_root`, into `out`, with every time in the archive
-/// `mtime` (the verb takes it from the commit in git). Returns the verb's lines, or why it
-/// refused.
-pub fn linux_package(
-    version: &str,
-    binary: &Path,
-    unit: &Path,
-    trusted_root: &Path,
-    out: &Path,
-    mtime: u64,
-) -> Result<Vec<String>, String> {
-    let request = Request {
-        service: Service::Hostkeeper,
-        platform: Platform::LinuxX86_64,
-        version: version.parse::<Version>().map_err(|e| e.to_string())?,
-        commit: "0"
-            .repeat(40)
-            .parse::<Commit>()
-            .map_err(|e| e.to_string())?,
-        binary: binary.to_path_buf(),
-        unit: Some(unit.to_path_buf()),
-        fail_ready: false,
-        trusted_root: Some(trusted_root.to_path_buf()),
-        archives: None,
-        out: out.to_path_buf(),
-    };
-    package_dated(&request, || Ok(mtime)).map_err(|e| e.to_string())
-}
-
-/// The hook `release deb` and `release macos-pkg --service hello` put in hello's packages, by
-/// the absolute path each installs it at, with the program path it runs: the `.deb`'s and the
-/// `.pkg`'s.
-pub fn hello_hooks() -> Vec<(String, String, String)> {
-    use super::native::hello::{self, File};
-    let pick = |files: Vec<File>, program: &str| {
-        let hook = files
-            .iter()
-            .find(|f| f.path.ends_with(super::native::HOOK))
-            .map(|f| {
-                (
-                    f.path.clone(),
-                    String::from_utf8_lossy(&f.data).into_owned(),
-                )
-            });
-        hook.map(|(path, text)| (path, text, program.to_owned()))
-    };
-    let mut out = Vec::new();
-    out.extend(pick(
-        hello::deb_files(Vec::new(), false),
-        hello::DEB_PROGRAM,
-    ));
-    let pkg = hello::pkg_files(Vec::new(), false).unwrap_or_default();
-    out.extend(pick(pkg, hello::PKG_PROGRAM));
-    out
 }

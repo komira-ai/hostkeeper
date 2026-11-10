@@ -361,7 +361,9 @@ fn only_an_apt_entry_has_a_backend() {
 }
 
 /// Proves a failure that fails the order before the commit point is `Failed` with its class and
-/// token, and one a later try may pass is `Deferred` for [`DEFER_SECS`], never resent.
+/// token, and one a later try may pass is `Deferred` for [`DEFER_SECS`], never resent. The
+/// `package_scripts` reason is no longer produced by any installer; its token still maps, so a
+/// report from an older daemon is read as before.
 #[test]
 fn a_failure_before_the_runner_is_a_failed_or_deferred_verdict() {
     let reply = |reason| finished(&Failure::new(reason, "detail"));
@@ -473,6 +475,7 @@ fn repository_with_units(scratch: &Scratch) -> (Repository, Arc<FakeUnitControl>
     let repository = Repository {
         launcher: ScriptedLauncher::new(),
         ports: crate::testing::repository_ports(&packages, scratch.path(), Repositories::default()),
+        packages: crate::testing::FakePackages::new(&packages),
         clock: FakeClock::new(),
         roots: roots(),
         fs: Arc::new(FaultFs::new(scratch.path(), log.clone())),
@@ -591,6 +594,8 @@ fn order(scratch: &Scratch, service: &str, version: &str) -> UpdateOrder {
         staged: hostkeeper_steps::Staged::seal(&dir).expect("sealed"),
         previous: None,
         hook_binary: PathBuf::from("bin/hook"),
+        hook_args: Vec::new(),
+        previous_hook: None,
         bounds: hostkeeper_steps::Bounds {
             prepare_secs: 1,
             cutover_secs: 1,
@@ -851,7 +856,12 @@ fn a_stage_of_an_entry_for_another_installer_is_failed_order_invalid() {
     let version = Version::new("2.0.0").expect("a version");
 
     let wrong = repository
-        .stage(backend, &web(), &version, &entry("tarball"))
+        .stage(
+            Native::Repository(backend),
+            &web(),
+            &version,
+            &entry("tarball"),
+        )
         .expect_err("an entry of another installer");
     assert_eq!(
         wrong,

@@ -36,14 +36,15 @@ pub fn location(locator: &str) -> Location {
     }
 }
 
-/// Whether `installer` is native (packages-native.md section 10): its hook is the package's
-/// program at a fixed path, so its manifest names no `hook.command`.
+/// Whether `installer` is native (packages-native.md section 10): its manifest's `hook.command`
+/// names a program the package installs, by an absolute path.
 pub fn is_native(installer: &str) -> bool {
     installer == "apt" || installer == "macos-pkg"
 }
 
 /// A manifest that passes every rule a manifest keeps, for the service `service` on Linux: a
-/// hook program for an installer that is not native, none for a native one.
+/// hook program: a relative path of the tree for an installer that is not native, an absolute
+/// path of the package's files for a native one.
 pub fn manifest(service: &str, installer: &str) -> Manifest {
     if installer == "hostkeeper-archive" {
         return Manifest {
@@ -55,7 +56,7 @@ pub fn manifest(service: &str, installer: &str) -> Manifest {
         package: (installer == "deb" || installer == "rpm").then(|| service.to_owned()),
         hook: Some(Hook {
             command: if is_native(installer) {
-                Vec::new()
+                vec![format!("/usr/bin/{service}"), "update-hook".to_owned()]
             } else {
                 vec![format!("bin/{service}"), "update-hook".to_owned()]
             },

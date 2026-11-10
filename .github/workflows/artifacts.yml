@@ -1,19 +1,15 @@
 # The release files of one commit: for linux-x86_64, linux-arm64 and macos-arm64, the `hostkeeper`
-# binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
-# `.sha256`), and the package of `hello`, the example service of examples/hello, and of its failing
-# build (the same package started with `--fail-ready`, which a host can be rolled back from), each
-# with its `.sha256`; for each Linux platform the deb and the rpm, the `hostkeeper-coordinator`
+# binary as a tarball with its CycloneDX SBOM; for each Linux platform the deb and the rpm of
+# hostkeeper and of `hello`, the example service of examples/hello, the `hostkeeper-coordinator`
 # binary as a tarball with its SBOM, its container image (`.image.tar`, an OCI image layout) and
 # its deb and rpm (packaging/coordinator/nfpm.yaml, the static build with a systemd unit),
 # and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
-# for linux-x86_64 the package of `mdm`, the MDM server stack as a service package
+# for linux-x86_64 the deb of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
-# crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`), with its `.sha256`;
+# crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`);
 # for macos-arm64 the installer pkg of a Mac's first install and hello's .pkg, each signed on a
-# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the release
-# indexes `index.json`, `hello-index.json` and `hello-fail-ready-index.json` over the three
-# packages each, and
-# `mdm-index.json` over the one mdm package; the coordinator's image index over its two images
+# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the
+# coordinator's image index over its two images
 # (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
 # multi-platform image under;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
@@ -26,9 +22,6 @@
 # (docs/deploy/verify-a-release.md, "Every name"):
 #
 #   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
-#   hostkeeper-<version>-<platform>.tar.zst         hostkeeper-<version>-<platform>.tar.zst.sha256
-#   hello-<version>-<platform>.tar.zst              hello-<version>-<platform>.tar.zst.sha256
-#   hello-<version>-fail-ready-<platform>.tar.zst   hello-<version>-fail-ready-<platform>.tar.zst.sha256
 #   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
 #   hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
 #   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
@@ -37,10 +30,10 @@
 #   hostkeeper-coordinator-<version>.image.json
 #   hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
-#   mdm-<version>-linux-x86_64.tar.zst              mdm-<version>-linux-x86_64.tar.zst.sha256
 #   hostkeeper-<version>-macos-arm64.pkg
 #   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg   mdm_<version>_amd64.deb
-#   index.json   hello-index.json   hello-fail-ready-index.json   mdm-index.json   netboot.json
+#   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
+#   netboot.json
 #   SHA256SUMS
 #   hkctl-<version>
 #   <signed file>.sigstore.json
@@ -52,9 +45,10 @@
 # prints `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm --version` prints
 # `hostkeeper-mdm X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
 # `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` is built from the same workspace, so it carries the
-# release version (`hello --version` prints `hello X.Y.Z`); its failing build is named
-# `<version>-fail-ready` in its manifest and index, and its server, started with `--fail-ready`,
-# answers `/version` with that name.
+# release version (`hello --version` prints `hello X.Y.Z`); its failing build, started with
+# `--fail-ready`, is named `<version>-fail-ready`, and its server answers `/version` with that
+# name: `release deb` writes its .deb into dist/ (a release file, Debian version
+# `<version>~fail.ready`), and `release macos-pkg` its .pkg under `native/`, which is not released.
 #
 # The image job builds the coordinator's image twice, each time with a new BuildKit builder from
 # a context that holds the released binary and the operator web app (`ui/` of the commit, files
@@ -409,26 +403,10 @@ jobs:
         env:
           RPM_ARCH: ${{ matrix.rpm-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --coordinator-staged target/nfpm-coordinator
-      # The package carries its own unit (packaging/linux/units/hostkeeper.service), not the
-      # bootstrap unit the Linux packages install (packaging/linux/hostkeeper.service): it seeds
-      # the binary directory and starts the binary the self-update switches. It also
-      # carries the committed Sigstore trusted root, which the daemon checks every package against,
-      # so each update of hostkeeper brings the root of its release (trusted-root.yml says when the
-      # committed root is no longer the live one).
-      - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary "target/$MUSL_TARGET/release/hostkeeper" --unit packaging/linux/units/hostkeeper.service --trusted-root packaging/sigstore/trusted_root.json --out dist
-      - name: hostkeeper's package holds no dynamically linked program
-        run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.zst"
-      - name: hello's package and its SHA-256
-        run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      # The same binary and units, started with --fail-ready: a build whose verify fails, so that
-      # a host can be rolled back from it. It is released and attested like the others.
-      - name: hello's failing build and its SHA-256
-        run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       # The mdm package, for linux-x86_64 only (its pinned tools are linux-amd64 builds): its
       # program bin/mdm, stamped like the binaries, and the pinned servers and lego, each archive
       # downloaded over HTTPS and checked against its pin in crates/hostkeeper-mdm-core/pins.txt
-      # by mdm-fetch, then checked again by the package verb, which takes the binaries out.
+      # by mdm-fetch, which `release deb --service mdm` then takes the binaries out of.
       # Nothing downloaded is run here.
       - name: Build mdm, the program of the mdm package
         if: matrix.platform == 'linux-x86_64'
@@ -441,9 +419,6 @@ jobs:
       - name: The pinned archives of the mdm package
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release mdm-fetch --dir "$RUNNER_TEMP/mdm-archives"
-      - name: The mdm package and its SHA-256
-        if: matrix.platform == 'linux-x86_64'
-        run: cargo xtask release package --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
       # The tarballs as a host takes them: unpacked with this runner's tar, the binary in each says
       # the version and the commit, as the built one did.
       - run: mkdir "$RUNNER_TEMP/unpacked"
@@ -457,40 +432,35 @@ jobs:
       - name: The packaged hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-mdm" "$RELEASE_VERSION" "$GITHUB_SHA"
       # The native packages of the services (docs/design/packages-native.md, items A20 and A21):
-      # hello's .deb and its failing build's, and on linux-x86_64 mdm's, each with its hook at
-      # /usr/lib/<service>/hostkeeper-hook, its units in /usr/lib/systemd/system/ and no
-      # maintainer script, read back by check-linux-pkg --service. hello's and mdm's go to dist/:
-      # release assets, summed and attested, that the release publishes to the repository's
-      # testing suite. The failing build's goes to native/, an artifact of its own and no asset:
-      # its version, <version>-fail-ready, is not the X.Y.Z the shared repository's index takes.
+      # hello's .deb and its failing build's, and on linux-x86_64 mdm's, read back by
+      # check-linux-pkg --service: the package named for the service, every entry root's and not
+      # writable by others, each unit starting a file of the package, no dependency. The release
+      # manifest names each one's hook command. All go to dist/: release assets, summed and
+      # attested. The release publishes hello's and mdm's to the repository's testing suite, and
+      # the failing build's, whose Debian version is <version>~fail.ready (the file keeps the
+      # service version, <version>-fail-ready, in its name), to its testing-fail suite.
       - name: hello's .deb
         run: cargo xtask release deb --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       - name: hello's failing build's .deb
-        run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out native
-      - name: hello's .deb has its hook, no script, files only at its paths and its units disabled
+        run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: hello's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}_$ARCH.deb" --service hello
-      - name: hello's failing build's .deb has its hook, no script, files only at its paths and its units disabled
+      - name: hello's failing build's .deb is named for hello, root's, and its units start its own files
         env:
           ARCH: ${{ matrix.deb-arch }}
-        run: cargo xtask release check-linux-pkg "native/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
+        run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
       - name: mdm's .deb
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release deb --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
-      - name: mdm's .deb has its hook, no script, files only at its paths and its units disabled
+      - name: mdm's .deb is named for mdm, root's, and its units start its own files
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release check-linux-pkg "dist/mdm_${RELEASE_VERSION}_amd64.deb" --service mdm
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-${{ matrix.platform }}
           path: dist/
-          retention-days: 90
-          if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: native-${{ matrix.platform }}
-          path: native/
           retention-days: 90
           if-no-files-found: error
 
@@ -593,14 +563,6 @@ jobs:
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: Tarball of the binary
         run: gtar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
-      # The package carries the committed trusted root (see the Linux build job).
-      - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --trusted-root packaging/sigstore/trusted_root.json --out dist
-      - name: hello's package and its SHA-256
-        run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      # The same binary and plists, started with --fail-ready (see the Linux build job).
-      - name: hello's failing build and its SHA-256
-        run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
       - name: Restore the pinned gh.zip from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -651,12 +613,12 @@ jobs:
       - name: The packaged hostkeeper says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
       # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
-      # one component with no script, the program and its hook under
-      # /Library/Application Support/hello/ and the two slots' plists, Disabled, in
-      # /Library/LaunchDaemons/, read back from the expanded product. hello's goes to pkg/, unsigned,
+      # one component with no script, the program under /Library/Application Support/hello/ and
+      # the two slots' plists, Disabled, in /Library/LaunchDaemons/, read back from the expanded
+      # product: what hello's builder writes, not a rule of the daemon's. hello's goes to pkg/, unsigned,
       # beside the installer: sign-pkg signs it and check-pkg publishes it, a release asset the
       # release puts in the testing directory of the installers. The failing build's goes to
-      # native/, as on Linux, and is never signed or released.
+      # native/, an artifact of its own, and is never signed or released.
       - name: hello's .pkg (component by pkgbuild with no scripts, distribution by productbuild)
         run: cargo xtask release macos-pkg --service hello --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-pkg-root" --out pkg
       - name: hello's failing build's .pkg
@@ -665,9 +627,9 @@ jobs:
         run: pkgutil --expand "pkg/hello-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/hello-pkg-expanded"
       - name: Expand hello's failing build's .pkg
         run: pkgutil --expand "native/hello-$RELEASE_VERSION-fail-ready-$PLATFORM.pkg" "$RUNNER_TEMP/hello-fail-ready-pkg-expanded"
-      - name: hello's .pkg has its hook, no script, files only at its paths and its jobs disabled
+      - name: hello's .pkg is exactly what its builder writes
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-pkg-expanded" --service hello --version "$RELEASE_VERSION" --binary target/release/hello
-      - name: hello's failing build's .pkg has its hook, no script, files only at its paths and its jobs disabled
+      - name: hello's failing build's .pkg is exactly what its builder writes
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-fail-ready-pkg-expanded" --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
@@ -897,7 +859,7 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # index.json over the packages of both platforms, netboot.json from the committed pins of the
+  # netboot.json from the committed pins of the
   # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
@@ -927,14 +889,6 @@ jobs:
           pattern: assets-*
           path: dist
           merge-multiple: true
-      - name: The release index
-        run: cargo xtask release index --version "$RELEASE_VERSION" --dir dist
-      - name: The release index of hello
-        run: cargo xtask release index --service hello --version "$RELEASE_VERSION" --dir dist
-      - name: The release index of hello's failing build
-        run: cargo xtask release index --service hello --fail-ready --version "$RELEASE_VERSION" --dir dist
-      - name: The release index of mdm
-        run: cargo xtask release index --service mdm --version "$RELEASE_VERSION" --dir dist
       - name: The boot sets of network install
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
       - name: The command line, hkctl
@@ -959,10 +913,6 @@ jobs:
           name: sha256sums
           path: |
             dist/SHA256SUMS
-            dist/index.json
-            dist/hello-index.json
-            dist/hello-fail-ready-index.json
-            dist/mdm-index.json
             dist/netboot.json
             dist/hkctl-${{ needs.version.outputs.version }}
             dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}.image.json
@@ -1056,38 +1006,6 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-x86_64.tar.gz.sigstore.json"
-      - id: package-linux-x86_64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
-      - name: Name the bundle of the package for linux-x86_64
-        env:
-          BUNDLE: ${{ steps.package-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-x86_64.tar.zst.sigstore.json"
-      - id: hello-linux-x86_64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
-      - name: Name the bundle of the hello package for linux-x86_64
-        env:
-          BUNDLE: ${{ steps.hello-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-linux-x86_64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-linux-x86_64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-linux-x86_64.tar.zst
-      - name: Name the bundle of the failing build of hello for linux-x86_64
-        env:
-          BUNDLE: ${{ steps.hello-fail-ready-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-linux-x86_64.tar.zst.sigstore.json"
-      - id: mdm-package-linux-x86_64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/mdm-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
-      - name: Name the bundle of the mdm package for linux-x86_64
-        env:
-          BUNDLE: ${{ steps.mdm-package-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/mdm-${V}-linux-x86_64.tar.zst.sigstore.json"
       - id: hello-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1096,6 +1014,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-deb-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello_${V}_amd64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_amd64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_amd64.deb.sigstore.json"
       - id: mdm-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1168,30 +1094,6 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-arm64.tar.gz.sigstore.json"
-      - id: package-linux-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.zst
-      - name: Name the bundle of the package for linux-arm64
-        env:
-          BUNDLE: ${{ steps.package-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-arm64.tar.zst.sigstore.json"
-      - id: hello-linux-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-arm64.tar.zst
-      - name: Name the bundle of the hello package for linux-arm64
-        env:
-          BUNDLE: ${{ steps.hello-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-linux-arm64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-linux-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-linux-arm64.tar.zst
-      - name: Name the bundle of the failing build of hello for linux-arm64
-        env:
-          BUNDLE: ${{ steps.hello-fail-ready-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-linux-arm64.tar.zst.sigstore.json"
       - id: hello-deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1200,6 +1102,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-deb-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello_${V}_arm64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_arm64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_arm64.deb.sigstore.json"
       - id: deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1248,30 +1158,6 @@ jobs:
         env:
           BUNDLE: ${{ steps.tarball-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.gz.sigstore.json"
-      - id: package-macos-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
-      - name: Name the bundle of the package for macos-arm64
-        env:
-          BUNDLE: ${{ steps.package-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.zst.sigstore.json"
-      - id: hello-macos-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
-      - name: Name the bundle of the hello package for macos-arm64
-        env:
-          BUNDLE: ${{ steps.hello-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-macos-arm64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-macos-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-macos-arm64.tar.zst
-      - name: Name the bundle of the failing build of hello for macos-arm64
-        env:
-          BUNDLE: ${{ steps.hello-fail-ready-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-macos-arm64.tar.zst.sigstore.json"
       - id: hello-pkg-macos-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

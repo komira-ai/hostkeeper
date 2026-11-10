@@ -304,13 +304,14 @@ fn run_daemon(
         .map_err(StartError::Runtime)?;
     runtime.block_on(async {
         let platform = Platform::host();
+        let config = start::load_config(&settings)?;
         let mut adapters = Adapters::for_platform(&platform)?;
         if let Some(unit) = own_unit {
             adapters.own_unit = unit.to_owned();
         }
         let mut files = HostFiles::host();
         files.repositories = Some(dir.join("repositories"));
-        let mut ports: Ports = cli::host_ports(&settings, &files, own, adapters)?;
+        let mut ports: Ports = cli::host_ports(&config, &settings, &files, own, adapters)?;
         let mut repository = (*ports.repository).clone();
         repository.dirs.root = dir.join("root");
         ports.repository = Arc::new(repository);
@@ -400,7 +401,11 @@ impl CoordinatorLink for FileLink {
             .append(true)
             .open(self.dir.join("beats.jsonl"))
             .map_err(transport)?;
-        writeln!(beats, "{}", beat.to_json()).map_err(transport)?;
+        // One write of the whole line: `writeln!` writes a line in pieces, and a daemon stopped
+        // between two of them (the old one at its hand-over) leaves half a line that the next
+        // daemon's line is appended to. One append of a regular file is one piece.
+        let line = format!("{}\n", beat.to_json());
+        beats.write_all(line.as_bytes()).map_err(transport)?;
         let malformed = || LinkError::BadReply(ReplyFault::Malformed);
         let (features, acknowledged) = match read_if_there(&self.dir.join("answer.json")) {
             Ok(Some(text)) => read_answer(&text).ok_or_else(malformed)?,

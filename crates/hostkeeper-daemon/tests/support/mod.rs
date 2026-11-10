@@ -23,7 +23,9 @@ use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::links::{Links, MakeEnroller};
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
-use hostkeeper_daemon::testing::{FakeClock, Log, NoPrune, ScriptedLauncher, manifest};
+use hostkeeper_daemon::testing::{
+    FakeClock, FakePackages, Log, NoPrune, ScriptedLauncher, manifest,
+};
 use hostkeeper_daemon::{Daemon, Dirs, Placement, Ports, StoreSeam};
 use hostkeeper_enroll::{Enroller, RenewalState, Settings as EnrollSettings};
 use hostkeeper_hook::{Step, Verdict};
@@ -257,6 +259,8 @@ pub struct Rig {
     pub launcher: Arc<ScriptedLauncher>,
     /// Native version directories of the rig's packages directory.
     pub store: Arc<versions::Versions>,
+    /// The package store the daemon fetches a `.pkg` by its pin from.
+    pub pins: Arc<FakePackages>,
     /// The service manager; its calls are in [`Rig::placed_log`].
     pub units: Arc<FakeUnitControl>,
     /// The writes of placed-path linking and the calls of the service manager, in order.
@@ -303,6 +307,7 @@ impl Rig {
         Rig {
             state: root.join("state"),
             store: versions::Versions::new(&packages),
+            pins: FakePackages::new(&packages),
             packages,
             config,
             run_dir: root.join("run"),
@@ -324,6 +329,7 @@ impl Rig {
         Ports {
             announcement: Default::default(),
             launcher: self.launcher.clone(),
+            packages: self.pins.clone(),
             clock: self.clock.clone(),
             deadman_poll_secs: None,
             units: self.units.clone(),

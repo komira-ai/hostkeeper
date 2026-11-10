@@ -38,7 +38,7 @@ fn publish_to(fakes: &Fakes, dir: &Path, commit: &Commit) -> Result<Vec<String>,
 
 fn check_line(commit: &Commit) -> String {
     format!(
-        "release check: the 92 assets of v0.1.5 match SHA256SUMS, and 70 attestations of commit \
+        "release check: the 62 assets of v0.1.5 match SHA256SUMS, and 54 attestations of commit \
          {commit} verified online and from their bundles"
     )
 }
@@ -88,7 +88,7 @@ fn publish_is_idempotent_for_identical_assets() {
         publish_to(&fakes, &dir, &commit),
         Ok(vec![
             check_line(&commit),
-            format!("published {TAG} at {commit} with 92 assets"),
+            format!("published {TAG} at {commit} with 62 assets"),
         ])
     );
     assert_eq!(*fakes.store.writes.borrow(), all_writes());
@@ -148,7 +148,7 @@ fn a_partial_draft_is_completed_from_the_same_runs_assets() {
         publish_to(&fakes, &dir, &commit),
         Ok(vec![
             check_line(&commit),
-            format!("published {TAG} at {commit} with 92 assets"),
+            format!("published {TAG} at {commit} with 62 assets"),
         ])
     );
     assert_eq!(*fakes.store.writes.borrow(), all_writes());
@@ -334,12 +334,13 @@ fn misread(tamper: fn(&mut Release), detail: &str) {
         git: &fakes.git,
         runs: &fakes.runs,
         store: &store,
-        source: &fakes.source,
         verifier: &fakes.verifier,
         run_version: &fakes.run_version,
         pkgbuild: &fakes.pkgbuild,
         advisories: &fakes.advisories,
         download: &fakes.download,
+        registry: &fakes.registry,
+        wait: &fakes.wait,
     };
     let detail = detail.replace("SUMS_DIGEST", &digest(&dir, "SHA256SUMS"));
     assert_eq!(
@@ -405,7 +406,7 @@ fn a_directory_that_fails_the_attestation_check_publishes_nothing() {
     fakes.verifier = Fakes::over(FakeHistory::default()).verifier;
     let result = publish_to(&fakes, &dir, &commit);
     assert_eq!(
-        result.map_err(|e| matches!(e, Error::Refused(lines) if lines.len() == 70)),
+        result.map_err(|e| matches!(e, Error::Refused(lines) if lines.len() == 54)),
         Err(true)
     );
     assert!(fakes.store.writes.borrow().is_empty());

@@ -380,13 +380,13 @@ fn run_hook(
 
 /// Steps 5 and 6, then the tombstone goes: the service is gone.
 fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
-    let backend = ctx
+    let steps = ctx
         .placer()
         .store()
         .load()
         .map_err(|error| error.to_string())
-        .and_then(|record| installers::backend_for(&record, service));
-    match backend {
+        .and_then(|record| installers::steps_for(&record, service));
+    match steps {
         Ok(Some(_)) => {
             if let Err(reply) = remove_repository(ctx, service) {
                 return reply;

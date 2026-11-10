@@ -19,7 +19,7 @@ use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::testing::{AdditiveFault, FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, ReadyNotifier, Refusal, SystemdNotifier};
 use hostkeeper_hook::Step;
-use hostkeeper_install::repository::tree::hook_path;
+use support::versions::hook_path;
 use support::{OWN, alerting, d, lines, manifest_with, name};
 use support_host::NativeHost;
 

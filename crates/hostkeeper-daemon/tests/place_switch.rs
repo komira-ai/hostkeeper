@@ -35,6 +35,8 @@ fn order(service: &str, staged: Staged) -> UpdateOrder {
         staged,
         previous: None,
         hook_binary: "hook".into(),
+        hook_args: Vec::new(),
+        previous_hook: None,
         bounds: Bounds {
             prepare_secs: 1,
             cutover_secs: 1,

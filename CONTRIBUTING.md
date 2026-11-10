@@ -298,8 +298,9 @@ released daemon reads from the host's fixed path as this build does. On Linux th
 orders hostkeeper as a release from stage 9 on does (docs/design/packages-native.md, section
 10.5): by targets alone, each list one `apt` entry of hostkeeper's `.deb` from a signed apt
 repository the test serves on loopback (`tests/across/deb.rs`), and the host starts from the
-released version's `.deb` installed and adopted; on a Mac, where no daemon announces `macos-pkg`
-yet, it orders the `hostkeeper-archive` entry from a loopback release channel, as before. This
+released version's `.deb` installed and adopted; on a Mac, whose daemon announces `macos-pkg`
+only with a signers file the rig does not write (and the pinned release on no Mac), it orders the
+`hostkeeper-archive` entry from a loopback release channel, as before. This
 build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over acted on first,
 its version the name of the file it runs from, so it runs as versions newer than the release) and
 `hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is v0.1.218, A19's own release (one

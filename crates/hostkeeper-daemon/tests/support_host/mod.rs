@@ -34,14 +34,14 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::support::versions::hook_path;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::boot::BootReport;
 use hostkeeper_daemon::prune::Prune;
-use hostkeeper_daemon::repository::backend_of_entry;
+use hostkeeper_daemon::repository::{Native, backend_of_entry};
 use hostkeeper_daemon::testing::{Signal, manifest};
 use hostkeeper_daemon::{Daemon, Placement, Ports, Reply};
 use hostkeeper_hook::Verdict;
-use hostkeeper_install::repository::tree::hook_path;
 use hostkeeper_placed::InstalledEntry;
 use hostkeeper_placed::testing::{FakeUnitControl, FaultFs};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
@@ -501,7 +501,7 @@ impl NativeHost {
         let daemon = self.daemon();
         let repository = daemon.ctx().repository();
         let staged = repository
-            .stage(backend, &name, &at, &entry)
+            .stage(Native::Repository(backend), &name, &at, &entry)
             .expect("the version stages");
         let dir = staged.dir().to_path_buf();
         repository

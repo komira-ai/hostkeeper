@@ -3,8 +3,8 @@
 use crate::nfpm::Config;
 use crate::{NFPM, altered, read};
 
-/// The platforms of hostkeeper's packages: the closed list of the release index (one package
-/// per OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
+/// The platforms of hostkeeper's packages: the closed list of platforms (one package per
+/// OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
 #[derive(Clone, Copy, Debug)]
 enum Platform {
     LinuxX86_64,

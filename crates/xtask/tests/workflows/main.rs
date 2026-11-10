@@ -16,6 +16,8 @@ mod callers_tests;
 
 mod ci;
 mod ci_tests;
+mod coordinator_wait;
+mod coordinator_wait_tests;
 mod desired;
 mod desired_tests;
 mod downloads;

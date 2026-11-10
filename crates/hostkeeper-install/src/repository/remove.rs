@@ -8,6 +8,7 @@ use super::activate::{drift_of, links_of};
 use super::backend::Purged;
 use super::enable;
 use super::outcome::{Failure, Reason};
+use super::policy;
 use super::{Drift, Removed, RepositoryInstaller, io_failure, record_failure};
 
 /// The seconds between two tries of a purge whose lock is held.
@@ -63,6 +64,9 @@ impl RepositoryInstaller<'_> {
     /// The purge and its tries.
     fn purge(&self, package: &str, remove_secs: u64) -> Result<(), Failure> {
         let (backend, tools) = (self.backend, self.tools);
+        // Held across every try, the pauses between them included.
+        let _policy = policy::Guard::hold(&self.dirs.root)
+            .map_err(|e| io_failure("the policy-rc.d file", e))?;
         let tries = (remove_secs / PURGE_RETRY_SECS).max(1);
         let mut last = String::new();
         let mut done = false;

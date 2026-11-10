@@ -12,8 +12,10 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::adapters::host_systemctl;
 use hostkeeper_daemon::executor::{Dirs, Placement};
+use hostkeeper_daemon::packages::{PackageError, Packages, Pinned};
 use hostkeeper_daemon::prune::{LayoutPrune, NoLockPoint};
 use hostkeeper_daemon::repository::RepositoryPorts;
 use hostkeeper_daemon::{Daemon, Ports, repositories};
@@ -53,6 +55,17 @@ const OWN: HostkeeperVersion = HostkeeperVersion {
     minor: 1,
     patch: 0,
 };
+
+/// A package store that has nothing: an apt order never asks it.
+struct NoStore;
+
+impl Packages for NoStore {
+    fn pinned(&self, _service: &ServiceName, _entry: &Target) -> Result<Pinned, PackageError> {
+        Err(PackageError::Other(
+            "this daemon fetches no artifact".to_owned(),
+        ))
+    }
+}
 
 /// The root-owned directory the daemon's own directories are made in: a sealed version is
 /// trusted only below directories that root owns (`Staged::check`), which the rig's scratch
@@ -96,6 +109,7 @@ pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
     );
     let ports = Ports {
         launcher: Arc::new(SystemdLauncher::system()),
+        packages: Arc::new(NoStore),
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),
         deadman_poll_secs: None,
         units: Arc::new(Systemctl::new(host_systemctl())),
@@ -131,6 +145,16 @@ pub fn release(package_version: &str) -> String {
 /// The entry of the package at `package_version`, pinned to `pin`, from the rig's repository,
 /// on the built-in steps.
 pub fn entry(package_version: &str, pin: &str) -> Target {
+    entry_running(package_version, pin, &[])
+}
+
+/// The program the hooked versions of the package install, and the arguments the manifest gives
+/// it before the step's name.
+pub const HOOK_COMMAND: [&str; 2] = ["/usr/bin/hkaptfix-hook", "update-hook"];
+
+/// The entry of the package at `package_version`, pinned to `pin`, whose manifest names `command`
+/// as its hook (empty: the built-in steps).
+pub fn entry_running(package_version: &str, pin: &str, command: &[&str]) -> Target {
     let bounds = StepBounds {
         prepare: 120,
         cutover: 120,
@@ -147,6 +171,7 @@ pub fn entry(package_version: &str, pin: &str) -> Target {
             package: Some(PACKAGE.to_owned()),
             run: vec!["hkaptfix.service".to_owned()],
             hook: Some(Hook {
+                command: command.iter().map(|word| (*word).to_owned()).collect(),
                 timeout_secs: Some(bounds),
                 verify_deadline_secs: 600,
                 ..Hook::default()
@@ -166,11 +191,16 @@ pub fn entry(package_version: &str, pin: &str) -> Target {
 
 /// An install of the package at `package_version`, pinned to `pin`, as try `order_try`.
 pub fn install(package_version: &str, pin: &str, order_try: u64) -> Order {
+    install_of(entry(package_version, pin), package_version, pin, order_try)
+}
+
+/// An install of `target`, the entry of the package at `package_version` pinned to `pin`.
+pub fn install_of(target: Target, package_version: &str, pin: &str, order_try: u64) -> Order {
     Order {
         order_id: format!("install-{package_version}"),
         r#try: order_try,
         verb: Some(order::Verb::Install(Install {
-            target: Some(entry(package_version, pin)),
+            target: Some(target),
             service: PACKAGE.to_owned(),
             version: release(package_version),
             package_digest: pin.to_owned(),
@@ -181,11 +211,16 @@ pub fn install(package_version: &str, pin: &str, order_try: u64) -> Order {
 
 /// An update to the package at `package_version`, pinned to `pin`, as try `order_try`.
 pub fn update(package_version: &str, pin: &str, order_try: u64) -> Order {
+    update_of(entry(package_version, pin), package_version, pin, order_try)
+}
+
+/// An update to `target`, the entry of the package at `package_version` pinned to `pin`.
+pub fn update_of(target: Target, package_version: &str, pin: &str, order_try: u64) -> Order {
     Order {
         order_id: format!("update-{package_version}"),
         r#try: order_try,
         verb: Some(order::Verb::Update(Update {
-            target: Some(entry(package_version, pin)),
+            target: Some(target),
             service: PACKAGE.to_owned(),
             version: release(package_version),
             package_digest: pin.to_owned(),
@@ -203,4 +238,17 @@ pub fn uninstall(order_try: u64) -> Order {
             service: PACKAGE.to_owned(),
         })),
     }
+}
+
+/// What the daemon does at its start once its configuration is read, but for the work on
+/// hostkeeper's own package: the sweep and reconciliation before the step records, the start pass
+/// over them, and the work after it (which starts the run units no enablement link starts). The
+/// rig's daemon is made in this process, so a start is these calls on it.
+pub fn start(daemon: &Daemon) {
+    let mut report = hostkeeper_daemon::BootReport::default();
+    hostkeeper_daemon::start::before_records(daemon, &mut report);
+    daemon
+        .boot_pass_into(&mut report, &|_| false)
+        .expect("the start pass");
+    daemon.after_boot(&mut report, &hostkeeper_daemon::NoNotifier);
 }

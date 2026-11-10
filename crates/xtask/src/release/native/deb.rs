@@ -3,17 +3,19 @@
 //!
 //! The file is `<package>_<version>_<arch>.deb` (`amd64` for linux-x86_64, `arm64` for
 //! linux-arm64), where `<version>` is the release's, `<version>-fail-ready` for hello's failing
-//! build (the version its program answers `/version` with). It is an `ar` archive of three
+//! build (the version its program answers `/version` with). The `Version` of its `control` is the
+//! package's Debian version ([`Package::deb_version`]): the release's, or `<version>~fail.ready`
+//! for the failing build, which sorts below the release; so the failing build's file name and its
+//! `control` differ in the version, by design. It is an `ar` archive of three
 //! members in this order, each dated the commit's committer time, owned by 0 and 0, mode 0644:
 //!
 //! - `debian-binary`, `2.0` and a line break;
 //! - `control.tar.gz`, a gzip ustar of the directory `./` and the file `control` alone (the tar
-//!   writer drops a leading `./` from every other name, which dpkg reads the same): no maintainer
-//!   script, so
-//!   dpkg runs nothing of the package's own at install, upgrade or removal. `control` names the
+//!   writer drops a leading `./` from every other name, which dpkg reads the same): this builder
+//!   writes no maintainer script. `control` names the
 //!   package, its version and architecture, the maintainer, the installed size and the
-//!   description, and declares no dependency (the programs are those the archive package
-//!   carries, built for the release runner's glibc);
+//!   description, and declares no dependency (the programs are built for the release runner's
+//!   glibc);
 //! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`] or [`super::mdm`] by
 //!   their paths from `/` (`usr/lib/hello/hello`), each directory above them listed first (mode
 //!   0755), every entry owned by root and group root
@@ -134,7 +136,7 @@ pub(crate) fn deb_with(
     let version = package.version_text(&request.version);
     let bytes = build(
         name,
-        &version,
+        &package.deb_version(&request.version),
         arch,
         &description(request.service),
         &files,

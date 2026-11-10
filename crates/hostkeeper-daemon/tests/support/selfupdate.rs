@@ -11,12 +11,12 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use super::versions::hook_path;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_daemon::observer::{OwnService, observer_with};
 use hostkeeper_daemon::selfupdate::{APT_RELEASE_BINARY, REASON_AWAITING_RESTART, binary_dir};
 use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_install::repository::tree::hook_path;
 use hostkeeper_install::{Announcement, Family};
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{ActiveState, ExeStat};

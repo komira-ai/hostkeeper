@@ -42,6 +42,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use clap::{Args, Parser, Subcommand};
+use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_enroll::{
     Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
@@ -50,12 +51,15 @@ use hostkeeper_enroll::{
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_observe::ProcessRunner;
+use hostkeeper_package::net::{NetFetcher, UreqTransport};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
 use hostkeeper_unpack::Owner;
 
 use crate::repository::RepositoryPorts;
+use rustls_pki_types::CertificateDer;
+use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
@@ -69,13 +73,15 @@ use crate::notify::{
 };
 use crate::observer::{OwnService, observer_with};
 use crate::prune::{LayoutPrune, NoLockPoint};
+use crate::real_packages::RealPackages;
 use crate::repositories;
 use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
 use crate::unix_clock::SystemUnixClock;
 use hostkeeper_install::announce::OsHost;
+use hostkeeper_install::host::{Host, Ids};
 use hostkeeper_install::macos_pkg::signers::Signers;
-use hostkeeper_install::{Announcement, Family};
+use hostkeeper_install::{Announcement, Family, Tools};
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
@@ -94,6 +100,9 @@ pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
 /// microseconds. The daemon reads only whether it is set.
 pub const WATCHDOG_USEC: &str = "WATCHDOG_USEC";
+/// The CA bundle of a Mac, the system roots macOS keeps as PEM: the roots the fetch of a
+/// `macos-pkg` entry's `.pkg` trusts.
+pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
 /// The pinned `gh` that checks an attestation, on a Linux host: a file hostkeeper's own package
 /// installs for `hostkeeper-pxe`; the daemon runs none.
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
@@ -485,18 +494,19 @@ pub fn start_with(
     {
         crate::mac_files::macos_pkg(managed, target, settings.trusted_uid)?;
     }
-    start::load_config(settings)?;
+    let config = start::load_config(settings)?;
     crate::layout::ensure_state_dirs(settings)?;
     Adapters::for_platform(platform)
-        .and_then(|adapters| host_ports(settings, files, own_version, adapters))
+        .and_then(|adapters| host_ports(&config, settings, files, own_version, adapters))
         .and_then(|ports| start::startup_notifying(settings, ports, own_version, notifier))
 }
 
 /// The files outside the daemon's own directories that the host's ports and loops read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostFiles {
-    /// The stores file ([`hostkeeper_package::stores`]) a Mac's start renders from `managed_stores`
-    /// ([`crate::mac_files::stores`]); the daemon reads no store from it yet.
+    /// The stores file ([`hostkeeper_package::stores`]), which a Mac's start renders from
+    /// `managed_stores` ([`crate::mac_files::stores`]); a start refuses a file that is not sound,
+    /// and has no store when it is not there.
     pub stores: PathBuf,
     /// The signers file of the macos-pkg installer
     /// ([`hostkeeper_install::macos_pkg::signers`]); a start refuses a file that is not sound and
@@ -573,6 +583,21 @@ impl HostFiles {
     }
 }
 
+/// The DER certificates of the PEM bundle at `path`. A bundle that cannot be opened has none,
+/// and a section that cannot be read is skipped: a fetch with no root to trust ends
+/// `fetch_failed`, and the daemon still starts.
+pub fn tls_roots(path: &Path) -> Vec<Vec<u8>> {
+    CertificateDer::pem_file_iter(path).map_or_else(
+        |_| Vec::new(),
+        |sections| {
+            sections
+                .filter_map(Result::ok)
+                .map(|der| der.as_ref().to_vec())
+                .collect()
+        },
+    )
+}
+
 /// The signers file of `files`, which `owner_uid` must own: `Ok(None)` on a host with no such
 /// file configured (Linux) or none there; `Err` ([`StartError::MacosPkg`]) on every refusal of
 /// [`hostkeeper_install::macos_pkg::signers::load`].
@@ -590,37 +615,67 @@ pub fn load_signers(files: &HostFiles, owner_uid: u32) -> Result<Option<Signers>
 
 /// The ports of this build over the platform's `adapters` ([`Adapters`]: the step launcher, the
 /// service manager, the unit directory and the observer's service manager and process probe).
-/// The observer looks through the adapters and TCP ([`observer_with`]); the unit control is the
-/// adapters' (`systemctl` on Linux, `launchctl` on macOS). The daemon's links and `placed.json`
-/// are under the host's own directories and the adapters' unit directory, `--packages-dir` being
-/// the packages directory; the prune of step 18 of a force deletes nothing yet. The repository
-/// installer stages into `--packages-dir` as root. The installers the daemon announces are
-/// decided here, once, from the host's `os-release` under the `os_root` of `files`
-/// ([`hostkeeper_install::announce`]) and the host's repository entries: none on a Mac. `Err`
-/// when the signers file is not sound ([`StartError::MacosPkg`]) or the repositories directory
-/// is not ([`StartError::Repositories`]).
+/// The package store is the real one ([`RealPackages`]: HTTPS over the CA bundle of `files`, the
+/// stores file of `files`, the bounds of `config`; it fetches the `.pkg` of a `macos-pkg` entry
+/// into `--packages-dir`); the observer looks through the adapters and TCP ([`observer_with`]);
+/// the unit control is the adapters' (`systemctl` on Linux, `launchctl` on macOS). The daemon's
+/// links and `placed.json` are under the host's own directories and the adapters' unit
+/// directory, `--packages-dir` being the packages directory; the prune of step 18 of a force
+/// deletes nothing yet. The installers the daemon announces are decided here, once, from the
+/// host's `os-release` under the `os_root` of `files` ([`hostkeeper_install::announce`]), its
+/// repository entries ([`crate::repositories::announced`]) and, on a Mac, its signers file and
+/// tools ([`crate::macos_pkg::ports`]: `macos-pkg`, whose installer's ports the daemon then
+/// holds). `Err` when the stores file of `files` is not sound ([`StartError::Stores`]; one that
+/// is not there gives no store) or the signers file is not ([`StartError::MacosPkg`]).
 pub fn host_ports(
+    config: &DaemonConfig,
     settings: &Settings,
     files: &HostFiles,
     own_version: HostkeeperVersion,
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
     let announcement = announced(&files.os_root);
-    // The signers are checked here and not kept: the daemon's order path runs no installer yet
-    // (item A6 dispatches them), so `macos-pkg` is not in `entry::INSTALLERS` and the daemon does
-    // not announce an installer it cannot run. A6 takes the loaded signers from this call.
-    let _signers = load_signers(files, 0)?;
+    let stores = hostkeeper_package::stores::load(&files.stores, 0).map_err(|source| {
+        StartError::Stores {
+            path: files.stores.clone(),
+            source,
+        }
+    })?;
+    let signers = load_signers(files, 0)?;
+    let macos_pkg = crate::macos_pkg::ports(
+        adapters.kind == PlatformKind::Macos,
+        Host::new(&files.os_root, Ids::MAC),
+        signers,
+        host_tools(),
+    );
     let repositories = repositories::load(files, repositories::ROOT_UID)?;
     let announcement = repositories::announced(announcement, &files.os_root, &repositories);
+    let announcement = crate::macos_pkg::announced(announcement, macos_pkg.as_ref());
+    say_announced(&announcement);
     let repository = RepositoryPorts::new(
         &settings.packages_dir,
         Path::new("/"),
         repositories,
         Owner::ROOT,
-    );
+    )
+    .with_macos_pkg(macos_pkg);
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
+    // Only a Mac fetches a `.pkg`: no other host reads a CA bundle.
+    let roots = match adapters.kind {
+        PlatformKind::Macos => tls_roots(Path::new(CA_BUNDLE_MACOS)),
+        PlatformKind::Linux | PlatformKind::Openrc => Vec::new(),
+    };
+    let fetcher = NetFetcher::new(UreqTransport::new(&roots), Arc::clone(&clock));
+    let packages = RealPackages::new(
+        Box::new(fetcher),
+        Arc::clone(&clock),
+        config.bounds.clone(),
+        stores,
+        &settings.packages_dir,
+    );
     Ok(Ports {
         launcher: adapters.launcher,
+        packages: Arc::new(packages),
         clock,
         deadman_poll_secs: Some(DEADMAN_POLL_SECS),
         units: adapters.units,
@@ -649,19 +704,36 @@ pub fn host_ports(
     })
 }
 
-/// The installers the daemon announces, decided from the host's `os-release` under `os_root`
-/// ([`hostkeeper_install::announce`]), said once on standard error.
+/// The installers every host announces, and its family, decided from the host's `os-release`
+/// under `os_root` ([`hostkeeper_install::announce`]).
 fn announced(os_root: &Path) -> Announcement {
-    let announcement = hostkeeper_install::announce(OsHost {
+    hostkeeper_install::announce(OsHost {
         macos: cfg!(target_os = "macos"),
         root: os_root,
-    });
+    })
+}
+
+/// Says once on standard error the installers the daemon announces, the native ones added
+/// ([`crate::repositories::announced`], [`crate::macos_pkg::announced`]), and the family.
+fn say_announced(announcement: &Announcement) {
     eprintln!(
         "hostkeeper daemon: announces the installers {}; the os-release family is {}",
         announcement.names().join(", "),
         announcement.family.map_or("none", Family::as_str)
     );
-    announcement
+}
+
+/// The `macos-pkg` installer's tools on a Mac: the host's own
+/// ([`hostkeeper_install::HostTools`]).
+#[cfg(target_os = "macos")]
+fn host_tools() -> Option<Arc<dyn Tools>> {
+    Some(Arc::new(hostkeeper_install::HostTools))
+}
+
+/// No `macos-pkg` installer's tools: a build for another platform runs none.
+#[cfg(not(target_os = "macos"))]
+fn host_tools() -> Option<Arc<dyn Tools>> {
+    None
 }
 
 /// A service manager and a step launcher that run nothing: each refuses. No platform's adapters

@@ -861,32 +861,17 @@ descriptors with a committed baseline and fails on any removed, renumbered, rena
 field, method or enum value
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-proto/src/compat.rs">crates/hostkeeper-proto/src/compat.rs</a>).</p>
 <h3 id="packages">Packages</h3>
-<p>A service version ships as <strong>one package per platform</strong>, <code>&lt;service&gt;-&lt;version&gt;-&lt;platform&gt;.tar.zst</code>.
-A package is one zstd frame holding one tar archive whose top level is <code>manifest.toml</code>, <code>bin/</code>,
-<code>units/</code> and <code>files/</code> (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/package-format.md">docs/package-format.md</a>,
-<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#47-the-package">design: The package</a>). The platforms are a closed
-set, <code>linux-x86_64</code>, <code>linux-arm64</code> and <code>macos-arm64</code>. The daemon knows its own from the target it
+<p>A service version ships as <strong>one native package per platform</strong>, a <code>.deb</code> or a <code>.pkg</code>
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/packages-native.md">design: native packages</a>).
+The hook, its bounds, the run units and the health URL are the manifest of the release&rsquo;s entry, not a file of the package.
+The platforms are a closed set, <code>linux-x86_64</code>, <code>linux-arm64</code> and <code>macos-arm64</code>. The daemon knows its own from the target it
 was compiled for (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/hostkeeper-config/src/platform.rs">crates/hostkeeper-config/src/platform.rs</a>).</p>
-<p><strong>The release index and the channel layout.</strong> An order names a service, a version, the package
-digest of the host&rsquo;s platform and the SHA-256 of the version&rsquo;s index, but no platform and no URL. The
-daemon reads <code>&lt;release_channel&gt;/&lt;service&gt;/&lt;version&gt;/index.json</code>, refuses it before parsing it when its SHA-256
-is not the order&rsquo;s index digest, takes the entry for its platform,
-then fetches the archive and its attestation bundle (<code>.sigstore.json</code>) beside it
-(<a href="https://github.com/komira-ai/hostkeeper/tree/main/crates/hostkeeper-package">crates/hostkeeper-package</a>,
-<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#55-fetching-verifying-and-unpacking-a-package">design: Fetching, verifying and unpacking</a>).
-The index is a lookup, not a trust anchor, and is read up to
-<span data-cell="c-index" data-source="crates/hostkeeper-package/src/index.rs" data-item="MAX_INDEX_BYTES">64 KiB</span>.
-<code>cargo xtask release channel-stage</code> lays one release out in that tree and checks it with the
-daemon&rsquo;s own parser (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/release-channel.md">docs/deploy/release-channel.md</a>). No workflow
-uploads a channel. The operator stages it and serves it over HTTPS.</p>
-<p><strong>Fetch.</strong> HTTPS only, no redirects, no proxy, a connect timeout of
-<span data-cell="c-connect" data-source="crates/hostkeeper-package/src/stage.rs" data-item="CONNECT_TIMEOUT">30 s</span>
-and a whole-fetch deadline from the config&rsquo;s <code>[bounds]</code>. The archive is hashed as it arrives and the
-transfer stops once it passes the indexed size. Its size and SHA-256 must equal the index entry,
-and its SHA-256 must also equal the order&rsquo;s <code>package_digest</code>, which the coordinator took from the same index.
-The config is refused when its largest package could not arrive in its fetch deadline at
-<span data-cell="c-min-rate" data-source="crates/hostkeeper-config/src/daemon.rs" data-item="MIN_FETCH_BYTES_PER_SEC">262,144</span>
-bytes per second.</p>
+<p><strong>The targets of a release.</strong> CI sets a version with its targets: for each platform an ordered list of
+entries, one per installer. <code>cargo xtask release targets</code> writes them from the files of the release, and the
+host installs the entry its daemon announces the installer of, from the project&rsquo;s package repository
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/package-repositories.md">docs/deploy/package-repositories.md</a>).
+The tree digest and the seal of a placed version are a public format
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/tree-digest.md">docs/tree-digest.md</a>).</p>
 <p><strong>Signing.</strong> Packages are attested in CI. Per commit, <code>artifacts.yml</code> builds the binaries, the
 packages, deb and rpm, an SBOM, a coordinator image built twice and compared, and an unsigned
 macOS installer. It attests every file it sums, with a bundle beside each archive, package and
@@ -1094,7 +1079,7 @@ uncommitted update is rolled back and a committed one goes on to <code>verify</c
 <rect class="box" x="740" y="14" width="210" height="40" rx="4"/><text x="845" y="39" text-anchor="middle" class="t-s t-b">hook, one unit per step</text>
 <path class="life" d="M105 54V604"/><path class="life" d="M345 54V604"/><path class="life" d="M585 54V604"/><path class="life" d="M845 54V604"/>
 <path class="ln" marker-end="url(#au)" d="M105 88H341"/><text x="113" y="82" class="t-s">update order in a heartbeat reply</text>
-<path class="ln" marker-end="url(#au)" d="M345 118H581"/><text x="353" y="112" class="t-s">GET index.json, the package, its attestation bundle</text>
+<path class="ln" marker-end="url(#au)" d="M345 118H581"/><text x="353" y="112" class="t-s">GET the package, its attestation bundle</text>
 <rect class="box-w" x="355" y="128" width="470" height="24" rx="3"/><text x="365" y="145" class="t-s">size and digest against the index and the order; gh attestation verify; unpack and seal</text>
 <path class="ln-acc" marker-end="url(#av)" d="M345 180H841"/><text x="595" y="174" text-anchor="middle" class="t-b">prepare</text>
 <rect class="box-w" x="355" y="192" width="380" height="24" rx="3"/><text x="365" y="209" class="t-s">link units and files, switch current, daemon-reload</text>

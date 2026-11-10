@@ -11,13 +11,14 @@ description = "The hostkeeper daemon: start-up, the order executor with its lock
 # The library of the one root process of a host (docs/design/hostkeeper-design.md, sections 4.1,
 # 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3). Everything the daemon does is here, so that it is measured;
 # the `hostkeeper` binary only forwards to `cli::main`. Everything privileged comes in through
-# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the service manager
-# (`hostkeeper_placed::UnitControl`), the filesystem the daemon's links are made through
-# (`hostkeeper_placed::Fs`) and the service observer (`hostkeeper_observe::Observer`).
+# ports it is given: the step launcher (`hostkeeper_steps::StepLauncher`), the package store
+# (`packages::Packages`), the service manager (`hostkeeper_placed::UnitControl`), the filesystem
+# the daemon's links are made through (`hostkeeper_placed::Fs`) and the service observer
+# (`hostkeeper_observe::Observer`).
 
 [features]
 # The test doubles in `hostkeeper_daemon::testing` (a scripted launcher, a fake clock, fake
-# notifiers and prunes), for this crate's tests and the tests of crates built on it;
+# package store, notifiers and prunes), for this crate's tests and the tests of crates built on it;
 # it turns on the fakes of the heartbeat loop's ports (`hostkeeper_link::testing`) too.
 testing = ["hostkeeper-link/testing"]
 
@@ -47,7 +48,9 @@ hostkeeper-observe = { path = "../hostkeeper-observe" }
 # The OpenRC adapters of an Alpine host: the step launcher, the unit control and the service
 # manager (docs/design/two-programs.md, section 4.6).
 hostkeeper-openrc = { path = "../hostkeeper-openrc" }
-# The stores file a Mac's start renders from its managed preferences (`mac_files`).
+# The host's stores (`stores.toml`, which a Mac's start renders from its managed preferences in
+# `mac_files`) and the fetch of a `macos-pkg` entry's artifact by its pin, which the real package
+# store composes.
 hostkeeper-package = { path = "../hostkeeper-package" }
 # The record of installed services (`placed.json`) and the switch of `current` and `previous`, and
 # the service-manager port the daemon stops, starts and asks after units with.
@@ -74,6 +77,8 @@ prost-reflect = { workspace = true, features = ["serde"] }
 # `lgetxattr`: the quarantine attribute of a staged entry on a Mac, read without following a
 # link and without unsafe code (`mac`).
 rustix = { workspace = true, features = ["fs"] }
+# The host's CA bundle (PEM) read into the DER roots the package fetch's HTTPS client trusts.
+rustls-pki-types.workspace = true
 # `target.json` and the built-in steps' last lines, as JSON.
 serde_json.workspace = true
 sha2.workspace = true

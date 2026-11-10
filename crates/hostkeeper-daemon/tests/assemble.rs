@@ -10,19 +10,41 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE};
 use hostkeeper_daemon::boot::{ALERT_START, BootReport, BootStep, Stage, alert_line};
 use hostkeeper_daemon::cli::{
-    ConsoleFiles, GH_BINARY, HostFiles, PKI_DIR, SIGSTORE_TRUSTED_ROOT, start_with,
+    ConsoleFiles, DEADMAN_POLL_SECS, GH_BINARY, HostFiles, PKI_DIR, SIGSTORE_TRUSTED_ROOT,
+    host_ports, start_with,
 };
 use hostkeeper_daemon::console::{AGETTY, ENROLLMENT_ISSUE};
-use hostkeeper_daemon::start::{self, EXIT_FAILED, Settings, StartError, before_records};
+use hostkeeper_daemon::start::{
+    self, EXIT_CONFIG, EXIT_FAILED, Settings, StartError, before_records,
+};
 use hostkeeper_daemon::testing::{FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, Ports, ReadyNotifier};
+use hostkeeper_hook::{Invocation, Step};
 use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_observe::fake::FakeCommandRunner;
+use hostkeeper_observe::{CommandOutput, RunError};
 use hostkeeper_placed::testing::{Event, Log as PlacedLog};
-use support::{OWN, Rig, Tap, alerting, d, lines, manifest_with};
+use hostkeeper_steps::{Bound, StepCall};
+use support::{OWN, Rig, Tap, alerting, config, d, lines, manifest_with};
 
 const RESTORE: &str = r#"boot = "restore""#;
+
+/// The adapters of a Linux host, the unit control's `systemctl` run through `systemctl` (which
+/// answers what it is told and records each command).
+fn linux_over(systemctl: &FakeCommandRunner) -> Adapters {
+    Adapters::linux(
+        &Platform::linux(),
+        RunnerLauncher::new(systemctl.clone(), SYSTEMCTL_DEADLINE),
+    )
+}
+
+/// The adapters of a Linux host whose `systemctl` is never asked.
+fn linux() -> Adapters {
+    linux_over(&FakeCommandRunner::default())
+}
 
 /// A readiness notifier that puts a mark in the placed log, in its place among the writes and
 /// calls of the service manager, and then tells `inner`.
@@ -82,12 +104,14 @@ fn the_daemon_reaches_ready_only_after_the_boot_pass() {
         report.stages,
         [
             Stage::UnlinkRegistrationSocket,
+            Stage::ClearPolicyRcD,
             Stage::BeforeRecords,
             Stage::ReadRecords,
             Stage::WriteBootId,
             Stage::ResumeUninstalls,
             Stage::RunUpdates,
             Stage::RestartWatchers,
+            Stage::StartRunUnits,
             Stage::BootSteps,
             Stage::Ready,
         ]
@@ -256,9 +280,111 @@ fn the_registration_socket_directory_is_updater_under_the_run_directory() {
     }
 }
 
-/// Catches the host's build starting on ports it cannot build, or on a config that does not load:
-/// a config that does not load stops the start as a `Config` error before any port is built; and
-/// a build for another system than macOS has no macOS adapters.
+/// Catches ports of the host's build that read the wrong place, or fall back to the unwired ones:
+/// the dead-man poll and the host's directories for placement. Catches a launcher or a unit
+/// control left unwired: the ports' launcher is the host's systemd launcher, which refuses a hook
+/// that is not there by its path before it spawns anything, and their unit control runs
+/// `systemctl` through the adapters' launcher. Catches a package store that fetches by a path of
+/// its own: a stores file that is not sound stops the ports as `Stores` naming it, and one that
+/// is not there gives the ports no store.
+#[test]
+fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
+    let rig = Rig::new("assemble-host-ports");
+    let files = HostFiles {
+        repositories: None,
+        os_root: rig.scratch.path().join("os"),
+        stores: rig.scratch.path().join("stores.toml"),
+        macos_pkg_signers: None,
+        pki: rig.scratch.path().join("pki"),
+        console: None,
+        managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
+    };
+    make_dir(&rig.packages, 0o755);
+    let systemctl = FakeCommandRunner::default();
+    let ports = host_ports(
+        &config(),
+        &rig.settings(),
+        &files,
+        OWN,
+        linux_over(&systemctl),
+    )
+    .expect("the ports");
+    assert_eq!(ports.deadman_poll_secs, Some(DEADMAN_POLL_SECS));
+    assert_eq!(ports.placement.roots.packages().dir(), rig.packages);
+
+    // The launcher is the host's: a hook that is not there does not start, named by its path
+    // (the unwired launcher would answer that it has none), and nothing is spawned for it.
+    let missing = rig.scratch.path().join("no-such-hook");
+    let unit = "updater-web-prepare-1";
+    let call = StepCall {
+        service: "web",
+        hook_args: &[],
+        invocation: Invocation {
+            step: Step::Prepare,
+            artifact: Some(rig.packages.join("web")),
+            params: Some(rig.scratch.path().join("params.toml")),
+        },
+        executable: &missing,
+        unit,
+        bound: Bound::Unbounded,
+    };
+    let refused = ports
+        .launcher
+        .run(&call)
+        .err()
+        .map(|error| error.to_string());
+    assert_eq!(
+        refused,
+        Some(format!(
+            "the hook did not start: {}: No such file or directory (os error 2)",
+            missing.display()
+        ))
+    );
+
+    // The unit control is the adapters' `systemctl`, not the unwired one that refused.
+    systemctl.then(Ok(CommandOutput {
+        exit_code: Some(0),
+        stdout: Vec::new(),
+        truncated: false,
+    }));
+    assert_eq!(ports.units.daemon_reload(), Ok(()));
+    assert_eq!(
+        systemctl.calls(),
+        vec![(
+            vec!["systemctl".to_owned(), "daemon-reload".to_owned()],
+            SYSTEMCTL_DEADLINE
+        )]
+    );
+    // Nothing more answered: the next command cannot run, and that is the call's error.
+    assert_eq!(
+        ports
+            .units
+            .stop_unit("web.service")
+            .map_err(|e| e.to_string()),
+        Err(format!(
+            "systemctl stop -- web.service failed: {}",
+            RunError::Empty
+        ))
+    );
+
+    // A stores file that is not sound stops the ports, naming the file.
+    fs::write(&files.stores, "not a stores file").expect("write the stores file");
+    fs::set_permissions(&files.stores, fs::Permissions::from_mode(0o644)).expect("its mode");
+    let error = host_ports(&config(), &rig.settings(), &files, OWN, linux())
+        .err()
+        .expect("a stores file that is not sound");
+    assert!(
+        matches!(&error, StartError::Stores { path, .. } if *path == files.stores),
+        "{error}"
+    );
+    assert_eq!(error.exit_code(), EXIT_CONFIG);
+}
+
+/// Catches a start of the host's build that goes on past ports it could not build: a config that
+/// does not load stops the start as a `Config` error, before any port is built; and a build for
+/// another system than macOS has no macOS adapters.
 #[test]
 fn the_start_of_the_host_build_stops_at_the_ports_it_cannot_build() {
     let rig = Rig::new("assemble-start-with");

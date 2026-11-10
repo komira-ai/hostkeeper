@@ -1,5 +1,5 @@
 //! The seal of a package version: `packages/<service>/<version>.seal`, written when the version
-//! was staged and verified, read before the version is used (docs/package-format.md).
+//! was staged and verified, read before the version is used (docs/tree-digest.md).
 //!
 //! ```json
 //! {"schema":1,"tree_digest":"<64 hex>","package_digest":"<64 hex>"}

@@ -44,7 +44,9 @@
 //! - [`halt`]: the held halt generation of each service, persisted, never lowered.
 //! - [`hook_log`]: what the host's step launcher kept of a hook's standard error, as lines of the
 //!   daemon's log under the step's unit.
-//! - [`installed`]: what the host runs.
+//! - [`packages`]: the port that fetches a `macos-pkg` entry's `.pkg` by its pin,
+//!   [`real_packages`] its real implementation (the host's stores, the one table that maps the
+//!   fetch's failures onto [`refusal`]), and [`installed`] what the host runs.
 //! - [`installers`]: the installer each installed service is recorded with, whose backend
 //!   (`hostkeeper_install`) the uninstall and the prune read.
 //! - [`repository`]: the repository installer (`apt`) with the daemon's ports: the stage of an
@@ -68,10 +70,10 @@
 //!   clock of the loop's deferrals, the daemon's one read of it.
 //!
 //! Everything privileged is behind a port the daemon is given: the step launcher
-//! (`hostkeeper_steps::StepLauncher`), the service manager (`hostkeeper_placed::UnitControl`),
-//! the filesystem the daemon's links are made through (`hostkeeper_placed::Fs`), the repository
-//! installer's tools ([`repository::RepositoryPorts`]) and the service observer
-//! (`hostkeeper_observe::Observer`). Time is the
+//! (`hostkeeper_steps::StepLauncher`), the package store ([`packages::Packages`]), the service
+//! manager (`hostkeeper_placed::UnitControl`), the filesystem the daemon's links are made through
+//! (`hostkeeper_placed::Fs`), the repository installer's tools ([`repository::RepositoryPorts`])
+//! and the service observer (`hostkeeper_observe::Observer`). Time is the
 //! `hostkeeper_steps::Clock`; nothing here reads the wall clock.
 
 pub mod adapters;
@@ -90,6 +92,7 @@ pub mod hook_log;
 pub mod installed;
 pub mod installers;
 pub mod ipmi;
+mod launchd_plist;
 pub mod layout;
 pub mod link_adapters;
 pub mod links;
@@ -97,17 +100,21 @@ pub mod locks;
 pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
+pub mod macos_pkg;
 pub mod node;
 pub mod notify;
 pub mod observer;
 pub mod own_package;
 pub mod packaged;
+pub mod packages;
 pub mod place;
 pub mod prune;
+pub mod real_packages;
 pub mod refusal;
 pub mod repositories;
 pub mod repository;
 pub mod rollback_floor;
+pub mod run_units;
 pub mod seed;
 pub mod selfupdate;
 pub mod stamp;

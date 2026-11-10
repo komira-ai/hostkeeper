@@ -14,13 +14,13 @@ use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSIO
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_install::repository::tree::hook_path;
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Abort, ClearHalt, ClearRecord, Force, Install, Order, Uninstall, order,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE};
 use hostkeeper_steps::{RecordStore, tree_digest};
+use support::versions::hook_path;
 use support::{d, digest, force_rollback, update};
 use support_apt::with_entry;
 use support_host::{NativeHost, pv};

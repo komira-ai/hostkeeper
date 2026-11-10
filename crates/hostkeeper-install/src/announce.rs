@@ -12,9 +12,12 @@
 //! not closed) give no family. A macOS host has no family and never reads `os-release`.
 //!
 //! The family chooses the one native installer a host may announce, the one of its own package
-//! database: the daemon adds `apt` for the `deb` family when the host also has apt's tools, apt
-//! 2.2 or later and a repository entry ([`crate::repository::announce`]). `macos-pkg` (A9) on a
-//! Mac and a `dnf` backend (A8) for `rpm` are not announced yet. The daemon reports the family it found at its start.
+//! database. [`announce`] gives no installer; the daemon adds `apt` for the `deb`
+//! family when the host also has apt's tools, apt 2.2 or later and a repository entry
+//! ([`crate::repository::announce`]), and `macos-pkg` on a Mac whose signers file it loaded at
+//! its start, when `installer` and `pkgutil` are present ([`crate::macos_pkg::announces`]). A
+//! `dnf` backend (A8) for `rpm` is not announced yet. The daemon reports the installers and the
+//! family it found at its start.
 
 use std::fs::File;
 use std::io::Read;

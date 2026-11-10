@@ -17,7 +17,6 @@ mod daemon_flags;
 mod directories;
 mod nfpm;
 mod overlay;
-mod own_list;
 mod package;
 mod package_names;
 mod script;

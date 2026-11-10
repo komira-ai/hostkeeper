@@ -134,7 +134,7 @@ pub fn confirmed_switch(
 /// unfinished step record, its target and the release it replaces (the version whose seal holds
 /// the record's `previous_digest`); and the target of a force record with no verdict. An error,
 /// with nothing pruned, when a record cannot be read, or `placed.json` names an installer of the
-/// service this daemon has no backend of: what it holds cannot be known, or not undone.
+/// service this daemon has no steps of: what it holds cannot be known, or not undone.
 fn protected(ctx: &Ctx, layout: &Layout, service: &ServiceName) -> Result<Protected, String> {
     let mut protect = Protected::default();
     let rec = match ctx.store(service).load() {
@@ -163,7 +163,7 @@ fn protected(ctx: &Ctx, layout: &Layout, service: &ServiceName) -> Result<Protec
         .store()
         .load()
         .map_err(|error| error.to_string())?;
-    installers::backend_for(&placed, service)?;
+    installers::steps_for(&placed, service)?;
     Ok(protect)
 }
 

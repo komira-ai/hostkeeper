@@ -289,3 +289,32 @@ fn the_cargo_deny_download_of_ci_yml_on_short_retries_is_refused() {
         ]
     );
 }
+
+/// Proves: a curl that follows no redirect needs no `--proto-redir`, and `--fail-with-body`
+/// counts as `--fail`; one that follows a redirect (`--location`, `-L`, `--location-trusted`)
+/// without `--proto-redir =https` is refused, and so is one with neither `--fail` nor
+/// `--fail-with-body`.
+/// Catches: the guard dropped from a download that follows a redirect to plain HTTP, and an HTTP
+/// error page kept as the answer.
+#[test]
+fn a_curl_that_follows_no_redirect_needs_no_proto_redir_and_fail_with_body_is_a_fail() {
+    let still = "--proto =https --tlsv1.2 --fail-with-body --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors";
+    assert_problems(
+        &run(&format!("curl {still} --url https://example.com/a")),
+        &[],
+    );
+    for follows in ["--location", "-L", "--location-trusted"] {
+        assert_problems(
+            &run(&format!(
+                "curl {still} {follows} --url https://example.com/a"
+            )),
+            &["line 17: a curl lacks `--proto-redir =https`"],
+        );
+    }
+    assert_problems(
+        &run(
+            "curl --proto =https --tlsv1.2 --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --url https://example.com/a",
+        ),
+        &["line 17: a curl lacks `--fail`"],
+    );
+}

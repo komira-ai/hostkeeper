@@ -27,14 +27,24 @@ pub const REASON_ROLLBACK_BELOW_INSTALLER: &str = "rollback_below_installer";
 /// before it cannot stage, activate, roll back or remove a version of it. [`ARCHIVE_INSTALLER`]
 /// has none: an old record that names it holds no version this binary runs, and no rollback is
 /// below it.
-pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 1] = [(
-    Installer::Apt,
-    HostkeeperVersion {
-        major: 0,
-        minor: 1,
-        patch: 211,
-    },
-)];
+pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 2] = [
+    (
+        Installer::Apt,
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 211,
+        },
+    ),
+    (
+        Installer::MacosPkg,
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 223,
+        },
+    ),
+];
 
 /// The first release of hostkeeper that updates itself through a native installer: its new
 /// binary installs its own package after it confirmed itself (docs/design/packages-native.md,

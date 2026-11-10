@@ -11,8 +11,8 @@
 //! its manifest.
 //!
 //! A native entry ([`is_native_entry`], packages-native.md section 10) is a repository entry, or
-//! an artifact entry whose installer is native (`macos-pkg`): its hook names no `hook.command` and may name a `hook.boot` without one, a
-//! `macos-pkg` entry carries no attestation, and the service `hostkeeper` is set with one native
+//! an artifact entry whose installer is native (`macos-pkg`): its `hook.command` is empty or its program an
+//! absolute path of a file the package installs, a `macos-pkg` entry carries no attestation, and the service `hostkeeper` is set with one native
 //! entry per list and no `hostkeeper-archive` entry after it (section 10.4).
 //!
 //! The coordinator does not check that it knows an installer: a name of the grammar no daemon

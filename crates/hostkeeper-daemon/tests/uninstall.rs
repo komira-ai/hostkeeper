@@ -657,7 +657,7 @@ fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
     let mut record = rig.placed_record();
     record.installed.insert(
         "web".to_owned(),
-        hostkeeper_placed::InstalledEntry::new("macos-pkg"),
+        hostkeeper_placed::InstalledEntry::new("oci-image"),
     );
     rig.save_placed(&record);
     let reply = daemon.order(&uninstall("web", 1));
@@ -666,7 +666,7 @@ fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
         Reply::Interrupted {
             refusal: Refusal::LinkFailed,
             detail:
-                "web is installed by the installer \"macos-pkg\", which this daemon has no steps of"
+                "web is installed by the installer \"oci-image\", which this daemon has no steps of"
                     .to_owned(),
         }
     );

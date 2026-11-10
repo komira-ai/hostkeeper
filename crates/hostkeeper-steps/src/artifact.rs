@@ -15,7 +15,7 @@
 //!
 //! # The tree digest
 //!
-//! [`tree_digest`] is a public format (docs/package-format.md): the seal of every unpacked
+//! [`tree_digest`] is a public format (docs/tree-digest.md): the seal of every unpacked
 //! package holds it, and a later release recomputes it. It is the lower-case hex SHA-256 of one
 //! record per entry below the tree (the tree itself is not an entry), in the byte order of the
 //! entries' full relative names (`bin`, `bin/x`, `manifest.toml`, ...; `/` separates names):

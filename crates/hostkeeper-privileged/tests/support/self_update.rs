@@ -185,6 +185,7 @@ fn entry_of(published: &Published) -> Target {
         run: vec![UNIT_FILE.to_owned()],
         health_url: None,
         params: std::collections::BTreeMap::new(),
+        hook_command: Vec::new(),
         steps: StepBounds {
             prepare: 600,
             cutover: 300,

@@ -2,7 +2,7 @@
 //! the index, simulate, download, install, hold, query and purge, the layout of the work
 //! directory and of the version directory's copy, and how the commands' output maps onto
 //! section 4.5's reasons. The installer kind ([`super::RepositoryInstaller`]) runs them in its
-//! order, with its records, its lock, its tree checks and its enablement, the same for every
+//! order, with its records, its lock, its tree and its enablement, the same for every
 //! manager; [`super::apt::Apt`] is the backend designed here, and a `dnf` backend (A8) is the
 //! next.
 
@@ -104,19 +104,6 @@ pub trait Backend: Send + Sync {
 
     /// The control fields of the package file `file`.
     fn fields(&self, tools: &dyn Tools, file: &Path, bound: u64) -> Result<Fields, Failure>;
-
-    /// The names of the package's control members (its scripts among them), extracted into the
-    /// empty directory `into`, in order.
-    fn control_members(
-        &self,
-        tools: &dyn Tools,
-        file: &Path,
-        into: &Path,
-        bound: u64,
-    ) -> Result<Vec<String>, Failure>;
-
-    /// The control members a service's package may carry: no script.
-    fn allowed_members(&self) -> &'static [&'static str];
 
     /// Extracts the package's files into the empty directory `tree`, running no script.
     fn extract(

@@ -36,7 +36,7 @@ fn order_of(entry: Option<&Target>) -> Result<Order, Failure> {
 }
 
 /// Catches: A6's stage order read with another identifier, other jobs, other bounds or another
-/// `boot` than its entry's manifest gives.
+/// hook program than its entry's manifest gives.
 #[test]
 fn the_order_is_read_from_the_stage_orders_entry() {
     let mut order = Rig::new("order-of").order_run("1.0", &BOTH);
@@ -46,14 +46,38 @@ fn the_order_is_read_from_the_stage_orders_entry() {
         remove: Duration::from_secs(30),
     };
     assert_eq!(order_of(Some(&entry())).unwrap(), order);
-    let mut booted = entry();
-    if let Some(manifest) = booted.manifest.as_mut() {
+    assert_eq!(order_of(Some(&entry())).unwrap().hook, None);
+    let hooked = |command: &[&str]| {
+        let mut hooked = entry();
+        if let Some(manifest) = hooked.manifest.as_mut() {
+            manifest.hook = Some(Hook {
+                command: command.iter().map(|word| (*word).to_owned()).collect(),
+                ..Hook::default()
+            });
+        }
+        hooked
+    };
+    let order = order_of(Some(&hooked(&["/usr/local/bin/svc", "update-hook"]))).unwrap();
+    assert_eq!(order.hook.as_deref(), Some("/usr/local/bin/svc"));
+    assert_eq!(order_of(Some(&hooked(&[]))).unwrap().hook, None);
+}
+
+/// Catches: a hook command whose program is not an absolute path being read as an order.
+#[test]
+fn a_relative_hook_program_is_manifest_invalid() {
+    let mut relative = entry();
+    if let Some(manifest) = relative.manifest.as_mut() {
         manifest.hook = Some(Hook {
-            boot: Some("check".into()),
+            command: vec!["bin/svc".into()],
             ..Hook::default()
         });
     }
-    assert!(order_of(Some(&booted)).unwrap().boot);
+    let err = order_of(Some(&relative)).unwrap_err();
+    assert_eq!(err.reason(), Reason::ManifestInvalid);
+    assert_eq!(
+        err.detail(),
+        "the hook command's program \"bin/svc\" is not an absolute path"
+    );
 }
 
 /// Catches: an order with no entry, or an entry naming a repository, a package version or an
@@ -537,18 +561,24 @@ fn stage_refuses_each_shape_defect_as_manifest_invalid_and_changes_nothing() {
     }
 }
 
-/// Catches: a package carrying a script that `installer` would run as root (a `Scripts` archive
-/// in its component or beside it, a `preinstall` or `postinstall` in its `PackageInfo`, a
-/// payload-free package with scripts) being staged, or refused for its shape (`manifest_invalid`)
-/// rather than as `package_scripts`, or after its `Bom` is read.
+/// Proves a package carrying scripts (a `Scripts` archive in its component or beside it, any
+/// script element in its `PackageInfo`, a payload-free package with scripts) stages: nothing
+/// about its scripts is examined, and none runs at `stage`.
 #[test]
-fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_changes_nothing() {
-    let scripts = "<scripts><preinstall file=\"./preinstall\"/></scripts>";
-    let cases: Vec<(&str, FakePkg, &str)> = vec![
+fn stage_accepts_a_package_with_scripts_and_runs_none() {
+    let element = |name: &str| {
+        tweak(|p| {
+            p.package_info = info_with(
+                p,
+                "<scripts/>",
+                &format!("<scripts><{name} file=\"./{name}\"/></scripts>"),
+            )
+        })
+    };
+    let cases: Vec<(&str, FakePkg)> = vec![
         (
             "a Scripts archive in the component",
             tweak(|p| p.component_extras = vec!["Scripts".into()]),
-            "the package carries a script: the component holds \"Scripts\"",
         ),
         (
             "a Scripts archive in a product archive's component",
@@ -556,7 +586,6 @@ fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_c
                 p.product = true;
                 p.component_extras = vec!["Scripts".into()];
             }),
-            "the package carries a script: the component holds \"Scripts\"",
         ),
         (
             "a Scripts archive beside the component",
@@ -564,86 +593,64 @@ fn stage_refuses_a_package_with_a_script_as_package_scripts_before_its_bom_and_c
                 p.product = true;
                 p.extras = vec!["Scripts".into()];
             }),
-            "the package carries a script: the product archive holds \"Scripts\"",
         ),
+        ("a preinstall in the PackageInfo", element("preinstall")),
+        ("a postinstall in the PackageInfo", element("postinstall")),
+        ("a preupgrade in the PackageInfo", element("preupgrade")),
+        ("a postupgrade in the PackageInfo", element("postupgrade")),
         (
-            "a preinstall in the PackageInfo",
-            tweak(|p| p.package_info = info_with(p, "<scripts/>", scripts)),
-            "the package carries a script: the PackageInfo has a <preinstall> element",
-        ),
-        (
-            "a postinstall in the PackageInfo",
+            "a postinstall file and its element",
             tweak(|p| {
+                p.component_extras = vec!["Scripts".into()];
+                p.script_files = vec!["postinstall".into()];
                 p.package_info = info_with(
                     p,
                     "<scripts/>",
                     "<scripts><postinstall file=\"./postinstall\"/></scripts>",
-                )
+                );
             }),
-            "the package carries a script: the PackageInfo has a <postinstall> element",
-        ),
-        (
-            "a payload-free package with scripts",
-            tweak(|p| {
-                p.has_payload = false;
-                p.component_extras = vec!["Scripts".into()];
-            }),
-            "the package carries a script: the component holds \"Scripts\"",
         ),
     ];
-    for (what, pkg, detail) in cases {
+    for (what, pkg) in cases {
         let rig = Rig::new("stage-scripts");
         rig.mac.add(pkg);
-        let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
-        let err = result.unwrap_err();
-        assert_eq!(err.reason(), Reason::PackageScripts, "{what}: {err}");
-        assert_eq!(err.reason().class(), Class::Release);
-        assert_eq!(err.reason().outcome(), Outcome::Failed);
-        assert_eq!(err.detail(), detail, "{what}");
-        assert!(
-            rig.mac.calls_of(Tool::Lsbom).is_empty(),
-            "{what}: the Bom was not read"
-        );
-        assert!(rig.snapshot().is_empty(), "{what}");
-        assert!(rig.records.all().is_empty());
+        let (result, staging) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+        result.unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(staging.join("tree").is_dir(), "{what}");
         no_install_ran(&rig);
     }
 }
 
-/// Catches: a hook at the fixed path that is a directory or not executable, or a `hook.boot`
-/// with no hook in the package, being staged; or a package with an executable hook, with or
-/// without `hook.boot`, being refused. (A hook that is a link is `hook`'s unit test: on Linux a
-/// link's mode is 777, which the payload's mode rule refuses before the hook is looked at; on a
-/// Mac a link is 755 and reaches the hook check.)
+/// Proves the hook program the order names is checked in the package: one that the payload lacks,
+/// that is a directory or that is not executable is `manifest_invalid` naming the program (the
+/// text of `ProgramError`), and nothing is staged; an executable regular file, also one reached
+/// through a link of the package, stages.
 #[test]
-fn stage_checks_the_hook_at_its_fixed_path() {
-    let hook = home("hostkeeper-hook");
+fn stage_checks_the_hook_program_the_manifest_names() {
+    let hook = home("bin/hook");
     let program = || Content::File(b"#!/bin/sh\nexit 0\n".to_vec());
-    let refused: Vec<(&str, FakePkg, bool, String)> = vec![
+    let refused: Vec<(&str, FakePkg, String)> = vec![
+        (
+            "missing",
+            v1(),
+            format!("{hook} is not a file the package installs"),
+        ),
         (
             "a directory",
-            with_entry(&hook, Content::Dir, 0o755, &[]),
-            false,
-            format!("the hook {hook} is a directory"),
+            with_entry(&hook, Content::Dir, 0o755, &[&home("bin")]),
+            format!("{hook} is not a regular file in the package"),
         ),
         (
             "not executable",
-            with_entry(&hook, program(), 0o644, &[]),
-            false,
-            format!("the hook {hook} is not executable (mode 644)"),
-        ),
-        (
-            "hook.boot with no hook",
-            v1(),
-            true,
-            format!("the entry's hook.boot is set, but the package has no hook at {hook}"),
+            with_entry(&hook, program(), 0o644, &[&home("bin")]),
+            format!("{hook} is not executable in the package"),
         ),
     ];
-    for (what, pkg, boot, detail) in refused {
+    for (what, pkg, detail) in refused {
         let rig = Rig::new("stage-hook");
         rig.mac.add(pkg);
         let mut order = rig.order_run("1.0", &BOTH);
-        order.boot = boot;
+        order.hook = Some(hook.clone());
         let (result, _) = rig.try_stage(&order, "svc-1.0");
         let err = result.unwrap_err();
         assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
@@ -651,16 +658,21 @@ fn stage_checks_the_hook_at_its_fixed_path() {
         assert!(rig.snapshot().is_empty(), "{what}");
         no_install_ran(&rig);
     }
-    for boot in [false, true] {
-        let rig = Rig::new("stage-hook-ok");
-        rig.mac.add(with_entry(&hook, program(), 0o755, &[]));
-        let mut order = rig.order_run("1.0", &BOTH);
-        order.boot = boot;
-        let (result, staging) = rig.try_stage(&order, "svc-1.0");
-        result.unwrap();
-        let staged = staging.join("tree").join(hook.trim_start_matches('/'));
-        assert!(staged.is_file(), "boot {boot}: the hook is in the tree");
-    }
+    let rig = Rig::new("stage-hook-ok");
+    rig.mac
+        .add(with_entry(&hook, program(), 0o755, &[&home("bin")]));
+    let mut order = rig.order_run("1.0", &BOTH);
+    order.hook = Some(hook.clone());
+    let (result, staging) = rig.try_stage(&order, "svc-1.0");
+    result.unwrap();
+    let staged = staging.join("tree").join(hook.trim_start_matches('/'));
+    assert!(staged.is_file(), "the hook is in the tree");
+
+    let rig = Rig::new("stage-hook-none");
+    rig.mac.add(v1());
+    rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0")
+        .0
+        .unwrap();
 }
 
 /// Catches: the `PackageInfo` `pkgbuild` writes (its empty `<relocate/>` and `<scripts/>`) being
@@ -688,8 +700,7 @@ fn with_entry(rel_path: &str, content: Content, mode: u32, dirs: &[&str]) -> Fak
 }
 
 /// Catches: a payload the `Bom` does not describe, or an entry a service's package may not
-/// install (setuid, setgid, sticky, group or other writable, a fifo, a path of another
-/// service, of `/usr/local` or of an unlisted job), being staged.
+/// install (setuid, setgid, sticky, group or other writable, a fifo), being staged.
 #[test]
 fn stage_refuses_each_payload_defect_as_manifest_invalid_and_changes_nothing() {
     let file = |mode| with_entry(&home("f"), Content::File(b"x".to_vec()), mode, &[]);
@@ -752,6 +763,23 @@ fn stage_refuses_each_payload_defect_as_manifest_invalid_and_changes_nothing() {
             "a fifo",
             with_entry(&home("pipe"), Content::Fifo, 0o644, &[]),
         ),
+    ];
+    for (what, pkg) in cases {
+        let rig = Rig::new("stage-payload");
+        rig.mac.add(pkg);
+        let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+        let err = result.unwrap_err();
+        assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
+        assert!(rig.snapshot().is_empty(), "{what}");
+        no_install_ran(&rig);
+    }
+}
+
+/// Proves the paths of a package are its own to choose: files under `/usr/local`, in another
+/// service's directory and a plist of a job the order does not run stage.
+#[test]
+fn stage_accepts_a_payload_at_any_path() {
+    let cases: Vec<(&str, FakePkg)> = vec![
         (
             "a path under /usr/local",
             with_entry(
@@ -781,12 +809,11 @@ fn stage_refuses_each_payload_defect_as_manifest_invalid_and_changes_nothing() {
         ),
     ];
     for (what, pkg) in cases {
-        let rig = Rig::new("stage-payload");
+        let rig = Rig::new("stage-any-path");
         rig.mac.add(pkg);
-        let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
-        let err = result.unwrap_err();
-        assert_eq!(err.reason(), Reason::ManifestInvalid, "{what}: {err}");
-        assert!(rig.snapshot().is_empty(), "{what}");
+        let (result, staging) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+        result.unwrap_or_else(|e| panic!("{what}: {e}"));
+        assert!(staging.join("tree").is_dir(), "{what}");
         no_install_ran(&rig);
     }
 }
@@ -826,7 +853,7 @@ fn stage_refuses_an_entry_of_another_group_or_another_owner() {
     }
 }
 
-/// Catches: a `run` label whose job plist is missing, has another `Label`, is not `Disabled`
+/// Catches: a `run` label whose job plist is missing, has another `Label`
 /// or runs a program the payload lacks being staged.
 #[test]
 fn stage_refuses_each_job_defect_as_manifest_invalid_and_changes_nothing() {
@@ -839,17 +866,6 @@ fn stage_refuses_each_job_defect_as_manifest_invalid_and_changes_nothing() {
         (
             "another Label",
             v1().plist("svc.worker", &job_plist("other", &program, Some(true))),
-        ),
-        (
-            "no Disabled",
-            v1().plist("svc.worker", &job_plist("svc.worker", &program, None)),
-        ),
-        (
-            "Disabled false",
-            v1().plist(
-                "svc.worker",
-                &job_plist("svc.worker", &program, Some(false)),
-            ),
         ),
         (
             "a program the payload lacks",
@@ -870,6 +886,23 @@ fn stage_refuses_each_job_defect_as_manifest_invalid_and_changes_nothing() {
         assert_eq!(reason(result), Reason::ManifestInvalid, "{what}");
         assert!(rig.snapshot().is_empty(), "{what}");
         no_install_ran(&rig);
+    }
+}
+
+/// Proves a job plist needs no `Disabled` key: one that is absent, false or true stages.
+#[test]
+fn stage_accepts_a_job_whatever_its_disabled_key() {
+    let program = format!("{HOME}/svc");
+    for (what, disabled) in [
+        ("absent", None),
+        ("false", Some(false)),
+        ("true", Some(true)),
+    ] {
+        let rig = Rig::new("stage-job-disabled");
+        rig.mac
+            .add(v1().plist("svc.worker", &job_plist("svc.worker", &program, disabled)));
+        let (result, _) = rig.try_stage(&rig.order_run("1.0", &BOTH), "svc-1.0");
+        result.unwrap_or_else(|e| panic!("{what}: {e}"));
     }
 }
 
@@ -895,5 +928,32 @@ fn stage_reports_io_error_when_the_staging_directory_cannot_take_its_files() {
             &staging,
         );
         assert_eq!(reason(result), Reason::IoError, "{what}");
+    }
+}
+
+/// Catches: a `macos-pkg` failure reported by the daemon under another token, class, outcome or
+/// detail than the installer gave it, once it is read as the repository installer's failure
+/// (the daemon reports both kinds through one path). Every reason maps to the reason of the
+/// same token.
+#[test]
+fn every_macos_pkg_failure_reads_as_the_repository_failure_of_its_token() {
+    use hostkeeper_install::repository;
+    for reason in Reason::ALL {
+        let read = repository::Failure::from(Failure::new(reason, "the detail"));
+        assert_eq!(read.reason().token(), reason.token());
+        assert_eq!(read.detail(), "the detail");
+        assert_eq!(
+            read.reason().class().token(),
+            match reason.class() {
+                Class::Release => "release",
+                Class::Environment => "environment",
+            },
+            "{reason:?}"
+        );
+        assert_eq!(
+            read.reason().outcome() == repository::Outcome::Deferred,
+            reason.outcome() == Outcome::Deferred,
+            "{reason:?}"
+        );
     }
 }

@@ -27,12 +27,17 @@
 //! | the verifier is unavailable or out of time | `Deferred`, `environment`, `attestation_unavailable` |
 //! | the verifier rejects the attestation | `Failure`, `release`, `not_attested` |
 //!
+//! [`fetch_pinned`] is the artifact half alone (the rows of the table that name the artifact, and
+//! no bundle is asked for), for an entry with no attestation: it gives a [`Pinned`], the staging
+//! file with the entry's size and SHA-256, to the `macos-pkg` installer, which checks the
+//! package's signature itself.
+//!
 //! The staging files are the ones of the channel path: `packages/<service>/.fetch-<pid>-<n>`,
 //! the bundle's ending in `.json`; orphans are removed first, and every refusal removes them all.
 //! The proof is [`crate::prove`]'s: the bundle is read for its commit and ref, and the verifier
 //! has `attestation_timeout_secs` from the start of the proof.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use hostkeeper_config::daemon::{Bounds, Sha256Hex, TrustedSigners};
 use hostkeeper_config::names::ServiceName;
@@ -66,6 +71,31 @@ pub struct EntryEnv<'a> {
     pub packages_root: &'a Path,
     pub signers: &'a TrustedSigners,
     pub platform: Platform,
+}
+
+/// What a fetch of an entry's artifact by its pin alone ([`fetch_pinned`]) needs: the network, the
+/// clock, the config's bounds, the host's stores and where packages live. No verifier and no
+/// trusted signer: nothing is proven.
+#[derive(Clone, Copy)]
+pub struct PinnedEnv<'a> {
+    pub fetcher: &'a dyn Fetcher,
+    pub clock: &'a dyn Clock,
+    pub bounds: &'a Bounds,
+    pub stores: &'a Stores,
+    pub packages_root: &'a Path,
+}
+
+impl<'a> EntryEnv<'a> {
+    /// The part of this environment a fetch by pin alone uses.
+    pub fn pinned(&self) -> PinnedEnv<'a> {
+        PinnedEnv {
+            fetcher: self.fetcher,
+            clock: self.clock,
+            bounds: self.bounds,
+            stores: self.stores,
+            packages_root: self.packages_root,
+        }
+    }
 }
 
 /// An entry's artifact, whose size and SHA-256 are the entry's and which the trusted signer
@@ -110,9 +140,8 @@ pub(crate) fn fetch_entry_with(
     entry: &Target,
     writer: OpenWriter,
 ) -> Result<Proven, PackageFailure> {
-    let artifact_digest = Sha256Hex::parse(&entry.digest)
-        .filter(|_| (1..=env.bounds.max_package_bytes).contains(&entry.bytes))
-        .ok_or(PackageFailure::release(PACKAGE_DIGEST_MISMATCH))?;
+    let pin = env.pinned();
+    let artifact_digest = artifact_digest(&pin, entry)?;
     let blob = entry
         .attestation
         .as_ref()
@@ -121,21 +150,16 @@ pub(crate) fn fetch_entry_with(
     let bundle_digest =
         Sha256Hex::parse(&blob.digest).ok_or(PackageFailure::release(NOT_ATTESTED))?;
 
-    let dir = env.packages_root.join(service.as_str());
-    stage::make_dir(&dir).map_err(|e| failure(Fault::Storage(e)))?;
-    remove_orphan_fetches(env.packages_root, service).map_err(|e| failure(Fault::Storage(e)))?;
-
+    let dir = staging_dir(&pin, service)?;
     let mut other_bytes = Vec::new();
-    let artifact = Want {
-        digest: &artifact_digest,
-        bytes: entry.bytes,
-        locations: &entry.locations,
-        timeout_secs: env.bounds.fetch_timeout_secs,
-        suffix: "",
-        wrong: PackageFailure::release(PACKAGE_DIGEST_MISMATCH),
-        down: PackageFailure::deferred(FETCH_FAILED),
-    };
-    let archive = fetch_blob(env, &dir, &artifact, writer, &mut other_bytes)?;
+    let archive = fetch_artifact(
+        &pin,
+        &dir,
+        &artifact_digest,
+        entry,
+        writer,
+        &mut other_bytes,
+    )?;
     let bundle = Want {
         digest: &bundle_digest,
         bytes: blob.bytes,
@@ -146,7 +170,7 @@ pub(crate) fn fetch_entry_with(
         wrong: PackageFailure::release(NOT_ATTESTED),
         down: PackageFailure::deferred(ATTESTATION_UNAVAILABLE),
     };
-    let bundle = fetch_blob(env, &dir, &bundle, writer, &mut other_bytes)?;
+    let bundle = fetch_blob(&pin, &dir, &bundle, writer, &mut other_bytes)?;
 
     let proof = Stamp::now(env.clock);
     let deadline = after(&proof, env.bounds.attestation_timeout_secs);
@@ -166,6 +190,92 @@ pub(crate) fn fetch_entry_with(
     let archive = attest(&prove, subject, bundle.file.path(), &deadline)?;
     Ok(Proven {
         archive,
+        other_bytes,
+    })
+}
+
+/// The digest of `entry`'s artifact, when it and the entry's size are ones a fetch can ask for.
+fn artifact_digest(env: &PinnedEnv<'_>, entry: &Target) -> Result<Sha256Hex, PackageFailure> {
+    Sha256Hex::parse(&entry.digest)
+        .filter(|_| (1..=env.bounds.max_package_bytes).contains(&entry.bytes))
+        .ok_or(PackageFailure::release(PACKAGE_DIGEST_MISMATCH))
+}
+
+/// The service's directory under the packages root, made if need be, with the orphans of earlier
+/// fetches removed.
+fn staging_dir(env: &PinnedEnv<'_>, service: &ServiceName) -> Result<PathBuf, PackageFailure> {
+    let dir = env.packages_root.join(service.as_str());
+    stage::make_dir(&dir).map_err(|e| failure(Fault::Storage(e)))?;
+    remove_orphan_fetches(env.packages_root, service).map_err(|e| failure(Fault::Storage(e)))?;
+    Ok(dir)
+}
+
+/// Downloads `entry`'s artifact, whose SHA-256 is `digest`, into a staging file in `dir`.
+fn fetch_artifact(
+    env: &PinnedEnv<'_>,
+    dir: &Path,
+    digest: &Sha256Hex,
+    entry: &Target,
+    writer: OpenWriter,
+    other_bytes: &mut Vec<String>,
+) -> Result<Download, PackageFailure> {
+    let artifact = Want {
+        digest,
+        bytes: entry.bytes,
+        locations: &entry.locations,
+        timeout_secs: env.bounds.fetch_timeout_secs,
+        suffix: "",
+        wrong: PackageFailure::release(PACKAGE_DIGEST_MISMATCH),
+        down: PackageFailure::deferred(FETCH_FAILED),
+    };
+    fetch_blob(env, dir, &artifact, writer, other_bytes)
+}
+
+/// An entry's artifact fetched by its pin alone: the staging file holds the bytes with the
+/// entry's size and SHA-256, and nothing says who made them. It is removed when this is dropped.
+#[derive(Debug)]
+pub struct Pinned {
+    file: stage::TempFile,
+    sha256: Sha256Hex,
+    size: u64,
+    /// The store of each source that gave bytes other than the expected ones, in the order asked,
+    /// each once. The caller logs `store_digest_mismatch` for each.
+    pub other_bytes: Vec<String>,
+}
+
+impl Pinned {
+    /// The staging file.
+    pub fn path(&self) -> &Path {
+        self.file.path()
+    }
+
+    /// The artifact's SHA-256, which is the entry's.
+    pub fn sha256(&self) -> &Sha256Hex {
+        &self.sha256
+    }
+
+    /// The artifact's size in bytes, which is the entry's.
+    pub fn size(&self) -> u64 {
+        self.size
+    }
+}
+
+/// Fetches the artifact `entry` names, for `service`, by its pin alone: the artifact half of
+/// [`fetch_entry`] (the same refusals, sources and staging files), with no bundle asked for and
+/// no attestation read. The caller holds the service's lock (see [`remove_orphan_fetches`]).
+pub fn fetch_pinned(
+    env: &PinnedEnv<'_>,
+    service: &ServiceName,
+    entry: &Target,
+) -> Result<Pinned, PackageFailure> {
+    let digest = artifact_digest(env, entry)?;
+    let dir = staging_dir(env, service)?;
+    let mut other_bytes = Vec::new();
+    let got = fetch_artifact(env, &dir, &digest, entry, stage::plain, &mut other_bytes)?;
+    Ok(Pinned {
+        file: got.file,
+        sha256: digest,
+        size: got.size,
         other_bytes,
     })
 }
@@ -204,7 +314,7 @@ fn sources<'a>(stores: &'a Stores, digest: &Sha256Hex, locations: &[Location]) -
 /// Downloads the blob `want` into a staging file in `dir` from the first source that gives its
 /// size and SHA-256, and notes in `other_bytes` the store of each source that gave other bytes.
 fn fetch_blob(
-    env: &EntryEnv<'_>,
+    env: &PinnedEnv<'_>,
     dir: &Path,
     want: &Want<'_>,
     writer: OpenWriter,

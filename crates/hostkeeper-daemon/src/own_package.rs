@@ -39,7 +39,9 @@
 //! package installed whole at the version it runs, no record of hostkeeper's installer and no
 //! version of hostkeeper in the packages directory, holds the package and records it as
 //! installed by `apt`. It is not drift, and nothing but hostkeeper replaces `/usr/bin/hostkeeper`
-//! from then on. A Mac adopts nothing yet: no daemon runs `macos-pkg`'s steps.
+//! from then on. A Mac adopts nothing: its bootstrap install (the `.pkg` its MDM or operator
+//! installed) has a receipt and no record, so the first update of hostkeeper through
+//! `macos-pkg` finds it as drift, installs over it and ends `Succeeded`, `drift_repaired`.
 
 use std::io;
 use std::path::Path;
@@ -56,7 +58,7 @@ use hostkeeper_steps::record::{Activated, Loaded};
 use crate::executor::Ctx;
 use crate::installed::{self, CURRENT};
 pub use crate::repository::DEFER_SECS;
-use crate::repository::backend_of_entry;
+use crate::repository::native_of_entry;
 use crate::target;
 use crate::verbs::force::SELF_SERVICE;
 
@@ -163,7 +165,7 @@ fn activate(ctx: &Ctx, service: &ServiceName, version: &str) -> OwnActivate {
         .join(service.as_str())
         .join(version.as_str());
     match target::read(&dir) {
-        Ok(Some(entry)) if backend_of_entry(&entry).is_some() => {
+        Ok(Some(entry)) if native_of_entry(&entry).is_some() => {
             native(ctx, service, &version, &dir, &entry)
         }
         Ok(Some(_) | None) | Err(_) => unreadable(),

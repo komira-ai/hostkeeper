@@ -114,7 +114,7 @@ store and its `approve` command, the account checks, the per-service signer and 
 digest are recorded in the paragraphs above.
 
 The tree digest of `hostkeeper-steps` (`tree_digest`, which `Staged` and the step record hold)
-is now the package format of `docs/package-format.md`: kind, name, mode, size and bytes, no owner
+is now the package format of `docs/tree-digest.md`: kind, name, mode, size and bytes, no owner
 and no times, and a tree with a link has none. kbf's format, imported at first, hashed owners and
 links. No release of hostkeeper wrote a record with the earlier digest; a record that holds one
 is another update to the runner (`Busy` while it is unfinished, so no step runs from it; a new

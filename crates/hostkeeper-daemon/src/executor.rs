@@ -36,6 +36,7 @@ use crate::installed::{self, CURRENT, Lifecycle};
 use crate::locks::{Held, Package, ServiceGuard, ServiceLocks, StepLock};
 use crate::node::NodeState;
 use crate::observer;
+use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::repository::{Repository, RepositoryPorts};
@@ -60,6 +61,8 @@ pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct Ports {
     /// Runs one step of a hook.
     pub launcher: Arc<dyn StepLauncher>,
+    /// Fetches the artifact of a `macos-pkg` entry by its pin.
+    pub packages: Arc<dyn Packages>,
     /// Monotonic seconds and the boot id; nothing the daemon decides reads the wall clock.
     pub clock: Arc<dyn Clock>,
     /// How often each service's dead-man looks at its running step, in seconds; `None` starts
@@ -113,6 +116,7 @@ pub struct Ctx {
     /// The version of this daemon, which a manifest's `min_hostkeeper` is compared with.
     pub own_version: HostkeeperVersion,
     pub launcher: Arc<dyn StepLauncher>,
+    pub packages: Arc<dyn Packages>,
     pub clock: Arc<dyn Clock>,
     pub units: Arc<dyn UnitControl + Send + Sync>,
     pub placement: Placement,
@@ -253,6 +257,7 @@ impl Ctx {
         Repository {
             launcher: Arc::clone(&self.launcher),
             ports: Arc::clone(&self.repository_ports),
+            packages: Arc::clone(&self.packages),
             clock: Arc::clone(&self.clock),
             roots: self.placement.roots.clone(),
             fs: Arc::clone(&self.placement.fs),
@@ -615,6 +620,7 @@ impl Daemon {
                 dirs,
                 own_version,
                 launcher: ports.launcher,
+                packages: ports.packages,
                 clock: ports.clock,
                 units: ports.units,
                 placement: ports.placement,

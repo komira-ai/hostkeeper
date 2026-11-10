@@ -5,7 +5,7 @@
 //! The coordinator picks an entry by the equality of installer names and takes any name of the
 //! grammar ([`crate::grammar::is_installer_name`]), since no daemon lists a name it does not know.
 //! It asks this list one thing: whether an entry's installer is native ([`Installer::is_native`],
-//! packages-native.md section 10), for the hook of a native entry, a `macos-pkg` entry's
+//! packages-native.md section 10), for the program of a native entry's hook, a `macos-pkg` entry's
 //! attestation and hostkeeper's own list. The daemon applies the rules of the entry's installer.
 
 use std::fmt;
@@ -53,9 +53,9 @@ impl Installer {
     }
 
     /// Whether it installs the platform's own package (packages-native.md section 10.1): a
-    /// `.deb` through `apt`, a signed `.pkg` through `macos-pkg`. A native package's hook is its
-    /// program at a fixed path, so its entry names no `hook.command`; and the service `hostkeeper` is set with one native
-    /// entry per list.
+    /// `.deb` through `apt`, a signed `.pkg` through `macos-pkg`. A native entry's
+    /// `hook.command` is empty (the built-in steps) or names, by an absolute path, a program the
+    /// package installs; and the service `hostkeeper` is set with one native entry per list.
     pub const fn is_native(self) -> bool {
         matches!(self, Installer::Apt | Installer::MacosPkg)
     }

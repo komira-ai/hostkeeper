@@ -1,11 +1,11 @@
 //! The rules of a native entry (packages-native.md sections 10.2 to 10.4, build item A18): which
-//! installers are native, the hook of a native entry (no `hook.command`, and `hook.boot` without
-//! one), a `macos-pkg` entry with no attestation, and the list of the service `hostkeeper`, one
+//! installers are native, the hook of a native entry (an empty `hook.command`, or an absolute
+//! program of the package; `hook.boot` needs a command for every installer), a `macos-pkg` entry with no attestation, and the list of the service `hostkeeper`, one
 //! native entry and no `hostkeeper-archive` entry after it. Each is judged by the
 //! coordinator (`target::check`, `target::check_entry`) and, where it is a manifest's, by the
 //! daemon (`manifest::check_for`) the same way.
 
-use hostkeeper_config::names::ServiceName;
+use hostkeeper_config::names::{PathError, ServiceName};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Blob, Hook, Manifest, Target, TargetList};
 use hostkeeper_release::manifest::{self, ManifestError};
@@ -13,7 +13,8 @@ use hostkeeper_release::target::{self, EntryError, TargetError, is_native_entry}
 use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 
 use crate::support::{
-    LINUX, digest, entry, location, named, platform_of, repository_entry, targets, unlisted, web,
+    LINUX, digest, entry, hook, location, manifest, named, platform_of, repository_entry, targets,
+    unlisted, web,
 };
 
 /// The installers whose entries are native: the platform's own package format.
@@ -75,69 +76,114 @@ fn the_native_installers_are_apt_and_macos_pkg() {
     assert!(is_native_entry(&artifact_apt));
 }
 
-/// Catches: a native entry passing with a hook program, which would let the caller of
-/// `SetDesired` choose a program of the package to run as root, at the coordinator or at the
-/// daemon; or an empty command refused.
+/// Catches: a native entry whose hook names an absolute program of the package refused, at the
+/// coordinator or at the daemon, for `apt`, `macos-pkg` or a later `dnf` entry; or its leading
+/// arguments judged as paths.
 #[test]
-fn a_native_entry_names_no_hook_command() {
+fn a_native_entry_may_name_an_absolute_hook_program() {
     for installer in NATIVE {
-        assert_eq!(check_entry(&entry(installer)), Ok(()), "{installer}");
-        let commanded = with_hook(entry(installer), |hook| {
-            hook.command = vec!["usr/lib/web/hostkeeper-hook".to_owned()];
+        let hooked = with_hook(entry(installer), |hook| {
+            hook.command = vec!["/usr/bin/tierstore".to_owned(), "update-hook".to_owned()];
         });
-        let refused = ManifestError::NativeHookCommand;
-        assert_eq!(
-            check_entry(&commanded),
-            Err(EntryError::Manifest(refused.clone())),
-            "{installer}"
-        );
-        let manifest = commanded.manifest.expect("a manifest");
-        assert_eq!(check_for(installer, &manifest), Err(refused), "{installer}");
-        // The rules every manifest keeps do not know the installer, and take it.
+        assert_eq!(check_entry(&hooked), Ok(()), "{installer}");
+        let manifest = hooked.manifest.expect("a manifest");
+        assert_eq!(check_for(installer, &manifest), Ok(()), "{installer}");
+        // The program's shape needs the installer, so the rules every manifest keeps take it.
         assert_eq!(
             manifest::check(&web(), platform_of(installer), &manifest),
             Ok(()),
             "{installer}"
         );
     }
-    // A later repository backend's entry is held to it too.
     let later = with_hook(
         Target {
             installer: "dnf".to_owned(),
             ..repository_entry()
         },
-        |hook| hook.command = vec!["usr/lib/web/hostkeeper-hook".to_owned()],
+        |hook| hook.command = vec!["/usr/bin/tierstore".to_owned(), "update-hook".to_owned()],
     );
-    assert_eq!(
-        target::check_entry(&web(), LINUX, &later),
-        Err(EntryError::Manifest(ManifestError::NativeHookCommand))
-    );
-    assert_eq!(
-        ManifestError::NativeHookCommand.to_string(),
-        "hook.command is set on a native entry; a native package's hook is its program at its fixed path"
-    );
+    assert_eq!(target::check_entry(&web(), LINUX, &later), Ok(()));
+    // The arguments are the hook's own.
+    let args = with_hook(entry(Installer::Apt), |hook| {
+        hook.command = vec![
+            "/usr/bin/web".to_owned(),
+            "../x".to_owned(),
+            "y z".to_owned(),
+        ];
+    });
+    assert_eq!(check_entry(&args), Ok(()));
+    // A space is a path character of a native program: a `.pkg` installs under
+    // `/Library/Application Support/`.
+    let spaced = with_hook(entry(Installer::MacosPkg), |hook| {
+        hook.command = vec![
+            "/Library/Application Support/hello/bin/hello".to_owned(),
+            "update-hook".to_owned(),
+        ];
+    });
+    assert_eq!(check_entry(&spaced), Ok(()));
+    let manifest = spaced.manifest.expect("a manifest");
+    assert_eq!(check_for(Installer::MacosPkg, &manifest), Ok(()));
 }
 
-/// Catches: `hook.boot` refused on a native entry, whose hook is the package's program at its
-/// fixed path; or allowed with no program on any other entry, whose built-in steps have no
-/// boot step, at the coordinator or at the daemon.
+/// Catches: a native entry's hook program that is relative, has a dot segment or is not of the
+/// path grammar passing, or the refusal not naming the program and why; a native entry with no
+/// command (the built-in steps) refused.
 #[test]
-fn hook_boot_without_a_command_passes_for_a_native_entry_only() {
+fn a_native_hook_program_must_be_an_absolute_path_of_plain_names() {
+    for (bad, why) in [
+        ("bin/web", PathError::NotAbsolute),
+        ("../bin/web", PathError::NotAbsolute),
+        ("/usr/../bin/web", PathError::DotComponent),
+        ("/usr//bin/web", PathError::EmptyComponent),
+        ("/usr/bin/web\thook", PathError::BadChar('\t')),
+        ("/usr/bin/web;x", PathError::BadChar(';')),
+        ("-/usr/bin/web", PathError::SystemdPrefix('-')),
+    ] {
+        let refused = ManifestError::NativeHookProgram {
+            program: bad.to_owned(),
+            why: why.clone(),
+        };
+        for installer in NATIVE {
+            let commanded = with_hook(entry(installer), |hook| {
+                hook.command = vec![bad.to_owned(), "update-hook".to_owned()];
+            });
+            assert_eq!(
+                check_entry(&commanded),
+                Err(EntryError::Manifest(refused.clone())),
+                "{installer} {bad}"
+            );
+            let manifest = commanded.manifest.expect("a manifest");
+            assert_eq!(
+                check_for(installer, &manifest),
+                Err(refused.clone()),
+                "{installer} {bad}"
+            );
+        }
+    }
+    assert!(
+        ManifestError::NativeHookProgram {
+            program: "bin/web".to_owned(),
+            why: PathError::NotAbsolute,
+        }
+        .to_string()
+        .starts_with("hook.command names the program \"bin/web\", which ")
+    );
     for installer in NATIVE {
-        let booted = entry(installer);
-        let hook = booted
-            .manifest
-            .as_ref()
-            .and_then(|m| m.hook.as_ref())
-            .expect("a hook");
-        assert!(
-            hook.command.is_empty() && hook.boot.is_some(),
-            "{installer}"
-        );
-        assert_eq!(check_entry(&booted), Ok(()), "{installer}");
-        let manifest = booted.manifest.expect("a manifest");
+        let builtin = with_hook(entry(installer), |hook| {
+            hook.command.clear();
+            hook.boot = None;
+        });
+        assert_eq!(check_entry(&builtin), Ok(()), "{installer}");
+        let manifest = builtin.manifest.expect("a manifest");
         assert_eq!(check_for(installer, &manifest), Ok(()), "{installer}");
     }
+}
+
+/// Catches: `hook.boot` with no program passing for any installer (native too), at the
+/// coordinator or at the daemon, when the built-in steps have no boot step; or the same boot step
+/// refused when the program is there.
+#[test]
+fn hook_boot_without_a_command_is_refused_for_every_installer() {
     let without = |entry: Target| {
         with_hook(entry, |hook| {
             hook.command.clear();
@@ -145,15 +191,38 @@ fn hook_boot_without_a_command_passes_for_a_native_entry_only() {
         })
     };
     let refused = ManifestError::BootWithoutCommand("restore".to_owned());
-    for other in [unlisted("tarball"), named("deb")] {
+    for other in [
+        unlisted("tarball"),
+        named("deb"),
+        entry(Installer::Apt),
+        entry(Installer::MacosPkg),
+    ] {
         let name = other.installer.clone();
         assert_eq!(
             check_entry(&without(other.clone())),
             Err(EntryError::Manifest(refused.clone())),
             "{name}"
         );
-        // With a program the boot step is the hook's, as before.
+        // With a program the boot step is the hook's.
         assert_eq!(check_entry(&other), Ok(()), "{name}");
+    }
+    for installer in [Installer::Apt, Installer::MacosPkg] {
+        let mut m = manifest(installer);
+        m.hook = Some(Hook {
+            command: Vec::new(),
+            boot: Some("restore".to_owned()),
+            ..hook()
+        });
+        assert_eq!(
+            check_for(installer, &m),
+            Err(refused.clone()),
+            "{installer}"
+        );
+        assert_eq!(
+            manifest::check(&web(), platform_of(installer), &m),
+            Ok(()),
+            "{installer}"
+        );
     }
     assert_eq!(
         refused.to_string(),

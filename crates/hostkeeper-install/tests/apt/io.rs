@@ -16,7 +16,7 @@ fn assert_io(failure: &hostkeeper_install::repository::Failure) {
 }
 
 /// Proves a tool that cannot be run at all fails the stage with `io_error`, naming the tool,
-/// whichever of the stage's eight tools it is, and the host is unchanged.
+/// whichever of the stage's seven tools it is, and the host is unchanged.
 #[test]
 fn a_tool_that_cannot_run_fails_the_stage() {
     let labels = [
@@ -26,7 +26,6 @@ fn a_tool_that_cannot_run_fails_the_stage() {
         "apt-get simulate",
         "apt-get download",
         "dpkg-deb --field",
-        "dpkg-deb --control",
         "dpkg-deb --extract",
     ];
     for label in labels {
@@ -142,15 +141,11 @@ fn an_answer_the_installer_cannot_use_is_an_io_error() {
     assert_io(&failure);
 }
 
-/// Proves a package file or a control member list dpkg-deb cannot read is `manifest_invalid`: the
-/// control members and the extraction exit non-zero.
+/// Proves a package file dpkg-deb cannot read is `manifest_invalid`: the field read and the
+/// extraction exit non-zero.
 #[test]
 fn a_package_dpkg_deb_cannot_read_is_manifest_invalid() {
-    for label in [
-        "dpkg-deb --control",
-        "dpkg-deb --extract",
-        "dpkg-deb --field",
-    ] {
+    for label in ["dpkg-deb --extract", "dpkg-deb --field"] {
         let env = Env::new("apt-unreadable-deb");
         let order = env.publish(&deb(V1));
         env.host.answer(label, 0, Ok(ToolOutput::exit(2, "")));
@@ -320,17 +315,14 @@ fn a_staging_directory_that_cannot_be_written_is_an_io_error() {
 
     env.host
         .edit(|s| s.faults.litter = vec!["control".to_owned()]);
-    let failure = env
-        .installer()
+    env.installer()
         .stage(&order, &env.staging())
-        .expect_err("control exists");
-    assert_io(&failure);
-    assert!(failure.detail().starts_with("the control directory"));
+        .expect("a directory named control in the work directory is nothing to stage");
 }
 
 /// Proves a version directory that is missing is `io_error` at the activate, before anything is
-/// recorded or installed, and one whose tree lost the run unit is `manifest_invalid` after the
-/// install; an enablement directory that cannot be made is `io_error`; a service manager that
+/// recorded or installed, and one whose tree lost the run unit activates with no link for it; an
+/// enablement directory that cannot be made is `io_error`; a service manager that
 /// cannot reload is `io_error`.
 #[test]
 fn an_activate_over_a_damaged_version_directory_fails() {
@@ -345,8 +337,17 @@ fn an_activate_over_a_damaged_version_directory_fails() {
     assert!(env.records.saved().is_empty());
 
     std::fs::remove_file(dir.join("tree/usr/lib/systemd/system/mdm.service")).expect("removed");
-    let failure = env.installer().activate(&order, &dir).expect_err("no unit");
-    assert_eq!(failure.reason(), Reason::ManifestInvalid);
+    env.installer()
+        .activate(&order, &dir)
+        .expect("a run unit with no unit file activates");
+    assert!(
+        env.records
+            .saved()
+            .pop()
+            .expect("a record")
+            .links
+            .is_empty()
+    );
 
     let env = Env::new("apt-activate-links");
     let (order, dir) = env.staged(&deb(V1), &["mdm.service"]);

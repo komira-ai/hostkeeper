@@ -23,9 +23,10 @@ fn deb_of(version: &str, arch: &str) -> Vec<u8> {
 }
 
 fn stanza(version: &str, arch: &str, sha: &str) -> Stanza {
-    from_fields(&format!(
-        "Package: hostkeeper\nVersion: {version}\nArchitecture: {arch}\nSHA256: {sha}\n"
-    ))
+    from_fields(
+        &format!("Package: hostkeeper\nVersion: {version}\nArchitecture: {arch}\nSHA256: {sha}\n"),
+        Suite::Stable,
+    )
     .expect("stanza")
 }
 
@@ -45,8 +46,8 @@ fn versions(merged: &Merged) -> Vec<String> {
 #[test]
 fn the_packages_and_release_text_is_the_golden_form_the_shared_index_has() {
     // Catches: a format drift in the text of an index that other products' tools also write.
-    let amd = parse_packages(PACKAGES_AMD64).expect("amd64");
-    let arm = parse_packages(PACKAGES_ARM64).expect("arm64");
+    let amd = parse_packages(PACKAGES_AMD64, Suite::Stable).expect("amd64");
+    let arm = parse_packages(PACKAGES_ARM64, Suite::Stable).expect("arm64");
     assert_eq!((amd.len(), arm.len()), (2, 1));
     let (new_amd, old_amd) = (amd[0].clone(), amd[1].clone());
     let first = merge(&[], &[old_amd], 25).expect("first");
@@ -102,7 +103,7 @@ fn the_packages_and_release_text_is_the_golden_form_the_shared_index_has() {
 fn the_stanza_of_a_package_names_its_pool_file_its_size_and_the_sha256_of_its_bytes() {
     // Catches: an index entry that does not match the file, or a Description that is not last.
     let bytes = deb_of("1.2.3", "amd64");
-    let s = stanza_of(&bytes).expect("stanza");
+    let s = stanza_of(&bytes, Suite::Stable).expect("stanza");
     assert_eq!(
         (s.package.as_str(), s.version, s.architecture.as_str()),
         ("hostkeeper", (1, 2, 3), "amd64")
@@ -132,12 +133,13 @@ fn a_package_that_would_forge_its_entry_or_leave_the_pool_is_refused() {
     // Catches: a control file naming its own Filename, SHA256 or Size, a name or architecture
     // that is a path, a version that is not X.Y.Z, and a control file missing a field.
     let base = "Package: hostkeeper\nVersion: 1.2.3\nArchitecture: amd64\n";
-    assert!(stanza_of(&deb_with_control(base)).is_ok());
+    assert!(stanza_of(&deb_with_control(base), Suite::Stable).is_ok());
     // Debian's other name characters are names.
     assert!(
-        stanza_of(&deb_with_control(
-            "Package: lib2-host.keeper+x\nVersion: 1.2.3\nArchitecture: all\n"
-        ))
+        stanza_of(
+            &deb_with_control("Package: lib2-host.keeper+x\nVersion: 1.2.3\nArchitecture: all\n"),
+            Suite::Stable
+        )
         .is_ok()
     );
     for (control, why) in [
@@ -164,12 +166,12 @@ fn a_package_that_would_forge_its_entry_or_leave_the_pool_is_refused() {
             "cannot be a file",
         ),
     ] {
-        let e = stanza_of(&deb_with_control(&control))
+        let e = stanza_of(&deb_with_control(&control), Suite::Stable)
             .unwrap_err()
             .to_string();
         assert!(e.contains(why), "{control:?}: {e}");
     }
-    assert!(stanza_of(b"junk").is_err());
+    assert!(stanza_of(b"junk", Suite::Stable).is_err());
 }
 
 #[test]
@@ -181,9 +183,9 @@ fn a_packages_stanza_needs_its_name_version_architecture_and_checksum() {
         "Package: p\nVersion: 1.2.3\nArchitecture: amd64\n",
         "garbage\n",
     ] {
-        assert!(parse_packages(text).is_err(), "{text:?}");
+        assert!(parse_packages(text, Suite::Stable).is_err(), "{text:?}");
     }
-    assert!(parse_packages("").expect("empty").is_empty());
+    assert!(parse_packages("", Suite::Stable).expect("empty").is_empty());
 }
 
 #[test]
@@ -247,9 +249,10 @@ fn a_slot_the_merge_does_not_add_to_is_not_trimmed_to_keep() {
     // Catches: hostkeeper's publish dropping the older versions of another product's package
     // because the shared index lists more of them than hostkeeper's own `--keep`.
     let foreign = |v: u64| {
-        from_fields(&format!(
-            "Package: example\nVersion: 1.{v}.0\nArchitecture: amd64\nSHA256: e{v}\n"
-        ))
+        from_fields(
+            &format!("Package: example\nVersion: 1.{v}.0\nArchitecture: amd64\nSHA256: e{v}\n"),
+            Suite::Stable,
+        )
         .expect("foreign stanza")
     };
     let mut existing: Vec<Stanza> = (0..5).map(foreign).collect();
@@ -279,11 +282,16 @@ fn an_entry_of_another_product_outside_the_shared_format_refuses_the_index() {
     // for) being dropped or rewritten instead of refused, which the repository document promises.
     let revision = "Package: example\nVersion: 2.0.1-1\nArchitecture: amd64\nSHA256: z\n";
     assert_eq!(
-        parse_packages(revision).unwrap_err().to_string(),
+        parse_packages(revision, Suite::Stable)
+            .unwrap_err()
+            .to_string(),
         "version \"2.0.1-1\" is not X.Y.Z"
     );
-    let all = parse_packages("Package: example\nVersion: 2.0.1\nArchitecture: all\nSHA256: z\n")
-        .expect("parses");
+    let all = parse_packages(
+        "Package: example\nVersion: 2.0.1\nArchitecture: all\nSHA256: z\n",
+        Suite::Stable,
+    )
+    .expect("parses");
     let info = ReleaseInfo {
         origin: None,
         label: None,
@@ -301,6 +309,7 @@ fn another_products_entries_are_kept_untouched() {
     // Catches: the shared index losing a product when hostkeeper publishes.
     let other = from_fields(
         "Package: example\nVersion: 9.9.9\nArchitecture: amd64\nSHA256: z\nDescription: x\n",
+        Suite::Stable,
     )
     .expect("other");
     let merged = merge(

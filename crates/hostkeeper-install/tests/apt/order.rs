@@ -56,7 +56,8 @@ fn refused(target: &Target, reason: Reason) -> Failure {
 }
 
 /// Proves a good entry is accepted, and the order carries the entry's repository, package,
-/// version, pin, run units, boot step, params flag, bounds and the daemon's package limit.
+/// version, pin, run units, bounds and the daemon's package limit, and no hook program for an
+/// entry with no command; boot and params are not the order's (the built-in steps ignore them).
 #[test]
 fn a_good_entry_is_an_order() {
     let mut target = entry();
@@ -73,8 +74,7 @@ fn a_good_entry_is_an_order() {
     );
     assert_eq!(order.pin, PIN);
     assert_eq!(order.run, ["mdm.service"]);
-    assert_eq!(order.boot.as_deref(), Some("migrate"));
-    assert!(order.params);
+    assert_eq!(order.hook, None);
     assert_eq!(
         (
             order.bounds.stage,
@@ -87,7 +87,20 @@ fn a_good_entry_is_an_order() {
     assert_eq!(order.service.as_str(), "mdm");
     assert_eq!(order.version.as_str(), "1.4.0");
     let plain = self::order(&entry()).expect("accepted");
-    assert!(!plain.params & plain.boot.is_none());
+    assert_eq!(plain.hook, None);
+}
+
+/// Proves a hook command led by an absolute path is accepted, and the order carries the program,
+/// `command[0]`; the arguments after it are the daemon's.
+#[test]
+fn a_hook_command_led_by_an_absolute_path_is_carried() {
+    let mut target = entry();
+    manifest(&mut target).hook = Some(Hook {
+        command: vec!["/usr/bin/mdm".to_owned(), "update-hook".to_owned()],
+        ..Hook::default()
+    });
+    let order = order(&target).expect("accepted");
+    assert_eq!(order.hook.as_deref(), Some("/usr/bin/mdm"));
 }
 
 /// Proves an entry for another installer is `order_invalid`, and so is one that names an artifact
@@ -161,7 +174,7 @@ fn a_bad_pin_is_refused() {
 }
 
 /// Proves each manifest rule of a repository entry is `manifest_invalid`: no manifest, no
-/// package, a package or a version outside dpkg's grammar, a hook command, `place` entries,
+/// package, a package or a version outside dpkg's grammar, a hook command led by a relative path, `place` entries,
 /// containers, no run unit and 65 of them, and missing or zero installer bounds; 1 and 64 run
 /// units are accepted.
 #[test]
@@ -188,7 +201,7 @@ fn each_manifest_rule_is_manifest_invalid() {
             Box::new(|t| t.package_version = Some("1 0".to_owned())),
         ),
         (
-            "a hook command",
+            "a hook command led by a relative path",
             Box::new(|t| {
                 manifest(t).hook = Some(Hook {
                     command: vec!["bin/x".to_owned()],

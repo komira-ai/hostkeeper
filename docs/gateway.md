@@ -60,6 +60,25 @@ does not have, a value of the wrong type, malformed JSON, a body that is too lar
 that does not arrive whole are all refused as `INVALID_ARGUMENT` with the reason
 `invalid_request`. A response is 200 with the response message.
 
+A field the message does not have is what a coordinator older than its client refuses: the
+client sends a field a later release added. So `hkctl`, on an `invalid_request`, asks the
+coordinator's version (below) and says `coordinator_older` when the coordinator is older than
+its own release ([docs/cli.md](cli.md)).
+
+## The coordinator's version
+
+`GET /v1/version` on the private listener, outside the gateway, takes no token and says which
+release the coordinator is: `200` and `{"version":"X.Y.Z","commit":"<12 hex>"}`, the two halves
+of what `hostkeeper-coordinator --version` prints as `X.Y.Z+<commit>`. With the query
+`at_least=<version>` it is that answer when the coordinator is at least that version (by its
+leading numbers: a build suffix does not order), and `409` with
+`{"error":"coordinator_older","version":"...","commit":"..."}` when it is older; any other query
+is `400` `{"error":"bad_request"}`. A coordinator from before the route answers `404`
+`{"error":"not_found"}`, which says as much: it is older than the release that added it. A
+release's deploy waits on `at_least=<the release>` before it sets the hosts
+([github-actions.md](deploy/github-actions.md)), and the coordinator's machine updates the
+coordinator ([coordinator-update.md](deploy/coordinator-update.md)).
+
 The gateway answers every call as soon as its handler does, and adds no deadline once the body
 is read. One method is held: `Releases.WaitConverged` answers when the service's hosts have
 converged on the version, the service is halted, another version is desired, or its `waitSecs`

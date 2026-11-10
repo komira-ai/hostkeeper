@@ -26,8 +26,18 @@ pub enum Flavour {
     DropIn,
     /// `Plain` and a unit of another name.
     OtherUnit,
-    /// `Plain` and a `postinst`.
+    /// `Plain` and a `postinst` that does nothing.
     Script,
+    /// `Plain` and a `postinst` that records the policy file it finds, runs it, and asks for the
+    /// run unit to be started with `deb-systemd-invoke`, which a policy of `exit 101` refuses.
+    PostinstStart,
+    /// `Plain` and a program under `/opt/hkaptfix/bin` that `/usr/bin/hkaptfix-opt` links to.
+    OptLink,
+    /// `Plain` with a run unit that has no `[Install]` section.
+    NoInstall,
+    /// `Plain` and `/usr/bin/hkaptfix-hook`, an update hook that logs each step it is given and
+    /// fails `verify` while `/run/hkaptfix-hook.fail-verify` exists.
+    Hooked,
     /// `Plain` and a dependency no repository has.
     UnmetDependency,
     /// `Plain` and one more file: other bytes under the version of the plain build.
@@ -41,10 +51,11 @@ pub struct Spec {
     pub flavour: Flavour,
 }
 
-/// The versions a repository lists: `0.1-dropin` to `0.9-dep` are what `stage` refuses, `1.0-1`
-/// and `2.0-1` the two versions a host moves between, and `3.0-1` the newer one an upgrade
-/// would take.
-pub const DEFAULT: [Spec; 7] = [
+/// The versions a repository lists: `0.1-dropin` to `0.6-noinstall` are packages of other shapes
+/// (`0.9-dep` is the one `stage` refuses), `1.0-1` and `2.0-1` the two versions a host moves
+/// between, `3.0-1` the newer one an upgrade would take, and `0.7-hook` and `0.8-hook` two
+/// versions with an update hook.
+pub const DEFAULT: [Spec; 12] = [
     Spec {
         version: "0.1-dropin",
         flavour: Flavour::DropIn,
@@ -56,6 +67,26 @@ pub const DEFAULT: [Spec; 7] = [
     Spec {
         version: "0.3-unit",
         flavour: Flavour::OtherUnit,
+    },
+    Spec {
+        version: "0.4-start",
+        flavour: Flavour::PostinstStart,
+    },
+    Spec {
+        version: "0.5-opt",
+        flavour: Flavour::OptLink,
+    },
+    Spec {
+        version: "0.6-noinstall",
+        flavour: Flavour::NoInstall,
+    },
+    Spec {
+        version: "0.7-hook",
+        flavour: Flavour::Hooked,
+    },
+    Spec {
+        version: "0.8-hook",
+        flavour: Flavour::Hooked,
     },
     Spec {
         version: "0.9-dep",
@@ -217,6 +248,25 @@ fn put(root: &Path, path: &str, text: &str, mode: u32) {
 const SERVICE_UNIT: &str = "[Unit]\nDescription=hkaptfix fixture service\n\n[Service]\n\
     ExecStart=/usr/bin/hkaptfix serve\n\n[Install]\nWantedBy=multi-user.target\n";
 
+/// The run unit of `NoInstall`: nothing enables it.
+const UNENABLED_UNIT: &str = "[Unit]\nDescription=hkaptfix fixture service\n\n[Service]\nExecStart=/usr/bin/hkaptfix serve\n";
+
+/// The `postinst` of `PostinstStart`: it keeps a copy of the policy file and what it answers,
+/// then asks for the unit to start.
+const START_POSTINST: &str = "#!/bin/sh\nset -e\n\
+    cp /usr/sbin/policy-rc.d /run/hkaptfix-policy-seen 2>/dev/null || echo absent > /run/hkaptfix-policy-seen\n\
+    code=0\n/usr/sbin/policy-rc.d hkaptfix start >/dev/null 2>&1 || code=$?\n\
+    echo $code > /run/hkaptfix-policy-exit\n\
+    if [ \"$1\" = configure ]; then deb-systemd-invoke start hkaptfix.service || true; fi\nexit 0\n";
+
+/// The update hook of `Hooked`: `$1` is the leading argument of the manifest's command, `$2` the
+/// step.
+const HOOK: &str = "#!/bin/sh\necho \"$1 $2\" >> /run/hkaptfix-hook.log\n\
+    if [ \"$2\" = verify ] && [ -e /run/hkaptfix-hook.fail-verify ]; then\n\
+    echo '{\"class\":\"release\",\"reason\":\"fixture_failed\"}'; exit 1; fi\n\
+    if [ \"$2\" = cutover ]; then systemctl restart hkaptfix.service || exit 1; fi\n\
+    echo '{}'\n";
+
 /// The unit the package ships that nothing runs: a timer with no `[Install]`.
 const TIMER_UNIT: &str =
     "[Unit]\nDescription=hkaptfix fixture timer\n\n[Timer]\nOnCalendar=daily\n";
@@ -270,6 +320,27 @@ fn write_tree(src: &Path, spec: &Spec, architecture: &str) {
             0o644,
         ),
         Flavour::Script => put(src, "DEBIAN/postinst", "#!/bin/sh\nexit 0\n", 0o755),
+        Flavour::PostinstStart => put(src, "DEBIAN/postinst", START_POSTINST, 0o755),
+        Flavour::OptLink => {
+            put(
+                src,
+                "opt/hkaptfix/bin/hkaptfix-opt",
+                "#!/bin/sh\necho opt\n",
+                0o755,
+            );
+            std::os::unix::fs::symlink(
+                "/opt/hkaptfix/bin/hkaptfix-opt",
+                src.join("usr/bin/hkaptfix-opt"),
+            )
+            .expect("link the program");
+        }
+        Flavour::NoInstall => put(
+            src,
+            "usr/lib/systemd/system/hkaptfix.service",
+            UNENABLED_UNIT,
+            0o644,
+        ),
+        Flavour::Hooked => put(src, "usr/bin/hkaptfix-hook", HOOK, 0o755),
         Flavour::UnmetDependency => control.push_str("Depends: hkaptfix-no-such-package\n"),
         Flavour::Reuploaded => put(src, "usr/share/hkaptfix/reuploaded", "other bytes\n", 0o644),
     }

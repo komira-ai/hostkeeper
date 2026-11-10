@@ -159,9 +159,10 @@ installed afresh ([network-install.md](network-install.md)).
    keyring and the two entries `komira-testing.sources` and `komira-stable.sources`, root's and
    closed to writes by others: the steps under "Place the repository entries" in
    [enrollment.md](enrollment.md#bootstrap-a-linux-node). The directory holds those three files
-   and nothing else. Then, as root, `hostkeeper check-repositories` checks it with the daemon's
-   own loader: it prints the two entries and exits 0, or prints the file it refuses and why and
-   exits 1. Fix what it names before the restart.
+   and nothing else, but on a host that runs hello's failing-build proof, which also holds
+   `komira-testing-fail.sources` ([hello.md](../hello.md), step 4). Then, as root,
+   `hostkeeper check-repositories` checks it with the daemon's own loader: it prints each entry
+   and exits 0, or prints the file it refuses and why and exits 1. Fix what it names before the restart.
 3. **Restart the daemon**, as root: `systemctl restart hostkeeper.service`. The daemon reads the
    entries and decides its installers only at its start. Then `systemctl is-active
    hostkeeper.service` prints `active`. If it prints anything else, the daemon refused the
@@ -251,8 +252,9 @@ and installed afresh ([network-install.md](network-install.md)), so that no host
 daemon that nothing can update. The pull request of stage 9 (A24) shows both queries' output.
 
 **The work.** Every release is set with native entries alone (A24): per Linux platform the
-`.deb`'s `apt` entry, and no list for macOS while no daemon announces `macos-pkg` (no Mac is
-enrolled; one would show `no_target`). `release.yml` no longer waits for the channel. Once A24's release has
+`.deb`'s `apt` entry, and for macOS the signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose
+daemon announces `macos-pkg` takes (a Mac that does not is ordered nothing: `installer_dropped` or
+`no_build_for_host`). `release.yml` no longer waits for the channel. Once A24's release has
 converged on every host, stop the channel's sync, remove `--release-channel` from the
 coordinator's deployment, and delete the channel's tree (packages-native.md section 10.5).
 

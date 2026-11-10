@@ -18,7 +18,10 @@
 //! hello's `.deb` for both architectures and mdm's for amd64 alone (neither has an rpm), and
 //! beside hostkeeper's own installer hello's `.pkg`. The index, write and promote verbs take every
 //! package of the product in one pass ([`Product::deb_files`], [`Product::rpm_files`]), so a
-//! release is listed in the repository whole or not at all.
+//! release is listed in the repository whole or not at all. Hello's failing build is not one of
+//! them: its `.deb`s are listed in the suite `testing-fail` alone ([`Product::fail_ready_debs`]).
+
+use crate::release::contract::{FAIL_READY_DEB_SUFFIX, FAIL_READY_SUFFIX};
 
 /// A Linux architecture, in the two names the package formats give it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +46,10 @@ pub(crate) const ARM64: Arch = Arch {
 
 /// The architectures of the repository: every package is built for one or both.
 pub(crate) const ARCHES: [Arch; 2] = [AMD64, ARM64];
+
+/// The directory of every product's installers in the bucket, and the path the hosts' store of
+/// the installers' channel is rooted at (`https://packages.komira.ai/pkg/`).
+pub(crate) const PKG_ROOT: &str = "pkg/";
 
 /// The release number of every rpm: `nfpm` writes `1` and the release assets name it.
 pub(crate) const RPM_RELEASE: &str = "1";
@@ -129,6 +136,9 @@ pub(crate) struct Product {
     /// The names of the macOS installers a release ships, each `<name>-<version>-macos-arm64.pkg`
     /// in the version's directory: the product's own and the native packages of its services.
     pub(crate) installers: &'static [&'static str],
+    /// The name of the package whose failing build (the same program started with `--fail-ready`)
+    /// the suite `testing-fail` lists alone.
+    pub(crate) fail_ready: &'static str,
     /// The jobs `channels decide` reads, in the order it names them.
     pub(crate) stages: &'static [&'static str],
     /// The stages that may be `skipped`; every other stage must be `success`.
@@ -154,6 +164,13 @@ impl Product {
         files
     }
 
+    /// The path of the installer `file` of `version` below [`PKG_ROOT`]: what a Mac's store of
+    /// the `testing` channel, rooted there, fetches it by (`hostkeeper/<version>/<file>`).
+    pub(crate) fn pkg_locator(&self, version: &str, file: &str) -> String {
+        let prefix = self.pkg_prefix(version);
+        format!("{}{file}", prefix.strip_prefix(PKG_ROOT).unwrap_or(&prefix))
+    }
+
     /// The key prefix of the installer's version, `pkg/<product>/<version>/`: the `testing`
     /// channel of the installer.
     pub(crate) fn pkg_prefix(&self, version: &str) -> String {
@@ -172,6 +189,23 @@ impl Product {
             .into_iter()
             .map(|(_, name)| name)
             .collect()
+    }
+
+    /// The debs of the failing build of `version`, for each architecture of its package, as the
+    /// file name the pool and the index give it (`<name>_<version>~fail.ready_<arch>.deb`) and the
+    /// file name of the release asset (`<name>_<version>-fail-ready_<arch>.deb`: an asset name
+    /// has no `~`), sorted.
+    pub(crate) fn fail_ready_debs(&self, version: &str) -> Vec<(String, String)> {
+        let pool = format!("{version}{FAIL_READY_DEB_SUFFIX}");
+        let asset = format!("{version}{FAIL_READY_SUFFIX}");
+        let mut files: Vec<(String, String)> = self
+            .package(self.fail_ready)
+            .into_iter()
+            .flat_map(|p| p.arches.iter().map(move |a| (p, a)))
+            .map(|(p, a)| (p.deb_file(&pool, a), p.deb_file(&asset, a)))
+            .collect();
+        files.sort();
+        files
     }
 
     /// The file names of the rpms of `version`, every package that is an rpm for each of its
@@ -214,6 +248,7 @@ pub(crate) const HOSTKEEPER: Product = Product {
     pool_dir: "pool/hostkeeper",
     session_prefix: "hostkeeper-",
     pkg_dir: "pkg/hostkeeper",
+    fail_ready: "hello",
     packages: &[
         Package {
             name: "hostkeeper",
@@ -269,7 +304,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             prerequisites: &[],
             files: &[
                 "/usr/lib/hello/hello",
-                "/usr/lib/hello/hostkeeper-hook",
                 "/usr/lib/systemd/system/hello@a.service",
                 "/usr/lib/systemd/system/hello@b.service",
             ],
@@ -287,7 +321,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             prerequisites: &[],
             files: &[
                 "/usr/lib/mdm/mdm",
-                "/usr/lib/mdm/hostkeeper-hook",
                 "/usr/lib/systemd/system/mdm-cert-renew.service",
                 "/usr/lib/systemd/system/mdm-cert.service",
                 "/usr/lib/systemd/system/mdm-cert.timer",

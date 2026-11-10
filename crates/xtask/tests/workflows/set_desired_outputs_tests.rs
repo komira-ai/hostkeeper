@@ -72,8 +72,23 @@ const REFUSED_SET: &str =
 
 /// The outputs program of the real workflow, run on `left`.
 fn outputs(left: &Left) -> Ran {
+    outputs_of(left, false)
+}
+
+/// The same, with the message of a failed job (`::error::<why>` and the log) printed as a last
+/// value, where the job halts with it on stderr, so a test can hold it exactly.
+fn said(left: &Left) -> Ran {
+    outputs_of(left, true)
+}
+
+fn outputs_of(left: &Left, print_the_halt: bool) -> Ran {
     let doc = yaml::load(&real()).expect("the workflow parses");
     let program = outputs_program(&doc).expect("the outputs step has its program");
+    let program = if print_the_halt {
+        program.replace("halt_error(1)", ".")
+    } else {
+        program.to_owned()
+    };
     let vars: Vec<(&str, String)> = OUTPUTS_ARGS
         .iter()
         .map(|&(_, name, _)| {
@@ -92,7 +107,7 @@ fn outputs(left: &Left) -> Ran {
             (name, value.to_owned())
         })
         .collect();
-    run(program, &vars)
+    run(&program, &vars)
 }
 
 /// The three output lines, and whether the step ends with exit 1.
@@ -122,6 +137,36 @@ fn a_refused_set_writes_its_token_and_no_version() {
             "hkctl: the coordinator answered UNAUTHENTICATED\nrefused: unauthorized\n"
         )),
         want("", false, "unauthorized", true)
+    );
+}
+
+#[test]
+fn a_set_refused_by_an_older_coordinator_writes_coordinator_older() {
+    // hkctl's stderr when the coordinator refused a field it does not know with invalid_request
+    // and then said it is older than hkctl: the `refused:` line carries coordinator_older. Catches
+    // the reason read from the line before it, and the job's message naming another reason.
+    let err = "hkctl: the coordinator answered INVALID_ARGUMENT
+hkctl: the coordinator is older than this hkctl (1.2.3): it runs 1.0.0; update the coordinator, then call again
+refused: coordinator_older
+";
+    assert_eq!(
+        outputs(&set_failed(err)),
+        want("", false, "coordinator_older", true)
+    );
+    assert_eq!(
+        said(&set_failed(err)),
+        (
+            vec![
+                "desired_version=".to_owned(),
+                "converged=false".to_owned(),
+                "reason=coordinator_older".to_owned(),
+                format!(
+                    "::error::the coordinator refused the set of hello 1.2.3: coordinator_older; it is not set
+{err}"
+                ),
+            ],
+            Ended::Done
+        )
     );
 }
 
@@ -322,17 +367,14 @@ fn a_requested_version_that_is_not_a_version_is_never_written() {
     assert_eq!(outputs(&trailing), want("", false, "not_waited", false));
 }
 
-/// The request program of the real workflow, given the five texts of the release inputs.
-fn request(package_digest: &str, index: &str, index_digest: &str, targets: &str) -> Ran {
+/// The request program of the real workflow, given the text of the targets.
+fn request(targets: &str) -> Ran {
     let doc = yaml::load(&real()).expect("the workflow parses");
     let program = request_program(&doc).expect("the request step has its program");
     run(
         program,
         &[
             ("version", "1.2.3".to_owned()),
-            ("package_digest", package_digest.to_owned()),
-            ("release_index", index.to_owned()),
-            ("release_index_digest", index_digest.to_owned()),
             ("targets", targets.to_owned()),
         ],
     )
@@ -348,88 +390,31 @@ fn written(ran: Ran) -> serde_json::Value {
     serde_json::from_str(line).expect("one JSON object")
 }
 
-/// Targets of one archive entry, as `cargo xtask release targets` writes them.
-const TARGETS: &str = "{\"linux-x86_64\":{\"entries\":[{\"installer\":\"hostkeeper-archive\",\
+/// Targets of one native entry, as `cargo xtask release targets` writes them.
+const TARGETS: &str = "{\"linux-x86_64\":{\"entries\":[{\"installer\":\"apt\",\
     \"bytes\":\"7\",\"manifest\":{\"minHostkeeper\":\"0.1.0\"}}]}}";
 
 #[test]
-fn the_request_names_the_release_one_way_exactly() {
-    // Catches the request losing the version or the digest, the index text changed on its way
-    // (it is one JSON string of its exact bytes), and a request sent with neither way of naming
-    // the release, or with both (the coordinator would take a set with no digest at all).
-    let digest = "a".repeat(64);
-    assert_eq!(
-        written(request(&digest, "", "", "")),
-        serde_json::json!({"desired": {"version": "1.2.3"}, "packageDigest": digest})
-    );
-    let index = "{\"service\":\"hello\",\n \"note\":\"a \\\"quoted\\\" word\"}\n";
-    assert_eq!(
-        written(request("", index, &digest, "")),
-        serde_json::json!({
-            "desired": {"version": "1.2.3"},
-            "releaseIndex": index,
-            "releaseIndexDigest": digest,
-        })
-    );
-}
-
-#[test]
-fn targets_go_into_the_request_as_an_object_alone_or_beside_the_index() {
+fn targets_go_into_the_request_as_an_object_beside_the_version() {
     // Catches the targets sent as a JSON string (the coordinator reads `targets` as a map and
-    // refuses a string), changed on their way (an entry's order or a field lost), the index and
-    // its digest dropped from a set that has them (a daemon before targets would then be
-    // ordered no archive through the release channel), or a set of targets alone refused.
-    let digest = "a".repeat(64);
+    // refuses a string), or changed on their way (an entry's order or a field lost), and the
+    // version lost from the request.
     let targets: serde_json::Value = serde_json::from_str(TARGETS).expect("JSON");
     assert_eq!(
-        written(request("", "", "", TARGETS)),
+        written(request(TARGETS)),
         serde_json::json!({"desired": {"version": "1.2.3"}, "targets": targets})
-    );
-    assert_eq!(
-        written(request("", "{}", &digest, TARGETS)),
-        serde_json::json!({
-            "desired": {"version": "1.2.3"},
-            "releaseIndex": "{}",
-            "releaseIndexDigest": digest,
-            "targets": targets,
-        })
     );
 }
 
 #[test]
-fn a_request_with_no_way_a_package_digest_and_another_or_half_an_index_is_refused() {
+fn a_request_with_no_targets_is_refused() {
     // Catches a request sent with no way of naming the release (the coordinator would take a
-    // set with no digest at all), the package digest with the index or the targets (refused by
-    // the coordinator as `index_invalid`), or half of the index, with or without targets: each
-    // stops with jq's error (exit 5), so the step fails before any token exists.
-    let digest = "a".repeat(64);
-    let refused = (
-        Vec::new(),
-        Ended::Failed(
-            "give package_digest, or release_index with release_index_digest, or targets alone \
-             or with both of those; never package_digest with another"
-                .to_owned(),
-        ),
+    // set with nothing to install): it stops with jq's error (exit 5), so the step fails before
+    // any token exists.
+    assert_eq!(
+        request(""),
+        (Vec::new(), Ended::Failed("give targets".to_owned()))
     );
-    let d = digest.as_str();
-    for (package, index, index_digest, targets) in [
-        ("", "", "", ""),
-        (d, "{}", d, ""),
-        (d, "{}", "", ""),
-        (d, "", d, ""),
-        ("", "{}", "", ""),
-        ("", "", d, ""),
-        (d, "", "", TARGETS),
-        (d, "{}", d, TARGETS),
-        ("", "{}", "", TARGETS),
-        ("", "", d, TARGETS),
-    ] {
-        assert_eq!(
-            request(package, index, index_digest, targets),
-            refused,
-            "{package:?} {index:?} {index_digest:?} {targets:?}"
-        );
-    }
 }
 
 #[test]
@@ -449,7 +434,7 @@ fn targets_that_are_not_one_json_object_are_refused() {
         "{\"a\":1} {\"b\":2}",
         "{\"a\":",
     ] {
-        assert_eq!(request("", "", "", targets), refused, "{targets:?}");
+        assert_eq!(request(targets), refused, "{targets:?}");
     }
 }
 

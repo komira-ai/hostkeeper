@@ -178,8 +178,8 @@ fn on_receipt_the_daemon_applies_every_rule_every_manifest_keeps_before_its_inst
             |e| matches!(e, ManifestError::HealthUrl { .. }),
         ),
         (
-            |m| m.hook.as_mut().expect("a hook").command = vec!["../bin/sh".to_owned()],
-            |e| matches!(e, ManifestError::HookProgram { .. }),
+            |m| m.hook.as_mut().expect("a hook").boot = Some("prepare".to_owned()),
+            |e| matches!(e, ManifestError::Boot(_)),
         ),
         (
             |m| {

@@ -1,6 +1,6 @@
 //! The parts of the end-to-end rig of `tests/tierstore_shaped.rs` that need no root, run in the
 //! pull-request set so that a privileged run after the merge is not the first place a drift
-//! shows: the fixture package is a `.deb` whose tree the daemon's path rule and hook check accept
+//! shows: the fixture package is a `.deb` whose tree holds the units and the hook its entry names
 //! and whose entry the installer's own reading of an entry takes, and a port the rig holds for
 //! the fixture's instances is refused to other sockets and served by the fixture.
 
@@ -12,7 +12,7 @@ use std::path::Path;
 use std::process::{Child, Command};
 use std::{io, io::Write};
 
-use e2e::aptrepo::{self, File};
+use e2e::aptrepo;
 use e2e::package::{FixtureVersion, PackageBuilder};
 use e2e::{
     FIXTURE_BINARY, HeldPort, REPOSITORY_NAME, SERVICE, UNIT_TEMPLATE, instance, served_version,
@@ -21,7 +21,7 @@ use e2e::{
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::repository::Order;
 use hostkeeper_install::repository::apt::Apt;
-use hostkeeper_install::repository::tree::{self, Rules, TreeError};
+use hostkeeper_install::repository::tree;
 use hostkeeper_testkit::Scratch;
 
 /// A scratch directory under cargo's directory for tests.
@@ -44,12 +44,11 @@ fn extracted(deb: &Path, into: &Path) {
 
 /// `PackageBuilder`'s `.deb` has the tree and the entry the daemon accepts: the installer's reading
 /// of its entry (`Order::from_entry`) gives the package, its pin, the repository, the two run
-/// units and the params; the tree extracted from the `.deb` passes the path rule, has every run
-/// unit as a file of the package and has the hook at its fixed path (`tree::check` is the check
-/// `stage` makes of the extracted tree); the tree holds the fixture program as the run units'
-/// program and as the hook, and the release file of the version with the two instances on the
-/// version's ports. The same package with a file outside the paths a service's package may use is
-/// refused. Fails if the fixture drifts from what the daemon accepts.
+/// units and the hook program the manifest names; the entry carries the params the hook reads;
+/// the tree extracted from the `.deb` has every run unit as a file of the package and the hook
+/// at the path the entry names; the tree holds the fixture program as the run units' program and
+/// as the hook, and the release file of the version with the two instances on the version's
+/// ports. Fails if the fixture drifts from what the daemon accepts.
 #[test]
 fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
     let bench = scratch("fixture-package");
@@ -91,21 +90,32 @@ fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
     assert_eq!(order.repository, REPOSITORY_NAME);
     assert_eq!(order.pin, published.sha256);
     assert_eq!(order.run, fixture.ports.map(instance));
-    assert!(order.params, "the entry has the params the hook reads");
+    assert_eq!(
+        order.hook.as_deref(),
+        Some(format!("/usr/lib/{SERVICE}/hostkeeper-hook").as_str())
+    );
+    assert!(
+        entry
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| !manifest.params.is_empty()),
+        "the entry has the params the hook reads"
+    );
 
     let tree_dir = bench.path().join("extracted");
     extracted(&published.file, &tree_dir);
-    let rules = Rules {
-        service: SERVICE,
-        package: SERVICE,
-        run: &order.run,
-        boot: order.boot.as_deref(),
-        params: order.params,
-    };
-    assert_eq!(
-        tree::check(&tree_dir, &rules),
-        Ok(true),
-        "the extracted tree passes the checks of stage, with its hook"
+    for unit in &order.run {
+        let template = format!("{SERVICE}@.service");
+        assert!(
+            tree::unit_file(&tree_dir, unit).is_some()
+                || tree::unit_file(&tree_dir, &template).is_some(),
+            "the package has the unit file of {unit}"
+        );
+    }
+    let hook = order.hook.as_deref().expect("a hook program");
+    assert!(
+        tree_dir.join(hook.trim_start_matches('/')).is_file(),
+        "the package installs the hook the entry names"
     );
     let program = fs::read(FIXTURE_BINARY).expect("the built fixture program");
     assert_eq!(
@@ -113,7 +123,7 @@ fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
         program
     );
     assert_eq!(
-        fs::read(tree_dir.join(tree::hook_path(SERVICE))).expect("the hook"),
+        fs::read(tree_dir.join(hook.trim_start_matches('/'))).expect("the hook"),
         program
     );
     let release =
@@ -128,19 +138,6 @@ fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
             .join("usr/lib/systemd/system")
             .join(UNIT_TEMPLATE)
             .is_file()
-    );
-
-    let mut stray = deb.clone();
-    stray
-        .files
-        .push(File::new("etc/cron.d/fixture", "x", 0o644));
-    let (published, _) = aptrepo::build(&stray, &trees, &pool);
-    let stray_dir = bench.path().join("stray");
-    extracted(&published.file, &stray_dir);
-    assert_eq!(
-        tree::check(&stray_dir, &rules),
-        Err(TreeError::Outside("etc/cron.d".to_owned())),
-        "a file outside the paths of a service's package is refused"
     );
 }
 

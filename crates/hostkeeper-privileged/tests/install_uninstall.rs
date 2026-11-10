@@ -105,6 +105,7 @@ fn package(repo: &AptRepo, version: &'static str) -> Package {
         params: [("fixture.mode".to_owned(), aptrepo::text("ok"))]
             .into_iter()
             .collect(),
+        hook_command: vec![format!("/usr/lib/{SERVICE}/hostkeeper-hook")],
         steps: StepBounds {
             prepare: 60,
             cutover: 60,

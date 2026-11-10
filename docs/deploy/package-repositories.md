@@ -21,9 +21,14 @@ directory, `pool/hostkeeper`.
 
 The apt index is one `Packages` file per architecture for every product, and the tool reads all of it
 before it writes: it keeps another product's entries as they are and trims only the versions of the
-packages it adds. It reads every entry strictly, so every product in the shared repository must list
-`X.Y.Z` versions (no Debian revision) and the architectures `amd64` and `arm64` only; an entry that is
-neither makes `apt index`, `apt promote` and `apt write` fail, naming the entry, and nothing is written.
+packages it adds. It reads every entry of a suite strictly in the form that suite takes, so every
+product in the shared repository must list, in `testing` and `stable`, `X.Y.Z` versions exactly (no
+Debian revision, no `~`), and in `testing-fail` the one form and package below, and in all of them the
+architectures `amd64` and `arm64` only; an entry that is not of its suite's form makes `apt index`,
+`apt promote` and `apt write` fail, naming the entry, and nothing is written. The suite `testing-fail`
+lists `hello` alone, at `X.Y.Z~fail.ready` exactly: a plain `X.Y.Z` entry, an entry of another package,
+or any other version in it is refused in the same way, and an `X.Y.Z~fail.ready` entry in `testing` or
+`stable` is too.
 
 | Channel | `testing` | `stable` |
 |---|---|---|
@@ -31,9 +36,9 @@ neither makes `apt index`, `apt promote` and `apt write` fail, naming the entry,
 | rpm, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
 | macOS installers, `hostkeeper` and `hello`, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
 
-The packages themselves are in a pool both suites share: `apt/pool/hostkeeper/<name>_<version>_<arch>.deb`
+The packages themselves are in a pool every suite shares: `apt/pool/hostkeeper/<name>_<version>_<arch>.deb`
 and `rpm/pool/hostkeeper/<name>-<version>-1.<arch>.rpm`. A suite is an index that lists packages of
-the pool, signed with the organisation's archive key. The key is published as
+the pool, signed with the organisation's archive key (the same key for all three apt suites). The key is published as
 `https://packages.komira.ai/apt/komira-archive-keyring.gpg` (binary, for apt) and
 `https://packages.komira.ai/apt/komira-archive-keyring.asc` (armored, for rpm).
 
@@ -105,27 +110,95 @@ so its attestation can be verified as for any other asset.
 
 `hello`'s and `mdm`'s native packages (docs/design/packages-native.md, item A21) are the release's
 assets `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb`,
-published with hostkeeper's own in the same passes, so a release is listed whole. hello's failing build
-(`<version>-fail-ready`) is not published: its version is not `X.Y.Z`. hostkeeper's own native
+published with hostkeeper's own in the same passes, so a release is listed whole. hostkeeper's own native
 packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the installer
 `hostkeeper-<version>-macos-arm64.pkg`, the packages a host is set up from.
 
+**hello's failing build** is the same program started with `--fail-ready` (its units pass the flag, so
+`/readyz` answers 503), built to prove that a host rolls back to the previous hello. Its service
+version is `<version>-fail-ready`, which hello's `/version` serves and its hook compares with the
+order's service version; its `.deb` has the Debian version `<version>~fail.ready`. A `~` sorts below
+everything, the end of the version included, so apt orders the failing build below the release
+`<version>` it is built from and never takes it for, or prefers it over, that release; a version
+`<version>-fail-ready` would be the Debian revision `ready` of `<version>-fail` and sort above it.
+The release carries the `.deb` of each Linux architecture as the asset `hello_<version>-fail-ready_<arch>.deb`
+(an asset name carries the service version, since a hosting service may rename a `~`), attested like
+every native package (`hello_<version>-fail-ready_<arch>.deb.sigstore.json`). It is published to the
+suite **`testing-fail`** of the same apt repository, which lists that build alone, under
+`X.Y.Z~fail.ready`, and nothing else; the pool file is `apt/pool/hostkeeper/hello_<version>~fail.ready_<arch>.deb`,
+the name its control file gives. `testing` and `stable` never list it, and it is never promoted. Its
+`.pkg` is not released, so no Mac is ordered the failing build. A host that is to be ordered it needs
+the repository entry `/etc/hostkeeper/repositories/komira-testing-fail.sources` with `Suites: testing-fail`
+and the same keyring as `komira-testing`.
+
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
-`--service mdm`) lists, for each Linux platform, the native entry alone (docs/design/packages-native.md,
-section 10.5, A24): an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
+`--service mdm`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
+section 10.5, A24): for each Linux platform an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
 above (`/etc/hostkeeper/repositories/komira-testing.sources`, placed by host setup, which checks the
 directory with `hostkeeper check-repositories` before and after it places it), at the release's
-version, pinned by the `.deb`'s SHA-256. It writes no `hostkeeper-archive` entry, and no list for macOS
-while no daemon announces `macos-pkg`: the release's `.pkg`s are still published to the store, and a
-Mac (none is enrolled) would show `no_target`. hello's failing build is refused by name: it has no
-package here.
+version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm has no
+macOS platform) a `macos-pkg` entry of the signed `.pkg`, located in the store `komira-testing` at
+`hostkeeper/<version>/<file>` (the installers' `testing` directory, rooted at `pkg/`) and pinned by
+its SHA-256 and size. It writes no `hostkeeper-archive` entry, and the macOS list carries the
+`.pkg`'s entry alone, which a Mac whose daemon announces `macos-pkg` (its signers file
+`/etc/hostkeeper/macos-pkg.toml` loaded, `/usr/sbin/installer` and `/usr/sbin/pkgutil` present)
+takes; a Mac that does not announce it is ordered nothing (`installer_dropped` or
+`no_build_for_host`, as the coordinator's pick gives). `--service hello --fail-ready`, given
+explicitly and never by default, writes the failing build's entries instead: for each Linux
+platform, an `apt` entry of the repository entry `komira-testing-fail` (the suite `testing-fail`), at
+the package version `<version>~fail.ready`, pinned by the SHA-256 of
+`hello_<version>-fail-ready_<arch>.deb`, with the manifest of the failing build's archive; none for
+macOS, where the failing build has no `.pkg`. Without `--fail-ready` the entries are as above, and a
+failing build is never among them.
 
 hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
-the release) and no hook: its daemon updates itself through its package with built-in steps
+the release) and no hook command: its daemon updates itself through its package with built-in steps
 (docs/design/packages-native.md, section 10.4). A host whose daemon does not announce `apt`, or has no
 such entry, is ordered nothing (`installer_dropped`); stage 9's counts are zero before such a release
 is set (docs/operations/move-to-native.md). A host picked an entry before the publish below has put its
 package into `testing` defers it (`not_in_repository`) and takes it once it is there.
+
+## Packaging a service
+
+Ship the `.deb` or `.pkg` as you would anyway: the binary where you want it, your maintainer scripts, your unit or
+plist. hostkeeper imposes no rule on a package's files, paths, units or scripts; what it checks is the bytes (the
+order's SHA-256 pin and the repository's or the package's signature) and that no package of the same name was installed
+by hand. Around its own `apt-get install` and `dpkg --purge` it keeps a `postinst` from starting or restarting the unit
+through `invoke-rc.d` or `deb-systemd-invoke`, as debhelper's scripts do, until the hand-over (a `policy-rc.d` that
+exits 101, present only while hostkeeper runs the package manager); a script that calls `systemctl` itself is not
+held back. A `.pkg`
+has no such guard: the scripts run when `installer` runs them, before `cutover`, so a `.pkg` whose scripts load its job
+needs the built-in steps or a hook that tolerates it.
+
+The hook is named in the release manifest's entry, not in the package. `hook.command[0]` is the absolute path of a file
+the package installs, and the elements after it are leading arguments:
+
+```json
+{
+  "installer": "apt",
+  "repository": "komira-stable",
+  "package_version": "1.6.0-1",
+  "digest": "<64 hex>",
+  "manifest": {
+    "package": "tierstore",
+    "run": ["tierstore.service"],
+    "hook": {
+      "command": ["/usr/bin/tierstore", "update-hook"],
+      "timeout_secs": { "...": "..." }
+    }
+  }
+}
+```
+
+hostkeeper runs `/usr/bin/tierstore update-hook <step> [<version dir>] --params <file>` from the sealed copy of that
+file in the version it staged, so `prepare` runs the version being installed before it is installed. `stage` refuses
+(`manifest_invalid`) a command whose file is not an executable regular file of the package. The contract the hook
+keeps (the steps, the exit codes, the params file) is that of
+[`crates/hostkeeper-hook`](../../crates/hostkeeper-hook/README.md).
+
+Without a hook command the built-in steps stop, swap and start the `run` units. A `run` unit needs no `[Install]`
+section: hostkeeper writes the links of one that has `[Install]` targets, and starts any other, or one whose file is
+not in the package, at `cutover` and at every daemon start.
 
 ## What the release workflow does
 
@@ -143,16 +216,21 @@ changes of the older ones. Each job is a green no-op until the settings below ex
    package once, then the index, with `If-Match` on the ETags that were read. The signing key and the
    cloud role are never in one job. A write that finds the index changed in between (another product's
    release) ends green with `conflict=true`, and attempts 2 and 3 (the jobs with the suffix `-2` and
-   `-3`) read, merge and sign again; the third attempt fails instead of asking for a fourth. The
-   installers go into `pkg/hostkeeper/<version>/` (`testing-pkg-upload`), each file once: a second put
+   `-3`) read, merge and sign again; the third attempt fails instead of asking for a fourth. hello's
+   failing build goes into the suite `testing-fail` by three more jobs of the apt kind,
+   `testing-fail-apt-read`, `testing-fail-apt-index` and `testing-fail-apt-write` (the same
+   environments, settings, key and checks of the release's files, `--suite testing-fail`, the
+   artifacts `apt-fail-current` and `apt-fail-next`), in one attempt: its write passes `--last`, so a
+   lost race for the index fails that job. They are not stages of `promote-check`: the failing build
+   is never promoted, and their result decides nothing about the release. The installers go into `pkg/hostkeeper/<version>/` (`testing-pkg-upload`), each file once: a second put
    of the same bytes is accepted, other bytes at the same key fail.
 2. **Checks.** `check-apt` installs each package from the suite `testing` in a clean Ubuntu
    container of each architecture it is built for, `check-rpm` installs each rpm with dnf in a clean
    Fedora container, both images pinned by digest, and each holds the installed system to what the
    package promises: the version its binary says (and the commit, but for `hello`, whose program
    prints its version alone), the files it ships, the user and the units, and that the units are
-   enabled or not as the package says (a service's native package enables none: hostkeeper's
-   installer does). `check-pkg` downloads each installer, its bundle and the directory's
+   enabled or not as the package says (hostkeeper enables the `[Install]` links of a `run` unit
+   itself and starts one that nothing enables). `check-pkg` downloads each installer, its bundle and the directory's
    `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
 3. **Decision.** `promote-check` (`cargo xtask channels decide`) promotes when every write succeeded
    and every check succeeded or had nothing to check.

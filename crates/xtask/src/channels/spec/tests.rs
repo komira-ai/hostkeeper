@@ -183,7 +183,7 @@ fn hellos_package_is_the_files_of_its_deb_says_its_version_alone_and_enables_not
 #[test]
 fn mdms_package_is_amd64_alone_with_the_units_of_its_deb_and_enables_nothing() {
     // Catches: mdm's units out of step with the ones its .deb installs, an arm64 mdm asked of
-    // the repository, and the program or hook at another path than the .deb's.
+    // the repository, and the program at another path than the .deb's.
     use hostkeeper_mdm_core::package::{DEB_BIN, SERVICE, UNITS};
     let package = HOSTKEEPER.package("mdm").expect("mdm");
     let mut built: Vec<&str> = UNITS.iter().map(|u| u.name).collect();
@@ -197,9 +197,9 @@ fn mdms_package_is_amd64_alone_with_the_units_of_its_deb_and_enables_nothing() {
     assert!(
         package
             .files
-            .contains(&format!("{DEB_BIN}/hostkeeper-hook").as_str())
+            .contains(&format!("{DEB_BIN}/{SERVICE}").as_str())
     );
-    assert_eq!(package.files.len(), 2 + UNITS.len());
+    assert_eq!(package.files.len(), 1 + UNITS.len());
 }
 
 #[test]
@@ -210,6 +210,21 @@ fn the_installers_and_their_two_channels_are_named_from_the_product() {
             "hello-1.2.3-macos-arm64.pkg",
             "hostkeeper-1.2.3-macos-arm64.pkg"
         ]
+    );
+    // What a Mac's store of the testing channel, rooted at pkg/, fetches an installer by.
+    assert_eq!(
+        HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg"),
+        "hostkeeper/1.2.3/hello-1.2.3-macos-arm64.pkg"
+    );
+    assert_eq!(
+        format!(
+            "{PKG_ROOT}{}",
+            HOSTKEEPER.pkg_locator("1.2.3", "hello-1.2.3-macos-arm64.pkg")
+        ),
+        format!(
+            "{}hello-1.2.3-macos-arm64.pkg",
+            HOSTKEEPER.pkg_prefix("1.2.3")
+        )
     );
     assert_eq!(HOSTKEEPER.pkg_prefix("1.2.3"), "pkg/hostkeeper/1.2.3/");
     assert_eq!(HOSTKEEPER.pkg_stable_key(), "pkg/hostkeeper/stable.json");
@@ -222,4 +237,58 @@ fn architectures_are_found_by_either_name() {
     assert_eq!(arch_of_deb("amd64").map(|a| a.rpm), Some("x86_64"));
     assert_eq!(arch_of_rpm("amd64"), None);
     assert_eq!(arch_of_deb("x86_64"), None);
+}
+
+#[test]
+fn the_failing_build_is_hellos_two_debs_named_by_its_debian_version_and_by_its_asset() {
+    // Catches: a pool name that carries the service version's `-fail-ready` (which apt orders
+    // above the release), and an asset name that carries the `~` the release's file names lack.
+    assert_eq!(
+        HOSTKEEPER.fail_ready_debs("1.2.3"),
+        [
+            (
+                "hello_1.2.3~fail.ready_amd64.deb".to_owned(),
+                "hello_1.2.3-fail-ready_amd64.deb".to_owned()
+            ),
+            (
+                "hello_1.2.3~fail.ready_arm64.deb".to_owned(),
+                "hello_1.2.3-fail-ready_arm64.deb".to_owned()
+            ),
+        ]
+    );
+}
+
+#[test]
+fn the_failing_builds_files_are_the_ones_the_release_contract_names() {
+    // Catches: the suite's files drifting from the assets the release lists and the Debian
+    // version its package declares.
+    use crate::release::contract::{Package, Platform, Version};
+    let version: Version = "1.2.3".parse().expect("version");
+    let assets: Vec<String> = [Platform::LinuxX86_64, Platform::LinuxArm64]
+        .into_iter()
+        .map(|p| {
+            Package::HelloFailReady
+                .native_name(&version, p)
+                .expect("a deb")
+        })
+        .collect();
+    let listed = HOSTKEEPER.fail_ready_debs("1.2.3");
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(_, asset)| asset.clone())
+            .collect::<Vec<_>>(),
+        assets
+    );
+    let deb_version = Package::HelloFailReady.deb_version(&version);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|(pool, _)| pool.as_str())
+            .collect::<Vec<_>>(),
+        [
+            format!("hello_{deb_version}_amd64.deb"),
+            format!("hello_{deb_version}_arm64.deb")
+        ]
+    );
 }

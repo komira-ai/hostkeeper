@@ -14,11 +14,16 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_install::repository::tree::hook_path;
 use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Manifest, Param, StepBounds, Target, param,
 };
 use hostkeeper_steps::{Seal, tree_digest};
+
+/// Where a package with a hook program installs it, relative to the tree: the program the
+/// entry's `hook.command` names by the absolute path `/` followed by this.
+pub fn hook_path(package: &str) -> String {
+    format!("usr/lib/{package}/hostkeeper-hook")
+}
 
 /// The installer the versions are staged for.
 pub const INSTALLER: &str = "apt";
@@ -102,6 +107,11 @@ pub fn entry_of(service: &str, version: &str, manifest: &str) -> (Target, bool) 
     let manifest = Manifest {
         package: Some(service.to_owned()),
         hook: Some(Hook {
+            command: if has_hook {
+                vec![format!("/{}", hook_path(service))]
+            } else {
+                Vec::new()
+            },
             boot: hook
                 .and_then(|hook| hook.get("boot"))
                 .and_then(toml::Value::as_str)
@@ -116,7 +126,6 @@ pub fn entry_of(service: &str, version: &str, manifest: &str) -> (Target, bool) 
                 .and_then(|hook| hook.get("cleanup_retries"))
                 .and_then(toml::Value::as_integer)
                 .map(|n| u32::try_from(n).expect("retries")),
-            ..Hook::default()
         }),
         run,
         health_url: table

@@ -41,6 +41,7 @@ use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_install::repository::config::RepositoriesError;
 use hostkeeper_observe::unlink_stale_registration_socket;
+use hostkeeper_package::stores::StoresError;
 use hostkeeper_unpack::HostFs;
 
 use crate::boot::{ALERT_START, BootError, BootReport, Stage};
@@ -107,6 +108,14 @@ pub enum StartError {
     /// preferences ([`crate::mac_files`]); the error names the managed file and the reason.
     #[error("a file is not made from the managed preferences: {0}")]
     MacFiles(#[from] MacFilesError),
+    /// The host's `stores.toml` is not sound; the error names the file and, in its text, the store
+    /// and the rule it breaks (never a credential).
+    #[error("{}: {source}", path.display())]
+    Stores {
+        path: PathBuf,
+        #[source]
+        source: StoresError,
+    },
     /// The Mac's `macos-pkg.toml` is not sound; the error names the file and the rule it breaks.
     #[error("{}: {source}", path.display())]
     MacosPkg {
@@ -159,6 +168,7 @@ impl StartError {
             StartError::Config { .. }
             | StartError::MacConfig(_)
             | StartError::MacFiles(_)
+            | StartError::Stores { .. }
             | StartError::MacosPkg { .. }
             | StartError::Repositories { .. } => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
@@ -260,6 +270,7 @@ pub fn startup_notifying(
         packages: settings.packages_dir.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
     adopt_own_package(&daemon, &mut report);
@@ -367,8 +378,8 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
         }
     };
     for service in services.into_values() {
-        // The staging directories a stage left, then the `.fetch-*` files an earlier release's
-        // fetch left: no daemon from this one fetches, so nothing else removes them.
+        // The staging directories a stage left, then the `.fetch-*` files a fetch of a `.pkg`
+        // (or an earlier release's fetch) left.
         let swept = hostkeeper_unpack::remove_orphans(&service, &packages)
             .map_err(|error| error.to_string())
             .and_then(|()| {

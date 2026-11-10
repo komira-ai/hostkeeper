@@ -59,6 +59,7 @@ use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT};
 use crate::locks::{Holder, Package, ServiceGuard};
+use crate::packages::PackageError;
 use crate::refusal::Refusal;
 use crate::verb::{Forced, HookedVerb, PackageDigest};
 use crate::verbs::update::{last_record, while_held};
@@ -279,15 +280,16 @@ fn obtain(
     version: &Version,
     (digest, entry): (&PackageDigest, Option<&Entry>),
 ) -> Result<Target, Reply> {
-    let repository = entry.and_then(|entry| {
-        crate::repository::backend_of_entry(entry).map(|backend| (backend, entry))
-    });
+    let repository = entry
+        .and_then(|entry| crate::repository::native_of_entry(entry).map(|native| (native, entry)));
     let (dir, tree_digest) = match repository {
-        // A repository entry is staged, or found sealed for the same entry, by its installer.
-        Some((backend, entry)) => {
+        // A native entry is staged, or found sealed for the same entry, by its installer.
+        Some((native, entry)) => {
+            let fetch_failed =
+                |error: PackageError| failed_before(package_class(&error), error.refusal().token());
             let dir = ctx
                 .repository()
-                .stage(backend, service, version, entry)
+                .stage_with(native, service, version, entry, &fetch_failed)
                 .map_err(force_reply)?;
             (dir.dir().to_path_buf(), dir.digest().to_owned())
         }
@@ -367,6 +369,14 @@ fn failed_before(class: ManifestClass, reason: &str) -> Reply {
         },
         reason: Some(reason.to_owned()),
         resent: false,
+    }
+}
+
+/// Whom a package error is blamed on: the class it carries ([`PackageError::class`]).
+fn package_class(error: &PackageError) -> ManifestClass {
+    match error.class() {
+        Class::Release => ManifestClass::Release,
+        Class::Environment => ManifestClass::Environment,
     }
 }
 

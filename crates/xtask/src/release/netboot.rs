@@ -40,7 +40,11 @@ use serde_json::{Map, Value, json};
 
 use super::Error;
 use super::contract::{NETBOOT, Platform, Version};
-use super::index::is_sha256;
+
+/// Whether `text` is 64 lowercase hex digits.
+fn is_sha256(text: &str) -> bool {
+    (text.len() == 64) & text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
 
 /// The platforms with a boot set, in the order of their names, each with its architecture as a
 /// deb names it and as a UEFI boot file names it.

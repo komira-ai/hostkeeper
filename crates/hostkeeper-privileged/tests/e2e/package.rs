@@ -172,6 +172,7 @@ impl PackageBuilder {
             ]
             .into_iter()
             .collect(),
+            hook_command: vec![format!("/usr/lib/{SERVICE}/hostkeeper-hook")],
             // prepare is unbounded: it waits on the drain gate for as long as the host is busy.
             steps: StepBounds {
                 prepare: 0,

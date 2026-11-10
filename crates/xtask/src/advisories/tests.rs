@@ -448,6 +448,9 @@ impl GitHubRuns for Down {
     fn runs(&self, _: &Repo, _: &str, _: &Commit) -> Result<Vec<Run>, PortError> {
         Err(self.fail("runs"))
     }
+    fn job_names(&self, _: &Repo, _: u64) -> Result<Vec<String>, PortError> {
+        Err(self.fail("job_names"))
+    }
     fn on_main(&self, _: &Repo, _: &Commit) -> Result<bool, PortError> {
         Err(self.fail("on_main"))
     }
@@ -474,6 +477,9 @@ struct ReadOnly {
 impl GitHubRuns for ReadOnly {
     fn runs(&self, repo: &Repo, w: &str, c: &Commit) -> Result<Vec<Run>, PortError> {
         self.down.runs(repo, w, c)
+    }
+    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+        self.down.job_names(repo, run)
     }
     fn on_main(&self, repo: &Repo, c: &Commit) -> Result<bool, PortError> {
         self.down.on_main(repo, c)

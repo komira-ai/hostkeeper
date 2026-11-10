@@ -60,7 +60,7 @@ fn listed<'a>(stanzas: &'a [Stanza], name: &str) -> Option<&'a Stanza> {
 /// digest other than the sums', a `stable` that is newer or lists the version with other bytes, or
 /// a file that cannot be written.
 pub fn promote(r: &Request) -> Result<Vec<String>, Error> {
-    let names = package_names(r.version)?;
+    let names = package_names(r.version, Suite::Stable)?;
     let etags_in = r.stable.join(ETAGS_FILE);
     let etags = std::fs::read_to_string(&etags_in).map_err(|_| {
         Error::Failed(format!(

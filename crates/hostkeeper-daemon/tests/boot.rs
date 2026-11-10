@@ -543,12 +543,14 @@ fn the_start_runs_its_parts_in_order_with_before_records_first() {
         started.boot_report().stages,
         [
             Stage::UnlinkRegistrationSocket,
+            Stage::ClearPolicyRcD,
             Stage::BeforeRecords,
             Stage::ReadRecords,
             Stage::WriteBootId,
             Stage::ResumeUninstalls,
             Stage::RunUpdates,
             Stage::RestartWatchers,
+            Stage::StartRunUnits,
             Stage::BootSteps,
             Stage::Ready,
         ]
