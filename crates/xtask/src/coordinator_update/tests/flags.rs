@@ -44,7 +44,7 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
     let f = parse(&[]).expect("the defaults");
     assert_eq!(f.container, "hostkeeper-coordinator");
     assert_eq!(f.docker_socket, PathBuf::from("/var/run/docker.sock"));
-    assert_eq!(f.version, None);
+    assert_eq!(f.target_version, None);
     assert_eq!(
         (f.ready_checks, f.check_every_secs, f.stop_timeout_secs),
         (60, 5, 30)
@@ -60,7 +60,7 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
     let f = parse(&[
         "--platform",
         "linux-arm64",
-        "--version",
+        "--target-version",
         "1.2.3",
         "--container",
         "coord_2",
@@ -69,7 +69,12 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
     ])
     .expect("flags");
     assert_eq!(
-        (f.platform, f.version, f.container.as_str(), f.ready_checks),
+        (
+            f.platform,
+            f.target_version,
+            f.container.as_str(),
+            f.ready_checks
+        ),
         (Platform::LinuxArm64, Some(v("1.2.3")), "coord_2", 2)
     );
 
@@ -82,7 +87,7 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
             vec!["--platform", "x"],
             "not a platform of the coordinator's image: \"x\"",
         ),
-        (vec!["--version", "1.2"], "not a version: \"1.2\""),
+        (vec!["--target-version", "1.2"], "not a version: \"1.2\""),
         (vec!["--ready-checks", "0"], "0 is not in 1..="),
         (vec!["--container=-x"], "not a container name: \"-x\""),
         (vec!["--container", ""], "not a container name: \"\""),

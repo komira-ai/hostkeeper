@@ -13,7 +13,7 @@ use super::{Pause, Ports, Releases};
 use crate::release::contract::{Repo, Version};
 use crate::release::ports::{PortError, Release, StoredAsset};
 
-/// The id of the container the tests start with, and of the one the verb creates.
+/// The id of the container the tests start with, and of the one the program creates.
 pub(super) const OLD_ID: &str = "oldid0000000000";
 pub(super) const NEW_ID: &str = "newid0000000000";
 

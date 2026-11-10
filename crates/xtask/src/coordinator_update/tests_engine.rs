@@ -24,7 +24,7 @@ struct Call {
 }
 
 /// An `Exec` that answers from a queue and records each call, reading the body file at the
-/// moment of the call (the verb removes it after).
+/// moment of the call (the program removes it after).
 #[derive(Default)]
 struct Script {
     replies: RefCell<VecDeque<std::io::Result<Ran>>>,

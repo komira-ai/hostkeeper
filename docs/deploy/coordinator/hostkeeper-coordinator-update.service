@@ -1,21 +1,23 @@
 # The coordinator's self-update on the machine that runs its container
-# (docs/deploy/coordinator-update.md): one run of `xtask coordinator-update`, which installs the
+# (docs/deploy/coordinator-update.md): one run of `hostkeeper-coordinator-update`, which installs the
 # newest published release's attested image and replaces the container, keeping the old one until
 # the new one is ready. hostkeeper-coordinator-update.timer starts it.
 #
 # Install:
-#   - the xtask binary of a hostkeeper checkout (`cargo build --release -p xtask`) as
-#     /usr/local/libexec/hostkeeper/xtask, `gh` and `curl` on the PATH;
+#   - the program of the release asset hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz,
+#     checked first (its SHA256SUMS line and its attestation, docs/deploy/coordinator-update.md,
+#     "Install"), as /usr/local/libexec/hostkeeper/hostkeeper-coordinator-update, mode 0755, owned
+#     by root; nothing is built on this machine. `gh` and `curl` on the PATH;
 #   - a system user `hostkeeper-coordinator-update` in the group `docker`, with
 #     /var/lib/hostkeeper-coordinator-update as its home (the download directory; gh and the
 #     attestation verifier keep their caches there). Membership of `docker` is root on this
-#     machine: the user is a dedicated one, and the verb loads only an image the release signer
+#     machine: the user is a dedicated one, and the program loads only an image the release signer
 #     attested;
 #   - the CA the coordinator's private listener's certificate chains to, as
 #     /etc/hostkeeper/coordinator-ca.pem, mode 0644, owned by root;
 #   - /etc/hostkeeper/coordinator-update.env, mode 0600, owned by root, holding one line
 #     `GH_TOKEN=<token>`: a GitHub token that can read public repositories and nothing else. It
-#     is gh's credential; the verb reads no environment variable;
+#     is gh's credential; the program reads no environment variable;
 #   - the URL of --coordinator-url below set to the coordinator's private listener, and the
 #     container's name (--container, default hostkeeper-coordinator) if it is another.
 # Then `systemctl enable --now hostkeeper-coordinator-update.timer`.
@@ -36,7 +38,7 @@ Group=hostkeeper-coordinator-update
 SupplementaryGroups=docker
 StateDirectory=hostkeeper-coordinator-update
 EnvironmentFile=/etc/hostkeeper/coordinator-update.env
-ExecStart=/usr/local/libexec/hostkeeper/xtask coordinator-update --download-dir /var/lib/hostkeeper-coordinator-update --coordinator-url https://coordinator.example.com:8444 --ca-file /etc/hostkeeper/coordinator-ca.pem
+ExecStart=/usr/local/libexec/hostkeeper/hostkeeper-coordinator-update --download-dir /var/lib/hostkeeper-coordinator-update --coordinator-url https://coordinator.example.com:8444 --ca-file /etc/hostkeeper/coordinator-ca.pem
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectHome=yes

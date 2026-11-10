@@ -47,8 +47,8 @@
 #          online as a deployment does and every bundle offline as a host does
 #          (cargo xtask release check), and runs the downloaded linux-x86_64 binaries, which
 #          must print exactly `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator
-#          X.Y.Z+<12 hex>` and `hostkeeper-mdm X.Y.Z+<12 hex>` (cargo xtask release
-#          check-binary). These are the commands of
+#          X.Y.Z+<12 hex>`, `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update
+#          X.Y.Z+<12 hex>` (cargo xtask release check-binary). These are the commands of
 #          docs/deploy/verify-a-release.md, and a test keeps the two the same
 #          (crates/xtask/src/release/doc_tests.rs).
 # publish  the one job that holds `contents: write`, per release: creates a draft release at the
@@ -245,6 +245,9 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-mdm
       - name: hostkeeper-mdm says the version and the commit it is released under
         run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-mdm" "$RELEASE_VERSION" "$COMMIT"
+      - run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-linux-x86_64.tar.gz" -C "$RUNNER_TEMP/binary" hostkeeper-coordinator-update
+      - name: hostkeeper-coordinator-update says the version and the commit it is released under
+        run: cargo xtask release check-binary "$RUNNER_TEMP/binary/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$COMMIT"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: release-${{ matrix.tag }}
@@ -404,14 +407,18 @@ jobs:
   # coordinator  waits until the coordinator runs at least this release, so that set-desired
   #          never sends the fields of a newer release to an older coordinator (it would
   #          answer `invalid_request`). This workflow never changes the coordinator: the coordinator's
-  #          own machine updates it from each published release (`cargo xtask coordinator-update`,
-  #          docs/deploy/coordinator-update.md). The job joins the tailnet as set-desired does,
-  #          and asks the private listener `GET /v1/version?at_least=<version>`, which takes no
-  #          token: 200 once the coordinator is at least that version, 409 while it is older, 404
-  #          from a coordinator before the route; curl retries for 30 minutes, then the job
-  #          fails and the hosts' desired version is not set. It holds `id-token: write` for the
-  #          tailnet join alone, and no repository: no checkout, no artifact, no code of ours;
-  #          curl, jq and the pinned tailscale action only.
+  #          own machine updates it from each published release (the release asset
+  #          `hostkeeper-coordinator-update` on a timer there, docs/deploy/coordinator-update.md).
+  #          The job joins the tailnet as set-desired does, and asks the private listener
+  #          `GET /v1/version?at_least=<version>`, which takes no token: 200 once the coordinator
+  #          is at least that version, 409 while it is older, 404 from a coordinator before the
+  #          route; curl retries for 30 minutes, then the job fails and the hosts' desired version
+  #          is not set. curl writes the last answer's HTTP status (000 for none) to the step's
+  #          output `status`, and one of two error steps says why the wait failed: after a 409 or
+  #          a 404, that no coordinator updater reported this release (is the timer installed?);
+  #          after anything else, that the coordinator did not answer. It holds `id-token: write`
+  #          for the tailnet join alone, and no repository: no checkout, no artifact, no code of
+  #          ours; curl, jq and the pinned tailscale action only.
   coordinator:
     needs: [plan, targets]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}
@@ -448,12 +455,19 @@ jobs:
         env:
           COORDINATOR_URL: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
           VERSION: ${{ needs.targets.outputs.version }}
-        run: curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail-with-body --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --url "$COORDINATOR_URL/v1/version?at_least=$VERSION"
-      - name: Say why the wait failed
-        if: ${{ failure() && steps.wait.outcome == 'failure' }}
+        run: curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail-with-body --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --output /dev/null --write-out 'status=%{http_code}\n' --url "$COORDINATOR_URL/v1/version?at_least=$VERSION" >> "$GITHUB_OUTPUT"
+      - name: Say that no coordinator updater reported this release
+        if: ${{ failure() && steps.wait.outcome == 'failure' && (steps.wait.outputs.status == '409' || steps.wait.outputs.status == '404') }}
         env:
+          STATUS: ${{ steps.wait.outputs.status }}
           VERSION: ${{ needs.targets.outputs.version }}
-        run: echo "::error::The coordinator is older than this release ($VERSION), or not reachable, because the coordinator-update of its machine did not bring it to this release within 30 minutes. The hosts' desired version is not set. See docs/deploy/coordinator-update.md."
+        run: echo "::error::No coordinator updater reported this release ($VERSION) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP $STATUS; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. The hosts' desired version is not set."
+      - name: Say that the coordinator did not answer
+        if: ${{ failure() && steps.wait.outcome == 'failure' && steps.wait.outputs.status != '409' && steps.wait.outputs.status != '404' }}
+        env:
+          STATUS: ${{ steps.wait.outputs.status }}
+          VERSION: ${{ needs.targets.outputs.version }}
+        run: echo "::error::The coordinator did not say whether it runs this release ($VERSION) within 30 minutes; its last answer was HTTP $STATUS (000 is no answer). Check the tailnet join and the repository variables HOSTKEEPER_COORDINATOR_URL and HOSTKEEPER_COORDINATOR_CA. The hosts' desired version is not set."
 
   # set-desired  the CI client (set-desired.yml, docs/deploy/ci-client.md), pinned like any
   #          caller's, at the CI client's revision the workflow lint names (`callers.rs`,

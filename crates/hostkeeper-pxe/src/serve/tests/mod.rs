@@ -15,5 +15,6 @@ mod reads;
 mod repositories;
 mod router;
 mod sealed;
+mod sockets;
 mod start;
 mod tftp;
