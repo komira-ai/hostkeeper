@@ -755,8 +755,8 @@ volumes:
   has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
   refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
   instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
-  `starting`, `store_unreachable` and `not_writer` (two-programs.md section 2.7,
-  [coordinator-health.md](../deploy/coordinator-health.md)).
+  `starting`, `store_unreachable`, `not_writer` and `draining` (from SIGTERM until it exits; two-programs.md
+  section 2.7, [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
 

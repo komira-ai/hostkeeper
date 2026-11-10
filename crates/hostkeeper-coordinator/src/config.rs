@@ -79,7 +79,9 @@ use crate::health::{self, Serving};
 use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::inventory::RecordWindow;
-use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
+use crate::listen::{
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve, together,
+};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::migrate::{HostGroupsCommand, migrate};
@@ -705,16 +707,6 @@ pub async fn bind_tcp(
     Ok((tcp.local_addr()?, accept_tcp(tcp)))
 }
 
-/// Two futures that never finish, polled together: it never returns.
-async fn together(
-    first: impl Future<Output = Infallible>,
-    second: impl Future<Output = Infallible>,
-) -> Infallible {
-    let (Either::Left((never, _)) | Either::Right((never, _))) =
-        select(pin!(first), pin!(second)).await;
-    match never {}
-}
-
 /// Binds the listeners with `bind` (which answers the address bound and the function that
 /// accepts connections): the health listener first when there is one, which from then on
 /// answers `starting` until the rest are bound; then the heartbeat listener, the private one,
@@ -736,7 +728,23 @@ where
     Next: Future<Output = io::Result<Stream>> + Send,
     Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
-    let serving = Serving::default();
+    run_as(parts, bind, ready, Serving::default()).await
+}
+
+/// [`run`], its health listener saying what `serving` holds ([`start`] drains it).
+async fn run_as<Bind, Binding, Accept, Next, Stream>(
+    parts: Parts,
+    bind: Bind,
+    ready: impl FnOnce(Bound),
+    serving: Serving,
+) -> Result<Infallible, StartError>
+where
+    Bind: Fn(SocketAddr) -> Binding,
+    Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
+    Accept: FnMut() -> Next + Send,
+    Next: Future<Output = io::Result<Stream>> + Send,
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
     let (health, probing) = match parts.health_listen {
         Some(addr) => {
             let (addr, accept) = bind(addr).await?;
@@ -882,7 +890,7 @@ async fn signalled() -> io::Result<()> {
 }
 
 /// Runs the coordinator, its sockets bound by `bind` and the issuer's keys fetched trusting
-/// `roots`, until `stop` resolves.
+/// `roots`, until `stop` resolves, which drains the health listener ([`health::drain_on`]).
 ///
 /// # Errors
 /// [`StartError`]: the start is refused ([`build`]), an address cannot be bound, or `stop`
@@ -901,7 +909,14 @@ where
     Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
-    let serving = run(parts, bind, |bound| println!("{}", start_line(&bound)));
+    let health = Serving::default();
+    let stop = health::drain_on(stop, health.clone());
+    let serving = run_as(
+        parts,
+        bind,
+        |bound| println!("{}", start_line(&bound)),
+        health,
+    );
     match select(pin!(stop), pin!(serving)).await {
         Either::Left((stopped, _)) => stopped.map_err(StartError::from),
         Either::Right((served, _)) => {

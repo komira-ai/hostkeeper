@@ -1,8 +1,8 @@
 //! `hostkeeper-coordinator serve --health-listen`: the plain-HTTP loopback listener a probe on
 //! the coordinator's machine asks `GET /healthz` of (docs/design/two-programs.md section 2.7).
 //! It takes a loopback address only; without the flag there is none; with it, it is bound first
-//! and says `starting` until every other listener is bound, then `ok`. The connections are in
-//! memory; nothing binds a socket.
+//! and says `starting` until every other listener is bound, then `ok`, and `draining` in every
+//! answer made after the stop. The connections are in memory; nothing binds a socket.
 
 mod support;
 
@@ -10,11 +10,11 @@ use std::io;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use hostkeeper_coordinator::config::{Bound, Parts, StartError, run, start_line};
-use support::serve::{Files, build_given, flags_of, refusal};
+use hostkeeper_coordinator::config::{Bound, Parts, StartError, run, start, start_line};
+use support::serve::{Files, build_given, flags_of, refusal, roots};
 use support::{Net, accepting};
 use tokio::io::{AsyncReadExt, AsyncWriteExt, DuplexStream};
-use tokio::sync::{Notify, Semaphore, oneshot};
+use tokio::sync::{Notify, Semaphore, mpsc, oneshot};
 
 /// The health listener's address in these tests.
 const HEALTH: &str = "127.0.0.1:9";
@@ -276,4 +276,73 @@ async fn there_is_no_health_listener_without_the_flag() {
         unbound.map(drop).map_err(|why| why.kind()),
         Err(io::ErrorKind::ConnectionRefused)
     );
+}
+
+/// Proves: through `start`, a probe of the health listener is answered `200 ok` while it serves;
+/// once the stop resolves, `start` returns `Ok`, and a probe that connected before the stop and
+/// whose request is answered after it is told `503 draining`, not `ok`. (Its connection's task
+/// outlives `start` in the test's runtime; it stands for an answer made while the process exits.)
+///
+/// Catches: a `start` that does not drain on the stop signal, so an answer made between the
+/// signal and the exit reads the coordinator as healthy.
+#[tokio::test]
+async fn an_answer_made_after_the_stop_through_start_is_draining() {
+    let files = Files::new("health-stop");
+    let health: SocketAddr = HEALTH.parse().expect("an address");
+    let head = "GET /healthz HTTP/1.1\r\nhost: localhost\r\n\r\n";
+    // Two probes wait for the health listener's accepts: one sent whole, one written as `start`
+    // reads it (a pipe of 1 byte).
+    let (mut before, first) = tokio::io::duplex(4096);
+    before.write_all(head.as_bytes()).await.expect("written");
+    let (mut across, second) = tokio::io::duplex(1);
+    let (offer, probes) = mpsc::unbounded_channel();
+    offer.send(first).expect("offered");
+    offer.send(second).expect("offered");
+    let probes = Mutex::new(Some(probes));
+    // The other listeners accept nothing: their senders are kept until the test ends.
+    let quiet = Arc::new(Mutex::new(Vec::new()));
+    let kept = Arc::clone(&quiet);
+    let bind = move |addr: SocketAddr| {
+        let receive = if addr == health {
+            probes.lock().expect("probes").take().expect("bound once")
+        } else {
+            let (send, receive) = mpsc::unbounded_channel();
+            kept.lock().expect("kept").push(send);
+            receive
+        };
+        async move { Ok::<_, io::Error>((addr, accepting(receive))) }
+    };
+    let (stop, stopped) = oneshot::channel::<()>();
+    let args = with_health(&files, HEALTH);
+    let running = tokio::spawn(start(flags_of(args), roots(), bind, async move {
+        stopped.await.expect("sent");
+        Ok(())
+    }));
+
+    let mut answer = String::new();
+    before.read_to_string(&mut answer).await.expect("read");
+    assert_eq!(
+        status_and_body(&answer),
+        ("HTTP/1.1 200 OK", "ok"),
+        "{answer}"
+    );
+    // Written only once the health listener reads it: the probe is connected before the stop.
+    across.write_all(b"GET ").await.expect("written");
+    stop.send(()).expect("sent");
+    running
+        .await
+        .expect("the start ended")
+        .expect("a stop is a clean end");
+    across
+        .write_all(&head.as_bytes()["GET ".len()..])
+        .await
+        .expect("written");
+    let mut answer = String::new();
+    across.read_to_string(&mut answer).await.expect("read");
+    assert_eq!(
+        status_and_body(&answer),
+        ("HTTP/1.1 503 Service Unavailable", "draining"),
+        "{answer}"
+    );
+    drop(quiet);
 }

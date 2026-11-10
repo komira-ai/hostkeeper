@@ -21,13 +21,13 @@
 
 use std::convert::Infallible;
 use std::io;
-use std::pin::Pin;
+use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
 use std::time::Duration;
 
 use futures::FutureExt;
-use futures::future::BoxFuture;
+use futures::future::{BoxFuture, Either, select};
 use hostkeeper_tls::TlsSource;
 use hyper::body::Incoming;
 use hyper::server::conn::{http1, http2};
@@ -172,6 +172,16 @@ where
             }
         }
     }
+}
+
+/// Two futures that never finish, polled together: it never returns.
+pub(crate) async fn together(
+    first: impl Future<Output = Infallible>,
+    second: impl Future<Output = Infallible>,
+) -> Infallible {
+    let (Either::Left((never, _)) | Either::Right((never, _))) =
+        select(pin!(first), pin!(second)).await;
+    match never {}
 }
 
 /// A connection's IO whose writes fail with [`io::ErrorKind::TimedOut`] when one makes no
