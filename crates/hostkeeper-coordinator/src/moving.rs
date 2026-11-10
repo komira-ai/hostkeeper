@@ -12,9 +12,15 @@
 //!    those plans, as a host that joins does: it counts as started in them ([`crate::stages`]).
 //!    The admission is kept in the fleet's memory, per package and version, and is made again after
 //!    a restart.
-//! 2. **Uninstalls.** The host's uninstall intents run, then its installs and updates wait for
+//! 2. **Facts.** The move raised the host's facts generation ([`crate::facts`]), and the host
+//!    is sent its facts, which name the new group. A host whose daemon announced `facts-v1` over
+//!    gRPC is ordered nothing, and is told [`crate::decide::Gate::Moving`], until its heartbeat
+//!    reports the generation, decided at each heartbeat: a change of the host's facts during the
+//!    move holds it again until it reports that one. A host whose daemon did not announce the
+//!    feature is not held for facts.
+//! 3. **Uninstalls.** The host's uninstall intents run, then its installs and updates wait for
 //!    them ([`crate::decide::Gate::Moving`]).
-//! 3. **Installs and updates.** The packages of the group are ordered in the order of its list
+//! 4. **Installs and updates.** The packages of the group are ordered in the order of its list
 //!    ([`crate::install_order`]), back to back, without the plan's gate ([`crate::stages::gate`],
 //!    [`crate::stages::uninstall_gate`]) for the packages and versions it was admitted to, and under
 //!    every other rule of the decision ([`crate::decide`]).
@@ -55,12 +61,22 @@ struct Sequence {
     /// The packages the host was admitted to, each with the desired version it was admitted at;
     /// none until the host is admitted.
     admitted: Option<BTreeMap<String, Version>>,
+    /// Whether the host's daemon has not reported the generation of its facts yet, as of the
+    /// host's last heartbeat.
+    facts_pending: bool,
 }
 
 impl Fleet {
     /// Begins the move of the host `id` into `to`, dropping the admission of a move under way.
     pub(crate) fn begin_move(&mut self, id: HostId, to: GroupName) {
-        self.moves.0.insert(id, Sequence { to, admitted: None });
+        self.moves.0.insert(
+            id,
+            Sequence {
+                to,
+                admitted: None,
+                facts_pending: false,
+            },
+        );
     }
 
     /// Makes the move of the host `id` what its record says: under way into `group` when
@@ -86,6 +102,26 @@ impl Fleet {
             .0
             .get(id)
             .is_some_and(|move_| move_.admitted.is_none())
+    }
+
+    /// Whether the host `id` is moving and is ordered nothing for now: it is not admitted yet, or
+    /// its daemon has not reported its facts' generation.
+    pub(crate) fn holds_moving(&self, id: &HostId) -> bool {
+        self.waits_to_move(id)
+            || self
+                .moves
+                .0
+                .get(id)
+                .is_some_and(|move_| move_.facts_pending)
+    }
+
+    /// Notes whether the move of the host `id` waits for the host to report its facts.
+    fn await_facts(&mut self, id: &HostId, pending: bool) {
+        self.moves
+            .0
+            .get_mut(id)
+            .into_iter()
+            .for_each(|move_| move_.facts_pending = pending);
     }
 
     /// Whether the host `id` is moving and admitted: its uninstalls go past the plan's gate.
@@ -239,7 +275,8 @@ impl Coordinator {
     /// Takes the next step of the move of the host `id`, at its heartbeat and under the fleet's
     /// lock, after the heartbeat is noted: the fleet's move is made what the host's record says
     /// ([`Basis`]); a host whose packages match its group ends its move; a host not admitted yet
-    /// is admitted when the plans admit it.
+    /// is admitted when the plans admit it; a host that must report its facts' generation is held
+    /// until it does.
     pub(crate) fn step_move(
         &self,
         fleet: &mut Fleet,
@@ -257,11 +294,17 @@ impl Coordinator {
         let to_do = needed(services, &desired, fleet, id, now);
         if to_do.is_empty() && !fleet.uninstalls_pending(services, id) {
             self.end_move(fleet, id, group);
-        } else if fleet.waits_to_move(id)
+            return;
+        }
+        if fleet.waits_to_move(id)
             && let Some(admitted) = admission(&to_do, fleet, id, now)
         {
             fleet.admit(id, admitted);
         }
+        let pending = fleet
+            .facts
+            .awaits(id, self.ops.facts_generation(id.as_str()));
+        fleet.await_facts(id, pending);
     }
 
     /// Clears the move of the host `id` into `group` from its record and the fleet; a record that

@@ -12,6 +12,12 @@
 //! records for a host, and the host's move begins afresh: a move under way is replaced, and the
 //! admission it had is dropped ([`crate::moving`]).
 //!
+//! The audit entry raises the host's facts generation ([`crate::facts`]), once it is committed:
+//! the facts the host is sent carry the new group, and the host is ordered nothing after its
+//! admission until it reports that generation. A commit that fails raises nothing, and the
+//! fleet's lock, held from the first write to the end, keeps the new group out of the facts
+//! until the call has ended.
+//!
 //! The entry names the host (`node_id`) and the new group (`host_group`); its reason is
 //! `from <old> to <new>: <reason>`, or `into <new>: <reason>` for a host that was in no group.
 //! Each intent cancelled is an `uninstall_cancelled` entry after it. The sequence that follows
@@ -30,6 +36,10 @@ use crate::inventory::unreadable;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, OpsError, Write};
 use crate::service::Coordinator;
+
+/// The audit action of a move; it raises the facts generation of the host it names
+/// ([`crate::facts`]).
+pub(crate) const ACTION_MOVE: &str = "host_move";
 
 /// What to answer, and log, when a host's group cannot be written.
 fn unwritten(why: StoreError) -> Refusal {
@@ -88,7 +98,7 @@ impl Coordinator {
             .filter(|package| !into.packages.contains(package));
         let wanted = listed_by(&fleet, leaving, std::slice::from_ref(&host));
         let nodes = [host.to_string()];
-        let mut audit = AuditEntry::new(by, "host_move");
+        let mut audit = AuditEntry::new(by, ACTION_MOVE);
         audit.node_id = Some(host.to_string());
         audit.host_group = Some(to.to_string());
         audit.reason = Some(if before.host_group.is_empty() {

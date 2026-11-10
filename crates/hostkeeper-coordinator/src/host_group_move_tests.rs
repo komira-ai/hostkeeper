@@ -25,11 +25,11 @@ fn membership(group: &str, moving_from: Option<&str>) -> Membership {
 /// Proves: a host in no group moves into one: the answer names no group it came from, the audit
 /// entry is `host_move` about the host and the new group with the reason `into alpha: ...`, the
 /// host's record names the new group and the empty group it moves from (so it is moving), and the
-/// rest of the record, the generation of its facts included, is as it was; no intent is written
-/// for a host with no group to leave.
+/// rest of the record is as it was, its `facts_generation` field included (the generation of a
+/// host's facts is the number of the audit entry that raised it, `moving_facts_tests.rs`); no
+/// intent is written for a host with no group to leave.
 ///
-/// Catches: a record whose move is not marked, or a facts generation raised by a call that makes
-/// no facts.
+/// Catches: a record whose move is not marked, or a record field written that nothing reads.
 #[test]
 fn a_host_in_no_group_moves_into_its_first() {
     let world = World::new("hg-move-first");

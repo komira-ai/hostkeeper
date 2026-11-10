@@ -376,7 +376,8 @@ pub fn reconcile(
         }
     }
     // The plan reads the desired state the changes above left: a rollback starts it over.
-    if let Some(want) = store.of_def(def) {
-        crate::rollouts::advance(def, &want, ops, fleet, now);
-    }
+    store
+        .of_def(def)
+        .into_iter()
+        .for_each(|want| crate::rollouts::advance(def, &want, ops, fleet, now));
 }

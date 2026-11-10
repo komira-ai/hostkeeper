@@ -334,6 +334,8 @@ mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
 #[cfg(test)]
+mod moving_facts_tests;
+#[cfg(test)]
 mod moving_tests;
 #[cfg(test)]
 mod one_live_update_coordinator_tests;
@@ -392,6 +394,8 @@ mod repository_origin_support;
 mod repository_origin_tests;
 #[cfg(test)]
 mod repository_private_tests;
+#[cfg(test)]
+mod repository_push_group_tests;
 #[cfg(test)]
 mod repository_push_private_tests;
 #[cfg(test)]

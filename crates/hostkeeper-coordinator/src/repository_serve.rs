@@ -11,11 +11,12 @@
 //! other than `GET` 405 `method_not_allowed`. Everything else a host may not read is 404
 //! `not_found`, the answer of a path that does not exist: a name that is not a private repository
 //! of the registry (public or unknown), a `<group>` that is not the host's own group
-//! ([`host_group`]) or not one of the repository's suites, and a `<rest>` that is not 1 to 1024
+//! ([`group_of`]) or not one of the repository's suites, and a `<rest>` that is not 1 to 1024
 //! bytes of segments with no empty, `.` or `..` segment and no `%` (the locator grammar). A read
 //! the grammar passes but the host may not make, another group's path or a name that is not
 //! private, is also logged at warn with the node id and the path. The group is looked up at every
-//! request, so a host whose certificate names another role is served that group's paths only.
+//! request, so a host whose certificate names another role is served that group's paths only, and
+//! once the store holds a host group a host is served the paths of the group its record holds.
 //!
 //! The origin's 200 is answered 200, the body streamed as it arrives and never held whole, with
 //! the `Content-Length` the origin gave; its 404 is 404 `not_found`. Any other status, a failed
@@ -57,10 +58,24 @@ enum Failure {
     Origin(#[from] OriginError),
 }
 
-/// The group of the host `id`, whose certificate names `role`: the role, until the coordinator
-/// holds host groups. The one place that says it.
+/// The group of the host `id`, whose certificate names `role`: the role. A coordinator that
+/// holds host groups judges a request by [`group_of`] instead.
 pub(crate) fn host_group(_id: &HostId, role: &str) -> String {
     role.to_owned()
+}
+
+/// The group whose paths the host `identity` may read: in group mode the group of its enrollment
+/// record, empty for a host in none (it reads nothing); else its certificate's role
+/// ([`host_group`]). It is the group the host's repository set names the suite of
+/// ([`crate::repository_push`]).
+fn group_of(coordinator: &Coordinator, identity: &Identity) -> String {
+    if !coordinator.desired.in_group_mode() {
+        return host_group(&identity.host_id, identity.role.name());
+    }
+    coordinator
+        .membership_of(&identity.host_id)
+        .map(|(group, _)| group.to_string())
+        .unwrap_or_default()
 }
 
 /// `answer` as a route's.
@@ -135,7 +150,7 @@ pub(crate) async fn serve<B>(
     let Some(wanted) = Wanted::of(path) else {
         return not_found();
     };
-    let group = host_group(&identity.host_id, identity.role.name());
+    let group = group_of(coordinator, &identity);
     let found = coordinator.desired.with_repositories(|registry| {
         registry
             .get(wanted.name)

@@ -19,10 +19,10 @@ use crate::registry::Digest;
 use crate::rollouts::Pause;
 use crate::testutil::{id, version};
 
-const MOVING: Option<Why> = Some(Why::Gate(Gate::Moving));
+pub(crate) const MOVING: Option<Why> = Some(Why::Gate(Gate::Moving));
 
 /// The wide policy: everything may go at once, in one stage.
-fn wide() -> RolloutPolicy {
+pub(crate) fn wide() -> RolloutPolicy {
     policy(|p| {
         p.max_updating = Some(5);
         p.live_rollouts = Some(4);
@@ -32,7 +32,7 @@ fn wide() -> RolloutPolicy {
 
 /// What a host that lists hostkeeper and `running` is told: `install svc`, `update svc`,
 /// `uninstall svc`, or nothing.
-fn told(farm: &Farm, host: &str, running: &[(&str, &str)]) -> Option<String> {
+pub(crate) fn told(farm: &Farm, host: &str, running: &[(&str, &str)]) -> Option<String> {
     let listed = std::iter::once((SELF, "1.0"))
         .chain(running.iter().copied())
         .map(|(name, at)| runs(name, at))
@@ -41,7 +41,7 @@ fn told(farm: &Farm, host: &str, running: &[(&str, &str)]) -> Option<String> {
 }
 
 /// What a host that lists the services `listed` is told ([`told`]).
-fn told_beats(farm: &Farm, host: &str, listed: Vec<ServiceBeat>) -> Option<String> {
+pub(crate) fn told_beats(farm: &Farm, host: &str, listed: Vec<ServiceBeat>) -> Option<String> {
     let (reply, order) = ask_typed(&farm.world.rig, host, "storage", beat_of(INSTALLER, listed));
     match (reply, order) {
         (_, Some(Order::Install { service, .. })) => Some(format!("install {service}")),
@@ -76,11 +76,11 @@ fn held(farm: &Farm, package: &str, host: &str) {
         .expect("held");
 }
 
-fn say(told: &str) -> Option<String> {
+pub(crate) fn say(told: &str) -> Option<String> {
     Some(told.to_owned())
 }
 
-fn membership(group: &str, moving_from: Option<&str>) -> Membership {
+pub(crate) fn membership(group: &str, moving_from: Option<&str>) -> Membership {
     Membership {
         host_group: group.to_owned(),
         moving_from: moving_from.map(str::to_owned),
@@ -90,7 +90,7 @@ fn membership(group: &str, moving_from: Option<&str>) -> Membership {
 /// A farm of the group `old`, which lists `oldsvc` and then its config `oldcfg`, and the group
 /// `new` with `policy`, which lists `svc` and then its config `cfg`, both wanted at 2.0; the host
 /// `m1` is in `old` and runs its two packages, and has been heard so.
-async fn farm_of(name: &str, new: RolloutPolicy) -> Farm {
+pub(crate) async fn farm_of(name: &str, new: RolloutPolicy) -> Farm {
     let farm = Farm::new(name);
     farm.group("old", &["oldsvc", "oldcfg"], Some(wide()));
     farm.group("new", &["svc", "cfg"], Some(new));
@@ -104,7 +104,7 @@ async fn farm_of(name: &str, new: RolloutPolicy) -> Farm {
     farm
 }
 
-const OLD: [(&str, &str); 2] = [("oldsvc", "1.0"), ("oldcfg", "1.0")];
+pub(crate) const OLD: [(&str, &str); 2] = [("oldsvc", "1.0"), ("oldcfg", "1.0")];
 
 /// Proves: a move writes the one audit entry `host_move` for the host and the new group with the
 /// reason `from old to new: ...`, and the moved host is shown `moving` for each package of the

@@ -157,15 +157,18 @@ struct Plan {
 }
 
 /// The names of the repositories the host `id` needs: those of the services assigned to it and
-/// not excluded, and of the services it announced.
+/// not excluded, and of the services it announced. In group mode the services placed on it are
+/// the packages of its group, not what the rollout file and the assignments place.
 fn needed(coordinator: &Coordinator, fleet: &Fleet, id: &HostId) -> BTreeSet<String> {
-    coordinator
-        .services
-        .defs()
-        .filter(|def| {
-            (fleet.is_assigned(def, id) && !fleet.is_excluded(&def.name, id))
-                || fleet.lists(id, &def.name)
-        })
+    let grouped = coordinator.desired.in_group_mode();
+    let placed = grouped.then(|| coordinator.basis_of(id));
+    let of_group = placed.iter().flat_map(|basis| basis.services.defs());
+    let of_file = coordinator.services.defs().filter(|def| {
+        (!grouped && fleet.is_assigned(def, id) && !fleet.is_excluded(&def.name, id))
+            || fleet.lists(id, &def.name)
+    });
+    of_group
+        .chain(of_file)
         .map(|def| def.repository.clone())
         .collect()
 }

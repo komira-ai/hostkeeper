@@ -54,6 +54,10 @@ start. In group mode:
   and repository.
 - A package a host runs that its group does not list, and no uninstall intent covers (it was
   installed by hand, or by an earlier placement), is never ordered. `Hosts.Get` still shows it.
+- A private repository is served to a host under the name of its group, the one its record holds,
+  not the role its certificate names: the suite a host is sent
+  ([repository-keys.md](repository-keys.md)) and the paths it may read are of that group. A host
+  in no group reads none.
 
 Without any group, nothing on this page applies and the coordinator places by the rollout file and
 the operator's assignments ([assignments.md](assignments.md)). The groups and their desired
@@ -133,7 +137,9 @@ The host is in the new group from the call: its record is written first, and the
 stop counting it. The same commit writes the audit entry, an uninstall intent for each package
 of the old group that the host listed and the new group does not (in the reverse of the old list's
 order), and the cancelling of the host's intents for packages the new group lists. If that commit
-fails, the host's old record is written back, and the call changes nothing.
+fails, the host's old record is written back, and the call changes nothing. The audit entry also
+raises the host's facts generation (see the facts below), once it is committed, so a call that
+fails raises nothing.
 
 The host is then moving until its packages match its new group, at the host's heartbeats:
 
@@ -145,10 +151,19 @@ The host is then moving until its packages match its new group, at the host's he
    its quiet start admits no host. When the host is admitted it takes a place in each of those
    plans, as a host that joins does. The admission is kept in memory: after a restart the
    coordinator makes it again.
-2. **Uninstalls.** The host's uninstall intents run, one order at a time, under the halt, the
+2. **Facts.** The move raised the host's facts generation, and the next answer to the host's
+   heartbeat over gRPC carries its facts, which name the new group. A host whose daemon announces
+   `facts-v1` is ordered nothing, and is told `moving`, until its heartbeat reports that
+   generation: the daemon has written the facts file by then, so a package installed after reads
+   the new group. The coordinator decides this at each heartbeat, so a change of the host's facts
+   during the move (`hkctl hosts set-labels`) holds the sequence again until the host reports
+   the new generation. A host whose daemon does not announce `facts-v1`, or that heartbeats over
+   the JSON route, is sent no facts and is not held for them; so is every host of a coordinator
+   that does not advertise the feature.
+3. **Uninstalls.** The host's uninstall intents run, one order at a time, under the halt, the
    hold and the one update at a time on a host; the admitted host is not asked the plan's gate
    (`rollout_elsewhere`, `no_slot`) for them. The installs and updates wait for them (`moving`).
-3. **Installs and updates.** The packages of the new group are ordered in the order of its list,
+4. **Installs and updates.** The packages of the new group are ordered in the order of its list,
    back to back. An admitted host is not asked the plan's gate (stage, pause, `no_slot`,
    `rollout_elsewhere`) for the package and version it was admitted to; every other rule holds. A
    package the host runs at another version is updated, a downgrade included.
@@ -175,7 +190,18 @@ the plan's gate.
   list.
 
 A host's holds, exclusions and minimum version stay with it. A standing force of the old group no
-longer covers it. The move sends no facts file and waits for none: that is not built.
+longer covers it.
+
+### The facts
+
+A host's facts (its id, its group, its labels) are sent in the answer to its heartbeat over gRPC,
+whole, until the host reports their generation. The generation is the number of the newest audit
+entry that changed the facts of the host: `host_move`, `set_labels`, an approval or a replacing
+approval, or, if none since the coordinator opened its audit log, the number of its last entry.
+The group in the facts is the one the host's record holds, or, for a host in none, the role it
+was approved for. Nothing is stored for the generation: it follows from the audit log, so a
+restart resends every host its facts once and the daemon, which writes the file only on a change,
+writes nothing.
 
 ## Installs and uninstalls follow the list
 
@@ -284,8 +310,6 @@ the plan they are about.
 
 - Approval by group: `Approve` and `AddRecord` name no group, the services an approval names are
   not refused, and the Mac allowlist names no group. A new host is in no group until `Move`.
-- The facts file (a host's id and group, written by the daemon); a move does not wait for it.
-- The private repository for config packages and the host's read of it.
 - The CI allow-list's `host_groups`: a CI token may deploy to any group that lists its service.
 - The migration of roles, the rollout file and assignments into groups, and the refusal of
   `--rollout-file`. Until then, putting the first group is the whole fleet changing from placement

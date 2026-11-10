@@ -53,7 +53,8 @@
 //!    it ([`Fleet::occupants_of`]).
 //!
 //! A host moved into its group ([`crate::moving`]) is told [`Gate::Moving`] for every package, before
-//! every rule above but a halt, until the group's plans admit it. Once admitted, its installs and
+//! every rule above but a halt, until the group's plans admit it and, if its daemon announced
+//! `facts-v1`, it has reported the generation of its facts. Once admitted, its installs and
 //! updates wait for its uninstalls (`moving`), and the plan's gate (rule 6 from `stages::gate`, and
 //! the `rollout_elsewhere` and `no_slot` of an uninstall) is not asked of the packages and
 //! versions it was admitted to; every other rule holds as for any host.
@@ -190,8 +191,8 @@ pub enum Gate {
     /// uninstall waits.
     UninstallOrder,
     /// In a host group: the host was moved into its group and its move has not started or is not
-    /// over. It is ordered nothing until the group's plans admit it, and its installs and updates
-    /// wait for its uninstalls ([`crate::moving`]).
+    /// over. It is ordered nothing until the group's plans admit it and its daemon has reported
+    /// its facts, and its installs and updates wait for its uninstalls ([`crate::moving`]).
     Moving,
 }
 
@@ -324,7 +325,7 @@ pub fn decide_marked(
     let Some(def) = services.get(service) else {
         return Decision::Skip(Skip::NotAMember);
     };
-    if def.scope.is_some() && fleet.waits_to_move(id) {
+    if def.scope.is_some() && fleet.holds_moving(id) {
         return Decision::Gate(Gate::Moving);
     }
     let member = !fleet.is_excluded(service, id) && fleet.is_assigned(def, id);

@@ -215,6 +215,8 @@ pub struct Fleet {
     pub(crate) picks: crate::picks::Picks,
     /// The hosts whose move into a host group is under way ([`crate::moving`]).
     pub(crate) moves: crate::moving::Moves,
+    /// The facts generations daemons reported over gRPC ([`crate::facts`]).
+    pub(crate) facts: crate::facts::Reported,
 }
 
 impl Fleet {
@@ -243,6 +245,7 @@ impl Fleet {
             store_lost: false,
             picks: crate::picks::Picks::default(),
             moves: crate::moving::Moves::default(),
+            facts: crate::facts::Reported::default(),
         }
     }
 
