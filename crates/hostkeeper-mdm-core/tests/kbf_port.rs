@@ -10,11 +10,12 @@
 //! `tests/kbf_f89ed5c/kbf_names.conf`, which holds `@TEST_BIND@` and `@TEST_LAN@` for
 //! kbf's bind address and LAN; the tests build those addresses at run time.
 //!
-//! Four differences from kbf are deliberate, and the tests name them: comment lines are
+//! Five differences from kbf are deliberate, and the tests name them: comment lines are
 //! this crate's own wording (they say `hostkeeper-mdm`, not `kbf-deploy`), the slice's
 //! `Description=` has lost the words ` on the dev box`, the Caddyfile has the route
 //! `/pkg/<sha256>.pkg` (docs/design/hostkeeper-mdm.md section 7.1, task M5), and the ADE
-//! profile sets `auto_advance_setup` (section 6.2). Everything else is compared byte for
+//! profile sets `auto_advance_setup` (section 6.2), and the SCEP unit runs `scepserver` with
+//! `-allowrenew 0` where kbf's has `-allowrenew 14` (section 6.2). Everything else is compared byte for
 //! byte.
 
 mod common;
@@ -98,6 +99,21 @@ fn kbf_slice_wording(text: &str) -> String {
     text.replace(" on the dev box", "")
 }
 
+/// kbf's SCEP unit runs `scepserver -allowrenew 14`, which refuses a second Mac whose request
+/// has the same (empty) subject as the first; ours passes `0`, which always allows.
+const KBF_ALLOWRENEW: &str = "-crtvalid 365 -allowrenew 14";
+const OUR_ALLOWRENEW: &str = "-crtvalid 365 -allowrenew 0";
+
+/// kbf's SCEP unit with its one deliberate change: `-allowrenew 0`.
+fn kbf_scep_allowrenew(text: &str) -> String {
+    assert_eq!(
+        text.matches(KBF_ALLOWRENEW).count(),
+        1,
+        "kbf's SCEP unit runs scepserver with -allowrenew 14"
+    );
+    text.replace(KBF_ALLOWRENEW, OUR_ALLOWRENEW)
+}
+
 /// The lines of the pkg route, with kbf's state directory's sibling as the pkg directory
 /// (`MDM_PKG_DIR`'s default for the prefix `kbf-mdm`).
 const PKG_ROUTE: &str = "\t@pkg path_regexp ^/pkg/[0-9a-f]{64}\\.pkg$\n\thandle @pkg {\n\t\turi strip_prefix /pkg\n\t\troot * /var/lib/kbf-mdm-pkg\n\t\tfile_server\n\t}\n\n";
@@ -118,6 +134,7 @@ fn kbf_pkg_route(text: &str) -> String {
 fn deliberate(name: &str, text: &str) -> String {
     match name {
         "kbf-mdm.slice" => kbf_slice_wording(text),
+        "kbf-mdm-scep.service" => kbf_scep_allowrenew(text),
         "Caddyfile" => kbf_pkg_route(text),
         _ => text.to_owned(),
     }
@@ -163,13 +180,14 @@ fn rendering_with_kbfs_names_reproduces_kbfs_files() {
 
 /// Catches the deliberate differences growing: the comment lines are the only other
 /// lines that differ, so a file's non-comment lines are exactly kbf's, the only line that
-/// changed outside a comment is the slice's `Description=`, and the only lines added are the
-/// Caddyfile's pkg route.
+/// changed outside a comment are the slice's `Description=` and the SCEP unit's `ExecStart=`
+/// (`-allowrenew 0`), and the only lines added are the Caddyfile's pkg route.
 #[test]
 fn the_only_lines_that_differ_are_comments_and_one_description() {
     for unit in rendered() {
         let want = match unit.name.as_str() {
             "Caddyfile" => kbf_pkg_route(&expand(&unit.name)),
+            "kbf-mdm-scep.service" => kbf_scep_allowrenew(&expand(&unit.name)),
             _ => expand(&unit.name),
         };
         let mut ours = unit
@@ -186,7 +204,10 @@ fn the_only_lines_that_differ_are_comments_and_one_description() {
                 unit.name
             );
             let (Some(a), Some(b)) = (a, b) else { break };
-            if a != b {
+            if a != b && unit.name == "kbf-mdm-scep.service" {
+                assert!(a.ends_with(OUR_ALLOWRENEW), "{a}");
+                assert!(b.ends_with(KBF_ALLOWRENEW), "{b}");
+            } else if a != b {
                 assert_eq!(unit.name, "kbf-mdm.slice");
                 assert_eq!(a, "Description=kbf-mdm services (capped)");
                 assert_eq!(b, "Description=kbf-mdm services on the dev box (capped)");
@@ -203,7 +224,7 @@ fn the_only_lines_that_differ_are_comments_and_one_description() {
 /// Catches the hook's reference data drifting from kbf's templates: the committed
 /// hashes of what kbf-deploy installs (comments left out) must be the hashes of kbf's
 /// templates expanded here, and this crate's manifest must equal them for every file
-/// except the slice and the Caddyfile, whose hashes must be those of kbf's files with
+/// except the slice, the SCEP unit and the Caddyfile, whose hashes must be those of kbf's files with
 /// their deliberate changes.
 #[test]
 fn the_manifest_equals_the_committed_hashes_of_kbfs_installed_files() {
@@ -233,7 +254,10 @@ fn the_manifest_equals_the_committed_hashes_of_kbfs_installed_files() {
             changed.push(file.name.as_str());
         }
     }
-    assert_eq!(changed, ["kbf-mdm.slice", "Caddyfile"]);
+    assert_eq!(
+        changed,
+        ["kbf-mdm.slice", "kbf-mdm-scep.service", "Caddyfile"]
+    );
 }
 
 /// Catches an enrollment profile that differs from the one kbf-deploy's tests hold as

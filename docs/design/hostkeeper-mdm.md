@@ -465,6 +465,21 @@ erases every user's data and every extra volume. On a farm Mac that means its bu
 caches and the work of setting it up for builds. The OS is kept when Apple's conditions hold (it
 starts from its first partition, with a signed system volume).
 
+**Every Mac's SCEP identity has the same subject, so the SCEP server runs with `-allowrenew 0`.**
+The enrollment profile asks for its identity certificate with an empty subject name, the same for
+every Mac. `scepserver` refuses to sign a request whose subject already has a certificate that is
+not within `-allowrenew` days of its end (`failed to sign CSR err="DN  already exists"`), so with
+the kit's `-allowrenew 14` the second Mac to enroll, and any Mac enrolling again after an erase,
+failed in Setup Assistant with "could not find certificate". The unit now passes `-allowrenew 0`
+("set to 0 to always allow"), so a request is always signed. The trade-off: the server no longer
+tells a renewal from a second device, so the challenge password is the only gate on issuing a
+certificate (it was already the gate for the first one). The other way is a unique subject per
+device, a CN built from `%HardwareUUID%` or the serial number in the profile's SCEP payload, which
+keeps the server's duplicate check and names each certificate in the depot. It is not done here
+because it changes the profile every enrolled Mac holds and the identity NanoMDM records, which
+is a decision of its own; until then `-allowrenew 0` is the fix. The kbf port differs from kbf's
+unit by this one argument (`tests/kbf_port.rs`).
+
 ### 6.3 Path B: keep the Mac as it is
 
 Two routes give management without a wipe.

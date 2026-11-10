@@ -270,3 +270,28 @@ fn an_unknown_placeholder_or_a_stray_at_is_refused() {
         "s:2: an @ that starts no @KEY@ placeholder"
     );
 }
+
+/// Catches a SCEP server that refuses a second Mac: every Mac's request has the same (empty)
+/// subject, and `-allowrenew 14` made `scepserver` answer "DN already exists" to any request
+/// whose subject already had a certificate, so a Mac enrolling after the first failed in Setup
+/// Assistant. The rendered unit must pass `-allowrenew 0`, which always allows.
+#[test]
+fn the_rendered_scep_unit_always_allows_a_request_with_a_known_subject() {
+    let r = render(&config()).expect("renders");
+    let scep = r
+        .units
+        .iter()
+        .find(|u| u.name == "hostkeeper-mdm-scep.service")
+        .expect("the SCEP unit");
+    let exec: Vec<&str> = scep
+        .text
+        .lines()
+        .filter(|l| l.starts_with("ExecStart="))
+        .collect();
+    assert_eq!(exec.len(), 1);
+    assert!(
+        exec[0].ends_with(" -crtvalid 365 -allowrenew 0"),
+        "{}",
+        exec[0]
+    );
+}

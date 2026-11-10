@@ -336,3 +336,25 @@ fn the_renewal_job_is_the_first_certificates_job_renewing_within_30_days() {
         assert!(renew.iter().any(|l| l == line), "{line}");
     }
 }
+
+/// Catches the package's SCEP unit refusing a second Mac: every Mac's request has the same
+/// (empty) subject, so `-allowrenew 14` made `scepserver` answer "DN already exists" to every
+/// Mac after the first. The package unit must pass `-allowrenew 0`, which always allows.
+#[test]
+fn the_package_scep_unit_always_allows_a_request_with_a_known_subject() {
+    let unit = UNITS
+        .iter()
+        .find(|u| u.name == "mdm-scep.service")
+        .expect("the SCEP unit");
+    let exec: Vec<&str> = unit
+        .text
+        .lines()
+        .filter(|l| l.starts_with("ExecStart="))
+        .collect();
+    assert_eq!(exec.len(), 1);
+    assert!(
+        exec[0].ends_with(" -crtvalid 365 -allowrenew 0"),
+        "{}",
+        exec[0]
+    );
+}
