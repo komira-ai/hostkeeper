@@ -32,11 +32,12 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 use tonic::{Code, Status};
 
-use super::{CLIENT_PATIENCE, WriteDeadline, connection, reload_all};
-use crate::http::{STATUS_PATH, Surface};
+use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
+use crate::http::{PeerAddr, STATUS_PATH, Surface};
 use crate::service::Coordinator;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
+use crate::wait::ConnectionWaits;
 
 const PATIENCE: Duration = Duration::from_millis(200);
 
@@ -539,4 +540,41 @@ async fn a_held_http2_connection_is_closed_one_patience_after_its_wait_ends() {
         );
         drop(send);
     }
+}
+
+// ---- the address a connection came from -----------------------------------------------------
+
+/// Proves: a TCP stream says the address of its other end, and an in-memory pipe says none.
+#[tokio::test]
+async fn a_tcp_stream_names_its_peer_and_a_pipe_names_none() {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("a loopback socket");
+    let there = listener.local_addr().expect("its address");
+    let (dialled, accepted) =
+        tokio::join!(tokio::net::TcpStream::connect(there), listener.accept());
+    let dialled = dialled.expect("connected");
+    let (accepted, from) = accepted.expect("accepted");
+    assert_eq!(accepted.remote(), Some(from));
+    assert_eq!(accepted.remote(), dialled.local_addr().ok());
+    let (pipe, _far) = tokio::io::duplex(8);
+    assert_eq!(pipe.remote(), None);
+}
+
+/// Proves: a request carries the address of its connection as [`PeerAddr`], and a connection
+/// with no address leaves the request without one; the held waits ride on it either way.
+///
+/// Catches: an address dropped on the way to the request, or invented for a transport with none.
+#[test]
+fn a_request_carries_the_address_of_its_connection_when_it_has_one() {
+    let from: std::net::SocketAddr = "192.0.2.7:4433".parse().expect("an address");
+    let waits = ConnectionWaits::default();
+    let mut named = Request::new(());
+    carry(&mut named, &waits, Some(from));
+    assert_eq!(named.extensions().get::<PeerAddr>(), Some(&PeerAddr(from)));
+    assert!(named.extensions().get::<ConnectionWaits>().is_some());
+    let mut nameless = Request::new(());
+    carry(&mut nameless, &waits, None);
+    assert_eq!(nameless.extensions().get::<PeerAddr>(), None);
+    assert!(nameless.extensions().get::<ConnectionWaits>().is_some());
 }
