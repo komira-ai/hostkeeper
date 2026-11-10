@@ -14,7 +14,7 @@ use tonic::Code;
 use super::operator::post;
 use super::rollouts::{Refused, WIRES, rpc};
 use crate::enrollment::tests::support::Rig as EnrollmentRig;
-use crate::host_groups_support::{body, coordinator_on, put_of};
+use crate::host_groups_support::{body, coordinator_listed, put_of};
 use crate::service::Coordinator;
 use crate::store::Fake;
 use crate::testutil::{OPERATOR, Rig, ci_token};
@@ -33,14 +33,23 @@ struct Wired {
 
 impl Wired {
     fn new(name: &str) -> Self {
+        Self::limited(name, "")
+    }
+
+    /// A world whose allow-list entry also holds the lines `entry_extra`.
+    fn limited(name: &str, entry_extra: &str) -> Self {
         let enrollment = EnrollmentRig::over_records(
             &format!("{name}-enrollment"),
             Arc::new(MemoryRecords::new()),
         );
         let fake = Fake::new();
         let rig = Rig::new(name);
-        let coordinator =
-            coordinator_on(&fake, &rig.clock, Some(Arc::clone(&enrollment.enrollment)));
+        let coordinator = coordinator_listed(
+            &fake,
+            &rig.clock,
+            Some(Arc::clone(&enrollment.enrollment)),
+            entry_extra,
+        );
         rig.at(2_000);
         for (group, packages) in [
             ("alpha", ["hostkeeper", "web"]),
@@ -340,4 +349,165 @@ async fn waited_refused(world: &Wired, wire: super::rollouts::Wire, group: &str)
     )
     .await
     .expect_err("refused")
+}
+
+/// Proves: a CI token whose entry names `host_groups = ["alpha"]` sets alpha over both wires; a
+/// set naming beta (which exists and lists the package) or a group that does not exist is
+/// `PermissionDenied` with the token `forbidden`, changing nothing; a set naming no group is one
+/// deployment to alpha alone.
+#[tokio::test]
+async fn a_limited_ci_token_is_permission_denied_outside_its_groups_over_both_wires() {
+    for wire in WIRES {
+        let world = Wired::limited(
+            &format!("grpc-group-limited-{wire:?}").to_lowercase(),
+            "host_groups = [\"alpha\"]\n",
+        );
+        let answered: proto::SetDesiredResponse = rpc(
+            &world.coordinator,
+            wire,
+            SET_DESIRED,
+            Some(&ci_token()),
+            &set("alpha", "2.0"),
+        )
+        .await
+        .expect("set");
+        assert_eq!(
+            answered.desired.map(|d| d.version),
+            Some("2.0".to_owned()),
+            "{wire:?}"
+        );
+        let before = world.fake.desired();
+
+        for group in ["beta", "missing"] {
+            let refused = rpc::<proto::SetDesiredResponse>(
+                &world.coordinator,
+                wire,
+                SET_DESIRED,
+                Some(&ci_token()),
+                &set(group, "3.0"),
+            )
+            .await
+            .expect_err("refused");
+            assert_eq!(
+                refused,
+                token(Code::PermissionDenied, "forbidden"),
+                "{wire:?} {group}"
+            );
+        }
+        assert_eq!(world.fake.desired(), before, "{wire:?}");
+
+        let _: proto::SetDesiredResponse = rpc(
+            &world.coordinator,
+            wire,
+            SET_DESIRED,
+            Some(&ci_token()),
+            &set("", "4.0"),
+        )
+        .await
+        .expect("no group");
+        let held = |group: &str| {
+            world
+                .coordinator
+                .desired
+                .group_desired(&group.parse().expect("a group"), "web")
+                .map(|desired| desired.version.to_string())
+        };
+        assert_eq!(held("alpha"), Some("4.0".to_owned()), "{wire:?}");
+        assert_eq!(held("beta"), None, "{wire:?}");
+    }
+}
+
+/// Proves: the same token reads a group it may not deploy to over both wires: `Converge` and
+/// `WaitConverged` naming beta are answered.
+#[tokio::test]
+async fn a_limited_ci_token_reads_other_groups_over_both_wires() {
+    for wire in WIRES {
+        let world = Wired::limited(
+            &format!("grpc-group-limited-read-{wire:?}").to_lowercase(),
+            "host_groups = [\"alpha\"]\n",
+        );
+        let _: proto::SetDesiredResponse = rpc(
+            &world.coordinator,
+            wire,
+            SET_DESIRED,
+            Some(OPERATOR),
+            &set("beta", "2.0"),
+        )
+        .await
+        .expect("the operator sets beta");
+
+        let answer: proto::ConvergeResponse = rpc(
+            &world.coordinator,
+            wire,
+            CONVERGE,
+            Some(&ci_token()),
+            &proto::ConvergeRequest {
+                service: "web".to_owned(),
+                host_group: "beta".to_owned(),
+            },
+        )
+        .await
+        .expect("a convergence");
+        assert_eq!(
+            answer.convergence.and_then(|c| c.desired),
+            Some("2.0".to_owned()),
+            "{wire:?}"
+        );
+        let waited: proto::WaitConvergedResponse = rpc(
+            &world.coordinator,
+            wire,
+            WAIT_CONVERGED,
+            Some(&ci_token()),
+            &proto::WaitConvergedRequest {
+                service: "web".to_owned(),
+                version: "2.0".to_owned(),
+                wait_secs: 1,
+                host_group: "beta".to_owned(),
+            },
+        )
+        .await
+        .expect("a wait");
+        assert_eq!(
+            waited.outcome,
+            i32::from(proto::WaitOutcome::Converged),
+            "{wire:?}"
+        );
+    }
+}
+
+/// Proves: the frozen `POST /v1/desired` with a limited token is the form that names no group
+/// over the groups the token may deploy to: alpha is set and beta is not, and a limited token
+/// whose list holds no group that lists the package is HTTP 403 with `{"error":"forbidden"}`.
+#[tokio::test]
+async fn the_frozen_route_deploys_a_limited_token_to_its_groups_alone() {
+    let world = Wired::limited("grpc-group-frozen-limited", "host_groups = [\"alpha\"]\n");
+    let (status, answer) = post(
+        &world.coordinator,
+        "/v1/desired",
+        &ci_token(),
+        &json!({"service": "web", "version": "2.0"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(answer["version"], "2.0");
+    let held = |group: &str| {
+        world
+            .coordinator
+            .desired
+            .group_desired(&group.parse().expect("a group"), "web")
+            .map(|desired| desired.version.to_string())
+    };
+    assert_eq!(held("alpha"), Some("2.0".to_owned()));
+    assert_eq!(held("beta"), None);
+
+    let none = Wired::limited("grpc-group-frozen-none", "host_groups = [\"gamma\"]\n");
+    let (status, answer) = post(
+        &none.coordinator,
+        "/v1/desired",
+        &ci_token(),
+        &json!({"service": "web", "version": "2.0"}).to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(answer["error"], "forbidden");
 }

@@ -74,6 +74,7 @@ use crate::desired::DesiredStore;
 use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::health::{self, Serving};
+use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::inventory::RecordWindow;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
@@ -517,6 +518,13 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         return Err(StartError::LegacyService(name.to_owned()));
     }
     for (n, entry) in oidc.entries().iter().enumerate() {
+        let names = entry.host_groups.iter().flatten();
+        if let Some(name) = names.into_iter().find(|g| g.parse::<GroupName>().is_err()) {
+            return Err(StartError::OidcEntryHostGroup {
+                entry: n + 1,
+                name: name.clone(),
+            });
+        }
         match &entry.services {
             None if legacy.is_none() => return Err(StartError::OidcEntryUnnamed(n + 1)),
             None => {}

@@ -70,7 +70,8 @@ pub enum SetError {
     /// lift again.
     #[error(transparent)]
     Ops(#[from] OpsError),
-    /// The allow-list entry that admitted the token does not name this service.
+    /// The allow-list entry that admitted the token does not name this service, or names
+    /// `host_groups` that exclude where the set would deploy.
     #[error("the token may not set this service")]
     Forbidden,
     /// The version is below the service's `min_version`.

@@ -3,8 +3,8 @@
 //! by [`Coordinator::ci`], which spends it, so a token is checked once; an operator's token
 //! is resolved to its name by [`Coordinator::caller`] and spends nothing. CI and an operator
 //! both set the desired state, and only CI reads the convergence here. They differ in what may
-//! be set (CI: the services its allow-list entry names; an operator: any service the coordinator
-//! manages) and in who the audit names.
+//! be set (CI: the services its allow-list entry names, and in the host groups it names, when it
+//! names any; an operator: any service the coordinator manages) and in who the audit names.
 
 use std::sync::Arc;
 
@@ -135,10 +135,14 @@ impl Coordinator {
     /// [`Self::set_desired_with`] for a set that names the host group `host_group` (none: empty).
     /// A coordinator that holds a host group sets the desired version of the package in the group,
     /// or in each group that lists it ([`Self::set_desired_by_group`]); one that holds none
-    /// refuses a set that names a group `not_in_host_group`.
+    /// refuses every set of a CI token whose allow-list entry names `host_groups` `forbidden`
+    /// (its deployments are limited to groups, and there are none), and then a set that names a
+    /// group `not_in_host_group`.
     ///
     /// # Errors
-    /// [`SetError`], as [`Self::set_desired_with`].
+    /// [`SetError`], as [`Self::set_desired_with`]; [`SetError::Forbidden`] for a token limited
+    /// to host groups on a coordinator that holds none; [`SetError::NotInHostGroup`] for a set
+    /// that names a group on a coordinator that holds none.
     pub(crate) async fn set_desired_in(
         &self,
         setter: &Setter<'_>,
@@ -151,6 +155,16 @@ impl Coordinator {
             return self
                 .set_desired_by_group(setter, body, ask, targets, host_group)
                 .await;
+        }
+        // A token limited to host groups deploys to groups alone, and there are none.
+        if let Setter::Ci(verified) = setter
+            && verified.host_groups.is_some()
+        {
+            tracing::warn!(
+                workflow = %verified.job_workflow_ref,
+                "refused a desired state: the allow-list entry names host groups, the coordinator none"
+            );
+            return Err(SetError::Forbidden);
         }
         if !host_group.is_empty() {
             return Err(SetError::NotInHostGroup);
@@ -267,7 +281,8 @@ impl Coordinator {
     }
 
     /// Whether the allow-list entry that admitted `verified` names `service`: an entry that names
-    /// no services stands for the legacy service.
+    /// no services stands for the legacy service. (Its `host_groups` are judged where the groups
+    /// are: [`Self::set_desired_in`].)
     ///
     /// # Errors
     /// [`SetError::Forbidden`].

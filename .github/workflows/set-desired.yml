@@ -36,7 +36,10 @@
 # step wrote (the version and the targets; the coordinator checks them); and, when
 # `wait` is true and the set succeeded,
 # `releases wait-converged`, one call the coordinator holds until the fleet converges, the
-# service halts, another version is set or `max_polls` times 10 seconds pass. hkctl keeps the
+# service halts, another version is set or `max_polls` times 10 seconds pass. Both pass
+# `--host-group` only when the `host_group` input is not empty: hkctl writes every flag it is
+# given into the request, and a coordinator older than its client refuses a field it does not
+# know, so an empty input sends the bytes it sent before the input existed. hkctl keeps the
 # token in a shell variable and hands it to curl through a pipe: no file holds it, no argument
 # list and no other step's environment. Each call runs with `continue-on-error`, its answer in
 # a file (`--response-file`) and its diagnostics in another, so that the last step, which runs
@@ -60,6 +63,11 @@ on:
         description: "The targets of the version, one JSON object keyed by platform (linux-x86_64, linux-arm64, macos-arm64), each value {\"entries\": [...]} in the order the service prefers, as `cargo xtask release targets` writes them; under 128 KiB, the most the runner passes in one environment value or argument. Each host is ordered the entry of the installer it runs, else the first its daemon can install (docs/design/packages.md, section 3). Needs a coordinator that takes SetDesired with targets."
         type: string
         required: false
+      host_group:
+        description: "The host group the version is set in and waited on, as the coordinator names it. Empty: each group that lists the service (for a token whose allow-list entry names host_groups, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the hkctl of a hostkeeper release that has --host-group."
+        type: string
+        required: false
+        default: ""
       hostkeeper_version:
         description: The hostkeeper release whose command line, hkctl, makes the calls, X.Y.Z, pinned by the caller.
         type: string
@@ -256,12 +264,14 @@ jobs:
       # and its diagnostics are read by the outputs step, so a failure goes on to it. The
       # diagnostics also go to the step's own log (`tee`), so a failed set names its cause there
       # (the coordinator's code and its `refused: <token>` line); the step ends with hkctl's exit
-      # code.
+      # code. `--host-group` is passed as the one word `${HOST_GROUP:+"--host-group=$HOST_GROUP"}`,
+      # which bash expands to nothing when the input is empty and to one argument otherwise.
       - name: Set the desired version
         id: set-desired
         continue-on-error: true
         env:
           SERVICE: ${{ inputs.service }}
+          HOST_GROUP: ${{ inputs.host_group }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
         run: |
@@ -273,11 +283,12 @@ jobs:
             releases set-desired \
             --service "$SERVICE" \
             --request "$RUNNER_TEMP/hkctl-request.json" \
+            ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
             2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)
 
       # One held call, with a token of its own. `--wait-secs` is `max_polls` with a 0 appended,
       # ten times it, as text: no arithmetic is done on an input. The coordinator refuses a wait
-      # above 1800 seconds (`invalid_wait`).
+      # above 1800 seconds (`invalid_wait`). `--host-group` is passed as in the set.
       - name: Wait for the fleet to converge
         id: wait
         if: ${{ inputs.wait && steps.set-desired.outcome == 'success' }}
@@ -285,6 +296,7 @@ jobs:
         env:
           SERVICE: ${{ inputs.service }}
           VERSION: ${{ inputs.version }}
+          HOST_GROUP: ${{ inputs.host_group }}
           COORDINATOR_URL: ${{ inputs.coordinator_url }}
           AUDIENCE: ${{ inputs.audience }}
           MAX_POLLS: ${{ inputs.max_polls }}
@@ -298,6 +310,7 @@ jobs:
             --service "$SERVICE" \
             --version "$VERSION" \
             --wait-secs "${MAX_POLLS}0" \
+            ${HOST_GROUP:+"--host-group=$HOST_GROUP"} \
             2> "$RUNNER_TEMP/hkctl-wait.err"
 
       # Runs whatever happened before it. The program below (OUTPUTS_PROGRAM) reads the outcomes

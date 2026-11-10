@@ -281,6 +281,18 @@ group's policy. A group with no hosts is converged. A package a group lists that
 version in that group orders nothing, and the status shows the pair `no_desired`; when no group
 has a desired version, `WaitConverged` answers `no_desired` at once.
 
+An entry of the CI allow-list may name `host_groups` ([ci-client.md](../deploy/ci-client.md)), a
+list of host group names. Without the key, a token of the entry deploys its services to any group
+that lists them. With it, the token deploys to those groups alone, and `host_groups = []` names
+none. A set that names a group outside the list is refused `forbidden` (gRPC `PermissionDenied`,
+HTTP 403), before the group is looked up, so it does not say whether the group exists. A set that
+names no group is one deployment to each of the token's groups that lists the package, one entry
+each; it is `not_in_host_group` when no group lists the package and `forbidden` when some do but
+none of them is the token's, and `if_generation` is `ambiguous_host_group` when more than one of
+the token's groups lists it. A coordinator that holds no host group refuses such a token every
+set with `forbidden`. The list limits deployments only: `Converge`, `WaitConverged` and
+`GetRelease` answer a token of any admitted entry for any group.
+
 `Releases.Status` answers one entry for each (group, package), with its `host_group`. A version
 marked bad is bad in every group (`Releases.MarkBad` is the package's), so a build that fails in
 a canary group is not rolled on to the next one.
@@ -339,10 +351,9 @@ the plan they are about.
 
 ## Not built yet
 
-- The CI allow-list's `host_groups`: a CI token may deploy to any group that lists its service.
 - The migration of roles, the rollout file and assignments into groups, and the refusal of
   `--rollout-file`. Until then, putting the first group is the whole fleet changing from placement
-  by roles to placement by groups: every host is in no group, and runs what it runs but is ordered
-  nothing, until it is moved.
+  by roles to placement by groups: every host enrolled before it is in no group, and runs what it
+  runs but is ordered nothing, until it is moved.
 
 Each is a later build item of the design ([hostgroups.md](../design/hostgroups.md), section 12).
