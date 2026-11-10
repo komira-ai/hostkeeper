@@ -361,13 +361,15 @@ fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
 }
 
 #[test]
-fn a_release_without_a_deb_or_its_bundle_stops_at_the_download() {
+fn a_release_without_a_deb_its_pkg_or_a_bundle_stops_at_the_download() {
     // Catches: a download that goes on past a missing file (curl without `--fail-early` ends
-    // with the last transfer's status), and so a set made without a platform's `.deb` or its
-    // bundle (its hosts would never be ordered).
+    // with the last transfer's status), and so a set made without a platform's `.deb`, the
+    // macOS `.pkg`, or a bundle (its hosts would never be ordered).
     for (n, missing) in [
         "hello_1.2.3_arm64.deb",
         "hello_1.2.3_amd64.deb.sigstore.json",
+        "hello-1.2.3-macos-arm64.pkg",
+        "hello-1.2.3-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()
@@ -383,17 +385,21 @@ fn a_release_without_a_deb_or_its_bundle_stops_at_the_download() {
 }
 
 #[test]
-fn a_release_without_what_no_list_carries_is_still_set() {
-    // Catches: the job downloading or reading files no entry is made of: macOS's installer and
-    // its bundle (macOS has no list).
-    let site = Site::new("unread");
+fn a_dispatch_of_the_failing_build_needs_no_pkg() {
+    // Catches: the failing build's job downloading or reading hello's `.pkg` (the failing build
+    // has none, and its set has no macOS list): with the release's `.pkg` and its bundle gone, it
+    // is still set.
+    let site = Site::new("fail-ready-no-pkg");
     for missing in [
         "hello-1.2.3-macos-arm64.pkg",
         "hello-1.2.3-macos-arm64.pkg.sigstore.json",
     ] {
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
     }
-    assert_eq!(dispatch(&site, RELEASE, "hello"), set_with());
+    let Ended::Set(outputs) = dispatch(&site, RELEASE, "fail-ready") else {
+        panic!("the failing build is set");
+    };
+    assert_eq!(outputs["version"], format!("{RELEASE}-fail-ready"));
 }
 
 #[test]

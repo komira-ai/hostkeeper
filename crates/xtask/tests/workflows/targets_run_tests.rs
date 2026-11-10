@@ -382,14 +382,16 @@ fn of_several_releases_the_targets_are_the_newest_ones() {
 }
 
 #[test]
-fn a_release_missing_a_deb_or_its_bundle_stops_the_job_before_the_set_and_its_pkg_is_not_read() {
+fn a_release_missing_a_deb_its_pkg_or_a_bundle_stops_the_job_before_the_set() {
     // Catches: targets written for a release whose files do not all check out (one of
-    // hostkeeper's `.deb`s or its bundle, whose entry would pin bytes no repository holds), or a failure of the targets step that the job goes
-    // on after: the set must not run with no targets. The installer pkg and its bundle are not
-    // read, since macOS has no list.
+    // hostkeeper's `.deb`s, its installer `.pkg`, or a bundle, whose entry would pin bytes no
+    // store holds), or a failure of the targets step that the job goes on after: the set must
+    // not run with no targets.
     for (n, withheld) in [
         "hostkeeper_1.2.10_amd64.deb",
         "hostkeeper_1.2.10_arm64.deb.sigstore.json",
+        "hostkeeper-1.2.10-macos-arm64.pkg",
+        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
     ]
     .into_iter()
     .enumerate()
@@ -403,17 +405,6 @@ fn a_release_missing_a_deb_or_its_bundle_stops_the_job_before_the_set_and_its_pk
             "{withheld}"
         );
         assert!(!ended.sets_desired());
-    }
-    for (n, withheld) in [
-        "hostkeeper-1.2.10-macos-arm64.pkg",
-        "hostkeeper-1.2.10-macos-arm64.pkg.sigstore.json",
-    ]
-    .into_iter()
-    .enumerate()
-    {
-        let site = Site::new(&format!("withheld-pkg-{n}"), &["1.2.10"], &["v1.2.10"]);
-        site.withhold("1.2.10", withheld);
-        assert_eq!(run(&site), passed("1.2.10", true), "{withheld}");
     }
 }
 

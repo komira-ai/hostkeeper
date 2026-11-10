@@ -144,7 +144,7 @@ fn a_pending_activate_whose_version_cannot_be_read_ends_failed() {
             }
             "no-steps" => {
                 fs::create_dir_all(nr.version_dir(V2)).unwrap();
-                fs::write(&target, r#"{"installer":"macos-pkg"}"#).unwrap();
+                fs::write(&target, r#"{"installer":"oci-image"}"#).unwrap();
             }
             _ => {}
         }

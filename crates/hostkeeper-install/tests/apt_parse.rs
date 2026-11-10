@@ -745,9 +745,9 @@ fn comparing_an_invalid_version_is_none() {
     }
 }
 
-/// The reasons of packages-repositories.md section 4.5 (and of 2.3 and packages-native.md 10.2
-/// for the rest), each with its token, class and outcome, and its place in `Reason::ALL`.
-const TABLE: [(Reason, &str, Class, Outcome); 18] = [
+/// The reasons of packages-repositories.md section 4.5 (and of 2.3, packages-native.md 10.2 and
+/// section 4.7's two of `macos-pkg` for the rest), each with its token, class and outcome, and its place in `Reason::ALL`.
+const TABLE: [(Reason, &str, Class, Outcome); 20] = [
     (
         Reason::CoordinatorTooOld,
         "coordinator_too_old",
@@ -783,6 +783,12 @@ const TABLE: [(Reason, &str, Class, Outcome); 18] = [
         "fetch_failed",
         Class::Environment,
         Outcome::Deferred,
+    ),
+    (
+        Reason::InstallerError,
+        "installer_error",
+        Class::Release,
+        Outcome::Failed,
     ),
     (
         Reason::IoError,
@@ -856,6 +862,12 @@ const TABLE: [(Reason, &str, Class, Outcome); 18] = [
         Class::Environment,
         Outcome::Deferred,
     ),
+    (
+        Reason::UnsafeDirectory,
+        "unsafe_directory",
+        Class::Environment,
+        Outcome::Failed,
+    ),
 ];
 
 /// A place for each reason; a new reason without an arm does not compile.
@@ -867,18 +879,20 @@ fn place(reason: Reason) -> usize {
         Reason::DpkgError => 3,
         Reason::DpkgInterrupted => 4,
         Reason::FetchFailed => 5,
-        Reason::IoError => 6,
-        Reason::ManifestInvalid => 7,
-        Reason::NotInRepository => 8,
-        Reason::OrderInvalid => 9,
-        Reason::PackageConflict => 10,
-        Reason::PackageDigestMismatch => 11,
-        Reason::PackageManagerBusy => 12,
-        Reason::PackageScripts => 13,
-        Reason::PackageTooLarge => 14,
-        Reason::RepositoryUnknown => 15,
-        Reason::Signature => 16,
-        Reason::StoreDigestMismatch => 17,
+        Reason::InstallerError => 6,
+        Reason::IoError => 7,
+        Reason::ManifestInvalid => 8,
+        Reason::NotInRepository => 9,
+        Reason::OrderInvalid => 10,
+        Reason::PackageConflict => 11,
+        Reason::PackageDigestMismatch => 12,
+        Reason::PackageManagerBusy => 13,
+        Reason::PackageScripts => 14,
+        Reason::PackageTooLarge => 15,
+        Reason::RepositoryUnknown => 16,
+        Reason::Signature => 17,
+        Reason::StoreDigestMismatch => 18,
+        Reason::UnsafeDirectory => 19,
     }
 }
 

@@ -150,8 +150,9 @@ pub struct Tombstone {
 /// How a service was installed, when not by `hostkeeper-archive`. A repository package's entry
 /// also names the package, the version installed (or being installed while `pending`), the
 /// repository and the enablement links its `activate` wrote (packages-repositories.md section
-/// 4.3); each of these keys is written only when set, so an entry of the installer alone is
-/// written as before.
+/// 4.3); a `macos-pkg` entry names the package's identifier, the version and the directories its
+/// installs created (section 4.7). Each of these keys is written only when set, so an entry of
+/// the installer alone is written as before.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct InstalledEntry {
     /// The installer's name, as the entry spells it.
@@ -171,6 +172,10 @@ pub struct InstalledEntry {
     /// Written before the install, cleared once the package manager shows `version`.
     #[serde(default, skip_serializing_if = "is_false")]
     pub pending: bool,
+    /// The directories a `macos-pkg` install created that were not on the host before, as
+    /// logical paths: its `remove` deletes them once they are empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub created_dirs: BTreeSet<String>,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
     extra: Map<String, Value>,
@@ -186,6 +191,7 @@ impl InstalledEntry {
             repository: None,
             links: BTreeSet::new(),
             pending: false,
+            created_dirs: BTreeSet::new(),
             extra: Map::new(),
         }
     }

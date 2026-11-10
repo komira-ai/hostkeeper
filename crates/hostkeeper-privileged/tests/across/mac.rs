@@ -1,8 +1,8 @@
 //! The Mac host of the cross-release rig: the daemon's own job `dev.hostkeeper.hostkeeper` under
 //! the host's launchd, as the pkg leaves a Mac.
 //!
-//! **Archive orders still.** No daemon announces `macos-pkg` yet, so a Mac can take no native
-//! entry: this host and the Mac half of the rig (`super::archive`) are as they were before the
+//! **Archive orders still.** A Mac announces `macos-pkg` only with the signers file, which this
+//! host does not have, and the pinned release on no Mac, so this host takes no native entry: this host and the Mac half of the rig (`super::archive`) are as they were before the
 //! Linux half moved to native `.deb` orders (`super::deb`), and hostkeeper's package here is the
 //! archive, set by its entry and the release index and taken through the entry.
 //!

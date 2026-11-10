@@ -930,3 +930,30 @@ fn stage_reports_io_error_when_the_staging_directory_cannot_take_its_files() {
         assert_eq!(reason(result), Reason::IoError, "{what}");
     }
 }
+
+/// Catches: a `macos-pkg` failure reported by the daemon under another token, class, outcome or
+/// detail than the installer gave it, once it is read as the repository installer's failure
+/// (the daemon reports both kinds through one path). Every reason maps to the reason of the
+/// same token.
+#[test]
+fn every_macos_pkg_failure_reads_as_the_repository_failure_of_its_token() {
+    use hostkeeper_install::repository;
+    for reason in Reason::ALL {
+        let read = repository::Failure::from(Failure::new(reason, "the detail"));
+        assert_eq!(read.reason().token(), reason.token());
+        assert_eq!(read.detail(), "the detail");
+        assert_eq!(
+            read.reason().class().token(),
+            match reason.class() {
+                Class::Release => "release",
+                Class::Environment => "environment",
+            },
+            "{reason:?}"
+        );
+        assert_eq!(
+            read.reason().outcome() == repository::Outcome::Deferred,
+            reason.outcome() == Outcome::Deferred,
+            "{reason:?}"
+        );
+    }
+}
