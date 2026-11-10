@@ -290,6 +290,12 @@ fn an_ops_file_with_group_marks_is_refused_by_the_release_before_and_read_back()
         back.host_groups,
         after.host_groups.clone().without_defaults()
     );
+    let web: crate::host_groups::GroupName = "web".parse().expect("a name");
+    assert_eq!(
+        back.host_groups.0[&web]["tierstore"].force,
+        every_mark().force,
+        "the standing force, whole"
+    );
 
     let calm = scratch("files-host-groups-ops-calm");
     let mut defaults = rich_ops();

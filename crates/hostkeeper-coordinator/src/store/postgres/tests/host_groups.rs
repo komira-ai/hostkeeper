@@ -286,6 +286,14 @@ fn a_group_packages_mark_rows_follow_its_commits() {
     let marked = with(every_mark());
     commit(&loaded.ops, &marked);
     assert_eq!(counts(&db), [1, 1, 1, 1]);
+    let read = with_session(&db, |session| load_all(session, SPENT_NOW).expect("loads"));
+    assert_eq!(read.ops.host_groups, marked.host_groups);
+    let web: crate::host_groups::GroupName = "web".parse().expect("a name");
+    assert_eq!(
+        read.ops.host_groups.0[&web]["tierstore"].force,
+        every_mark().force,
+        "the standing force, whole"
+    );
     let paused = with(GroupMarks {
         rollout: Rollout {
             paused: every_mark().rollout.paused,

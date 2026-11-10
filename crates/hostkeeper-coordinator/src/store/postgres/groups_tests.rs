@@ -247,6 +247,16 @@ fn the_marks_round_trip_through_their_rows() {
             Val::Null
         ]
     );
+    let force = every_mark().force.expect("a force");
+    assert_eq!(
+        tables["group_services"][&key(&["web", "tierstore"])][3],
+        Val::Json(serde_json::to_value(&force).expect("serialises"))
+    );
+    assert_eq!(
+        marks_of(&tables).expect("the marks back").0[&name("web")]["tierstore"].force,
+        Some(force),
+        "the standing force, whole"
+    );
     assert_eq!(
         tables["group_services"][&key(&["web", "tierstore"])][5],
         Val::Json(json!([{"node_id": "web-02", "target": "2.4.0"}]))

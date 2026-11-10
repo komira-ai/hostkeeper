@@ -4,7 +4,9 @@ use hostkeeper_wire::version::Version;
 use serde_json::json;
 
 use super::*;
+use crate::force::ForceTargets;
 use crate::ops::HaltOrigin;
+use crate::registry::Digest;
 use crate::rollouts::Pause;
 use crate::stages::{Share, StageDef};
 
@@ -527,7 +529,18 @@ pub(crate) fn every_mark() -> GroupMarks {
             ..ack
         }],
         halt_generation: 2,
-        force: None,
+        force: Some(ForceRecord {
+            version: v("2.3.1"),
+            generation: 1,
+            reason: "fix forward".to_owned(),
+            by: "alice".to_owned(),
+            digest: Digest::parse(&"ab".repeat(32)).expect("a digest"),
+            release_index: None,
+            halt_generation: 2,
+            targets: ForceTargets::Hosts(vec!["web-01".to_owned(), "web-02".to_owned()]),
+            include_held: true,
+            hosts: vec!["web-01".to_owned()],
+        }),
         force_generation: 1,
         rollout: Rollout {
             version: Some(v("2.4.0")),
@@ -561,6 +574,10 @@ fn the_marks_of_a_package_in_a_group_are_written_by_name_and_read_back() {
             "halt_acked": [{"node_id": "web-02", "target": "2.4.0"}],
             "halt_seen": [{"node_id": "web-03", "target": "2.4.0"}],
             "halt_generation": 2,
+            "force": {"version": "2.3.1", "generation": 1, "reason": "fix forward",
+                "by": "alice", "digest": "ab".repeat(32), "halt_generation": 2,
+                "targets": {"hosts": ["web-01", "web-02"]}, "include_held": true,
+                "hosts": ["web-01"]},
             "force_generation": 1,
             "rollout": {"version": "2.4.0", "entered": 2, "done": ["web-01"],
                 "paused": {"by": "alice", "reason": "looking"}}
