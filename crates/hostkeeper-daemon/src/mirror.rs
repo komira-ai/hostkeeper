@@ -256,9 +256,12 @@ impl CoordinatorMirror {
             .map_err(|why| MirrorError::Unreachable(format!("{release_path}: {why}")))?;
         for (path, (sha256, size)) in &listed {
             let relative = format!("{dists}/{path}");
-            if let Some(parent) = Path::new(path).parent().and_then(Path::to_str) {
-                make_dirs(next, &format!("{dists}/{parent}")).map_err(io_error)?;
-            }
+            // Every listed path is under a component's directory (`wanted`), so it has a parent.
+            let parent = Path::new(path)
+                .parent()
+                .and_then(Path::to_str)
+                .unwrap_or_default();
+            make_dirs(next, &format!("{dists}/{parent}")).map_err(io_error)?;
             let changed = match self.read(
                 &url(&relative),
                 &next.join(&relative),

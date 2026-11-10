@@ -459,6 +459,28 @@ fn a_mirror_root_that_is_a_file_is_io() {
     assert!(matches!(error, MirrorError::Io(_)), "{error}");
 }
 
+/// Proves a mirror root that cannot be made because its parent is a file is an I/O failure of
+/// the stage, for the index and for the pool file, and nothing is asked of the coordinator.
+#[test]
+fn a_mirror_root_under_a_file_is_io() {
+    let mut bench = bench("mirror-root-under-file");
+    fs::write(&bench.root, b"x").expect("a file where the root's parent is");
+    bench.root = bench.root.join("mirror");
+    bench.mirror = CoordinatorMirror::new(
+        bench.root.clone(),
+        Arc::clone(&bench.origin) as Arc<dyn Fetch>,
+    );
+    bench.publish(&listed());
+    let error = bench.index().expect_err("io");
+    assert!(matches!(error, MirrorError::Io(_)), "{error}");
+    let error = bench
+        .mirror
+        .pool(&acme(&bench.root), "pool/web/a.deb", &sha256(b"x"), 1)
+        .expect_err("io");
+    assert!(matches!(error, MirrorError::Io(_)), "{error}");
+    assert!(bench.origin.requests().is_empty());
+}
+
 const POOL: &str = "/repositories/acme/pool/web/a/hello_1_amd64.deb";
 const FILENAME: &str = "pool/web/a/hello_1_amd64.deb";
 
@@ -573,6 +595,8 @@ fn a_filename_outside_the_suites_pool_is_refused() {
         "dists/web/InRelease",
         "/pool/web/a.deb",
         "pool/web/",
+        &format!("pool/web/{}.deb", "a".repeat(1012)),
+        "pool/web/a b.deb",
     ] {
         let error = bench
             .mirror
@@ -654,6 +678,18 @@ fn a_set_keeps_the_mirrors_it_names_and_removes_the_rest() {
     assert!(root.join("fresh/pool/web/a.deb").is_file());
 
     prune(&scratch.path().join("absent"), &entries).expect("no root is no error");
+
+    // A mirror that cannot be removed (its directory holds one no one may write) is the error,
+    // and the rest of the root is still pruned.
+    make("held/dists/web/sub/InRelease");
+    make("other/dists/web/InRelease");
+    let locked = root.join("held/dists/web");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o555)).expect("the mode");
+    let failed = prune(&root, &entries);
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).expect("the mode back");
+    failed.expect_err("a mirror that cannot be removed");
+    assert!(!root.join("other").exists(), "the rest is pruned");
+    assert!(root.join("held").exists());
     fs::write(scratch.path().join("file"), b"x").expect("a file");
     prune(&scratch.path().join("file"), &entries).expect_err("a root that is a file");
 }
