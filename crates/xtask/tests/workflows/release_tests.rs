@@ -575,13 +575,14 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
         "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"image\", \"newest\", \"notify\", \"plan\"",
     );
     for program in super::release::SHIPPED_BINARIES {
-        let check = format!(
-            "      - name: {program} says the version and the commit it is released under\n        run: cargo xtask release check-binary \"$RUNNER_TEMP/binary/{program}\" \"$RELEASE_VERSION\" \"$COMMIT\"\n"
-        );
-        let text = with_in(&workflow("release.yml"), &check, "");
-        let found = all_problems("release.yml", &text);
+        let text = workflow("release.yml"); // The step's name, `if:` (`release_assets.rs`), run:
+        let at = text
+            .find(&format!("- name: {program} says"))
+            .expect("its step");
+        let end = at + text[at..].find(" \"$COMMIT\"\n").expect("its run") + 11;
+        let text = with_in(&text, &text[at - 6..end], "");
         assert_eq!(
-            found,
+            all_problems("release.yml", &text),
             vec![format!(
                 "release.yml: job verify runs no `cargo xtask release check-binary` of {program}"
             )],
