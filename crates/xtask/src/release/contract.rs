@@ -525,8 +525,8 @@ impl Package {
     /// [`asset_names`] lists with the daemon's other packages. Hello's failing build has its
     /// `.deb` alone, `hello_<v>-fail-ready_<deb>.deb`, named by its service version: its Debian
     /// version ([`Package::deb_version`]) carries a `~`, which an asset name does not, and the
-    /// suite `testing-fail` lists it under that version. Its `.pkg` is not released (no daemon
-    /// announces `macos-pkg` yet).
+    /// suite `testing-fail` lists it under that version. Its `.pkg` is not released, so no Mac is
+    /// ordered it.
     pub(crate) fn native_name(self, version: &Version, platform: Platform) -> Option<String> {
         if !self.platforms().contains(&platform) {
             return None;

@@ -37,10 +37,10 @@ one credential is the OIDC token GitHub issues to the job.
    `cargo xtask release targets`, compiled from the release's own commit, writes the release's
    targets from those files: per Linux platform, hostkeeper's native entry alone, an `apt` entry
    of the daemon's `.deb` in the repository's `testing` suite pinned by its SHA-256, its
-   manifest made by `release targets` itself (its hook bounds, run unit and `min_hostkeeper`); no
-   list for macOS while no daemon announces `macos-pkg` (a Mac
-   would show `no_target`; none is enrolled) ([packages design](../design/packages.md), section
-   3.7). A file of the release that does not check out fails the job, and nothing is set. Last,
+   manifest made by `release targets` itself (its hook bounds, run unit and `min_hostkeeper`); for
+   macOS its signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose daemon announces
+   `macos-pkg` takes (any other Mac is ordered nothing) ([packages design](../design/packages.md),
+   section 3.7). A file of the release that does not check out fails the job, and nothing is set. Last,
    it lists the published releases: when a higher version than the run's is published already
    (a late run of an older commit, released after a newer one), the next step is skipped, so
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds

@@ -59,6 +59,39 @@ pub(super) fn program(package: Package) -> Option<String> {
     }
 }
 
+/// The manifest of the native entry of `package`'s release `version` on a Mac, its signed
+/// `.pkg`'s: the Linux one ([`of`]) with the `.pkg`'s identifier as its package (hostkeeper's the
+/// daemon's launchd label, which its daemon takes as its own package; hello's its own), each slot
+/// a launchd label (`hello.a`, `hello.b`) where hostkeeper's daemon job is no run unit, the
+/// params' `units` `launchd`, and the hook command the program the `.pkg` installs. Only
+/// hostkeeper and hello release a `.pkg`.
+pub(super) fn of_pkg(package: Package, version: &Version) -> Manifest {
+    let mut manifest = of(package, version);
+    let (identifier, run) = match package {
+        Package::Hostkeeper => (crate::release::macos_pkg::identifier(), Vec::new()),
+        _ => (
+            crate::release::native::pkg::IDENTIFIER.to_owned(),
+            hello::SLOTS
+                .iter()
+                .map(|slot| format!("{}.{slot}", hello::NAME))
+                .collect(),
+        ),
+    };
+    manifest.package = Some(identifier);
+    manifest.run = run;
+    if let Some(units) = manifest.params.get_mut("units") {
+        *units = text("launchd");
+    }
+    if let Some(hook) = manifest
+        .hook
+        .as_mut()
+        .filter(|hook| !hook.command.is_empty())
+    {
+        hook.command = vec![hello::PKG_PROGRAM.to_owned(), UPDATE_HOOK.to_owned()];
+    }
+    manifest
+}
+
 /// The hook command of `package`'s entry: its [`program`] and `update-hook`, or none.
 fn command(package: Package) -> Vec<String> {
     program(package)

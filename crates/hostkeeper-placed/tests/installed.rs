@@ -177,3 +177,76 @@ fn a_repository_entry_crosses_the_release_boundary_in_both_directions() {
     fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
     assert_eq!(world.record(), record);
 }
+
+/// An `installed` entry as the release before `created_dirs` reads and writes it: the key it
+/// does not know is kept in `extra`.
+#[derive(Debug, Deserialize, Serialize)]
+struct PreviousEntry {
+    installer: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    package: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    version: Option<String>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pending: bool,
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+/// Catches: a `macos-pkg` entry's `created_dirs` written under another key, written when empty,
+/// or lost when the release before the key rewrites the entry. That release reads the entry and
+/// keeps the key it does not know; this release reads it back as saved, and reads that
+/// release's entry, which has no such key, as one that created no directory.
+#[test]
+fn a_macos_pkg_entry_crosses_the_release_boundary_in_both_directions() {
+    let world = World::new("installed-macos-pkg");
+    let mut entry = InstalledEntry::new("macos-pkg");
+    entry.package = Some("dev.hostkeeper.hello".to_owned());
+    entry.version = Some("1.2.3".to_owned());
+    entry.created_dirs = [
+        "/Library/Application Support/hello".to_owned(),
+        "/Library/Application Support/hello/bin".to_owned(),
+    ]
+    .into();
+    let mut record = PlacedRecord::default();
+    record.installed.insert("hello".to_owned(), entry);
+    save(&world, &record).expect("saves");
+    let written = fs::read(world.host(PLACED)).expect("written");
+    let value: Value = serde_json::from_slice(&written).expect("json");
+    let saved = json!({
+        "installer": "macos-pkg",
+        "package": "dev.hostkeeper.hello",
+        "version": "1.2.3",
+        "created_dirs": [
+            "/Library/Application Support/hello",
+            "/Library/Application Support/hello/bin"
+        ]
+    });
+    assert_eq!(value["installed"], json!({ "hello": saved }));
+
+    let previous: PreviousEntry =
+        serde_json::from_value(value["installed"]["hello"].clone()).expect("it reads");
+    assert_eq!(previous.installer, "macos-pkg");
+    assert_eq!(previous.package.as_deref(), Some("dev.hostkeeper.hello"));
+    assert_eq!(previous.version.as_deref(), Some("1.2.3"));
+    assert!(!previous.pending);
+    assert_eq!(serde_json::to_value(&previous).expect("it writes"), saved);
+
+    let previous: PreviousRecord = serde_json::from_slice(&written).expect("it reads");
+    let rewritten = serde_json::to_vec_pretty(&previous).expect("it writes");
+    fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
+    assert_eq!(world.record(), record);
+
+    let older = PreviousEntry {
+        installer: "macos-pkg".to_owned(),
+        package: Some("dev.hostkeeper.hello".to_owned()),
+        version: Some("1.2.2".to_owned()),
+        pending: true,
+        extra: Map::new(),
+    };
+    let read: InstalledEntry =
+        serde_json::from_value(serde_json::to_value(&older).expect("it writes")).expect("reads");
+    assert!(read.created_dirs.is_empty());
+    assert!(read.pending);
+    assert_eq!(read.version.as_deref(), Some("1.2.2"));
+}

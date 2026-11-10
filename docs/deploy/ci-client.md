@@ -426,9 +426,11 @@ komira-ai/hostkeeper`,
 from the release's assets: its releases list native entries alone
 ([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform, the
 one native entry of the package's `.deb`, an `apt` entry of the repository entry `komira-testing`
-pinned by the `.deb`'s SHA-256, its manifest compiled into xtask; no list for macOS while no
-daemon announces `macos-pkg`. A host whose daemon does not announce `apt` is ordered nothing
-(`installer_dropped`). `--repo` is read and not used. It refuses a release whose `.deb`s or their
+pinned by the `.deb`'s SHA-256, its manifest compiled into xtask; for macOS (hostkeeper and
+hello) the one `macos-pkg` entry of the signed `.pkg`, in the store `komira-testing` at
+`hostkeeper/<version>/<file>`, pinned by its SHA-256 and size. A host whose daemon announces
+neither `apt` nor, on a Mac, `macos-pkg` (its signers file loaded, `/usr/sbin/installer` and
+`/usr/sbin/pkgutil` present) is ordered nothing (`installer_dropped`, or `no_build_for_host`). `--repo` is read and not used. It refuses a release whose `.deb`s or their
 bundles do not check out, and entries the coordinator or the daemon would refuse, and prints
 `targets=<JSON>` (appended to `--output`). `--fail-ready` (hello only, explicit only) writes
 hello's failing build instead: per Linux platform one `apt` entry of the repository entry

@@ -252,8 +252,9 @@ and installed afresh ([network-install.md](network-install.md)), so that no host
 daemon that nothing can update. The pull request of stage 9 (A24) shows both queries' output.
 
 **The work.** Every release is set with native entries alone (A24): per Linux platform the
-`.deb`'s `apt` entry, and no list for macOS while no daemon announces `macos-pkg` (no Mac is
-enrolled; one would show `no_target`). `release.yml` no longer waits for the channel. Once A24's release has
+`.deb`'s `apt` entry, and for macOS the signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose
+daemon announces `macos-pkg` takes (a Mac that does not is ordered nothing: `installer_dropped` or
+`no_build_for_host`). `release.yml` no longer waits for the channel. Once A24's release has
 converged on every host, stop the channel's sync, remove `--release-channel` from the
 coordinator's deployment, and delete the channel's tree (packages-native.md section 10.5).
 

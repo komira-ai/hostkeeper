@@ -804,3 +804,66 @@ fn the_store_reports_the_trusted_root_it_was_given_as_of_each_call() {
     let now = store.trusted_root().expect("a report");
     assert_eq!((now.path, now.problem), (installed, None));
 }
+
+/// Catches: a `.pkg` fetched by its pin into a file the store deletes before the installer's
+/// `stage` reads it, a pinned fetch that asks for an attestation, a refusal of the library mapped
+/// to another reason, and a store with no pinned fetch that answers anything but its refusal.
+/// The real store fetches the entry's artifact by its pin alone (the one request its location
+/// names) into a staging file of the service's package directory that lives as long as the
+/// answer; other bytes are `package_digest_mismatch` (release) and leave nothing; the default of
+/// the port, and the fake for a digest it does not serve, refuse.
+#[test]
+fn a_pkg_is_fetched_by_its_pin_into_a_file_that_lives_as_long_as_the_answer() {
+    use hostkeeper_daemon::packages::NO_PINNED_FETCH;
+    use hostkeeper_proto::hostkeeper::release::v1::{Location, Target};
+    let rig = Rig::new("pinned");
+    let bytes = b"the signed pkg".to_vec();
+    let locator = "hello/1.0.0/hello-1.0.0-macos-arm64.pkg";
+    let url = format!("https://releases.example/{locator}");
+    let entry = |bytes: &[u8]| Target {
+        installer: "macos-pkg".to_owned(),
+        locations: vec![Location {
+            store: "channel".to_owned(),
+            locator: locator.to_owned(),
+        }],
+        digest: sha256_hex(bytes),
+        bytes: bytes.len() as u64,
+        ..Target::default()
+    };
+    let store = rig
+        .open(vec![(url.clone(), bytes.clone())], Answer::Confirms)
+        .expect("open the store");
+    let pinned = store
+        .pinned(&Rig::service(), &entry(&bytes))
+        .expect("the pkg is fetched");
+    assert_eq!(fs::read(pinned.path()).expect("it reads"), bytes);
+    assert!(pinned.path().starts_with(rig.packages.join(SERVICE)));
+    assert_eq!(*rig.fetched.lock().expect("log"), vec![url.clone()]);
+    assert!(
+        rig.verified.lock().expect("log").is_empty(),
+        "nothing proven"
+    );
+    let path = pinned.path().to_path_buf();
+    drop(pinned);
+    assert!(!path.exists(), "the staging file goes with the answer");
+
+    let other = store
+        .pinned(&Rig::service(), &entry(b"other bytes"))
+        .err()
+        .expect("other bytes are refused");
+    assert_refused(&other, Refusal::DigestMismatch, RELEASE);
+    assert!(
+        names(&rig.packages.join(SERVICE)).is_empty(),
+        "no staging file is left"
+    );
+
+    assert_eq!(
+        Plain.pinned(&Rig::service(), &entry(&bytes)).err(),
+        Some(PackageError::Other(NO_PINNED_FETCH.to_owned()))
+    );
+    let fake = FakePackages::new(&rig.packages);
+    assert!(matches!(
+        fake.pinned(&Rig::service(), &entry(&bytes)).err(),
+        Some(PackageError::DigestMismatch(_))
+    ));
+}

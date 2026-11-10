@@ -395,7 +395,7 @@ fn remove(ctx: &Ctx, service: &ServiceName) -> Reply {
             };
             steps.remove(&host).map_err(|error| error.to_string())
         }
-        Ok(Steps::Repository(_)) => match remove_repository(ctx, service) {
+        Ok(Steps::Repository(_) | Steps::MacosPkg) => match remove_repository(ctx, service) {
             Ok(()) => Ok(()),
             Err(reply) => return reply,
         },

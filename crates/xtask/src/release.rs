@@ -466,13 +466,13 @@ pub(crate) enum Verb {
         #[arg(long)]
         commit: Commit,
     },
-    /// Write the `targets` of the set that deploys a package of the release: for each Linux
-    /// platform the package is released for, the package's `.deb` alone, an `apt` entry of the
-    /// repository's testing suite whose manifest and `min_hostkeeper` the verb compiles in; with
-    /// `--fail-ready`, of hello's failing build, of the `testing-fail` suite at `X.Y.Z~fail.ready`.
-    /// No list for macOS while no daemon announces `macos-pkg`. Refused, every problem named,
-    /// unless every `.deb` and its bundle check out and the entries pass the coordinator's
-    /// checks. Prints `targets=<JSON>`.
+    /// Write the `targets` of the set that deploys a package of the release: per platform the
+    /// package is released for, its native package alone, whose manifest and `min_hostkeeper`
+    /// the verb compiles in: a Linux `.deb`'s `apt` entry of the testing suite (with
+    /// `--fail-ready`, hello's failing build's, of `testing-fail` at `X.Y.Z~fail.ready`), the
+    /// Mac's signed `.pkg`'s `macos-pkg` entry. Refused, every problem named, unless every
+    /// native package and its bundle check out and the entries pass the coordinator's checks.
+    /// Prints `targets=<JSON>`.
     Targets {
         /// The service: hostkeeper (the default), hello or mdm.
         #[arg(long, value_enum, default_value_t)]

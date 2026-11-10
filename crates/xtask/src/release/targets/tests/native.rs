@@ -111,7 +111,7 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
     // Catches: a native package missing (its hosts would be ordered a pin no repository holds),
     // its bundle missing or listing other bytes (the published package would not be the one
     // attested), a `.deb` of another version under the release's name, or the verb stopping at
-    // the first of these; and the `.pkg`, which no list carries, read at all.
+    // the first of these; a `.pkg` whose bundle lists other bytes among them.
     let (root, dist) = dist("targets-native-problems");
     built(&dist, Package::Hello);
     let output = root.join("github_output");
@@ -133,11 +133,12 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
     // linux-x86_64: no .deb and no bundle.
     std::fs::remove_file(dist.join("hello_0.1.5_amd64.deb")).expect("remove");
     std::fs::remove_file(dist.join("hello_0.1.5_amd64.deb.sigstore.json")).expect("remove");
-    // macos-arm64: a .pkg whose bundle lists other bytes, not read: macOS has no list.
+    // macos-arm64: a .pkg whose bundle lists other bytes.
     let pkg = "hello-0.1.5-macos-arm64.pkg";
     std::fs::write(dist.join(bundle_of(pkg)), bundle_listing(&"0".repeat(64))).expect("rewrite");
     let got = targets(&request(&dist, Package::Hello, Some(output.clone())));
     let arm_digest = file_sha256(&dist.join(arm)).expect("hash");
+    let pkg_digest = file_sha256(&dist.join(pkg)).expect("hash");
     assert_eq!(
         got,
         Err(Error::Refused(vec![
@@ -153,17 +154,21 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
             "hello_0.1.5_amd64.deb.sigstore.json: missing: every native package carries its \
              attestation bundle"
                 .to_owned(),
+            format!(
+                "{pkg}.sigstore.json: {}",
+                bundle_problem(&bundle_listing(&"0".repeat(64)), pkg, &pkg_digest)
+                    .expect("a problem")
+            ),
         ]))
     );
     assert!(!output.exists(), "nothing is written on a refusal");
 }
 
 #[test]
-fn hostkeepers_release_with_another_packages_deb_is_refused_and_its_installer_is_not_read() {
+fn hostkeepers_release_without_its_installer_or_with_another_packages_deb_is_refused() {
     // Catches: hostkeeper's list written with the coordinator's `.deb` under the daemon's name
     // (both are built by nfpm into one directory), which a host's apt would install as another
-    // package; and a missing installer refusing the release, though no list carries it while no
-    // daemon announces `macos-pkg`.
+    // package; and a release missing its installer `.pkg` given a macOS list without it.
     let (root, dist) = dist("targets-hostkeeper-native-problems");
     built(&dist, Package::Hostkeeper);
     let output = root.join("github_output");
@@ -188,6 +193,9 @@ fn hostkeepers_release_with_another_packages_deb_is_refused_and_its_installer_is
         Err(Error::Refused(vec![
             "hostkeeper_0.1.5_amd64.deb: its control names the Package hostkeeper-coordinator, \
              not hostkeeper"
+                .to_owned(),
+            "hostkeeper-0.1.5-macos-arm64.pkg: missing: the release ships the native package of \
+             every platform it lists"
                 .to_owned(),
         ]))
     );

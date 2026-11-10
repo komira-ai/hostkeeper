@@ -131,53 +131,90 @@ fn fail_ready_name(release: &str, platform: Platform) -> String {
 }
 
 /// The targets `release targets` must write for `files` (from [`native_files`] of `service`) of
-/// the release `release`: per Linux platform, the native entry alone (an `apt` entry of the
-/// repository `komira-testing` pinned by the `.deb`'s SHA-256), its manifest the package's own;
-/// no list for macOS, while no daemon announces `macos-pkg`. As [`sorted`] JSON text.
+/// the release `release`: per platform, the native entry alone (an `apt` entry of the repository
+/// `komira-testing` pinned by the `.deb`'s SHA-256, or on macOS a `macos-pkg` entry of the store
+/// `komira-testing` at the installers' testing path, pinned by the `.pkg`'s SHA-256 and size),
+/// its manifest the package's own. As [`sorted`] JSON text.
 pub fn targets(service: &str, release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
-    lists(|platform| {
-        let bytes = &files[&native_name(service, release, platform)];
-        native_entry(service, release, bytes, "komira-testing", release)
+    lists(&Platform::ALL, |platform| {
+        let name = native_name(service, release, platform);
+        let bytes = &files[&name];
+        let manifest = manifest_on(service, release, platform);
+        match platform {
+            Platform::MacosArm64 => json!({
+                "installer": "macos-pkg",
+                "locations": [{"store": "komira-testing", "locator": format!("hostkeeper/{release}/{name}")}],
+                "digest": sha256(bytes),
+                "bytes": bytes.len().to_string(),
+                "manifest": manifest,
+            }),
+            _ => native_entry(manifest, bytes, "komira-testing", release),
+        }
     })
 }
 
 /// The targets `release targets --fail-ready` must write for hello's failing build at the
 /// release `release`, from `files` ([`fail_ready_files`]): per Linux platform, an `apt` entry of
 /// the repository `komira-testing-fail` at the Debian version `<release>~fail.ready`, pinned by
-/// the failing build's `.deb`, its manifest hello's. As [`sorted`] JSON text.
+/// the failing build's `.deb`, its manifest hello's; no list for macOS, where the failing build
+/// has no `.pkg`. As [`sorted`] JSON text.
 pub fn fail_ready_targets(release: &str, files: &BTreeMap<String, Vec<u8>>) -> String {
-    lists(|platform| {
+    lists(&[Platform::LinuxArm64, Platform::LinuxX86_64], |platform| {
         let bytes = &files[&fail_ready_name(release, platform)];
         let version = format!("{release}~fail.ready");
-        native_entry("hello", release, bytes, "komira-testing-fail", &version)
+        native_entry(
+            manifest("hello", release),
+            bytes,
+            "komira-testing-fail",
+            &version,
+        )
     })
 }
 
-/// The lists of the Linux platforms, each the one entry `entry` makes, as [`sorted`] JSON text.
-fn lists(entry: impl Fn(Platform) -> Value) -> String {
+/// The lists of `platforms`, each the one entry `entry` makes, as [`sorted`] JSON text.
+fn lists(platforms: &[Platform], entry: impl Fn(Platform) -> Value) -> String {
     let mut lists = serde_json::Map::new();
-    for platform in [Platform::LinuxArm64, Platform::LinuxX86_64] {
+    for platform in platforms.iter().copied() {
         lists.insert(platform.to_string(), json!({"entries": [entry(platform)]}));
     }
     sorted(Value::Object(lists)).to_string()
 }
 
-/// The native entry `release targets` must write for `service`'s `.deb` `bytes` of the release
-/// `release`: the repository entry `repository` at the Debian version `package_version`.
-fn native_entry(
-    service: &str,
-    release: &str,
-    bytes: &[u8],
-    repository: &str,
-    package_version: &str,
-) -> Value {
+/// The `apt` entry `release targets` must write for a `.deb` `bytes` with `manifest`: the
+/// repository entry `repository` at the Debian version `package_version`.
+fn native_entry(manifest: Value, bytes: &[u8], repository: &str, package_version: &str) -> Value {
     json!({
         "installer": "apt",
         "digest": sha256(bytes),
-        "manifest": manifest(service, release),
+        "manifest": manifest,
         "repository": repository,
         "packageVersion": package_version,
     })
+}
+
+/// [`manifest`] on `platform`: on macOS the `.pkg`'s, with the `.pkg`'s identifier
+/// (`dev.hostkeeper.<service>`), each slot a launchd label (hostkeeper's daemon job is no run
+/// unit), the params' `units` `launchd`, and the hook command the program the `.pkg` installs.
+fn manifest_on(service: &str, release: &str, platform: Platform) -> Value {
+    let mut manifest = manifest(service, release);
+    if platform != Platform::MacosArm64 {
+        return manifest;
+    }
+    manifest["package"] = json!(format!("dev.hostkeeper.{service}"));
+    match service {
+        "hello" => {
+            manifest["run"] = json!(["hello.a", "hello.b"]);
+            manifest["params"]["units"] = json!({"text": "launchd"});
+            manifest["hook"]["command"] = json!([
+                "/Library/Application Support/hello/bin/hello",
+                "update-hook"
+            ]);
+        }
+        _ => {
+            manifest.as_object_mut().expect("an object").remove("run");
+        }
+    }
+    manifest
 }
 
 /// The manifest of the native entry of `service` at the release `release`, as the package has

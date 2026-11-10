@@ -323,9 +323,9 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   text is held byte for byte (`crates/hostkeeper-launchd/tests/postinstall.rs`, A19).
 - **Release workflows (A21, A23, A24; the workflow lint, `crates/xtask/src/release/targets/tests.rs`).** `release
   targets` writes the native entry before the archive one for each platform (A21, A23) and the native entry alone
-  (A24: the Linux `.deb`'s, no list for macOS while no daemon announces `macos-pkg`; hello's failing build only with
-  `--fail-ready`, its entry of repository `komira-testing-fail` at `X.Y.Z~fail.ready`, packages-native.md 10.10,
-  `targets/tests/fail_ready.rs`); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
+  (A24: the Linux `.deb`'s and the macOS list's signed `.pkg` entry alone, which a Mac whose daemon announces
+  `macos-pkg` takes; hello's failing build only with `--fail-ready`, its entry of repository `komira-testing-fail` at
+  `X.Y.Z~fail.ready`, packages-native.md 10.10, `targets/tests/fail_ready.rs`); the lint holds the publish steps to the release machinery's call (`crates/xtask/tests/workflows/packages.rs`:
   every job that signs or puts the release's files checks them against `SHA256SUMS` and their attestations first, A23)
   and, from A24, refuses the channel wait and any index output while it keeps the `targets` job that `set-desired`
   needs (`desired.rs`, `desired_tests.rs`, `tailnet_join_tests.rs`; the job run with bash in `targets_run_tests.rs`,
