@@ -49,6 +49,13 @@ impl Farm {
         }
     }
 
+    /// A farm named `name` whose allow-list entry also holds the lines `entry_extra`.
+    pub(crate) fn limited(name: &str, entry_extra: &str) -> Self {
+        Self {
+            world: World::over_listed(name, crate::store::Fake::new(), entry_extra),
+        }
+    }
+
     /// A farm named `name` over the committed state `fake` holds.
     pub(crate) fn over(name: &str, fake: crate::store::Fake) -> Self {
         Self {

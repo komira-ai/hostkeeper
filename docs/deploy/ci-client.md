@@ -83,7 +83,7 @@ before its first run. The workflow lint of this repository holds that template t
 - calls `komira-ai/hostkeeper/.github/workflows/set-desired.yml` pinned to a full commit, with
   its release as the comment, and passes that release and commit as `hostkeeper_version` and
   `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
-- passes `service`, `version` and `targets`, the coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
+- passes `service`, `version` and `targets`, optionally `host_group` ([Host groups](#host-groups)), the coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
   (true when `HOSTKEEPER_TAILNET_CLIENT_ID` is set), `tailnet_client_id`, `tailnet_audience` and
   `tailnet_coordinator`, from the job that read the release and from repository variables.
 
@@ -145,6 +145,7 @@ services = ["hello"]
 | `refs` | `refs/heads/main` | `hello-desired.yml` sets nothing from another branch: its jobs run only on main, and a token from another ref is refused here as well. |
 | `event_names` | `workflow_dispatch` | `hello-desired.yml` runs by hand only. The default is `push` and `workflow_dispatch`; a `pull_request` event is refused in any entry. |
 | `services` | `hello` | What a token of the entry may set. |
+| `host_groups` | absent | Optional. The host groups a token of the entry may deploy to ([Host groups](#host-groups)). Absent: any group that lists the service. |
 
 `release.yml` sets hostkeeper's own desired version through the client too, while the
 repository variable `RELEASE_SETS_DESIRED` is `true` ([Deploying hostkeeper from GitHub
@@ -161,6 +162,68 @@ services = ["hello", "hostkeeper"]
 Adding or changing the entry is a change to the coordinator's configuration, made by its operator;
 the coordinator reads the file when it starts, so restart it afterwards. Nothing in CI writes it.
 
+## Host groups
+
+A coordinator that holds host groups ([docs/operations/hostgroups.md](../operations/hostgroups.md))
+keeps one desired version of a service for each group that lists it. The workflow's input
+`host_group` names the group the version is set in and waited on. With it empty, as before the
+input existed, the workflow names no group and the coordinator reads the call as one deployment to
+each group that lists the service, each rolled by its own group's policy. A coordinator that holds
+no host group takes the call as it always did.
+
+A non-empty `host_group` needs a coordinator that holds host groups and the `hkctl` of a hostkeeper
+release that has `--host-group`: with `host_group` empty the workflow passes no `--host-group`
+flag at all, since hkctl writes every flag it is given into the request and a coordinator older
+than its client refuses a field it does not know ([the gateway](../gateway.md)), so an empty input
+sends the bytes it sent before. Only a non-empty one sends the field, and an older coordinator
+then refuses it.
+
+### Limiting a token to host groups
+
+An allow-list entry may name `host_groups`, the groups its token may deploy to. Each name is a host
+group name (1 to 32 bytes of `a-z`, `0-9` and `-`, starting with a letter, not ending with `-`
+and holding no `--`); the coordinator
+refuses to start on a name that is not one, or is empty or only whitespace.
+
+```toml
+services = ["hello"]
+host_groups = ["canary", "prod"]
+```
+
+- With `host_groups` absent, a token may deploy its `services` to any group that lists them.
+- With it present, a token may deploy only to those groups. `host_groups = []` names no group, so
+  the token deploys nowhere.
+- A set that names a group outside the list is refused `forbidden`, before the coordinator looks
+  at whether the group exists or lists the service, and nothing is written.
+- A set that names no group is one deployment to each group the token may deploy to that lists the
+  service, in name order, one audit entry for each. When no group lists the service it is refused
+  `not_in_host_group`; when some group lists it but none is the token's, `forbidden`.
+  `if_generation` with no group is refused `ambiguous_host_group` when more than one of those
+  groups lists the service (the count is over the groups the token may deploy to).
+- A token with `host_groups` that sets on a coordinator that holds no host group is refused
+  `forbidden`: its deployments are limited to groups, and there are none. The frozen route
+  `POST /v1/desired` follows the same rules, as the call that names no group.
+- The wait and the reads are not limited: `Releases.Converge`, `Releases.WaitConverged` and
+  `Releases.GetRelease` answer any admitted token, as before. The list limits deployments only.
+
+### Promotion across groups
+
+The coordinator has no promotion rule; the order of groups is the caller's. A caller that wants a
+canary group first calls the workflow in one job with `host_group` set to the canary group and
+`wait` true, so the job ends green only when that group converged, and calls it again in a second
+job that `needs` the first, with the next group. Each call is its own deployment with its own
+audit entry, and a version marked bad is bad in every group, so a build that fails its canary
+group is held back from the next. A call with `wait` false, or a first job that failed, promotes
+nothing.
+
+This repository's own callers, `release.yml` and `hello-desired.yml`, and the template of
+[A service's caller](service-caller.md) stay pinned to the revision of `set-desired.yml` they
+call now, which declares no `host_group` input, so they pass none: their set is one deployment to
+each group that lists the service. `hostkeeper` is listed in every group, so a release of
+hostkeeper is one deployment per group, each rolled by its own group's policy. Chaining the groups
+in order lands when that pin moves to a revision that has the input, and the callers pass
+`hostkeeper_version` and `hostkeeper_commit` of a release whose hkctl has `--host-group`.
+
 ## Inputs
 
 | input | type | required | default | meaning |
@@ -168,6 +231,7 @@ the coordinator reads the file when it starts, so restart it afterwards. Nothing
 | `service` | string | yes |  | The service whose desired version is set, as the coordinator names it. |
 | `version` | string | yes |  | The version of the service to set. |
 | `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Needs a coordinator that takes `SetDesired` with targets. |
+| `host_group` | string | no |  | The host group the version is set in and waited on, as the coordinator names it ([Host groups](#host-groups)). Empty: each group that lists the service (for a token whose allow-list entry names `host_groups`, each of those that lists it), the call sending no group, as before this input. A non-empty value needs a coordinator that holds host groups and the `hkctl` of a hostkeeper release that has `--host-group`. |
 | `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hkctl`, makes the calls. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
 | `coordinator_url` | string | yes |  | The coordinator's private listener, as `https://<host>[:<port>]`. |
@@ -383,7 +447,8 @@ answer`. The set:
 ```sh
 hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
   --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hkctl-set.json" \
-  releases set-desired --service "$SERVICE" --request "$RUNNER_TEMP/hkctl-request.json"
+  releases set-desired --service "$SERVICE" --request "$RUNNER_TEMP/hkctl-request.json" \
+  --host-group web
 ```
 
 where the request file is `{"desired":{"version":"<version>"},"targets":{...}}`: the canonical
@@ -395,8 +460,15 @@ Then the wait, with `--wait-secs` ten times `max_polls`:
 ```sh
 hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
   --github-oidc-audience "$AUDIENCE" --response-file "$RUNNER_TEMP/hkctl-wait.json" \
-  releases wait-converged --service "$SERVICE" --version "$VERSION" --wait-secs 1800
+  releases wait-converged --service "$SERVICE" --version "$VERSION" --wait-secs 1800 \
+  --host-group web
 ```
+
+`--host-group web` is what both calls pass when `host_group` is `web`. The workflow writes it as
+the one word `${HOST_GROUP:+"--host-group=$HOST_GROUP"}` after the method's other flags, which bash
+expands to nothing when `host_group` is empty and to the one argument `--host-group=web` otherwise:
+an empty `host_group` sends no flag, so the request has no host group field and an older
+coordinator takes it as it always did.
 
 The coordinator answers at once when the wait is over already, and otherwise after the change
 that ends it; hkctl gives curl a time limit of the wait plus its own timeout. A wait cut by a
@@ -466,7 +538,7 @@ them.
 | Check the version of the verified hkctl | hkctl does not say `hkctl <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
-| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hkctl made the call: it refused a field it does not know, and hkctl's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hkctl made the call: it refused a field it does not know, and hkctl's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
 | Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hkctl releases status`. |
 
 ## What it does not do

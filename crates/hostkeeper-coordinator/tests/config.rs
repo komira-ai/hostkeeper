@@ -199,8 +199,8 @@ fn the_recorded_flags_build_a_coordinator_that_has_them() {
 
 /// Catches: a start that goes on with a file it cannot use, or flags that do not fit: a missing
 /// certificate, an operator token file others can read, a bad allow-list, a missing rollout
-/// file, an allow-list entry naming a service that is not defined or no service with no legacy
-/// service to stand for, a legacy service that is not defined, namespaces that overlap and a
+/// file, an allow-list entry naming a service that is not defined, a host group that is not a
+/// host group name, or no service with no legacy service to stand for, a legacy service that is not defined, namespaces that overlap and a
 /// state file that is not a state each stop it with a reason that names the file or the flag; and
 /// the binary exits 1.
 #[test]
@@ -247,6 +247,42 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
         "{why}"
     );
     assert!(why.to_string().contains("--oidc-config"), "{why}");
+
+    // Each `host_groups` name is a host group name: a bad one is refused at start, named in
+    // full, and a name at the grammar's bound of 32 bytes is accepted.
+    let long = "a".repeat(33);
+    for bad in ["Canary", "1st", "a_b", "a-", "a--b", long.as_str()] {
+        let groups = format!(
+            "{}services = [\"kbf\"]\nhost_groups = [\"canary\", \"{bad}\"]\n",
+            config_text(STATIC_ISSUER)
+        );
+        files.put("groups.toml", &groups, 0o644);
+        let path = files.path("groups.toml").display().to_string();
+        let why = refusal(with(&args, "--oidc-config", &path));
+        assert!(
+            matches!(&why, StartError::OidcEntryHostGroup { entry: 1, name } if name == bad),
+            "{why}"
+        );
+        assert_eq!(
+            why.to_string(),
+            format!(
+                "--oidc-config: entry 1 names the host group {bad:?}, which is not a host group \
+                 name (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with \
+                 - or holding --)"
+            )
+        );
+    }
+    let longest = "a".repeat(32);
+    let groups = format!(
+        "{}services = [\"kbf\"]\nhost_groups = [\"canary\", \"{longest}\"]\n",
+        config_text(STATIC_ISSUER)
+    );
+    files.put("groups.toml", &groups, 0o644);
+    let path = files.path("groups.toml").display().to_string();
+    let parts = build_given(&flags_of(with(&args, "--oidc-config", &path)))
+        .expect("host group names in the grammar start");
+    // The parts hold the lock of the state files, which the next refusals take.
+    drop(parts);
 
     let why = refusal(without(&args, "--legacy-service"));
     assert!(matches!(why, StartError::OidcEntryUnnamed(1)), "{why}");
