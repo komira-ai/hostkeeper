@@ -27,8 +27,16 @@
 //! into a `.deb` in a signed apt repository the test makes) through its `apt` entry, roll it back
 //! on a failed `verify` and force it back with the repository gone; its rig is `tests/e2e/`, test
 //! code outside the measured set, whose root-free parts `tests/tierstore_rig.rs` runs in the
-//! pull-request set. No Mac runs these paths: no daemon announces `macos-pkg` yet, so the Mac
-//! device tests drive no install or update.
+//! pull-request set. On a Mac the daemon announces `macos-pkg` (its signers file, `installer` and
+//! `pkgutil`), and the same two end-to-end paths run through it: `tests/device_mac_e2e.rs` (a
+//! macOS file, in the job `macos-device`) has the real coordinator (in process) install, update,
+//! roll back on a failed `verify` and uninstall hello's `.pkg` (the program `hello-e2e`, whose
+//! rig is `tests/e2e/hello.rs` and `tests/e2e/mac_host.rs`), and
+//! `tests/device_mac_selfupdate.rs` (a macOS file, in the job `macos-device`) has hostkeeper
+//! update itself through its `.pkg` under launchd (the program `hostkeeper-selfupdate-daemon`
+//! on the Mac's adapters, `tests/mac_self_update/`); no package is signed on a runner, so the
+//! program's `pkgutil --check-signature` of a package the test serves is answered as a signed
+//! package's (`tests/shared/macos_pkg.rs`).
 //! `tests/install_macos_pkg.rs` (a macOS file, in the job `macos-device`) drives
 //! `hostkeeper_install`'s `MacosPkg` as root with the Mac's real `pkgutil`, `installer`, `lsbom`
 //! and `launchctl`, against M11's unsigned fixture forms built at test time: nothing is signed and

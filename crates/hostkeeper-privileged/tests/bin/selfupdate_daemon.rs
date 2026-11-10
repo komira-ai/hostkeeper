@@ -1,5 +1,6 @@
 //! `hostkeeper-selfupdate-daemon`: the hostkeeper binary of the privileged self-update tests
-//! (`tests/self_update.rs`), a program of the tests, not shipped.
+//! (`tests/self_update.rs` on Linux, `tests/device_mac_selfupdate.rs` on a Mac) and of the Mac's
+//! hello test (`tests/device_mac_e2e.rs`), a program of the tests, not shipped.
 //!
 //! It parses the `hostkeeper` binary's command line (`hostkeeper_daemon::cli::Cli`) and runs its
 //! `daemon` verb, the only one it takes; any other is a usage error.
@@ -7,17 +8,23 @@
 //! It is the shipped daemon (`hostkeeper_daemon::start`: the settle of a waiting
 //! self-update, the boot pass, the readiness notice, the heartbeat loop, the executor and its
 //! follow-on) on the
-//! host's Linux adapters (the step launcher's transient units, `systemctl`), started as
+//! host's adapters (on Linux the step launcher's transient units and `systemctl`, on a Mac
+//! `launchctl` and the launchd step jobs), started as
 //! `hostkeeper daemon` starts: from the packaged binary, then the hand-over of its own update
 //! (`hostkeeper_daemon::handover`, run first, so a binary that waits for a hand-over into another
 //! version execs that binary while its start count lasts). Three things differ from the host's
 //! own, that a test cannot have for real put in place:
 //!
-//! - the host's repository entries are the fixture's (`repositories/` of the fixture's
+//! - on Linux, the host's repository entries are the fixture's (`repositories/` of the fixture's
 //!   directory), where the test's signed apt repository of hostkeeper's `.deb`s is, and the root
 //!   the installer writes the enablement links of a package's `run` units under is the fixture's
 //!   (`root/`), so no link is made in the host's own unit directory (the package itself is the
-//!   host's, in dpkg's database, as an update of hostkeeper installs it);
+//!   host's, in dpkg's database, as an update of hostkeeper installs it); on a Mac, the signers
+//!   file of the `macos-pkg` installer is the fixture's (`macos-pkg.toml`), the `.pkg` files the
+//!   daemon fetches by their pins are the fixture's (`pkgs/`, `shared/macos_pkg.rs`), and the
+//!   installer's `pkgutil --check-signature` is answered as a signed package for a package the
+//!   fixture serves (every other tool call, `installer` included, is the Mac's: the package is
+//!   the host's, in its receipts and at its paths, as an update of hostkeeper installs it);
 //! - the placement state (`placed.json`) and the unit directory are the fixture's (`placed/`,
 //!   `units/`), never the host's;
 //! - the heartbeat loop's link to the coordinator is files in the fixture's directory: each
@@ -26,7 +33,10 @@
 //!   when that file is there, and the features and acknowledged verdicts of `link/answer.json`
 //!   when that one is (no enrollment; a test may answer as the real coordinator in its process
 //!   answers each heartbeat). An order carries the `entry` of a set by targets, in the JSON
-//!   of `target.json` (`hostkeeper_daemon::target::to_json`).
+//!   of `target.json` (`hostkeeper_daemon::target::to_json`). With `--fixture-link coordinator`
+//!   the loops are the shipped daemon's instead (`hostkeeper_daemon::cli::host_links`): the
+//!   daemon enrolls with the coordinator of its config and beats over mutual TLS, its pki
+//!   directory the fixture's (`pki/`).
 //!
 //! Its own version is the name of the file it runs from, its links resolved (launchd starts
 //! `current`, and macOS gives a program the path it was started by): the binary directory keeps
@@ -38,7 +48,10 @@
 //! variable but the notify socket systemd sets for a `Type=notify` unit:
 //!
 //! - `--fixture-dir <dir>` (required by `daemon`): `link/`, `repositories/`, `root/`, `units/`
-//!   and `placed/` (above). The host's own unit and state directories are never written.
+//!   and `placed/` (above), and on a Mac `macos-pkg.toml`, `pkgs/` and `pki/`. The host's own
+//!   unit and state directories are never written.
+//! - `--fixture-link <files|coordinator>`: the link to the coordinator, `files` (the default) or
+//!   `coordinator` (above).
 //! - `--fixture-fail-start <version>`: a `daemon` of that version writes one line to standard
 //!   error ([`refused_line`]) and exits 1 before it does anything else: a new binary that cannot
 //!   start. A `daemon` of any other version runs.
@@ -91,6 +104,11 @@ use hostkeeper_link::{
 use hostkeeper_placed::Roots;
 use serde_json::Value;
 
+/// The `.pkg` files and the signature answers of the fixture, on a Mac.
+#[cfg(target_os = "macos")]
+#[path = "../shared/macos_pkg.rs"]
+mod macos_pkg;
+
 /// The program's name, at the start of what it says on standard error.
 const PROGRAM: &str = "hostkeeper-selfupdate-daemon";
 /// The exit status of a command line this program refuses (`2`, a usage error, as clap's).
@@ -108,6 +126,8 @@ struct Fixture {
     hold_start: Option<(String, PathBuf)>,
     own_unit: Option<String>,
     packaged: Option<PathBuf>,
+    /// The link to the coordinator: the shipped daemon's, over mutual TLS, instead of files.
+    coordinator_link: bool,
 }
 
 /// The line a `daemon` of `version` writes before it exits at `--fixture-fail-start`.
@@ -160,6 +180,13 @@ fn take_fixture_flags(
             }
             "--fixture-own-unit" => fixture.own_unit = Some(value.to_string_lossy().into_owned()),
             "--fixture-packaged" => fixture.packaged = Some(PathBuf::from(value)),
+            "--fixture-link" => {
+                fixture.coordinator_link = match value.to_string_lossy().as_ref() {
+                    "files" => false,
+                    "coordinator" => true,
+                    other => return Err(format!("{flag} takes files or coordinator, not {other}")),
+                };
+            }
             _ => return Err(format!("unknown flag {flag}")),
         }
     }
@@ -212,7 +239,13 @@ fn daemon_verb(fixture: &Fixture, flags: &DaemonFlags) -> ExitCode {
     let Some(dir) = fixture.dir.as_deref() else {
         return usage("daemon needs --fixture-dir");
     };
-    let served = run_daemon(dir, fixture.own_unit.as_deref(), flags, own);
+    let served = run_daemon(
+        dir,
+        fixture.own_unit.as_deref(),
+        fixture.coordinator_link,
+        flags,
+        own,
+    );
     if served.is_ok()
         && let Some(file) = &fixture.hold_exit
         && hold(file)
@@ -285,12 +318,15 @@ fn systemd_vars() -> SystemdVars {
     }
 }
 
-/// Starts the shipped daemon with the fixture's repository entries and link, and serves it until it
-/// asks to exit for its own update, as `hostkeeper_daemon::cli` does with the host's; its
-/// observer watches `own_unit` as the daemon's own job when one is given.
+/// Starts the shipped daemon with the fixture's repository entries (on a Mac, its `macos-pkg`
+/// signers and packages) and link, and serves it until it asks to exit for its own update, as
+/// `hostkeeper_daemon::cli` does with the host's; its observer watches `own_unit` as the daemon's
+/// own job when one is given. `coordinator_link` has it enroll and beat as the shipped daemon
+/// does, its pki directory the fixture's.
 fn run_daemon(
     dir: &Path,
     own_unit: Option<&str>,
+    coordinator_link: bool,
     flags: &DaemonFlags,
     own: HostkeeperVersion,
 ) -> Result<(), StartError> {
@@ -310,10 +346,40 @@ fn run_daemon(
             adapters.own_unit = unit.to_owned();
         }
         let mut files = HostFiles::host();
-        files.repositories = Some(dir.join("repositories"));
+        // A Mac has no repository entries and never reads the directory.
+        #[cfg(not(target_os = "macos"))]
+        {
+            files.repositories = Some(dir.join("repositories"));
+        }
+        #[cfg(target_os = "macos")]
+        {
+            files.macos_pkg_signers = Some(dir.join(macos_pkg::SIGNERS_FILE));
+        }
+        if coordinator_link {
+            files.pki = dir.join("pki");
+        }
         let mut ports: Ports = cli::host_ports(&config, &settings, &files, own, adapters)?;
         let mut repository = (*ports.repository).clone();
         repository.dirs.root = dir.join("root");
+        #[cfg(target_os = "macos")]
+        {
+            // The installer's tools and the package store are the fixture's; the signers are the
+            // ones the daemon's loader read from the fixture's file, as `host_ports` did.
+            let tools: Arc<dyn hostkeeper_install::Tools> = Arc::new(macos_pkg::SignedByStore {
+                dir: dir.to_path_buf(),
+            });
+            let pkg = hostkeeper_daemon::macos_pkg::ports(
+                true,
+                hostkeeper_install::host::Host::mac(),
+                cli::load_signers(&files, 0)?,
+                Some(tools),
+            );
+            repository = repository.with_macos_pkg(pkg);
+            ports.packages = Arc::new(macos_pkg::PkgStore {
+                dir: dir.to_path_buf(),
+                packages: settings.packages_dir.clone(),
+            });
+        }
         ports.repository = Arc::new(repository);
         ports.placement.roots = Roots::new(
             &dir.join("placed"),
@@ -321,12 +387,22 @@ fn run_daemon(
             &settings.packages_dir,
         );
         let started = start::startup_notifying(&settings, ports, own, notifier.as_ref())?;
-        let links = file_links(
-            started.daemon(),
-            &dir.join("link"),
-            flags.link.heartbeat_secs,
-            watchdog,
-        );
+        let links = if coordinator_link {
+            cli::host_links(
+                started.daemon(),
+                &files,
+                flags.link.heartbeat_secs,
+                platform.kind,
+                watchdog,
+            )
+        } else {
+            file_links(
+                started.daemon(),
+                &dir.join("link"),
+                flags.link.heartbeat_secs,
+                watchdog,
+            )
+        };
         start::serve(started, links).await;
         Ok(())
     })

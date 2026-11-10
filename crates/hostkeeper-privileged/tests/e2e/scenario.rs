@@ -37,7 +37,7 @@ pub const LOCAL: u32 = 240;
 
 /// The config of a daemon that no order of this rig makes read a key of: the loader requires the
 /// release channel and the trusted signers, and the daemon reads neither.
-const CONFIG_TAIL: &str = "release_channel = \"https://releases.example\"\n\n\
+pub const CONFIG_TAIL: &str = "release_channel = \"https://releases.example\"\n\n\
      [trusted_signers]\norganisation = \"example-org\"\nworkflow = \".github/workflows/release.yml\"\n\
      refs = [\"refs/tags/*\"]\nhosted_runner = true\n";
 

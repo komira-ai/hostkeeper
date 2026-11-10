@@ -21,6 +21,7 @@ use hostkeeper_daemon::repository::RepositoryPorts;
 use hostkeeper_daemon::{Daemon, Ports, repositories};
 use hostkeeper_install::announce;
 use hostkeeper_install::announce::OsHost;
+use hostkeeper_install::version::Owner;
 use hostkeeper_observe::fake::{
     FakeExpectedExe, FakeHealthClient, FakeProcessProbe, FakeServiceManager,
 };
@@ -32,7 +33,6 @@ use hostkeeper_proto::hostkeeper::release::v1::{
 };
 use hostkeeper_steps::{ProcBootId, SystemClock, SystemdLauncher};
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 
 use super::repo::PACKAGE;
 use super::rig::{REPOSITORY, Rig};

@@ -166,10 +166,23 @@ impl Key {
             .and_then(|rest| rest.split(':').nth(8))
             .expect("the key's fingerprint")
             .to_owned();
-        Key {
+        let key = Key {
             home: home.to_path_buf(),
             fingerprint,
-        }
+        };
+        key.stop_agent();
+        key
+    }
+
+    /// Stops the gpg-agent that a key generation or a signature started, so that its sockets do
+    /// not stay in the test's directory between uses (a test that asserts the daemon left no
+    /// socket there would find them); the next use starts it again.
+    fn stop_agent(&self) {
+        let _ = Command::new("gpgconf")
+            .arg("--homedir")
+            .arg(&self.home)
+            .args(["--kill", "gpg-agent"])
+            .output();
     }
 
     /// The public key, binary, into `path` (mode 0644): a keyring `Signed-By` names.
@@ -180,6 +193,7 @@ impl Key {
             .args(["--export", &self.fingerprint]));
         fs::write(path, key).expect("write the keyring");
         fs::set_permissions(path, fs::Permissions::from_mode(0o644)).expect("keyring mode");
+        self.stop_agent();
     }
 
     /// `release` clear-signed into `into`, the suite's `InRelease`.
@@ -192,16 +206,13 @@ impl Key {
             .arg("--output")
             .arg(into)
             .arg(release));
+        self.stop_agent();
     }
 }
 
 impl Drop for Key {
     fn drop(&mut self) {
-        let _ = Command::new("gpgconf")
-            .arg("--homedir")
-            .arg(&self.home)
-            .args(["--kill", "gpg-agent"])
-            .output();
+        self.stop_agent();
     }
 }
 

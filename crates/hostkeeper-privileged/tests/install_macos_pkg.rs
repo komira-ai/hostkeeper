@@ -34,7 +34,7 @@
 //!
 //! - `a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_ordered_pkg`: the
 //!   daemon's own order path in this process (`install_macos_pkg/daemon.rs`) on the Mac's
-//!   adapters and tools: with no signers file it announces `hostkeeper-archive` alone and defers
+//!   adapters and tools: with no signers file it announces no installer and defers
 //!   an order of the `.pkg` `installer_not_listed`, fetching nothing; with the signers file
 //!   (loaded by the daemon's loader) and the Mac's `installer` and `pkgutil` it announces
 //!   `macos-pkg`, refuses the unsigned `.pkg` at `stage` (`signature`, real `pkgutil`, nothing
@@ -817,7 +817,7 @@ fn a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_order
     );
 
     let without = daemon::daemon(&signers_file);
-    assert_eq!(without.names, ["hostkeeper-archive"], "no signers file");
+    assert_eq!(without.names, Vec::<String>::new(), "no signers file");
     let one = without.publish("1.0.0", &v100.component, true);
     assert_eq!(
         finished(without.daemon.order(&daemon::install("1.0.0", &one, 1))),
@@ -830,7 +830,7 @@ fn a_mac_daemon_announces_macos_pkg_with_its_signers_file_and_installs_the_order
     fs::write(&signers_file, format!("signers = [\"{LEAF}\"]\n")).expect("the signers file");
     fs::set_permissions(&signers_file, fs::Permissions::from_mode(0o644)).expect("its mode");
     let mac = daemon::daemon(&signers_file);
-    assert_eq!(mac.names, ["hostkeeper-archive", "macos-pkg"]);
+    assert_eq!(mac.names, ["macos-pkg"]);
 
     let unsigned = mac.publish("1.0.0", &v100.product, false);
     let refused = finished(mac.daemon.order(&daemon::install("1.0.0", &unsigned, 1)));

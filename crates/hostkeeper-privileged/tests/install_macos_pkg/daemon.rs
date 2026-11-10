@@ -28,6 +28,7 @@ use hostkeeper_daemon::{Daemon, Ports};
 use hostkeeper_install::announce::{OsHost, announce};
 use hostkeeper_install::host::Host;
 use hostkeeper_install::tools::{ToolError, ToolOutput};
+use hostkeeper_install::version::Owner;
 use hostkeeper_install::{HostTools, Tool, Tools};
 use hostkeeper_launchd::Platform;
 use hostkeeper_observe::fake::{
@@ -40,7 +41,6 @@ use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Location, Manifest, StepBounds, Target,
 };
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 use sha2::{Digest, Sha256};
 
 use super::{IDENTIFIER, SERVICE, signed_answer};

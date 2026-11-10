@@ -16,6 +16,11 @@
 //! - [`coordinator`]: [`coordinator::CoordinatorHandle`], the real coordinator in process, and
 //!   the operator's calls against it ([`operator_api`], shared with `support::pair`).
 //! - [`scenario`]: the states the tests start from, each built the same way by every test.
+//! - On a Mac, `tests/device_mac_e2e.rs` runs hello's `.pkg` through the same coordinator and the
+//!   daemon under launchd: `hello` builds the package and its entry (`pkg_build` is the Mac's
+//!   `pkgbuild` and `productbuild`, `macos_pkg` the files the daemon's package port serves and
+//!   the answer to its signature check), and `mac_host` is the Mac's directories and the
+//!   daemon's job.
 //!
 //! `tests/tierstore_rig.rs` runs the parts that need no root (the package's shape against the
 //! daemon's tree rules and manifest checks, the held ports) in the pull-request set.
@@ -45,6 +50,19 @@ pub mod operator_api;
 pub mod package;
 pub mod scenario;
 pub mod signer;
+
+// The Mac's end-to-end rig (`tests/device_mac_e2e.rs`): hello's `.pkg`, the Mac the daemon runs
+// on as a launchd job, and the `.pkg` files and signature answers the program serves.
+#[cfg(target_os = "macos")]
+pub mod hello;
+#[cfg(target_os = "macos")]
+pub mod mac_host;
+#[cfg(target_os = "macos")]
+#[path = "../shared/macos_pkg.rs"]
+pub mod macos_pkg;
+#[cfg(target_os = "macos")]
+#[path = "../shared/pkg_build.rs"]
+pub mod pkg_build;
 
 /// The service of the fixture package, which is also its package; every unit of it starts with
 /// this name.

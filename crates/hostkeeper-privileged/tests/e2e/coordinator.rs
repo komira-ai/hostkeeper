@@ -197,6 +197,21 @@ impl CoordinatorHandle {
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
     pub fn start(dir: &Path, service: &str, host_role: &str) -> CoordinatorHandle {
+        CoordinatorHandle::start_with_rollout(dir, service, host_role, "")
+    }
+
+    /// [`CoordinatorHandle::start`], with `rollout` (lines of keys, each ending in a newline)
+    /// added to the service's table of the rollout file: the keys of a rollout that the
+    /// defaults above do not set (`bake_beats = 2`, a host baked for two healthy heartbeats).
+    ///
+    /// # Panics
+    /// A file cannot be written or the coordinator does not start.
+    pub fn start_with_rollout(
+        dir: &Path,
+        service: &str,
+        host_role: &str,
+        rollout: &str,
+    ) -> CoordinatorHandle {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("chmod the directory");
         // 64 hex digits: the token must be at least 32 visible ASCII characters.
@@ -210,7 +225,8 @@ impl CoordinatorHandle {
                  name = \"{service}\"\n\
                  roles = [\"{host_role}\"]\n\
                  rollback = \"automatic\"\n\
-                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n"
+                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n\
+                 {rollout}"
             ),
             0o600,
         );

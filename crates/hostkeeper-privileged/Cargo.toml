@@ -56,6 +56,15 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 serde_json.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread"] }
 
+# The same program on a Mac answers the `macos-pkg` installer's signature check for the packages
+# the test serves (`hostkeeper_install::Tools`, `tests/shared/macos_pkg.rs`) and holds the
+# daemon's installer ports; the macOS device tests drive the installer's own steps with it too
+# (`tests/install_macos_pkg.rs`) and the apt device test the repository installer's.
+hostkeeper-install = { path = "../hostkeeper-install" }
+
+# hello's update hook and server (`examples/hello`), for the program `hello-e2e` below.
+hello = { path = "../../examples/hello" }
+
 # The workload fixture (`hostkeeper_privileged::fixture` says what it does). Built by cargo with
 # the crate's tests, nothing prebuilt or checked in; a program of the tests, not shipped. Its
 # decisions and the start of its child are in the library, measured; the program only forwards
@@ -80,8 +89,9 @@ name = "hostkeeper-privileged-coordinator"
 path = "tests/bin/coordinator.rs"
 
 # The `hostkeeper` binary of the Linux self-update tests (`tests/self_update.rs`): the daemon of
-# `hostkeeper_daemon` with the repository entries and the coordinator link of the test, its
-# version the name it is staged under. What it does is documented in the program.
+# `hostkeeper_daemon` with the repository entries (on a Mac, the `macos-pkg` signers and
+# packages) and the coordinator link of the test, its version the name it is staged under. What
+# it does is documented in the program.
 [[bin]]
 name = "hostkeeper-selfupdate-daemon"
 path = "tests/bin/selfupdate_daemon.rs"
@@ -101,6 +111,14 @@ path = "tests/bin/pxe.rs"
 [[bin]]
 name = "tierstore-like"
 path = "tests/bin/tierstore_like.rs"
+
+# The program the hello `.pkg` of `tests/device_mac_e2e.rs` installs at
+# `/Library/Application Support/hello/bin/hello`: hello's hook and server, its `/version` the
+# version the package says (the program says why). A program of the tests, outside the measured
+# set like every file under `tests/`.
+[[bin]]
+name = "hello-e2e"
+path = "tests/bin/hello_e2e.rs"
 
 # The `hostkeeper` binary of this build in the cross-release rig
 # (`tests/self_update_across_releases.rs`): the daemon of `hostkeeper_daemon` on the host's real
@@ -148,11 +166,10 @@ p256.workspace = true
 # What the privileged tests drive: the production launcher and dead-man (`hostkeeper-steps`,
 # above), and the observer's real adapters; on a Mac the launchd adapters (`hostkeeper-launchd`,
 # above), the process probe over `proc_pidpath`, the package check
-# (`hostkeeper_unpack::MacVerify`) over `codesign` and `getxattr`, and the enrollment claims over
-# `ioreg`; and the owner the apt device test's daemon stages as and the version the cross-release
-# rig's package floors are judged by (`hostkeeper_unpack`).
+# (`hostkeeper_install::mac_verify::MacVerify`) over `codesign` and `getxattr`, and the enrollment
+# claims over `ioreg`; and the owner the apt device test's daemon stages as
+# (`hostkeeper_install::version::Owner`).
 hostkeeper-observe = { path = "../hostkeeper-observe" }
-hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The macOS device test of the enrollment claims: `MacClaims` over the daemon's `HostIoreg`, the
 # real `ioreg`.
 hostkeeper-enroll = { path = "../hostkeeper-enroll" }
@@ -160,8 +177,7 @@ hostkeeper-enroll = { path = "../hostkeeper-enroll" }
 # the real `HostTools`, and the signature and receipt forms it pins;
 # and the device test of the apt backend (`tests/install_apt.rs`): the repository installer's own
 # steps over the production launcher, and the backend's readers of apt's output, against the real
-# apt of the runner and of each deb release's container.
-hostkeeper-install = { path = "../hostkeeper-install" }
+# apt of the runner and of each deb release's container (`hostkeeper-install`, above).
 tokio = { workspace = true, features = ["net", "rt", "sync", "time"] }
 tonic = { workspace = true, features = ["channel"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

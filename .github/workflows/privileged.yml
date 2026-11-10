@@ -25,7 +25,11 @@
 # and quarantine verdicts, and in
 # install_macos_pkg.rs the macos-pkg installer driven as root with the real pkgutil, installer, lsbom
 # and launchctl, against M11's unsigned fixture forms built at test time, with nothing signed and no
-# trust setting or keychain changed. In the job first-boot the programs themselves
+# trust setting or keychain changed, in device_mac_e2e.rs hello's .pkg installed, updated, rolled back on a
+# failed verify and uninstalled under launchd by the real coordinator in process, and in
+# device_mac_selfupdate.rs hostkeeper's update of itself under launchd through its .pkg (the daemon
+# as a launchd job fetching each .pkg by its pin from the test's files, its signature answered as a
+# signed package's, installed by the Mac's own installer). In the job first-boot the programs themselves
 # meet: the coordinator and the
 # daemon, each started by the tests as a child process, through a host's first boot (enrollment,
 # approval, the host certificate, heartbeats over mutual TLS, a restart of each) and a package
@@ -353,9 +357,14 @@ jobs:
   # The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
   # boot id, the enrollment claims and the package check against a GitHub-hosted arm64 macOS
   # runner (passwordless sudo, launchd), in device_mac.rs (the real daemon under launchd binding no
-  # socket, a hook step as a launchd job stopped at its bound), and, in install_macos_pkg.rs, the
-  # macos-pkg installer against the real pkgutil, installer, lsbom and launchctl. The tests print
-  # what they find (the proc_pidpath table, the verdicts of codesign) to the log.
+  # socket, a hook step as a launchd job stopped at its bound), in install_macos_pkg.rs, the
+  # macos-pkg installer against the real pkgutil, installer, lsbom and launchctl, in
+  # device_mac_e2e.rs, hello's .pkg installed, updated, rolled back and uninstalled by the real
+  # coordinator in process and the daemon as a launchd job, and, in device_mac_selfupdate.rs,
+  # hostkeeper's update of itself under launchd through its .pkg (an install of the running
+  # version, a restart into the next binary, a next binary that cannot start, the coordinator
+  # baking and converging a Mac that updated itself). The tests print what they find (the
+  # proc_pidpath table, the verdicts of codesign) to the log.
   macos-device:
     runs-on: macos-15
     permissions:
@@ -435,9 +444,9 @@ jobs:
           path: ${{ runner.temp }}/previous-release.tar.gz
           key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test install_macos_pkg
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test install_macos_pkg -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:

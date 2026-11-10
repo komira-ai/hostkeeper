@@ -134,8 +134,8 @@ pub fn newer(version: &str, step: u64) -> String {
 /// with. The released binary was built as the pinned release: [`FLOOR`] and the release's
 /// version. This build's `OLDEST_READER` is `hostkeeper_steps::OLDEST_READER` (R2, 0.1.194) and
 /// its version the workspace's (`0.1.0` in a pull request, the release's own once `release
-/// set-version` ran), which is also the version `hostkeeper_unpack::running_hostkeeper` gives,
-/// whatever name the program runs under. In a pull request the floor is therefore the
+/// set-version` ran), which is also the version of `hostkeeper-privileged`, a crate of the same
+/// workspace, whatever name the program runs under. In a pull request the floor is therefore the
 /// workspace's `0.1.0`, at or below the legacy floor (an entry has no hook command and runs the
 /// built-in steps whatever the floor).
 pub fn floor(build: Build, released: &str) -> String {
@@ -146,7 +146,7 @@ pub fn floor(build: Build, released: &str) -> String {
         ),
         Build::This | Build::Failing => (
             hostkeeper_steps::OLDEST_READER,
-            hostkeeper_unpack::running_hostkeeper(),
+            HostkeeperVersion::parse(env!("CARGO_PKG_VERSION")).expect("the workspace version"),
         ),
     };
     oldest.min(built).to_string()
