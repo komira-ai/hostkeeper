@@ -62,20 +62,9 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// The reason the gateway gives a body that is not the method's request as JSON.
 const INVALID_REQUEST: &str = "invalid_request";
 
-/// The rollout file: the two services the requests name, on the roles they name.
-const ROLLOUT: &str = r#"
-[[service]]
-name = "kbf"
-roles = ["frontend", "storage"]
-
-[[service]]
-name = "tierstore"
-roles = ["storage"]
-"#;
-
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
-/// calls the method sends it (`ui/pages/*.js`), with values the coordinator takes: a service of
-/// [`ROLLOUT`], a role of it, a host id, a reason. A host or request id no heartbeat or
+/// calls the method sends it (`ui/pages/*.js`), with values the coordinator takes: a service, a
+/// role, a host id, a reason. A host or request id no heartbeat or
 /// enrollment named is answered `NOT_FOUND` or the like, which passes.
 const REQUESTS: &[(&str, &str)] = &[
     ("hostkeeper.operator.v1.Alerts/List", "{}"),
@@ -115,6 +104,15 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Enrollment/RemoveRecord",
         r#"{"hostId": "storage-1", "reason": "decommissioned"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.HostGroups/Get",
+        r#"{"hostGroup": "storage", "limit": 50}"#,
+    ),
+    ("hostkeeper.operator.v1.HostGroups/List", "{}"),
+    (
+        "hostkeeper.operator.v1.HostGroups/Move",
+        r#"{"nodeId": "storage-1", "hostGroup": "storage", "reason": "rebuilt"}"#,
     ),
     (
         "hostkeeper.operator.v1.Hosts/Abort",
@@ -228,6 +226,14 @@ const BEFORE: &[(&str, &str, &str)] = &[
     ),
 ];
 
+/// The group a coordinator is given before a method is sent to it: the coordinator manages no
+/// service of its own, so the two services the requests name are packages of this group.
+const GROUP: (&str, &str) = (
+    "hostkeeper.operator.v1.HostGroups/Put",
+    r#"{"hostGroup": {"name": "storage", "packages": ["hostkeeper", "kbf", "tierstore"]},
+        "reason": "the packages the requests name"}"#,
+);
+
 /// Every method `ui/calls.json` lists.
 fn listed() -> Vec<String> {
     let file = UiFile::named("calls.json").expect("ui/calls.json is a file of the app");
@@ -320,8 +326,7 @@ struct Served {
 
 impl Served {
     /// What `hostkeeper-coordinator serve` builds from flags naming files written in a new
-    /// directory: the operator tokens file with [`OPERATOR_TOKEN`] named [`TOKEN_NAME`], the
-    /// rollout file [`ROLLOUT`], and the coordinator as the hosts' CA (`--enrollment-dir`), so
+    /// directory: the operator tokens file with [`OPERATOR_TOKEN`] named [`TOKEN_NAME`], and the coordinator as the hosts' CA (`--enrollment-dir`), so
     /// the enrollment calls are served as a deployed coordinator serves them.
     fn start(name: &str) -> Self {
         let dir = Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name)
@@ -351,7 +356,6 @@ impl Served {
                 path(put("oidc.toml", &config_text(STATIC_ISSUER), 0o644)),
             ),
             ("--tokens-file", path(put("tokens.toml", &tokens, 0o600))),
-            ("--rollout-file", path(put("rollout.toml", ROLLOUT, 0o600))),
             ("--legacy-service", "kbf".to_owned()),
             ("--enrollment-dir", path(dir.path().join("enrollment"))),
             ("--ca-key-file", path(dir.path().join("ca.key"))),
@@ -572,6 +576,15 @@ async fn failures_of(methods: &[String], bearer: &str) -> Vec<String> {
         };
         for transport in Transport::ALL {
             let served = Served::start(&format!("real-router-{n}-{transport:?}"));
+            let put = send(
+                &served,
+                Transport::Gateway,
+                GROUP.0,
+                GROUP.1,
+                OPERATOR_TOKEN,
+            )
+            .await;
+            assert_eq!(put.code, Code::Ok, "{put:?}");
             for (_, before, request) in BEFORE.iter().filter(|(m, _, _)| m == method) {
                 let answer =
                     send(&served, Transport::Gateway, before, request, OPERATOR_TOKEN).await;

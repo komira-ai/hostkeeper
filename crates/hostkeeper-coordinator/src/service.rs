@@ -258,6 +258,10 @@ pub struct Coordinator {
     pub(crate) running: crate::running::Kept,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
     pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
+    /// Held by `Services.SetRepository` from its check that the registry holds the repository to
+    /// its write, and by `Repositories.Remove` from its check that no service names the
+    /// repository to its commit, so neither decides on what the other is changing.
+    pub(crate) repository_naming: Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -313,6 +317,7 @@ impl Coordinator {
             repository_reports: crate::repository_push::Reports::default(),
             running: crate::running::Kept::default(),
             repository_origin: None,
+            repository_naming: Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

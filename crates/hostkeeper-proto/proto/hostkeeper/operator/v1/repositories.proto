@@ -2,8 +2,8 @@
 // (`RepositoriesRefusal`): the coordinator's registry of package repositories
 // (docs/design/packages-repositories.md section 3). Each entry is a
 // `hostkeeper.release.v1.Repository`: a name, the package manager, the URI, the suites, the
-// components, the signing keys' fingerprints and the keyring. Each service of the rollout file
-// names one (`repository`, `komira` when it names none); the coordinator sends each Linux host
+// components, the signing keys' fingerprints and the keyring. Each package
+// comes from one (`Services.SetRepository`, `komira` when none is set); the coordinator sends each Linux host
 // the repositories its services name, and the host's daemon writes them as its repository
 // configuration. A private repository (`access` `hosts`) is read from its origin by the
 // coordinator alone, with the credential of its `credential_file`, and served to each host over
@@ -45,7 +45,7 @@ service Repositories {
   // key rotation, which reaches each host whose services name it at its next heartbeat. The
   // registry's generation grows by one. Writes the audit entry `repository_put`.
   rpc Put(PutRepositoryRequest) returns (PutRepositoryResponse);
-  // Removes a repository no service of the rollout file names. The registry's generation grows
+  // Removes a repository no package comes from. The registry's generation grows
   // by one. Writes the audit entry `repository_remove`.
   rpc Remove(RemoveRepositoryRequest) returns (RemoveRepositoryResponse);
 }
@@ -67,7 +67,7 @@ enum RepositoriesRefusal {
   REPOSITORIES_REFUSAL_KEYRING_INVALID = 4;
   // NOT_FOUND: `Get` or `Remove` of a name the registry does not hold.
   REPOSITORIES_REFUSAL_UNKNOWN_REPOSITORY = 5;
-  // FAILED_PRECONDITION: `Remove` of a repository a service of the rollout file names.
+  // FAILED_PRECONDITION: `Remove` of a repository a package comes from.
   REPOSITORIES_REFUSAL_IN_USE = 6;
   // FAILED_PRECONDITION: `Put` of a repository one of whose entries `<name>-<suite>` is an entry
   // of another repository of the registry.
@@ -93,7 +93,7 @@ message RegisteredRepository {
   string keyring_sha256 = 2;
   // The registry's generation when it was last put.
   uint64 generation = 3;
-  // The services of the rollout file that name it, by name.
+  // The packages that come from it, by name.
   repeated string services = 4;
 }
 
@@ -104,8 +104,7 @@ message ListRepositoriesResponse {
   repeated RegisteredRepository repositories = 1;
   // The registry's generation: 0 until the first `Put`.
   uint64 generation = 2;
-  // The repositories the services of the rollout file name that the registry does not hold,
-  // by name. A host one of whose services names one is sent no repository.
+  // The repositories packages come from that the registry does not hold, by name. A host one of whose services names one is sent no repository.
   repeated string unregistered = 3;
 }
 

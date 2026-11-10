@@ -71,6 +71,7 @@ export interface Client {
     assign(request: hostkeeper_operator_v1.AssignRequest): Promise<hostkeeper_operator_v1.AssignResponse>;
     unassign(request: hostkeeper_operator_v1.UnassignRequest): Promise<hostkeeper_operator_v1.UnassignResponse>;
     setMinVersion(request: hostkeeper_operator_v1.SetMinVersionRequest): Promise<hostkeeper_operator_v1.SetMinVersionResponse>;
+    setRepository(request: hostkeeper_operator_v1.SetRepositoryRequest): Promise<hostkeeper_operator_v1.SetRepositoryResponse>;
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
   };
@@ -862,6 +863,8 @@ export namespace hostkeeper_operator_v1 {
     minVersion?: hostkeeper_operator_v1.MinVersion;
   }
   export interface SetMinVersionResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface SetRepositoryRequest { service?: string; repository?: string; reason?: string; }
+  export interface SetRepositoryResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SkippedHost { nodeId?: string; reason?: string; }
   export type StageAdvance =
     | "STAGE_ADVANCE_UNSPECIFIED"

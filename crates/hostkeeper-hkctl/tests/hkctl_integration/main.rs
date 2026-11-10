@@ -23,4 +23,5 @@ mod oidc;
 mod older;
 mod rig;
 mod secrets;
+mod services_repository;
 mod surface;
