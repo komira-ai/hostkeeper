@@ -114,9 +114,21 @@ operator asks (section 6.4). It
    at the first login". It prints nothing else of the file, and it never writes the password to a log or to the
    script's own output files.
 
-The file is "root-only" in the sense that matters: the state volume's directory on the host is root's, and inside the
-container only the coordinator's own user can read the file. The plaintext is there for the person who missed the
-terminal, and for one hour only.
+An expired file is removed before a new one is minted, and by the dry run too (which says it would): the script reads
+one non-secret line of the file, `valid_until`, to decide, and never reads the `password` line back, so no secret
+passes through the script after it has printed it.
+
+**Who may read the file, said exactly.** The file is mode 0400 and owned by the uid the coordinator runs as; the
+directory holding it is in the state volume, owned by root on the host and writable by that same uid, because deleting
+a file needs write access to its directory. So "root-only" means: on the host only root (and the coordinator's uid)
+can read it, and inside the container only the coordinator's uid can. Which uid the container runs as is not checked
+in this design; L5 reads the image and pins it down, and if the coordinator runs as root the sentence above is simply
+"root". The plaintext is there for the person who missed the terminal, and for one hour only.
+
+**The clock is the coordinator's.** `valid_until` is a timestamp the script wrote from the host's clock, and the
+coordinator compares it with its own injected clock. It is capped: the coordinator refuses a file whose `valid_until`
+is more than `--initial-password-secs` (itself at most 3600) past its own clock. A different setting can therefore
+only shorten the hour, never stretch it, and the file cannot be edited to grant more.
 
 **The coordinator side (Designed).** A new flag `--initial-admin-file <path>` names the file. On start and on every
 `--tls-reload-secs` tick (the tick that already reloads the tokens file, `listen::reload_every`) the coordinator reads
@@ -136,8 +148,11 @@ refuses a file whose `valid_until` is more than that past its own clock, so the 
 The flag also cannot be set above 3600: the owner's rule is one hour, and a larger number would have to be a decision.
 
 **The first login.** The initial password logs in only while `now < initial_expires_at`. The session it makes has
-`must_change` set, ends no later than `initial_expires_at`, and may call only `/v1/password`, `/v1/logout` and
-`/v1/session` (section 5.3). A successful change sets the new hash, clears `must_change` and `initial_expires_at`,
+`must_change` set and may call only `/v1/password`, `/v1/logout` and `/v1/session` (section 5.3). That session
+outlives `initial_expires_at` for one purpose only: the password-change call is accepted up to `initial_expires_at`
+and refused after it, so an admin who started the form at 59 minutes is not cut off mid-way by a timer on the page
+but is refused at the deadline. The session answer carries `must_change_until`, the deadline, so the form can show
+the time left. A successful change sets the new hash, clears `must_change` and `initial_expires_at`,
 ends the user's other sessions, deletes the file, and audits `password_changed`.
 
 **Start rule.** Today exactly one of `--tokens-file` and `--operator-token-file` is required
@@ -175,7 +190,7 @@ the cookie unless it came from a secure origin, with `Path=/` and no `Domain`, s
 A session has an idle deadline (`--session-idle-secs`, default 1800) pushed out at each use, and an absolute one
 (`--session-max-secs`, default 43200). Each is checked by the injected clock at each request. The table is capped
 (`--session-max-count`, default 256); a login past the cap drops the oldest idle session. `GET /v1/session` answers
-`{"username", "csrf", "must_change"}` for a live session, so a page reload gets its CSRF token back without a new
+`{"username", "csrf", "must_change", "must_change_until"}` (the last only when `must_change`) for a live session, so a page reload gets its CSRF token back without a new
 login; any other request gets 401 `sign_in_required`, the code `ui/api.js` already maps to the sign-in view.
 
 ### 5.3 Where the cookie is accepted, and CSRF
@@ -194,7 +209,13 @@ not. So the two credentials are handled differently, in one place, where `bearer
 - `GET /v1/session` is the only `GET` that needs the cookie alone: its answer is readable only by a same-origin page,
   because the listener sends no `Access-Control-*` header.
 - The gRPC path (`grpc/operator.rs`) keeps reading `Authorization` only. The gateway, which the UI uses, is the one
-  place a cookie is read; nothing else in the coordinator learns that cookies exist.
+  place a cookie is read; nothing else in the coordinator learns that cookies exist. That this holds is **not yet
+  verified** and is a precondition of L6b: before L6b changes `Caller` resolution, the pull request shows by test that
+  a gRPC call carrying only a valid session cookie is refused, and that a bearer response never carries `Set-Cookie`.
+- Some rpcs are **session only**: a per-rpc attribute, declared beside the rpc's definition and read where `Caller`
+  is resolved, which refuses a bearer caller with `PERMISSION_DENIED` (`session_required`). The MDM setup
+  writes of coordinator-mdm.md section 4.9 carry it and nothing else does for now: `Users` and `ApiTokens` stay open
+  to tokens, as section 7.2 says.
 
 `SameSite=Strict`, the Origin and Fetch-Metadata checks and the secret header are three independent defences; any one
 of them stops the classic forged form post, and the header stops everything the other two let through (an old browser
@@ -214,6 +235,11 @@ the form is plain. The login routes answer `Cache-Control: no-store`.
 - The peer's address goes into the audit entry of a failure, which needs it carried on the access path (today it is
   not; section 14, L1). It is not a key of the limiter now: the listener is private, and a per-address limit that a
   shared address (a bastion, a tailnet node) would trip is worse than none.
+- Two cases are accepted for "really simple". The lock can keep an admin out for 15 minutes at a time, repeatedly, by
+  anyone on the private network, and the recovery then is to wait or to run break-glass, which needs root on the host.
+  And the limiter is per user name, so one weak password sprayed over many names is not limited, only slowed by the
+  hash cap; the 12-character minimum is what stands against it. A per-address limit and a lock that spares the real
+  user's own address are future work. A successful login by the user clears that user's count (tested).
 - The audit records the first failure of a window, the lock (`login_locked`) and the success, not every failure, so
   a guesser cannot fill the log.
 
@@ -387,7 +413,8 @@ never logs a request body.
 | Case | What happens | Mechanism |
 | --- | --- | --- |
 | The hour passes before the first login | the password no longer logs in; the file is deleted; run the deploy again | tick check on `valid_until`, and the record's `initial_expires_at` checked at login |
-| The hour passes while the admin is on the change page | the change is refused 401; the session ends | a `must_change` session's deadline is `initial_expires_at` |
+| The hour passes while the admin is on the change page | the change is accepted up to `initial_expires_at` and refused 401 after it; run the deploy again | the change call checks `initial_expires_at` by the injected clock; the page shows `must_change_until` |
+| The coordinator is down, or was never started, when the hour ends | the password cannot log in because nothing answers; the plaintext file stays on disk past the hour until the next start or tick deletes it | expiry is checked at login and by the tick; the deploy script's re-run (and its dry run) removes an expired file before minting; the exposure is the file, readable by root and the coordinator's uid only |
 | The coordinator restarts after the file was adopted | nothing is reset | adopted `id` stored with the record |
 | The file is edited or malformed | rejected, the old state keeps; one log line with the reason, never the content | secret-file rule, as the tokens file |
 | Two admins change a password at once | one wins by the store's write; the other sees `current` fail | the store's single-writer commit |
@@ -415,6 +442,8 @@ assertions use a stepped clock: the one-hour rule is "login at `valid_until - 1`
 - **Login**: success sets the cookie with exactly the attributes of section 5.1 and a body with the CSRF token; an
   unknown name, a wrong password, a disabled user and an expired initial credential all give the same bytes; the fifth
   failure locks and the lock ends by the clock; a 6th hash in flight is refused 429.
+- **Cookie and bearer separation**: a gRPC call with only a session cookie is refused; a response to a bearer
+  request never carries `Set-Cookie`; a session-only rpc called with a token answers `PERMISSION_DENIED`.
 - **Session and CSRF**: a call without the header, with a wrong header, with another `Origin`, with
   `Sec-Fetch-Site: cross-site` is 403 and changes nothing; a bearer call with a cookie of another user is made as the
   bearer; idle and absolute expiry; `must_change` allows exactly three routes; logout and disable end sessions;
@@ -449,18 +478,20 @@ the negative case of any new check (T15). An item that needs another says so; no
 | L0 | This document, and its links from the design index and the README | S, docs | |
 | L1 | Carry the peer address on the access path (`Peer`), unused except by the audit | S, about 150 | |
 | L2 | `AuditEntry.subject` and `.source`, the new action constants, the exact-equality tests | S, about 200 | |
-| L3 | Password module: Argon2id, policy, rehash, dummy verify, hash cap, its dependency and `cargo deny` | M, about 450 | |
+| L3 | Password module: Argon2id, policy, rehash, dummy verify, hash cap, its dependency. **First step, before any code**: add the crate and run `cargo deny check licenses bans sources`; the licence recorded here is from memory | M, about 450 | |
 | L4 | Users and tokens in the store: trait methods, fake, files backend, migration `0009`, conformance, export and import | M, about 700 | L2 |
 | L5 | Initial-admin file: `--initial-admin-file`, `--initial-password-secs`, the tick, the start rule, expiry | M, about 500 | L3, L4 |
-| L6 | Login, session, CSRF, limiter, the four routes, `Caller` resolution from cookie or bearer, and the rewrite of the "no session" tests | L, about 1200 | L1, L2, L3, L4 |
-| L7 | `Users` and `ApiTokens` services: proto, handlers, `name_of` over the store, the generated client and the CLI | M, about 800 | L4, L6 |
-| L8 | The UI: sign-in form, forced change, users and tokens pages, session without a token, `ui-tests` | L, about 900 | L6, L7 |
-| L9 | Docs sweep: `ui-serving.md`, `gateway.md`, `docs/operations`, the `ui-api-cli.svg` caption ("no session cookie"), `hostkeeper-design.md` section 4.8 | S, docs | L8 |
-| K1 | komira-ai/komira `tools/held/hostkeeper/coordinator_docker.sh`: the mint step, `--reset-admin`, the tokens file optional, and its tests | M, about 400 | L5 |
+| L6a | Session table and limiter, memory only, no route: ids, deadlines, the cap, failure counts, the hash cap, on the injected clock | M, about 500 | L3 |
+| L6b | The four routes, cookie-or-bearer `Caller` resolution, the CSRF checks, the session-only rpc attribute, and the rewrite of the "no session" tests. **Pre-condition**: the gRPC-ignores-the-cookie and no-`Set-Cookie`-on-bearer tests of section 13, passing against today's code first | M, about 700 | L1, L2, L4, L5, L6a |
+| L7 | `Users` and `ApiTokens` services: proto, handlers, `name_of` over the store, the generated client and the CLI | M, about 800 | L4, L6b |
+| L8a | The UI sign-in and forced change: the forms, the CSRF header in `ui/api.js`, session without a token, the pasted-token form removed, `ui-tests` for sign-in | M, about 450 | L6b |
+| L8b | The UI Users and API tokens pages, with tokens-file tokens read-only, and their `ui-tests` | M, about 450 | L7, L8a |
+| L9 | Docs sweep: `ui-serving.md`, `gateway.md`, `docs/operations`, the `ui-api-cli.svg` caption ("no session cookie"), `hostkeeper-design.md` section 4.8 | S, docs | L8b |
+| K1 | komira-ai/komira `tools/held/hostkeeper/coordinator_docker.sh`: the mint step, removal of an expired file, `--reset-admin`, the optional tokens file, the port-443 setting of coordinator-mdm.md section 4.1, and its tests | M, about 400 | L5 |
 
-L6 is the one to split if review asks: the session table and limiter (memory only, no route) can land first as L6a, then
-the routes and the `Caller` change as L6b. L1 to L3 are independent and can be reviewed in any order. The farm's
-first admin is minted by K1 after L5 is deployed; L6 to L8 can wait for it.
+L1 to L3 are independent and can be reviewed in any order. The farm's first admin is minted by K1 after L5 is deployed;
+L6a to L8b can wait for it. The smallest usable sign-in is L1 to L6b, L8a and K1; the Users and API tokens pages (L7,
+L8b) land before the cutover of coordinator-mdm.md, because the owner wants tokens manageable in the UI.
 
 ## 15. What is not here
 
