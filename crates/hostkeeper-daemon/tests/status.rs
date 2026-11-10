@@ -3,6 +3,7 @@
 //! error of a status that cannot list the services.
 
 mod support;
+mod support_apt;
 
 use std::fs;
 use std::sync::Arc;
@@ -15,28 +16,32 @@ use hostkeeper_daemon::{Daemon, Dirs};
 use hostkeeper_hook::{Step, Verdict};
 use hostkeeper_observe::{HealthView, Observation, ServiceState as Observed, VersionView};
 use hostkeeper_steps::record::RECORD_FILE;
-use support::{OWN, Rig, config, d, update};
+use support::{OWN, Rig, config, update};
+use support_apt::AptRig;
+use support_apt::services;
+use support_apt::with_entry;
 
 /// Catches a field of the status dropped or read from the wrong service: a service whose order
 /// ended, one with a step running, one halted with a held generation, one whose record does not
 /// read and one a newer daemon wrote, each with what it holds.
 #[test]
 fn status_reports_running_version_last_result_and_held_halt() {
-    let rig = Rig::new("status-fields");
-    rig.running("done", "2.0.0");
-    rig.add("done", "2.1.0");
-    rig.add("busy", "2.0.0");
-    rig.add("halted", "2.0.0");
-    rig.add("idle", "1.0.0");
+    let apt = AptRig::new("status-fields");
+    let rig = &apt.rig;
+    services::installed(&apt, "done", "2.0.0");
+    rig.store
+        .add("idle", "1.0.0", &services::manifest_text("idle", "1.0.0"));
     rig.store.link("idle", "current", ".hidden");
     rig.launcher.exits("halted", Step::Prepare, &[76]);
     let gate = rig.launcher.hold("busy", Step::Cutover);
-    let daemon = Arc::new(rig.daemon());
+    let daemon = Arc::new(apt.daemon());
+    let done_entry = services::publish(&apt, "done", "2.1.0");
+    let done_order = with_entry(update("done", "2.1.0", &done_entry.digest, 3), &done_entry);
     assert!(matches!(
-        daemon.order(&update("done", "2.1.0", &d(), 3)),
+        daemon.order(&done_order),
         hostkeeper_daemon::Reply::Finished { .. }
     ));
-    daemon.order(&update("halted", "2.0.0", &d(), 1));
+    daemon.order(&services::update_of(&apt, "halted", "2.0.0", 1));
     HaltStore::new(&rig.state)
         .raise(&ServiceName::new("halted").expect("a name"), 3)
         .expect("raise");
@@ -44,11 +49,10 @@ fn status_reports_running_version_last_result_and_held_halt() {
         fs::create_dir_all(rig.state.join(service)).expect("dir");
         fs::write(rig.state.join(service).join(RECORD_FILE), text).expect("record");
     }
+    let busy_order = services::update_of(&apt, "busy", "2.0.0", 1);
     let running = {
         let daemon = Arc::clone(&daemon);
-        spawn("the order", move || {
-            daemon.order(&update("busy", "2.0.0", &d(), 1))
-        })
+        spawn("the order", move || daemon.order(&busy_order))
     };
     gate.entered(&running).expect("the held step is entered");
 
@@ -107,18 +111,19 @@ fn status_reports_running_version_last_result_and_held_halt() {
             last.target_version.as_str(),
             last.tarball_digest.as_str()
         ),
-        (Some(3), "2.1.0", d().as_str())
+        (Some(3), "2.1.0", done_entry.digest.as_str())
     );
     assert_eq!(halted.last_result().map(|f| f.verdict), Some(Verdict::Halt));
     assert_eq!(halted.held_halt, Some(3));
     assert!(matches!(broken.record, RecordState::Unreadable(_)));
     assert!(!broken.step_running());
     assert_eq!(newer.record, RecordState::Newer(9));
+    // The service runs `done.service`, which the rig's service manager does not list.
     assert_eq!(
         done.observation,
         Some(Observation {
             service: "done".to_owned(),
-            state: Observed::Unmonitored,
+            state: Observed::Absent,
             version: VersionView::NotLive,
             health: HealthView::NotProbed,
             recorded: Some("2.1.0".to_owned()),

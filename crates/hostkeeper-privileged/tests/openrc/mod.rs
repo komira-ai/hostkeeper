@@ -11,9 +11,8 @@
 //!
 //! **The programs.** What runs in the container is built for musl, static, as hostkeeper's Alpine
 //! package carries the daemon: the job's step `cargo build --target x86_64-unknown-linux-musl`
-//! builds `hostkeeper`, `hostkeeper-selfupdate-daemon` and `hostkeeper-fixture-hook` into the
-//! musl directory beside the test's own target directory ([`musl_program`]); a program missing
-//! there fails the test by name. The Alpine package is built from the committed
+//! builds `hostkeeper` into the musl directory beside the test's own target directory
+//! ([`musl_program`]); a program missing there fails the test by name. The Alpine package is built from the committed
 //! `packaging/alpine/` by the pinned nfpm the job installed ([`nfpm`]).
 //!
 //! **Waits.** Every wait reads a state a bounded number of times ([`wait`]) and fails naming

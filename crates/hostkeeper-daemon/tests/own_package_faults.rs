@@ -120,7 +120,7 @@ fn an_activate_that_fails_in_the_environment_is_failed_of_that_class() {
 }
 
 /// Proves a pending `activate` whose version cannot be read ends instead of being tried for
-/// ever: a version that is not a version, a version directory gone (its archive manifest cannot
+/// ever: a version that is not a version, a version directory gone (its `target.json` cannot
 /// be read), a `target.json` that does not read, and one of an installer this daemon has no
 /// steps of each end the update `Failed` after the commit, of class release,
 /// `release_unreadable`, with an alert naming the version, no tool run, and the record no longer
@@ -278,22 +278,22 @@ fn a_settlement_that_cannot_read_the_version_waits() {
     assert!(nr.record().unwrap().progress.awaiting_restart.is_some());
 }
 
-/// Proves a service whose `placed.json` names apt while its packages directory holds no native
-/// version is refused at the switch, nothing purged: with an archive version `current`, and with
-/// none.
+/// Proves a service whose `placed.json` names apt while its packages directory holds no version
+/// the installer staged (a version directory with no `target.json`) is not ordered through: an
+/// `update` of it, whose `current` holds no `target.json`, is refused `release_unreadable`, and an
+/// `install` of it over a version directory with no seal is refused `artifact_changed`, with
+/// nothing fetched, installed or purged and the record as it was.
 #[test]
 fn a_service_recorded_with_apt_and_no_native_version_is_not_switched() {
     for current in [true, false] {
         let apt = AptRig::new(&format!("own-damaged-{current}"));
-        match current {
-            true => {
-                apt.rig.running(SERVICE, "1.0.0");
-                apt.rig.add(SERVICE, "2.0.0");
-            }
-            false => {
-                apt.rig.stage(SERVICE, "2.0.0");
-            }
-        }
+        let pin = apt.publish(support_apt::package("2.0.0"));
+        let entry = support_apt::entry("2.0.0-1", &pin);
+        let dir = match current {
+            true => apt.rig.running(SERVICE, "1.0.0"),
+            false => apt.rig.stage(SERVICE, "2.0.0"),
+        };
+        fs::remove_file(dir.join("target.json")).expect("a version the installer did not stage");
         let mut record = apt.rig.placed_record();
         record
             .installed
@@ -301,18 +301,22 @@ fn a_service_recorded_with_apt_and_no_native_version_is_not_switched() {
         apt.rig.save_placed(&record);
         let daemon = apt.daemon();
         let order = match current {
-            true => update(SERVICE, "2.0.0", &d(), 1),
-            false => support::install(SERVICE, "2.0.0", &d(), 1),
+            true => update(SERVICE, "2.0.0", &pin, 1),
+            false => support::install(SERVICE, "2.0.0", &pin, 1),
         };
-        let reply = daemon.order(&order);
-        assert!(
-            matches!(reply, Reply::Interrupted { refusal: Refusal::LinkFailed, ref detail }
-                if detail.contains("is recorded with a repository installer")),
+        let reply = daemon.order(&support_apt::with_entry(order, &entry));
+        let refused = match current {
+            true => Refusal::ReleaseUnreadable,
+            false => Refusal::ArtifactChanged,
+        };
+        assert_eq!(
+            reply.refusal(),
+            Some(refused),
             "current={current}: {reply:?}"
         );
         assert!(
             apt.host.calls().is_empty(),
-            "current={current}: nothing purged"
+            "current={current}: nothing fetched, installed or purged"
         );
         assert_eq!(
             apt.rig.placed_record().installer_of(web().as_str()),

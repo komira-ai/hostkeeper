@@ -2,6 +2,8 @@
 //! state directory and the lock, and the command line.
 
 mod support;
+mod support_apt;
+mod support_boot;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -19,6 +21,7 @@ use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepLauncher};
 use support::{CONFIG, OWN, Rig, snapshot};
+use support_boot::Bench;
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
@@ -26,6 +29,31 @@ fn mode(path: &Path) -> u32 {
         .permissions()
         .mode()
         & 0o7777
+}
+
+/// The unwired launcher for everything but the tools of the repository installer, which the
+/// rig's launcher answers: the version is staged from the repository, and each step of it
+/// meets the unwired launcher.
+struct ToolsOnly(Arc<hostkeeper_daemon::testing::ScriptedLauncher>);
+
+impl StepLauncher for ToolsOnly {
+    fn run(
+        &self,
+        call: &hostkeeper_steps::StepCall<'_>,
+    ) -> Result<hostkeeper_steps::StepExit, LaunchError> {
+        Unwired.run(call)
+    }
+
+    fn stop(&self, unit: &str) -> Result<(), LaunchError> {
+        Unwired.stop(unit)
+    }
+
+    fn run_tool(
+        &self,
+        call: &hostkeeper_steps::ToolCall<'_>,
+    ) -> Result<hostkeeper_steps::ToolExit, LaunchError> {
+        self.0.run_tool(call)
+    }
 }
 
 fn start(rig: &Rig) -> Result<Started, StartError> {
@@ -213,12 +241,13 @@ fn the_unwired_ports_refuse_everything() {
     assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
     assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
     assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
-    let rig = Rig::new("unwired");
+    let rig = Bench::new("unwired");
     rig.add("web", "2.0.0");
+    let order = rig.update("web", "2.0.0", 1);
     let mut ports = rig.ports();
-    ports.launcher = Arc::new(Unwired);
+    ports.launcher = Arc::new(ToolsOnly(Arc::clone(&rig.launcher)));
     let daemon = hostkeeper_daemon::Daemon::new(support::config(), rig.dirs(), ports, OWN);
-    let reply = daemon.order(&support::update("web", "2.0.0", &support::d(), 1));
+    let reply = daemon.order(&order);
     assert!(
         matches!(reply, hostkeeper_daemon::Reply::Finished { .. }),
         "{reply:?}"

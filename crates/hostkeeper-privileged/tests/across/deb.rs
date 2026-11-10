@@ -28,8 +28,7 @@
 //! - **The host's evidence** that a version went the native path is read from the host, not from
 //!   a count of requests: dpkg's version of the package and its hold, `/usr/bin/hostkeeper`, the
 //!   version directory of the packages directory (its sealed `target.json`, its `tree/`), the link
-//!   `current` there, the installer `placed.json` records, and that the release channel was asked
-//!   for nothing of hostkeeper ([`Rig::assert_native`]).
+//!   `current` there and the installer `placed.json` records ([`Rig::assert_native`]).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -356,8 +355,7 @@ impl Rig {
     /// the version directory holds the sealed `target.json` of the entry (installer, pin, repository
     /// and package version) and a
     /// `tree/` whose `usr/bin/hostkeeper` is that binary, `current` of the packages directory
-    /// names the version, `placed.json` records `apt` at the version, and the release channel was
-    /// asked for nothing of hostkeeper (no index, no archive, no bundle).
+    /// names the version, and `placed.json` records `apt` at the version.
     pub fn assert_native(&self, built: &Built, build: Build) {
         let version = &built.version;
         let binary = self.binary(build);
@@ -417,7 +415,6 @@ impl Rig {
             fs::symlink_metadata(DEB_UNIT).is_ok_and(|meta| meta.is_file()),
             "the package's unit is the host's"
         );
-        self.assert_channel_untouched();
     }
 
     /// Checks that the host holds hostkeeper as the `.deb` of `version` still, whichever binary
@@ -440,19 +437,6 @@ impl Rig {
             self.placed_install(),
             Some(("apt".to_owned(), Some(version.to_owned())))
         );
-    }
-
-    /// Checks that the release channel was asked for no index, archive or bundle of hostkeeper:
-    /// the set carried no index and every entry was native.
-    pub fn assert_channel_untouched(&self) {
-        let prefix = format!("/{HK}/");
-        let asked: Vec<_> = self
-            .channel
-            .requests()
-            .into_keys()
-            .filter(|path| path.starts_with(&prefix))
-            .collect();
-        assert!(asked.is_empty(), "the channel was asked for {asked:?}");
     }
 
     /// What the host says of the package, for a failed test's view.

@@ -71,16 +71,13 @@ pub type Layer = (
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
 /// normal dependency), the launchd adapters and the package check, and
 /// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
-/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
-/// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
-/// platform, the link, the placement roots and the step crate as normal dependencies; and the
+/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with
+/// repository entries and a heartbeat link of its own, so it needs the config, the launchd
+/// crate's platform, the link, the placement roots and the step crate as normal dependencies; and the
 /// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
 /// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency); the
-/// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
-/// check the fixture's attestation with the package crate; the Mac's self-update test answers
-/// the heartbeats its daemon writes with the coordinator in process, read with the wire crate; the Mac's end-to-end test packages
-/// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
-/// as a normal dependency; and the network-install tests run `hostkeeper-pxe` (their program
+/// end-to-end tests run the coordinator in process with its fake issuer's config; and the
+/// network-install tests run `hostkeeper-pxe` (their program
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
 /// packet with its packet crate; `hostkeeper-pxe` loads the repository directory `--repositories`
 /// names with the daemon's own loader (`hostkeeper-install`) before any seed is made; the `mdm` package's certificate-unit test loads that package's
@@ -143,7 +140,6 @@ pub const LAYERS: [Layer; 33] = [
             CONFIG,
             COORDINATOR,
             DAEMON,
-            HELLO,
             HOOK,
             LAUNCHD,
             LINK,
@@ -158,10 +154,8 @@ pub const LAYERS: [Layer; 33] = [
             MDM_CORE,
             OBSERVE,
             OIDC,
-            PACKAGE,
             PXE_PACKETS,
             UNPACK,
-            WIRE,
         ],
     ),
     (PROTO, &[], &[]),

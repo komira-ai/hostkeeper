@@ -3,9 +3,11 @@
 //! pipe.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
+pub mod apt;
 pub mod coordinated;
 pub mod force;
 pub mod selfupdate;
+pub mod typed;
 pub mod versions;
 
 use std::fs;

@@ -1,7 +1,15 @@
 //! The host of one self-update test: hostkeeper's real unit file under the host's systemd,
-//! running the binary directory's `current` of a state directory the test owns, with the release
-//! of the next version in its package store and a coordinator the test writes (the program
-//! `hostkeeper-selfupdate-daemon` says what it replaces and why).
+//! running the binary directory's `current` of a state directory the test owns, with the
+//! `.deb`s of hostkeeper in a signed apt repository the test builds and a coordinator the test
+//! writes (the program `hostkeeper-selfupdate-daemon` says what it replaces and why).
+//!
+//! **hostkeeper's package.** The next version is a native package, as hostkeeper's own release
+//! is (docs/design/packages-native.md, section 10.4): its `.deb` (the binary of the program under
+//! test at `usr/bin/hostkeeper`, and the package unit) is in the test's repository, and the order
+//! carries its `apt` entry ([`Host::entry`]). The daemon stages it from the repository, hands over
+//! to its binary, and the new binary, once it confirmed itself, installs the package with apt
+//! (the host's own dpkg database, purged when the test ends; the enablement links of its `run`
+//! unit go under the fixture's root, not the host's).
 //!
 //! **Where.** The release a self-update stages from must be a tree whose every directory, up to
 //! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`). The target
@@ -25,8 +33,8 @@
 //!   cannot start is retried every `RestartSec=1`, never left failed.
 //!
 //! The unit file is linked from the scratch directory (`systemctl link`); dropping the [`Host`]
-//! stops, unlinks and resets it, reloads systemd and removes the scratch directory, failed or
-//! not.
+//! stops, unlinks and resets it, purges the package, reloads systemd and removes the scratch
+//! directory, failed or not.
 //!
 //! Every wait polls systemd or the files for a state ([`support::wait_until`]) and fails at once
 //! when the state can no longer come: an order refused, or the main unit failed
@@ -36,19 +44,18 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_config::platform::Platform;
+use hostkeeper_daemon::target;
 use hostkeeper_privileged::Rig;
 use hostkeeper_privileged::rig::service_unit;
+use hostkeeper_proto::hostkeeper::release::v1::{StepBounds, Target};
 use hostkeeper_steps::record::{Loaded, RECORD_FILE, Record, State};
 use hostkeeper_steps::systemd::SYSTEMCTL;
 use hostkeeper_steps::{BadVersions, Layout, RecordStore, Seal, tree_digest};
 use hostkeeper_testkit::Scratch;
 use serde_json::Value;
 
+use super::aptrepo::{self, AptRepo, Deb, File, Published, Service};
 use super::{FIXTURE, journal, property, run, run_ok, wait_until};
-
-#[path = "../shared/target_entry.rs"]
-pub mod target_entry;
 
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
@@ -67,8 +74,8 @@ pub const HK: &str = "hostkeeper";
 pub const N: &str = "1.0.0";
 /// The version it is ordered to.
 pub const NEXT: &str = "1.0.1";
-/// The package digest the orders name.
-pub const DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+/// The name of the host's repository entry of hostkeeper's `.deb`s.
+const REPOSITORY: &str = "hostkeeper-su";
 /// The order id of the self-update.
 pub const ORDER: &str = "self-update-1";
 /// The reason of the verdict of a version whose new binary fell back.
@@ -89,19 +96,19 @@ pub struct Plan {
     /// The daemon of [`NEXT`] holds its start after the hand-over exec'd it, before it settles
     /// the update (`--fixture-hold-start`).
     pub hold_start: bool,
-    /// The host is as the deb leaves it: no package of hostkeeper installed (only the binary
-    /// directory, as the packaged start seeds it), the unit enabled by a `WantedBy=` link to the
-    /// unit the deb installs ([`DEB_UNIT`]) that `placed.json` does not list, and the release of
-    /// [`NEXT`] carrying the real unit, run ([`REAL_UNIT`], as CI packages it). The main unit is
-    /// the bootstrap unit ([`BOOTSTRAP_UNIT`]) over a packaged binary named [`N`], and the binary
-    /// directory is empty: the start seeds it. The coordinator orders it an `install`.
+    /// The host is as the deb leaves it: no package of hostkeeper installed and no version of it
+    /// in the packages directory (only the binary directory, as the packaged start seeds it). The
+    /// main unit is the bootstrap unit ([`BOOTSTRAP_UNIT`]) over a packaged binary named [`N`], and
+    /// the binary directory is empty: the start seeds it. The coordinator orders it an `install`.
     pub deb: bool,
 }
 
-/// Where the deb installs the unit its `systemctl enable` links.
+/// Where the deb installs the unit of hostkeeper's package.
 pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
 /// The unit hostkeeper's release carries and runs.
 pub const UNIT_FILE: &str = "hostkeeper.service";
+/// The package of hostkeeper, as dpkg names it.
+pub const PACKAGE: &str = "hostkeeper";
 
 /// One test's host (the module says what it is).
 pub struct Host {
@@ -109,6 +116,10 @@ pub struct Host {
     /// The main unit's name, without `.service`.
     pub main: String,
     scratch: Scratch,
+    /// The apt repository of hostkeeper's `.deb`s, which the daemon's repository entry names.
+    repo: AptRepo,
+    /// The entry of the release of [`NEXT`] that the orders carry.
+    entry: Target,
 }
 
 impl Drop for Host {
@@ -116,6 +127,11 @@ impl Drop for Host {
         for args in self.rig.teardown() {
             let _ = run(SYSTEMCTL, &args);
         }
+        // A package a stopped step left half configured is finished first, so that the purge
+        // can run.
+        let _ = run("/usr/bin/dpkg", &["--configure", "-a"]);
+        let _ = run("/usr/bin/apt-mark", &["unhold", PACKAGE]);
+        let _ = run("/usr/bin/dpkg", &["--purge", PACKAGE]);
         let _ = run(SYSTEMCTL, &["daemon-reload"]);
     }
 }
@@ -138,40 +154,52 @@ fn program(from: &str, to: &Path) {
     fs::set_permissions(to, fs::Permissions::from_mode(0o755)).expect("its mode");
 }
 
-/// The manifest of hostkeeper at `version`: its hook the workload fixture in mode `ok`, which
-/// ends every step `0` with a valid last line; with `unit`, it runs [`UNIT_FILE`].
-fn manifest(version: &str, unit: bool) -> String {
-    let platform = Platform::current();
-    let units = match unit {
-        true => format!("\n[units]\nrun = [\"{UNIT_FILE}\"]\n"),
-        false => String::new(),
+/// The `.deb` of hostkeeper at `version`: the binary of the program under test and the package
+/// unit, the files of hostkeeper's own package the test needs (the daemon's own list is
+/// `hostkeeper_install::repository::tree::OWN_FILES`).
+fn deb(version: &str) -> Deb {
+    Deb {
+        package: PACKAGE.to_owned(),
+        version: version.to_owned(),
+        files: vec![
+            File::new(
+                "usr/bin/hostkeeper",
+                fs::read(DAEMON).unwrap_or_else(|e| panic!("read {DAEMON}: {e}")),
+                0o755,
+            ),
+            File::new(
+                "usr/lib/systemd/system/hostkeeper.service",
+                REAL_UNIT,
+                0o644,
+            ),
+        ],
+    }
+}
+
+/// The entry of hostkeeper's `.deb` `published`, as `release targets` writes it: the repository,
+/// the package version, the pin, and a manifest with the package unit as its `run` unit and the
+/// bounds of the steps (hostkeeper's package has no hook: the steps are the built-in ones).
+fn entry_of(published: &Published) -> Target {
+    let service = Service {
+        repository: REPOSITORY.to_owned(),
+        run: vec![UNIT_FILE.to_owned()],
+        health_url: None,
+        params: std::collections::BTreeMap::new(),
+        steps: StepBounds {
+            prepare: 600,
+            cutover: 300,
+            verify: 1000,
+            rollback: 600,
+            cleanup: 1300,
+            ..StepBounds::default()
+        },
+        verify_deadline_secs: 1600,
     };
-    format!(
-        r#"schema = 1
-name = "{HK}"
-version = "{version}"
-platform = "{platform}"
-min_hostkeeper = "0.1.0"
-
-[hook]
-command = ["bin/hook"]
-verify_deadline_secs = 1600
-
-[hook.timeout_secs]
-prepare = 600
-cutover = 300
-verify = 1000
-rollback = 600
-cleanup = 1300
-
-[params]
-"fixture.mode" = "ok"
-{units}"#
-    )
+    aptrepo::entry(&service, published)
 }
 
 /// The daemon config: every key the loader requires. Nothing reads its addresses: the
-/// fixture's link, package store and enroller replace what would.
+/// fixture's link and enroller replace what would.
 const CONFIG: &str = r#"coordinator = "https://coordinator.example"
 ca_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 release_channel = "https://releases.example"
@@ -190,8 +218,9 @@ pub struct Paths {
     pub config: PathBuf,
     /// The directory of the packaged binary of a [`Plan::deb`] host.
     pub packaged_dir: PathBuf,
-    /// The fixture's directory: `link/`, `units/` (the unit directory the daemon places
-    /// units in), `placed/`.
+    /// The fixture's directory: `link/`, `repositories/` (the daemon's repository entries),
+    /// `root/` (where the installer enables the package's `run` units), `units/` (the unit
+    /// directory of the placement roots), `placed/`.
     pub fixture: PathBuf,
     /// The file the daemon holds its exit at.
     pub held: PathBuf,
@@ -220,13 +249,6 @@ impl Paths {
     /// The binary directory of hostkeeper's own update.
     pub fn bin(&self) -> PathBuf {
         self.state.join(HK).join("bin")
-    }
-
-    /// The `WantedBy=` link of [`UNIT_FILE`] in the fixture's unit directory.
-    pub fn wants(&self) -> PathBuf {
-        self.fixture
-            .join("units/multi-user.target.wants")
-            .join(UNIT_FILE)
     }
 }
 
@@ -310,9 +332,9 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
 impl Host {
     /// The host of the test `test` (lowercase letters, digits, `_`): hostkeeper [`N`] installed
     /// (its package `current`, its binary staged and `current` of the binary directory; with
-    /// [`Plan::deb`], its binary alone), the release of [`NEXT`] in the package store, the unit
-    /// linked, the main unit started under `plan` and ready (its start returns once the daemon
-    /// notified systemd).
+    /// [`Plan::deb`], its binary alone), the `.deb` of [`NEXT`] in the repository the daemon's
+    /// entry names, the unit linked, the main unit started under `plan` and ready (its start
+    /// returns once the daemon notified systemd).
     pub fn start(test: &str, plan: Plan) -> Host {
         let root = rustix::process::geteuid().is_root();
         if let Err(e) = hostkeeper_privileged::check_host(
@@ -327,7 +349,16 @@ impl Host {
         let rig = Rig::new(scratch.path(), Path::new(FIXTURE), test, std::process::id())
             .expect("make the rig");
         let main = rig.unit();
-        let host = Host { rig, main, scratch };
+        let repo = AptRepo::new(scratch.path(), "hostkeeper-su");
+        let published_next = repo.publish(&deb(NEXT));
+        let entry = entry_of(&published_next);
+        let host = Host {
+            rig,
+            main,
+            scratch,
+            repo,
+            entry,
+        };
         host.make(plan);
         run_ok(SYSTEMCTL, &["start", "--system", &service_unit(&host.main)]);
         host
@@ -343,23 +374,21 @@ impl Host {
         dir(&paths.state, 0o700);
         dir(&paths.state.join(HK), 0o700);
         dir(&paths.packages, 0o755);
-        for sub in ["link", "units", "placed"] {
+        for sub in ["link", "units", "placed", "root"] {
             dir(&paths.fixture.join(sub), 0o755);
         }
+        self.repo
+            .install_entry_in(&paths.fixture.join("repositories"), REPOSITORY);
         file(&paths.config, CONFIG.as_bytes(), 0o644);
         let service = paths.packages.join(HK);
         dir(&service, 0o755);
-        if plan.deb {
-            self.release(&service, NEXT, true);
-            let wants = paths.wants();
-            dir(wants.parent().expect("the wants directory"), 0o755);
-            std::os::unix::fs::symlink(DEB_UNIT, &wants).expect("the deb's enable link");
-        } else {
-            for version in [N, NEXT] {
-                self.release(&service, version, false);
-            }
+        if !plan.deb {
+            // The release the host runs: a version of the package as the daemon leaves one, its
+            // entry and its tree, `current` naming it. The package itself is not installed.
+            self.release(&service, N, &self.repo.publish(&deb(N)));
             std::os::unix::fs::symlink(N, service.join("current")).expect("link current");
         }
+
         let layout = Layout::new(&paths.bin());
         if plan.deb {
             // The binary directory is left as it is: the packaged binary seeds it.
@@ -402,30 +431,19 @@ impl Host {
         run_ok(SYSTEMCTL, &["daemon-reload"]);
     }
 
-    /// The release of hostkeeper at `version` in the package directory `service`, as the real
-    /// store leaves it: the tree (manifest, the hook, the binary and, with `unit`, the real unit
-    /// as `units/hostkeeper.service`), then its seal beside it.
-    fn release(&self, service: &Path, version: &str, unit: bool) {
+    /// The release of hostkeeper at `version` in the package directory `service`, as the daemon
+    /// leaves a staged version: the entry it was staged for (`target.json`) and the tree of its
+    /// package (the binary), then its seal beside it, naming the package's pin.
+    fn release(&self, service: &Path, version: &str, published: &Published) {
         let tree = service.join(version);
         dir(&tree, 0o755);
-        dir(&tree.join("bin"), 0o755);
-        file(
-            &tree.join("manifest.toml"),
-            manifest(version, unit).as_bytes(),
-            0o644,
-        );
-        if unit {
-            dir(&tree.join("units"), 0o755);
-            file(
-                &tree.join("units").join(UNIT_FILE),
-                REAL_UNIT.as_bytes(),
-                0o444,
-            );
+        target::write(&tree, &entry_of(published)).expect("the entry of the version");
+        for sub in ["tree", "tree/usr", "tree/usr/bin"] {
+            dir(&tree.join(sub), 0o755);
         }
-        program(FIXTURE, &tree.join("bin/hook"));
-        program(DAEMON, &tree.join("bin/hostkeeper"));
+        program(DAEMON, &tree.join("tree/usr/bin/hostkeeper"));
         let digest = tree_digest(&tree).expect("the tree digest");
-        let seal = Seal::new(&digest, DIGEST).expect("a seal");
+        let seal = Seal::new(&digest, &published.sha256).expect("a seal");
         file(
             &service.join(format!("{version}.seal")),
             seal.to_json().as_bytes(),
@@ -433,58 +451,43 @@ impl Host {
         );
     }
 
-    /// The coordinator orders the update of hostkeeper to [`NEXT`], order [`ORDER`] try
-    /// `order_try`, in every reply from now on.
+    /// The coordinator orders the update of hostkeeper to [`NEXT`] by its entry, order [`ORDER`]
+    /// try `order_try`, in every reply from now on.
     pub fn offer(&self, order_try: u64) {
-        self.order("update", order_try, false);
+        self.order("update", order_try);
     }
 
-    /// The coordinator orders the install of hostkeeper at [`NEXT`], as it orders a host whose
-    /// heartbeat lists no hostkeeper, order [`ORDER`] try `order_try`, in every reply from now
-    /// on.
+    /// The coordinator orders the install of hostkeeper at [`NEXT`] by its entry, as it orders a
+    /// host whose heartbeat lists no hostkeeper, order [`ORDER`] try `order_try`, in every reply
+    /// from now on.
     pub fn offer_install(&self, order_try: u64) {
-        self.order("install", order_try, false);
+        self.order("install", order_try);
     }
 
-    /// [`Host::offer`], with the order set by targets: it carries [`Host::entry`].
-    pub fn offer_by_target(&self, order_try: u64) {
-        self.order("update", order_try, true);
+    /// The entry of the release of hostkeeper at [`NEXT`] that an order carries: the `apt` entry
+    /// of its `.deb` in the host's repository.
+    pub fn entry(&self) -> &Target {
+        &self.entry
     }
 
-    /// [`Host::offer_install`], with the order set by targets: it carries [`Host::entry`].
-    pub fn offer_install_by_target(&self, order_try: u64) {
-        self.order("install", order_try, true);
+    /// The entry the daemon staged the version [`NEXT`] of hostkeeper for (its sealed
+    /// `target.json`), `None` while it has not staged it.
+    pub fn staged_entry(&self) -> Option<Target> {
+        target::read(&self.paths().packages.join(HK).join(NEXT)).expect("target.json")
     }
 
-    /// The entry of the release of hostkeeper at [`NEXT`] that an order set by targets carries.
-    pub fn entry() -> Value {
-        target_entry::entry_json(HK, NEXT, DIGEST)
-    }
-
-    /// Every package the daemon's store was asked for so far, oldest first: the service, the
-    /// version and the entry the order carried (`null` for an order without one), as the
-    /// program records them.
-    pub fn asked(&self) -> Vec<Value> {
-        let text =
-            fs::read_to_string(self.paths().fixture.join("entries.jsonl")).unwrap_or_default();
-        text.lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
-            .collect()
-    }
-
-    fn order(&self, verb: &str, order_try: u64, by_target: bool) {
+    fn order(&self, verb: &str, order_try: u64) {
         let link = self.paths().fixture.join("link");
-        let mut order = serde_json::json!({
+        let entry = target::to_json(&self.entry).expect("the entry as JSON");
+        let order = serde_json::json!({
             "id": ORDER,
             "try": order_try,
             "verb": verb,
             "service": HK,
             "version": NEXT,
-            "digest": DIGEST,
+            "digest": self.entry.digest,
+            "entry": serde_json::from_slice::<Value>(&entry).expect("the entry's JSON"),
         });
-        if by_target {
-            order["entry"] = Host::entry();
-        }
         let tmp = link.join("order.json.tmp");
         file(&tmp, order.to_string().as_bytes(), 0o644);
         fs::rename(&tmp, link.join("order.json")).expect("place the order");
@@ -512,6 +515,30 @@ impl Host {
     /// The bytes of the step record file.
     pub fn record_bytes(&self) -> Vec<u8> {
         fs::read(self.paths().state.join(HK).join(RECORD_FILE)).expect("the step record")
+    }
+
+    /// The version of the package [`PACKAGE`] when dpkg has it installed whole, `None` otherwise.
+    pub fn package_version(&self) -> Option<String> {
+        let out = run(
+            "/usr/bin/dpkg-query",
+            &["-W", "-f=${Version}\\t${db:Status-Abbrev}\\n", PACKAGE],
+        );
+        let text = String::from_utf8_lossy(&out.stdout).into_owned();
+        let (version, status) = text
+            .trim_end()
+            .split_once('\t')
+            .filter(|_| out.status.success())?;
+        // The abbreviation is the wanted state, the state and the error: `hi ` is installed and
+        // held.
+        (status.as_bytes().get(1) == Some(&b'i')).then(|| version.to_owned())
+    }
+
+    /// Whether the package [`PACKAGE`] is on apt's list of held packages.
+    pub fn package_held(&self) -> bool {
+        let out = run("/usr/bin/apt-mark", &["showhold"]);
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .any(|line| line == PACKAGE)
     }
 
     /// Whether [`NEXT`] is on the local list of bad versions.
@@ -633,14 +660,6 @@ impl Host {
     /// unit runs [`N`] again.
     pub fn fall_back(&self) -> Record {
         self.offer(1);
-        let rec = self.settled();
-        self.runs(N);
-        rec
-    }
-
-    /// [`Host::fall_back`], with the order set by targets ([`Host::offer_by_target`]).
-    pub fn fall_back_by_target(&self) -> Record {
-        self.offer_by_target(1);
         let rec = self.settled();
         self.runs(N);
         rec

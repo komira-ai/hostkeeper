@@ -12,13 +12,10 @@ use std::sync::Arc;
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_daemon::adapters::host_systemctl;
 use hostkeeper_daemon::executor::{Dirs, Placement};
-use hostkeeper_daemon::packages::{Entry, PackageError, Packages, VersionDir};
 use hostkeeper_daemon::prune::{LayoutPrune, NoLockPoint};
 use hostkeeper_daemon::repository::RepositoryPorts;
-use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{Daemon, Ports, repositories};
 use hostkeeper_install::announce;
 use hostkeeper_install::announce::OsHost;
@@ -38,7 +35,7 @@ use hostkeeper_unpack::Owner;
 use super::repo::PACKAGE;
 use super::rig::{REPOSITORY, Rig};
 
-/// The daemon's config: what every daemon reads, none of which an apt order uses.
+/// The daemon's config: what the loader requires of every daemon, none of which an apt order uses.
 const CONFIG: &str = r#"coordinator = "https://coordinator.example"
 ca_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 release_channel = "https://releases.example"
@@ -57,24 +54,6 @@ const OWN: HostkeeperVersion = HostkeeperVersion {
     patch: 0,
 };
 
-/// A package store that has nothing: an apt order never asks it.
-struct NoStore;
-
-impl Packages for NoStore {
-    fn version_dir(
-        &self,
-        _service: &ServiceName,
-        _version: &Version,
-        _digest: &PackageDigest,
-        _index_digest: Option<&PackageDigest>,
-        _entry: Option<&Entry>,
-    ) -> Result<VersionDir, PackageError> {
-        Err(PackageError::Other(
-            "this daemon fetches no artifact".to_owned(),
-        ))
-    }
-}
-
 /// The root-owned directory the daemon's own directories are made in: a sealed version is
 /// trusted only below directories that root owns (`Staged::check`), which the rig's scratch
 /// directory under `target/` is not.
@@ -83,12 +62,6 @@ pub const BASE: &str = "/run/hostkeeper-ci";
 /// The daemon on the rig's host, the installers the host announces, and the root-owned
 /// directory its state, packages and placed record are in, kept until the test ends.
 pub fn daemon(rig: &Rig) -> (Daemon, Vec<String>, Scratch) {
-    daemon_with(rig, Arc::new(NoStore))
-}
-
-/// [`daemon`] with `store` as its package store: the archive versions of a service that moves to
-/// apt are served by it.
-pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>, Scratch) {
     fs::create_dir_all(BASE).expect("the root-owned base");
     fs::set_permissions(BASE, fs::Permissions::from_mode(0o755)).expect("its mode");
     let scratch = Scratch::under(Path::new(BASE), "apt-daemon").expect("the daemon's directory");
@@ -123,7 +96,6 @@ pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>,
     );
     let ports = Ports {
         launcher: Arc::new(SystemdLauncher::system()),
-        packages: store,
         clock: Arc::new(SystemClock::new(Box::new(ProcBootId::host()))),
         deadman_poll_secs: None,
         units: Arc::new(Systemctl::new(host_systemctl())),

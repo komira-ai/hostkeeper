@@ -4,14 +4,13 @@
 //! workflow that runs the privileged tests as root after a merge, are tested in
 //! `privileged_tests.rs`; those of `net-install.yml`, the other workflow with jobs as root, the
 //! network-install jobs on main, in `net_install_tests.rs`; those of its job `openrc-device`, in
-//! `openrc_tests.rs`, and of its target that runs on both platforms, in `both_platforms_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
+//! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
 //! no secret on a pull request, in `pr_device_tests.rs`, its path rule (the job `changes` and its
 //! skip list) in `pr_paths_tests.rs`, and the conditions of its macOS jobs and of their gates,
 //! evaluated against every outcome, in `pr_device_gate_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`.
 
 mod advisories;
-mod both_platforms_tests;
 mod callers;
 mod callers_tests;
 

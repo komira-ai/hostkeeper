@@ -288,9 +288,9 @@ jobs:
       - name: Pull opensuse/tumbleweed
         run: docker pull opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e
       - name: Build the privileged tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt
       - name: Run the privileged tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt --test move_native -- --test-threads=1
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test transient_unit --test observer --test unit_control --test self_update --test tierstore_shaped --test self_update_across_releases --test linux_packages --test mdm_cert_units --test install_apt -- --test-threads=1
       - name: The journal of the test units
         if: failure()
         run: journalctl --unit 'hostkeeper-ci-*' --no-pager
@@ -455,16 +455,10 @@ jobs:
         with:
           path: ${{ runner.temp }}/previous-release.tar.gz
           key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
-      # device_mac_e2e and device_mac_selfupdate run after device_mac, in the one step that runs
-      # as root.
       - name: Build the macOS device tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac
-      # unpack_mac runs twice: here as the runner's user, as the release check of a package
-      # unpacks it on a hosted runner, and below as root, as the daemon unpacks it on a host.
-      - name: Run the macOS unpack tests as the runner's user
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --test unpack_mac -- --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test install_macos_pkg
       - name: Run the macOS device tests as root
-        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg --test self_update_across_releases --test unpack_mac -- --test-threads=1 --nocapture
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test install_macos_pkg -- --test-threads=1 --nocapture
       - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         if: ${{ github.event_name == 'push' && steps.cargo-cache.outputs.cache-hit != 'true' }}
         with:
@@ -540,7 +534,7 @@ jobs:
       - name: Build the programs the container runs
         env:
           CC_x86_64_unknown_linux_musl: gcc
-        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-privileged --features hostkeeper-privileged/privileged --bin hostkeeper-selfupdate-daemon --bin hostkeeper-fixture-hook
+        run: cargo build --locked --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper
       - name: Build the OpenRC device tests as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test openrc_device
       - name: Run the OpenRC device tests as root

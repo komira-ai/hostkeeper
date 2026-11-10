@@ -481,12 +481,6 @@ const FIRST_BOOT_JOB: &str = "first-boot";
 const FIRST_BOOT_FIRST_LINE: &str = "#![cfg(all(target_os = \"linux\", feature = \"privileged\"))]";
 /// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
 const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
-/// The first line of a privileged test file of both the Linux job and [`MACOS_DEVICE_JOB`]: one
-/// target whose tests run against systemd on Linux and against launchd on a Mac (the
-/// cross-release rig, `self_update_across_releases`).
-pub const BOTH_FIRST_LINE: &str =
-    "#![cfg(all(any(target_os = \"linux\", target_os = \"macos\"), feature = \"privileged\"))]";
-
 /// Whether `text` starts with the attribute `first`, as rustfmt may break it over lines: the same
 /// characters, whitespace aside, up to the attribute's closing bracket.
 pub fn starts_with_attribute(text: &str, first: &str) -> bool {
@@ -516,19 +510,12 @@ pub fn privileged_targets(first: &str) -> BTreeSet<String> {
 }
 
 /// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
-/// macOS job's and the OpenRC job's. A target of both platforms is the Linux job's and the macOS
-/// job's.
+/// macOS job's and the OpenRC job's.
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
-    let both = privileged_targets(BOTH_FIRST_LINE);
-    let with_both = |first: &str| {
-        let mut targets = privileged_targets(first);
-        targets.extend(both.iter().cloned());
-        targets
-    };
     BTreeMap::from([
-        ("privileged", with_both(LINUX_FIRST_LINE)),
+        ("privileged", privileged_targets(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
-        (MACOS_DEVICE_JOB, with_both(MACOS_FIRST_LINE)),
+        (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
         (OPENRC_DEVICE_JOB, privileged_targets(OPENRC_FIRST_LINE)),
     ])
 }
@@ -576,7 +563,6 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "install_apt".to_owned(),
             "linux_packages".to_owned(),
             "mdm_cert_units".to_owned(),
-            "move_native".to_owned(),
             "observer".to_owned(),
             "self_update".to_owned(),
             "self_update_across_releases".to_owned(),
@@ -591,14 +577,7 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     );
     assert_eq!(
         targets[MACOS_DEVICE_JOB],
-        BTreeSet::from([
-            "device_mac".to_owned(),
-            "device_mac_e2e".to_owned(),
-            "device_mac_selfupdate".to_owned(),
-            "install_macos_pkg".to_owned(),
-            "self_update_across_releases".to_owned(),
-            "unpack_mac".to_owned()
-        ])
+        BTreeSet::from(["device_mac".to_owned(), "install_macos_pkg".to_owned()])
     );
     assert_eq!(
         targets.keys().copied().collect::<Vec<_>>(),

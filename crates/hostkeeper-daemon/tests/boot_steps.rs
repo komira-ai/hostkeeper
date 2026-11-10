@@ -3,9 +3,12 @@
 //! whatever the start found; systemd's notifier; and the flag that asks for it.
 
 mod support;
+mod support_apt;
+mod support_boot;
 
 use std::ffi::OsString;
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixDatagram;
 use std::process::ExitCode;
 
@@ -16,12 +19,14 @@ use hostkeeper_daemon::start::{self, StartError};
 use hostkeeper_daemon::testing::{AdditiveFault, FakeNotifier, Log};
 use hostkeeper_daemon::{NoNotifier, ReadyNotifier, Refusal, SystemdNotifier};
 use hostkeeper_hook::Step;
-use support::{OWN, Rig, alerting, d, lines, manifest_with, name, update};
+use hostkeeper_install::repository::tree::hook_path;
+use support::{OWN, alerting, d, lines, manifest_with, name};
+use support_boot::Bench;
 
 const RESTORE: &str = r#"boot = "restore""#;
 
 /// `service` runs `version` from a sealed package whose manifest names the boot step `restore`.
-fn restoring(rig: &Rig, service: &str, version: &str) {
+fn restoring(rig: &Bench, service: &str, version: &str) {
     rig.add_with(service, version, &manifest_with(service, version, RESTORE));
     rig.store.link(service, "current", version);
 }
@@ -37,17 +42,12 @@ fn logged(log: &Log) -> Vec<String> {
 /// the params of `current` and the manifest's `cutover` bound.
 #[test]
 fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
-    let rig = Rig::new("steps-order");
-    let with_args = manifest_with("alpha", "1.0.0", RESTORE).replace(
-        r#"command = ["bin/hook", "update-hook"]"#,
-        r#"command = ["bin/hook", "update-hook", "boot-mode"]"#,
-    );
-    rig.add_with("alpha", "1.0.0", &with_args);
-    rig.store.link("alpha", "current", "1.0.0");
+    let rig = Bench::new("steps-order");
+    restoring(&rig, "alpha", "1.0.0");
     rig.add("beta", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("beta", Step::Prepare);
-    let reply = daemon.order(&update("beta", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("beta", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::LauncherFailed));
     drop(daemon);
     let log = Log::default();
@@ -78,9 +78,13 @@ fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
         (ran[0].service.as_str(), ran[0].step.as_str()),
         ("alpha", "restore")
     );
-    assert_eq!(ran[0].executable, current.join("bin/hook"));
+    assert_eq!(
+        ran[0].executable,
+        current.join("tree").join(hook_path("alpha"))
+    );
     assert_eq!(ran[0].timeout_secs, 300);
-    assert_eq!(ran[0].hook_args, ["update-hook", "boot-mode"]);
+    // A package's hook is called with no arguments: its program is the whole command.
+    assert!(ran[0].hook_args.is_empty(), "{:?}", ran[0].hook_args);
     let params = hostkeeper_hook::Params::parse(&ran[0].params).expect("the params file");
     assert_eq!(params.staged_release(), Some(current.clone()));
     assert_eq!(params.target_version(), Some("1.0.0"));
@@ -91,7 +95,7 @@ fn the_boot_hook_runs_from_current_after_all_updates_and_before_ready() {
 /// no `boot` step, and a service with no `current`, run nothing, and the notice goes out.
 #[test]
 fn a_service_without_a_boot_step_runs_no_boot_hook() {
-    let rig = Rig::new("steps-none");
+    let rig = Bench::new("steps-none");
     rig.running("alpha", "1.0.0");
     rig.stage("beta", "1.0.0");
     let log = Log::default();
@@ -111,7 +115,7 @@ fn a_service_without_a_boot_step_runs_no_boot_hook() {
 /// fail that service's boot step alone; nothing is rolled back, and the notice goes out once.
 #[test]
 fn a_failing_boot_hook_is_logged_and_the_daemon_still_becomes_ready() {
-    let rig = Rig::new("steps-failing");
+    let rig = Bench::new("steps-failing");
     restoring(&rig, "exits", "1.0.0");
     rig.launcher.additive_exits("exits", &[1]);
     restoring(&rig, "unsealed", "1.0.0");
@@ -120,12 +124,22 @@ fn a_failing_boot_hook_is_logged_and_the_daemon_still_becomes_ready() {
     fs::write(rig.packages.join("garbled/1.0.0.seal"), "{").expect("garble the seal");
     restoring(&rig, "changed", "1.0.0");
     fs::write(rig.packages.join("changed/1.0.0/extra"), "x").expect("change the tree");
-    let hookless = manifest_with("hookless", "1.0.0", RESTORE).replace("bin/hook", "bin/gone");
-    rig.add_with("hookless", "1.0.0", &hookless);
-    rig.store.link("hookless", "current", "1.0.0");
-    let misnamed = manifest_with("other", "1.0.0", RESTORE);
-    rig.add_with("misnamed", "1.0.0", &misnamed);
-    rig.store.link("misnamed", "current", "1.0.0");
+    // A package whose tree has no hook at its fixed path (sealed as it is).
+    restoring(&rig, "hookless", "1.0.0");
+    fs::remove_file(
+        rig.packages
+            .join("hookless/1.0.0")
+            .join("tree")
+            .join(hook_path("hookless")),
+    )
+    .expect("remove the hook");
+    rig.store.seal("hookless", "1.0.0", &d());
+    // A package whose `target.json`, the entry it was staged for, does not load (sealed as it is).
+    restoring(&rig, "unreadable", "1.0.0");
+    let target_json = rig.packages.join("unreadable/1.0.0/target.json");
+    fs::set_permissions(&target_json, fs::Permissions::from_mode(0o644)).expect("its mode");
+    fs::write(&target_json, "{").expect("garble the entry");
+    rig.store.seal("unreadable", "1.0.0", &d());
     restoring(&rig, "stuck", "1.0.0");
     rig.launcher.fail_stops("stuck");
     let notifier = FakeNotifier::new(Log::default());
@@ -133,7 +147,13 @@ fn a_failing_boot_hook_is_logged_and_the_daemon_still_becomes_ready() {
         .expect("the daemon starts");
     let report = started.boot_report();
     for service in [
-        "exits", "unsealed", "garbled", "changed", "hookless", "misnamed", "stuck",
+        "exits",
+        "unsealed",
+        "garbled",
+        "changed",
+        "hookless",
+        "unreadable",
+        "stuck",
     ] {
         let step = &report.services[service].boot_step;
         assert!(matches!(step, BootStep::Failed(_)), "{service}: {step:?}");
@@ -163,12 +183,12 @@ fn a_failing_boot_hook_is_logged_and_the_daemon_still_becomes_ready() {
 /// run, while the notice still goes out.
 #[test]
 fn a_service_with_an_unfinished_update_runs_no_boot_hook() {
-    let rig = Rig::new("steps-unfinished");
+    let rig = Bench::new("steps-unfinished");
     restoring(&rig, "alpha", "1.0.0");
     rig.add("alpha", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher.lose("alpha", Step::Prepare);
-    let reply = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::LauncherFailed));
     drop(daemon);
     rig.launcher.lose("alpha", Step::Prepare);
@@ -190,7 +210,7 @@ fn a_service_with_an_unfinished_update_runs_no_boot_hook() {
 /// fails is reported, and the daemon still starts.
 #[test]
 fn ready_is_sent_exactly_once() {
-    let rig = Rig::new("steps-ready-once");
+    let rig = Bench::new("steps-ready-once");
     restoring(&rig, "alpha", "1.0.0");
     rig.launcher.additive_exits("alpha", &[1]);
     fs::create_dir_all(rig.state.join("beta")).expect("beta's dir");
@@ -227,7 +247,7 @@ fn ready_is_sent_exactly_once() {
 /// socket listens is an error; the notifier of a daemon without the flag does nothing.
 #[test]
 fn the_systemd_notifier_writes_ready_to_the_given_socket() {
-    let rig = Rig::new("steps-notify");
+    let rig = Bench::new("steps-notify");
     let path = rig.scratch.path().join("n.sock");
     let socket = UnixDatagram::bind(&path).expect("bind the socket");
     SystemdNotifier::new(path.as_os_str())
@@ -247,7 +267,7 @@ fn the_systemd_notifier_writes_ready_to_the_given_socket() {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_systemd_notifier_writes_ready_to_an_abstract_socket() {
-    let rig = Rig::new("steps-notify-abstract");
+    let rig = Bench::new("steps-notify-abstract");
     let mut buf = [0u8; 64];
     let unique = rig
         .scratch
@@ -272,7 +292,7 @@ fn the_systemd_notifier_writes_ready_to_an_abstract_socket() {
 /// anything; with a socket it starts as usual (here, to the config error of a missing config).
 #[test]
 fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
-    let rig = Rig::new("steps-flag");
+    let rig = Bench::new("steps-flag");
     let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
         panic!("`daemon` parses as the daemon verb");
     };
@@ -326,12 +346,12 @@ fn the_notify_systemd_flag_needs_the_socket_systemd_sets() {
 /// `updater-<service>-boot-<generation>`, the generation of the service's last update.
 #[test]
 fn the_boot_step_unit_carries_the_generation_of_the_last_update() {
-    let rig = Rig::new("steps-generation");
+    let rig = Bench::new("steps-generation");
     restoring(&rig, "alpha", "1.0.0");
     // The update switches `current` to 2.0.0, so the boot step is 2.0.0's.
-    rig.add_with("alpha", "2.0.0", &manifest_with("alpha", "2.0.0", RESTORE));
+    rig.publish("alpha", "2.0.0", &manifest_with("alpha", "2.0.0", RESTORE));
     let (daemon, mut report) = rig.booted();
-    let reply = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert!(reply.refusal().is_none(), "{reply:?}");
     let notifier = FakeNotifier::new(Log::default());
     daemon.after_boot(&mut report, &*notifier);
@@ -345,7 +365,7 @@ fn the_boot_step_unit_carries_the_generation_of_the_last_update() {
 /// A daemon whose start pass ran on `rig`, its alerts in a log, and the report after its boot
 /// steps and readiness notice.
 fn after_boot(
-    rig: &Rig,
+    rig: &Bench,
 ) -> (
     hostkeeper_daemon::Daemon,
     hostkeeper_daemon::BootReport,
@@ -365,7 +385,7 @@ fn after_boot(
 /// one exact alert.
 #[test]
 fn a_boot_step_the_launcher_lost_is_stopped_or_its_service_held() {
-    let rig = Rig::new("steps-lost");
+    let rig = Bench::new("steps-lost");
     for service in ["lost", "nostart", "stuck"] {
         restoring(&rig, service, "1.0.0");
     }
@@ -428,7 +448,7 @@ fn a_boot_step_the_launcher_lost_is_stopped_or_its_service_held() {
         ]
     );
     rig.add("stuck", "2.0.0");
-    let reply = daemon.order(&update("stuck", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("stuck", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::Busy), "{reply:?}");
 }
 
@@ -438,7 +458,7 @@ fn a_boot_step_the_launcher_lost_is_stopped_or_its_service_held() {
 /// goes out, and once the way is clear the next start runs the step.
 #[test]
 fn a_boot_step_whose_params_cannot_be_written_or_removed_fails() {
-    let rig = Rig::new("steps-params");
+    let rig = Bench::new("steps-params");
     restoring(&rig, "alpha", "1.0.0");
     let params = rig.state.join("alpha/params.toml");
     fs::create_dir_all(params.join("inside")).expect("a directory in the way");
@@ -476,7 +496,7 @@ fn a_boot_step_whose_params_cannot_be_written_or_removed_fails() {
 /// fails it too.
 #[test]
 fn a_current_that_is_not_a_version_of_the_service_runs_no_boot_step() {
-    let rig = Rig::new("steps-current");
+    let rig = Bench::new("steps-current");
     restoring(&rig, "other", "1.0.0");
     let elsewhere = rig.packages.join("other/1.0.0");
     let cases: [(&str, Option<std::path::PathBuf>); 5] = [
@@ -515,7 +535,7 @@ fn a_current_that_is_not_a_version_of_the_service_runs_no_boot_step() {
 /// filled, and the notice fails at once with an error the daemon reports.
 #[test]
 fn a_full_notify_queue_fails_the_notice_without_waiting() {
-    let rig = Rig::new("steps-full-queue");
+    let rig = Bench::new("steps-full-queue");
     let path = rig.scratch.path().join("q.sock");
     let _receiver = UnixDatagram::bind(&path).expect("bind the socket");
     // Each notice is a socket of its own, so only the receiver's queue stops the fill.

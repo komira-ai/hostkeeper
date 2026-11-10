@@ -10,8 +10,9 @@
     reason = "each part of the support is used by some of the test files"
 )]
 
-#[path = "../../../hostkeeper-install/tests/support/apt_fake.rs"]
-pub mod apt_fake;
+// The fake is loaded once, by `support::apt`, which the self-update rig of `support` shares.
+pub use crate::support::apt::apt_fake;
+pub mod services;
 
 use std::fs;
 use std::path::PathBuf;

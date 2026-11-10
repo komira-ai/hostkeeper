@@ -5,6 +5,8 @@
 //! of the table, not the daemon's.
 
 mod support;
+mod support_apt;
+mod support_boot;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -14,7 +16,8 @@ use hostkeeper_daemon::{Daemon, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::{CrashPoint, Finished, ResumeAction};
-use support::{IRREVERSIBLE, PENDING_LINE, Rig, crash_at, d, finished, name, update};
+use support::{IRREVERSIBLE, PENDING_LINE, crash_at, finished, name};
+use support_boot::Bench;
 
 #[derive(Clone, Copy, Debug)]
 enum Fixture {
@@ -29,7 +32,7 @@ const DEFER_LINE: &str = r#"{"retry_after_secs":100}"#;
 
 /// Scripts the hook of `web` for the fixture. A step run again answers as it did the first
 /// time, as a hook deciding from the world would.
-fn script(rig: &Rig, fixture: Fixture) {
+fn script(rig: &Bench, fixture: Fixture) {
     let launcher = &rig.launcher;
     match fixture {
         Fixture::Success => {}
@@ -44,8 +47,8 @@ fn script(rig: &Rig, fixture: Fixture) {
 }
 
 /// A rig with `web`'s package 2.0.0, its hook scripted, and a booted daemon's boot id written.
-fn rig_for(fixture: Fixture, id: &str) -> Rig {
-    let rig = Rig::new(id);
+fn rig_for(fixture: Fixture, id: &str) -> Bench {
+    let rig = Bench::new(id);
     rig.add("web", "2.0.0");
     script(&rig, fixture);
     let (_, _) = rig.booted();
@@ -57,7 +60,7 @@ fn baseline(fixture: Fixture) -> (Finished, u64) {
     let rig = rig_for(fixture, &format!("sweep-base-{fixture:?}"));
     let count = Arc::new(AtomicU64::new(0));
     let daemon = rig.daemon().with_stores(crash_at(None, Arc::clone(&count)));
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     let Reply::Finished {
         verdict, reason, ..
     } = reply
@@ -110,12 +113,12 @@ fn by_the_table(action: ResumeAction) -> Option<Finished> {
 
 /// The fixture's update run by a daemon killed at `at`: the rig, the record the daemon left, and
 /// how many steps had run.
-fn first_crash(fixture: Fixture, at: CrashPoint, id: &str) -> (Rig, Option<Record>, usize) {
+fn first_crash(fixture: Fixture, at: CrashPoint, id: &str) -> (Bench, Option<Record>, usize) {
     let rig = rig_for(fixture, id);
     let dying = rig
         .daemon()
         .with_stores(crash_at(Some(at), Arc::new(AtomicU64::new(0))));
-    let reply = dying.order(&update("web", "2.0.0", &d(), 1));
+    let reply = dying.order(&rig.update("web", "2.0.0", 1));
     assert!(
         matches!(reply, Reply::Interrupted { .. }),
         "{fixture:?} killed at {at:?}: {reply:?}"
@@ -135,7 +138,7 @@ fn settle(daemon: &Daemon, report: &BootReport) {
 
 /// The update ended as the table says for `found`, ran no committed step again and skipped no
 /// rollback.
-fn check(rig: &Rig, found: &Record, before: usize, want: &Finished, what: &str) {
+fn check(rig: &Bench, found: &Record, before: usize, want: &Finished, what: &str) {
     let action = expected_cell(found);
     let expected = by_the_table(action).unwrap_or_else(|| want.clone());
     assert_eq!(rig.verdict("web"), Some(expected), "{what}");

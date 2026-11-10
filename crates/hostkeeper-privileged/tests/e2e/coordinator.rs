@@ -316,32 +316,6 @@ impl CoordinatorHandle {
             .map_or(Value::Null, |got| got["host"].clone())
     }
 
-    /// Sets the desired version of `service` to `version`, whose package has the SHA-256
-    /// `digest` (64 lower-case hex digits).
-    pub fn set_desired(&self, service: &str, version: &str, digest: &str) {
-        must(
-            "releases set-desired",
-            self.api.set_desired(service, version, digest),
-        );
-    }
-
-    /// Sets the desired version of `service` to `version` by targets, as CI's set does: `targets`
-    /// by platform, and the text of the version's release index with its SHA-256 `index_digest`.
-    pub fn set_desired_targets(
-        &self,
-        service: &str,
-        version: &str,
-        targets: BTreeMap<String, TargetList>,
-        index: &str,
-        index_digest: &str,
-    ) {
-        must(
-            "releases set-desired by targets",
-            self.api
-                .set_desired_targets(service, version, targets, index, index_digest),
-        );
-    }
-
     /// Sets the desired version of `service` to `version` by targets alone, as CI's set of a
     /// release whose entries are all native does: `targets` by platform, no release index and no
     /// index digest.

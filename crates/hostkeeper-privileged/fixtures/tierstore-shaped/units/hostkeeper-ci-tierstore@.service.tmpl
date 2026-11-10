@@ -3,7 +3,7 @@ Description=Tierstore-shaped fixture service on port %i
 
 [Service]
 Type=exec
-ExecStart={{packages}}/{{service}}/current/bin/tierstore-like serve %i
+ExecStart=/usr/bin/tierstore-like serve %i
 
 [Install]
 WantedBy=multi-user.target

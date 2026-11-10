@@ -5,11 +5,9 @@
 //! only its `daemon` verb (any other is a usage error), and it is the shipped daemon as
 //! `hostkeeper daemon` runs it (`hostkeeper_daemon::cli`): the hand-over of its own update first
 //! (`hostkeeper_daemon::handover`: a binary that waits for a hand-over into another version execs
-//! that binary), the host's files, ports and adapters (the
-//! release channel, the attestation check with the host's `gh` and trusted root, the coordinator
-//! over mutual TLS, systemd or launchd), the start and the heartbeat and enrollment loops, served
-//! until it asks to exit for its own
-//! update. One thing differs: its version is the name of the file it runs from, its links
+//! that binary), the host's files, ports and adapters (the repository installer with the host's
+//! entries, the coordinator over mutual TLS, systemd), the start and the heartbeat and enrollment
+//! loops, served until it asks to exit for its own update. One thing differs: its version is the name of the file it runs from, its links
 //! resolved (`hostkeeper_privileged::across::program_version`), where the shipped binary's is the
 //! one it was built with. The binary directory keeps version `<v>` at `versions/<v>`, so this
 //! build staged under two names runs as two versions, both newer than the pinned release.

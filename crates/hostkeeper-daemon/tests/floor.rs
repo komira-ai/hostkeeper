@@ -6,17 +6,14 @@
 mod support;
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::selfupdate::{
-    APT_RELEASE_BINARY, Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, binary_dir,
-    builtin_steps, judge,
+    Judgement, LEGACY_FLOOR, REASON_PROTOCOL_UNSUPPORTED, binary_dir, builtin_steps, judge,
 };
-use hostkeeper_daemon::testing::manifest;
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Step, Verdict};
 use hostkeeper_steps::record::State;
@@ -52,18 +49,11 @@ impl Host {
     }
 
     /// The release of hostkeeper at `version` whose package declares the floor `floor`, with its
-    /// binary, in the package store.
+    /// binary, published in the repository.
     fn release(&self, version: &str, floor: &str) {
-        let text = manifest(HK, version).replace(
-            "min_hostkeeper = \"0.1.0\"",
-            &format!("min_hostkeeper = \"{floor}\""),
-        );
-        assert!(text.contains(&format!("min_hostkeeper = \"{floor}\"")));
-        let dir = self.s.rig.store.add(HK, version, &text);
-        let binary = dir.join(APT_RELEASE_BINARY);
-        fs::create_dir_all(binary.parent().expect("a bin directory")).expect("the directory");
-        fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
+        let entry = self.s.release_with_floor(version, floor);
+        let manifest = entry.manifest.expect("the entry's manifest");
+        assert_eq!(manifest.min_hostkeeper, floor);
     }
 
     fn daemon(&self) -> Daemon {
@@ -123,19 +113,20 @@ fn a_floor_above_the_daemon_is_deferred_before_any_step() {
     assert_eq!(snapshot(&bin), before);
 }
 
-/// Catches a release whose floor is the legacy floor (the releases before stage 2 declare it; R2 and later ones declare a higher floor) being
-/// refused, probed or run built in: it is accepted as the oldest reader or newer, runs its hook's
-/// command for each step, and is handed over to.
+/// Catches a release whose floor is the legacy floor (the releases before stage 2 declare it; R2 and
+/// later ones declare a higher floor) being refused or probed: it is accepted as the oldest reader
+/// or newer and is handed over to. Its steps are built in whatever its floor: hostkeeper's own
+/// package carries no hook program (its tree is held to the package's own list), so no floor
+/// has a command to run, and the record waits for the restart at `cleanup` as the steps leave it.
 #[test]
-fn a_floor_at_the_legacy_floor_runs_its_command_and_is_handed_over_to() {
+fn a_floor_at_the_legacy_floor_is_accepted_and_handed_over_to() {
     let host = Host::new("floor-legacy");
     host.release(TARGET, "0.1.53");
     let reply = host.order(TARGET);
     assert_eq!(reply, awaiting(false));
-    assert_eq!(
-        host.s.hk_steps(),
-        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
-    );
+    assert!(host.s.hk_steps().is_empty(), "{:?}", host.s.hk_steps());
+    let rec = host.s.rig.record(HK).expect("the record");
+    assert_eq!(rec.step, Step::Cleanup);
     assert_eq!(host.s.current().as_deref(), Some(DAEMON));
     assert_eq!(
         host.s.layout().next().expect("next").as_deref(),

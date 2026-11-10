@@ -4,6 +4,8 @@
 //! way.
 
 mod support;
+mod support_apt;
+mod support_hooked;
 
 use std::fs;
 use std::sync::Arc;
@@ -21,7 +23,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{ClearHalt, Order, order};
 use hostkeeper_steps::record::{RECORD_FILE, State};
 use hostkeeper_steps::runner::REASON_HALT_CLEARED;
 use hostkeeper_steps::{CrashPoint, RecordStore};
-use support::{Rig, d, name, update};
+use support::{Rig, name};
+use support_hooked::Farm;
 
 fn succeeded() -> Reply {
     Reply::Finished {
@@ -43,14 +46,26 @@ fn cleared() -> State {
     }
 }
 
+/// The release `web` runs before the update that halts.
+const BASE: &str = "1.9.0";
+
+/// `web` installed at [`BASE`], with 2.0.0 and 2.1.0 published to order next.
+fn installed(farm: &Farm) -> Daemon {
+    for version in [BASE, "2.0.0", "2.1.0"] {
+        farm.publish("web", version);
+    }
+    let daemon = farm.daemon();
+    assert_eq!(daemon.order(&farm.install("web", BASE, 1)), succeeded());
+    daemon
+}
+
 /// `web` halted by its hook (an update to 2.0.0 whose `prepare` exits 76), held under halt
 /// generation `persisted` (no file for 0), with a package 2.1.0 to order next.
-fn halted(rig: &Rig, persisted: u64) -> Daemon {
-    rig.add("web", "2.0.0");
-    rig.add("web", "2.1.0");
+fn halted(farm: &Farm, persisted: u64) -> Daemon {
+    let rig = farm.rig();
+    let daemon = installed(farm);
     rig.launcher.exits("web", Step::Prepare, &[76]);
-    let daemon = rig.daemon();
-    let halt = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let halt = daemon.order(&farm.update("web", "2.0.0", 2));
     assert!(
         matches!(
             halt,
@@ -101,9 +116,10 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
         (0, 0, false),
     ];
     for (persisted, asked, lifts) in rows {
-        let rig = Rig::new(&format!("clear-row-{persisted}-{asked}"));
-        let daemon = halted(&rig, persisted);
-        let (halt_before, record_before) = (bytes(&rig, HELD_HALT_FILE), bytes(&rig, RECORD_FILE));
+        let farm = Farm::new(&format!("clear-row-{persisted}-{asked}"));
+        let rig = farm.rig();
+        let daemon = halted(&farm, persisted);
+        let (halt_before, record_before) = (bytes(rig, HELD_HALT_FILE), bytes(rig, RECORD_FILE));
         let answer = daemon.clear_halt(&name("web"), asked);
         let row = format!("held {persisted}, asked {asked}");
         match lifts {
@@ -114,7 +130,7 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
                 };
                 assert_eq!(answer, Ok(lifted), "{row}");
                 assert_eq!(
-                    bytes(&rig, HELD_HALT_FILE),
+                    bytes(rig, HELD_HALT_FILE),
                     Some(format!("{asked}\n").into_bytes())
                 );
                 assert_eq!(
@@ -123,7 +139,7 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
                     "{row}"
                 );
                 assert_eq!(
-                    daemon.order(&update("web", "2.1.0", &d(), 2)),
+                    daemon.order(&farm.update("web", "2.1.0", 3)),
                     succeeded(),
                     "{row}"
                 );
@@ -134,9 +150,9 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
                 );
                 let refused = Refused::new(Refusal::StaleHaltGeneration, detail);
                 assert_eq!(answer, Err(refused), "{row}");
-                assert_eq!(bytes(&rig, HELD_HALT_FILE), halt_before, "{row}");
-                assert_eq!(bytes(&rig, RECORD_FILE), record_before, "{row}");
-                let held = daemon.order(&update("web", "2.1.0", &d(), 2));
+                assert_eq!(bytes(rig, HELD_HALT_FILE), halt_before, "{row}");
+                assert_eq!(bytes(rig, RECORD_FILE), record_before, "{row}");
+                let held = daemon.order(&farm.update("web", "2.1.0", 3));
                 assert_eq!(held.refusal(), Some(Refusal::Halted), "{row}");
             }
         }
@@ -147,16 +163,17 @@ fn clear_halt_lifts_only_a_strictly_greater_generation() {
 /// on the same directories still refuses 4 and lifts 5.
 #[test]
 fn clear_halt_generation_survives_a_restart() {
-    let rig = Rig::new("clear-restart");
-    let daemon = halted(&rig, 3);
+    let farm = Farm::new("clear-restart");
+    let rig = farm.rig();
+    let daemon = halted(&farm, 3);
     assert!(daemon.clear_halt(&name("web"), 4).is_ok());
     drop(daemon);
-    let daemon = rig.daemon();
+    let daemon = farm.daemon();
     let refused = daemon.clear_halt(&name("web"), 4).expect_err("4 is held");
     assert_eq!(refused.refusal, Refusal::StaleHaltGeneration);
     let lifted = daemon.clear_halt(&name("web"), 5).expect("5 lifts");
     assert_eq!(lifted.generation, 5);
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"5\n".to_vec()));
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"5\n".to_vec()));
 }
 
 /// Catches the two writes in the other order: a daemon that dies once the record's write is
@@ -166,9 +183,10 @@ fn clear_halt_generation_survives_a_restart() {
 /// would decide alone.
 #[test]
 fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_the_resend() {
-    let rig = Rig::new("clear-crash");
-    drop(halted(&rig, 3));
-    let dies = rig
+    let farm = Farm::new("clear-crash");
+    let rig = farm.rig();
+    drop(halted(&farm, 3));
+    let dies = farm
         .daemon()
         .with_stores(Arc::new(|_: &ServiceName, store: RecordStore| {
             let after_a_write = |point: CrashPoint| matches!(point, CrashPoint::AfterWrite(_));
@@ -178,17 +196,17 @@ fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_t
         .clear_halt(&name("web"), 4)
         .expect_err("the daemon died");
     assert_eq!(died.refusal, Refusal::StoreFailed);
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"3\n".to_vec()));
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"3\n".to_vec()));
     drop(dies);
 
-    let daemon = rig.daemon();
+    let daemon = farm.daemon();
     let lifted = daemon
         .clear_halt(&name("web"), 4)
         .expect("the resend lifts");
     assert_eq!(lifted.generation, 4);
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"4\n".to_vec()));
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"4\n".to_vec()));
     assert_eq!(rig.record("web").expect("the record").state, cleared());
-    assert_eq!(daemon.order(&update("web", "2.1.0", &d(), 2)), succeeded());
+    assert_eq!(daemon.order(&farm.update("web", "2.1.0", 3)), succeeded());
 }
 
 /// Catches a generation written when the record could be cleared and the generation could not:
@@ -196,39 +214,42 @@ fn a_crash_between_clearing_the_record_and_writing_the_generation_is_lifted_by_t
 /// leaving the held generation as it was, and the same `clear_halt` lifts once it can be.
 #[test]
 fn a_held_halt_that_cannot_be_written_refuses_and_the_resend_lifts() {
-    let rig = Rig::new("clear-unwritable");
-    let daemon = halted(&rig, 0);
+    let farm = Farm::new("clear-unwritable");
+    let rig = farm.rig();
+    let daemon = halted(&farm, 0);
     let blocker = rig.state.join("web").join(format!("{HELD_HALT_FILE}.tmp"));
     fs::create_dir(&blocker).expect("a directory where the temporary file goes");
     let refused = daemon.clear_halt(&name("web"), 1).expect_err("not written");
     assert_eq!(refused.refusal, Refusal::StoreFailed);
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), None);
+    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
     fs::remove_dir(&blocker).expect("removed");
     assert!(daemon.clear_halt(&name("web"), 1).is_ok());
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"1\n".to_vec()));
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"1\n".to_vec()));
 }
 
 /// Catches `clear_halt` that ignores the service's lock: while an order of the service runs a
 /// step, it is `busy` and nothing is written.
 #[test]
 fn clear_halt_on_a_service_with_a_running_step_is_busy() {
-    let rig = Rig::new("clear-busy");
-    rig.add("web", "2.0.0");
+    let farm = Farm::new("clear-busy");
+    let rig = farm.rig();
+    farm.publish("web", BASE);
+    farm.publish("web", "2.0.0");
+    let daemon = Arc::new(farm.daemon());
+    assert_eq!(daemon.order(&farm.install("web", BASE, 1)), succeeded());
     let gate = rig.launcher.hold("web", Step::Prepare);
-    let daemon = Arc::new(rig.daemon());
+    let update = farm.update("web", "2.0.0", 2);
     let order = {
         let daemon = Arc::clone(&daemon);
-        spawn("the order", move || {
-            daemon.order(&update("web", "2.0.0", &d(), 1))
-        })
+        spawn("the order", move || daemon.order(&update))
     };
     gate.entered(&order).expect("the held step is entered");
-    let record_before = bytes(&rig, RECORD_FILE);
+    let record_before = bytes(rig, RECORD_FILE);
     let refused = daemon.clear_halt(&name("web"), 1).expect_err("busy");
     let detail = "web is locked by an order to update it to 2.0.0";
     assert_eq!(refused, Refused::new(Refusal::Busy, detail));
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), None);
-    assert_eq!(bytes(&rig, RECORD_FILE), record_before);
+    assert_eq!(bytes(rig, HELD_HALT_FILE), None);
+    assert_eq!(bytes(rig, RECORD_FILE), record_before);
     gate.release();
     assert_eq!(order.join().expect("the order"), succeeded());
 }
@@ -237,15 +258,16 @@ fn clear_halt_on_a_service_with_a_running_step_is_busy() {
 /// text, and neither the file nor the halt record changes.
 #[test]
 fn clear_halt_with_a_garbage_held_halt_file_names_the_error_and_lifts_nothing() {
-    let rig = Rig::new("clear-garbage");
-    let daemon = halted(&rig, 0);
+    let farm = Farm::new("clear-garbage");
+    let rig = farm.rig();
+    let daemon = halted(&farm, 0);
     fs::write(rig.state.join("web").join(HELD_HALT_FILE), "seven\n").expect("garbage");
-    let record_before = bytes(&rig, RECORD_FILE);
+    let record_before = bytes(rig, RECORD_FILE);
     let refused = daemon.clear_halt(&name("web"), 9).expect_err("garbage");
     let detail = "the held halt generation of web is not a number: \"seven\\n\"";
     assert_eq!(refused, Refused::new(Refusal::HaltUnreadable, detail));
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"seven\n".to_vec()));
-    assert_eq!(bytes(&rig, RECORD_FILE), record_before);
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"seven\n".to_vec()));
+    assert_eq!(bytes(rig, RECORD_FILE), record_before);
 }
 
 /// Catches a service that was never halted unable to take a generation: with no record and no
@@ -297,8 +319,8 @@ fn clear_halt_of_a_record_that_cannot_be_cleared_names_why_and_writes_nothing() 
 /// `stale_halt_generation`.
 #[test]
 fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
-    let rig = Rig::new("clear-order");
-    let daemon = halted(&rig, 0);
+    let farm = Farm::new("clear-order");
+    let daemon = halted(&farm, 0);
     let lifted = Reply::Finished {
         verdict: Verdict::Deferred {
             retry_after_secs: None,
@@ -321,8 +343,9 @@ fn a_clear_halt_order_lifts_the_halt_and_a_stale_one_is_refused() {
 /// nothing.
 #[test]
 fn a_halt_generation_from_the_heartbeat_lifts_the_halt_record() {
-    let rig = Rig::new("clear-heartbeat");
-    let daemon = Arc::new(halted(&rig, 0));
+    let farm = Farm::new("clear-heartbeat");
+    let rig = farm.rig();
+    let daemon = Arc::new(halted(&farm, 0));
     let halts = DaemonHalts::new(Arc::clone(&daemon));
     halts.raise(&name("web"), 2).expect("raised");
     assert_eq!(halts.held(&name("web")), 2);
@@ -330,8 +353,8 @@ fn a_halt_generation_from_the_heartbeat_lifts_the_halt_record() {
     halts
         .raise(&name("web"), 1)
         .expect("a lower generation is no error");
-    assert_eq!(bytes(&rig, HELD_HALT_FILE), Some(b"2\n".to_vec()));
-    assert_eq!(daemon.order(&update("web", "2.1.0", &d(), 2)), succeeded());
+    assert_eq!(bytes(rig, HELD_HALT_FILE), Some(b"2\n".to_vec()));
+    assert_eq!(daemon.order(&farm.update("web", "2.1.0", 3)), succeeded());
 }
 
 /// Catches a `busy` that does not say what holds the service: the lock of a `clear_halt` and of
