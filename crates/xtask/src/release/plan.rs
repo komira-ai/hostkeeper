@@ -16,11 +16,36 @@
 //! not held by a red privileged run, and every required workflow has a successful push run on
 //! `main` for it. Versions come from the first-parent history ([`version::version_in`]), never
 //! from tags, so a documentation-only commit has its number and later numbers count it.
+//!
+//! A release is published before its image is pushed and before it is set as the desired
+//! version, so a run can publish a release and then fail. When the plan releases no commit, it
+//! therefore looks for the latest run of `release.yml` on `main` that released the newest
+//! published release (the one with its job `publish (<version>, <tag>, <commit>)`): when that run
+//! completed other than successfully, the plan releases that release again, and every job after
+//! it runs again for it (publishing a release that holds the same files, and pushing the same
+//! image, change nothing). A run that has not completed is waited for; when no run is found the
+//! release is left as it is; after [`RELEASE_RUNS`] such runs in a row that did not succeed it
+//! is left too, and says so (a maintainer re-runs the failed jobs once the cause is fixed). A
+//! newer commit released supersedes it: the run sets the newer one.
+//!
+//! A commit not yet released that the rules above would release is passed over when its own
+//! verify job (`verify (<version>, <tag>, <commit>)`) ended `failure` in each of its latest
+//! [`RELEASE_RUNS`] release runs on `main` that ran it, with no other end of that job between
+//! ([`passed_over`]): a failure that every attempt meets, such as a file the release's build never
+//! made, would otherwise be planned first in every run for ever, and, since the jobs of a release
+//! run wait for every verify, hold every newer commit with it. The line of the commit says so and
+//! names the runs; the newer commits are released, and its version, below the next release, is
+//! never planned again. A verify job cancelled (the run's matrix stops at its first failure, so
+//! a newer commit's verify is cancelled by an older one's) or that succeeded resets the count.
 
+use std::cell::{OnceCell, RefCell};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use super::contract::{Commit, PRIVILEGED_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version};
-use super::ports::{Ports, Release, Run};
+use super::contract::{
+    Commit, MAIN, PRIVILEGED_WORKFLOW, RELEASE_WORKFLOW, REQUIRED_WORKFLOWS, Repo, Version,
+};
+use super::ports::{Job, Ports, Release, Run};
 use super::{Error, RunState, answer, state, version};
 
 /// What `release plan` is asked.
@@ -41,6 +66,12 @@ pub(crate) const DOCS_PATHS: [&str; 2] = ["docs/", "**/*.md"];
 
 /// The title of the one issue that tracks a hold on releases.
 pub(crate) const BLOCK_TITLE: &str = "Releases are held: the privileged tests failed on main";
+
+/// The release runs of one release that may end other than successfully in a row before the plan
+/// stops releasing it again, and the release runs in a row whose verify job of a commit not yet
+/// released may fail before the plan passes over that commit: a failure that every attempt meets
+/// (a refusal that does not pass) then holds no more than three runs of the release group.
+const RELEASE_RUNS: usize = 3;
 
 /// Why a frozen repository releases nothing.
 const FROZEN: &str = "RELEASE_FREEZE is set";
@@ -110,6 +141,48 @@ struct Context<'a> {
     /// The published releases.
     releases: &'a [Release],
     hold: Option<Hold>,
+    /// The end of the window: `chain[..end]` are the commits judged, and `chain[end]`, when
+    /// there is a last release, is its commit.
+    end: usize,
+    /// The release runs on `main` whose head is a commit of the window or the last release's,
+    /// newest first, read once ([`Context::release_runs`]).
+    release_runs: OnceCell<Vec<Run>>,
+    /// The jobs of each release run read so far, by its id ([`Context::jobs_of`]).
+    jobs: RefCell<BTreeMap<u64, Vec<Job>>>,
+}
+
+impl Context<'_> {
+    /// The runs of `release.yml` on `main` whose head is a commit of `chain[..=end]`, newest
+    /// first, each once: every release run that can have released a commit of the window, or
+    /// the last release (a run's head is the tip of `main` it planned from, the commit itself or
+    /// a newer one).
+    fn release_runs(&self) -> Result<&[Run], Error> {
+        if let Some(runs) = self.release_runs.get() {
+            return Ok(runs);
+        }
+        let heads = &self.chain[..(self.end + 1).min(self.chain.len())];
+        let mut runs = Vec::new();
+        for head in heads {
+            let found = self
+                .ports
+                .runs
+                .runs(&self.request.repo, RELEASE_WORKFLOW, head)?;
+            runs.extend(found.into_iter().filter(|r| r.branch == MAIN));
+        }
+        runs.sort_by_key(|r| std::cmp::Reverse(r.id));
+        runs.dedup_by_key(|r| r.id);
+        Ok(self.release_runs.get_or_init(|| runs))
+    }
+
+    /// The jobs of the release run `run`, read from GitHub once per plan.
+    fn jobs_of(&self, run: u64) -> Result<Vec<Job>, Error> {
+        if let Some(jobs) = self.jobs.borrow().get(&run) {
+            return Ok(jobs.clone());
+        }
+        let jobs = self.ports.runs.jobs(&self.request.repo, run)?;
+        self.jobs.borrow_mut().insert(run, jobs.clone());
+        Ok(jobs)
+    }
 }
 
 /// Plans the release of each commit from the requested one down to the last release, oldest
@@ -131,8 +204,9 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         .collect();
     // The window is chain[..end]: the commits newer than the last release, or, with no release,
     // those from the commit that last changed the version file.
-    let end = match last_release(&releases, &chain) {
-        Some(index) => index,
+    let last = last_release(&releases, &chain);
+    let end = match &last {
+        Some((index, _)) => *index,
         None => version::base_of(ports.git, &chain, &request.version_file)? + 1,
     };
     let hold = hold(ports, request, &chain, end)?;
@@ -142,6 +216,9 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         chain: &chain,
         releases: &releases,
         hold,
+        end,
+        release_runs: OnceCell::new(),
+        jobs: RefCell::new(BTreeMap::new()),
     };
     let mut candidates: Vec<Candidate> = Vec::new();
     for index in (0..end).rev() {
@@ -155,17 +232,93 @@ pub(crate) fn plan(ports: &Ports<'_>, request: &Request) -> Result<Vec<String>, 
         }
         candidates.push(candidate);
     }
-    let printed = candidates.iter().map(describe).collect();
+    let mut printed: Vec<String> = candidates.iter().map(describe).collect();
+    if let (Some((index, version)), true) = (last, candidates.iter().all(|c| c.reason.is_some())) {
+        let (line, again) = resume(&context, index, version)?;
+        printed.extend(line);
+        candidates.extend(again);
+    }
     finish(request, printed, &candidates)
 }
 
-/// The index in `chain` of the published release nearest the tip whose tag is a version.
-fn last_release(releases: &[Release], chain: &[Commit]) -> Option<usize> {
+/// The newest published release, `version` at `index` of the chain, released again when the
+/// latest run of `release.yml` on `main` that released it completed other than successfully (see
+/// the module): the line that says why or why not (none when no run released it), and the
+/// candidate.
+fn resume(
+    context: &Context<'_>,
+    index: usize,
+    version: Version,
+) -> Result<(Option<String>, Option<Candidate>), Error> {
+    let commit = &context.chain[index];
+    let job = format!("publish ({version}, {}, {commit})", version.tag());
+    let tag = version.tag();
+    // The release's runs that completed other than successfully, newest first, back to its
+    // latest success.
+    let mut failed: Vec<(u64, String)> = Vec::new();
+    for run in context.release_runs()? {
+        if !context.jobs_of(run.id)?.iter().any(|j| j.name == job) {
+            continue;
+        }
+        let ended =
+            (run.status == "completed").then(|| run.conclusion.as_deref().unwrap_or("none"));
+        match (failed.is_empty(), ended) {
+            (true, Some("success")) => {
+                let line = format!("{tag} of {commit}: its release run {} succeeded", run.id);
+                return Ok((Some(line), None));
+            }
+            (true, None) => {
+                let line = format!(
+                    "{tag} of {commit}: waiting for its release run {}, which has not completed",
+                    run.id
+                );
+                return Ok((Some(line), None));
+            }
+            (_, Some(conclusion)) if conclusion != "success" => {
+                failed.push((run.id, conclusion.to_owned()));
+                if failed.len() == RELEASE_RUNS {
+                    break;
+                }
+            }
+            _ => break,
+        }
+    }
+    let Some((latest, conclusion)) = failed.first() else {
+        return Ok((None, None));
+    };
+    if failed.len() == RELEASE_RUNS {
+        let ended: Vec<&str> = failed.iter().map(|(_, c)| c.as_str()).collect();
+        let line = format!(
+            "{tag} of {commit} is not released again: its last {RELEASE_RUNS} release runs \
+             ended {} (the latest {latest}); re-run its failed jobs once the cause is fixed",
+            ended.join(", ")
+        );
+        return Ok((Some(line), None));
+    }
+    let line = format!(
+        "release {tag} of {commit} again: its release run {latest} ended {conclusion} ({} of \
+         {RELEASE_RUNS} runs in a row that did not succeed)",
+        failed.len()
+    );
+    let again = Candidate {
+        commit: commit.clone(),
+        version,
+        reason: None,
+        pending: false,
+    };
+    Ok((Some(line), Some(again)))
+}
+
+/// The index in `chain` of the published release nearest the tip whose tag is a version, and
+/// that version.
+fn last_release(releases: &[Release], chain: &[Commit]) -> Option<(usize, Version)> {
     releases
         .iter()
-        .filter(|r| Version::of_tag(&r.tag).is_some())
-        .filter_map(|r| chain.iter().position(|c| c.as_str() == r.commit))
-        .min()
+        .filter_map(|r| {
+            let version = Version::of_tag(&r.tag)?;
+            Some((chain.iter().position(|c| c.as_str() == r.commit)?, version))
+        })
+        .min_by_key(|(index, _)| *index)
 }
 
 /// The hold on releases, in one place so a different rule can replace it: the newest commit of
@@ -268,7 +421,42 @@ fn decline(
     if let Some(hold) = context.hold.as_ref().filter(|h| index <= h.index) {
         return Ok(Decline::settled(hold.reason()));
     }
-    waiting(context, commit)
+    if let Some(decline) = waiting(context, commit)? {
+        return Ok(Some(decline));
+    }
+    passed_over(context, commit, version)
+}
+
+/// Why `commit`, which every other rule releases, is passed over: its verify job ended
+/// `failure` in each of its latest [`RELEASE_RUNS`] release runs that ran it (see the module).
+/// None when fewer did, or a run between ended that job otherwise (or has not ended it).
+fn passed_over(
+    context: &Context<'_>,
+    commit: &Commit,
+    version: &Version,
+) -> Result<Option<Decline>, Error> {
+    let job = format!("verify ({version}, {}, {commit})", version.tag());
+    let mut failed: Vec<u64> = Vec::new();
+    for run in context.release_runs()? {
+        let jobs = context.jobs_of(run.id)?;
+        let Some(verify) = jobs.iter().find(|j| j.name == job) else {
+            continue;
+        };
+        if verify.conclusion.as_deref() != Some("failure") {
+            break;
+        }
+        failed.push(run.id);
+        if failed.len() == RELEASE_RUNS {
+            let ids: Vec<String> = failed.iter().map(u64::to_string).collect();
+            return Ok(Decline::settled(format!(
+                "passed over: its verify job failed in each of its last {RELEASE_RUNS} release \
+                 runs ({}, the latest first), a failure every attempt meets; the newer commits \
+                 are released without it",
+                ids.join(", ")
+            )));
+        }
+    }
+    Ok(None)
 }
 
 /// The first required workflow without a successful push run for `commit`, as a reason.
@@ -345,5 +533,9 @@ fn finish(
     Ok(printed)
 }
 
+#[cfg(test)]
+mod passed_over_tests;
+#[cfg(test)]
+mod resume_tests;
 #[cfg(test)]
 mod tests;

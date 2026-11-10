@@ -192,6 +192,10 @@ pub(crate) fn convergence_of(
         &members(def, fleet, ops, desired, now),
         deferred,
     );
+    let convergence = Convergence {
+        picks: desired.and_then(|desired| crate::picks::counts(def, desired, fleet)),
+        ..convergence
+    };
     match halt::standing(ops, &def.name) {
         Some(halt) => convergence.halted(halt),
         None => convergence,

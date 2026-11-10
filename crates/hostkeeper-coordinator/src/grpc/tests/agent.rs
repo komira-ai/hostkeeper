@@ -51,6 +51,8 @@ fn request(
     services: Vec<proto::ServiceBeat>,
 ) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: Vec::new(),
+        repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent,
         features: features.iter().map(|name| (*name).to_owned()).collect(),
@@ -58,6 +60,9 @@ fn request(
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root_age_secs: None,
+        trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 
@@ -191,6 +196,8 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         json!({"name": "svc", "version": "1.0"})
     );
     let full = proto::ServiceBeat {
+        installer: None,
+        drift: None,
         name: "svc".to_owned(),
         version: "3.1".to_owned(),
         health: proto::Health::Absent as i32,
@@ -415,14 +422,16 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
     let who = updater("d1", "daemon");
     let mut running = entry("kbf", "1.0");
     running.health = proto::Health::Healthy as i32;
-    let announced = request(
+    running.installer = Some("apt".to_owned());
+    let mut announced = request(
         agent("hostkeeper-daemon", "1.0"),
-        &["order-v1", "unknown-v9"],
+        &["order-v1", "unknown-v9", "target-v1"],
         vec![running],
     );
+    announced.installers = vec!["apt".to_owned()];
     let reply = beat(&farm.coordinator, &who, &announced).await;
     let response: proto::HeartbeatResponse = reply.decode();
-    assert_eq!(response.features, ["order-v1"]);
+    assert_eq!(response.features, ["order-v1", "target-v1"]);
     let order = response.order.expect("an update order");
     assert_eq!(order.r#try, 1);
     assert!(order.order_id.starts_with("update-"));
@@ -433,6 +442,8 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
                 ("kbf", "2.0")
             );
             assert_eq!(update.package_digest, "1".repeat(64));
+            let target = update.target.expect("the entry picked for the host");
+            assert_eq!(target.installer, "apt");
         }
         other => panic!("not an update: {other:?}"),
     }

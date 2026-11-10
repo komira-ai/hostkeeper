@@ -18,7 +18,6 @@ use serde_json::{Value, json};
 use tonic::Request;
 
 use crate::audit_file::UnixClock;
-use crate::channel::ChannelRefusal;
 use crate::desired::{DesiredError, StoreError};
 use crate::grpc::Admitted;
 use crate::grpc::operator::{
@@ -78,7 +77,7 @@ impl World {
     }
 
     /// Every file of the ops store, by name: the ops file, its audit file and its halts file.
-    fn ops_files(&self) -> BTreeMap<String, Vec<u8>> {
+    pub(super) fn ops_files(&self) -> BTreeMap<String, Vec<u8>> {
         let mut files = BTreeMap::new();
         for entry in std::fs::read_dir(self.rig.dir.path()).expect("the state directory") {
             let name = entry
@@ -202,6 +201,7 @@ fn audit(
         reason: reason.map(str::to_owned),
         at_unix: None,
         by_name: Some("operator".to_owned()),
+        host_group: None,
     })
 }
 
@@ -544,14 +544,6 @@ fn every_way_a_set_of_the_desired_state_fails_is_refused_with_its_value() {
         (SetError::DigestConflict, R::InvalidRequest),
         (SetError::BelowMinVersion, R::BelowMinVersion),
         (SetError::BadVersion, R::HeldBad),
-        (
-            SetError::Channel(ChannelRefusal::NotInChannel),
-            R::NotInChannel,
-        ),
-        (
-            SetError::Channel(ChannelRefusal::DigestMismatch),
-            R::ChannelDigestMismatch,
-        ),
         (
             SetError::Store(StoreError::Io {
                 path: "desired.json".into(),

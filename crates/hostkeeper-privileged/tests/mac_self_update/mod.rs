@@ -1,35 +1,62 @@
 //! The Mac of one self-update test of `tests/device_mac_selfupdate.rs`: the program
 //! `hostkeeper-selfupdate-daemon` (its module says what it replaces and why) run as a launchd job
-//! of the system domain from `current` of a binary directory the test owns, with the releases of
-//! hostkeeper in its package store and a coordinator the test writes (`link/order.json`, read at
-//! each heartbeat; `link/beats.jsonl`, each heartbeat sent).
+//! of the system domain from `current` of a binary directory the test owns, with the `.pkg`
+//! files of hostkeeper's releases served to it by their pins and a coordinator the test writes
+//! (`link/order.json`, read at each heartbeat; `link/beats.jsonl`, each heartbeat sent), or the
+//! real one ([`Plan::Pkg`] with `--fixture-link coordinator`, see [`MacSelfHost::new_coordinated`]).
+//!
+//! **hostkeeper's package.** A release of hostkeeper on a Mac is a native package, its signed
+//! `.pkg` (docs/design/packages-native.md, section 10.4): the binary of the program under test at
+//! `/usr/local/bin/hostkeeper` (the program's own path on a Mac, where the pkg's launchd plist
+//! starts it), nothing else. The test builds one `.pkg` of it for each of [`N`] and [`NEXT`] with
+//! the Mac's `pkgbuild` and `productbuild` (`shared/pkg_build.rs`), serves it to the daemon by
+//! its pin (`shared/macos_pkg.rs` says how the daemon fetches it and how its signature is judged),
+//! and orders it by the one `macos-pkg` entry `release targets` writes ([`MacSelfHost::entry`]).
+//! The daemon stages it, hands over to the binary of its tree (`tree/usr/local/bin/hostkeeper`),
+//! and the new binary, once it confirmed itself, has the installer install the package: the Mac's
+//! `installer` puts the file at `/usr/local/bin/hostkeeper`, the receipt is `pkgutil`'s, and the
+//! daemon's record is its own `placed.json` (the fixture's, not the host's).
 //!
 //! **Where.** The release a self-update stages from must be a tree whose every directory, up to
 //! `/`, is root's and closed to group and others (`hostkeeper_steps::Staged::check`), and every
 //! file in it root's: the target directory is the runner's user's, so the host lives under
 //! `/var/hk-su-<tag>-<pid>` (a link to `/private/var`, as the daemon's default directories are
 //! reached), and the programs are written into it byte for byte (`fs::copy` on macOS clones a
-//! file and keeps the owner of its source).
+//! file and keeps the owner of its source). The package installs at `/usr/local/bin/`, a host
+//! path: the test moves nothing aside (the host has no hostkeeper installed, which it checks),
+//! makes the directories above it ones only root can write when the runner's are not (the
+//! daemon refuses to install through any other), and the drop removes the file, forgets the
+//! receipt and removes the directories the install made.
 //!
 //! **The job.** Its plist is the daemon's own (`hostkeeper_launchd::plist::daemon_plist`:
 //! `RunAtLoad` and plain `KeepAlive` true, so that the clean exit the follow-on asks for starts
-//! `current` again), its program `current` of the test's binary directory, with the fixture's
-//! flags before the verb and the test's directories and `--heartbeat-secs 1` after it, its
-//! output in two files of the test's tree.
+//! the program again), with the fixture's flags before the verb and the test's directories and
+//! `--heartbeat-secs 1` after it, its output in two files of the test's tree. Its program is
+//! `current` of the test's binary directory ([`Plan::Installed`]) or, as the pkg's plist names the
+//! binary the pkg installed (`DaemonJob::standard`'s program, `/usr/local/bin/hostkeeper`), a copy
+//! of the fixture daemon at a packaged path of the test's tree, named by the version it stands
+//! for ([`Plan::Pkg`]; the fixture flag `--fixture-packaged` makes that path the packaged binary
+//! of the daemon's start). The binary directory of a [`Plan::Pkg`] Mac is empty: the packaged
+//! binary seeds it and execs `current`, in the process launchd started, so the job's process
+//! runs the binary directory's file of [`N`] after the start.
 //!
-//! **What this rig does not have.** The daemon writes its fallback job's plist into the unit
-//! directory of its placement (the fixture's `units/`, not `/Library/LaunchDaemons`) and loads it
-//! from `/Library/LaunchDaemons`, where it is not: that load fails and is an alert of the daemon,
-//! which goes on (`hostkeeper_daemon::selfunits`). So the fallback of a next binary that cannot
-//! start is not run here. A fallback plist the Mac already has (an earlier daemon writes it at its
-//! start) is booted out and moved aside by [`MacSelfHost::new`] and put back when the host is
-//! dropped, so a fallback job of another tree is never loaded.
+//! **An installed Mac.** [`Plan::Installed`] starts the daemon of [`N`] with its binary
+//! directory made and no package of hostkeeper installed, as the pkg leaves a Mac, and has the
+//! package installed the way a Mac gets it: the coordinator (the file) orders the install of the
+//! version that runs, which is `Succeeded` at once and installs the package without a restart
+//! (the order [`SETUP_ORDER`]); the update the test offers next finds hostkeeper installed.
 //!
-//! Dropping the host boots out the daemon's job, the probe's job and the fallback label, prints
-//! the daemon's output when the test is failing, and removes the tree.
+//! **The fallback.** The hand-over has no fallback job (docs/design/two-programs.md, section
+//! 4.3): a next binary that cannot start is execed three times by the old binary, which then
+//! settles the update failed ([`Plan::InstalledFailingNext`], [`MacSelfHost::refused_starts`]),
+//! under the same launchd the job runs in.
 //!
-//! **The coordinator.** By default the test writes it ([`MacSelfHost::offer`]); a test may answer
-//! each heartbeat with the real coordinator in its process instead ([`coordinator::Relay`]). The
+//! Dropping the host boots out the daemon's job, prints the daemon's output when the test is
+//! failing, and removes the tree and what the packages put on the host.
+//!
+//! **The coordinator.** By default the test writes it ([`MacSelfHost::offer`]); a test may
+//! answer instead with the real coordinator in its process (`e2e::coordinator`), which the
+//! daemon enrolls with and beats to over mutual TLS ([`MacSelfHost::new_coordinated`]). The
 //! daemon's observer watches the test's job as the service `hostkeeper` (the fixture's
 //! `--fixture-own-unit`), as a Mac's daemon watches its own job `dev.hostkeeper.hostkeeper`.
 //!
@@ -37,44 +64,61 @@
 //! can no longer come (an order refused, [`MacSelfHost::check_not_stuck`]); nothing asserts how
 //! long anything took.
 
+use std::collections::BTreeMap;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_config::platform::Platform;
-use hostkeeper_daemon::selfunits::fallback_label;
-use hostkeeper_daemon::selfupdate::PROBE_UNIT;
+use hostkeeper_daemon::target;
+use hostkeeper_hook::Verdict;
+use hostkeeper_install::macos_pkg::receipt;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{DaemonJob, Label, Launchctl, LaunchctlProcess, PidInfo, daemon_plist};
+use hostkeeper_proto::hostkeeper::release::v1::{
+    Hook, InstallerBounds, Location, Manifest, StepBounds, Target, TargetList,
+};
 use hostkeeper_steps::record::{Loaded, Record, State};
-use hostkeeper_steps::{Layout, RecordStore, Seal, tree_digest};
+use hostkeeper_steps::{BadVersions, Layout, RecordStore};
 use serde_json::Value;
 
-pub mod coordinator;
+use crate::e2e::macos_pkg::{self, PKGS_DIR, SIGNERS_FILE, signers_file_text};
+use crate::e2e::pkg_build::{self, PkgFile, PkgSource};
 
 /// The daemon program of these tests.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
-/// The workload fixture, the hook of every release.
-pub const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
+/// The package identifier of hostkeeper's `.pkg`, the name `pkgutil` knows its receipt by.
+pub const IDENTIFIER: &str = "dev.hostkeeper.ci-selfupdate";
 /// The version the host runs first.
 pub const N: &str = "1.0.0";
 /// The version it is ordered to.
 pub const NEXT: &str = "1.0.1";
-/// The package digest the orders name.
-pub const DIGEST: &str = "abababababababababababababababababababababababababababababababab";
+/// Where hostkeeper's `.pkg` installs the program: the path the pkg's launchd plist starts.
+pub const INSTALLED: &str = "/usr/local/bin/hostkeeper";
 /// The order id of the self-update.
 pub const ORDER: &str = "self-update-1";
+/// The order id of the install of the version that runs which makes a Mac an installed one.
+pub const SETUP_ORDER: &str = "setup-install-1";
+
+/// The try of `order`: [`SETUP_ORDER`] is try 1 and [`ORDER`], which follows it on the same
+/// service, try 2, since the daemon refuses an order whose try its step record already holds
+/// (`try_conflict`).
+pub fn try_of(order: &str) -> u64 {
+    if order == SETUP_ORDER { 1 } else { 2 }
+}
 /// The reason of the verdict of an update whose new binary has not run yet.
 const AWAITING_REASON: &str = "awaiting_restart";
-/// Where launchd reads the plists of the system domain.
-const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
+/// The reason of the verdict of a version whose new binary failed its tries.
+pub const FALLBACK_REASON: &str = "self_update_fallback";
 /// How many times a wait reads its state, and the pause between two reads.
 const READS: u32 = 1500;
 const PAUSE: Duration = Duration::from_millis(200);
+/// The deadline of `pkgutil` and `chown` on the host.
+const TOOL_DEADLINE: Duration = Duration::from_secs(120);
 
 /// `launchctl`, as the daemon runs it.
 fn launchctl() -> LaunchctlProcess {
@@ -92,11 +136,11 @@ pub fn wait(what: &str, mut done: impl FnMut() -> bool) {
     panic!("{what}: not reached after {READS} reads");
 }
 
-/// The line the daemon's log holds once its probe ran the program's `self-update-protocol`: the
-/// program's line (its `probed_line`) under the probe's unit, as the launcher logs a run.
-pub fn probed_log_line() -> String {
+/// The line the daemon program writes to standard error when `--fixture-fail-start` refuses its
+/// start at `version` (the program's `refused_line`).
+pub fn refused_line(version: &str) -> String {
     format!(
-        "hostkeeper daemon: {PROBE_UNIT}: hostkeeper-selfupdate-daemon: asked self-update-protocol"
+        "hostkeeper-selfupdate-daemon: version {version} refuses to start (--fixture-fail-start)"
     )
 }
 
@@ -118,36 +162,33 @@ fn program(from: &str, to: &Path) {
     file(to, &bytes, 0o755);
 }
 
-/// The manifest of hostkeeper at `version`: its hook the workload fixture in mode `ok`, which
-/// ends every step `0` with a valid last line.
-fn manifest(version: &str) -> String {
-    let platform = Platform::current();
-    format!(
-        r#"schema = 1
-name = "{HK}"
-version = "{version}"
-platform = "{platform}"
-min_hostkeeper = "0.1.0"
-
-[hook]
-command = ["bin/hook"]
-verify_deadline_secs = 1600
-
-[hook.timeout_secs]
-prepare = 600
-cutover = 300
-verify = 1000
-rollback = 600
-cleanup = 1300
-
-[params]
-"fixture.mode" = "ok"
-"#
+/// The version of the receipt of hostkeeper's package; `None` when `pkgutil` knows none.
+pub fn receipt_version() -> Option<String> {
+    let args = ["--pkg-info-plist".to_owned(), IDENTIFIER.to_owned()];
+    let out = LaunchctlProcess::new(Path::new("/usr/sbin/pkgutil"), TOOL_DEADLINE)
+        .run(&args)
+        .unwrap_or_else(|e| panic!("pkgutil did not run to its end: {e}"));
+    if out.code != Some(0) {
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(
+            said.contains(receipt::NO_RECEIPT),
+            "an unexpected pkgutil failure: {said}"
+        );
+        return None;
+    }
+    Some(
+        receipt::parse_pkg_info(&out.stdout)
+            .expect("pkgutil's receipt")
+            .version,
     )
 }
 
-/// The daemon config: every key the loader requires. Nothing reads its addresses: the fixture's
-/// link, package store and enroller replace what would.
+/// The daemon config: every key the loader requires. Nothing reads its addresses on the file
+/// link: the fixture's link and package store replace what would.
 const CONFIG: &str = r#"coordinator = "https://coordinator.example"
 ca_sha256 = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
 release_channel = "https://releases.example"
@@ -159,38 +200,42 @@ refs = ["refs/tags/*"]
 hosted_runner = true
 "#;
 
+/// The directories above [`INSTALLED`] that the host may lack, outermost first.
+const PARENTS: [&str; 2] = ["/usr/local", "/usr/local/bin"];
+
 /// How the host is when the daemon starts.
 #[derive(Clone, Copy, Debug)]
 pub enum Plan {
-    /// hostkeeper's package at [`N`] installed (`current` of its package directory), the
-    /// releases of [`N`] and [`NEXT`] in the store: the coordinator orders an `update`.
+    /// hostkeeper's package at [`N`] installed (the install of the version that runs, ordered as
+    /// the module says), the releases of [`N`] and [`NEXT`] served: the coordinator orders an
+    /// `update`.
     Installed,
-    /// As the pkg leaves a Mac: the binary directory alone, no package of hostkeeper installed,
-    /// the release of the version given in the store: the coordinator orders an `install`.
-    Pkg(&'static str),
+    /// [`Plan::Installed`], with the daemon of [`NEXT`] refusing to start
+    /// (`--fixture-fail-start`): a next binary that cannot start.
+    InstalledFailingNext,
+    /// As the pkg leaves a Mac: the job's program the packaged binary (a copy of the fixture
+    /// daemon named [`N`]) and the binary directory empty, no package of hostkeeper installed,
+    /// the releases of [`N`] and [`NEXT`] served: the coordinator orders an `install`.
+    Pkg,
+}
+
+/// One release of hostkeeper's package, served.
+struct Release {
+    /// The entry of an order for it.
+    entry: Target,
 }
 
 /// One test's Mac (the module says what it is).
 pub struct MacSelfHost {
     base: PathBuf,
     label: Label,
-    /// Where the Mac's own fallback plist was moved aside to, when it had one: put back when the
-    /// host is dropped.
-    aside: Option<PathBuf>,
-}
-
-/// The plist of the daemon's fallback job in `/Library/LaunchDaemons`.
-fn fallback_plist() -> PathBuf {
-    Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()))
-}
-
-/// Moves `from` to `to`: a rename, or a copy and a removal when the two are on different
-/// volumes.
-fn move_file(from: &Path, to: &Path) -> std::io::Result<()> {
-    fs::rename(from, to).or_else(|_| {
-        fs::copy(from, to)?;
-        fs::remove_file(from)
-    })
+    /// The releases served, by version.
+    releases: BTreeMap<&'static str, Release>,
+    /// The directories of [`PARENTS`] that were not on the host before the test, which the drop
+    /// removes when the installs left them empty.
+    made: Vec<&'static str>,
+    /// Whether the job's program is the real coordinator's link (`--fixture-link coordinator`).
+    coordinated: bool,
 }
 
 impl Drop for MacSelfHost {
@@ -198,59 +243,184 @@ impl Drop for MacSelfHost {
         if std::thread::panicking() {
             eprintln!("{}", self.logs());
         }
-        for label in [
-            Some(self.label.clone()),
-            Label::probe(PROBE_UNIT).ok(),
-            Label::parse(&fallback_label()).ok(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            let _ = launchctl().run(&bootout_args(&label));
-        }
-        if let Some(aside) = &self.aside
-            && let Err(e) = move_file(aside, &fallback_plist())
-        {
-            eprintln!(
-                "the fallback plist moved aside to {} was not put back: {e}",
-                aside.display()
-            );
-            return;
+        let _ = launchctl().run(&bootout_args(&self.label));
+        let forget = ["--forget".to_owned(), IDENTIFIER.to_owned()];
+        let _ = LaunchctlProcess::new(Path::new("/usr/sbin/pkgutil"), TOOL_DEADLINE).run(&forget);
+        let _ = fs::remove_file(INSTALLED);
+        for parent in self.made.iter().rev() {
+            let _ = fs::remove_dir(parent);
         }
         let _ = fs::remove_dir_all(&self.base);
     }
 }
 
+/// The directories above [`INSTALLED`] made fit for the daemon's install: a directory only root
+/// writes. The hosted runner may own `/usr/local/bin` itself, which the daemon refuses to install
+/// through (`unsafe_directory`); this makes it root's. Gives the directories that are not there.
+fn prepare_parents() -> Vec<&'static str> {
+    let mut missing = Vec::new();
+    for parent in PARENTS {
+        match fs::metadata(parent) {
+            Ok(meta) => {
+                if meta.uid() != 0 || meta.mode() & 0o022 != 0 {
+                    std::os::unix::fs::chown(parent, Some(0), Some(0))
+                        .unwrap_or_else(|e| panic!("chown {parent}: {e}"));
+                    fs::set_permissions(
+                        parent,
+                        fs::Permissions::from_mode(meta.mode() & 0o7777 & !0o022),
+                    )
+                    .unwrap_or_else(|e| panic!("chmod {parent}: {e}"));
+                }
+            }
+            Err(_) => missing.push(parent),
+        }
+    }
+    missing
+}
+
+/// The manifest's bounds of hostkeeper's entry: its package has no hook (the steps are the
+/// built-in ones, which succeed at once for hostkeeper itself), so these only bound a wait.
+const STEPS: StepBounds = StepBounds {
+    prepare: 600,
+    cutover: 300,
+    verify: 1000,
+    rollback: 600,
+    cleanup: 1300,
+    uninstall: None,
+};
+
 impl MacSelfHost {
     /// The Mac of the test `tag` (1 to 8 of `[a-z0-9]`) under `plan`, its daemon's job loaded,
-    /// running [`N`].
+    /// running [`N`], on the files link; under [`Plan::Installed`] with the package installed.
     pub fn new(tag: &str, plan: Plan) -> MacSelfHost {
+        let host = MacSelfHost::make(tag, plan, false);
+        host.load(plan);
+        host.runs(N);
+        if matches!(plan, Plan::Installed | Plan::InstalledFailingNext) {
+            host.place_order(SETUP_ORDER, "install", N);
+            host.settled(N);
+            fs::remove_file(host.link().join("order.json")).expect("take the order away");
+            host.assert_installed(N);
+        }
+        host
+    }
+
+    /// The Mac of the test `tag` as the pkg leaves it ([`Plan::Pkg`]) with the daemon on the real
+    /// coordinator's link: `config` is the daemon's config (the coordinator's address and CA),
+    /// which the daemon reads at its start, and the caller approves its enrollment once this
+    /// returns. Nothing is ordered here.
+    pub fn new_coordinated(tag: &str, config: &str) -> MacSelfHost {
+        let plan = Plan::Pkg;
+        let host = MacSelfHost::make(tag, plan, true);
+        file(&host.path("hostkeeper.toml"), config.as_bytes(), 0o600);
+        host.load(plan);
+        host.runs(N);
+        host
+    }
+
+    /// The tree, the fixture, the served releases and the programs, the job not loaded.
+    fn make(tag: &str, plan: Plan, coordinated: bool) -> MacSelfHost {
         assert!(
             rustix::process::geteuid().is_root(),
             "the device tests run as root (privileged.yml's cargo runner `sudo`)"
+        );
+        assert!(
+            fs::symlink_metadata(INSTALLED).is_err(),
+            "{INSTALLED} is on the host before the test: the test installs hostkeeper's package there"
+        );
+        assert_eq!(
+            receipt_version(),
+            None,
+            "no receipt of the package to begin with"
         );
         let pid = std::process::id();
         let base = PathBuf::from(format!("/var/hk-su-{tag}-{pid}"));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
         let label = Label::parse(&format!("dev.hostkeeper.ci-su{tag}-{pid}")).expect("a job label");
-        // A fallback job of this Mac's own (an earlier daemon's, which writes it at its start)
-        // would run another tree's `previous`: it is booted out and its plist moved aside, and
-        // put back when the test ends, so the daemon under test never loads it.
-        let fallback = fallback_plist();
-        let aside = fs::symlink_metadata(&fallback).is_ok().then(|| {
-            let fallback_job = Label::parse(&fallback_label()).expect("the fallback label");
-            let _ = launchctl().run(&bootout_args(&fallback_job));
-            let aside = base.join("fallback.plist.aside");
-            move_file(&fallback, &aside)
-                .unwrap_or_else(|e| panic!("move {} aside: {e}", fallback.display()));
-            aside
-        });
-        let host = MacSelfHost { base, label, aside };
-        host.make(plan);
-        host.load();
-        host.runs(N);
+        let made = prepare_parents();
+        let mut host = MacSelfHost {
+            base,
+            label,
+            releases: BTreeMap::new(),
+            made,
+            coordinated,
+        };
+        dir(&host.base, 0o755);
+        dir(&host.state(), 0o700);
+        dir(&host.state().join(HK), 0o700);
+        dir(&host.path("packages"), 0o755);
+        for sub in ["link", "units", "placed", PKGS_DIR] {
+            dir(&host.fixture().join(sub), 0o755);
+        }
+        file(
+            &host.fixture().join(SIGNERS_FILE),
+            signers_file_text().as_bytes(),
+            0o644,
+        );
+        file(&host.path("hostkeeper.toml"), CONFIG.as_bytes(), 0o644);
+        dir(&host.service(), 0o755);
+        for version in [N, NEXT] {
+            host.publish(version);
+        }
+        match plan {
+            Plan::Installed | Plan::InstalledFailingNext => {
+                let daemon = host.path("hostkeeper-selfupdate-daemon");
+                program(DAEMON, &daemon);
+                let layout = host.layout();
+                layout.stage(N, &daemon).expect("stage the first binary");
+                layout.switch(N).expect("switch to it");
+            }
+            Plan::Pkg => {
+                // The binary directory is left empty: the packaged binary seeds it.
+                dir(&host.path("packaged"), 0o755);
+                program(DAEMON, &host.packaged());
+            }
+        }
         host
+    }
+
+    /// Builds the `.pkg` of hostkeeper at `version` (the program under test at
+    /// [`INSTALLED`]), serves it by its pin, and keeps its entry.
+    fn publish(&mut self, version: &'static str) {
+        let source = PkgSource {
+            identifier: IDENTIFIER.to_owned(),
+            version: version.to_owned(),
+            files: vec![PkgFile::new(
+                INSTALLED.trim_start_matches('/'),
+                fs::read(DAEMON).unwrap_or_else(|e| panic!("read {DAEMON}: {e}")),
+                0o755,
+            )],
+            postinstall: None,
+        };
+        let pkg = pkg_build::build(&self.path(&format!("build-{version}")), &source);
+        let (digest, bytes) = macos_pkg::serve(&self.fixture(), &pkg);
+        let entry = Target {
+            installer: "macos-pkg".to_owned(),
+            locations: vec![Location {
+                store: "channel".to_owned(),
+                locator: format!("{HK}/{version}/{HK}-{version}-macos-arm64.pkg"),
+            }],
+            digest,
+            bytes,
+            manifest: Some(Manifest {
+                min_hostkeeper: "0.1.0".to_owned(),
+                package: Some(IDENTIFIER.to_owned()),
+                hook: Some(Hook {
+                    timeout_secs: Some(STEPS),
+                    verify_deadline_secs: 1600,
+                    ..Hook::default()
+                }),
+                installer_bounds: Some(InstallerBounds {
+                    stage_secs: 300,
+                    activate_secs: 300,
+                    remove_secs: 300,
+                }),
+                ..Manifest::default()
+            }),
+            ..Target::default()
+        };
+        self.releases.insert(version, Release { entry });
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -261,7 +431,8 @@ impl MacSelfHost {
         self.path("state")
     }
 
-    fn fixture(&self) -> PathBuf {
+    /// The fixture's directory: `link/`, `units/`, `placed/`, `pkgs/` and the signers file.
+    pub fn fixture(&self) -> PathBuf {
         self.path("fixture")
     }
 
@@ -275,63 +446,24 @@ impl MacSelfHost {
         Layout::new(&self.state().join(HK).join("bin"))
     }
 
-    fn make(&self, plan: Plan) {
-        dir(&self.base, 0o755);
-        dir(&self.state(), 0o700);
-        dir(&self.state().join(HK), 0o700);
-        dir(&self.path("packages"), 0o755);
-        dir(&self.path("run"), 0o700);
-        for sub in ["link", "units", "placed"] {
-            dir(&self.fixture().join(sub), 0o755);
-        }
-        file(&self.path("hostkeeper.toml"), CONFIG.as_bytes(), 0o644);
-        dir(&self.service(), 0o755);
-        match plan {
-            Plan::Installed => {
-                for version in [N, NEXT] {
-                    self.release(version);
-                }
-                std::os::unix::fs::symlink(N, self.service().join("current"))
-                    .expect("link current");
-            }
-            Plan::Pkg(version) => self.release(version),
-        }
-        let daemon = self.path("hostkeeper-selfupdate-daemon");
-        program(DAEMON, &daemon);
-        let layout = self.layout();
-        layout.stage(N, &daemon).expect("stage the first binary");
-        layout.switch(N).expect("switch to it");
-    }
-
-    /// The release of hostkeeper at `version`, as the real store leaves it: the tree (manifest,
-    /// the hook, the binary), then its seal beside it.
-    fn release(&self, version: &str) {
-        let tree = self.service().join(version);
-        dir(&tree, 0o755);
-        dir(&tree.join("bin"), 0o755);
-        file(
-            &tree.join("manifest.toml"),
-            manifest(version).as_bytes(),
-            0o644,
-        );
-        program(FIXTURE, &tree.join("bin/hook"));
-        program(DAEMON, &tree.join("bin/hostkeeper"));
-        let digest = tree_digest(&tree).expect("the tree digest");
-        let seal = Seal::new(&digest, DIGEST).expect("a seal");
-        file(
-            &self.service().join(format!("{version}.seal")),
-            seal.to_json().as_bytes(),
-            0o644,
-        );
+    /// The packaged binary of a [`Plan::Pkg`] Mac: a copy of the fixture daemon whose file name
+    /// is the version [`N`] it stands for.
+    fn packaged(&self) -> PathBuf {
+        self.path("packaged").join(N)
     }
 
     /// The daemon's plist, as `daemon_plist` renders it, with the test's arguments around the
-    /// verb; its job bootstrapped.
-    fn load(&self) {
-        let current = self.layout().current_path();
+    /// verb; its job bootstrapped. Its program is the packaged binary under [`Plan::Pkg`] (with
+    /// `--fixture-packaged` among the fixture's flags) and `current` otherwise.
+    fn load(&self, plan: Plan) {
+        let pkg = matches!(plan, Plan::Pkg);
+        let program = match pkg {
+            true => self.packaged(),
+            false => self.layout().current_path(),
+        };
         let job = DaemonJob {
             label: self.label.clone(),
-            program: current,
+            program,
             stdout: self.path("daemon.out.log"),
             stderr: self.path("daemon.err.log"),
         };
@@ -343,13 +475,25 @@ impl MacSelfHost {
             arg(self.fixture().display().to_string()),
             arg("--fixture-own-unit".to_owned()),
             arg(self.label.to_string()),
-            arg("daemon".to_owned()),
         ];
+        if self.coordinated {
+            argv.push(arg("--fixture-link".to_owned()));
+            argv.push(arg("coordinator".to_owned()));
+        }
+        if pkg {
+            argv.push(arg("--fixture-packaged".to_owned()));
+            argv.push(arg(self.packaged().display().to_string()));
+        }
+        if matches!(plan, Plan::InstalledFailingNext) {
+            argv.push(arg("--fixture-fail-start".to_owned()));
+            argv.push(arg(NEXT.to_owned()));
+        }
+        argv.push(arg("daemon".to_owned()));
         for (flag, value) in [
             ("--config", text("hostkeeper.toml")),
             ("--state-dir", text("state")),
             ("--packages-dir", text("packages")),
-            ("--admin-socket", text("run/admin.sock")),
+            ("--facts-file", text("facts.json")),
             ("--heartbeat-secs", "1".to_owned()),
         ] {
             argv.push(arg(flag.to_owned()));
@@ -359,7 +503,7 @@ impl MacSelfHost {
         assert_eq!(
             rendered.matches(verb).count(),
             1,
-            "the daemon's plist runs `current daemon`:\n{rendered}"
+            "the daemon's plist runs its program with the verb `daemon`:\n{rendered}"
         );
         assert!(
             rendered.contains("<key>KeepAlive</key>\n\t<true/>"),
@@ -402,17 +546,60 @@ impl MacSelfHost {
         fs::read_to_string(self.path("daemon.err.log")).unwrap_or_default()
     }
 
-    /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 1, in every
-    /// reply from now on.
+    /// How many times the daemon of [`NEXT`] refused to start so far (`--fixture-fail-start`):
+    /// the tries of the hand-over.
+    pub fn refused_starts(&self) -> usize {
+        self.daemon_log().matches(&refused_line(NEXT)).count()
+    }
+
+    /// Whether [`NEXT`] is on the daemon's local list of bad versions of hostkeeper.
+    pub fn next_is_bad(&self) -> bool {
+        BadVersions::load(&self.state().join(HK))
+            .expect("the list of bad versions")
+            .contains(NEXT)
+    }
+
+    /// The coordinator orders `verb` of hostkeeper at `version`, order [`ORDER`] try 2, in every
+    /// reply from now on, by the entry of the release ([`MacSelfHost::entry`]).
     pub fn offer(&self, verb: &str, version: &str) {
+        self.place_order(ORDER, verb, version);
+    }
+
+    /// The entry of the release of hostkeeper at `version` that an order carries: the `macos-pkg`
+    /// entry of its `.pkg`.
+    pub fn entry(&self, version: &str) -> &Target {
+        &self.releases[version].entry
+    }
+
+    /// The `targets` of a set of hostkeeper at `version`: its one `macos-pkg` entry, for this
+    /// Mac's platform.
+    pub fn targets(&self, version: &str) -> BTreeMap<String, TargetList> {
+        BTreeMap::from([(
+            Platform::current().to_string(),
+            TargetList {
+                entries: vec![self.entry(version).clone()],
+            },
+        )])
+    }
+
+    /// The entry the daemon staged the version `version` of hostkeeper for (its sealed
+    /// `target.json`), `None` while it has not staged it.
+    pub fn staged_entry(&self, version: &str) -> Option<Target> {
+        target::read(&self.service().join(version)).expect("target.json")
+    }
+
+    fn place_order(&self, id: &str, verb: &str, version: &str) {
         let link = self.fixture().join("link");
+        let entry = self.entry(version);
+        let json = target::to_json(entry).expect("the entry as JSON");
         let order = serde_json::json!({
-            "id": ORDER,
-            "try": 1,
+            "id": id,
+            "try": try_of(id),
             "verb": verb,
             "service": HK,
             "version": version,
-            "digest": DIGEST,
+            "digest": entry.digest,
+            "entry": serde_json::from_slice::<Value>(&json).expect("the entry's JSON"),
         });
         let tmp = link.join("order.json.tmp");
         file(&tmp, order.to_string().as_bytes(), 0o644);
@@ -423,11 +610,6 @@ impl MacSelfHost {
     /// answer it reads.
     pub fn link(&self) -> PathBuf {
         self.fixture().join("link")
-    }
-
-    /// A directory of the test's tree for a coordinator's state files.
-    pub fn coordinator_dir(&self) -> PathBuf {
-        self.path("coordinator")
     }
 
     /// The version `current` of the binary directory names.
@@ -445,7 +627,7 @@ impl MacSelfHost {
     }
 
     /// Every heartbeat the daemon sent so far, oldest first; a last line still being written is
-    /// left out.
+    /// left out. None on the real coordinator's link, which writes no file.
     pub fn beats(&self) -> Vec<Value> {
         let text = fs::read_to_string(self.fixture().join("link/beats.jsonl")).unwrap_or_default();
         text.lines()
@@ -453,57 +635,59 @@ impl MacSelfHost {
             .collect()
     }
 
-    /// The newest `last_update` the heartbeats reported for hostkeeper's order [`ORDER`].
-    pub fn verdict(&self) -> Option<Value> {
+    /// The newest `last_update` the heartbeats reported for hostkeeper's order `id` at its try ([`try_of`]).
+    pub fn verdict(&self, id: &str) -> Option<Value> {
         self.beats().into_iter().rev().find_map(|beat| {
             beat["services"]
                 .as_array()?
                 .iter()
                 .filter(|service| service["name"] == HK)
                 .map(|service| service["last_update"].clone())
-                .find(|result| result["order_id"] == ORDER && result["order_try"] == 1)
+                .find(|result| result["order_id"] == id && result["order_try"] == try_of(id))
         })
     }
 
-    /// Fails at once, with the daemon's output, when the order was answered with a refusal (any
-    /// failure but the wait for the restart): what a wait waits for can no longer come.
+    /// Fails at once, with the daemon's output, when an order of the test was answered with a
+    /// refusal (any failure but the wait for the restart and the fallback's): what a wait waits
+    /// for can no longer come. On the real coordinator's link, which writes no heartbeat file, a
+    /// record of hostkeeper that ended failed is the refusal.
     pub fn check_not_stuck(&self) {
-        if let Some(result) = self.verdict() {
-            let refused = (result["outcome"] == "failed") && (result["reason"] != AWAITING_REASON);
-            assert!(!refused, "the order was refused: {result}\n{}", self.logs());
+        if self.coordinated
+            && let Some(Record {
+                state:
+                    State::Finished {
+                        verdict: Verdict::Failed { .. },
+                        reason,
+                    },
+                ..
+            }) = self.record()
+        {
+            panic!("an order ended failed ({reason:?})\n{}", self.logs());
         }
-    }
-
-    /// Fails at once, with the daemon's output, when any heartbeat reports a refusal of an order
-    /// of hostkeeper, whatever its id (an order the coordinator in process gave).
-    pub fn check_no_refusal(&self) {
-        for beat in self.beats() {
-            let refused = beat["services"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|service| {
-                    let last = &service["last_update"];
-                    service["name"] == HK
-                        && last["outcome"] == "failed"
-                        && last["reason"] != AWAITING_REASON
-                });
-            if let Some(service) = refused {
-                panic!("an order was refused: {service}\n{}", self.logs());
+        for id in [ORDER, SETUP_ORDER] {
+            if let Some(result) = self.verdict(id) {
+                let refused = (result["outcome"] == "failed")
+                    && ![AWAITING_REASON, FALLBACK_REASON]
+                        .contains(&result["reason"].as_str().unwrap_or_default());
+                assert!(!refused, "the order was refused: {result}\n{}", self.logs());
             }
         }
     }
 
-    /// Waits until the step record of hostkeeper is finished, and gives it.
-    pub fn settled(&self) -> Record {
+    /// Waits until the step record of hostkeeper is finished for an update or install to
+    /// `version`, and gives it.
+    pub fn settled(&self, version: &str) -> Record {
         let mut found = None;
-        wait("the step record of hostkeeper is finished", || {
-            self.check_not_stuck();
-            found = self
-                .record()
-                .filter(|rec| matches!(rec.state, State::Finished { .. }));
-            found.is_some()
-        });
+        wait(
+            &format!("the step record of hostkeeper is finished for {version}"),
+            || {
+                self.check_not_stuck();
+                found = self.record().filter(|rec| {
+                    rec.target_version == version && matches!(rec.state, State::Finished { .. })
+                });
+                found.is_some()
+            },
+        );
         found.expect("a finished record")
     }
 
@@ -516,43 +700,122 @@ impl MacSelfHost {
         }
     }
 
-    /// The real path of the binary directory's file of `version`.
-    pub fn binary_of(&self, version: &str) -> PathBuf {
-        fs::canonicalize(self.layout().version_path(version)).expect("the staged binary")
+    /// The real path of the binary directory's file of `version`, once it is there.
+    pub fn binary_of(&self, version: &str) -> Option<PathBuf> {
+        fs::canonicalize(self.layout().version_path(version)).ok()
     }
 
     /// Waits until the daemon's job has a process that runs the binary of `version`, checks that
-    /// `current` names it, and gives its pid.
+    /// `current` names it, and gives its pid. The file of `version` may not be there yet when the
+    /// wait begins: on a [`Plan::Pkg`] Mac the job's packaged binary puts it in at its start.
     pub fn runs(&self, version: &str) -> u32 {
-        let want = self.binary_of(version);
+        let shown = self.layout().version_path(version);
         let mut running = None;
-        wait(&format!("the daemon's job runs {}", want.display()), || {
-            self.check_not_stuck();
-            running = self
-                .pid()
-                .filter(|pid| DarwinPidInfo.path(*pid).is_ok_and(|path| path == want));
-            running.is_some()
-        });
+        wait(
+            &format!("the daemon's job runs {}", shown.display()),
+            || {
+                self.check_not_stuck();
+                let Some(want) = self.binary_of(version) else {
+                    return false;
+                };
+                running = self
+                    .pid()
+                    .filter(|pid| DarwinPidInfo.path(*pid).is_ok_and(|path| path == want));
+                running.is_some()
+            },
+        );
         assert_eq!(self.current().as_deref(), Some(version), "{}", self.logs());
         running.expect("a pid")
     }
 
     /// Waits until a heartbeat of the daemon at `agent` reports hostkeeper at `version` with the
-    /// order's `last_update` succeeded.
+    /// order's `last_update` succeeded. The daemon settles a waiting self-update at its start,
+    /// before its first heartbeat, so the heartbeat comes only once that settlement is whole: the
+    /// record confirmed and `next` removed after it.
     pub fn reports_succeeded(&self, agent: &str, version: &str) {
-        wait("a heartbeat reports the order succeeded", || {
+        self.reports("the order succeeded", agent, |service| {
+            service["version"] == version && service["last_update"]["outcome"] == "succeeded"
+        });
+    }
+
+    /// Waits until a heartbeat of the daemon at `agent` reports the order's `last_update` of
+    /// hostkeeper failed, [`FALLBACK_REASON`]. Only a daemon that started after the fallback
+    /// sends it: the hand-over at its start lists the version bad, settles the record and
+    /// removes `next`, in that order, before the daemon runs, so the heartbeat comes only once
+    /// all three are written. The service's version is not asked: it is what the package's
+    /// `current` names, which the hand-over does not decide.
+    pub fn reports_fell_back(&self, agent: &str) {
+        self.reports("the order fell back", agent, |service| {
+            let last = &service["last_update"];
+            last["outcome"] == "failed" && last["reason"] == FALLBACK_REASON
+        });
+    }
+
+    /// Waits until a heartbeat of the daemon at `agent` lists hostkeeper with the `last_update`
+    /// of order [`ORDER`] and `listed` holds for that entry; fails naming `what` when none did.
+    fn reports(&self, what: &str, agent: &str, listed: impl Fn(&Value) -> bool) {
+        wait(&format!("a heartbeat reports {what}"), || {
             self.check_not_stuck();
             self.beats().iter().any(|beat| {
                 beat["agent"]["version"] == agent
                     && beat["services"].as_array().is_some_and(|services| {
                         services.iter().any(|service| {
                             service["name"] == HK
-                                && service["version"] == version
                                 && service["last_update"]["order_id"] == ORDER
-                                && service["last_update"]["outcome"] == "succeeded"
+                                && listed(service)
                         })
                     })
             })
         });
+    }
+
+    /// The link `name` (`current`, `previous`) of hostkeeper's package directory.
+    pub fn package_link(&self, name: &str) -> Option<String> {
+        fs::read_link(self.service().join(name))
+            .ok()
+            .map(|target| target.to_string_lossy().into_owned())
+    }
+
+    /// hostkeeper's package is installed at `version`: `pkgutil` has its receipt at `version`, the
+    /// program is at [`INSTALLED`] with the bytes of the program under test, root's, mode 0755,
+    /// `current` of the packages directory names `version`, and the daemon's record names the
+    /// `macos-pkg` installer, the package and the version.
+    pub fn assert_installed(&self, version: &str) {
+        assert_eq!(
+            receipt_version().as_deref(),
+            Some(version),
+            "{}",
+            self.logs()
+        );
+        let meta = fs::symlink_metadata(INSTALLED)
+            .unwrap_or_else(|e| panic!("{INSTALLED} is not installed: {e}"));
+        assert_eq!(
+            (meta.uid(), meta.mode() & 0o7777),
+            (0, 0o755),
+            "{INSTALLED} is root's, mode 0755"
+        );
+        assert_eq!(
+            fs::read(INSTALLED).expect("the installed program"),
+            fs::read(DAEMON).expect("the program under test"),
+            "{INSTALLED} is the program the package carries"
+        );
+        assert_eq!(
+            self.package_link("current").as_deref(),
+            Some(version),
+            "{}",
+            self.logs()
+        );
+        let placed = fs::read(self.fixture().join("placed/placed.json")).unwrap_or_default();
+        let placed: Value = serde_json::from_slice(&placed).unwrap_or(Value::Null);
+        let installed = &placed["installed"][HK];
+        assert_eq!(
+            (
+                installed["installer"].as_str(),
+                installed["package"].as_str(),
+                installed["version"].as_str()
+            ),
+            (Some("macos-pkg"), Some(IDENTIFIER), Some(version)),
+            "the daemon's record of hostkeeper: {placed}"
+        );
     }
 }

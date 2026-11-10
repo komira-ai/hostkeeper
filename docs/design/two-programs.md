@@ -1,6 +1,6 @@
 # hostkeeper is two programs
 
-Status: design, for the maintainers' comments. Nothing here is built. Every statement about new code is **Designed**;
+Status: design, for the maintainers' comments. Every statement about new code is **Designed** until its item lands;
 **Built** names code on `main` with a path, as in [hostkeeper-design.md](hostkeeper-design.md). Section 9 lists the
 build items, one pull request each.
 
@@ -35,7 +35,9 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
 
 **After.**
 
-- `hostkeeper daemon` is the only verb of `hostkeeper`. `hostkeeper --version` stays.
+- `hostkeeper daemon` is the only verb of `hostkeeper` that runs the daemon. `hostkeeper --version` stays.
+  `hostkeeper check-repositories` was added after this design: host setup's check of a repositories directory with
+  the daemon's own loader (packages-repositories.md section 3.1), which only the binary the daemon runs can give.
 - `hostkeeper-coordinator serve` is the only verb of the coordinator once the storage move is done (section 7).
 - `hkctl` is the command line. It is one bash script, generated from the protobuf, released as an attested asset. It
   calls the private listener's JSON gateway with `curl`. Its command tree is the one `hostkeeper ctl` has today
@@ -45,7 +47,9 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
   `ui/gen/client.d.ts`). `ui/calls.json` is derived from it, not kept by hand.
 - CI sets a desired version with `hkctl`. The reusable workflow `set-desired.yml` keeps its inputs and outputs; the
   wait is one call to a new method, `Releases.WaitConverged`, instead of a loop in a client.
-- The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone. `hkctl hosts get`, `hkctl hosts
+- The daemon serves nothing on the host. `hostkeeper admin` and its socket are gone (**Built**, K3: the daemon binds no
+  socket, `admin` is a usage error, `admin.rs`, `admin_client.rs` and `socket.rs` of `crates/hostkeeper-daemon/src` are
+  deleted). `hkctl hosts get`, `hkctl hosts
   abort` and a new `hkctl hosts clear-record` replace its three calls.
 - The network-install server and the MDM stack become service packages, `pxe` and `mdm`, that hostkeeper installs like
   any other service (section 6).
@@ -67,20 +71,20 @@ release each lands):
 
 - **The seed.** When the running image (`std::env::current_exe`) is one of the two packaged paths,
   `/usr/bin/hostkeeper` or `/usr/local/bin/hostkeeper`, the start takes the state directory's lock, gives the binary
-  directory its first binary when `current` starts nothing (what `self-update-seed` does,
+  directory its first binary when `current` starts nothing (what `self-update-seed` did,
   `crates/hostkeeper-daemon/src/seed.rs`), releases the lock and `exec`s `current` with its own arguments. The process
   id stays, so `Type=notify`, `NOTIFY_SOCKET` and the watchdog carry over. The trigger is the packaged path and
   nothing else: a binary that runs from `versions/<v>` never execs `current`, so the exec happens at most once and the
   hand-over of 4.3 is not undone by it. Only the bootstrap unit and the Mac's plist start the packaged path (4.1).
 - **The Mac's config.** On macOS, when `/etc/hostkeeper/hostkeeper.toml` is absent, the start builds it from the
-  managed preferences, with the code `mac-config` runs today (`crates/hostkeeper-daemon/src/mac_config.rs`), before it
+  managed preferences, with the code `mac-config` ran (`crates/hostkeeper-daemon/src/mac_config.rs`, `at_start`), before it
   reads it.
 - **The fallback, by the binary that runs.** A self-update no longer switches `current` before the new binary has run
   (section 4.3). The binary `current` names (reached directly, or through the packaged binary's one exec) hands over to
   the next binary itself, so no unit or job runs an older binary with a verb of its own.
 
-**The bare program or `daemon`.** The verb stays. Every live unit and plist starts `.../bin/current daemon ...`, and
-hosts keep their unit text until a package replaces it (section 4.1). An old unit that started a binary which no longer
+**The bare program or `daemon`.** The verb stays. The package unit starts `.../bin/current daemon ...` and the bootstrap unit and the plist start
+`<packaged path> daemon ...` (4.1), and hosts keep their unit text until a package replaces it (section 4.1). An old unit that started a binary which no longer
 knows `daemon` would leave the host with no daemon. Bare `hostkeeper` as a second spelling would be a second way to do
 one thing. So `hostkeeper` with no verb prints its usage and exits 2, as today. The unit stays
 `hostkeeper.service`, the launchd job stays `dev.hostkeeper.hostkeeper`.
@@ -177,17 +181,18 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 
 | Program | Verb | Fate |
 |---|---|---|
-| `hostkeeper` | `daemon` | Kept, the only verb. Gains the seed, the Mac config and the hand-over (2.1). |
+| `hostkeeper` | `daemon` | Kept, the only verb that runs the daemon. Gains the seed, the Mac config and the hand-over (2.1). |
+| | `check-repositories` | Added later: checks a repositories directory with the daemon's loader, for host setup (packages-repositories.md section 3.1). |
 | | `--version` | Kept (a flag). |
-| | `admin status` | Deleted. `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
-| | `admin abort <service>` | Deleted. `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
-| | `admin clear-record <service>` | Deleted. `hkctl hosts clear-record` (new method, 3.2). Off-line: root stops the daemon and renames the record by hand, which is all the verb does (3.2). |
+| | `admin status` | Deleted (**Built**, K3). `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
+| | `admin abort <service>` | Deleted (**Built**, K3). `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
+| | `admin clear-record <service>` | Deleted (**Built**, K3). `hkctl hosts clear-record` (new method, 3.2). Off-line: root stops the daemon and renames the record by hand, which is all the verb does (3.2). |
 | | `ctl <service> <rpc>` | Deleted. `hkctl <service> <rpc>`. |
 | | `ci set-desired` | Deleted. The workflow calls `hkctl releases set-desired` and `hkctl releases wait-converged` (section 5). |
-| | `self-update-protocol` | Deleted. The release's `min_hostkeeper` and the running daemon's compiled-in oldest reader decide (4.2). |
-| | `self-update-fallback` | Deleted. The binary `current` names hands over and falls back itself (4.3). |
-| | `self-update-seed` | Folded into `daemon` started from the packaged binary (2.1). |
-| | `mac-config` | Folded into `daemon`'s start on macOS (2.1). |
+| | `self-update-protocol` | Deleted. The release's `min_hostkeeper` and the running daemon's compiled-in oldest reader decide (4.2). **Built** (S3). |
+| | `self-update-fallback` | Deleted. The binary `current` names hands over and falls back itself (4.3). **Built** (S3). |
+| | `self-update-seed` | Folded into `daemon` started from the packaged binary (2.1). **Built** (S3): the verb is gone; `seed::seed` stays for `packaged.rs`. |
+| | `mac-config` | Folded into `daemon`'s start on macOS (2.1). **Built** (S3): the verb is gone; `mac_config::at_start` stays. |
 | | `update-hook` (with its step argument, `uninstall` among them) and the five step words `prepare`, `cutover`, `verify`, `rollback`, `cleanup` | Deleted. No daemon runs a hook for the service `hostkeeper` (4.4). |
 | `hostkeeper-coordinator` | `serve` | Kept, the only verb in the end. |
 | | `backup`, `restore` | Kept for the file store; deleted with it by C9 of coordinator-storage.md (section 7). |
@@ -308,17 +313,27 @@ message ClearRecordResponse { string order_id = 1; }
   daemon that announces the feature `clear-record-v1`; to any other it refuses `daemon_too_old`, as `Force` does
   (`crates/hostkeeper-coordinator/src/force.rs`, **Built**). The order is a new case of `Order`'s `oneof verb` in
   `hostkeeper.agent.v1` (`agent.proto`, **Built**), with the service as its argument; a daemon that does not announce
-  the feature is never sent it.
+  the feature is never sent it. This bullet and the audit line below are **Built**
+  (`crates/hostkeeper-coordinator/src/clear_record.rs`): the order is sent once and takes no slot, as `Hosts.Abort`'s.
 - The daemon runs exactly what the admin socket's `ClearRecord` runs today
-  (`crates/hostkeeper-daemon/src/verbs/clear_record.rs`, **Built**): under the service's lock without waiting
-  (`busy`), it renames `step-record.json` to `step-record.json.corrupt` only when the record does not read; an absent
-  record, one that reads and one of a newer schema are each `record_reads`; a store failure is `store_failed`. The
-  verdict comes back in the heartbeat like any order's. Today an order carrying the verb is refused `forbidden`; that
-  refusal goes. The executor dispatches `clear-record` before it reads the service's record, as the admin verb does, so
-  a host whose record does not read still takes it; D1 proves that with a corrupt record in place.
+  (`crates/hostkeeper-daemon/src/verbs/clear_record.rs`, **Built**): under the service's lock without waiting (`busy`),
+  it renames `step-record.json` to `step-record.json.corrupt` only when the record does not read; an absent record, one
+  that reads and one of a newer schema are each `record_reads`; a store failure is `store_failed`. The verdict comes
+  back in the heartbeat like any order's. Before D1 an order carrying the verb was refused `forbidden`; that refusal is
+  gone. The executor dispatches `clear-record` before it reads the service's record, as the admin verb does, so a host
+  whose record does not read still takes it; D1 proves that with a corrupt record in place. This bullet is **Built**
+  (D1): the daemon announces `clear-record-v1` (`crates/hostkeeper-link/src/beat.rs`). A verdict that cleared the record
+  is `succeeded` with the reason `record_cleared`; every verdict names the version the service runs, as an `uninstall`'s
+  does. The heartbeat loop runs the order one at a time like the others (`crates/hostkeeper-link/src/heartbeater.rs`),
+  but it is no update: a deferral does not hold it back and its verdict ends none, its service is not reported
+  `updating` while it runs, and a service the host does not list is not run. The coordinator acknowledges the verdict
+  and `Hosts.Get` shows it, but it is no word on a release: it is taken out of the heartbeat before any rule reads it
+  and is never kept as the host's standing verdict, as a refusal for the try is kept out of the beat
+  (`crates/hostkeeper-coordinator/src/clear_record.rs`). So a host's failure of a version it fell back from still keeps
+  the gate from ordering it that version, and a failed clear holds no update slot.
 - **A host the coordinator cannot reach.** Root stops the daemon, which ends the running step. If the record must go
   before the link is back, root renames it by hand, `step-record.json` to `step-record.json.corrupt` in the service's
-  state directory: that rename is the whole of what the verb does. The runbook of K3 says so.
+  state directory: that rename is the whole of what the verb does. The runbook says so (`docs/admin.md`, **Built**, K3).
 - **Audit.** `ClearRecord` writes the audit line `record_cleared` with the operator, the host and the service.
 - **What a compromise gains.** A coordinator can already order any attested package installed, forced or uninstalled on
   any host. Renaming a record that does not read is less than that: it never clears a record that reads, so it cannot
@@ -329,7 +344,7 @@ message ClearRecordResponse { string order_id = 1; }
 `hostkeeper.local.v1` (the admin socket's package) is not deleted from the protos. Removing a package is a removal the
 compatibility rule refuses (rule B8, and the test asserts the four packages), and the format shipped: an older
 `/usr/bin/hostkeeper admin` on a host speaks it. Its file stays, frozen, with a header that no program serves it; no
-code is generated from it. Deleting the file needs an exception to rule B8 that only the maintainers can grant; this
+code is generated from it (**Built**, K3: `FROZEN` in `crates/hostkeeper-proto/build.rs`; `hostkeeper_proto::hostkeeper::local::v1` no longer exists, the file stays in the descriptor set and the compatibility test is unchanged). Deleting the file needs an exception to rule B8 that only the maintainers can grant; this
 design does not ask for one. The command generator already skips the packages `hostkeeper.local.v<n>` (`ctl_gen.rs`,
 **Built**).
 
@@ -346,7 +361,7 @@ The fleet's daemons are live, and a daemon updates itself. Every risk below come
 or runs a step of the self-update is often not the binary that was built with the change. A self-update is run by the
 **old** daemon, which runs the **new** release's hook and probes the **new** binary; the fallback, today, runs the
 **previous** binary from a unit the **new** daemon wrote; and on Linux the unit that starts the daemon comes from
-hostkeeper's own package, which the update links (`packaging/linux/hostkeeper.service` header, **Built**), so after a
+hostkeeper's own package, which the update links (`packaging/linux/units/hostkeeper.service` header, **Built**), so after a
 fallback the old binary runs under the new release's unit.
 
 The path is three stages. Releases are cut from `main` automatically; a stage is the set of pull requests listed for it
@@ -359,11 +374,12 @@ after R1 and R2 are released and name them.
 |---|---|---|---|
 | 1, readers | The daemon understands everything stage 2 writes: the hand-over records and links, judging a release by its floor, hostkeeper's package with no hook command run, the start from the packaged binary, the Mac config at start. It writes, probes and runs exactly what it does today. | Every verb; the probe; the fallback units and job it still writes | none: hostkeeper's package keeps today's floor, 0.1.53, and every older daemon updates to R1 the old way |
 | 2, writers | hostkeeper's package declares `min_hostkeeper = R1`. The self-update hands over instead of switching `current`, probes nothing and runs no hook command for itself. The daemon removes the fallback units and job it finds. New unit, plist and pkg scripts. | Every self-update verb, `update-hook` and its step words, `--admin-socket` (accepted, ignored), the start log of R1's Mac fallback job | R1: a daemon older than R1 defers R2 before it probes or runs a hook |
-| 3, removal | hostkeeper's package declares `min_hostkeeper = R2`. The self-update verbs, `update-hook`, the probe verb, the fallback code, the start log and the `--admin-socket` flag are deleted. | nothing | R2 |
+| 3, removal | hostkeeper's package declares `min_hostkeeper = R2`. The self-update verbs, `update-hook`, the probe verb, the fallback code, the start log and the `--admin-socket` flag are deleted. **Built** (S3). | nothing | R2 |
 
 `ctl`, `ci` and `admin` are not in this table: no daemon and no unit invokes them, so they go as soon as their callers
 have moved (K1 to K3, section 8), between stage 1 and stage 2. K3 deletes the socket and keeps the `--admin-socket`
-flag accepted, because units that pass it are live until stage 3.
+flag accepted and ignored, because units that pass it are live until stage 3 (**Built** in K3, deleted in S3: `DaemonFlags.admin_socket`, hidden,
+no default, was in `crates/hostkeeper-daemon/src/cli.rs`; the flag is now a usage error, exit 2).
 
 Before the floor of a stage is raised, the operator checks that every host of the service `hostkeeper` runs the
 previous stage: `hkctl releases status --service hostkeeper` (or `hostkeeper ctl` before G3) shows every host at R1 (or
@@ -374,32 +390,35 @@ downgrades are allowed by the rule of 4.2.
 
 ### 4.1 Unit, plist and pkg texts
 
-- **Linux, hostkeeper's package unit** (`units/hostkeeper.service`, linked by every update): it keeps
-  `ExecStart=.../bin/current daemon ...` for good. It must: `/usr/bin/hostkeeper` is replaced only by a deb or rpm
-  upgrade, so on most hosts it is an older binary, which would run itself and never hand over to the updated one.
-  Stage 2 drops `--admin-socket` and `RuntimeDirectory=hostkeeper`. It keeps `ExecStartPre=-/usr/bin/hostkeeper
-  self-update-seed ...`, today the only repair of a `current` that starts nothing on a host with a linked unit; the
-  `-` already lets a start go on when the packaged binary lacks the verb. Stage 3 deletes the line with the verb.
+**Revised by [packages-native.md](packages-native.md) section 10.4**: hostkeeper updates itself from its `.deb`
+and `.pkg`, installed by the new binary after it confirms, so the `.deb`'s unit, starting `/usr/bin/hostkeeper`, is the
+only unit; the archive's package unit is deleted (section 10.7), and the `.pkg`'s postinstall bootstraps the job
+only when it is not loaded.
+
 - **Linux, the bootstrap unit** of the deb, the rpm and the boot image overlay
   (`/usr/lib/systemd/system/hostkeeper.service`): stage 2 makes it `ExecStart=/usr/bin/hostkeeper daemon ...`, with no
-  `ExecStartPre`, so the packaged binary seeds and execs `current` (2.1). It is in effect only until hostkeeper's
-  package is first installed, whose linked unit then takes its place in `/etc/systemd/system`. The binary and this unit
+  `ExecStartPre`, so the packaged binary seeds and execs `current` (2.1). It is the only unit of hostkeeper on Linux. The binary and this unit
   come from the same deb, so they always match. From stage 2 the two units are two files in `packaging/linux/`, and the
   packaging tests hold each.
+  **Built** (S2b): the package unit is `packaging/linux/units/hostkeeper.service` (`ExecStartPre=-` seed line,
+  `ExecStart=` `current` of the binary directory, no `--admin-socket`, no `RuntimeDirectory=`); the bootstrap unit is
+  `packaging/linux/hostkeeper.service` (`ExecStart=/usr/bin/hostkeeper daemon ...`, no `ExecStartPre=`), with its
+  byte-identical copy `packaging/linux/overlay/usr/lib/systemd/system/hostkeeper.service` and the comment of
+  `packaging/linux/hostkeeper.tmpfiles.conf` (`/run/hostkeeper` is still made by tmpfiles; the daemon makes its
+  admin socket's directory itself). `packaging/linux/README.md` describes both.
 - **macOS.** The pkg is the only source of the plist and of `/usr/local/bin/hostkeeper` (hostkeeper's package carries
   no units on macOS), so the two always match. Stage 2 makes `daemon_plist` start `/usr/local/bin/hostkeeper daemon`,
-  which seeds and execs `current` at each start, and the postinstall script two lines: `launchctl bootout` and
-  `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
-- **Why these texts need no floor.** The bootstrap unit, the plist and the postinstall arrive only with the binary of
-  the same deb or pkg. The package unit of stage 2 differs from today's only in a flag every older daemon defaults to
-  the same path (`--admin-socket`, `crates/hostkeeper-daemon/src/cli.rs`, **Built**) and the socket's runtime
-  directory, so an older binary runs under it, and a newer binary under an older one, as today. So S2b depends only on
-  S1b (the binary that seeds and execs) being released.
+  which seeds and execs `current` at each start, and the postinstall script two lines: a quiet `launchctl print` of the job that ends the script when it is
+  loaded (no `bootout`, packages-native 10.4) and `launchctl bootstrap` (`crates/hostkeeper-launchd/src/postinstall.rs`, held byte for byte by `check-macos-pkg`).
+  **Built** (S2b): `DaemonJob::standard` runs `INSTALLED_BINARY` (`crates/hostkeeper-launchd/src/plist.rs`, which no
+  longer has `DAEMON_PROGRAM`), and `Postinstall` has the two commands and nothing else; `docs/macos.md` describes
+  both.
 - **After stage 3, a `current` that starts nothing.** The linked unit has no repair line, and systemd logs
   `203/EXEC` every second. Root runs `/usr/bin/hostkeeper daemon` once by hand with the unit's flags (an older packaged
   binary answers `self-update-seed` instead): it seeds, execs `current` and can be stopped, and the unit starts again.
   The runbook of S3 says so. Today the same host is repaired by its unit only when its packaged binary is new enough to
   have the verb.
+  **Built** (S3): `docs/operations/self-update-after-bootstrap.md`, the section "A current that starts nothing".
 - **What the install loses on a Mac.** Today a pkg installed without the managed preferences fails in its postinstall.
   From stage 2 the install succeeds and the daemon refuses to start at each launchd relaunch, naming the missing file
   in `daemon.err.log`. There is no coordinator address to report it to. The MDM gate installs the managed preferences
@@ -439,8 +458,16 @@ release that first read it.
   later judge it by its floor. The probe call, `ProtocolProbe`, `LauncherProbe`, `ProbeCall`, `ProbeExit`,
   `run_probe`, `probe_command`, `Label::probe` and `PROBE_UNIT` go. A downgrade below R1 is refused by the backward
   rule, so nothing is left to probe. The verb is still answered, printing `1`.
+  **Built** (S2a): `OLDEST_READER` is 0.1.163 (`crates/hostkeeper-steps/src/reader.rs`) and `judge` takes the running
+  version and the target's version alone (`crates/hostkeeper-daemon/src/selfupdate.rs`): the running version and any
+  release from `OLDEST_READER` on are `Accepted`, whatever floor they declare, and any older is `Unsupported`. The
+  probe machinery is gone from the daemon, the step launchers, `hostkeeper-launchd` and the tests; `LEGACY_FLOOR`
+  stays, for the one other question it answers, whether a release's hook steps are built in (4.4).
 - **Stage 3** sets `OLDEST_READER = R2` and deletes the verb and `SELF_UPDATE_PROTOCOL`. A daemon older than R2 defers
   the release before any probe.
+  **Built** (S3): `OLDEST_READER` is 0.1.194 (`crates/hostkeeper-steps/src/reader.rs`); the verb `self-update-protocol`,
+  `SELF_UPDATE_PROTOCOL`, `PROTOCOL_VERB` and `protocol_line` are gone, and the binary answers the verb as a usage
+  error, exit 2.
 
 ### 4.3 The fallback: the hand-over
 
@@ -485,6 +512,12 @@ is confirmed after the switch is finished. A record without `next`, written the 
   earlier binary, each of which answers `self-update-fallback`. It already reads the hand-over, as `O` (steps 1 and 3)
   and as `N` (step 2). It needs to: a stage-2 daemon may be downgraded to a stage-1 release, which must then settle
   itself and move `current`.
+  **Built** (S1a): steps 1 to 3 in `crates/hostkeeper-steps/src/handover.rs`, run first in `hostkeeper daemon`,
+  before the config and before the daemon's own lock; the state directory's lock is taken only around the writes of
+  steps 1 and 3, and released by the exec (`crates/hostkeeper-daemon/src/handover.rs`); the settlement's case of step 2,
+  and the removal of a `next` with no wait, in `settle_with` (`crates/hostkeeper-steps/src/selfupdate.rs`); the
+  record's fields `next` and `starts` of `AwaitingRestart` (`crates/hostkeeper-steps/src/record.rs`). The
+  fallback verb leaves a hand-over alone: it moved no link (`crates/hostkeeper-daemon/src/fallback.rs`).
 - **Stage 2** hands over. At start, before it may run a self-update, it removes the fallback unit, the drop-in and the
   Mac job (drop-in first, so `OnFailure=` never names a missing unit), and reloads the service manager. Until they are
   gone it answers a self-update `busy` and raises the alert `self_update_units`, which exists today. So a fallback unit
@@ -493,10 +526,22 @@ is confirmed after the switch is finished. A record without `next`, written the 
   binary still writes its start to the start log at the top of `daemon` (`record_start`,
   `crates/hostkeeper-daemon/src/fallback.rs`, **Built**), as today: R1's Mac job, armed when R1 updates to a stage-2
   release the old way, falls back only on three starts of the new version recorded there.
+  **Built** (S2a): `follow_on` stages, links `next`, then writes the wait with `next` and a count of 0, and moves no
+  `current` (`crates/hostkeeper-steps/src/selfupdate.rs`); the start removes the fallback unit, the drop-in and the job
+  (`remove` in `crates/hostkeeper-daemon/src/selfunits.rs`, drop-in first, one `daemon-reload` on Linux; on a Mac the
+  job is booted out before its plist goes) and, when it cannot, raises `self_update_units`, holds the daemon's own
+  update (`Ctx::hold_self_updates`) and answers it `busy` until the next start, which tries again. A reload that
+  fails after the files are gone is the same error; the files stay gone.
 - **Stage 3** deletes `self-update-fallback`, `fallback.rs` (the start log with it), `selfunits.rs`, `fallback_unit`,
   `main_dropin` and `launchd_fallback_job`. No release of stage 3 is ever run by a fallback unit or judged by a fallback
   job: stage 1 is the last that writes them, a stage-2 daemon removes them before it updates, and stage 3's floor of R2
   keeps it from any older daemon.
+  **Built** (S3): `fallback.rs`, `selfunits.rs`, the start log (`starts.rs` of `hostkeeper-steps`, `should_fall_back`,
+  `START_LIMIT_BURST`, `START_LIMIT_WINDOW_SECS`), `fallback_unit`, `main_dropin`, `launchd_fallback_job` and
+  `Layout::flip_back` are deleted, with the alert `self_update_units` (a log-only alert, not a wire value),
+  `Ctx::hold_self_updates` and the busy answer that went with them. `settle_with` still settles a wait with no `next`,
+  the record shape of the releases before the hand-over, and `REASON_SELF_UPDATE_FALLBACK` is the reason the hand-over
+  writes.
 
 The record gains two optional fields, the start count and the next version, read as absent by an older reader; the
 record is internal to the host, and stage 1 reads them before stage 2 writes them. A test of S1a has a stage-1 reader
@@ -504,28 +549,15 @@ load a record a stage-2 writer made, and an old-way record, and settle each.
 
 ### 4.4 The hook of hostkeeper's own package
 
-Every manifest has a bounded `[hook]` (`manifest.rs`, `hook()`, **Built**). hostkeeper's package has a no-op one,
-`command = ["bin/hostkeeper", "update-hook"]`, which the old daemon runs from the new release at step 8 through the
-step runner, whose held success the follow-on needs (`follow_on` takes the runner's finished record).
-
-- **Stage 1**, for a release of hostkeeper whose floor is above `LEGACY_FLOOR`, runs the step runner with a built-in
-  step for each step that succeeds at once and runs no command. The record, the held success and the verdict are
-  written as today, and a test holds the record byte for byte equal to the one the no-op command gives. Older
-  daemons, and stage 1 for releases before stage 2, still run the command, which every release before stage 3 answers.
-- **Stage 2.** A stage-2 release's floor is R1, so no daemon runs its hook command: an older one defers it first, a
-  newer one runs the built-in steps.
-- **Stage 3** deletes `update-hook` and the five step words from the binary (`crates/hostkeeper-daemon/src/update_hook.rs`).
-
-**The `[hook]` table stays in hostkeeper's manifest, unchanged.** A daemon older than R2 that is ordered a stage-3
-release must reach the floor check, which comes last in the loader; a manifest without `[hook]` is `manifest_mismatch`,
-class release, before the floor, so the release would count as failed on that host. A manifest schema 2 that made the
-table optional is refused the same way. The table is the existing `HOOK` text of the release builder
-(`crates/xtask/src/release/package.rs`, **Built**), kept as it is with its bounds, which the loader requires; its
-comment changes to say that no daemon runs the command. It keeps a straggler's answer `daemon_too_old`.
+**Revised by [packages-native.md](packages-native.md) section 10.4:** hostkeeper's native package has no hook and
+no `manifest.toml`; its steps are the built-in ones, and its floor is the entry's `min_hostkeeper`. The no-op
+`[hook]` of hostkeeper's archive manifest is now written into the entry's manifest by `cargo xtask release targets`,
+with the bounds the loader requires, so that a daemon older than the floor still reaches the floor check and defers
+the release `daemon_too_old`.
 
 ### 4.5 How each step is proven
 
-Every pull request of the path runs the self-update device tests that exist today, unchanged in stage 1:
+The pull requests of the path run the self-update device tests that exist today, unchanged in stage 1 (the `privileged` job on every pull request, `macos-device` when the pull request changes a path the macOS jobs build or read):
 
 - **Linux, as root under systemd**, in `pr-device.yml`'s `privileged` job and `privileged.yml`
   (`crates/hostkeeper-privileged/tests/self_update.rs`): `a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_runs`,
@@ -578,9 +610,98 @@ runs a released binary. The path needs that, so item X1 comes first:
   fallback files before its own update. A stage-2 binary started from the bootstrap unit seeds and hands over
   (`a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it`, re-pointed at the bootstrap
   unit), and from the plist on a Mac (`a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it`).
+  **Built** (S2a): the Linux tests are those of `tests/self_update.rs`, on a host with neither a fallback unit nor a
+  drop-in; `a_daemon_killed_after_the_exec_is_settled_succeeded_by_the_new_binarys_start` holds the new binary at its
+  start (the fixture flag `--fixture-hold-start`) and kills it there, and
+  `a_daemon_killed_before_the_exec_falls_back_after_three_starts` kills the old daemon holding its exit, with a new
+  binary that cannot start. `a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again` is
+  `a_unit_that_cannot_start_with_no_update_waiting_is_retried_until_it_can`: the unit has no start limit, so systemd
+  never leaves a daemon failed. On a Mac, `an_install_of_the_running_version_is_succeeded_without_a_probe_or_a_restart`
+  is `an_install_of_the_running_version_is_succeeded_without_a_restart`, and
+  `the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job` and its bound test are deleted with the probe. X1 is
+  pinned to R1 (`previous-release.toml`, v0.1.163, with the URLs and digests of `privileged.yml` and `pr-device.yml`);
+  it holds that R1 updates to this build the old way, that this build removes R1's fallback files at its start
+  (`fallback_files_present` of the rig's hosts), that R1's fallback unit and job fall back from a build that cannot
+  start, and that this build hands over to itself.
 - **Stage 3**: X1 pinned to R2; the binary's own tests (`crates/hostkeeper/tests/binary.rs`) assert that each deleted
   verb is a usage error, exit 2.
+  **Built** (S3): X1 is pinned to v0.1.194 (`previous-release.toml`, with the URLs and digests of `privileged.yml` and
+  `pr-device.yml`); `crates/hostkeeper/tests/binary.rs` asserts that each deleted verb and `daemon --admin-socket` exit 2
+  with nothing on stdout, and `crates/hostkeeper-daemon/tests/cli_removed_verbs.rs` asserts the same of the parser.
 - **Between stages**: the status check above, on the farm, before the floor pull request merges.
+
+### 4.6 OpenRC: the daemon on Alpine
+
+**Revised by [packages-native.md](packages-native.md) section 10.1:** with the tarball withdrawn, an Alpine host's
+services, and the daemon itself, are installed through an `apk` backend (its A26 and A27), which the archive's
+deletion waits for.
+
+An Alpine host runs OpenRC, not systemd, and the daemon runs there as the same program with the same flow, config,
+package paths and state directory; what differs is behind the ports that already carry systemd and launchd
+(`crates/hostkeeper-openrc`, `crates/hostkeeper-daemon/src/adapters.rs`, **Built**). This closes question 5 of
+[packages.md](packages.md).
+
+**Which service manager.** The daemon reads it from the host when it starts, never from the distribution's name
+(`Platform::host`, `crates/hostkeeper-launchd/src/platform.rs`): `/run/systemd/system`, which systemd makes when it
+boots the system, is a systemd host whatever else is there; else `/run/openrc`, which OpenRC makes when it starts its
+first runlevel, is an OpenRC host; a host with neither is taken for systemd, as before. The kind `Openrc` picks:
+
+| Port | systemd | OpenRC |
+|---|---|---|
+| Unit control | `systemctl start`, `stop`, `is-active`, `daemon-reload` | `rc-service <service> start`, `stop`, `status` (exit 0 is started); a reload runs nothing, as OpenRC reads a script each time it runs it |
+| Observer | `systemctl show` | `rc-service <service> status`, its exit (0, 3, 4, 8, 16, 32, 64) the state; the main pid the `child_pid` supervise-daemon keeps in `/run/openrc/options/<service>/`; no init script in `/etc/init.d` is not found |
+| Process probe | `/proc` | `/proc` |
+| Step launcher | a transient unit per step | a child process group of the daemon per step (below) |
+| Own units | none (the fallback files of the releases before the hand-over are removed) | none (no release before the hand-over ran on OpenRC) |
+| Readiness | `READY=1` on `NOTIFY_SOCKET` | the file of `--ready-file`, which the init script waits for |
+| Watchdog | `WatchdogSec=60` | none: supervise-daemon restarts a daemon that exits, not one that hangs |
+| Console | the issue file and `agetty --reload` | none: busybox's getty reads no issue directory |
+
+**What OpenRC lacks for the steps, and how the launcher makes up for it** (`OpenrcLauncher`). OpenRC has no transient
+unit, no `RuntimeMaxSec=` and no control group of a unit to kill. Each step and additive step is a child of the
+daemon in a process group of its own, with an empty environment but systemd's default `PATH`, `/` its directory and no
+input. The launcher bounds it on the daemon's clock: at the bound it sends `SIGTERM` to the group and `SIGKILL` 90
+seconds later, as systemd's default stop timeout; when the step's first process ends, the rest of its group is
+killed, as systemd kills what is left in a unit's group. A stop by the dead-man does the same and reports no exit code,
+as `SystemdLauncher` does. Each running step has a file under `/run/hostkeeper/steps/` with its pid and start time, so
+a daemon started again after a crash stops by name a step an earlier one left (resume), with the start time guarding
+against a pid used again. Two gaps remain, stated: a descendant that leaves the process group (`setsid`) is not killed
+with it; and a step whose daemon was killed runs on until the daemon is back and resume stops it, as on a Mac, or
+until it next writes to its output, whose reader was the daemon (`SIGPIPE`).
+
+**The package and its init script.** hostkeeper's Alpine package (`packaging/alpine/`, built by nfpm as an `apk`)
+carries the static musl daemon of A15 at `/usr/bin/hostkeeper`, the init script `/etc/init.d/hostkeeper`, the config
+template, the pinned `gh` and the trusted root; its post-install enables the service in the default runlevel and
+starts nothing. The script runs the daemon under supervise-daemon: `command=/usr/bin/hostkeeper` with the systemd
+unit's flags, but `--ready-file /run/hostkeeper/ready` in place of `--notify-systemd`; `respawn_delay=1` and
+`respawn_max=0`, so any exit is followed by a start a second later, for good; `start_pre` makes the directories of
+`hostkeeper.tmpfiles.conf` and removes the ready file. supervise-daemon's own readiness notice (`notify=`) is not used:
+its start waits for it with no end, also while it respawns a daemon that exits before it is ready (a config that does
+not load), which would hold the runlevel, and the boot. The daemon writes the ready file, with its pid, after its boot
+pass (`ReadyFile`, `crates/hostkeeper-daemon/src/notify.rs`), and removes nothing; `start_post` waits for it, and stops
+waiting, with the error said, once supervise-daemon has started the daemon a second time: the daemon is still
+supervised and retried. So `rc-service hostkeeper start` returns when the daemon is ready, or at its first failed
+start, as `systemctl start` does for `Type=notify`; unlike it, the start exits 0 then, because a failed start would
+have OpenRC mark the service stopped while supervise-daemon goes on running it.
+
+**Self-update.** An Alpine host updates hostkeeper by reinstalling its package, as every host does
+([packages-native.md](packages-native.md) section 10.4); the archive path of the hand-over is deleted (section 10.7).
+
+**What this does not cover yet.** A service package's own OpenRC init script (how a package ships, links and enables
+one) has no design: `apk` is withdrawn with no successor ([packages-repositories.md](packages-repositories.md)), so
+an Alpine host's services take the tarball. The OpenRC unit control and observer act on any init script by name, and the placer links what a package's `units/` holds into
+`/etc/init.d` as on the other systems, which check no unit's kind against the host either. A downgrade on an OpenRC
+host to a release older than the first with this support would run that binary on systemd's adapters; the floor rule
+of 4.2 is where its refusal belongs, once that release's number is known.
+
+**Proof.** The adapters' unit tests (`crates/hostkeeper-openrc/tests/`: every `rc-service` line, every status, the
+child pid, every launcher bound, stop and kill), the daemon's (`crates/hostkeeper-daemon/tests/openrc_adapters.rs`,
+`ready_file.rs`), the package tests (`crates/xtask/tests/packaging/alpine/`), and the device
+tests `crates/hostkeeper-privileged/tests/openrc_device.rs` in the job `openrc-device` of `privileged.yml` and of
+`pr-device.yml`: an Alpine 3.22 container whose init is OpenRC installs the package and runs the daemon, starts it
+again when it is killed and at boot, does not hold its start on a daemon that cannot become ready, updates the daemon
+of `1.0.0` to `1.0.1` by the hand-over under supervise-daemon, and falls back from a `1.0.1` that cannot
+start after its three starts.
 
 ## 5. CI without `hostkeeper ci`
 
@@ -596,29 +717,38 @@ command:
    source ref, source digest and `--deny-self-hosted-runners`).
 3. `version`: `hkctl --version` equals `hkctl <version>+<commit12>`.
 4. `tailnet`: as today, only with `join_tailnet`.
-5. `ca`, `request`: the CA file, as today; the request of the set built by `jq -n --arg ... --rawfile ...` from the
-   step's `env:` values (`{"desired":{"version":...}}`, with the release index and its digest when given). No
+5. `ca`, `request`: the CA file, as today; the request of the set built by `jq -n --arg ...` from the
+   step's `env:` values (`{"desired":{"version":...}}`, with the one package digest, or the release index and its
+   digest). It refuses neither way, both, or half of one, before any token, as `hostkeeper ci` does today. No
    `${{ inputs.* }}` is written into a script, as today.
 6. `set-desired`, `continue-on-error: true`: `hkctl --endpoint ... --ca-file ... --github-oidc-audience "$AUDIENCE"
    --response-file "$RUNNER_TEMP/hkctl-set.json" releases set-desired --service "$SERVICE" [--package-digest ...]
-   --request <file> 2> "$RUNNER_TEMP/hkctl-set.err"`.
+   --request <file> 2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)`: the diagnostics go to that file and to the
+   step's own log, which so names the cause of a failed set; the step ends with hkctl's exit code.
 7. `wait`, only when `wait` is true and step 6 succeeded, `continue-on-error: true`: `hkctl ... --response-file
    "$RUNNER_TEMP/hkctl-wait.json" releases wait-converged --service ... --version ... --wait-secs <max_polls times 10>
    2> "$RUNNER_TEMP/hkctl-wait.err"`.
-8. `outputs`, `if: always()`: one `jq` program, a file beside the workflow, reads those four files and the steps'
-   outcomes and writes the three outputs, then exits 1 unless the reason is `converged` or `not_waited`, as `hostkeeper
-   ci` does (`crates/hostkeeper-ci/src/flow.rs`, **Built**). Its table, in order:
+8. `outputs`, `if: always()`: one `jq` program, held in the step's `env` (a reusable workflow runs
+   in the caller's repository, where no file beside the workflow is checked out), reads those four
+   files and the steps' outcomes and writes the three outputs, then exits 1 unless the reason is
+   `converged` or `not_waited`, as `hostkeeper ci` does (`crates/hostkeeper-ci/src/flow.rs`,
+   **Built**). Its table, in order:
 
 | What the files say | `reason` | `converged` | `desired_version` |
 |---|---|---|---|
-| step 6 failed with `refused: <token>` | the token (only `[a-z0-9_]{1,64}`, as 2.4) | `false` | the requested version |
-| step 6 failed otherwise (transport, no body) | `no_answer` | `false` | the requested version |
+| step 6 failed with `refused: <token>` | the token (only `[a-z0-9_]{1,64}`, as 2.4) | `false` | empty |
+| step 6 failed otherwise (transport, no body) | `no_answer` | `false` | empty |
 | the stored version differs from the requested one | `not_stored` | `false` | the stored one, when it is a version |
 | `wait` is false | `not_waited` | `false` | the requested version |
 | step 7 failed with `refused: <token>` (`invalid_wait`, `too_many_waits`, ...) | the token | `false` | the requested version |
 | step 7 failed otherwise, or the outcome is absent or `UNSPECIFIED` | `no_answer` | `false` | the requested version |
 | outcome `WAIT_OUTCOME_CONVERGED`, `_HALTED`, `_SUPERSEDED` | `converged`, `halted`, `superseded` | `true` only for `converged` | the requested version |
 | outcome `WAIT_OUTCOME_DEADLINE` | `not_converged` | `false` | the requested version |
+
+`desired_version` is empty whenever step 6 failed: the output is "the desired version the
+coordinator stored; empty when it stored none", as `hostkeeper ci` writes it, and the first draft
+of this table, which gave the requested version there, contradicted that contract. A version is
+written only when it is a version, so no caller input reaches `GITHUB_OUTPUT` unchecked.
 
 **The properties kept.**
 
@@ -731,7 +861,7 @@ switches to the generated client in one pull request, with its tests.
 2. Runbooks and README name `hkctl` (G3); CI's new workflow revision (CI1) and the callers' move (CI2).
 3. Stage 1 of the daemon (S1a, S1b) and the `clear-record` order (D1), released as R1; the farm converges on R1.
 4. The deletions that no daemon or unit depends on: `ctl` and `hostkeeper-ctl` (K1), `ci` and `hostkeeper-ci` (K2),
-   the admin socket (K3, which keeps the `--admin-socket` flag accepted). The hand-written UI calls go in G2 itself.
+   the admin socket (K3, which kept the `--admin-socket` flag accepted until S3 deleted it). The hand-written UI calls go in G2 itself.
 5. Stage 2 (S2a, then S2b or both together), released as R2; the farm converges on R2.
 6. Stage 3 (S3).
 7. `pxe` and `mdm` (N1, M1, M2) at any point after G1, independent of the daemon's stages.
@@ -753,10 +883,10 @@ switches to the generated client in one pull request, with its tests.
 | S1b | Stage 1, the rest: `OLDEST_READER` at 0.1.53, `LEGACY_FLOOR` and the floor rule, the built-in steps for hostkeeper's package, the start from the packaged binary (seed and exec), the Mac config at start | X1 | the floor rule's tests; the built-in steps' record byte-equal to the no-op command's; the seed's tests (`tests/seed.rs`) and `tests/mac_config.rs` re-pointed at the start, each case kept (in place, locked, a dangling `current`, a config already there, a link refused, no managed file); every device test of 4.5; X1 |
 | K1 | Delete `hostkeeper ctl` and `crates/hostkeeper-ctl`; Rust callers use the tonic client through a `hostkeeper-testkit` helper | G1, G3 | `tests/cli_ctl.rs` replaced by `ctl` a usage error; the privileged e2e tests on the tonic helper; the layering test; `pr_device.rs` with the shorter crate list |
 | K2 | Delete `hostkeeper ci` and `crates/hostkeeper-ci` | CI2 | `ci` a usage error; the layering test; `pr_device.rs` |
-| K3 | Delete the admin socket, `hostkeeper admin`, `admin_client.rs`; freeze `local/v1/admin.proto` (3.3); keep `--admin-socket` accepted and ignored; runbooks to `hkctl` and the off-line rename of 3.2 | R1 converged (every daemon takes `clear-record`), G3 | `tests/admin.rs` and `tests/admin_cli.rs` replaced by: the daemon binds no socket, `admin` a usage error; the daemon starts with the exact argument list of today's unit and of the stage-2 unit; compat test unchanged |
+| K3 | Delete the admin socket, `hostkeeper admin`, `admin_client.rs`; freeze `local/v1/admin.proto` (3.3); keep `--admin-socket` accepted and ignored; runbooks to `hkctl` and the off-line rename of 3.2 | R1 converged (every daemon takes `clear-record`), G3 | `tests/admin.rs` and `tests/admin_cli.rs` replaced by: the daemon binds no socket, `admin` a usage error; the daemon starts with the exact argument list of today's unit and of the stage-2 unit; compat test unchanged. **Built** (K3): the daemon binds no socket and the platform's run directory replaces the socket path in `Settings` (`crates/hostkeeper-daemon/src/start.rs`, `crates/hostkeeper-launchd`); `docs/admin.md` is the runbook, and the packaging texts are unchanged until stage 2 |
 | S2a | Stage 2: `OLDEST_READER = R1`, the hand-over follow-on, the probe call and its plumbing deleted, the fallback files removed at start; the pin of X1 moved to R1 | R1 converged | the re-pointed and new device tests of 4.5, Linux and Mac; X1 pinned to R1 |
 | S2b | Stage 2: the package unit, the bootstrap unit, the plist and the postinstall (4.1) | S1b released | `crates/xtask/tests/packaging/{unit_file,daemon_flags,self_update}.rs`, `check-macos-pkg` and `crates/hostkeeper-launchd/tests/{plist,postinstall}.rs` on the new texts; the bootstrap-unit and pkg device tests of 4.5 |
-| S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5 |
+| S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5. **Built** (S3): see the **Built** notes of 4.1 to 4.5 |
 | H1 | The coordinator's `--health-listen` and `GET /healthz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable`, `not_writer` and `starting` on the fake store; 404 for any other path and for `POST`; a non-loopback address and a wildcard refused at start by name; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
 | N1 | The `pxe` package and its `prepare` step; `hostkeeper-pxe` out of the deb and rpm; network-install.md and its runbook | G1 | `cargo xtask release package --service pxe` tests (shape, units, manifest); a privileged install, assign and unassign of a fixture `pxe` package under systemd; the `fetch` tests re-pointed at `prepare` |
 | M1 | The `mdm` package: build-time fetch against `pins.txt`, hook steps, units, `bin/mdm` with the `push-cert` and `dep` verbs | G1 | the `install`, `tls`, `verify`, `push_cert` and `dep` tests re-pointed at the package's program; the package tests |
@@ -770,7 +900,7 @@ floor); S2a waits for the farm.
 
 | Question | Decision | Why |
 |---|---|---|
-| Bare `hostkeeper` or `hostkeeper daemon` | `daemon`, the only verb | Every live unit, plist and fallback text names it; a bare form would be a second way. |
+| Bare `hostkeeper` or `hostkeeper daemon` | `daemon`, the only verb that runs the daemon | Every live unit, plist and fallback text names it; a bare form would be a second way. |
 | The coordinator's file name | `hostkeeper-coordinator`, verb `serve` | The image, the assets and deployments name both; a rename buys nothing. |
 | The CLI's name | `hkctl` | Short, distinct from both programs, and not a verb of either. |
 | The CLI's transport | The JSON gateway only, bearer tokens only | The ruling's bash client; mutual TLS is the daemon's link alone. |
@@ -782,7 +912,7 @@ floor); S2a waits for the farm.
 | TypeScript | Generated JS plus `.d.ts`, checked in | No build step and no Node in the repository; the UI's tests run the real module. |
 | The protocol's carrier | The existing `min_hostkeeper` and one compiled-in `OLDEST_READER` | An older loader refuses any new manifest key as a release failure. |
 | The fallback | The hand-over: the old binary starts and execs the new one, three tries | No unit or job written by one binary and run by another; the Mac fallback becomes testable. |
-| The Linux package unit | Starts `current` for good; keeps the seed line until stage 3 | The packaged binary is as old as the host's last deb. |
+| The Linux package unit | Starts `current` for good; the seed line went with stage 3 | The packaged binary is as old as the host's last deb. |
 | hostkeeper's `[hook]` table | Kept, inert | Its absence is a release failure on a straggler, before the floor is read. |
 | `hostkeeper.local.v1` | Kept as a frozen file, served by nothing | Rule B8 refuses removing a shipped package; only the maintainers can make an exception. |
 | The cross-release proof | A pinned release, moved by the floor pull requests | Deterministic, no API call, and it proves exactly the pair the next stage meets. |

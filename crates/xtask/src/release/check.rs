@@ -5,16 +5,11 @@
 //!    ([`asset_names`]);
 //! 2. `SHA256SUMS` has one `<sha256>  <name>` line per summed asset ([`summed_names`]), and each
 //!    digest is that of the file;
-//! 3. the `.sha256` file of each package holds exactly `<sha256 of the package>  <name>` and a
-//!    line break;
-//! 4. each release index (`index.json` of the hostkeeper packages, `hello-index.json` of the
-//!    hello packages, `hello-fail-ready-index.json` of hello's failing build) is the index of the
-//!    packages in the directory: it reads as the index of its service at the package's version
-//!    (the release's, and for hello's failing build the release's followed by `-fail-ready`),
-//!    lists every package with its size and SHA-256, and is written canonically;
-//! 5. `hkctl-<version>` is a bash script whose one version line is the stamp of the version and
+//! 3. `hkctl-<version>` is a bash script whose one version line is the stamp of the version and
 //!    the pinned commit (`hkctl::problems`);
-//! 6. each attested asset verifies twice, online and from its bundle, and every attestation
+//! 4. the coordinator's image index is the one its two image tarballs make, byte for byte
+//!    ([`super::image_index`]): its SHA-256 is the digest of the image a registry serves;
+//! 5. each attested asset verifies twice, online and from its bundle, and every attestation
 //!    returned names this repository's signer workflow and ref, the pinned commit, and the
 //!    SHA-256 of the file.
 
@@ -22,11 +17,11 @@ use std::collections::BTreeSet;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Platform, SUMS, Signer, Version, asset_names, attested_names,
-    bundle_of, hkctl_name, summed_names,
+    Commit, Platform, SUMS, Signer, Version, asset_names, attested_names, bundle_of, hkctl_name,
+    summed_names,
 };
 use super::hkctl;
-use super::index::ReleaseIndex;
+use super::image_index;
 use super::ports::{Attestation, PortError, Verifier};
 use super::{Error, file_sha256};
 
@@ -43,11 +38,8 @@ pub(crate) fn check(
     let mut problems = Vec::new();
     check_names(version, &expected, &present, &mut problems);
     check_sums(dir, version, &present, &mut problems)?;
-    check_digest_files(dir, &expected, &present, &mut problems)?;
-    for package in Package::ALL {
-        check_index(dir, package, version, &present, &mut problems)?;
-    }
     check_hkctl(dir, (version, commit), &present, &mut problems)?;
+    check_image_index(dir, version, &present, &mut problems);
     let attested = attested_names(version);
     for name in attested.iter().filter(|n| present.contains(*n)) {
         check_attestations(verifier, dir, name, commit, &mut problems)?;
@@ -74,6 +66,26 @@ fn regular_files(dir: &Path) -> Result<BTreeSet<String>, Error> {
         .filter(|e| e.file_type().is_ok_and(|kind| kind.is_file()))
         .map(|e| e.file_name().to_string_lossy().into_owned())
         .collect())
+}
+
+/// Step 4: the image index is the one the two image tarballs make. It is skipped when the index
+/// or a tarball is absent (step 1 reported that).
+fn check_image_index(
+    dir: &Path,
+    version: &Version,
+    present: &BTreeSet<String>,
+    problems: &mut Vec<String>,
+) {
+    let needed = [
+        image_index::index_name(version),
+        image_index::image_name(version, Platform::LinuxX86_64),
+        image_index::image_name(version, Platform::LinuxArm64),
+    ];
+    if needed.iter().all(|n| present.contains(n))
+        && let Err(why) = image_index::check_index(dir, version)
+    {
+        problems.push(why.to_string());
+    }
 }
 
 /// Step 1: the files present are exactly the assets of the version.
@@ -151,44 +163,7 @@ fn check_sums(
     Ok(())
 }
 
-/// Step 4: the index of `package` is the canonical release index of its packages in `dir`. It is
-/// skipped when the index or a package is absent (step 1 reported that).
-fn check_index(
-    dir: &Path,
-    package: Package,
-    version: &Version,
-    present: &BTreeSet<String>,
-    problems: &mut Vec<String>,
-) -> Result<(), Error> {
-    let index_name = package.index_name();
-    let packages: Vec<String> = package
-        .platforms()
-        .iter()
-        .map(|&p| package.package_name(version, p))
-        .collect();
-    if !present.contains(index_name) | !packages.iter().all(|p| present.contains(p)) {
-        return Ok(());
-    }
-    let path = dir.join(index_name);
-    let bytes = std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
-    let text = String::from_utf8_lossy(&bytes);
-    let (service, version) = (package.service().name(), package.version_text(version));
-    let expected = ReleaseIndex::of_dir(dir, service, &version, package.platforms())?;
-    match ReleaseIndex::parse(&text, service, &version) {
-        Err(e) => problems.push(format!("{index_name}: {e}")),
-        Ok(read) if read != expected => problems.push(format!(
-            "{index_name} does not list exactly the packages of the directory with their sizes \
-             and SHA-256 digests"
-        )),
-        Ok(_) if text != expected.to_json() => {
-            problems.push(format!("{index_name} is not written canonically"));
-        }
-        Ok(_) => {}
-    }
-    Ok(())
-}
-
-/// Step 5: `hkctl-<version>` is the script `release hkctl` writes for the version and commit. It
+/// Step 3: `hkctl-<version>` is the script `release hkctl` writes for the version and commit. It
 /// is skipped when the asset is absent (step 1 reported that).
 fn check_hkctl(
     dir: &Path,
@@ -210,34 +185,7 @@ fn check_hkctl(
     Ok(())
 }
 
-/// Step 3: the digest file of each package holds exactly the package's digest and name. A pair
-/// with a file missing is skipped (step 1 reported that).
-fn check_digest_files(
-    dir: &Path,
-    expected: &[String],
-    present: &BTreeSet<String>,
-    problems: &mut Vec<String>,
-) -> Result<(), Error> {
-    let pairs = expected
-        .iter()
-        .filter_map(|n| n.strip_suffix(DIGEST_SUFFIX).map(|package| (n, package)));
-    for (name, package) in pairs {
-        if present.contains(name) & present.contains(package) {
-            let path = dir.join(name);
-            let bytes =
-                std::fs::read(&path).map_err(Error::io(format!("read {}", path.display())))?;
-            let want = format!("{}  {package}\n", file_sha256(&dir.join(package))?);
-            if bytes != want.as_bytes() {
-                problems.push(format!(
-                    "{name} is not '<sha256 of {package}>  {package}' and one line break"
-                ));
-            }
-        }
-    }
-    Ok(())
-}
-
-/// Step 6 for one attested asset: verified online, then from its bundle.
+/// Step 5 for one attested asset: verified online, then from its bundle.
 fn check_attestations(
     verifier: &dyn Verifier,
     dir: &Path,

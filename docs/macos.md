@@ -35,7 +35,7 @@ A quarantined entry, an unsigned binary or an invalid signature fails the order:
 made (the tool could not run, was killed or did not finish) is `Deferred`, class
 `environment`, reason `verify_unavailable`: the package is not judged bad. In every failing
 case the staging directory is removed and nothing is sealed or published. On Linux neither check
-runs. [package-format.md](package-format.md) has the rule as part of the package format.
+runs.
 
 ### Live leases: `leases_live`
 
@@ -51,63 +51,40 @@ The daemon never decides `leases_live` itself. It reads the exit like any other 
 and the order ends `Deferred` with the hook's reason and retry time.
 The token is `hostkeeper_hook::REASON_LEASES_LIVE`, beside `drain_bound`.
 
-### Self-update fallback
+### Self-update hand-over
 
-On Linux the daemon's unit restarts it, and an `OnFailure=` unit runs the previous binary's
-`self-update-fallback` verb once the new binary has failed the start limit of the self-update
-drop-in (the base unit has none: it restarts the daemon for good). launchd has neither
-a start limit nor `OnFailure=`, so on a Mac the same verb is run by a timer job. Two plists
-serve it:
+hostkeeper updates itself by a hand-over (design section 4.3 of
+[two programs](design/two-programs.md)): the daemon stages the new binary as `versions/<N>`,
+points the link `next` of the binary directory at it, writes the record as waiting for the
+restart into `N` with a start count of 0, and exits 0. `current` is not moved. launchd starts the
+job's program again (`KeepAlive`), and the binary `current` names, the old one, execs `next`
+while the count lasts, raising it at each exec; the new binary's start finishes the switch and
+confirms the update. After three starts of the new binary that do not settle the update, the old
+binary settles it `Failed` and runs. There is no fallback job on a Mac, and no unit on Linux:
+launchd's relaunch pause (10 seconds, below) paces the tries, and the Mac fallback is tested under
+the real launchd (`a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd`).
 
-- the daemon's own `LaunchDaemons` plist, the one `hostkeeper_launchd::plist::daemon_plist`
-  renders (see [One daemon, run by launchd](#one-daemon-run-by-launchd)). Its program is
-  `current` of the binary directory, `/var/lib/updater/state/hostkeeper/bin/current`
-  (`hostkeeper_launchd::plist::DAEMON_PROGRAM`, the path `hostkeeper_daemon::selfupdate::binary_dir`
-  derives from the daemon's state directory), the link a self-update switches to the new binary,
-  as the Linux unit's `ExecStart=` is. `KeepAlive` is plain `true`, the counterpart of the unit's
-  `Restart=always`, because the daemon exits cleanly after switching to a new binary and must be
-  started again, from what `current` names then. It sets no `ThrottleInterval`: launchd waits its
-  default 10 seconds between two starts;
-- `hostkeeper_steps::selfupdate::launchd_fallback_job`: the job `<label>.fallback`, which runs
-  `previous self-update-fallback --dir <dir>` every `StartInterval` seconds and not at load.
-  The plist is deterministic (keys sorted, fixed indentation) and every path and the label in
-  it are XML-escaped. The daemon writes it at each start, once ready, as
-  `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.fallback.plist` with an interval of 60
-  seconds, only when it differs from what is there, and then boots the job out and bootstraps it
-  again (`hostkeeper_daemon::selfunits`). Its `--dir` is the directory the daemon's own plist
-  starts `current` of, so the `current` it flips back is the one launchd starts next. Until the
-  first self-update there is no `previous`, and launchd cannot spawn the job's program when the
-  interval comes.
+A release before 0.1.194 cannot update to this one (its floor, `OLDEST_READER`), so the daemon
+writes, reads and removes no fallback job, and the binary has no `self-update-fallback` verb.
 
-launchd has no counterpart of the unit's `ExecStartPre=`, so on a Mac the binary directory gets
-its first binary at install: the pkg's `postinstall` runs
-`/usr/local/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/local/bin/hostkeeper`
-as its first command (see [Release and installer pkg](#release-and-installer-pkg)). A `current` that later starts
-nothing (removed by hand, or a link to a version that is gone) leaves launchd retrying a program it
-cannot spawn; installing the pkg again seeds it.
+The plist is the daemon's own `LaunchDaemons` plist, the one
+`hostkeeper_launchd::plist::daemon_plist` renders (see
+[One daemon, run by launchd](#one-daemon-run-by-launchd)). Its program is the installed binary,
+`/usr/local/bin/hostkeeper` (`hostkeeper_launchd::plist::INSTALLED_BINARY`), run as `daemon`.
+Started from that path, the daemon seeds the binary directory of hostkeeper's own update when
+`current` starts nothing and execs `current`
+(`/var/lib/updater/state/hostkeeper/bin/current`, the path `hostkeeper_daemon::selfupdate::binary_dir`
+derives from the daemon's state directory), the link a self-update switches to the new binary,
+with its own arguments (`hostkeeper_daemon::packaged`), at each start; so launchd's job runs the
+binary the last update chose. `KeepAlive` is plain `true`, the counterpart of the unit's
+`Restart=always`, because the daemon exits cleanly after switching to a new binary and must be
+started again, from what `current` names then. It sets no `ThrottleInterval`: launchd waits its
+default 10 seconds between two starts.
 
-Since the timer runs the verb whether or not the new binary is failing, the verb decides the
-burst itself on a Mac (`hostkeeper_daemon::fallback::fallback_after_burst`). Each start of the
-daemon on a Mac first adds itself to the start log, `<state-dir>/hostkeeper/starts` (its version
-and a stamp of the monotonic clock; the last 16 starts are kept). The verb then flips `current`
-back, writes `Failed` after the commit and marks the version bad (the same code as the systemd
-fallback runs) only when all of these hold; otherwise it changes nothing and exits 0, and the next
-run of the timer looks again:
-
-- the step record of `hostkeeper` waits for the restart into a version;
-- no daemon holds the state directory's lock (a daemon that runs is not failing to start), and
-  the verb holds that lock while it falls back;
-- no other service's step record holds an unfinished update (the rule of the self-update order);
-- the start log holds 3 starts of that version within 300 seconds, the latest less than 300
-  seconds ago (`hostkeeper_steps::should_fall_back`, the rule of the systemd drop-in's
-  `StartLimitBurst=3` and `StartLimitIntervalSec=300`, the same two constants).
-
-A start is written by the daemon itself, first thing; a new binary the system kills before it
-runs any of its code (a refused signature, another architecture) writes none, so this rule does
-not fall back from it.
-
-On Linux the verb falls back at once, as before: systemd has already counted the starts, and
-nothing writes the start log.
+launchd has no counterpart of the Linux package unit's `ExecStartPre=`, and needs none: the job's
+program is the installed binary, which seeds the binary directory at each start. A `current` that
+later starts nothing (removed by hand, or a link to a version that is gone) is seeded again by the
+next start, since the installed binary, not `current`, is what launchd runs.
 
 ### Enrollment claims
 
@@ -134,8 +111,7 @@ observer's service manager and process probe, and the unit control over `launchc
 step launcher, observer and unit control (`systemctl`), and no package check. Each set names the
 unit the daemon runs as, which the observer watches as the service `hostkeeper`: on a Mac the
 daemon's job `dev.hostkeeper.hostkeeper`, since the macOS package of hostkeeper names no unit
-(docs/service-observation.md, "The daemon's own service"). The admin socket's default is the platform's (`/var/run/hostkeeper/admin.sock` on a Mac),
-in a directory the daemon makes mode 0700.
+(docs/service-observation.md, "The daemon's own service"). The daemon binds no socket; the platform's run directory (`/var/run` on a Mac) holds the `updater` directory of the registration-socket cleanup.
 
 #### One daemon, run by launchd
 
@@ -146,10 +122,13 @@ maintainers must confirm the prefix before any Mac enrolls, since a label is the
 | what | where |
 |---|---|
 | config | `/etc/hostkeeper/hostkeeper.toml` |
+| stores config | `/etc/hostkeeper/stores.toml`, optional; without it the one store is `release_channel` (docs/design/packages.md section 7). On a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.stores` when that domain is there, replacing a file that differs |
+| macos-pkg signers | `/etc/hostkeeper/macos-pkg.toml`, optional, read at the start of a Mac only; on a managed Mac the daemon's start writes it from the managed preferences of `dev.hostkeeper.macos-pkg` when that domain is there, replacing a file that differs; a file that is not sound (a link, not root's, writable by others, not TOML of the signers) stops the start with the config exit status |
 | state directory, packages directory | as on Linux (`/var/lib/updater/state`, `/var/lib/hostkeeper/packages`); both exist on macOS |
-| admin socket | `/var/run/hostkeeper/admin.sock` (macOS has a read-only root and no `/run`) |
+| facts file | as on Linux, `/var/lib/hostkeeper/facts.json` (`--facts-file`; the plist passes no flag, so the default holds), mode 0644; its `platform` is `darwin-arm64`, the name the daemon's heartbeat gives |
+| run directory | `/var/run` (macOS has a read-only root and no `/run`); the daemon binds no socket there |
 | units linked from a package | `/Library/LaunchDaemons/<label>.plist`, a link to `<packages>/<service>/current/units/<label>.plist` |
-| the daemon's plist program | `/var/lib/updater/state/hostkeeper/bin/current`, which the pkg's `postinstall` points at `/usr/local/bin/hostkeeper` on a first install |
+| the daemon's plist program | `/usr/local/bin/hostkeeper daemon`, which seeds the binary directory when `current` starts nothing and execs `/var/lib/updater/state/hostkeeper/bin/current` |
 | the `hostkeeper` of the command line | `/usr/local/bin/hostkeeper` |
 | the daemon's logs | `/var/log/hostkeeper/daemon.out.log` and `daemon.err.log` |
 
@@ -216,16 +195,8 @@ timeout (a timeout of 0 is no bound). The unit of a `[hook] boot` step is
 `updater-<service>-boot-<generation>`, whatever the step's name, and its label
 `<prefix>.hostkeeper.step.<service>.boot.<generation>`.
 
-The probe of hostkeeper's own update (the daemon asking a new binary for its self-update
-protocol, `<binary> self-update-protocol`, before it stages it) runs the same way too, as one job
-with the label `<prefix>.hostkeeper.probe.<unit>` (`hostkeeper-self-update-protocol`), apart from
-every step label, so that a probe never boots out a step's job. It is bounded at 10 seconds (a
-bound of 0 is 1 second: a probe is never unbounded) and checked and read as on Linux: an absolute
-path to an executable file, the job's exit code (none when it was booted out at its bound or
-ended by a signal) and at most 64 bytes of its standard output. The binary is the file of the
-verified release the daemon just checked, so it passed the package check every Mach-O file of a
-release passes at unpack (no quarantine attribute, a valid code signature). A release of the
-version that already runs is not probed: none of its binary is staged.
+Hostkeeper's own update asks nothing of the new binary: a release is judged by its floor alone
+(the README's self-update section).
 
 | how the job ended | the step's exit |
 |---|---|
@@ -254,8 +225,7 @@ with the error (resume stops the job by name if it is still there).
 
 The equivalence tests (`crates/hostkeeper-launchd/tests/equivalence.rs`) run the same scenarios
 against both launchers through the trait: a bounded step that overruns is stopped at its bound
-and failed, an unbounded one is not, a double stop is `Ok`, the capture keeps the tail, and a
-probe keeps its exit and output within its bound and is stopped past it. The
+and failed, an unbounded one is not, a double stop is `Ok`, and the capture keeps the tail. The
 real `launchctl` run is not part of the pull-request check (no Mac runs there): the host's
 launcher, `LaunchdLauncher::system`, is compiled on macOS only.
 
@@ -341,13 +311,11 @@ uninstall boots out each `run` label, then removes every placed link.
 ### Release and installer pkg
 
 Every release ships macos-arm64 beside the two Linux platforms: the binary tarball
-`hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, hostkeeper's own package `.tar.zst` (its
-`manifest.toml` and `bin/hostkeeper`, and no `units/`), and the installer pkg
-`hostkeeper-<v>-macos-arm64.pkg`. It also ships the packages of `hello`, the example service of
-`examples/hello`, and of its failing build, for macos-arm64: `bin/hello`, `manifest.toml` and
-`units/hello.a.plist` and `units/hello.b.plist`, the plists of its two slots rendered by
-`hostkeeper_launchd::service_plist`; `hello` carries the same ad-hoc code signature as the
-hostkeeper binary. The artifacts workflow builds them on a GitHub-hosted Apple
+`hostkeeper-<v>-macos-arm64.tar.gz` with its SBOM, and the installer pkg
+`hostkeeper-<v>-macos-arm64.pkg`. It also ships hello's `.pkg`, `hello-<v>-macos-arm64.pkg`, for
+the example service of `examples/hello`: `hello` carries the same ad-hoc code signature as the
+hostkeeper binary, and the plists of its two slots are rendered by
+`hostkeeper_launchd::service_plist`. The artifacts workflow builds them on a GitHub-hosted Apple
 silicon runner, on each push to `main` and by hand, never on a pull request.
 
 The pkg is the first install of a Mac. It installs exactly five files and one empty directory,
@@ -357,7 +325,7 @@ and the directories that hold them (each 0755, as macOS has them already; `/usr/
 - `/usr/local/bin/hostkeeper`, mode 0755, the released binary;
 - `/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, mode 0644, the daemon's job as
   `hostkeeper_launchd::daemon_plist` writes it for `DaemonJob::standard` (label
-  `dev.hostkeeper.hostkeeper`, running `/var/lib/updater/state/hostkeeper/bin/current daemon`);
+  `dev.hostkeeper.hostkeeper`, running `/usr/local/bin/hostkeeper daemon`);
 - `/var/log/hostkeeper`, mode 0755, the empty directory of the daemon's logs;
 - `/etc/newsyslog.d/hostkeeper.conf`, mode 0644, the rotation of those logs
   ([The daemon's logs](#the-daemons-logs));
@@ -386,72 +354,92 @@ exists.)
 The file `hostkeeper-<v>-macos-arm64.pkg` is a distribution pkg: `productbuild` wraps the component
 pkg that `pkgbuild` makes from the payload and the script, and the wrapper holds the one
 component and nothing else (no installer script, no installation check, no volume check). The
-installer runs the component's one script, a `postinstall` of three commands, as root once the
-files are in place. Each command that fails ends the script with its status, which fails the
-install, and the last one is the script's own status:
+installer runs the component's one script, a `postinstall` of two lines, as root once the
+files are in place. The bootstrap's status is the script's own, which fails the install when the
+job is not loaded and cannot be:
 
 ```
 #!/bin/sh
-# The hostkeeper pkg's postinstall: three commands, in order. One that fails ends the
-# script with its status and its message, which fails the install.
-# 1. When current of the binary directory of hostkeeper's own update starts nothing,
-#    put the binary the pkg installed there and point current at it; when current
-#    starts a binary, as after a self-update, change nothing.
-# 2. Write the daemon config from the managed preferences the MDM installed. A config
-#    that is there is kept; with neither, fail.
-# 3. Load the daemon's launchd job, once any copy loaded before is booted out (which
-#    fails when none is loaded).
-'/usr/local/bin/hostkeeper' self-update-seed --state-dir '/var/lib/updater/state' --binary '/usr/local/bin/hostkeeper' || exit
-'/usr/local/bin/hostkeeper' mac-config --managed '/Library/Managed Preferences/dev.hostkeeper.config.plist' --config '/etc/hostkeeper/hostkeeper.toml' || exit
-'/bin/launchctl' bootout 'system/dev.hostkeeper.hostkeeper' 2>/dev/null
+# The hostkeeper pkg's postinstall: load the daemon's launchd job when launchd does
+# not have it loaded, and leave it alone when it does. An installer the daemon
+# itself runs (its self-update) must not boot the running daemon out, so the job is
+# never booted out here; its new plist takes effect at the next boot. A first
+# install, or a host where the job is not loaded, gets it loaded.
+'/bin/launchctl' print 'system/dev.hostkeeper.hostkeeper' >/dev/null 2>&1 && exit 0
 exec '/bin/launchctl' bootstrap system '/Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist'
 ```
 
-1. The seed is the one the Linux unit runs before each start (`hostkeeper_daemon::seed`): when
-   `current` of the binary directory starts nothing, it stages the installed binary as its version
-   (`versions/<version>`) and points `current` at it, so the job's first start runs it; when
-   `current` starts a binary, as after a self-update, it changes nothing, so installing the pkg again
-   never puts an older binary back over an update. A seed that cannot do its work fails the install
-   with its message: the binary or the directory cannot be read or written, or a daemon holds the
-   state directory's lock while `current` starts nothing (a daemon an older pkg started, which runs
-   `/usr/local/bin/hostkeeper`; boot its job out before installing).
-2. `hostkeeper mac-config [--managed <file>] [--config <file>]` (`hostkeeper_daemon::mac_config`)
-   writes the daemon config; the flags default to the paths in the script. A config that is there
-   as a regular file is kept: nothing is written, the managed file is not read, and the line
-   `hostkeeper mac-config: <path> exists and is kept; the managed config is not read` goes to
-   standard error. Anything else at the config path, a link or a directory, is left as it is and
-   refused (`<path> is there but is not a regular file; it is not replaced`), since the daemon
-   reads its config only from a regular file and not through a link. Otherwise the verb reads the managed preferences file, which the
+`launchctl print` exits 0 when launchd has the job loaded and non-zero (113) when it does not; its
+output is discarded. A loaded job is left alone: the script exits 0 and never runs
+`launchctl bootout`, because an `installer -pkg` that the daemon itself runs (its self-update
+through the `macos-pkg` installer) must not boot the running daemon out in the middle of its
+update. The plist's new text then takes effect at the next boot. When the job is not loaded (a
+first install, or a host that booted it out) `launchctl bootstrap` loads it, and `RunAtLoad`
+starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+
+The script no longer seeds the binary directory or writes the config; the daemon's start does
+both, each time it starts.
+
+1. The seed (`hostkeeper_daemon::seed`, run by `hostkeeper_daemon::packaged` when the running
+   binary is `/usr/local/bin/hostkeeper`): when `current` of the binary directory starts nothing,
+   it stages the installed binary as its version (`versions/<version>`) and points `current` at
+   it; when `current` starts a binary, as after a self-update, it changes nothing, so installing
+   the pkg again never puts an older binary back over an update. A seed that cannot do its work
+   ends the start with its message in `daemon.err.log`: the binary or the directory cannot be
+   read or written, or a daemon holds the state directory's lock while `current` starts nothing.
+   Then the start execs `current` with its own arguments.
+2. The daemon's start writes the daemon config (`hostkeeper_daemon::mac_config::at_start`), on
+   its `--config`, before it reads it, from the managed preferences file of the host
+   (`HostFiles::managed_config`, which `HostFiles::for_platform` sets on a Mac and not on Linux). A config that is there
+   as a regular file is kept: nothing is written and the managed file is not read. Anything else
+   at the config path, a link or a directory, is left as it is and refused
+   (`<path> is there but is not a regular file; it is not replaced`), since the daemon
+   reads its config only from a regular file and not through a link. Otherwise it reads the managed preferences file, which the
    config profile of the MDM makes (see the farm's config profile in
    [hostkeeper-mdm.md](design/hostkeeper-mdm.md) section 4). It accepts that file only when root
    owns it, no one else can write it and it is a regular file (checked on the open file, so a link
    is refused). The file is a property list, binary or XML, whose top level is a dictionary. The
-   verb renders it as TOML and has the daemon's config loader judge that text, so a missing key,
+   start renders it as TOML and has the daemon's config loader judge that text, so a missing key,
    an unknown key or a bad value is refused with the loader's reason, as in a hand-written file.
    A date, a data value or a uid, and an integer that does not fit 64 bits, has no form in the
    config and is refused naming its key. The config is then written atomically (a temporary file in
    the config's directory, synced, hard-linked to the config path, which fails when a config
    appeared meanwhile; that one is judged as above), as root's file of mode 0600, and its directory is made
    with mode 0755 when it is missing. The file starts with a comment that names the managed
-   preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, the verb
-   fails with a message that names both paths, and so does the install.
-3. `launchctl bootout` unloads a copy of the job loaded before, and its status is ignored
-   because it fails when none is loaded. `launchctl bootstrap` loads the job, and `RunAtLoad`
-   starts it. The script runs the bootstrap with `exec`, so its status is the install's.
+   preferences domain `dev.hostkeeper.config`. With neither a managed file nor a config, it
+   fails with a message that names both paths.
+   Right after the config, the start renders two more domains to their files
+   (`hostkeeper_daemon::mac_files`), each judged alone. The managed preferences of
+   `dev.hostkeeper.stores` (`HostFiles::managed_stores`, `/Library/Managed Preferences/dev.hostkeeper.stores.plist`)
+   become `/etc/hostkeeper/stores.toml`, and those of `dev.hostkeeper.macos-pkg`
+   (`HostFiles::managed_macos_pkg`) become `/etc/hostkeeper/macos-pkg.toml`. A domain that is not
+   there changes nothing: the operator's file stays and none is made. A domain that is there is
+   read and rendered as above, judged by the file's own loader (the stores loader, which also
+   reads their credential files, or the signers loader) before anything is written, and refused
+   when the file would be larger than that loader reads; the file starts with a comment naming the
+   domain. Unlike the config, the managed preferences are these files' source: a file that holds
+   exactly the rendered text, root's with mode 0644, is left alone, and any other is replaced (a new file in the same directory, mode 0644, synced and renamed over it), so a
+   rotation the MDM pushes takes effect at the next start. A link or a directory at the file's
+   path is refused and left. Any refusal stops the start with exit status 3, naming the managed
+   file and the reason.
+
+A config that cannot be made at a start (no managed file, a link at the config path, a managed
+file the loader refuses) stops the start with exit status 3, the message in
+`/var/log/hostkeeper/daemon.err.log`, and launchd starts the job again, which stops again. So a
+pkg installed on a Mac with neither a config nor the managed preferences installs, loads its job,
+and the daemon refuses each start, naming the missing file in `daemon.err.log`; the install does
+not fail. The MDM gate installs the managed preferences before the pkg, so this is a hand install
+done out of order.
 
 The manual path, for a Mac without an MDM: place `/etc/hostkeeper/hostkeeper.toml` first, then
-install the pkg. `mac-config` keeps that file, and the postinstall loads the job. Installing the
-pkg with neither a config nor a managed file fails at `mac-config`, before the job is loaded.
+install the pkg. The daemon's start keeps that file, and the postinstall loads the job.
 
-The pkg carries no installer signature yet. Which identity will sign it, a farm installer
-identity whose root the MDM installs or an Apple Developer ID Installer identity, is decided by
-the device test of the MDM design (section 7.2, task M11), whose kit and runbook are
-[operations/pkg-signing-test.md](operations/pkg-signing-test.md). It is attested like every other asset, and the binary in it
-keeps the ad-hoc code signature the linker gives it, which the package verification above accepts.
 `cargo xtask release macos-pkg` builds the component with `pkgbuild` from the binary, `gh` and the
 trusted root (`--binary`, `--gh`, `--trusted-root`), then runs `productbuild --package` over it
 with the pkg identifier and the version and no signature; only the product goes to `--out`, and
-the digest line is its digest. `cargo xtask release check-macos-pkg` reads back the product
+the digest line is its digest. The binary in it keeps the ad-hoc code signature the linker gives
+it, which the package verification above accepts.
+`cargo xtask release check-macos-pkg` reads back the product
 archive that `pkgutil --expand` expanded, layer by layer.
 
 - The outer layer holds exactly the file `Distribution` and the directory `hostkeeper.pkg`, no
@@ -465,7 +453,7 @@ archive that `pkgutil --expand` expanded, layer by layer.
   files `Bom`, `PackageInfo` and `Payload`, and the directory `Scripts` that `pkgutil` expands the
   pkg's scripts into, against the same three files. It refuses a missing part and any other file,
   mode, owner or bytes, any script but that `postinstall` (a regular file of mode 0755) with exactly
-  the bytes above, a plist whose program is not `current` of the binary directory or whose output
+  the bytes above, a plist whose program is not `/usr/local/bin/hostkeeper` or whose output
   paths are not the daemon's two log files, and a newsyslog file whose entries name other paths
   than those two.
 
@@ -480,6 +468,48 @@ hostkeeper's own package has no unit on a Mac: the manifest's launchd labels are
 or the service name, `.` and more, and the daemon's label is not, so the daemon's job is the
 pkg's plist.
 
+### The installer's signature
+
+The released pkg is signed with the Developer ID Installer identity
+`Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)`, because the MDM's
+`InstallEnterpriseApplication` installs only a signed pkg. hello's `.pkg`
+(`hello-<version>-macos-arm64.pkg`) is signed the same way, in the same jobs, because a host's
+`macos-pkg` installer stages only a signed pkg; each step below is done for both. It is not notarized: nothing Apple
+states asks an MDM-installed pkg for notarization (design section 7.3), and the release adds it
+only if a Mac refuses the signed pkg without it. The signing is in `.github/workflows/artifacts.yml`,
+on a push to `main` only, in three jobs:
+
+1. `build-macos` builds the unsigned pkgs into `pkg/` and checks them (above); they are never
+   release files, only the artifact `pkg-unsigned-macos-arm64`.
+2. `sign-pkg`, in the environment `pkg-signing`, runs no repository code (no checkout, no cargo),
+   so no build script or dependency runs where the key is. It decodes the PKCS#12 of the secret
+   `MACOS_INSTALLER_P12` (the identity's key and certificate and Apple's Developer ID G2
+   intermediate) into a file of the job, imports it into a new keychain in `$RUNNER_TEMP` (never
+   the login keychain) whose key only `productsign` may use, makes that keychain the user's only
+   one, and runs `productsign --sign <identity> --keychain <it> --timestamp`; the trusted
+   timestamp keeps the signature valid after the certificate expires. Then, whether the signing
+   worked or not, it deletes the keychain and the PKCS#12 file.
+3. `check-pkg`, with no secret, runs `cargo xtask release check-pkg-signature <pkg> --identity
+   <identity>`, which refuses the pkg unless `pkgutil --check-signature` exits 0 and prints a
+   trusted status, a trusted timestamp and the chain of exactly the identity, `Developer ID
+   Certification Authority` and `Apple Root CA`, naming every difference; it then expands the
+   signed and the unsigned pkg and refuses any file that differs, so the signing changed nothing
+   `check-macos-pkg` checked. Only then is each signed pkg the release file
+   `hostkeeper-<version>-macos-arm64.pkg` or `hello-<version>-macos-arm64.pkg`: `SHA256SUMS`,
+   the attestation and the release are of its bytes.
+
+A run by hand signs nothing: it builds and checks the unsigned pkgs and makes the sums without
+them.
+The workflow lint (`crates/xtask/tests/workflows/pkg_signing.rs`) holds these jobs to their
+steps: the signing job's exact steps, with the cleanup under `always()` after the signing; the
+secrets named in that job alone; the checks of both pkgs before the one upload of them; and
+`sums` after it.
+
+On a Mac, `pkgutil --check-signature hostkeeper-<version>-macos-arm64.pkg` (or
+`hello-<version>-macos-arm64.pkg`) shows the signature.
+The MDM gate takes the release's pkg as it is: its digest on the allowlist is the line of
+`SHA256SUMS`, the signed file's ([enrollment-coordinator.md](enrollment-coordinator.md)).
+
 ### Boot id
 
 The daemon's clock reads the boot id through a port, `hostkeeper_steps::BootIdSource`. On a Mac
@@ -489,32 +519,26 @@ boot id is never empty. One that cannot be read or parsed is an error, read as "
 rebooted", never as the same boot: a stamp of an unknown boot measures no elapsed time (the step
 runner begins such a window again once, when it first meets it, then counts it on its own
 process's monotonic clock); the start pass reads the step records as after a boot, alerts
-`journal_unavailable`, writes no `.boot-id` and runs no hook; and starts of an unknown boot are no
-burst for the fallback. A stamp of an unknown boot is stored with an empty `boot_id`, the value
+`journal_unavailable`, writes no `.boot-id` and runs no hook. A stamp of an unknown boot is stored with an empty `boot_id`, the value
 older releases wrote on a Mac, so the on-disk format is unchanged.
 
 ### The device run
 
 The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
 runner (`macos-15`) after every merge to `main` and by hand, as root, and in
-`.github/workflows/pr-device.yml`, a copy of it key for key, on every pull request, beside the
-job `macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md
+`.github/workflows/pr-device.yml`, a copy of it key for key, on every pull request that changes a
+path the macOS jobs build or read (CONTRIBUTING.md has the path rule), beside the job `macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md
 says which).
-Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs` and
-`device_mac_selfupdate.rs`) are not
+Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs`,
+`device_mac_selfupdate.rs` and `self_update_across_releases.rs`) are not
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:
 
 - start the daemon as a launchd job of the system domain, with a config and directories of their
-  own, call `Status` on its admin socket, and read the Mac's boot id in the `.boot-id` its start
+  own, read the Mac's boot id in the `.boot-id` its start
   pass wrote;
 - run the fixture hook in mode `sleep` as a step job through `LaunchdLauncher` with a bound of 5
   seconds: the job is booted out at the bound, the step has no exit code (a failed step), and
   launchd no longer holds the job;
-- probe the daemon binary's `self-update-protocol` as a launchd job through `LaunchdLauncher`
-  (the job `dev.hostkeeper.hostkeeper.probe.<unit>`): it exits 0 and prints exactly the protocol
-  and a newline, the daemon's probe reads that protocol, and launchd no longer holds the job; a
-  probe of a program that never ends, bounded at 1 second, is booted out at the bound with no
-  exit code;
 - read a running job, an ended job and an unknown label through the observer's service manager:
   active, inactive, not found;
 - read the boot id from `kern.bootsessionuuid` twice: a UUID, the same on both reads;
@@ -547,17 +571,28 @@ counted by the coverage gate; what they drive is measured against fakes on Linux
   `self_update.rs`): the daemon, a launchd job of the daemon's own plist from `current` of its
   binary directory, is ordered to the next version with releases the test seals in its package
   store and a coordinator of files the test writes:
-  - an installed daemon ordered the update: the new binary's protocol is asked through a launchd
-    job, `current` is switched, the daemon exits and launchd starts the new binary, which settles
-    the update `Succeeded`, with `previous` the old version, and reports it;
+  - an installed daemon ordered the update: it links `next` at the new binary and exits, launchd
+    starts the job's program, the old binary execs the new one, which finishes the switch
+    (`current` the new version, `previous` the old one), settles the update `Succeeded` and
+    reports it;
   - a daemon the pkg installed (no package of hostkeeper) ordered the install of the next
     release: the same, and the package is installed at the new version;
   - a daemon the pkg installed ordered the install of the version it runs: `Succeeded` at once,
-    with no probe and the same process;
+    with the same process;
+  - a next binary that cannot start: the old binary execs it three times, then settles the update
+    `Failed` (`self_update_fallback`), lists the version bad and runs, with `current` never
+    moved;
   - the real coordinator in the test's process, answering each heartbeat the daemon wrote (its
     rollout asks two healthy heartbeats of a host at its version), orders the update: the daemon
     restarts into the next version, the new binary reports the update's `Succeeded` under the
     coordinator's order id and its own job running, healthy and at the new version, and the
     coordinator reads the host baked and hostkeeper converged.
-  The fallback of a next binary that cannot start is not run there: the daemon of the test writes
-  its fallback job beside its placed units, not in `/Library/LaunchDaemons`.
+- update hostkeeper itself from the published release `previous-release.toml` pins to this build
+  (`self_update_across_releases.rs`, the cross-release rig, which runs on Linux too; CONTRIBUTING.md
+  says how the pin moves): the released daemon is the job `dev.hostkeeper.hostkeeper` of the
+  daemon's own plist in `/Library/LaunchDaemons`, ordered by the real coordinator with packages
+  from the loopback release channel. The pin is release 0.1.194, which hands over: it updates to
+  this build by the hand-over, and this build settles the update `Succeeded`; a version of this
+  build that cannot start is fallen back from by the released binary's hand-over (three tries,
+  then `Failed`, `self_update_fallback`), with no fallback job armed or removed; and this build
+  updates to itself under a newer version name by the hand-over.

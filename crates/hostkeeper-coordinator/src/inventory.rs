@@ -42,7 +42,7 @@
 //! Apart from the match, each record says what the enrollment store holds for its host id
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
-//! heard from, which `Hosts.List` (the hosts heard from since start) does not show.
+//! heard from, and for a denied or retired host, which `Hosts.List` does not show when it is not heard.
 //!
 //! A record may also state the platform its server is installed as by network boot
 //! ([`InventoryRecord::platform`]: `linux-x86_64` or `linux-arm64`), which `hostkeeper-pxe` needs
@@ -101,6 +101,10 @@ pub struct InventoryRecord {
     /// The role it is meant for.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
+    /// The host group it is meant for; empty when it names none. Written only when it names one,
+    /// so a file whose records name none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_group: String,
     /// The MACs of its data interfaces.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_macs: Vec<String>,
@@ -407,6 +411,7 @@ fn record_proto(
             .platform
             .map_or(agent::Platform::Unspecified, platform_proto)
             .into(),
+        host_group: String::new(),
     }
 }
 
@@ -498,6 +503,7 @@ fn record_of(
     Ok(InventoryRecord {
         host_id,
         role,
+        host_group: String::new(),
         data_macs,
         bmc_mac,
         serial,

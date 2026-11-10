@@ -78,9 +78,31 @@ fn export_refuses_to_leave_the_enrollment_store_behind() {
     assert!(into.files().is_empty());
 }
 
+/// Notes that the daemon of `host` runs `web` 1.0 from `deb`, in `enrolling`'s store.
+fn note_running(enrolling: &Enrolling, host: &str) {
+    let running = hostkeeper_enrollment::enroll::HostRunning {
+        agent_name: "hostkeeper".to_owned(),
+        agent_version: "0.2.0".to_owned(),
+        services: vec![hostkeeper_enrollment::enroll::RunningService {
+            service: "web".to_owned(),
+            version: "1.0".to_owned(),
+            installer: "deb".to_owned(),
+        }],
+    };
+    enrolling
+        .enrollment
+        .store()
+        .note_running(
+            &hostkeeper_enrollment::names::HostId::parse(host).expect("a host id"),
+            &running,
+            crate::enrollment::tests::support::NOW + 60,
+        )
+        .expect("noted");
+}
+
 /// Proves: the files an export writes are the state the database holds: imported again into a
 /// second database, they give back every row of every table, the audit history with its numbers
-/// and the enrollment store; and a pruned history is written as a sealed segment past the first,
+/// and the enrollment store (a host's record of what it runs among it); and a pruned history is written as a sealed segment past the first,
 /// so the file store says the same time of its oldest line.
 ///
 /// Catches: a part an export leaves out or writes in a form the file store does not read, or an
@@ -89,12 +111,14 @@ fn export_refuses_to_leave_the_enrollment_store_behind() {
 fn an_export_imported_again_gives_back_every_row() {
     let enrolling = Enrolling::new("transfer-round-ca");
     enrolled(&enrolling.enrollment, &HostKey::new(), "m-1", "web-1");
+    note_running(&enrolling, "web-1");
     let mut store = Store::recorded("transfer-round");
     store.put("desired.json.jti", b"live 99999999999\n");
     audit(&store, 9, 1_850_000_000, 2);
     store.paths.enrollment_dir = Some(enrolling.files.store.clone());
     let first = TestDatabase::new();
     imported(&store, &first).expect("imported");
+    assert_eq!(count(&first, "enrollment_host_running"), 1);
 
     let mut out = Store::new("transfer-round-out");
     out.paths.enrollment_dir = Some(out.dir.path().join("enrollment"));

@@ -1,6 +1,7 @@
 //! The Postgres store (`docs/design/coordinator-storage.md`, build item C3): the coordinator's
 //! state in the tables of migration `0001`, behind the same [`Backend`] as the files and the fake,
-//! and the enrollment store's records behind its `Records` port ([`PgRecords`]).
+//! the enrollment store's records behind its `Records` port ([`PgRecords`]), and the MDM gate's
+//! device records behind its `DeviceStore` ([`PgDevices`], migration `0005`).
 //!
 //! - **The start** ([`Postgres::open`]): open the writing session, take the coordinator's
 //!   advisory lock without waiting (another coordinator holding it refuses the start), run the
@@ -19,10 +20,15 @@
 //!   commit of unknown outcome is settled at the revival by the lease's counter, and what it
 //!   turned out to be is taken by the stores ([`Landing`]). Another epoch found deposes the store.
 
+mod at;
+mod devices;
 mod dsn;
 mod generations;
+mod groups;
 pub(crate) mod migrate;
 mod records;
+mod releases;
+mod repositories;
 pub(crate) mod rows;
 pub(crate) mod session;
 pub(crate) mod state;
@@ -35,6 +41,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use hostkeeper_oidc::Clock;
 
+pub(crate) use devices::PgDevices;
 pub use dsn::DsnError;
 pub(crate) use dsn::{Dsn, TIMEOUTS, Timeouts};
 pub(crate) use records::PgRecords;
@@ -237,7 +244,7 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
     let verdicts = state::verdicts_of(&read(session, &state::VERDICTS)?)?;
     let ring = session
         .query(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason FROM audit \
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
              ORDER BY seq DESC LIMIT $1",
             &[&(AUDIT_RING as i64)],
         )
@@ -267,7 +274,8 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
     })
 }
 
-/// The audit line of a row of `audit`, its columns in their order.
+/// The audit line of a row of `audit`, its columns in their order (`host_group`, of migration
+/// `0008`, last).
 fn logged_of(row: &postgres::Row) -> Logged {
     let unsigned = |i: usize| u64::try_from(row.get::<_, i64>(i)).unwrap_or_default();
     AuditLine {
@@ -278,6 +286,7 @@ fn logged_of(row: &postgres::Row) -> Logged {
         detail: Detail {
             service: row.get(4),
             node_id: row.get(5),
+            host_group: row.get(7),
             reason: row.get(6),
         },
     }
@@ -287,8 +296,8 @@ fn logged_of(row: &postgres::Row) -> Logged {
 /// The statement that writes the audit line `line`.
 fn audit_insert(line: &AuditLine) -> Result<Stmt, StoreError> {
     Ok(Stmt {
-        sql: "INSERT INTO audit (seq, at_unix, by_name, action, service, node_id, reason) \
-              VALUES ($1, $2, $3, $4, $5, $6, $7)"
+        sql: "INSERT INTO audit (seq, at_unix, by_name, action, service, node_id, reason, host_group) \
+              VALUES ($1, $2, $3, $4, $5, $6, $7, $8)"
             .to_owned(),
         params: vec![
             Val::Int(state::int(line.seq)?),
@@ -298,6 +307,7 @@ fn audit_insert(line: &AuditLine) -> Result<Stmt, StoreError> {
             Val::text_or_null(line.detail.service.as_deref()),
             Val::text_or_null(line.detail.node_id.as_deref()),
             Val::text_or_null(line.detail.reason.as_deref()),
+            Val::text_or_null(line.detail.host_group.as_deref()),
         ],
     })
 }
@@ -589,7 +599,7 @@ impl Backend for Postgres {
         ];
         let order = if query.newest { "DESC" } else { "ASC" };
         let sql = format!(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason FROM audit \
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
              WHERE seq > $1 \
              AND ($2::text IS NULL OR CASE $2::text WHEN 'operator' \
                   THEN by_name NOT IN ('coordinator', 'ci') ELSE by_name = $2::text END) \
@@ -626,7 +636,7 @@ impl Backend for Postgres {
                 .read(move |session| {
                     Ok(session
                         .query(
-                            "SELECT seq, at_unix, by_name, action, service, node_id, reason \
+                            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group \
                              FROM audit WHERE seq > $1 ORDER BY seq LIMIT 1024",
                             &[&after],
                         )?
@@ -730,7 +740,7 @@ impl Backend for Postgres {
 
 impl Drop for Inner {
     fn drop(&mut self) {
-        // The writing session goes first, and the lock with it.
+        // The writing session goes first, its lock freed before it closes ([`Writer`]'s drop).
         self.writer.stop();
         self.reader.stop();
     }

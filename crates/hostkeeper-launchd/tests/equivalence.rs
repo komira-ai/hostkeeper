@@ -16,10 +16,7 @@
 //! - the capture keeps the last 1 MiB of each stream, and the report line from it;
 //! - a step run again under the same unit reports what the second run wrote;
 //! - an additive step (the hook's `uninstall`) keeps its own exit code and report line within
-//!   its bound, and past it is stopped at the bound and is a failed step;
-//! - a probe (the daemon asking a new hostkeeper binary for its self-update protocol) keeps its
-//!   own exit code and output within its bound, and past it, or past 1 second when its bound is
-//!   0, is stopped and did not exit 0.
+//!   its bound, and past it is stopped at the bound and is a failed step.
 
 mod support;
 
@@ -33,8 +30,8 @@ use std::time::Duration;
 use hostkeeper_hook::{Outcome, Step};
 use hostkeeper_launchd::{Label, LaunchdLauncher};
 use hostkeeper_steps::{
-    AdditiveCall, Bound, Captured, ProbeCall, ProbeExit, Program, RING_BYTES, Ring, Spawner,
-    StepExit, StepLauncher, StepLog, SystemdLauncher,
+    AdditiveCall, Bound, Captured, Program, RING_BYTES, Ring, Spawner, StepExit, StepLauncher,
+    StepLog, SystemdLauncher,
 };
 use hostkeeper_testkit::Scratch;
 use support::{FakePace, Hook, PARAMS, SimLaunchd, call, hook_file, scratch, secs};
@@ -202,12 +199,9 @@ struct LaunchdRig {
     logged: Logged,
 }
 
-/// The label of the job of `unit`: a step's, or else a probe's.
+/// The label of the job of the step unit `unit`.
 fn label(unit: &str) -> String {
-    Label::from_unit(unit)
-        .or_else(|_| Label::probe(unit))
-        .expect("a step or a probe unit")
-        .to_string()
+    Label::from_unit(unit).expect("a step unit").to_string()
 }
 
 impl LaunchdRig {
@@ -503,55 +497,6 @@ fn an_additive_step_keeps_its_exit_within_its_bound_and_is_stopped_past_it() {
         assert_eq!(
             rig.stopped_after(),
             [Duration::from_secs(30)],
-            "{}",
-            rig.name()
-        );
-        assert!(!rig.is_running(unit), "{}", rig.name());
-    }
-}
-
-/// Catches a launcher that runs no probe (the Mac's did not, so every Mac self-update was
-/// refused `protocol_unreadable`), or runs one under other rules than the other launcher: the
-/// probe `self-update-protocol`, bounded at 10 s, keeps its exit code 0 and its whole output
-/// when it ends within the bound; one that would run an hour is stopped at 10 s and did not exit
-/// 0; and with a bound of 0 it is stopped at 1 s, never unbounded.
-#[test]
-fn a_probe_keeps_its_exit_within_its_bound_and_is_stopped_past_it() {
-    let (_dir, binary, rigs) = rigs("equivalence-probe");
-    let unit = "hostkeeper-self-update-protocol";
-    let call = |timeout_secs| ProbeCall {
-        service: "hostkeeper",
-        executable: &binary,
-        args: &["self-update-protocol"],
-        unit,
-        timeout_secs,
-        output_bytes: 64,
-    };
-    for rig in &rigs {
-        rig.script(unit, Hook::exits(9, 0, "1"));
-        rig.script(unit, Hook::exits(3600, 0, "1"));
-        rig.script(unit, Hook::exits(3600, 0, "1"));
-        let run = |timeout_secs| {
-            rig.launcher()
-                .run_probe(&call(timeout_secs))
-                .unwrap_or_else(|e| panic!("{}: the probe ran: {e}", rig.name()))
-        };
-        assert_eq!(
-            run(10),
-            ProbeExit {
-                code: Some(0),
-                output: b"1\n".to_vec(),
-                truncated: false,
-            },
-            "{}",
-            rig.name()
-        );
-        assert!(rig.stopped_after().is_empty(), "{}", rig.name());
-        assert_ne!(run(10).code, Some(0), "{}", rig.name());
-        assert_ne!(run(0).code, Some(0), "{}", rig.name());
-        assert_eq!(
-            rig.stopped_after(),
-            [Duration::from_secs(10), Duration::from_secs(1)],
             "{}",
             rig.name()
         );

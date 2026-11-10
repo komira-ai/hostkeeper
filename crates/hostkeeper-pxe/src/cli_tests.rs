@@ -144,6 +144,7 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         "--ssh-authorized-keys",
         "--install-disk",
         "--serial-console",
+        "--repositories",
         "--reinstall",
         "--user-id",
         "--group-id",
@@ -188,6 +189,7 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         assert_eq!(flags.mode, ModeFlag::Router);
         assert!(!flags.notify_systemd);
         assert_eq!(flags.settings, None);
+        assert_eq!(flags.repositories, None);
         Err("the coordinator could not be read".to_owned())
     };
     let (status, out, err) = run_with(&with_mode, &refused, &host);

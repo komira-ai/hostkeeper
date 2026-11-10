@@ -72,6 +72,7 @@ fn hosts(rig: &Rig) -> Vec<String> {
 /// A record as the ops file keeps it.
 fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord {
     InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: String::new(),
         data_macs: data.iter().map(|m| (*m).to_owned()).collect(),
@@ -129,6 +130,7 @@ fn an_added_record_keeps_one_spelling_of_each_mac_and_is_listed_and_audited() {
         used_by_request_id: String::new(),
         used_unix: 0,
         platform: 0,
+        host_group: String::new(),
     };
     assert_eq!(added.record.as_ref(), Some(&want));
     let entry = added.entry.expect("an audit entry");

@@ -179,6 +179,7 @@ pub(super) fn line(seq: u64, at_unix: u64) -> AuditLine {
         by: "alice".to_owned(),
         action: "exclude".to_owned(),
         detail: Detail {
+            host_group: None,
             service: Some("kbf".to_owned()),
             node_id: Some(format!("s{seq}")),
             reason: Some("a reason".to_owned()),
@@ -672,8 +673,8 @@ fn import_reads_the_halts_file_a_start_would_settle_on() {
 
 /// Proves: an import refuses what `serve` refuses before it touches the database: the marker of
 /// changes not yet written, the marker of a restore that stopped partway, an ops file of a newer
-/// schema, a missing enrollment directory, and the MDM gate's device records, which no table
-/// keeps yet.
+/// schema, a missing enrollment directory, and an MDM device record the gate's reader refuses,
+/// with the gate's own reason.
 ///
 /// Catches: an import that moves a state `serve` would not start on, or drops what the files hold.
 #[test]
@@ -709,12 +710,20 @@ fn import_refuses_what_serve_refuses() {
         Err(TransferError::Files(BackupError::NoEnrollmentDir { .. }))
     ));
     store.put("enrollment/mdm-devices/a.pb", b"a device");
-    match imported(&store, &database) {
-        Err(TransferError::MdmDevices { path }) => {
-            assert_eq!(path, store.dir.path().join("enrollment/mdm-devices"));
-        }
-        other => panic!("{other:?}"),
-    }
+    let refused = imported(&store, &database).expect_err("a device record serve refuses");
+    assert!(matches!(refused, TransferError::Devices(_)), "{refused:?}");
+    assert_eq!(
+        refused.to_string(),
+        format!(
+            "--enrollment-dir: the MDM device records: {}: the file is not a record; the gate \
+             does not guess what a device's record said, so fix or remove the file to start",
+            store
+                .dir
+                .path()
+                .join("enrollment/mdm-devices/a.pb")
+                .display()
+        )
+    );
     // The device records' directory that cannot be read as one is refused too.
     fs::remove_dir_all(store.dir.path().join("enrollment/mdm-devices")).expect("remove");
     store.put("enrollment/mdm-devices", b"not a directory");
@@ -735,7 +744,7 @@ fn import_refuses_what_serve_refuses() {
 }
 
 /// Proves: the enrollment store moves whole: a host enrolled on the files (its request, its
-/// certificate, its host row, the serial counter) and a deny row are in the database after the
+/// certificate, its host row, its record of what it runs, the serial counter) and a deny row are in the database after the
 /// import as the files held them, and a store started on the database knows the host.
 ///
 /// Catches: a record kind the import leaves out, or a serial counter that starts again from the
@@ -744,6 +753,19 @@ fn import_refuses_what_serve_refuses() {
 fn import_moves_the_enrollment_store_whole() {
     let enrolling = Enrolling::new("transfer-enrolled");
     enrolled(&enrolling.enrollment, &HostKey::new(), "m-1", "web-1");
+    enrolling
+        .enrollment
+        .store()
+        .note_running(
+            &host_id("web-1"),
+            &hostkeeper_enrollment::enroll::HostRunning {
+                agent_name: "hostkeeper".to_owned(),
+                agent_version: "0.2.0".to_owned(),
+                services: Vec::new(),
+            },
+            NOW + 60,
+        )
+        .expect("noted");
     enrolling
         .enrollment
         .store()
@@ -759,11 +781,13 @@ fn import_moves_the_enrollment_store_whole() {
         ("enrollment_requests", files.requests.len()),
         ("enrollment_issued", files.issued.len()),
         ("enrollment_hosts", files.hosts.len()),
+        ("enrollment_host_running", 1),
         ("enrollment_deny", files.deny.len()),
     ] {
         assert_eq!((table, count(&database, table)), (table, rows));
         assert!(rows > 0, "{table}");
     }
+    assert!(files.hosts.iter().any(|h| h.running.is_some()));
     let next = files.serial.expect("a serial was taken");
     assert_eq!(
         database.rows("SELECT next FROM enrollment_serial"),

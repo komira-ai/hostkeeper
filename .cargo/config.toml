@@ -2,3 +2,14 @@
 # step is one command and the logic behind it is Rust with tests.
 [alias]
 xtask = "run -p xtask --locked --"
+
+# The C compiler of the two static targets hostkeeper's own Linux build uses
+# (docs/design/packages.md section 5.4, "One build, every release"): the host's gcc. The one C of
+# that build is ring's, which links against no libc of its own, so a glibc host's gcc builds it
+# for musl, and Rust's musl targets bring their own static libc and startup files. Each target is
+# built on a host of its own architecture (artifacts.yml), so the plain `gcc` of that host is the
+# right one; cross-building takes a `CC_<target>` of the environment, which this does not
+# override.
+[env]
+CC_x86_64_unknown_linux_musl = "gcc"
+CC_aarch64_unknown_linux_musl = "gcc"

@@ -2,7 +2,9 @@
 //! `Renew`.
 //!
 //! The adapter has no rule of its own. `Heartbeat` is turned into the JSON the frozen route
-//! reads ([`super::beat_map`]) and answered by the same code ([`crate::http::beat`]); `Enroll`,
+//! reads ([`super::beat_map`]) and answered by the same code ([`crate::http::beat`]), with what
+//! it says of the host's trusted root, which the JSON has no key for, beside it
+//! ([`crate::trusted_root`]); `Enroll`,
 //! `Poll` and `Renew` are the handlers of [`crate::enrollment`]. Who calls was settled by the
 //! router before the request was read ([`super::admit`]) and arrives in the request's
 //! extensions; a refusal is a status whose message is exactly one token of `CoordinatorRefusal`.
@@ -21,6 +23,7 @@ use crate::enrollment::Enrollment;
 use crate::http::{BeatCaller, BeatRefused, beat};
 use crate::orders::Order;
 use crate::service::Coordinator;
+use crate::trusted_root::TrustedRootSaid;
 
 /// The gRPC status of a refused heartbeat: the code and the token `CoordinatorRefusal` names.
 pub(crate) fn beat_status(refused: BeatRefused) -> Status {
@@ -38,6 +41,8 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
         acks: crate::verdict_file::to_proto(&answer.acks),
+        repositories: None,
+        facts: None,
     }
 }
 
@@ -73,9 +78,27 @@ impl Api for AgentService {
             return Err(beat_status(BeatRefused::Forbidden));
         };
         let bytes = beat_map::json(request.get_ref(), self.coordinator.legacy_service());
+        let root = Some(TrustedRootSaid::of(request.get_ref()));
+        // The installers have no key on the JSON route: read here, before the heartbeat is
+        // decided, so this heartbeat's own order is picked from them.
+        if !retiring {
+            self.coordinator
+                .hear_installers(&identity, request.get_ref());
+            self.coordinator
+                .hear_repositories(&identity, request.get_ref());
+        }
+        let host_id = identity.host_id.clone();
+        let facts = (!retiring)
+            .then(|| self.coordinator.host_facts(&identity, request.get_ref()))
+            .flatten();
         let caller = BeatCaller { identity, retiring };
-        let (answer, order) = beat(&self.coordinator, caller, &bytes, true).map_err(beat_status)?;
-        Ok(Response::new(response_of(answer, order)))
+        let (answer, order) = beat(&self.coordinator, caller, &bytes, root).map_err(beat_status)?;
+        // The set is made once the heartbeat is taken: the host's announced features are the
+        // ones this heartbeat said.
+        let mut response = response_of(answer, order);
+        response.repositories = self.coordinator.repository_set(&host_id);
+        response.facts = facts;
+        Ok(Response::new(response))
     }
 
     async fn enroll(

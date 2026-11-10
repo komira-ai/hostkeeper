@@ -147,7 +147,8 @@ async fn a_second_exclusion_of_the_same_host_replaces_the_reason() {
 async fn no_ops_file_exists_until_the_first_action() {
     use std::os::unix::fs::PermissionsExt;
     let rig = Rig::new("op-lazy");
-    rig.set(STATE).await;
+    // A set with a release is audited, which makes the file: this set has none.
+    rig.set_plain(STATE).await;
     call(
         &rig,
         Surface::Heartbeat,
@@ -418,15 +419,7 @@ async fn labels_do_not_change_what_a_host_is_told_without_a_selector() {
         for at in [1_100, 1_200, 1_300] {
             rig.at(at);
             for (name, role) in [("d1", "daemon"), ("s1", "storage"), ("f1", "frontend")] {
-                let (code, reply) = call(
-                    &rig,
-                    Surface::Heartbeat,
-                    &updater(name, role),
-                    request("POST", HEARTBEAT_PATH, None, BEAT),
-                )
-                .await;
-                assert_eq!(code, StatusCode::OK);
-                replies.push(reply);
+                replies.push(native_beat(&rig, name, role, BEAT).await);
             }
         }
         let mut status = status(&rig).await;

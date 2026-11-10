@@ -4,18 +4,20 @@
 //! [`crate::marks_support::rig`]: `web` and `db` on the roles `daemon` and `storage`; the roles
 //! `mac` and `arm` are in no rollout file.
 
-use hostkeeper_config::platform::Platform as IndexPlatform;
 use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::ServiceBeat;
 use serde_json::{Value, json};
 
 use crate::assign_support::{assign, unassign};
 use crate::converge::State;
+use crate::index_set_support::try_set;
 use crate::marks_support::{
-    INSTALLER, NEW_DAEMON, WEB, ask_typed, beat_of, hold, rig, runs, scope_host, set, unhold,
+    INSTALLER, NEW_DAEMON, WEB, ask_typed, beat_of, beat_on, hold, rig, runs, scope_host, set,
+    set_targets, unhold,
 };
 use crate::orders::Order;
-use crate::release_index_support::{beat_on, set_index, try_set};
+use crate::releases::Targets;
+use crate::releases_tests::{apt_entry, list};
 use crate::testutil::{OPERATOR, Rig};
 
 /// The role counts of `web` in the status, as `[role, at_desired, updating, failed, down]`.
@@ -113,7 +115,7 @@ async fn a_role_assigned_by_an_operator_is_counted_until_its_hosts_are_at_desire
     assert_eq!(state(&rig), State::Converged);
     assert_eq!(
         releases_status(&rig),
-        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1], ["mac", 1]], "missing": null})
+        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1], ["mac", 1]], "missing": 0})
     );
 
     beat(&rig, "a1", "arm", vec![runs(WEB, "1.0")]);
@@ -162,7 +164,7 @@ async fn an_unassign_takes_the_hosts_out_of_the_count() {
     assert_eq!(state(&rig), State::Converged);
     assert_eq!(
         releases_status(&rig),
-        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": null})
+        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": 0})
     );
 }
 
@@ -197,16 +199,16 @@ async fn hosts_the_order_path_does_not_order_are_not_counted() {
 /// Catches: an assigned host counted missing although the order path can never install the
 /// service on it, which would keep the service from converging for ever: a host whose daemon lists
 /// its services but does not take installs (`unsupported`), and a host whose platform the release
-/// index lists no package for (`no_package_for_platform`), are not missing; a host of the same
-/// role on a listed platform is.
+/// lists no entries for (`no_target`), are not missing; a host of the same role on a listed
+/// platform is.
 #[tokio::test]
 async fn an_assigned_host_the_order_path_cannot_install_is_not_missing() {
     let rig = rig("counts-not-installable", "");
-    let linux = [
-        (IndexPlatform::LinuxX86_64, 1),
-        (IndexPlatform::LinuxArm64, 2),
-    ];
-    set_index(&rig, WEB, "2.0", &linux).await;
+    let linux = Targets::from([
+        ("linux-x86_64".to_owned(), list(vec![apt_entry(WEB, 1)])),
+        ("linux-arm64".to_owned(), list(vec![apt_entry(WEB, 2)])),
+    ]);
+    set_targets(&rig, WEB, "2.0", linux).await;
     let on = |host: &str, platform: Platform, services: Vec<ServiceBeat>| {
         ask_typed(&rig, host, "mac", beat_on(platform, services)).1
     };
@@ -227,7 +229,7 @@ async fn an_assigned_host_the_order_path_cannot_install_is_not_missing() {
     assert_eq!(state(&rig), State::Converged);
     assert_eq!(
         releases_status(&rig),
-        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": null})
+        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": 0})
     );
 
     on("m3", Platform::LinuxArm64, vec![]);
@@ -240,7 +242,7 @@ async fn an_assigned_host_the_order_path_cannot_install_is_not_missing() {
 
 /// Catches: an assigned host counted missing while the order path holds its install back for
 /// good: a host an operator holds (`held`), and every host while the desired version names no
-/// package (`no_digest`), are not missing; once the hold is released, and once CI sets a version
+/// release (`no_build_for_host`), are not missing; once the hold is released, and once CI sets a version
 /// with a package, the host is missing until it installs.
 #[tokio::test]
 async fn an_assigned_host_held_or_without_a_package_is_not_missing() {
@@ -252,7 +254,8 @@ async fn an_assigned_host_held_or_without_a_package_is_not_missing() {
     beat(&rig, "m1", "mac", vec![]);
     assign(&rig, WEB, "", "mac").expect("assigned");
     assert_eq!(beat(&rig, "m1", "mac", vec![]), None);
-    assert_eq!(state(&rig), State::Converged);
+    // A version CI set with no release picks no host an entry, so no host is counted at all.
+    assert_eq!(state(&rig), State::InProgress);
 
     set(&rig, WEB, "2.0", 1).await;
     hold(&rig, WEB, scope_host("m1")).expect("held");
@@ -260,7 +263,7 @@ async fn an_assigned_host_held_or_without_a_package_is_not_missing() {
     assert_eq!(state(&rig), State::Converged);
     assert_eq!(
         releases_status(&rig),
-        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": null})
+        json!({"state": "CONVERGENCE_STATE_CONVERGED", "roles": [["daemon", 1]], "missing": 0})
     );
 
     unhold(&rig, WEB, scope_host("m1")).expect("released");

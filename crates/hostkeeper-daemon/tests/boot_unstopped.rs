@@ -3,12 +3,14 @@
 //! first.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
-use hostkeeper_daemon::admin::service_record;
 use hostkeeper_daemon::boot::Outcome;
+use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::locks::Package;
 use hostkeeper_daemon::testing::{FakeClock, Log, spawn};
 use hostkeeper_daemon::verb::{HookedVerb, PackageDigest};
@@ -16,7 +18,8 @@ use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::Step;
 use hostkeeper_steps::CrashPoint;
 use hostkeeper_steps::record::State;
-use support::{Rig, alerting, crash_at, d, lines, name, ok, update};
+use support::{alerting, crash_at, d, lines, name, ok};
+use support_host::NativeHost;
 
 /// Catches a daemon that exits, lets go of the service, or rewrites the record when a step of
 /// the start pass cannot be stopped: `alpha`'s resumed `prepare` runs past its bound and the
@@ -28,10 +31,10 @@ use support::{Rig, alerting, crash_at, d, lines, name, ok, update};
 /// Once stops work again, the next start stops the unit first and finishes the update.
 #[test]
 fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
-    let rig = Rig::new("boot-unstopped");
-    rig.add("alpha", "2.0.0");
-    rig.add("alpha", "3.0.0");
-    rig.add("beta", "2.0.0");
+    let rig = NativeHost::new("boot-unstopped");
+    rig.add_staged("alpha", "2.0.0");
+    rig.add_staged("alpha", "3.0.0");
+    rig.add_staged("beta", "2.0.0");
     let (first, _) = rig.booted();
     drop(first);
     // The daemon dies right after the first record of `alpha`'s update: `prepare` is pending.
@@ -39,7 +42,7 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
         Some(CrashPoint::AfterWrite(1)),
         Arc::new(AtomicU64::new(0)),
     ));
-    let reply = dying.order(&update("alpha", "2.0.0", &d(), 1));
+    let reply = dying.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
     assert_eq!(rig.record("alpha").expect("a record").state, State::Pending);
     drop(dying);
@@ -96,21 +99,24 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
         .collect();
     assert_eq!(names, ["alpha", "beta"]);
     assert!(status.services[0].stuck & status.services[0].step_running());
-    let record = service_record(&status.services[0]);
-    assert_eq!(
-        record.current.expect("under way").reason,
-        "unstoppable_unit"
-    );
-    assert!(service_record(&status.services[1]).current.is_none());
+    let RecordState::Unfinished(record) = &status.services[0].record else {
+        panic!(
+            "alpha's update is under way: {:?}",
+            status.services[0].record
+        )
+    };
+    assert!(matches!(record.state, State::Running { .. }));
+    assert_eq!(status.services[1].record, RecordState::Absent);
+    assert!(!status.services[1].step_running());
     let package = Package {
         verb: HookedVerb::Update,
         version: hostkeeper_config::names::Version::new("2.0.0").expect("version"),
         digest: PackageDigest::new(&d()).expect("digest"),
     };
     assert!(daemon.ctx().locks.take(&alpha, package).is_err());
-    let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
+    let other = daemon.order(&rig.update("alpha", "3.0.0", 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy));
-    let resend = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let resend = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(
         resend,
         Reply::Refused {
@@ -119,7 +125,7 @@ fn unstopped_keeps_serving_holds_the_lock_and_leaves_the_step_running() {
         }
     );
     assert_eq!(
-        daemon.order(&update("beta", "2.0.0", &d(), 1)),
+        daemon.order(&rig.update("beta", "2.0.0", 1)),
         Reply::Finished {
             verdict: ok().verdict,
             reason: None,

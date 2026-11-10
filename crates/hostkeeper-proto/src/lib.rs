@@ -13,8 +13,13 @@
 //!   operator's holds; `Enrollment`, the hosts waiting for an operator's approval; `Audit`,
 //!   the log of every change; `Alerts`, the conditions that need a person; `Rollouts`, the
 //!   update plans; and `Mdm`, the devices the MDM policy gate knows.
-//! - `hostkeeper.local.v1`: `Admin`, what root on the host may ask of its daemon with the
-//!   coordinator down (status, abort, clear a corrupt step record).
+//! - `hostkeeper.release.v1`: no service; the messages of a release, a list of artifacts per
+//!   platform, one per installer, each with its manifest, which the operator API's
+//!   `SetDesired` and `GetRelease` carry, and an agent's order the one entry picked for its host
+//!   (docs/design/packages.md sections 3.1 and 3.3).
+//! - `hostkeeper.local.v1`: `Admin`, the admin socket's service, which no program serves any
+//!   more. Its file stays, frozen, in [`FILE_DESCRIPTOR_SET`], so the compatibility test holds
+//!   it to the last release; no code is generated from it (`build.rs`).
 //!
 //! Modules mirror the proto packages, because generated code names other packages by relative
 //! paths (`super::super::...`).
@@ -43,10 +48,10 @@ pub mod hostkeeper {
             tonic::include_proto!("hostkeeper.operator.v1");
         }
     }
-    pub mod local {
-        /// The host-local service of the daemon: `Admin`, root's socket.
+    pub mod release {
+        /// A release: per platform, the artifacts of each installer and their manifests.
         pub mod v1 {
-            tonic::include_proto!("hostkeeper.local.v1");
+            tonic::include_proto!("hostkeeper.release.v1");
         }
     }
 }
@@ -60,7 +65,7 @@ pub const MAX_SERVICES_PER_HEARTBEAT: usize = 16;
 pub const FILE_DESCRIPTOR_SET: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/hostkeeper.binpb"));
 
-/// The command table of `hostkeeper ctl`, generated from the descriptors.
+/// The command table `hkctl` and the UI client are generated from, itself generated from the descriptors.
 pub mod ctl;
 
 #[cfg(test)]

@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 const HOOK: &str = "hostkeeper-hook";
+const INSTALL: &str = "hostkeeper-install";
 const CONFIG: &str = "hostkeeper-config";
 const STEPS: &str = "hostkeeper-steps";
 const TESTKIT: &str = "hostkeeper-testkit";
@@ -19,19 +20,18 @@ const WIRE: &str = "hostkeeper-wire";
 const OIDC: &str = "hostkeeper-oidc";
 const TLS: &str = "hostkeeper-tls";
 const COORDINATOR: &str = "hostkeeper-coordinator";
-const UNPACK: &str = "hostkeeper-unpack";
 const ENROLLMENT: &str = "hostkeeper-enrollment";
 const MDM_GATE: &str = "hostkeeper-mdm-gate";
 const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
+const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
+const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
 const PXE_PACKETS: &str = "hostkeeper-pxe-packets";
 const PROTO: &str = "hostkeeper-proto";
-const CTL: &str = "hostkeeper-ctl";
 const HKCTL: &str = "hostkeeper-hkctl";
-const CI: &str = "hostkeeper-ci";
 const DAEMON: &str = "hostkeeper-daemon";
 const ENROLL: &str = "hostkeeper-enroll";
 const LINK: &str = "hostkeeper-link";
@@ -40,6 +40,7 @@ const PACKAGE: &str = "hostkeeper-package";
 const PLACED: &str = "hostkeeper-placed";
 const PRIVILEGED: &str = "hostkeeper-privileged";
 const PXE_SEED: &str = "hostkeeper-pxe-seed";
+const RELEASE: &str = "hostkeeper-release";
 const UI_TESTS: &str = "hostkeeper-ui-tests";
 const BINARY: &str = "hostkeeper";
 const HELLO: &str = "hello";
@@ -55,69 +56,79 @@ pub type Layer = (
 
 /// Every crate of the workspace but those of [`NO_ROW`], in name order. The dev column is what
 /// each crate's tests use: the coordinator's tests turn on `hostkeeper-oidc`'s `testkit` feature
-/// (a fake issuer), which a dev-dependency can do and a normal dependency must not, and run
-/// `hostkeeper-ctl` against an in-process coordinator; the daemon's and the link's tests run a
+/// (a fake issuer), which a dev-dependency can do and a normal dependency must not; the daemon's and the link's tests run a
 /// coordinator in process, behind a listener's TLS (`hostkeeper-tls`), and the daemon's run the
 /// example service hello's hook in process;
-/// hello's tests read its output with the hook contract and load its package with the
-/// manifest loader; `hkctl`'s tests forward the script's calls to a coordinator built from its
-/// flags, whose CI allow-list is `hostkeeper-oidc`'s testkit issuer's; the observer's tests run hooks through the step runner; the CLI
-/// crates' and the web app's tests read the protobuf descriptors, and the web app's send each of
-/// its calls to a coordinator built from its flags, whose CI allow-list is `hostkeeper-oidc`'s
-/// testkit issuer's; the privileged tests drive the
+/// hello's tests read its output with the hook contract; `hkctl`'s tests forward the script's calls to a coordinator built from its
+/// flags, whose CI allow-list is `hostkeeper-oidc`'s testkit issuer's; the observer's tests run
+/// hooks through the step runner; the CLI crates' tests read the protobuf descriptors, and the
+/// web app's send each of its calls to a coordinator built from its flags, whose CI allow-list
+/// is `hostkeeper-oidc`'s testkit issuer's (the web app's crate generates its API client from
+/// the protos' command table and descriptors, a normal dependency); the privileged tests drive the
 /// step runner's launcher and dead-man and the observer's adapters against the host, and on a
 /// Mac start the daemon (their program `hostkeeper-device-daemon`, which needs the daemon as a
-/// normal dependency), the launchd adapters and the package check, call its admin socket, and
+/// normal dependency), the launchd adapters and the package check, and
 /// read the Mac's enrollment claims (`hostkeeper-enroll`'s `MacClaims`) from the real `ioreg`;
-/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with a
-/// package store and a heartbeat link of its own, so it needs the config, the launchd crate's
-/// platform, the link, the placement roots and the step crate as normal dependencies; and the
+/// their program `hostkeeper-selfupdate-daemon` runs the daemon on the Linux adapters with
+/// repository entries and a heartbeat link of its own, so it needs the config, the launchd
+/// crate's platform, the link, the placement roots and the step crate as normal dependencies; and the
 /// first-boot tests start the coordinator and the daemon as child processes (the coordinator is
 /// their program `hostkeeper-privileged-coordinator`, which needs it as a normal dependency); the
-/// end-to-end tests run the coordinator in process with its fake issuer's config, and fetch and
-/// check the fixture's attestation with the package crate; the Mac's self-update test answers
-/// the heartbeats its daemon writes with the coordinator in process, read with the wire crate; the Mac's end-to-end test packages
-/// hello with their program `hello-e2e`, which runs hello's hook and server and so needs hello
-/// as a normal dependency; and the network-install tests run `hostkeeper-pxe` (their program
+/// end-to-end tests run the coordinator in process with its fake issuer's config; and the
+/// network-install tests run `hostkeeper-pxe` (their program
 /// `hostkeeper-privileged-pxe`, which needs it as a normal dependency) and read a DHCP client's
-/// packet with its packet crate. The binary's tests read the protobuf descriptors, and run the macOS
-/// pkg's postinstall (`hostkeeper-launchd`) against the binary.
-pub const LAYERS: [Layer; 31] = [
-    (BINARY, &[DAEMON], &[LAUNCHD, PROTO]),
-    (CI, &[CTL], &[PROTO]),
+/// packet with its packet crate; `hostkeeper-pxe` loads the repository directory `--repositories`
+/// names with the daemon's own loader (`hostkeeper-install`) before any seed is made; the `mdm` package's certificate-unit test loads that package's
+/// units and drop-ins (`hostkeeper-mdm-core`) into the host's systemd. The binary's tests run
+/// the macOS pkg's postinstall (`hostkeeper-launchd`) against the binary. The daemon's tests render
+/// the MDM gate's config profile (`hostkeeper-mdm-gate`) to the files the macos-pkg installer reads. The daemon reads the
+/// macos-pkg installer's signers file at its start (`hostkeeper-install`), and the privileged
+/// tests run that installer's steps against the Mac's real tools; their programs that answer for
+/// the `macos-pkg` installer's tools and run the daemon's installer ports need `hostkeeper-install`
+/// as a normal dependency, and the program `hello-e2e` runs hello's hook and server (`hello`). The MDM gate checks the files
+/// of the config profile's `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg` domains with
+/// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
+/// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
+/// the coordinator starts; neither depends on the gate or the coordinator.
+pub const LAYERS: [Layer; 32] = [
+    (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
-        &[CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, TLS, WIRE],
-        &[CTL, OIDC],
+        &[
+            CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, RELEASE, TLS, WIRE,
+        ],
+        &[OIDC],
     ),
-    (CTL, &[PROTO], &[]),
     (
         DAEMON,
         &[
-            CI, CONFIG, CTL, ENROLL, HOOK, LAUNCHD, LINK, OBSERVE, PACKAGE, PLACED, PROTO, STEPS,
-            UNPACK,
+            CONFIG, ENROLL, HOOK, INSTALL, LAUNCHD, LINK, OBSERVE, OPENRC, PACKAGE, PLACED, PROTO,
+            RELEASE, STEPS,
         ],
-        &[COORDINATOR, HELLO, OIDC, TLS, WIRE],
+        &[COORDINATOR, HELLO, MDM_GATE, OIDC, TLS, WIRE],
     ),
     (ENROLL, &[CONFIG, PROTO, STEPS], &[COORDINATOR, ENROLLMENT]),
     (ENROLLMENT, &[], &[]),
-    (HELLO, &[], &[CONFIG, HOOK]),
+    (HELLO, &[], &[HOOK]),
     (HKCTL, &[PROTO], &[COORDINATOR, OIDC]),
     (HOOK, &[], &[]),
+    (INSTALL, &[CONFIG, LAUNCHD, PROTO, RELEASE, STEPS], &[]),
     (LAUNCHD, &[HOOK, OBSERVE, PLACED, STEPS], &[]),
     (
         LINK,
         &[CONFIG, HOOK, PROTO, STEPS, WIRE],
         &[COORDINATOR, ENROLL, OIDC, TLS],
     ),
-    (MDM, &[MDM_CORE, MDM_STEP], &[]),
+    (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
-    (MDM_GATE, &[CONFIG, ENROLLMENT, WIRE], &[]),
+    (MDM_GATE, &[CONFIG, ENROLLMENT, INSTALL, PACKAGE, WIRE], &[]),
     (MDM_STEP, &[], &[]),
+    (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
     (OIDC, &[], &[]),
-    (PACKAGE, &[CONFIG, HOOK, STEPS], &[]),
+    (OPENRC, &[OBSERVE, PLACED, STEPS], &[HOOK]),
+    (PACKAGE, &[CONFIG, HOOK, PROTO, RELEASE, STEPS], &[]),
     (PLACED, &[CONFIG], &[]),
     (
         PRIVILEGED,
@@ -127,22 +138,15 @@ pub const LAYERS: [Layer; 31] = [
             DAEMON,
             HELLO,
             HOOK,
+            INSTALL,
             LAUNCHD,
             LINK,
             PLACED,
+            PROTO,
             PXE,
             STEPS,
         ],
-        &[
-            ENROLL,
-            OBSERVE,
-            OIDC,
-            PACKAGE,
-            PROTO,
-            PXE_PACKETS,
-            UNPACK,
-            WIRE,
-        ],
+        &[ENROLL, MDM_CORE, OBSERVE, OIDC, PXE_PACKETS],
     ),
     (PROTO, &[], &[]),
     (
@@ -151,6 +155,7 @@ pub const LAYERS: [Layer; 31] = [
             CONFIG,
             ENROLLMENT,
             HOOK,
+            INSTALL,
             PACKAGE,
             PROTO,
             PXE_PACKETS,
@@ -162,10 +167,10 @@ pub const LAYERS: [Layer; 31] = [
     ),
     (PXE_PACKETS, &[WIRE], &[]),
     (PXE_SEED, &[CONFIG, ENROLLMENT, WIRE], &[]),
+    (RELEASE, &[CONFIG, PROTO], &[]),
     (STEPS, &[CONFIG, HOOK], &[]),
     (TLS, &[], &[]),
-    (UI_TESTS, &[], &[COORDINATOR, OIDC, PROTO]),
-    (UNPACK, &[CONFIG, HOOK, STEPS], &[]),
+    (UI_TESTS, &[PROTO], &[COORDINATOR, OIDC]),
     (WIRE, &[], &[]),
 ];
 

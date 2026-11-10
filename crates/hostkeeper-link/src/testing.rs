@@ -13,14 +13,16 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 
-use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal};
+use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
+use crate::host_facts::PushedFacts;
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
-    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
-    Log, Observation, OrderSink, RecordedService, RenewalSource, ServiceObserver, ServiceRecords,
-    Sleeper, Tick, UnixClock,
+    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
+    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
+    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
+use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// A lock that a panicking test thread did not spoil: what it holds is still the fake's state.
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -160,6 +162,7 @@ impl ServiceObserver for FakeObserver {
                 version: None,
                 health: Health::Healthy,
                 health_detail: None,
+                drift: None,
             })
     }
 }
@@ -423,6 +426,115 @@ impl RenewalSource for FakeRenewal {
     }
 }
 
+/// The daemon's report of its trusted root, as a test sets it: none until it does.
+#[derive(Default)]
+pub struct FakeTrustedRoot {
+    root: Mutex<Option<TrustedRootFacts>>,
+}
+
+impl FakeTrustedRoot {
+    pub fn set(&self, root: Option<TrustedRootFacts>) {
+        *lock(&self.root) = root;
+    }
+}
+
+impl TrustedRootSource for FakeTrustedRoot {
+    fn trusted_root(&self) -> Option<TrustedRootFacts> {
+        *lock(&self.root)
+    }
+}
+
+/// The host's repository configuration, as a test sets it: it holds the report a test gives it,
+/// records every set it is given, and lists the installers a test gives it.
+#[derive(Default)]
+pub struct FakeRepositories {
+    report: Mutex<RepositoriesReport>,
+    applied: Mutex<Vec<PushedSet>>,
+    installers: Mutex<Vec<String>>,
+}
+
+impl FakeRepositories {
+    /// Sets the report every heartbeat sends.
+    pub fn set_report(&self, report: RepositoriesReport) {
+        *lock(&self.report) = report;
+    }
+
+    /// Sets the installers every heartbeat lists.
+    pub fn set_installers(&self, installers: &[&str]) {
+        *lock(&self.installers) = installers.iter().map(|name| (*name).to_owned()).collect();
+    }
+
+    /// Every set the loop gave it, in order.
+    pub fn applied(&self) -> Vec<PushedSet> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl RepositorySink for FakeRepositories {
+    fn report(&self) -> RepositoriesReport {
+        lock(&self.report).clone()
+    }
+
+    fn apply(&self, set: &PushedSet) {
+        lock(&self.applied).push(set.clone());
+    }
+
+    fn installers(&self) -> Vec<String> {
+        lock(&self.installers).clone()
+    }
+}
+
+/// The host's facts file, as a test sets it: it records every facts it is given, with how many
+/// jobs the [`World`]'s dispatcher held at that moment (so a test sees what came first), holds
+/// the generation of the last facts it took, and fails every write while a test says so.
+#[derive(Default)]
+pub struct FakeFacts {
+    held: Mutex<Option<u64>>,
+    applied: Mutex<Vec<(PushedFacts, usize)>>,
+    failing: Mutex<bool>,
+    dispatch: Arc<ManualDispatch>,
+}
+
+impl FakeFacts {
+    /// A facts file that counts the jobs of `dispatch` at each write.
+    pub fn seeing(dispatch: Arc<ManualDispatch>) -> FakeFacts {
+        FakeFacts {
+            dispatch,
+            ..FakeFacts::default()
+        }
+    }
+
+    /// Makes every later write fail (`true`) or succeed (`false`).
+    pub fn set_failing(&self, failing: bool) {
+        *lock(&self.failing) = failing;
+    }
+
+    /// Sets the generation the file holds, as one written before.
+    pub fn set_generation(&self, generation: Option<u64>) {
+        *lock(&self.held) = generation;
+    }
+
+    /// Every facts the loop gave it, in order, each with the jobs the dispatcher held then.
+    pub fn applied(&self) -> Vec<(PushedFacts, usize)> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl FactsSink for FakeFacts {
+    fn generation(&self) -> Option<u64> {
+        *lock(&self.held)
+    }
+
+    fn apply(&self, facts: &PushedFacts) -> bool {
+        lock(&self.applied).push((facts.clone(), self.dispatch.pending()));
+        if *lock(&self.failing) {
+            return false;
+        }
+        *lock(&self.held) = Some(facts.generation);
+        true
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -440,8 +552,18 @@ pub struct World {
     pub dispatch: Arc<ManualDispatch>,
     pub halts: Arc<FakeHalts>,
     pub renewal: Arc<FakeRenewal>,
+    pub trusted_root: Arc<FakeTrustedRoot>,
     pub clock: Arc<FakeClock>,
     pub log: Arc<RecordingLog>,
+    /// The host's repository configuration; the ports hold it only after
+    /// [`World::managing_repositories`].
+    pub repositories: Arc<FakeRepositories>,
+    managing: bool,
+    /// The host's facts file, which counts the jobs of [`World::dispatch`]; the ports hold it
+    /// only after [`World::keeping_facts`].
+    pub facts: Arc<FakeFacts>,
+    keeping_facts: bool,
+    private: bool,
 }
 
 impl Default for World {
@@ -453,18 +575,46 @@ impl Default for World {
 impl World {
     /// The world with `orders` as its executor.
     pub fn with_orders(orders: FakeSink) -> World {
+        let dispatch = Arc::new(ManualDispatch::default());
         World {
             link: Arc::default(),
             certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("a")))),
             records: Arc::default(),
             observer: Arc::default(),
             orders: Arc::new(orders),
-            dispatch: Arc::default(),
+            facts: Arc::new(FakeFacts::seeing(Arc::clone(&dispatch))),
+            keeping_facts: false,
+            dispatch,
             halts: Arc::default(),
             renewal: Arc::default(),
+            trusted_root: Arc::default(),
             clock: Arc::new(FakeClock::new(START_UNIX, START_MONO)),
             log: Arc::default(),
+            repositories: Arc::default(),
+            managing: false,
+            private: false,
         }
+    }
+
+    /// The world of a host that manages its repository configuration: its ports hold
+    /// [`World::repositories`], and it announces `repositories-v1`.
+    pub fn managing_repositories(mut self) -> World {
+        self.managing = true;
+        self
+    }
+
+    /// The world of a host that keeps a facts file: its ports hold [`World::facts`], and it
+    /// announces `facts-v1`.
+    pub fn keeping_facts(mut self) -> World {
+        self.keeping_facts = true;
+        self
+    }
+
+    /// The loop announces `private-repository-v1` though the world holds no repository
+    /// configuration: a daemon that reads private repositories another way (a Mac).
+    pub fn reading_private_repositories(mut self) -> World {
+        self.private = true;
+        self
     }
 
     /// The ports over these fakes.
@@ -478,8 +628,15 @@ impl World {
             dispatch: self.dispatch.clone(),
             halts: self.halts.clone(),
             renewal: self.renewal.clone(),
+            trusted_root: self.trusted_root.clone(),
             clock: self.clock.clone(),
             log: self.log.clone(),
+            repositories: self
+                .managing
+                .then(|| Arc::clone(&self.repositories) as Arc<dyn RepositorySink>),
+            facts: self
+                .keeping_facts
+                .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
         }
     }
 
@@ -492,6 +649,8 @@ impl World {
                 agent_version,
                 state_dir: PathBuf::from(state_dir),
                 period_secs: DEFAULT_HEARTBEAT_SECS,
+                installers: Vec::new(),
+                private_repository: self.private,
             },
             self.ports(),
         )

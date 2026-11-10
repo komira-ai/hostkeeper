@@ -82,11 +82,18 @@ yaml.org
 =hostkeeper.agent.v1.claims
 =hostkeeper.operator.v1.services
 =hostkeeper.operator.v1.host
-# systemd targets in packaging/linux/hostkeeper.service and its test, and in the channel sync's
-# units of docs/deploy/channel-sync (`target` is a top-level domain), not hosts.
+=hostkeeper.release.v1.target
+# The same in hostkeeper-proto's layout test of the orders, and its fixtures.
+=o.v1.update.target
+=hostkeeper.release.v1.force.target
+=hostkeeper.release.v1.order.target
+# systemd targets in packaging/linux/hostkeeper.service and its test, and in the repository
+# installer's tests of a unit's enablement (`target` is a top-level domain), not hosts.
 =default.target
+=graphical.target
 =multi-user.target
 =network-online.target
+=sockets.target
 =timers.target
 
 # The documentation of other tools that the technical report's comparison cites, one entry per
@@ -113,3 +120,15 @@ fleetdm.com
 # The namespace of OpenSSH's own names for its security-key types, which the SSH keys file of a
 # network-install seed accepts (hostkeeper-pxe-seed's keys.rs).
 =openssh.com
+
+# The organisation's package repository (apt and rpm), which `cargo xtask channels` publishes into
+# and the install checks read from (crates/xtask/src/channels, .github/workflows/release.yml).
+=packages.komira.ai
+# The audience AWS STS trusts a GitHub Actions OIDC token for (`cargo xtask channels assume`), and
+# the namespace of the rpm repository metadata (`repomd.xml`, `primary.xml`) the rpm channel writes.
+=sts.amazonaws.com
+=linux.duke.edu
+# The container registry the release pushes the coordinator's image to, and the OCI annotation key
+# an image index names a manifest's reference by (crates/xtask/src/release/image_index.rs).
+=ghcr.io
+=org.opencontainers.image.ref.name

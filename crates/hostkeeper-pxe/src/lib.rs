@@ -29,6 +29,7 @@
 //! - `iso`: an ISO 9660 image with Rock Ridge names, read for one file's extent;
 //! - `deb`: a deb, read for one file of its `data.tar` (zstd, xz, gzip or none);
 //! - [`seal`]: what the seal holds;
+//! - `repositories`: the repository files `serve --repositories` checks and reads;
 //! - [`serve`]: the start of `serve` (the files read as root, the sockets, the privilege drop of
 //!   [`privilege`], the seal check, the readiness notice), and the run: the answer set read from
 //!   the coordinator for each answer, DHCP in proxy or router mode, TFTP and HTTP.
@@ -47,6 +48,7 @@ mod deb;
 mod download;
 mod hook;
 mod iso;
+mod repositories;
 mod settings;
 
 #[cfg(test)]

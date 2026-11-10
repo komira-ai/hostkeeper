@@ -7,35 +7,61 @@ license.workspace = true
 repository.workspace = true
 publish.workspace = true
 description = "The CI steps of this repository (cargo xtask <verb>)."
-# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's other one is a
-# program of its tests.
+# `cargo xtask` (the alias in .cargo/config.toml) runs this binary; the crate's one shipped
+# program is `hostkeeper-coordinator-update`, and the others are programs of its tests.
 default-run = "xtask"
 
 [dependencies]
-# The DSSE payload of an attestation bundle (`release channel-stage` reads its subjects); the
-# HTTP Basic credentials of `mdm-signing-test send`.
+# The DSSE payload of an attestation bundle (`release targets` reads its subjects); the HTTP
+# Basic credentials of `mdm-signing-test send`.
 base64.workspace = true
 clap.workspace = true
 flate2.workspace = true
 hex.workspace = true
-# The release index, the platforms, the channel paths and the service and version grammars of
-# `release channel-stage`, which stages exactly the tree the daemon's fetch reads. The packaging
-# test (tests/packaging) also loads the config template with the daemon config's loader, and the
-# package test loads the produced `manifest.toml` with the manifest loader.
+# The platforms and the service grammar of `release targets`, and the daemon config's signer
+# type of the release contract. The packaging test (tests/packaging) also loads the config
+# template with the daemon config's loader.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The release asset `hkctl-<version>` (`release hkctl`): the script the emitter makes from the
-# command table of the protos. The enrollment runbook's test also reads the protos' descriptors.
+# command table of the protos. The operator docs' test (tests/enrollment_doc.rs) reads hkctl's
+# global flags from its docs/cli.md text, its command table, and the protos' descriptors.
 hostkeeper-hkctl = { path = "../hostkeeper-hkctl" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The checks of a release's targets and their manifests (`release targets`), the coordinator's own
+# and the daemon's for an `apt` entry, run on the entries before CI sends them.
+hostkeeper-release = { path = "../hostkeeper-release" }
+# `OLDEST_READER`, the floor of hostkeeper's own entry (`release targets`), the one constant the
+# daemon judges a release of hostkeeper by too.
+hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The daemon's launchd label, plist and paths the macOS installer pkg installs
-# (`release macos-pkg`), and the launchd plists of a macOS service package
-# (`release package --service hello`), rendered with the renderer the daemon's own plists use.
+# (`release macos-pkg`), and the launchd plists of hello's `.pkg`, rendered with the renderer the
+# daemon's own plists use.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
-# The zstd compression of the hostkeeper package (`release package`).
+# The mdm package (`release targets`, `release deb --service mdm`, `release mdm-fetch`): its
+# hook bounds, run units and params (the entry's manifest), its units (and their `.deb` text) and
+# the pins of the tools it carries from hostkeeper-mdm-core, and the tools taken out of their
+# archives by the kit's own archive reader in hostkeeper-mdm.
+hostkeeper-mdm = { path = "../hostkeeper-mdm" }
+hostkeeper-mdm-core = { path = "../hostkeeper-mdm-core" }
+# The xz decoder of `release check-linux-pkg`, which reads a tarball compressed with xz; pure
+# Rust.
+lzma-rs.workspace = true
+# The RPM header reader of `channels rpm` (the repository's `primary.xml`, the signature
+# header), and the builder its tests make packages with.
+rpm.workspace = true
+# The TLS of `channels assume`'s token request: the ring provider ureq is built with, and the
+# host's roots.
+rustls.workspace = true
+rustls-native-certs.workspace = true
+# The zstd decoder of `release check-linux-pkg` (a tarball).
 ruzstd.workspace = true
 # Reads back the launchd plist of the installer pkg (`release check-macos-pkg`); writes the
 # commands and the root's profile of `mdm-signing-test`.
 plist.workspace = true
+# The entries of `release targets`, built as the generated messages, checked, and written as
+# their proto3 canonical JSON through the descriptors (`serde`), as the coordinator reads them.
+prost.workspace = true
+prost-reflect = { workspace = true, features = ["serde"] }
 # `kit.toml` and `results.toml` of `mdm-signing-test`, read and written by their types.
 serde.workspace = true
 # The JSON `gh` prints: workflow runs, issues, releases and verified attestations; NanoHUB's
@@ -44,20 +70,34 @@ serde_json.workspace = true
 sha2.workspace = true
 tar.workspace = true
 thiserror.workspace = true
+# The OIDC token request of `channels assume` (the runner's, over HTTPS).
+ureq.workspace = true
 # The member manifests `release set-version` checks.
 toml.workspace = true
 
-# The program the package launch test (tests/package_launch.rs) packages as bin/hostkeeper and
-# starts through the committed unit of hostkeeper's own package: it prints what it was started
-# with. A program of the tests, not shipped: it is built only with `test-support`, which only the
-# tests of this crate turn on.
+[[bin]]
+name = "xtask"
+path = "src/main.rs"
+
+# The coordinator's machine runs it from a timer (docs/deploy/coordinator-update.md): each release
+# ships it, stamped like the other binaries, as an attested tarball for the two Linux platforms
+# (`hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz`), so nothing is built on that
+# machine. It only forwards to the library's `coordinator_update_main`.
+[[bin]]
+name = "hostkeeper-coordinator-update"
+path = "src/bin/hostkeeper-coordinator-update.rs"
+
+# The program the hook test (tests/native_hook.rs) puts in a native package's tree and starts
+# through its hook: it prints what it was started with. A program of the tests, not shipped: it is
+# built only with `test-support`, which only the tests of this crate turn on.
 [[bin]]
 name = "xtask-exec-fixture"
 path = "tests/bin/exec_fixture.rs"
 required-features = ["test-support"]
 
-# The `gh` the channel-sync deploy test (tests/channel_sync.rs) runs the committed unit's and
-# sidecar's commands with: it answers from files beside it. A program of the tests, not shipped.
+# The `gh`, `curl` and `cargo` the workflow lint's run tests (tests/workflows) run the committed
+# steps of `release.yml` and `hello-desired.yml` with: they answer from files beside it. A
+# program of the tests, not shipped.
 [[bin]]
 name = "xtask-gh-fixture"
 path = "tests/bin/gh_fixture.rs"
@@ -71,8 +111,24 @@ name = "xtask-dump-fixture"
 path = "tests/bin/dump_fixture.rs"
 required-features = ["test-support"]
 
+# The `aws` and `curl` the publisher tests (tests/channels_publish_cli.rs) hand `channels
+# apt|rpm|pkg` through `--aws` and `--curl`: a bucket and a public host in directories beside it,
+# and a record of its calls. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-aws-fixture"
+path = "tests/bin/aws_fixture.rs"
+required-features = ["test-support"]
+
+# The `env` the install-check tests (tests/channels_check_apt_cli.rs) put on the `PATH` of
+# `channels check-apt`: it answers for the programs of the checked system from files beside it,
+# and records its calls. A program of the tests, not shipped.
+[[bin]]
+name = "xtask-apt-fixture"
+path = "tests/bin/apt_fixture.rs"
+required-features = ["test-support"]
+
 [features]
-# Builds the launch test's fixture program and `xtask::test_support`. Off for everything else.
+# Builds the test fixture programs and `xtask::test_support`. Off for everything else.
 test-support = []
 
 [dev-dependencies]
@@ -81,31 +137,27 @@ xtask = { path = ".", features = ["test-support"] }
 # The packaging test (tests/packaging/daemon_flags.rs) parses the unit's command lines with the
 # binary's own flag parser and reads its default paths.
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
-# The package test runs the manifest's hook command line, as the hook contract builds it, through
-# the binary's own parser and its `update-hook` verb.
-hostkeeper-hook = { path = "../hostkeeper-hook" }
+# The installer's list for hostkeeper's own macOS package (`macos_pkg::own::list`), which the pkg
+# test (`release macos-pkg`) holds to the payload it builds.
+hostkeeper-install = { path = "../hostkeeper-install" }
 # The packaging test (tests/packaging/unit_file.rs) holds the unit's watchdog to the heartbeat
 # loop's longest call.
 hostkeeper-link = { path = "../hostkeeper-link" }
-# The daemon's fetch and proof (`fetch_package`, `prove`), which the channel-stage tests run
-# against the staged tree through an in-process origin; hostkeeper-steps for their `Clock`.
-hostkeeper-package = { path = "../hostkeeper-package" }
-hostkeeper-steps = { path = "../hostkeeper-steps" }
-# The daemon's unpacker (design 5.5), which the package test unpacks the produced archive with.
-hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 # The netboot test holds the served names of the shim and GRUB in netboot.json to the ones the
 # packet handling of network install serves them by (`LoaderNames`), for each platform.
 hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
-# The example service hello, whose command-line parser and served version the hello package test
-# checks the package's units and manifest against: the version a package names is the one its
-# server answers `/version` with.
+# The example service hello: the native hello test holds the paths its hook looks for in a
+# native package's tree and its default port to the ones the `.deb` and `.pkg` are built with.
 hello = { path = "../../examples/hello" }
-# The enrollment runbook's test (tests/enrollment_doc.rs) parses each `hostkeeper ctl` line of
-# docs/operations/enrollment.md with ctl's own parser over the generated command table, and
-# reads the refusal tokens from the protos' descriptors.
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
+# The operator docs' test (tests/enrollment_doc.rs) reads the refusal tokens from the protos'
+# descriptors.
 prost-reflect.workspace = true
+# The workflow lint's tests run the outputs program of `set-desired.yml` (a jq program) on one
+# fixture per row of its table, with no shell.
+jaq-core.workspace = true
+jaq-json.workspace = true
+jaq-std.workspace = true
 saphyr-parser.workspace = true
 
 [lints]

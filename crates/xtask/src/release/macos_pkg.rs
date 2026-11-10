@@ -8,9 +8,9 @@
 //!   (`/usr/local/bin/hostkeeper`), mode 0755;
 //! - the daemon's launchd plist, `/Library/LaunchDaemons/<label>.plist` with the label
 //!   `hostkeeper_launchd::Label::daemon` (`dev.hostkeeper.hostkeeper`), mode 0644, the text
-//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`, whose program is
-//!   `current` of the binary directory of hostkeeper's own update
-//!   (`hostkeeper_launchd::plist::DAEMON_PROGRAM`), not the binary above;
+//!   `hostkeeper_launchd::daemon_plist` writes for `DaemonJob::standard`, whose program is the
+//!   binary above: `hostkeeper daemon` started from that path seeds the binary directory of
+//!   hostkeeper's own update and execs `current` of it (`hostkeeper_daemon::packaged`);
 //! - the directory of the daemon's output files, `hostkeeper_launchd::DAEMON_LOG_DIR`
 //!   (`/var/log/hostkeeper`), empty: launchd opens the job's `StandardOutPath` and
 //!   `StandardErrorPath` there but does not make their directory;
@@ -39,12 +39,14 @@
 //! changes no system directory; `/usr/local/lib` and `/usr/local/lib/hostkeeper` are made with
 //! that mode when they are not there.
 //!
-//! The pkg has one script, `postinstall` ([`scripts`]), which runs three commands at install:
-//! the installed binary's `self-update-seed`, which points `current` of the binary directory at
-//! that binary when `current` starts nothing, so the job's first start works before any
-//! self-update; its `mac-config`, which writes `/etc/hostkeeper/hostkeeper.toml` from the managed
-//! preferences the MDM installed, keeps a config that is there and fails with neither; and
-//! `launchctl bootstrap`, which loads the daemon's job. The pkg carries no config of its own.
+//! The pkg has one script, `postinstall` ([`scripts`]), which asks launchd at install
+//! whether the daemon's job is loaded (`launchctl print`) and, only when it is not, runs
+//! `launchctl bootstrap`, which loads the job the pkg installed; a loaded job is never booted
+//! out, so an installer the daemon itself runs does not stop the daemon. It runs the installed binary at no point: the daemon's
+//! start does what the script once did (`hostkeeper_daemon::packaged` seeds the binary directory
+//! of hostkeeper's own update and execs `current`, `hostkeeper_daemon::mac_config::at_start`
+//! writes `/etc/hostkeeper/hostkeeper.toml` from the managed preferences the MDM installed). The
+//! pkg carries no config of its own.
 //!
 //! The file the verbs name is a distribution pkg ([`distribution`]): `pkgbuild` builds the
 //! component pkg that holds the payload and the script, and `productbuild` wraps it, as the one
@@ -69,7 +71,7 @@
 //! archive (the portable `odc` format) that `pkgutil --expand` does not expand, holds exactly
 //! the entries above with their modes, owners and bytes (the binary, `gh` and the trusted root
 //! those of the files it is given), the plist parsing as a launchd plist that names the daemon's
-//! label, the program `current` of the binary directory and the output files, and the newsyslog
+//! label, the program the installed binary and the output files, and the newsyslog
 //! file rotating exactly those output files.
 
 use std::collections::BTreeMap;
@@ -77,14 +79,14 @@ use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, DAEMON_PROGRAM, INSTALLED_BINARY};
+use hostkeeper_launchd::plist::{DAEMON_LOG_DIR, INSTALLED_BINARY};
 use hostkeeper_launchd::{DaemonJob, Label, Platform as Launchd, daemon_plist};
 
 use super::contract::{Version, installer_name};
 use super::ports::{BuildPkg, Exec, PortError};
 use super::{Error, file_sha256};
 
-mod distribution;
+pub(crate) mod distribution;
 mod scripts;
 
 use distribution::{COMPONENT, DISTRIBUTION, distribution_problems, open_tag};
@@ -166,8 +168,9 @@ const ODC_MAGIC: &[u8; 6] = b"070707";
 const ODC_HEADER: usize = 76;
 const TRAILER: &str = "TRAILER!!!";
 
-/// The pkg's identifier: the daemon's launchd label, a reverse-DNS name.
-fn identifier() -> String {
+/// The pkg's identifier: the daemon's launchd label, a reverse-DNS name. hostkeeper's native
+/// `macos-pkg` entry names it as its package (`release targets`).
+pub(crate) fn identifier() -> String {
     Label::daemon().as_str().to_owned()
 }
 
@@ -375,7 +378,7 @@ pub(crate) struct Request {
 }
 
 /// Makes the directory `at` with [`DIR_MODE`].
-fn make_dir(at: &Path) -> Result<(), Error> {
+pub(crate) fn make_dir(at: &Path) -> Result<(), Error> {
     std::fs::create_dir(at).map_err(Error::io(format!("create {}", at.display())))?;
     std::fs::set_permissions(at, std::fs::Permissions::from_mode(DIR_MODE))
         .map_err(Error::io(format!("set the mode of {}", at.display())))
@@ -422,15 +425,16 @@ pub(crate) fn build(pkgbuild: &dyn BuildPkg, request: &Request) -> Result<Vec<St
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
     let component = stage.join(COMPONENT);
-    pkgbuild.build_pkg(&root, &scripts, &identifier(), &request.version, &component)?;
+    let version = request.version.to_string();
+    pkgbuild.build_pkg(&root, Some(&scripts), &identifier(), &version, &component)?;
     let name = installer_name(&request.version);
     let product = request.out.join(&name);
-    pkgbuild.build_product(&component, &identifier(), &request.version, &product)?;
+    pkgbuild.build_product(&component, &identifier(), &version, &product)?;
     let hex = file_sha256(&product)?;
     Ok(vec![format!("{name}: sha256 {hex}")])
 }
 
-/// Runs `pkgbuild` and `productbuild` through an [`Exec`].
+/// Runs `pkgbuild`, `productbuild` and `pkgutil --check-signature` through an [`Exec`].
 pub(crate) struct PkgbuildCli<E> {
     exec: E,
 }
@@ -476,26 +480,27 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError> {
-        let args = vec![
-            "--root".to_owned(),
-            utf8("pkgbuild", root)?,
-            "--scripts".to_owned(),
-            utf8("pkgbuild", scripts)?,
+        let mut args = vec!["--root".to_owned(), utf8("pkgbuild", root)?];
+        if let Some(scripts) = scripts {
+            args.push("--scripts".to_owned());
+            args.push(utf8("pkgbuild", scripts)?);
+        }
+        args.extend([
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
-            version.to_string(),
+            version.to_owned(),
             "--install-location".to_owned(),
             INSTALL_LOCATION.to_owned(),
             "--ownership".to_owned(),
             "recommended".to_owned(),
             utf8("pkgbuild", pkg)?,
-        ];
+        ]);
         self.run("pkgbuild", &args)
     }
 
@@ -503,7 +508,7 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError> {
         let args = vec![
@@ -512,10 +517,31 @@ impl<E: Exec> BuildPkg for PkgbuildCli<E> {
             "--identifier".to_owned(),
             identifier.to_owned(),
             "--version".to_owned(),
-            version.to_string(),
+            version.to_owned(),
             utf8("productbuild", product)?,
         ];
         self.run("productbuild", &args)
+    }
+
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError> {
+        let args = vec!["--check-signature".to_owned(), utf8("pkgutil", pkg)?];
+        let what = format!("pkgutil {}", args.join(" "));
+        let ran = self
+            .exec
+            .spawn("pkgutil", &args)
+            .map_err(|e| PortError::new(&what, e.to_string()))?;
+        let stdout = String::from_utf8_lossy(&ran.stdout).into_owned();
+        if ran.success {
+            Ok(stdout)
+        } else {
+            let stderr = String::from_utf8_lossy(&ran.stderr);
+            Err(PortError::new(
+                what,
+                format!("{}\n{}", stdout.trim(), stderr.trim())
+                    .trim()
+                    .to_owned(),
+            ))
+        }
     }
 }
 
@@ -599,7 +625,7 @@ pub(crate) fn read_odc(bytes: &[u8]) -> Result<Vec<CpioEntry>, String> {
 
 /// The path of a payload entry from the install location: `.` is `""`, `./x` is `x`; any other
 /// name is kept, and so matches no entry of the payload.
-fn payload_path(name: &str) -> &str {
+pub(crate) fn payload_path(name: &str) -> &str {
     match name {
         "." => "",
         _ => name.strip_prefix("./").unwrap_or(name),
@@ -613,7 +639,7 @@ fn shown(path: &str) -> String {
 
 /// The attributes of the `<pkg-info ...>` element of `text`, or none when it has no such
 /// element or its attributes are not `name="value"` pairs.
-fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
+pub(crate) fn pkg_info_attributes(text: &str) -> Option<BTreeMap<String, String>> {
     let start = text.find("<pkg-info")? + "<pkg-info".len();
     open_tag(&text[start..]).map(|(attributes, ..)| attributes)
 }
@@ -648,9 +674,9 @@ fn package_info_problems(text: &str, version: &Version, problems: &mut Vec<Strin
 }
 
 /// What is wrong with the launchd plist `bytes` of the payload, one line each: it must parse as
-/// a plist dictionary naming the daemon's label, running `current` of the binary directory of
-/// hostkeeper's own update (which the `postinstall` seeds from the binary of the payload), and sending
-/// its output to the files the newsyslog file rotates, in the log directory of the payload.
+/// a plist dictionary naming the daemon's label, running the binary of the payload (which, started
+/// as `hostkeeper daemon` from that path, seeds the binary directory of hostkeeper's own update
+/// and execs `current` of it), and sending its output to the files the newsyslog file rotates, in the log directory of the payload.
 fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
     let what = shown(&plist_path());
     let value = match plist::Value::from_reader_xml(bytes) {
@@ -672,10 +698,10 @@ fn plist_problems(bytes: &[u8], problems: &mut Vec<String>) {
         .and_then(plist::Value::as_array)
         .and_then(|a| a.first())
         .and_then(plist::Value::as_string);
-    if program != Some(DAEMON_PROGRAM) {
+    if program != Some(INSTALLED_BINARY) {
         problems.push(format!(
-            "{what}: the job runs {program:?}, not {DAEMON_PROGRAM:?}, current of the binary \
-             directory a self-update switches"
+            "{what}: the job runs {program:?}, not {INSTALLED_BINARY:?}, the binary the pkg \
+             installs, whose start seeds the binary directory of a self-update and runs current"
         ));
     }
     for (key, want) in outputs() {
@@ -770,7 +796,7 @@ fn payload_problems(
 /// The entries of the `Payload` of the expanded pkg `expanded`, a gzip-compressed portable cpio
 /// archive; the inner `Err` says why its bytes are not such an archive, the outer one that the
 /// file could not be opened.
-fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error> {
+pub(crate) fn read_payload(expanded: &Path) -> Result<Result<Vec<CpioEntry>, String>, Error> {
     let name = "Payload";
     let path = expanded.join(name);
     let file = std::fs::File::open(&path).map_err(Error::io(format!("read {}", path.display())))?;
@@ -812,7 +838,7 @@ fn list(dir: &Path) -> Result<Vec<Listed>, Error> {
 /// Checks that the directory `dir` of an expanded pkg holds exactly the regular files `files` and
 /// the directories `dirs`: every other entry is a problem that says the directory `holds only`
 /// `only`, and every one missing is a problem. The names that are there, as they must be.
-fn layer(
+pub(crate) fn layer(
     dir: &Path,
     files: &[&str],
     dirs: &[&str],
@@ -938,4 +964,6 @@ pub(crate) fn check(
 #[cfg(test)]
 mod check_tests;
 #[cfg(test)]
-mod tests;
+mod own_tests;
+#[cfg(test)]
+pub(crate) mod tests;

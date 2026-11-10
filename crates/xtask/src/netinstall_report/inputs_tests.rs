@@ -161,13 +161,13 @@ fn pending_is_the_first_seen_time_of_the_records_request() {
 }
 
 /// Catches a file that is not what `enrollment list` prints read as a list with no request, and
-/// a time that is not ctl's string of digits read as one.
+/// a time that is not canonical JSON's string of digits read as one.
 #[test]
 fn a_pending_file_that_is_not_a_list_of_requests_is_refused() {
     let cases = [
         (
             "[]",
-            "--pending: not a JSON object, as `hostkeeper ctl --output json` prints",
+            "--pending: not a JSON object, as the operator API's canonical JSON",
         ),
         (
             r#"{"requests": {}}"#,
@@ -192,7 +192,7 @@ fn a_pending_file_that_is_not_a_list_of_requests_is_refused() {
 }
 
 /// Catches approved, the first heartbeat or serving read from another field (the last
-/// heartbeat is not serving), and an absent or zero time (ctl leaves a zero out) read as a time.
+/// heartbeat is not serving), and an absent or zero time (canonical JSON leaves a zero out) read as a time.
 #[test]
 fn the_host_gives_approved_the_first_heartbeat_and_serving() {
     let got = r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1600", "firstHeartbeatUnix": "1615",
@@ -250,7 +250,7 @@ fn a_host_file_of_another_host_or_shape_is_refused() {
         ),
         (
             "\"net-1\"",
-            "--host: not a JSON object, as `hostkeeper ctl --output json` prints",
+            "--host: not a JSON object, as the operator API's canonical JSON",
         ),
     ];
     for (text, why) in cases {

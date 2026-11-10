@@ -3,16 +3,23 @@
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
-//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
+//! method has a handler but the five of `HostGroups`, which [`super::PENDING`] lists and the
+//! router answers `UNIMPLEMENTED` before any adapter runs. The caller was settled before the request
 //! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
 //! an anonymous caller, and is refused as such.
+//!
+//! This coordinator holds no host group, so no group has any name: a request that names one in
+//! `host_group` is refused by its call's refusal that says so (`not_in_host_group` of `Releases`
+//! and `Rollouts`, `unknown_host_group` of `Enrollment`), never read as naming none, which would
+//! act on every host. `Audit.List` with a `host_group` filter lists no entry.
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsApi;
@@ -27,12 +34,12 @@ use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
 
 use super::{Admitted, refusal, report};
-use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
-use crate::service::ci_calls::Setter;
+use crate::service::ci_calls::{ReleaseError, Setter};
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
 use crate::write_record::{WriteAsk, WriteId, WriteRecord};
 
 /// What `operate` says of a service the coordinator does not manage.
@@ -112,17 +119,24 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
+        SetError::TargetInvalid(_) => proto::ReleasesRefusal::TargetInvalid,
+        SetError::ReleaseExists => proto::ReleasesRefusal::ReleaseExists,
+        SetError::RepositoryUnknown => proto::ReleasesRefusal::RepositoryUnknown,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
-        SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
-        SetError::Channel(ChannelRefusal::DigestMismatch) => {
-            proto::ReleasesRefusal::ChannelDigestMismatch
-        }
         SetError::Ops(why) => why.into(),
         SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }
+    }
+}
+
+/// The refusal of `Releases` for a wait that was not held.
+pub(crate) fn wait_refusal(why: WaitRefused) -> proto::ReleasesRefusal {
+    match why {
+        WaitRefused::UnknownService => proto::ReleasesRefusal::UnknownService,
+        WaitRefused::TooMany => proto::ReleasesRefusal::TooManyWaits,
     }
 }
 
@@ -327,6 +341,17 @@ impl HostsApi for HostsService {
             .map(Response::new)
             .map_err(refusal::hosts)
     }
+
+    async fn clear_record(
+        &self,
+        request: Request<proto::ClearRecordRequest>,
+    ) -> Result<Response<proto::ClearRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .clear_record(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
 }
 
 /// The service of `Releases`.
@@ -358,20 +383,64 @@ impl ReleasesApi for ReleasesService {
                 return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
             }
         };
-        let (body, ask) = desired_body(request.into_inner()).map_err(refusal::releases)?;
+        let mut message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
+        // A map left empty is a set without targets: proto3 sends no empty map.
+        let targets = std::mem::take(&mut message.targets);
+        let targets = (!targets.is_empty()).then_some(targets);
+        let (body, ask) = desired_body(message).map_err(refusal::releases)?;
         let setter = match &ci {
             Some(verified) => Setter::Ci(verified),
             None => Setter::Operator(&operator),
         };
         let (set, record) = self
             .coordinator
-            .set_desired_by(&setter, &body, &ask)
+            .set_desired_with(&setter, &body, &ask, targets)
             .await
             .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
             desired: Some(desired_proto(&set.desired)),
             record: record.as_ref().map(record_proto),
             dropped_roles: set.dropped_roles,
+        }))
+    }
+
+    async fn get_release(
+        &self,
+        request: Request<proto::GetReleaseRequest>,
+    ) -> Result<Response<proto::GetReleaseResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: a read, which changes nothing.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service =
+            service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let release = self
+            .coordinator
+            .release_verified(service, &message.version)
+            .map_err(|why| {
+                refusal::releases(match why {
+                    ReleaseError::UnknownService => proto::ReleasesRefusal::UnknownService,
+                    ReleaseError::Unknown => proto::ReleasesRefusal::ReleaseUnknown,
+                })
+            })?;
+        Ok(Response::new(proto::GetReleaseResponse {
+            targets: release.targets().clone(),
+            release_index_digest: release.index_digest().map(ToString::to_string),
         }))
     }
 
@@ -389,6 +458,9 @@ impl ReleasesApi for ReleasesService {
         }
         // No service names the legacy service, as the JSON route's query does.
         let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -411,11 +483,68 @@ impl ReleasesApi for ReleasesService {
             .map_err(|why| refusal::releases(converge_refusal(why)))
     }
 
+    async fn wait_converged(
+        &self,
+        request: Request<proto::WaitConvergedRequest>,
+    ) -> Result<Response<proto::WaitConvergedResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: checked once, when the call was
+        // admitted, and never again while it is held.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let limit = request.extensions().get::<CallLimit>().cloned();
+        let connection = request.extensions().get::<ConnectionWaits>().cloned();
+        let message = request.into_inner();
+        if !message.host_group.is_empty() {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
+        if message.wait_secs == 0 || message.wait_secs > MAX_WAIT_SECS {
+            return Err(refusal::releases(proto::ReleasesRefusal::InvalidWait));
+        }
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service = service
+            .filter(|_| !message.version.is_empty())
+            .ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let held = self
+            .coordinator
+            .hold_wait(service)
+            .map_err(|why| refusal::releases(wait_refusal(why)))?;
+        let wait = Duration::from_secs(message.wait_secs.into());
+        if let Some(limit) = limit {
+            limit.hold_for(wait);
+        }
+        let _connection = connection.as_ref().map(ConnectionWaits::hold);
+        let (outcome, convergence) = self
+            .coordinator
+            .wait_converged(&held, &message.version, wait)
+            .await;
+        let mut convergence = report::convergence(&convergence);
+        convergence.record = self
+            .coordinator
+            .write_record(service)
+            .as_ref()
+            .map(record_proto);
+        Ok(Response::new(proto::WaitConvergedResponse {
+            outcome: outcome.into(),
+            convergence: Some(convergence),
+        }))
+    }
+
     async fn force(
         &self,
         request: Request<proto::ForceRequest>,
     ) -> Result<Response<proto::ForceResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
+        }
         self.coordinator
             .force(&caller, request.into_inner())
             .map(Response::new)
@@ -595,6 +724,11 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::ApproveRequest>,
     ) -> Result<Response<proto::ApproveResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::enrollment(
+                proto::EnrollmentRefusal::UnknownHostGroup,
+            ));
+        }
         self.coordinator
             .enrollment_approve(&caller, request.into_inner())
             .map(Response::new)
@@ -617,6 +751,11 @@ impl EnrollmentApi for EnrollmentService {
         request: Request<proto::AddRecordRequest>,
     ) -> Result<Response<proto::AddRecordResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::enrollment(
+                proto::EnrollmentRefusal::UnknownHostGroup,
+            ));
+        }
         self.coordinator
             .add_record(&caller, request.into_inner())
             .map(Response::new)
@@ -676,8 +815,21 @@ impl AuditApi for AuditService {
         request: Request<proto::ListAuditRequest>,
     ) -> Result<Response<proto::ListAuditResponse>, Status> {
         let caller = caller_of(&request);
+        let message = request.into_inner();
+        let since_seq = message.since_seq;
+        let grouped = message.host_group.is_some();
         self.coordinator
-            .audit_list(&caller, request.into_inner())
+            .audit_list(&caller, message)
+            .map(|listed| {
+                if grouped {
+                    proto::ListAuditResponse {
+                        entries: Vec::new(),
+                        next_seq: since_seq,
+                    }
+                } else {
+                    listed
+                }
+            })
             .map(Response::new)
             .map_err(refusal::audit)
     }
@@ -754,6 +906,9 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::AdvanceRequest>,
     ) -> Result<Response<proto::AdvanceResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_advance(&caller, request.into_inner())
             .map(Response::new)
@@ -765,6 +920,9 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::PauseRequest>,
     ) -> Result<Response<proto::PauseResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_pause(&caller, request.into_inner())
             .map(Response::new)
@@ -776,9 +934,18 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::ResumeRequest>,
     ) -> Result<Response<proto::ResumeResponse>, Status> {
         let caller = caller_of(&request);
+        if names_group(&caller, &request.get_ref().host_group) {
+            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
+        }
         self.coordinator
             .rollout_resume(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::rollouts)
     }
+}
+
+/// Whether an operator's request names a host group, which this coordinator, holding none, has
+/// no group of. A caller who is no operator is left to the handler, which refuses it first.
+fn names_group(caller: &Caller, host_group: &str) -> bool {
+    caller.operator().is_ok() && !host_group.is_empty()
 }

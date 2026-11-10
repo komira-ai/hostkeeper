@@ -1,12 +1,15 @@
 //! The server over real sockets on loopback (port 0, chosen by the system), asked through the
 //! real probe and through raw connections; and the probe against servers that misbehave.
 
+mod support;
+
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
 use std::thread;
 
 use hello::ports::{HttpProbe, Probe};
 use hello::server::{Answer, MAX_HEAD, serve};
+use support::wait_until_acceptable;
 
 /// A listener on a port of the system's choosing, and that port.
 fn listener() -> (TcpListener, u16) {
@@ -129,7 +132,9 @@ fn the_server_answers_what_it_is_not_asked_and_survives_its_clients() {
 }
 
 /// Catches `serve` blocking on or dropping connections that are waiting when accept fails, and
-/// returning `Ok`: it ends only with the error that stopped it.
+/// returning `Ok`: it ends only with the error that stopped it. The connection is in the
+/// listener's queue before `serve` starts, so its first accept returns it and its second, with the
+/// queue empty, fails with `WouldBlock`.
 #[test]
 fn serve_answers_the_waiting_connections_and_returns_the_error_that_stopped_it() {
     let (listener, port) = listener();
@@ -138,6 +143,7 @@ fn serve_answers_the_waiting_connections_and_returns_the_error_that_stopped_it()
     client
         .write_all(b"GET /version HTTP/1.1\r\n\r\n")
         .expect("send");
+    wait_until_acceptable(&listener);
 
     let stopped = serve(
         listener,

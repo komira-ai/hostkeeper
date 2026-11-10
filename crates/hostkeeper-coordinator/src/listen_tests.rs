@@ -13,10 +13,12 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures::task::noop_waker_ref;
+use hostkeeper_proto::hostkeeper::operator::v1::{WaitConvergedRequest, WaitConvergedResponse};
 use hostkeeper_tls::TlsSource;
 use http_body_util::{BodyExt, Full};
 use hyper::{Request, Response, Version};
 use hyper_util::rt::{TokioExecutor, TokioIo};
+use prost::Message as _;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, ExtendedKeyUsagePurpose, IsCa, KeyPair,
     KeyUsagePurpose, SanType,
@@ -33,7 +35,7 @@ use tonic::{Code, Status};
 use super::{CLIENT_PATIENCE, WriteDeadline, connection, reload_all};
 use crate::http::{STATUS_PATH, Surface};
 use crate::service::Coordinator;
-use crate::testutil::{OPERATOR, Rig, scratch};
+use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
 
 const PATIENCE: Duration = Duration::from_millis(200);
@@ -449,4 +451,92 @@ async fn an_http2_connection_its_client_closes_ends_at_once() {
         matches!(ended, Ok(Ok(()))),
         "the connection is still served"
     );
+}
+
+/// A wait for 2.0 of kbf for 30 seconds as the operator: as a gRPC call, or as the gateway's
+/// JSON when `gateway`.
+fn wait_request(gateway: bool) -> Request<Full<Bytes>> {
+    let path = "/hostkeeper.operator.v1.Releases/WaitConverged";
+    let call = Request::builder()
+        .method("POST")
+        .uri(format!("https://localhost{path}"))
+        .header("authorization", format!("Bearer {OPERATOR}"));
+    let wait = WaitConvergedRequest {
+        service: "kbf".to_owned(),
+        version: "2.0".to_owned(),
+        wait_secs: 30,
+        host_group: String::new(),
+    };
+    let (call, body) = if gateway {
+        let json = r#"{"service":"kbf","version":"2.0","waitSecs":30}"#;
+        (
+            call.header("content-type", "application/json"),
+            Bytes::from(json),
+        )
+    } else {
+        let message = wait.encode_to_vec();
+        let mut framed = vec![0];
+        framed.extend_from_slice(&u32::try_from(message.len()).expect("short").to_be_bytes());
+        framed.extend_from_slice(&message);
+        let call = call
+            .header("content-type", "application/grpc")
+            .header("te", "trailers");
+        (call, Bytes::from(framed))
+    };
+    call.body(Full::new(body)).expect("a request")
+}
+
+/// Proves: an HTTP/2 connection that carries a held `Releases.WaitConverged` call, as gRPC or as
+/// the gateway's JSON, is still served 25 seconds in, past the two patiences that close any other
+/// connection, and takes no new call then; the call is answered at its 30 seconds (`DEADLINE`: no host runs kbf), and the
+/// connection then ends within one patience (on the paused clock).
+///
+/// Catches: a held call cut with its connection two patiences after the handshake, and a
+/// connection kept after its held calls are over.
+#[tokio::test(start_paused = true)]
+async fn a_held_http2_connection_is_closed_one_patience_after_its_wait_ends() {
+    for gateway in [false, true] {
+        let rig = Rig::new("listen-h2-held");
+        rig.coordinator
+            .set_desired(Some(&ci_token()), br#"{"version":"2.0"}"#)
+            .await
+            .expect("set");
+        let (coordinator, _dir) = (Arc::new(rig.coordinator), rig.dir);
+        let (tls, mut serving) = dial_served(&coordinator).await;
+        let mut send = http2(tls).await;
+        let mut answer = tokio::spawn(send.send_request(wait_request(gateway)));
+        tokio::select! {
+            _ = &mut serving => panic!("closed while a wait is held ({gateway})"),
+            _ = &mut answer => panic!("answered before its deadline ({gateway})"),
+            () = tokio::time::sleep(Duration::from_secs(25)) => {}
+        }
+        // Past its first patience the connection takes no new call, held wait or not.
+        let late = send.send_request(status_request()).await;
+        assert!(late.is_err(), "a new call taken 25 seconds in ({gateway})");
+        let answer = answer.await.expect("joined").expect("an answer");
+        assert_eq!(answer.status(), 200, "{gateway}");
+        let (parts, body) = answer.into_parts();
+        let collected = body.collect().await.expect("the body");
+        let outcome = if gateway {
+            let reply: Value = serde_json::from_slice(&collected.to_bytes()).expect("JSON");
+            reply["outcome"].as_str().expect("an outcome").to_owned()
+        } else {
+            let status = collected
+                .trailers()
+                .and_then(Status::from_header_map)
+                .or_else(|| Status::from_header_map(&parts.headers))
+                .expect("a grpc-status");
+            assert_eq!(status.code(), Code::Ok);
+            let bytes = collected.to_bytes();
+            let reply = WaitConvergedResponse::decode(&bytes[5..]).expect("a message");
+            reply.outcome().as_str_name().to_owned()
+        };
+        assert_eq!(outcome, "WAIT_OUTCOME_DEADLINE", "{gateway}");
+        let ended = tokio::time::timeout(CLIENT_PATIENCE, serving).await;
+        assert!(
+            matches!(ended, Ok(Ok(()))),
+            "the connection is still served ({gateway})"
+        );
+        drop(send);
+    }
 }

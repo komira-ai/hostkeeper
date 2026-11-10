@@ -10,15 +10,16 @@
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
-//! - a job has no `runs-on` (but a job of [`callers::CALLERS`] that calls the CI client), or a
-//!   runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a custom label (a
+//! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
+//!   calls the CI client), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
 //!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
-//!   [`ID_TOKEN_ALLOWED`] and [`callers::CALLERS`];
+//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`];
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
@@ -55,9 +56,22 @@
 //!   runner outside [`PRIVILEGED_RUNNERS`]. [`WRITE_ALLOWED`] has no entry for it either.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]; for its
+//!   package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
+//!   exact `if:`, [`super::packages`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
+//!
+//! In `release.yml` every `run:` is one command on one line ([`one_command`]).
+//!
+//! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
+//! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every pinned download
+//! is restored from the actions cache first, checked against its pin whichever way it came, and
+//! cached once checked ([`pinned_cache`]). Every `cargo xtask`
+//! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
+//! required flag and argument given ([`xtask_calls`]); and one that runs from a checkout of
+//! another commit than the workflow's own (a release's) is one the command line of a published
+//! release accepts too, since that commit may be older than the workflow ([`release_ref`]).
 //!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
 //! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
@@ -68,10 +82,18 @@
 
 use super::advisories;
 use super::callers;
+use super::desired;
+
+use super::downloads;
 use super::net_install;
+use super::one_command;
+use super::packages;
+use super::pinned_cache;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
+use super::release_ref;
 use super::set_desired;
+use super::xtask_calls;
 use super::yaml::{self, Node, Value};
 
 /// A write permission a job may hold: the workflow file, the job, the scope, and the `if:` of
@@ -90,6 +112,11 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
+///   the release, to this repository's package in the registry.
+/// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
+///   nothing and holds no other scope), under the `if:` of `set-desired`
+///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -118,6 +145,18 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         condition: PLAN_IF,
     },
     Allowed {
+        file: "release.yml",
+        job: "image",
+        scope: "packages",
+        condition: RELEASE_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: desired::COORDINATOR_JOB,
+        scope: "id-token",
+        condition: desired::SET_IF,
+    },
+    Allowed {
         file: advisories::FILE,
         job: advisories::JOB,
         scope: "issues",
@@ -126,8 +165,9 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
-/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the
-/// CI client's, whose order of steps [`set_desired`] holds.
+/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the CI
+/// client's, whose order of steps [`set_desired`] holds; hostkeeper's own deploy waits for no
+/// release channel and so joins no tailnet before its call ([`desired`]).
 pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
 
 /// The workflow of the privileged tests, after a merge to main and by hand: with
@@ -143,9 +183,14 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
-/// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), and
-/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`).
+/// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), hostkeeper's
+/// update of itself under launchd (`device_mac_selfupdate.rs`), and the macos-pkg installer with
+/// the Mac's real `installer` and `pkgutil` (`install_macos_pkg.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
+
+/// The job of [`PRIVILEGED_WORKFLOW`] that runs the daemon under OpenRC in an Alpine container
+/// (`crates/hostkeeper-privileged/tests/openrc_device.rs`), on a [`PRIVILEGED_RUNNERS`] runner.
+pub const OPENRC_DEVICE_JOB: &str = "openrc-device";
 
 /// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a
 /// named version (passwordless `sudo`, launchd), free for a public repository. No `-latest`
@@ -239,6 +284,23 @@ fn uses<'a>(node: &'a Node, out: &mut Vec<(usize, &'a str)>) {
     }
 }
 
+/// The comment after the `uses:` value `value` on the line `line` of `text` it is written on (for
+/// an alias, the line of its anchor), without its `#` and the blanks after it: past a closing
+/// quote, one or more spaces or tabs, then `#`. `None` when the line has no such comment.
+pub fn version_comment<'a>(text: &'a str, line: usize, value: &str) -> Option<&'a str> {
+    let source = text.lines().nth(line - 1).unwrap_or_default();
+    let after = source
+        .find(value)
+        .map(|at| &source[at + value.len()..])
+        .unwrap_or_default();
+    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
+    let spaced = after.trim_start_matches([' ', '\t']);
+    (spaced.len() < after.len())
+        .then(|| spaced.strip_prefix('#'))
+        .flatten()
+        .map(|c| c.trim_start_matches([' ', '\t']))
+}
+
 /// What is wrong with the `uses:` value `value` on `line` of `text`, if anything.
 fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
     if value.starts_with('.') {
@@ -255,20 +317,7 @@ fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
             "line {line}: `uses: {value}` is not pinned to a 40-digit lowercase commit SHA"
         ));
     }
-    // The comment after the value on the line the value is written on (for an alias, the line
-    // of its anchor): past a closing quote, one or more spaces or tabs, `#`, then `v<digit>`.
-    let source = text.lines().nth(line - 1).unwrap_or_default();
-    let after = source
-        .find(value)
-        .map(|at| &source[at + value.len()..])
-        .unwrap_or_default();
-    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
-    let spaced = after.trim_start_matches([' ', '\t']);
-    let comment = (spaced.len() < after.len())
-        .then(|| spaced.strip_prefix('#'))
-        .flatten()
-        .map(|c| c.trim_start_matches([' ', '\t']));
-    let versioned = comment.is_some_and(|c| {
+    let versioned = version_comment(text, line, value).is_some_and(|c| {
         c.strip_prefix('v')
             .is_some_and(|v| v.starts_with(|ch: char| ch.is_ascii_digit()))
     });
@@ -345,8 +394,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         let name = name.as_str().unwrap_or_default();
         problems.extend(permission_problems(file, name, job));
         problems.extend(image_problems(name, job));
-        // A job of `callers::CALLERS` that calls the CI client runs on that workflow's runner,
-        // which its own rules hold; every other job that calls a reusable workflow is refused.
+        // A job of `callers::CALLERS` (or the template's) that calls the CI client runs on that
+        // workflow's runner, which its own rules hold; every other job that calls a reusable
+        // workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
         if !calls_client {
@@ -374,7 +424,14 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     if net_install_file {
         problems.extend(net_install::problems(&doc));
     }
-    problems.extend(callers::problems(file, &doc));
+    problems.extend(callers::problems(file, text, &doc));
+    problems.extend(downloads::problems(&doc));
+    problems.extend(pinned_cache::problems(&doc));
+    if file == one_command::FILE {
+        problems.extend(one_command::problems(&doc));
+    }
+    problems.extend(xtask_calls::problems(&doc));
+    problems.extend(release_ref::problems(file, &doc));
     problems
 }
 
@@ -398,7 +455,7 @@ fn inherited_secrets(node: &Node) -> Vec<String> {
 }
 
 /// True for `<name>[:<tag>]@sha256:<64 lowercase hex>`.
-fn pinned_by_digest(image: &str) -> bool {
+pub fn pinned_by_digest(image: &str) -> bool {
     let Some((name, digest)) = image.split_once('@') else {
         return false;
     };
@@ -456,6 +513,18 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
             && level == Some("write")
             && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
+            continue;
+        }
+        // The jobs of the package channels that assume the cloud role, each under its exact `if:`.
+        if let (true, Some(want)) = (
+            scope == "id-token" && level == Some("write"),
+            packages::id_token_condition(file, name),
+        ) {
+            if condition != Some(want.as_str()) {
+                problems.push(format!(
+                    "job {name}: `id-token: write` needs the exact `if: {want}`"
+                ));
+            }
             continue;
         }
         let allowed = WRITE_ALLOWED

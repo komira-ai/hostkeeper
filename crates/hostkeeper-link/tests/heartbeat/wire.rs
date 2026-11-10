@@ -50,6 +50,8 @@ fn facts(name: &str, at: &str) -> ServiceFacts {
             version: Some(version(at)),
         }),
         record_try: None,
+        installer: None,
+        drift: None,
     }
 }
 
@@ -61,6 +63,10 @@ fn beat(platform: Platform, agent: &str, services: Vec<ServiceFacts>) -> Heartbe
         services,
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -122,7 +128,7 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
     );
     let mut expected = recorded.trim_end_matches('}').to_owned();
     expected.push_str(&format!(
-        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
+        r#","agent_features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","clear-record-v1","target-v1"],"agent":{{"name":"hostkeeper","version":"{agent}"}},"sent_unix":0}}"#
     ));
     assert!(recorded.ends_with("}]}"), "{recorded}");
     assert_eq!(
@@ -162,7 +168,9 @@ fn heartbeat_bytes_equal_the_recorded_kbf_shape_for_the_same_facts() {
             "verdict-acks-v1",
             "grpc-v1",
             "install-v1",
-            "abort-v1"
+            "abort-v1",
+            "clear-record-v1",
+            "target-v1"
         ]
     );
     assert_eq!(ours.agent_name(), "hostkeeper");
@@ -295,7 +303,7 @@ fn every_word_of_a_heartbeat_is_the_wires() {
                 },
             ],
             "agent_features": ["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1","order-v1", "verdict-acks-v1", "grpc-v1",
-                "install-v1", "abort-v1"],
+                "install-v1", "abort-v1", "clear-record-v1", "target-v1"],
             "agent": { "name": "hostkeeper", "version": "0.9.0" },
         })
     );
@@ -342,6 +350,8 @@ fn largest(ids: &[usize; 16], reasons: &[usize; 16]) -> Heartbeat {
                 health_detail: None,
                 observed: None,
                 record_try: None,
+                installer: None,
+                drift: None,
             }
         })
         .collect();
@@ -501,4 +511,44 @@ fn the_host_clock_and_certificate_go_out_on_the_json_route() {
     assert_eq!(body["sent_unix"], json!(0));
     assert_eq!(body.get("cert_not_after_unix"), None);
     assert_eq!(body.get("last_renew_error"), None);
+}
+
+/// Proves the JSON route sends no installers: a heartbeat that lists installers is the same
+/// body as one that lists none (the route is frozen; the installers go out on gRPC only).
+///
+/// Catches: the installers serialised into the JSON body the previous release's coordinator
+/// reads.
+#[test]
+fn the_json_body_carries_no_installers() {
+    let plain = beat(Platform::LinuxX86_64, "0.9.0", vec![facts("other", "1.0")]);
+    let mut listed = plain.clone();
+    listed.installers = vec!["hostkeeper-archive".to_owned()];
+    assert_eq!(
+        sent("wire-installers", &listed).body,
+        sent("wire-no-installers", &plain).body
+    );
+}
+
+/// Proves a service's drift is not in the body of the JSON route: the body of a heartbeat whose
+/// service has drift is the body of the same heartbeat without it.
+///
+/// Catches: the frozen JSON route given a field `drift`, which a coordinator of the release
+/// before would refuse or read as another fact.
+#[test]
+fn the_json_route_never_carries_a_drift() {
+    let mut drifting = facts("web", "1.0");
+    drifting.drift = Some(hostkeeper_link::Drift {
+        found: Some("2.0-1".to_owned()),
+        recorded: Some("1.0-1".to_owned()),
+    });
+    let with = sent(
+        "wire-drift",
+        &beat(Platform::LinuxX86_64, "0.9.0", vec![drifting]),
+    );
+    let without = sent(
+        "wire-no-drift",
+        &beat(Platform::LinuxX86_64, "0.9.0", vec![facts("web", "1.0")]),
+    );
+    assert_eq!(with.body, without.body);
+    assert!(!String::from_utf8_lossy(&with.body).contains("drift"));
 }

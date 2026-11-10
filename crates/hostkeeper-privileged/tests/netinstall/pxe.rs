@@ -307,6 +307,7 @@ impl Mode {
 pub struct ServeInputs {
     pub sealed: PathBuf,
     pub daemon_config: PathBuf,
+    pub repositories: PathBuf,
     pub ssh_keys: PathBuf,
     pub serial_console: &'static str,
     pub log_dir: PathBuf,
@@ -344,6 +345,8 @@ pub fn serve(
         &inputs.daemon_config.display().to_string(),
         "--ssh-authorized-keys",
         &inputs.ssh_keys.display().to_string(),
+        "--repositories",
+        &inputs.repositories.display().to_string(),
         "--serial-console",
         inputs.serial_console,
         "--user-id",

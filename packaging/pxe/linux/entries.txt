@@ -1,5 +1,0 @@
-0555 bin/
-0555 bin/pxe
-0444 manifest.toml
-0555 units/
-0444 units/pxe.service

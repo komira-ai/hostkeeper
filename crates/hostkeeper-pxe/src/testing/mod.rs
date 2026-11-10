@@ -140,6 +140,8 @@ impl Transport for FakeTransport {
         let response = |status: u16, body: Box<dyn Read>| Response {
             status,
             content_length: None,
+            location: None,
+            www_authenticate: None,
             body,
         };
         match self.routes.get(url).cloned().unwrap_or(Serve::Status(404)) {

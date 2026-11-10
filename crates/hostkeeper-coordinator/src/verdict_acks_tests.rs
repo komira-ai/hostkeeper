@@ -56,7 +56,7 @@ fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> (ServiceReply, Vec<Verdi
     rig.at(at);
     let answer = rig
         .coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat");
     (answer.reply, answer.acks)
 }
@@ -303,7 +303,7 @@ fn a_legacy_service_without_a_definition_is_acknowledged() {
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_verdicts(verdicts_of(&dir));
     let answer = coordinator
-        .heartbeat(who("d1"), acking(verdict("o-1", 1)))
+        .heartbeat_native(who("d1"), acking(verdict("o-1", 1)))
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-1", 1)]);
     let mut untried = verdict("o-2", 1);
@@ -311,7 +311,7 @@ fn a_legacy_service_without_a_definition_is_acknowledged() {
         last.order_try = None;
     }
     let answer = coordinator
-        .heartbeat(who("d1"), acking(untried))
+        .heartbeat_native(who("d1"), acking(untried))
         .expect("a heartbeat");
     assert!(answer.acks.is_empty());
     assert_eq!(
@@ -335,7 +335,7 @@ async fn only_a_host_whose_word_is_taken_in_is_acknowledged() {
     rig.at(2_000);
     let answer = rig
         .coordinator
-        .heartbeat(stranger, acking(verdict("o-1", 1)))
+        .heartbeat_native(stranger, acking(verdict("o-1", 1)))
         .expect("a heartbeat");
     assert_eq!(answer.acks, []);
     crate::testutil::ops_of(&rig.dir)
@@ -370,7 +370,7 @@ async fn a_service_named_twice_is_acknowledged_once() {
     b.services = Some(vec![entry]);
     let answer = rig
         .coordinator
-        .heartbeat(who("d1"), b)
+        .heartbeat_native(who("d1"), b)
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-1", 1)]);
     let text = serde_json::to_string(&answer).expect("JSON");
@@ -384,7 +384,7 @@ async fn a_service_named_twice_is_acknowledged_once() {
     b.services = Some(vec![entry]);
     let answer = rig
         .coordinator
-        .heartbeat(who("d1"), b)
+        .heartbeat_native(who("d1"), b)
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-3", 1)]);
 }
@@ -402,7 +402,7 @@ fn a_coordinator_without_a_legacy_service_acknowledges_the_entries() {
         .with_services(Services::parse(text).expect("services"))
         .with_verdicts(verdicts_of(&dir));
     let answer = coordinator
-        .heartbeat(
+        .heartbeat_native(
             who("d1"),
             listing(web("1.0", Some(&verdict("o-1", 1))), None),
         )

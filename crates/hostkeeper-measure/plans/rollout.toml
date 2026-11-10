@@ -1,0 +1,86 @@
+# A new hostkeeper version rolled out to the whole farm. docs/report/results/README.md describes
+# the plans and how a run becomes a result; `hostkeeper-measure check --plan` checks this file.
+id = "rollout"
+title = "A new hostkeeper version rolled out to the farm"
+measures = """
+How long a new version of hostkeeper, set as the desired version with `hkctl releases set-desired`, \
+takes to reach every host of the farm under the coordinator's update plan and update slots as \
+they are: the request sets no `maxUpdating`, so each role updates one host at a time (two for the \
+daemon roles), stage by stage. Measured: the time from the set to the first host updated and to \
+the last, and each host's own update, from the poll that first shows it ordered to the poll that \
+first shows the version installed by a succeeded update."""
+records = """
+The set, stamped by its `set_desired` audit entry; then, for each host, the first poll of \
+`hkctl hosts list` that shows it ordered (it holds an update slot, or its heartbeat reports \
+updating to the version) and the first poll that shows the version installed by an update whose \
+outcome is `OUTCOME_SUCCEEDED`, each stamped with the host's last heartbeat as the coordinator \
+received it. The runner polls every 2 s."""
+repetitions = 3
+states = [
+    "A new hostkeeper version reached the first host {first-host.median} s after it was set (median of {first-host.n} repetitions, from {first-host.min} s to {first-host.max} s).",
+    "It reached the last of {hosts.max} hosts {last-host.median} s after it was set (from {last-host.min} s to {last-host.max} s).",
+    "One host's update, from its order to its succeeded update, took {host-update.median} s (median of {host-update.n} host updates, from {host-update.min} s to {host-update.max} s).",
+]
+
+[hosts]
+says = "Every host the service hostkeeper is assigned to: the whole farm, host-1 to host-N in the records."
+pick = "service"
+service = "hostkeeper"
+
+[[param]]
+name = "version"
+says = "The hostkeeper version the repetition sets: one no host runs yet, a newer one each repetition."
+per_repetition = true
+
+[[param]]
+name = "index"
+says = "The file holding that release's index.json, byte for byte as the release channel serves it."
+per_repetition = true
+
+[[step]]
+id = "set-desired"
+do = "call"
+args = ["releases", "set-desired"]
+audit = "set_desired"
+request = { service = "hostkeeper", desired = { version = "{version}" }, releaseIndex = "{file:index}", releaseIndexDigest = "{sha256:index}" }
+
+[[step]]
+id = "rollout"
+do = "watch"
+until = { what = "updated", service = "hostkeeper", version = "{version}" }
+poll_secs = 2
+timeout_secs = 7200
+
+[[measure]]
+id = "first-host"
+kind = "span"
+says = "SetDesired to the first host updated"
+unit = "s"
+from = "set-desired/called"
+to = "rollout/updated"
+pick = "first"
+
+[[measure]]
+id = "last-host"
+kind = "span"
+says = "SetDesired to the last host updated"
+unit = "s"
+from = "set-desired/called"
+to = "rollout/updated"
+pick = "last"
+
+[[measure]]
+id = "host-update"
+kind = "span"
+says = "a host ordered to that host updated"
+unit = "s"
+from = "rollout/ordered"
+to = "rollout/updated"
+pick = "each"
+
+[[measure]]
+id = "hosts"
+kind = "count"
+says = "the hosts updated"
+unit = "hosts"
+of = "rollout/updated"

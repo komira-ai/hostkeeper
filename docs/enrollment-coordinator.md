@@ -28,11 +28,13 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--record-approve-for <time>` | The approval window of a new inventory record that names a role when `Enrollment.AddRecord` names none: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `24h`), at least one second, no longer than `--record-approve-max`; `24h` when not given. While it is open a pending request that matches the record exactly is approved by the coordinator itself. Needs no `--enrollment-dir`. |
 | `--record-approve-max <time>` | The longest approval window a record may be given, by `Enrollment.AddRecord` and `Enrollment.OpenRecord` alike; a longer one is refused `invalid_window`; `7d` when not given. A `--record-approve-for` above it stops the start. Needs no `--enrollment-dir`. |
 | `--mac-serial-allowlist <file>` | The Mac serial numbers a Mac may be approved for by its MDM nonce, with the host id prefix, role and services of each (below). Without it no Mac is approved by its nonce. Requires `--ca-key-file`. |
-| `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and `--enrollment-dir`, where the gate's device records are: the gate does not run on the database store in this release. |
+| `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and enrollment (`--ca-key-file`, with `--enrollment-dir` or `--database-dsn-file`); the gate's device records are kept with the enrollment store, in `--enrollment-dir` or in the database's table `mdm_devices`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
 | `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` and `--mdm-daemon-config`. |
 | `--mdm-daemon-config <file>` | The daemon config the config profile carries: a `hostkeeper.toml` of the farm (`coordinator`, `ca_sha256`, `release_channel`, `trusted_signers`, optional `bounds`). It is read at start and judged by the daemon's own loader; a file that does not read, or that the loader refuses, stops the start with the loader's reason. It holds no secret. Requires `--mdm-profile-identifier`. |
+| `--mdm-stores <file>` | Optional: the `stores.toml` of the farm's Macs, carried in the config profile as the domain `dev.hostkeeper.stores`, which a Mac's daemon writes to `/etc/hostkeeper/stores.toml`, replacing a file that differs. It is read at start and judged by the daemon's own stores loader; a file the loader refuses, or a store that names a credential file (a profile carries no secret), stops the start. Requires `--mdm-profile-identifier`. |
+| `--mdm-macos-pkg <file>` | Optional: the `macos-pkg.toml` of the farm's Macs, the signers of the `macos-pkg` installer, carried as the domain `dev.hostkeeper.macos-pkg` and written to `/etc/hostkeeper/macos-pkg.toml` the same way. Judged at start by the installer's own signers loader. Requires `--mdm-profile-identifier`. Rotation: [repository-keys.md](operations/repository-keys.md). |
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate names the DNS names of
@@ -101,7 +103,7 @@ whole (temporary file, fsync, rename, directory fsync), mode 0600:
 | `deny/<host id>.pb` | a denied host: retiring, retired, or cleared by a later approval |
 | `serial.pb` | the next certificate serial |
 | `mac-nonces/<nonce SHA-256>.pb` | a Mac nonce by its SHA-256 only: its serial, the request it was issued for (absent on a nonce stored before that field), when it was issued, the request that consumed it |
-| `mdm-devices/<enrollment id>.pb` | with the MDM gate, its record of one device (below), with the SHA-256 of the record, so a torn file is refused |
+| `mdm-devices/<enrollment id>.pb` | with the MDM gate, its record of one device (below), with the SHA-256 of the record, so a torn file is refused; on the database store, the row of the device in `mdm_devices`, holding the same bytes |
 | `lock` | the lock every change takes |
 
 A request id is the SHA-256 of the request key's SubjectPublicKeyInfo, as 64 lower-case hex
@@ -116,8 +118,10 @@ coordinator's gRPC serving registers them. Both take the operator token only: a 
 `forbidden` and no token or any other `unauthorized`, before the request is looked at.
 
 ```
-hostkeeper ctl enrollment list --limit 50
-hostkeeper ctl enrollment approve --request-id <id> --key-sha256 <key_sha256 as listed> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment list --limit 50
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment approve --request-id <id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --services api --reason "racked in row 4"
 ```
 
@@ -308,10 +312,10 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   asking the device: a serial no record has, or one two enrollments that have not checked out
   have, is `device_state_unavailable`; a checked-out device is `device_not_enrolled`; an
   unsupervised one `device_not_supervised`.
-- **Its records.** One file per device under `mdm-devices/` (above), written before the gate acts
-  on the event, so a restart loses nothing and a result of a command sent before the restart is
+- **Its records.** One file per device under `mdm-devices/` (above), or with `--database-dsn-file`
+  one row per device of the table `mdm_devices`, written before the gate acts on the event, so a restart loses nothing and a result of a command sent before the restart is
   still matched. A record that does not read stops the start. `Mdm.ListDevices` of the operator
-  API (`hostkeeper ctl mdm list-devices`, [docs/ctl.md](ctl.md)) lists them; it asks no device.
+  API (`hkctl mdm list-devices`, [docs/cli.md](cli.md)) lists them; it asks no device.
 
 - **Its enrollment side.** With `--mdm-profile-identifier` and `--mdm-daemon-config` the gate
   also acts for each device that is enrolled, has a serial from its `DeviceInformation` answer
@@ -319,12 +323,17 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   sections 4 and 5). It looks at each webhook event of a device, at each request posted to the
   coordinator, and at every device once a minute; one profile command a look.
   - Once a request claiming the serial was approved in this enrollment (at or after its first
-    `TokenUpdate`), it sends nothing more to the Mac in this enrollment, and removes the nonce
-    profile it pushed in it (`RemoveProfile`, once).
-  - It installs the config profile, `<id>.config`, once per enrollment, supervised or not: one
+    `TokenUpdate`), it sends no nonce and no pkg to the Mac in this enrollment, and removes the
+    nonce profile it pushed in it (`RemoveProfile`, once). Only a changed config profile (below)
+    still reaches it.
+  - It installs the config profile, `<id>.config`, supervised or not: one
     `com.apple.ManagedClient.preferences` payload forcing the keys of `--mdm-daemon-config` in
-    the domain `dev.hostkeeper.config`. One the Mac answered with an error is sent again an hour
-    after the answer.
+    the domain `dev.hostkeeper.config`, and, when given, those of `--mdm-stores` in
+    `dev.hostkeeper.stores` and of `--mdm-macos-pkg` in `dev.hostkeeper.macos-pkg`. It records
+    the SHA-256 of the settings with the command, and counts them delivered once the Mac
+    acknowledges it. It sends the profile again, approved Mac or not, once whenever the settings
+    it would send now differ from those delivered (a record with no digest counts as different).
+    One the Mac answered with an error is sent again an hour after the answer, never sooner.
   - It issues a nonce (`Enrollment::issue_mac_nonce`) only when the device is supervised, no
     nonce issued for the serial is still good (3600 seconds from its issue, and no approval of
     the serial recorded since, which consumed it), and exactly one
@@ -357,6 +366,10 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   path    = "/var/lib/hostkeeper-mdm-pkg/<sha256>.pkg"   # in the MDM kit's pkg directory
   ```
 
+  The pkg is the release's `hostkeeper-<version>-macos-arm64.pkg` as it is: the release signs
+  it with the Developer ID Installer identity before it sums and attests it, so its `sha256` is
+  its line of the release's `SHA256SUMS`, and the file goes into the pkg directory unchanged,
+  named by that digest ([macos.md](macos.md), "The installer's signature").
   A path is absolute and named `<sha256>.pkg`, a digest is listed once and so are a version's
   release numbers, and a list with no entry is refused. The gate sends the newest entry: an
   `InstallEnterpriseApplication` with an inline manifest, one `software-package` asset whose
@@ -373,7 +386,7 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     conditions hold. It never sends it again while the last send is unanswered (a Mac that is
     off), and sends at the next look one NanoHUB did not queue.
   - Each send NanoHUB queued is audited `mdm_install_sent` by `mdm-gate`, with the serial, the
-    digest, the version and the send's count. `hostkeeper ctl mdm list-devices` shows the count
+    digest, the version and the send's count. `hkctl mdm list-devices` shows the count
     (`install_sends`), the last send (`install_last_sent_unix`) and its digest
     (`install_sha256`). A new enrollment starts the count again.
 

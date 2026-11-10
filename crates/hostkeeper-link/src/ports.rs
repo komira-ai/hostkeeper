@@ -11,9 +11,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
-use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal};
+use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
+use crate::host_facts::PushedFacts;
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
+use crate::repositories::{PushedSet, RepositoriesReport};
 
 /// What a reply was refused for.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
@@ -154,6 +156,13 @@ pub trait RenewalSource: Send + Sync {
     fn renewal(&self) -> Renewal;
 }
 
+/// The Sigstore trusted root the daemon checks packages with, read at every heartbeat: the
+/// daemon's is its package store's report of the root ([`TrustedRootFacts`]); none from a store
+/// that keeps no root.
+pub trait TrustedRootSource: Send + Sync {
+    fn trusted_root(&self) -> Option<TrustedRootFacts>;
+}
+
 /// One installed service, as its step record says.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RecordedService {
@@ -168,6 +177,9 @@ pub struct RecordedService {
     /// The try the step record holds, finished or not; none when the record names none or
     /// cannot be read.
     pub record_try: Option<u64>,
+    /// The installer the installed release came through (`apt`, for one); none for
+    /// `hostkeeper-archive`. Sent on the gRPC route only.
+    pub installer: Option<String>,
 }
 
 /// The services installed on the host, from their step records: never a list of names from a
@@ -198,6 +210,19 @@ pub struct Observation {
     pub health: Health,
     /// Why the health is what it is.
     pub health_detail: Option<String>,
+    /// The drift the service's installer found at this observation, if it found any.
+    pub drift: Option<Drift>,
+}
+
+/// A native package found at a version the daemon did not set, as the installer reports it. Each
+/// string is a package version (1 to 128 bytes of `[A-Za-z0-9.+~:_-]`); the heartbeat sends a
+/// drift with a string outside that grammar as no drift.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Drift {
+    /// The version the package manager shows; none when the package is not installed.
+    pub found: Option<String>,
+    /// The version the record of what was placed names; none when no record names the package.
+    pub recorded: Option<String>,
 }
 
 /// The service observer: liveness, version and health, observed and not reported by the
@@ -211,9 +236,38 @@ pub trait ServiceObserver: Send + Sync {
 /// the record, `try_conflict`, `stale_try`) are the executor's.
 pub trait OrderSink: Send + Sync {
     /// Runs `order`; its verdict names `target`, the version the loop gives it: the order's own,
-    /// or for an `uninstall` and an `abort`, which name none, the version of the service the loop
-    /// knows (the one it lists, or the target of the order an `abort` stops).
+    /// or for an `uninstall`, an `abort` and a `clear_record`, which name none, the version of the
+    /// service the loop knows (the one it lists, or the target of the order an `abort` stops).
     fn execute(&self, order: &Order, target: &Version) -> OrderResult;
+}
+
+/// The host's repository configuration, which the coordinator's pushed sets replace
+/// (`repositories-v1`). A daemon that has one announces the feature; one that has none (a Mac)
+/// announces nothing of repositories and applies nothing.
+pub trait RepositorySink: Send + Sync {
+    /// What the configuration holds, and the last set it refused: sent in every heartbeat.
+    fn report(&self) -> RepositoriesReport;
+
+    /// Takes `set` as the host's whole configuration when it passes the sink's checks, or keeps
+    /// what it has. It says nothing back: the next report does.
+    fn apply(&self, set: &PushedSet);
+
+    /// The installers the host can run now, by name: what the heartbeat lists in place of the
+    /// list given at start, since a set applied may add one.
+    fn installers(&self) -> Vec<String>;
+}
+
+/// The host's facts file, which the coordinator's facts replace (`facts-v1`). A daemon that has
+/// one announces the feature and reports the generation the file holds.
+pub trait FactsSink: Send + Sync {
+    /// The generation of the facts the file holds, as the sink last wrote them or found them
+    /// already written; none until then. Sent in every heartbeat.
+    fn generation(&self) -> Option<u64>;
+
+    /// Makes the file hold `facts`, writing it only when its content changes. True when the
+    /// file holds them now; false when it could not be written (the sink says why in its log),
+    /// and the generation it reports is the one before.
+    fn apply(&self, facts: &PushedFacts) -> bool;
 }
 
 /// One job for a worker.

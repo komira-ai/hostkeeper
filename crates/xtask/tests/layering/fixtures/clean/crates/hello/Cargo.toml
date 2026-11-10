@@ -4,6 +4,5 @@ version = "0.1.0"
 edition = "2024"
 
 [dev-dependencies]
-hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

@@ -3,32 +3,85 @@
 //! clean ([`CLEAN`]) and reading the exact problems it reports. The rules of `privileged.yml`, the
 //! workflow that runs the privileged tests as root after a merge, are tested in
 //! `privileged_tests.rs`; those of `net-install.yml`, the other workflow with jobs as root, the
-//! network-install jobs on main, in `net_install_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
-//! no secret on a pull request, in `pr_device_tests.rs`; those of `advisories.yml`, the advisory
+//! network-install jobs on main, in `net_install_tests.rs`; those of its job `openrc-device`, in
+//! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
+//! no secret on a pull request, in `pr_device_tests.rs`, its path rule (the job `changes` and its
+//! skip list) in `pr_paths_tests.rs`, and the conditions of its macOS jobs and of their gates,
+//! evaluated against every outcome, in `pr_device_gate_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`.
 
 mod advisories;
 mod callers;
 mod callers_tests;
-mod channel_run_tests;
+
+mod ci;
+mod ci_tests;
+mod coordinator_update_release_tests;
+mod coordinator_wait;
+mod coordinator_wait_run_tests;
+mod coordinator_wait_tests;
 mod desired;
 mod desired_tests;
+mod downloads;
+mod downloads_tests;
+mod expr;
+mod hello_run_tests;
+mod image_push_tests;
+#[path = "../jq/run.rs"]
+mod jq;
 mod lint;
+mod linux_packages_tests;
+mod linux_releases;
+mod linux_releases_tests;
+mod mdm_package_tests;
 mod net_install;
 mod net_install_tests;
+mod one_command;
+mod one_command_tests;
+mod openrc;
+mod openrc_tests;
+mod packages;
+mod packages_tests;
+mod pinned_cache;
+mod pinned_cache_tests;
+mod pkg_signing;
+mod pkg_signing_tests;
 mod pr_device;
+mod pr_device_gate_tests;
 mod pr_device_tests;
+mod pr_paths;
+mod pr_paths_tests;
+mod previous_release;
+mod previous_release_tests;
 mod privileged_tests;
 mod release;
-mod release_pxe_tests;
+mod release_assets;
+mod release_assets_tests;
+mod release_files;
+mod release_native_tests;
+mod release_ref;
+mod release_ref_tests;
 mod release_tests;
+#[path = "../hygiene/rust_text.rs"]
+mod rust_text;
 mod services_tests;
 mod set_desired;
+mod set_desired_calls;
+mod set_desired_calls_tests;
+mod set_desired_outputs_tests;
+mod set_desired_tag;
+mod set_desired_tag_tests;
 mod set_desired_tests;
+mod tailnet_join_tests;
+mod targets_run_tests;
+mod template_doc;
+mod template_doc_tests;
 #[path = "../../src/testdir.rs"]
 mod testdir;
 mod verify_doc;
 mod verify_doc_tests;
+mod xtask_calls;
+mod xtask_calls_tests;
 mod yaml;
 
 use std::path::PathBuf;
@@ -117,7 +170,7 @@ fn every_workflow_of_the_repository_passes_the_lint() {
     // macOS job on pull_request outside pr-device.yml's jobs that may be, a copy in pr-device.yml
     // that drifted from privileged.yml's job, a release workflow out of its shape, or a workflow
     // that tags or publishes on pull_request or outside the release group, in any workflow file
-    // of this repository.
+    // of this repository; and ci.yml's test shards or coverage gate out of their shape.
     let all = workflows();
     let text_of = |required: &str| {
         all.iter()
@@ -125,9 +178,13 @@ fn every_workflow_of_the_repository_passes_the_lint() {
             .map(|(_, text)| text.clone())
             .unwrap_or_else(|| panic!("{required} is missing"))
     };
-    text_of("ci.yml");
     let mut found =
         pr_device::mirror_problems(&text_of(pr_device::FILE), &text_of(PRIVILEGED_WORKFLOW));
+    found.extend(
+        ci::problems(&text_of(ci::FILE))
+            .into_iter()
+            .map(|p| format!("{}: {p}", ci::FILE)),
+    );
     for (file, text) in all {
         let publish = release::publish_problems(&file, &text);
         for p in lint(&file, &text).into_iter().chain(publish) {
@@ -351,8 +408,8 @@ fn a_privileged_job_on_pull_request_is_refused() {
             "job test: privileged on pull_request (`cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"`)",
         ),
         (
-            "      - run: cargo xtask sudo-test\n",
-            "job test: privileged on pull_request (`cargo xtask sudo-test`)",
+            "      - run: cargo run --bin sudo-test\n",
+            "job test: privileged on pull_request (`cargo run --bin sudo-test`)",
         ),
         (
             "      - run: |\n          cargo build\n          docker run --privileged image\n",

@@ -59,13 +59,15 @@ pub fn resume_action(rec: &Record, rebooted: bool) -> ResumeAction {
         WatcherRestart,
     };
     let watching = rec.progress.watching.is_some();
-    let awaiting = rec.progress.awaiting_restart.is_some();
+    let awaiting = rec.progress.awaiting_restart.is_some() | rec.progress.activate.is_some();
     let running = match (&rec.state, awaiting, watching) {
         // Not a row of the table: the update has its verdict.
         (State::Finished { .. }, _, _) => return NothingFinished,
         // Not a row of the table either: an update of the updater itself waiting for its new
-        // binary has run every step, and is settled before the start pass, never resumed
-        // (`crate::selfupdate::settle`, design section 6.6).
+        // binary, or for its own package's `activate` after the new binary confirmed, has run
+        // every step, and is settled before the start pass, never resumed
+        // (`crate::selfupdate::settle`, design section 6.6; docs/design/packages-native.md,
+        // section 10.4).
         (_, true, _) => return NothingFinished,
         // Not a row of the table either: the post-success watcher is outside it, and it never
         // runs `rollback` (section 6.4). "Then ... watchers restart."

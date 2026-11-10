@@ -1,4 +1,4 @@
-//! The directories placed-path linking works in, as the host names them (design section 4.7,
+//! The directories the record and the switch work in, as the host names them (design section 4.7,
 //! "on the host"). Every path here is the host's own spelling (`/etc/systemd/system/...`); the
 //! [`crate::Fs`] the caller gives decides where on disk it is read and written, which is how the
 //! tests run under a scratch directory with no real root.
@@ -9,9 +9,9 @@ use std::path::{Path, PathBuf};
 pub const STATE_DIR: &str = "/var/lib/hostkeeper";
 /// The directory of every service's package directories.
 pub const PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
-/// The systemd unit directory, where units are placed on Linux.
+/// The systemd unit directory on Linux.
 pub const SYSTEMD_UNIT_DIR: &str = "/etc/systemd/system";
-/// The name of the placed-path record in the state directory.
+/// The name of the record of installed services in the state directory.
 pub const PLACED_FILE: &str = "placed.json";
 /// The name of the lock file in the state directory: taken while `placed.json` is read and
 /// written, and around `daemon-reload` (design section 8.7).

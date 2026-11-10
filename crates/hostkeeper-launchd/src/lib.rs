@@ -5,8 +5,7 @@
 //! - [`bootid`]: [`parse_boot_session_uuid`], the reading of the Mac's boot id
 //!   (`kern.bootsessionuuid`), and `SysctlBootId`, the step runner's
 //!   [`BootIdSource`](hostkeeper_steps::BootIdSource) on a Mac.
-//! - [`label`]: the reverse-DNS prefix and the labels of the daemon, of each step job and of each
-//!   probe job.
+//! - [`label`]: the reverse-DNS prefix and the labels of the daemon and of each step job.
 //! - [`plist`]: the XML property lists of the daemon, of a step job and of a service package's
 //!   job.
 //! - [`launchctl`]: the [`Launchctl`] port (one `launchctl` command), its real adapter
@@ -21,11 +20,10 @@
 //! - [`launcher`]: [`LaunchdLauncher`], the step runner's
 //!   [`StepLauncher`](hostkeeper_steps::StepLauncher): each step of a hook as a transient launchd
 //!   job, under the same contract as `hostkeeper_steps::SystemdLauncher`.
-//! - [`postinstall`]: the `postinstall` script of the macOS installer pkg, which gives the
-//!   self-update binary directory the daemon job starts its first binary, has the daemon config
-//!   written from the MDM's managed preferences, and loads the daemon's job.
-//! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux and
-//!   macOS.
+//! - [`postinstall`]: the `postinstall` script of the macOS installer pkg, which loads the
+//!   daemon's job once any copy loaded before is booted out.
+//! - [`platform`]: [`Platform`], the paths and unit directory that differ between Linux under
+//!   systemd, Linux under OpenRC and macOS, and which of them the host runs ([`Platform::host`]).
 //! - [`fake`]: [`FakeLaunchctl`], the scripted `launchctl` every test drives.
 //!
 //! Nothing here is compiled for macOS only except the real `PidInfo` of [`procid`], the host's
@@ -56,7 +54,7 @@ pub use launchctl::{
 };
 pub use launcher::{LaunchdLauncher, Pace};
 pub use manager::LaunchdServiceManager;
-pub use platform::{Platform, PlatformKind};
+pub use platform::{OPENRC_MARKER, Platform, PlatformKind, SYSTEMD_MARKER};
 pub use plist::{
     DaemonJob, PlistError, ServiceJob, StepJob, daemon_plist, service_plist, step_plist,
 };

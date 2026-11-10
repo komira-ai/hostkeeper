@@ -7,10 +7,10 @@
 //!     --ca-file <file> --token-file <file> --user-id <n> --group-id <n>
 //!     [--interface <name>] [--dhcp-listen <a:p>] [--proxy-listen <a:p>] [--tftp-listen <a:p>]
 //!     [--http-listen <a:p>] [--dhcp-reply-to <a:p>] [--install-disk <form>=<glob>]
-//!     [--serial-console <port>] [--reinstall <host id>]... [--tftp-timeout-ms <n>]
-//!     [--settings <file>] [--notify-systemd]
-//! pxe prepare <staged release> --params <file>
-//! pxe cutover|verify|rollback|cleanup|uninstall --params <file>
+//!     [--serial-console <port>] [--repositories <dir>] [--reinstall <host id>]...
+//!     [--tftp-timeout-ms <n>] [--settings <file>] [--notify-systemd]
+//! pxe update-hook prepare <staged release> --params <file>
+//! pxe update-hook cutover|verify|rollback|cleanup|uninstall --params <file>
 //! ```
 //!
 //! `serve` (network-install.md section 3, "What it serves, and how it runs"):
@@ -29,6 +29,12 @@
 //! - `--dir`: a directory the `prepare` step sealed. `--daemon-config` (root-owned, loaded with
 //!   the daemon's loader), `--ssh-authorized-keys`, `--install-disk` and `--serial-console`: the
 //!   inputs of the seeds (section 4).
+//! - `--repositories`: a directory of the installed hosts' repository entries, `<name>.sources`
+//!   files whose `Signed-By` names `/etc/hostkeeper/repositories/<keyring>`, and the keyrings
+//!   they name (packages-repositories.md sections 3.1 and 3.2). It is checked as root at the
+//!   start with the daemon's own loader, as if it were at that path, and a directory it would
+//!   refuse, a missing one or one holding no entry refuses the start. Every seed then writes the
+//!   files, byte for byte, to `/etc/hostkeeper/repositories/`. Without it a seed writes none.
 //! - `--reinstall`: a host id whose record is installed even though a host or a pending request
 //!   holds it (section 8), repeatable; it must name a record.
 //! - `--user-id`, `--group-id`: the unprivileged user and group `serve` drops to once its
@@ -188,6 +194,10 @@ pub(crate) struct ServeFlags {
     /// The installed system's serial console: ttyS<n> or ttyAMA<n>.
     #[arg(long)]
     pub(crate) serial_console: Option<SerialConsole>,
+    /// A directory of the installed hosts' repository entries (<name>.sources) and the keyrings
+    /// they name, written to /etc/hostkeeper/repositories/ by every seed.
+    #[arg(long)]
+    pub(crate) repositories: Option<PathBuf>,
     /// A host id to reinstall (repeatable).
     #[arg(long = "reinstall")]
     pub(crate) reinstall: Vec<hostkeeper_wire::HostId>,

@@ -15,7 +15,7 @@
 //!   and an `@` (`artifacts.yml@other.example`) is a different workflow and is refused;
 //! - `--deny-self-hosted-runners` is passed only when the config's `hosted_runner` is true;
 //! - the config's refs are globs. The ref in the bundle's certificate is matched against them
-//!   ([`TrustedSigners::allows_ref`], which channel-sync's check uses too), and a ref no glob
+//!   ([`TrustedSigners::allows_ref`], which `hostkeeper-pxe fetch` uses too), and a ref no glob
 //!   matches is rejected without running `gh`; otherwise `gh` is run once, with that ref as
 //!   `--source-ref`;
 //! - the commit is the one the bundle's provenance names (`--source-digest`); `gh` checks it

@@ -1,10 +1,10 @@
-//! The daemon behind five ports of the heartbeat loop (`hostkeeper_link`): the executor, the
-//! held halts, the installed services, the service observer and the enrollment loop's word on
-//! the certificate.
+//! The daemon behind six ports of the heartbeat loop (`hostkeeper_link`): the executor, the
+//! held halts, the installed services, the service observer, the enrollment loop's word on the
+//! certificate and the report of the Sigstore trusted root.
 //!
 //! [`DaemonOrders`] is the loop's [`OrderSink`]: it writes the loop's order (an update, a forced
-//! update, an install, an uninstall or an abort) as the protobuf `Order` that [`Daemon::order`]
-//! takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
+//! update, an install, an uninstall, an abort or a clear-record) as the protobuf `Order` that
+//! [`Daemon::order`] takes ([`wire_order`]), and reads the daemon's [`Reply`] as the verdict the loop reports
 //! ([`order_result`]). It decides nothing about the order: the checks, the locks and the try
 //! rules are the daemon's.
 //!
@@ -14,22 +14,26 @@
 //!
 //! [`DaemonRecords`] is the loop's [`ServiceRecords`]: every service whose `current` link names a
 //! version, at that version, with the target of its step record while the record is unfinished
-//! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation the admin
-//! `Status` reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
+//! ([`recorded`]). [`DaemonObserver`] is its [`ServiceObserver`]: the observation
+//! [`Daemon::status`] reports ([`Daemon::observer`]), in the loop's words ([`observation`]).
 //!
 //! [`DaemonRenewal`] is its [`RenewalSource`]: the [`RenewalState`] the enrollment loop writes
 //! after each step ([`crate::links::Links::renewal`]), as it is when the heartbeat is made.
+//!
+//! [`NoTrustedRoot`] is its [`TrustedRootSource`]: the daemon checks no attestation, so it
+//! reports no trusted root; the heartbeat's `trusted_root_age_secs` and `trusted_root_reason`
+//! stay in the protocol, unsent.
 
 use std::io;
 use std::sync::Arc;
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_enroll::RenewalState;
-use hostkeeper_hook::{Phase, Verdict};
+use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_link::{
-    Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult, OrderSink,
-    Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver, ServiceRecords,
-    Target, Verb,
+    Drift, Health, HeldHalts, Liveness, Observation, Order, OrderId, OrderRef, OrderResult,
+    OrderSink, Outcome, Reason, RecordedService, Renewal, RenewalSource, ServiceObserver,
+    ServiceRecords, Target, TrustedRootFacts, TrustedRootSource, Verb,
 };
 use hostkeeper_observe::{ServiceState, VersionView, beat_health};
 use hostkeeper_proto::hostkeeper::agent::v1 as wire;
@@ -63,9 +67,11 @@ impl OrderSink for DaemonOrders {
 }
 
 /// `order` as the protobuf `Order` the daemon takes, every field as it is: the id, the try, and
-/// the target's service, version and digest, or the service alone. An update is an `update`, a
-/// forced update a `force`, an install an `install`, an uninstall an `uninstall` and an abort an
-/// `abort`. The loop's order has no halt generation, so a `force` carries 0 and lifts no halt.
+/// the target's service, version, digest and entry, or the service alone. An update is an `update`, a
+/// forced update a `force`, an install an `install`, an uninstall an `uninstall`, an abort an
+/// `abort` and a clear-record a `clear_record`. The loop's order has no halt generation, so a
+/// `force` carries 0 and lifts no halt. The entry of a release the order carries goes back on the
+/// verb's `target` unchanged; an order with none leaves it unset.
 pub fn wire_order(order: &Order) -> wire::Order {
     let terms = |target: &Target| {
         (
@@ -76,41 +82,48 @@ pub fn wire_order(order: &Order) -> wire::Order {
                 .index_digest
                 .as_ref()
                 .map_or_else(String::new, |d| d.as_str().to_owned()),
+            target.entry.as_ref().map(|entry| entry.as_target().clone()),
         )
     };
     let verb = match &order.verb {
         Verb::Update(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Update(wire::Update {
                 service,
                 version,
                 package_digest,
                 index_digest,
+                target: entry,
             })
         }
         Verb::Force(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Force(wire::Force {
                 service,
                 version,
                 package_digest,
                 index_digest,
                 halt_generation: 0,
+                target: entry,
             })
         }
         Verb::Install(target) => {
-            let (service, version, package_digest, index_digest) = terms(target);
+            let (service, version, package_digest, index_digest, entry) = terms(target);
             wire::order::Verb::Install(wire::Install {
                 service,
                 version,
                 package_digest,
                 index_digest,
+                target: entry,
             })
         }
         Verb::Uninstall(service) => wire::order::Verb::Uninstall(wire::Uninstall {
             service: service.as_str().to_owned(),
         }),
         Verb::Abort(service) => wire::order::Verb::Abort(wire::Abort {
+            service: service.as_str().to_owned(),
+        }),
+        Verb::ClearRecord(service) => wire::order::Verb::ClearRecord(wire::ClearRecord {
             service: service.as_str().to_owned(),
         }),
     };
@@ -128,7 +141,8 @@ pub fn wire_order(order: &Order) -> wire::Order {
 ///   gave none. A reason that is not a token is left out and said in the detail.
 /// - A refused or interrupted order is `failed` with the refusal's token as its reason and the
 ///   daemon's text as its detail, in no phase: a refusal is not a new halt, and the halt that
-///   caused `halted` was reported when it was raised.
+///   caused `halted` was reported when it was raised. The refusals of an order's entry that
+///   docs/design/packages.md names with a class ([`blamed`]) carry it, before the commit point.
 /// - An order that is already running is not started: it is answered `busy`, as the loop
 ///   answers an order that arrives while another one runs.
 ///
@@ -148,15 +162,32 @@ pub fn order_result(order: &Order, target: &Version, reply: &Reply) -> OrderResu
     match reply {
         Reply::Running => OrderResult::busy(order, target.clone()),
         Reply::Refused { refusal, detail } | Reply::Interrupted { refusal, detail } => {
+            let (phase, class) = blamed(*refusal).map_or((None, None), |class| {
+                (Some(Phase::BeforeCommit), Some(class))
+            });
             OrderResult {
                 reason: Reason::new(refusal.token()).ok(),
                 detail: Some(bounded(detail)),
+                phase,
+                class,
                 ..base
             }
         }
         Reply::Finished {
             verdict, reason, ..
         } => finished(base, verdict, reason.as_deref()),
+    }
+}
+
+/// The class a refusal of an order's entry is blamed on (docs/design/packages.md sections 4.4,
+/// 7.1 and 7.4): `release` for an entry the daemon cannot accept (`order_invalid`) or whose
+/// manifest it refuses (`manifest_invalid`), `environment` for an entry none of whose stores the
+/// host defines (`no_store`). Every other refusal names no class, as before.
+pub fn blamed(refusal: Refusal) -> Option<Class> {
+    match refusal {
+        Refusal::OrderInvalid | Refusal::ManifestInvalid => Some(Class::Release),
+        Refusal::NoStore => Some(Class::Environment),
+        _ => None,
     }
 }
 
@@ -280,7 +311,8 @@ impl ServiceRecords for DaemonRecords {
 /// record holds, finished or not, none when it is absent, newer or unreadable or names no try.
 /// The record keeps no order id of a hooked order, so no verdict is given back from it: after a
 /// restart the coordinator's resend of the order is answered from the record (design 8.3), and
-/// the try tells a coordinator that never heard the verdict which try to number past.
+/// the try tells a coordinator that never heard the verdict which try to number past. The
+/// installer is the one `placed.json` records for it, none for a `hostkeeper-archive` service.
 ///
 /// The one verdict given back is that of a settled update of hostkeeper itself, as the service
 /// `hostkeeper`'s: its record keeps the order's id until the coordinator acknowledges the
@@ -304,13 +336,23 @@ pub fn recorded(ctx: &Ctx, service: ServiceName) -> Option<RecordedService> {
         }
         _ => (None, None, None),
     };
+    let installer = recorded_installer(ctx, &service);
     Some(RecordedService {
         name: service,
         version,
         updating,
         last_result,
         record_try,
+        installer,
     })
+}
+
+/// The installer `placed.json` records for `service`, as the heartbeat names it
+/// (`ServiceBeat.installer`): none for a service with no entry, and none when the record cannot
+/// be read.
+fn recorded_installer(ctx: &Ctx, service: &ServiceName) -> Option<String> {
+    let record = ctx.placer().store().load().ok()?;
+    record.installer_of(service.as_str()).map(str::to_owned)
 }
 
 /// The verdict a finished record of an update of hostkeeper itself keeps to report: under the
@@ -354,10 +396,11 @@ pub const NOT_OBSERVED: &str = "not_observed";
 
 impl ServiceObserver for DaemonObserver {
     /// One observation of `service` ([`observer::observe`]); a service the daemon does not
-    /// observe is `unobserved`, never absent or stopped.
+    /// observe is `unobserved`, never absent or stopped. A repository package's observation also
+    /// carries its drift ([`drift`]).
     fn observe(&self, service: &ServiceName) -> Observation {
         let ctx = self.daemon.ctx();
-        observer::observe(
+        let observed = observer::observe(
             self.daemon.observer(),
             &ctx.dirs.packages,
             &crate::selfupdate::binary_dir(&ctx.dirs.state),
@@ -370,15 +413,47 @@ impl ServiceObserver for DaemonObserver {
                 version: None,
                 health: Health::Unhealthy,
                 health_detail: Some(NOT_OBSERVED.to_owned()),
+                drift: None,
             },
             |seen| observation(&seen),
-        )
+        );
+        Observation {
+            drift: drift(ctx, service),
+            ..observed
+        }
+    }
+}
+
+/// The drift of `service` at this heartbeat (packages-repositories.md section 4.4): for a
+/// version `current` names that a repository installer staged, the version the package manager
+/// shows against the one `placed.json` records, when they differ. `None` for every other
+/// service, while an install is pending, and when the installed version cannot be read, which is
+/// logged.
+pub fn drift(ctx: &Ctx, service: &ServiceName) -> Option<Drift> {
+    let version = installed::linked_version(&ctx.dirs.packages, service, CURRENT)?;
+    let dir = ctx
+        .dirs
+        .packages
+        .join(service.as_str())
+        .join(version.as_str());
+    let entry = crate::target::read(&dir).ok().flatten()?;
+    match ctx.repository().drift(service, &entry) {
+        Ok(found) => found.map(|drift| Drift {
+            found: drift.found,
+            recorded: drift.recorded,
+        }),
+        Err(failure) => {
+            ctx.log(&format!(
+                "service={service}: the installed version could not be read for its drift: {failure}"
+            ));
+            None
+        }
     }
 }
 
 /// `seen` in the loop's words: the state as the liveness (live is running); the version only when
-/// the running executable confirmed it; the health as the heartbeat's health of the admin
-/// `Status` ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
+/// the running executable confirmed it; the health as the heartbeat's health
+/// ([`beat_health`]), a health the observer cannot tell being unhealthy; and the token
 /// that says why the service is not plainly live, healthy and confirmed as the detail.
 pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
     let liveness = match &seen.state {
@@ -406,6 +481,8 @@ pub fn observation(seen: &hostkeeper_observe::Observation) -> Observation {
         version,
         health,
         health_detail: seen.reason_token().map(str::to_owned),
+        // The repository installer's drift is added by the daemon's observer ([`drift`]).
+        drift: None,
     }
 }
 
@@ -427,5 +504,15 @@ impl RenewalSource for DaemonRenewal {
             cert_not_after_unix: noted.not_after,
             last_renew_error: noted.last_error,
         }
+    }
+}
+
+/// The heartbeat loop's [`TrustedRootSource`]: none, since the daemon keeps no trusted root.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct NoTrustedRoot;
+
+impl TrustedRootSource for NoTrustedRoot {
+    fn trusted_root(&self) -> Option<TrustedRootFacts> {
+        None
     }
 }

@@ -1,8 +1,8 @@
 // Host: one host's services, holds, marks and last update, the host-inventory record its
 // enrollment matched (linked to the Inventory page) with that record's data MACs, BMC MAC and
-// serial, when it enrolled, its certificate as its last heartbeat said it, and what an operator
-// may do to it. The page reads the time from `ctx.now()` (unix seconds), once per rendering, to
-// say how soon the certificate ends.
+// serial, when it enrolled, its certificate and its Sigstore trusted root as its last heartbeat
+// said them, and what an operator may do to it. The page reads the time from `ctx.now()` (unix
+// seconds), once per rendering, to say how soon the certificate ends.
 // Calls: Hosts.Get, then Services.List for the services assigned to the host (it is called even
 // when Hosts.Get fails, and each failure is shown as is), then, when a service is assigned to the
 // host, Audit.List of the host's entries, page by page, to mark a service whose last uninstall was
@@ -92,6 +92,62 @@ function certificate(host, now) {
     warnings.map((text) => h("p", { class: "warning", role: "alert" }, text)));
 }
 
+// Seconds in a day, the unit a trusted root's age is shown in.
+const DAY_SECS = 86400;
+
+// The state of a trusted root whose reason Hosts.Get answers as `reason` (`trustedRootReason`,
+// the enum's name; absent when unspecified): "stale", "missing" or "unparseable" when it needs
+// attention, "ok" when it needs none, and "unknown" when the host's last heartbeat said nothing
+// of it (absent, unspecified, or a value this page does not know).
+export function rootState(reason) {
+  switch (reason) {
+    case "TRUSTED_ROOT_REASON_NONE":
+      return "ok";
+    case "TRUSTED_ROOT_REASON_STALE":
+      return "stale";
+    case "TRUSTED_ROOT_REASON_MISSING":
+      return "missing";
+    case "TRUSTED_ROOT_REASON_UNPARSEABLE":
+      return "unparseable";
+    default:
+      return "unknown";
+  }
+}
+
+// What the page says of each state of a trusted root, and the warning of each that needs
+// attention.
+const ROOT_SAYS = {
+  ok: ["needs no attention", null],
+  stale: ["stale", "The Sigstore trusted root is stale: package checks go on with it, and refuse every package "
+    + "signed after a key rotation it does not hold. Update hostkeeper on the host, or copy a current root to it."],
+  missing: ["missing", "The host has no Sigstore trusted root: every package check on it fails."],
+  unparseable: ["unparseable", "The host's Sigstore trusted root cannot be read: every package check on it fails."],
+  unknown: ["not reported", null],
+};
+
+// The age of a trusted root as Hosts.Get answers it (`trustedRootAgeSecs`, a string or a number;
+// absent when the host said none): whole days and the seconds, or "not reported".
+export function rootAge(secs) {
+  const age = Number(secs);
+  if (secs === undefined || secs === null || secs === "" || !Number.isFinite(age) || age < 0) {
+    return "not reported";
+  }
+  return `${Math.floor(age / DAY_SECS)} days (${age} s)`;
+}
+
+// The trusted root of `host` as its last heartbeat said it: its state and age, and a warning when
+// it needs attention.
+function trustedRoot(host) {
+  const [said, warning] = ROOT_SAYS[rootState(host.trustedRootReason)];
+  return h("section", { class: "trusted-root" },
+    h("h3", {}, "Trusted root"),
+    table(["", ""], [
+      ["State", said],
+      ["Age", rootAge(host.trustedRootAgeSecs)],
+    ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
+    warning === null ? [] : [h("p", { class: "warning", role: "alert" }, warning)]);
+}
+
 function lastUpdate(result) {
   if (!result) {
     return h("p", {}, "No update reported yet.");
@@ -156,31 +212,31 @@ function serviceSection(ctx, nodeId, view) {
             && !ctx.confirm(`Exclude ${nodeId} from ${service} and free the update slot it holds (abandon)?`)) {
             return "Not excluded.";
           }
-          await ctx.api.call("hostkeeper.operator.v1.Hosts/Exclude",
+          await ctx.api.hosts.exclude(
             { service, nodeId, reason: reason(), abandon: form.abandon === true });
           ctx.refresh();
           return `Excluded ${nodeId} from ${service}.`;
         })),
         action(ctx, "Include", "include", async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Hosts/Include", { service, nodeId });
+          await ctx.api.hosts.include({ service, nodeId });
           ctx.refresh();
           return `Included ${nodeId} in ${service}.`;
         }),
         action(ctx, "Abort the running update", "abort", needReason(async () => {
-          const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Abort", { nodeId, service, reason: reason() });
+          const reply = await ctx.api.hosts.abort({ nodeId, service, reason: reason() });
           ctx.refresh();
           return reply.queued === true
             ? `Abort of ${service} queued for ${nodeId}'s next heartbeat.`
             : `Nothing to abort: ${nodeId} runs nothing of ${service}, so no abort was queued.`;
         })),
         action(ctx, "Hold here", "hold", needReason(async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Services/Hold",
+          await ctx.api.services.hold(
             { scope: { host: nodeId }, service, reason: reason() });
           ctx.refresh();
           return `Held ${service} on ${nodeId}.`;
         })),
         action(ctx, "Release the hold here", "unhold", needReason(async () => {
-          await ctx.api.call("hostkeeper.operator.v1.Services/Unhold",
+          await ctx.api.services.unhold(
             { scope: { host: nodeId }, service, reason: reason() });
           ctx.refresh();
           return `Released the hold of ${service} on ${nodeId}.`;
@@ -253,7 +309,7 @@ async function uninstallEnds(ctx, listing, nodeId) {
   try {
     let request = { nodeId };
     for (;;) {
-      const page = await ctx.api.call("hostkeeper.operator.v1.Audit/List", request);
+      const page = await ctx.api.audit.list(request);
       const got = list(page, "entries");
       entries.push(...got);
       const next = typeof page.nextSeq === "string" ? page.nextSeq : "0";
@@ -331,13 +387,13 @@ export async function render(ctx) {
   let host;
   let failure = null;
   try {
-    host = (await ctx.api.call("hostkeeper.operator.v1.Hosts/Get", { nodeId })).host || {};
+    host = (await ctx.api.hosts.get({ nodeId })).host || {};
   } catch (error) {
     failure = error;
   }
   let listing;
   try {
-    listing = { entries: list(await ctx.api.call("hostkeeper.operator.v1.Services/List", {}), "services") };
+    listing = { entries: list(await ctx.api.services.list({}), "services") };
   } catch (error) {
     listing = { error };
   }
@@ -364,6 +420,7 @@ export async function render(ctx) {
       ...inventoryFacts(ctx, host),
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))),
     certificate(host, now),
+    trustedRoot(host),
     h("fieldset", {},
       h("legend", {}, "Labels"),
       field("Labels (key=value, separated by commas)", "labels", labelsForm, "labels"),
@@ -378,7 +435,7 @@ export async function render(ctx) {
           && !ctx.confirm(`Remove every label of ${nodeId}?`)) {
           return "Labels not changed.";
         }
-        await ctx.api.call("hostkeeper.operator.v1.Hosts/SetLabels", { nodeId, labels });
+        await ctx.api.hosts.setLabels({ nodeId, labels });
         ctx.refresh();
         return `Labels of ${nodeId} set.`;
       })),
@@ -406,7 +463,7 @@ function retireSection(ctx, nodeId) {
       if (!ctx.confirm(`Retire ${nodeId}? Its heartbeats and renewals are refused from then on.`)) {
         return "Not retired.";
       }
-      const reply = await ctx.api.call("hostkeeper.operator.v1.Hosts/Retire", { nodeId, reason });
+      const reply = await ctx.api.hosts.retire({ nodeId, reason });
       ctx.refresh();
       return reply.updateInFlight === true
         ? `Retired ${nodeId}: its update slot is freed when it reports its update final.`

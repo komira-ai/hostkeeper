@@ -1,6 +1,6 @@
 # The network-install run: in the jobs net-install and net-install-arm64 a QEMU guest is installed
 # by network end to end (docs/design/network-install.md section 11), as root on a GitHub-hosted
-# Ubuntu runner: the real pxe and the real coordinator's LAN listener, on a bridge with
+# Ubuntu runner: the real hostkeeper-pxe and the real coordinator's LAN listener, on a bridge with
 # no route out, each box of the LAN in a network namespace of its own; x86-64 under KVM through
 # enrollment, a service, router mode, a reinstall and a retired host, and arm64 under TCG until its
 # seed fetch; net-install then makes the report of the measurement of the guest's first install
@@ -11,8 +11,7 @@
 #
 # - on a push to main that changes the network-install code: the boot server's crates
 #   (crates/hostkeeper-pxe*), the boot sets' pins (packaging/netboot), the deb's packaging
-#   (packaging/linux), the pxe package's goldens the tests install (packaging/pxe), the
-#   network-install tests and their rig, the generators the jobs run
+#   (packaging/linux), the network-install tests and their rig, the generators the jobs run
 #   (cargo xtask release netboot and netinstall-report), and this file;
 # - nightly, on main, whatever changed, for the code these tests use that the paths above leave
 #   out (the coordinator, the daemon);
@@ -50,7 +49,6 @@ on:
       - crates/hostkeeper-pxe*/**
       - packaging/netboot/**
       - packaging/linux/**
-      - packaging/pxe/**
       - crates/hostkeeper-privileged/tests/net_install*.rs
       - crates/hostkeeper-privileged/tests/netinstall/**
       - crates/hostkeeper-privileged/tests/bin/pxe.rs
@@ -80,7 +78,7 @@ env:
 jobs:
   # Network install end to end, x86-64 (docs/design/network-install.md section 11): a QEMU guest
   # with OVMF UEFI firmware under KVM, on a Linux bridge with no route out, installed by the real
-  # pxe from a boot set this job fetched by pinned URL (`pxe prepare` checks
+  # hostkeeper-pxe from a boot set this job fetched by pinned URL (`hostkeeper-pxe fetch` checks
   # its size and SHA-256 against the pins), with this commit's deb; it enrolls with the real
   # coordinator on its LAN listener, is approved, gets the fixture service, boots its disk in
   # router mode, is reinstalled, and once retired and the coordinator restarted is not installed
@@ -127,24 +125,61 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      # The deb of this commit, built as artifacts.yml builds it: the release binaries, the
-      # pinned gh and the Sigstore trusted root staged, then nfpm.
-      - name: Download nfpm (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      # The deb of this commit, built as artifacts.yml builds it: the static (musl) release
+      # programs, the pinned gh and the Sigstore trusted root staged, then nfpm.
+      - name: Restore the pinned nfpm.tar.gz from the cache
+        id: nfpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: pinned-nfpm-${{ env.NFPM_VERSION }}-${{ env.NFPM_SHA256 }}
+      - name: Download nfpm on a cache miss (HTTPS only, redirects included)
+        id: nfpm-download
+        if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+      - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
+        run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install nfpm (pinned checksum)
+        id: nfpm-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
-      # The gh the test checks the boot set's attestations with (the settings file's `gh` for `pxe prepare`).
+      - name: Save the checked nfpm.tar.gz to the cache
+        if: ${{ !cancelled() && steps.nfpm-check.outcome == 'success' && steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
+      # The gh the test checks the boot set's attestations with (hostkeeper-pxe fetch --gh).
+      - name: Restore the pinned gh.tar.gz from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Save the checked gh.tar.gz to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - name: The Sigstore trusted root
         run: target/privileged-tools/gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
-      # Only the deb's program: the test builds its own pxe program.
-      - name: Build hostkeeper
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
-      - name: Stage gh and the trusted root for the deb
-        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --out target/nfpm
+      - name: Add the static target
+        run: rustup target add x86_64-unknown-linux-musl
+      - name: Build the static hostkeeper and hostkeeper-pxe
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      - name: Stage the static programs, gh and the trusted root for the deb
+        run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --binaries target/x86_64-unknown-linux-musl/release --out target/nfpm
       - run: mkdir -p target/net-install
       - name: The deb
         env:
@@ -153,9 +188,9 @@ jobs:
         run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      # Checked by pxe prepare, against the pinned size and SHA-256, in the test.
+      # Checked by hostkeeper-pxe fetch, against the pinned size and SHA-256, in the test.
       - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-amd64.iso "$ISO_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-amd64.iso "$ISO_URL"
       - name: Build the network-install test as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install
       - name: Run the network-install test as root
@@ -229,15 +264,33 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Restore the pinned gh.tar.gz from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
+      - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
+      - name: Save the checked gh.tar.gz to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - run: mkdir -p target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
       - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-arm64.iso "$ISO_URL"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-arm64.iso "$ISO_URL"
       - name: Build the arm64 network-install test as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install_arm64
       - name: Run the arm64 network-install test as root

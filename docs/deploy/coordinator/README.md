@@ -11,6 +11,7 @@ this page:
 | `sql/after-restore.sql` | The one statement a restore runs before the coordinator starts. |
 | `sql/counts.sql` | The rows of each table, printed as `hostkeeper-coordinator export` prints them, for the drill. |
 | `hostkeeper-db-backup.service`, `.timer` | A dump every six hours, the newest 28 kept. |
+| `hostkeeper-coordinator-update.service`, `.timer` | The coordinator's container rolled forward to each published release, every five minutes. |
 
 The coordinator's own flags, refusals and the database store's behaviour are in
 [coordinator-state.md](../../operations/coordinator-state.md). Every command below runs as root in
@@ -78,6 +79,11 @@ the tokens file are read by the coordinator's user only: owned by 65532, mode 06
 command for the farm: the listen addresses (one interface's address each, never a wildcard),
 `--server-name`, and any other flag the coordinator runs with today
 (`hostkeeper-coordinator serve --help`).
+
+The coordinator gets no compose `healthcheck`: compose runs one inside the container, which has
+no shell or client. To probe it from the machine, add `--health-listen` with a loopback address
+(for example `127.0.0.1:9100`) to the command, and point the machine's monitoring at
+`GET /healthz` ([coordinator-health.md](../coordinator-health.md)).
 
 The local volume, `/var/lib/hostkeeper-coordinator` in the container, holds the CA key
 (`ca.key`) and its certificate (`ca.key.cert`), the server certificate file (`server.pem`) and the
@@ -180,6 +186,15 @@ docker compose --profile postgres restart coordinator
 `>` writes into the file that is there, which keeps its owner and mode (root writes it whatever
 its mode). Do not remove a secret file and make a new one: a running container keeps seeing the
 file it was started with, so `password.sql` would read the old password.
+
+## Updating the coordinator
+
+The machine that runs the container updates it from every published release by itself:
+`hostkeeper-coordinator-update.timer` runs `hostkeeper-coordinator-update` (a release asset of its own), which loads the release's
+attested image and replaces the container with the old one's command line, mounts and volumes,
+rolling back to the old container when the new one is not ready. The runbook (install, turn on,
+refusals, a failed version, the compose deployment's `image:` line) is
+[../coordinator-update.md](../coordinator-update.md).
 
 ## Backups
 

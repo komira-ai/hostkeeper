@@ -27,7 +27,7 @@ use crate::enrollment::tests::support::{enrolled, host_id, watched};
 use crate::grpc::{RouteBody, route};
 use crate::http::{BoxError, Peer, Surface};
 use crate::service::Coordinator;
-use crate::testutil::{OPERATOR, Rig, ci_token, scratch, with_kbf};
+use crate::testutil::{OPERATOR, Rig, scratch, with_kbf};
 
 /// How long a body has in these tests.
 pub(super) const PATIENCE: Duration = Duration::from_secs(30);
@@ -43,10 +43,10 @@ const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]
 
 /// The features the agents of this file announce; the coordinator answers the ones it
 /// advertises, in its own order.
-const ANNOUNCED: [&str; 3] = ["order-v1", "halt-v1", "deferred-v1"];
+const ANNOUNCED: [&str; 4] = ["order-v1", "halt-v1", "deferred-v1", "target-v1"];
 
 /// What the coordinator answers an agent that announced [`ANNOUNCED`].
-const AGREED: [&str; 3] = ["deferred-v1", "halt-v1", "order-v1"];
+const AGREED: [&str; 4] = ["deferred-v1", "halt-v1", "order-v1", "target-v1"];
 
 /// The agent of the heartbeats of this file.
 const AGENT_NAME: &str = "hostkeeper-daemon";
@@ -118,10 +118,7 @@ pub(super) async fn farm(name: &str) -> Farm {
             r#"{{"service":"other","version":"3.0","min_up":{{"storage":0,"frontend":0}},"release_digest":"{digest}"}}"#
         ),
     ] {
-        coordinator
-            .set_desired(Some(&ci_token()), body.as_bytes())
-            .await
-            .expect("CI sets the desired state");
+        crate::testutil::set_native(&coordinator, &body).await;
     }
     clock.store(2_000, Ordering::SeqCst);
     Farm {
@@ -137,10 +134,7 @@ pub(super) async fn farm_enrolled(name: &str, enrollment: &Arc<Enrollment>) -> F
     let clock = Arc::new(AtomicU64::new(1_000));
     let coordinator = Rig::start(&dir, &clock).with_enrollment(Arc::clone(enrollment));
     clock.store(2_000, Ordering::SeqCst);
-    coordinator
-        .set_desired(Some(&ci_token()), ONE_STORAGE.as_bytes())
-        .await
-        .expect("CI sets the desired state");
+    crate::testutil::set_native(&coordinator, ONE_STORAGE).await;
     clock.store(2_100, Ordering::SeqCst);
     Farm {
         coordinator: Arc::new(coordinator),
@@ -409,6 +403,7 @@ fn proto_service(service: &Svc) -> proto::ServiceBeat {
         name: service.name.clone(),
         version: service.version.to_owned(),
         health: proto::Health::Healthy as i32,
+        installer: Some("apt".to_owned()),
         ..proto::ServiceBeat::default()
     };
     match service.report {
@@ -436,6 +431,8 @@ fn proto_service(service: &Svc) -> proto::ServiceBeat {
 /// The same heartbeat as [`json_text`], as `Coordinator.Heartbeat` carries it.
 pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: vec!["apt".to_owned()],
+        repositories: None,
         platform: proto::Platform::LinuxX8664 as i32,
         agent: Some(proto::AgentInfo {
             name: AGENT_NAME.to_owned(),
@@ -446,6 +443,9 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root_age_secs: None,
+        trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 
@@ -540,6 +540,22 @@ enum Expect {
     },
 }
 
+impl Heard {
+    /// The same decision with no update: what the JSON route, which carries no order, says of it.
+    pub(super) fn without_update(&self) -> Heard {
+        match self {
+            Heard::Told {
+                features, halts, ..
+            } => Heard::Told {
+                update: None,
+                features: features.clone(),
+                halts: halts.clone(),
+            },
+            Heard::Refused => Heard::Refused,
+        }
+    }
+}
+
 fn nothing() -> Expect {
     Expect::Told {
         update: None,
@@ -604,7 +620,8 @@ enum Step {
 }
 
 /// Runs the steps of a case on two farms in the same state, one told over `POST /v1/heartbeat`
-/// and one over `Coordinator.Heartbeat`: the decisions are equal and are what the case expects.
+/// and one over `Coordinator.Heartbeat`: the decisions are equal but for the update, which the
+/// JSON route never carries, and the gRPC reply is what the case expects.
 async fn run(name: &str, steps: Vec<Step>) {
     let over_json = farm(&format!("grpc-same-json-{name}")).await;
     let over_grpc = farm(&format!("grpc-same-grpc-{name}")).await;
@@ -622,8 +639,12 @@ async fn run(name: &str, steps: Vec<Step>) {
                 let told_json = heard_json(code, &body);
                 let reply = beat(&over_grpc.coordinator, &who, &proto_message(services)).await;
                 let told_grpc = heard_proto(&reply);
-                assert_eq!(told_json, told_grpc, "{label}: JSON and gRPC disagree");
-                expect.holds(&told_json, &label);
+                assert_eq!(
+                    told_json,
+                    told_grpc.without_update(),
+                    "{label}: JSON and gRPC disagree beyond the update"
+                );
+                expect.holds(&told_grpc, &label);
             }
         }
     }
@@ -632,8 +653,9 @@ async fn run(name: &str, steps: Vec<Step>) {
 /// Proves that the facts of a heartbeat decide the same whichever way they are sent: for each
 /// state (up to date, behind, deferral, halted, halt cleared, a role the service does not run
 /// on, a service list over the limit) the JSON answer and the gRPC reply, mapped to one shape,
-/// carry the same update (service, version, order id, try, package digest), the same features
-/// and the same clear generations; and each is what the state calls for.
+/// carry the same features and the same clear generations, and the gRPC reply the update the
+/// state calls for (service, version, order id, try, package digest) where the JSON answer, which
+/// carries no order, says `nothing`.
 #[tokio::test]
 async fn grpc_heartbeat_and_json_heartbeat_give_the_same_decision() {
     let too_many: Vec<Svc> = std::iter::once(svc("kbf", "1.0"))
@@ -745,10 +767,10 @@ async fn heartbeat_identity_comes_from_the_certificate_not_the_message() {
         ..proto::ServiceBeat::default()
     });
     let mut bytes = message.encode_to_vec();
-    // Strings in fields 9 and 10, which the message does not define.
-    bytes.extend_from_slice(&[0x4A, 10]);
+    // Strings in fields 20 and 21, which the message does not define.
+    bytes.extend_from_slice(&[0xA2, 0x01, 10]);
     bytes.extend_from_slice(b"frontend-1");
-    bytes.extend_from_slice(&[0x52, 8]);
+    bytes.extend_from_slice(&[0xAA, 0x01, 8]);
     bytes.extend_from_slice(b"frontend");
     for (name, role) in [("real-host", "storage"), ("other-host", "daemon")] {
         let reply = grpc_call(

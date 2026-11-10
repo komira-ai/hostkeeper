@@ -38,7 +38,7 @@ fn round(world: &World, at: u64, d1_beat: Option<&Heartbeat>) {
         };
         world
             .coordinator
-            .heartbeat(who(host), sent)
+            .heartbeat_native(who(host), sent)
             .expect("a heartbeat");
     }
 }
@@ -54,10 +54,7 @@ async fn failed_canary(name: &str) -> World {
     let set = |body: &'static str| {
         let coordinator = world.coordinator.clone();
         async move {
-            coordinator
-                .set_desired(Some(&ci_token()), body.as_bytes())
-                .await
-                .expect("set");
+            crate::testutil::set_native(&coordinator, body).await;
         }
     };
     set(ONE).await;

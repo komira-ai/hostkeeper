@@ -114,7 +114,7 @@ store and its `approve` command, the account checks, the per-service signer and 
 digest are recorded in the paragraphs above.
 
 The tree digest of `hostkeeper-steps` (`tree_digest`, which `Staged` and the step record hold)
-is now the package format of `docs/package-format.md`: kind, name, mode, size and bytes, no owner
+is now the package format of `docs/tree-digest.md`: kind, name, mode, size and bytes, no owner
 and no times, and a tree with a link has none. kbf's format, imported at first, hashed owners and
 links. No release of hostkeeper wrote a record with the earlier digest; a record that holds one
 is another update to the runner (`Busy` while it is unfinished, so no step runs from it; a new
@@ -233,7 +233,8 @@ named, and every change is audited to a file.
   with the update plans, `paused`, `advance_wait`, `stage_failed`, `stage_wait`, `below_min_up`
   and `rollout_elsewhere`; `canary_wait` is no longer produced, the canary being the plan's first
   stage) and `Skip` (`no_desired`, `not_a_member`, `up_to_date`, `failed_here`, `deferred`,
-  `unsupported`, `no_digest`, `no_package_for_platform`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
+  `unsupported`, `no_digest`, `no_package_for_platform`, and, for a version set with targets,
+  `no_target`, `no_build_for_host` and `installer_dropped`), and a decision is `Update`, `Install`, `Uninstall`, `Gate` or
   `Skip`. `waiting_for_role`, `waiting_for_service` and `min_up` (`below_min_up` says it) are no
   longer produced, nor are `no_definition` (a service the coordinator does not manage is
   `not_a_member`) and `absent` (see the assignment below).

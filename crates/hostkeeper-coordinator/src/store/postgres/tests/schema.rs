@@ -8,7 +8,7 @@ use super::{TestDatabase, admin, off_runtime};
 use crate::store::conformance_tests::lines;
 use crate::store::postgres::migrate::{self, ApplyError, Migration, MigrationError, OlderReleases};
 use crate::store::postgres::session::Session;
-use crate::store::postgres::writer::LOCK_KEY;
+use crate::store::postgres::writer::{LOCK_KEY, Writer};
 use crate::store::postgres::{DatabaseError, TIMEOUTS};
 use crate::store::{Backend, Commit};
 
@@ -22,6 +22,11 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("1", "state", "refuse"),
         row("2", "first_serving", "refuse"),
         row("3", "generations", "refuse"),
+        row("4", "releases", "may-run"),
+        row("5", "mdm_devices", "may-run"),
+        row("6", "host_running", "may-run"),
+        row("7", "repositories", "may-run"),
+        row("8", "host_groups", "refuse"),
     ]
 }
 
@@ -82,7 +87,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 4,
+        version: 9,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -95,14 +100,14 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 4,
+            version: 9,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 4 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 9 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
@@ -112,7 +117,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 4,
+        version: 9,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -123,10 +128,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![4], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![9], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("4", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("9", "later", "may-run")]].concat()
     );
 }
 
@@ -170,16 +175,16 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (4, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (9, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 4, later)"
+        "the database's schema is newer than this coordinator (migration 9, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 4")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 9")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();
@@ -374,4 +379,88 @@ fn a_second_coordinator_on_the_database_is_refused() {
         ]]
     );
     third.stop();
+}
+
+/// How many times the tests below end a store and take its lock at once.
+const CYCLES: u32 = 200;
+
+/// The cycles, of [`CYCLES`] on `db`, in which another session could not take the lock at once
+/// after a store was opened, had `before` run on its writer, and was ended by `end`.
+fn cycles_held(
+    db: &TestDatabase,
+    before: fn(&mut Writer),
+    end: fn(crate::store::postgres::Postgres),
+) -> Vec<u32> {
+    let mut client = db.client();
+    let mut held = Vec::new();
+    for cycle in 0..CYCLES {
+        let (store, _) = db.open("cycling").expect("the store opens");
+        store.on_writer(before).expect("the writer runs");
+        end(store);
+        let taken: bool = client
+            .query_one("SELECT pg_try_advisory_lock($1)", &[&LOCK_KEY])
+            .expect("a try")
+            .get(0);
+        client
+            .batch_execute("SELECT pg_advisory_unlock_all()")
+            .expect("the lock is freed");
+        held.extend((!taken).then_some(cycle));
+    }
+    held
+}
+
+/// Proves: once [`Postgres::stop`](crate::store::postgres::Postgres::stop) returns, the store's
+/// advisory lock is free on the server, every time: another session takes it at once, in each
+/// of many cycles of open, stop and try.
+///
+/// Catches: a stop that closes the store's session and returns before the server has ended it
+/// and freed the lock with it.
+#[test]
+fn the_lock_is_free_at_once_after_every_stop() {
+    let db = TestDatabase::new();
+    let held = cycles_held(&db, |_| (), |store| store.stop());
+    assert_eq!(
+        held,
+        Vec::<u32>::new(),
+        "the cycles that found the lock held"
+    );
+}
+
+/// Proves: once a store is dropped, as a coordinator drops it when it ends, its advisory lock is
+/// free on the server, every time: a successor's session takes it at once, in each of many cycles
+/// of open, drop and try.
+///
+/// Catches: a successor refused `another coordinator holds the lock of this database` by the
+/// session of a coordinator that already ended.
+#[test]
+fn the_lock_is_free_at_once_after_every_drop() {
+    let db = TestDatabase::new();
+    let held = cycles_held(&db, |_| (), drop);
+    assert_eq!(
+        held,
+        Vec::<u32>::new(),
+        "the cycles that found the lock held"
+    );
+}
+
+/// Proves: a store whose writing session is left in an aborted transaction (a job that failed
+/// inside one and never rolled it back) still frees its lock at once when it stops, every time.
+///
+/// Catches: an unlock at the end that the aborted transaction refuses, which leaves the lock to
+/// the server's end of the session, after the stop returned.
+#[test]
+fn the_lock_is_free_at_once_after_a_stop_inside_an_aborted_transaction() {
+    let db = TestDatabase::new();
+    let abort = |writer: &mut Writer| {
+        let session = writer.session().expect("a session");
+        session.batch("BEGIN").expect("a transaction");
+        let failed = session.batch("SELECT 1 / 0");
+        assert!(failed.is_err(), "the statement fails: {failed:?}");
+    };
+    let held = cycles_held(&db, abort, |store| store.stop());
+    assert_eq!(
+        held,
+        Vec::<u32>::new(),
+        "the cycles that found the lock held"
+    );
 }

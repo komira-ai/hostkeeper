@@ -13,11 +13,12 @@ use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::FIRST_SERIAL;
 use hostkeeper_enrollment::enroll::records::Snapshot;
+use hostkeeper_mdm_gate::DeviceRecord;
 
 use super::rows::{Stmt, Tables, Val};
 use super::session::{Session, describe};
 use super::writer::try_lock;
-use super::{DatabaseError, Dsn, Timeouts, load_all, logged_of, migrate, records};
+use super::{DatabaseError, Dsn, Timeouts, devices, load_all, logged_of, migrate, records};
 use super::{state, statements};
 use crate::audit_file::AuditLine;
 use crate::desired;
@@ -36,9 +37,15 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 25] = [
+pub(crate) const STATE_TABLES: [&str; 37] = [
     "desired",
     "desired_digests",
+    "releases",
+    "repositories",
+    "repository_generation",
+    "host_groups",
+    "host_group_packages",
+    "group_desired",
     "services",
     "bad_versions",
     "failure_acks",
@@ -53,6 +60,10 @@ pub(crate) const STATE_TABLES: [&str; 25] = [
     "halt_reports",
     "rollouts",
     "rollout_done",
+    "group_min_versions",
+    "group_services",
+    "group_rollouts",
+    "group_rollout_done",
     "audit",
     "spent_tokens",
     "verdict_standing",
@@ -60,8 +71,10 @@ pub(crate) const STATE_TABLES: [&str; 25] = [
     "enrollment_requests",
     "enrollment_issued",
     "enrollment_hosts",
+    "enrollment_host_running",
     "enrollment_deny",
     "mac_nonces",
+    "mdm_devices",
 ];
 
 /// The rows of each state table, in [`STATE_TABLES`]' order.
@@ -80,6 +93,8 @@ pub(crate) struct Moved {
     pub(crate) audit: Vec<AuditLine>,
     /// The enrollment store's records.
     pub(crate) records: Snapshot,
+    /// The MDM gate's device records, in the order of their enrollment ids.
+    pub(crate) devices: Vec<DeviceRecord>,
     /// The time of the oldest audit line the files still held when older ones were deleted.
     pub(crate) pruned_before: Option<u64>,
     /// How many lines of the audit files this build could not read, and so are not in `audit`.
@@ -206,6 +221,7 @@ fn writes(moved: &Moved, lines: &[AuditLine]) -> Result<Vec<Stmt>, MoveError> {
         });
     }
     out.extend(records::writes(&moved.records).map_err(|e| load(&e))?);
+    out.extend(devices::writes(&moved.devices));
     Ok(out)
 }
 
@@ -237,8 +253,10 @@ pub(crate) fn counts_of(moved: &Moved) -> Result<Counts, MoveError> {
                 "enrollment_requests" => r.requests.len(),
                 "enrollment_issued" => r.issued.len(),
                 "enrollment_hosts" => r.hosts.len(),
+                "enrollment_host_running" => r.hosts.iter().filter(|h| h.running.is_some()).count(),
                 "enrollment_deny" => r.deny.len(),
                 "mac_nonces" => r.mac_nonces.len(),
+                "mdm_devices" => moved.devices.len(),
                 other => tables.get(other).map_or(0, |rows| rows.len()),
             };
             (*table, i64::try_from(rows).unwrap_or(i64::MAX))
@@ -250,7 +268,7 @@ pub(crate) fn counts_of(moved: &Moved) -> Result<Counts, MoveError> {
 fn audit_all(session: &mut Session) -> Result<Vec<AuditLine>, DatabaseError> {
     Ok(session
         .query(
-            "SELECT seq, at_unix, by_name, action, service, node_id, reason FROM audit \
+            "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
              ORDER BY seq",
             &[],
         )
@@ -269,7 +287,11 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, MoveError> {
     let loaded = load_all(session, now)
         .map_err(|e| MoveError::Database(DatabaseError::Load(e.to_string())))?;
     let audit = audit_all(session)?;
-    let records = records::read_all(session).map_err(|e| refused(&e))?;
+    let records = records::read_all(session)
+        .map_err(|e| refused(&e))?
+        .map_err(|e| DatabaseError::Refused(e.to_string()))?;
+    let devices = devices::read_all(session)
+        .map_err(|e| MoveError::Database(DatabaseError::Load(e.to_string())))?;
     let pruned: Option<i64> = session
         .query_opt(
             "SELECT audit_pruned_before FROM imports ORDER BY id DESC LIMIT 1",
@@ -281,6 +303,7 @@ fn read_moved(session: &mut Session, now: u64) -> Result<Moved, MoveError> {
         loaded,
         audit,
         records,
+        devices,
         pruned_before: pruned.and_then(|n| u64::try_from(n).ok()),
         unread: 0,
     })
@@ -325,6 +348,7 @@ fn first_difference(
         ("enrollment_deny", r.deny == f.deny),
         ("mac_nonces", r.mac_nonces == f.mac_nonces),
         ("enrollment_serial", r.serial == f.serial),
+        ("mdm_devices", read.devices == files.devices),
         ("imports", read.pruned_before == files.pruned_before),
     ];
     Ok(tables

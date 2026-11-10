@@ -305,9 +305,13 @@ async fn the_refusals_are_answered_with_their_token() {
 /// back to names the digest CI registered for that version.
 #[tokio::test]
 async fn a_rollback_names_the_digest_of_the_version_it_goes_back_to() {
-    let rig = rig("digest-rollback", AUTO, &body("1.0", Some(D1))).await;
+    let mut rig = rig("digest-rollback", AUTO, &body("1.0", Some(D1))).await;
+    // The version the hosts are ordered, and fail, is a release; the digest is that of the version
+    // the farm goes back to, which a release recorded as the last good before.
+    rig.set(&body("2.0", None)).await;
+    seed(&rig, |m| m.last_good = Some(version("1.0")));
+    restart(&mut rig, AUTO);
     round(&rig, 2_000, &[]);
-    set(&rig, &body("2.0", Some(D2))).await.expect("set");
     round(&rig, 2_030, &two_failed());
     let back = crate::rollback_tests::status(&rig).services[LEGACY].clone();
     assert_eq!(back.version, version("1.0"));

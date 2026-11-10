@@ -89,9 +89,11 @@ fn placed_json_with_a_tombstone_is_read_by_the_previous_release_reader() {
     );
     let rewritten = serde_json::to_vec_pretty(&previous).expect("it writes");
     let again: Value = serde_json::from_slice(&rewritten).expect("json");
-    assert_eq!(again, value);
+    // The previous release owns a `paths` key this release no longer writes: it writes it empty.
+    assert_eq!(again["uninstalling"], value["uninstalling"]);
+    assert_eq!(again["paths"], json!({}));
     fs::write(world.host(PLACED), &rewritten).expect("the previous release's write");
-    assert_eq!(world.record(), record);
+    assert_eq!(world.record().uninstalling, record.uninstalling);
 
     // What the previous release wrote, read by this one.
     let fixture = json!({"schema": 1, "paths": {}, "uninstalling": {"x": {}}});

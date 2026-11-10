@@ -2,59 +2,62 @@
 //!
 //! [`startup`] does, in this order: load the daemon config (a config that fails to load stops the
 //! daemon with an error naming the key, and nothing on the host changes: no directory, no lock
-//! file, no socket); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a
-//! second daemon on the same state directory gets [`StartError::Locked`]); remove the
-//! registration socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is
-//! touched; [`settle_self_update`]; [`before_records`] and [`boot_pass`]; bind the admin socket,
-//! removing a stale socket only now that the lock is held; [`after_boot`]; and, once the daemon
-//! is ready, [`install_self_units`] for the host's platform. [`serve`] then starts
-//! the enrollment and heartbeat loops ([`crate::links`]) and serves the admin socket, until the
+//! file); take the exclusive lock on `<state-dir>/lock`, held for the daemon's life (a second
+//! daemon on the same state directory gets [`StartError::Locked`]); remove the registration
+//! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
+//! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
+//! retried every minute by a thread of its own while it defers, and the adoption of the package
+//! the host was set up with ([`crate::own_package`]); [`before_records`], [`boot_pass`] and
+//! [`delete_archive_versions`]; and [`after_boot`]. [`serve`]
+//! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
+//!
+//! The daemon serves nothing on the host: it binds no socket and listens on no port. What it
+//! does is seen through the coordinator (`hkctl hosts get`), and orders reach it only in a
+//! heartbeat's answer (docs/design/two-programs.md, section 1).
 //!
 //! [`settle_self_update`] settles the update of hostkeeper itself that waits for this start
 //! (design section 6.6), before any step record is read by the boot pass: the new binary
 //! confirms it, any other records it failed.
 //!
-//! [`before_records`], [`boot_pass`] and [`after_boot`] are the boot work of design section 6.5.
-//! [`before_records`] removes what a crashed package fetch or unpack left, for every service
-//! directory of the packages directory, and then reconciles the placed links: each switch a step
-//! record says was begun is finished or undone ([`crate::boot::switch_intent`]), and every link
-//! is compared with `current` ([`hostkeeper_placed::Placer::reconcile`]). A sweep or a
-//! reconciliation that fails is an alert and does not stop the start; what it could not do is in
-//! [`BootReport::reconciled`]. [`boot_pass`] reads the step records against the boot
-//! id, runs each unfinished update to its verdict and restarts the watchers
-//! ([`crate::boot`]). [`after_boot`] runs the manifest's `boot` steps, then sends the readiness
-//! notice. The admin socket is bound before [`after_boot`] but served only by [`serve`], after
-//! [`startup`] has returned: nothing is answered on it while the boot work runs.
+//! [`before_records`], [`boot_pass`], [`delete_archive_versions`] and [`after_boot`] are the boot
+//! work of design section 6.5. [`before_records`] removes what a crashed stage left, for every
+//! service directory of the packages directory; a sweep that fails is an alert and does not stop
+//! the start. [`boot_pass`] reads the step records against the boot id, runs each unfinished
+//! update to its verdict and restarts the watchers ([`crate::boot`]).
+//! [`delete_archive_versions`] deletes the archive version a native service left as `previous`
+//! ([`crate::archive_versions`]), what it did being in [`BootReport::archive_versions`].
+//! [`after_boot`] runs the manifest's `boot` steps, then sends the readiness notice. No loop
+//! starts before [`startup`] has returned, so no order is taken while the boot work runs.
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 
 use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
-use hostkeeper_launchd::{Platform, PlatformKind};
+use hostkeeper_install::macos_pkg::signers::SignersError;
+use hostkeeper_install::repository::config::RepositoriesError;
+use hostkeeper_install::version::HostFs;
 use hostkeeper_observe::unlink_stale_registration_socket;
-use hostkeeper_placed::BootView;
+use hostkeeper_package::stores::StoresError;
 
-use crate::admin;
-use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
+use crate::boot::{ALERT_START, BootError, BootReport, Stage};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
 use crate::installed;
 use crate::links::Links;
+use crate::mac_config::MacConfigError;
+use crate::mac_files::MacFilesError;
 use crate::notify::{NoNotifier, ReadyNotifier};
-use crate::selfunits::ALERT_SELF_UNITS;
-use crate::socket;
+use crate::own_package::{self, OwnActivate};
 
 /// The lock file in the state directory.
 pub const LOCK_FILE: &str = "lock";
 
-/// The directory of kbf's agent under the run directory the admin socket's directory is in.
+/// The directory of kbf's agent under the run directory.
 const KBF_RUN_DIR: &str = "updater";
 
 /// The exit status of a daemon that could not start or serve for any reason but these below.
@@ -71,23 +74,21 @@ pub struct Settings {
     pub config: PathBuf,
     pub state_dir: PathBuf,
     pub packages_dir: PathBuf,
-    pub admin_socket: PathBuf,
+    /// The host's facts file (`--facts-file`).
+    pub facts_file: PathBuf,
+    /// The run directory, the host platform's (`hostkeeper_launchd::Platform`'s `run_dir`):
+    /// `/run` on Linux, `/var/run` on macOS.
+    pub run_dir: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
-    /// Days after which the Sigstore trusted root is reported stale
-    /// (`--trusted-root-max-age-days`).
-    pub trusted_root_max_age_days: NonZeroU64,
 }
 
 impl Settings {
-    /// The run directory kbf's agent kept its registration socket in, `updater` beside the
-    /// admin socket's directory (`/run/updater` for `/run/hostkeeper/admin.sock`).
+    /// The run directory kbf's agent kept its registration socket in: `updater` in the run
+    /// directory (`/run/updater` on Linux), where the admin socket's directory of an older daemon
+    /// put it beside `/run/hostkeeper`.
     pub fn kbf_run_dir(&self) -> PathBuf {
-        self.admin_socket
-            .parent()
-            .and_then(Path::parent)
-            .unwrap_or(Path::new("/"))
-            .join(KBF_RUN_DIR)
+        self.run_dir.join(KBF_RUN_DIR)
     }
 }
 
@@ -100,6 +101,37 @@ pub enum StartError {
         path: PathBuf,
         #[source]
         source: ConfigError,
+    },
+    /// A Mac's daemon config is not there and could not be written from the managed
+    /// preferences ([`crate::mac_config::at_start`]).
+    #[error("the daemon config is not made from the managed preferences: {0}")]
+    MacConfig(#[from] MacConfigError),
+    /// A Mac's stores file or macos-pkg signers file could not be written from its managed
+    /// preferences ([`crate::mac_files`]); the error names the managed file and the reason.
+    #[error("a file is not made from the managed preferences: {0}")]
+    MacFiles(#[from] MacFilesError),
+    /// The host's `stores.toml` is not sound; the error names the file and, in its text, the store
+    /// and the rule it breaks (never a credential).
+    #[error("{}: {source}", path.display())]
+    Stores {
+        path: PathBuf,
+        #[source]
+        source: StoresError,
+    },
+    /// The Mac's `macos-pkg.toml` is not sound; the error names the file and the rule it breaks.
+    #[error("{}: {source}", path.display())]
+    MacosPkg {
+        path: PathBuf,
+        #[source]
+        source: SignersError,
+    },
+    /// The host's repository configuration directory is not sound; the error names the file and
+    /// the rule it breaks.
+    #[error("{}: {source}", path.display())]
+    Repositories {
+        path: PathBuf,
+        #[source]
+        source: RepositoriesError,
     },
     /// Another daemon holds the state directory, or its lock cannot be taken.
     #[error("another daemon holds {}, or its lock cannot be taken: {source}", path.display())]
@@ -114,8 +146,6 @@ pub enum StartError {
         #[source]
         source: io::Error,
     },
-    #[error("the admin socket could not be served: {0}")]
-    Serve(#[from] tonic::transport::Error),
     #[error("the async runtime could not be made: {0}")]
     Runtime(io::Error),
     #[error("this daemon's own version is not major.minor.patch: {0}")]
@@ -137,10 +167,14 @@ impl StartError {
     /// The exit status of the daemon for this error.
     pub fn exit_code(&self) -> u8 {
         match self {
-            StartError::Config { .. } => EXIT_CONFIG,
+            StartError::Config { .. }
+            | StartError::MacConfig(_)
+            | StartError::MacFiles(_)
+            | StartError::Stores { .. }
+            | StartError::MacosPkg { .. }
+            | StartError::Repositories { .. } => EXIT_CONFIG,
             StartError::Locked { .. } => EXIT_LOCKED,
             StartError::Io { .. }
-            | StartError::Serve(_)
             | StartError::Runtime(_)
             | StartError::OwnVersion(_)
             | StartError::Boot(_)
@@ -157,11 +191,9 @@ fn io_at(path: &Path) -> impl Fn(io::Error) -> StartError + '_ {
     }
 }
 
-/// A daemon that started: its lock is held, its admin socket bound.
+/// A daemon that started: its lock is held and its boot work is over.
 pub struct Started {
     daemon: Arc<Daemon>,
-    listener: UnixListener,
-    socket_path: PathBuf,
     report: BootReport,
     /// Held while the daemon lives: one daemon per state directory.
     _lock: File,
@@ -209,7 +241,7 @@ pub fn load_config(settings: &Settings) -> Result<DaemonConfig, StartError> {
     })
 }
 
-/// Starts the daemon: the config, the lock, the boot work, the admin socket. `own_version` is
+/// Starts the daemon: the config, the lock, the boot work. `own_version` is
 /// the daemon's own, which a manifest's `min_hostkeeper` is compared with. Nobody is told it is
 /// ready ([`NoNotifier`]).
 pub fn startup(
@@ -238,18 +270,19 @@ pub fn startup_notifying(
     let dirs = Dirs {
         state: settings.state_dir.clone(),
         packages: settings.packages_dir.clone(),
+        facts: settings.facts_file.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
+    daemon.clear_policy_rc_d(&mut report);
     settle_self_update(&daemon, &mut report);
+    activate_own_package(&daemon, &mut report);
+    adopt_own_package(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
-    let listener = socket::bind(&settings.admin_socket).map_err(io_at(&settings.admin_socket))?;
+    delete_archive_versions(&daemon, &mut report);
     after_boot(&daemon, &mut report, notifier);
-    install_self_units(&daemon, Platform::host().kind, &mut report);
     Ok(Started {
         daemon,
-        listener,
-        socket_path: settings.admin_socket.clone(),
         report,
         _lock: lock,
     })
@@ -270,10 +303,57 @@ fn settle_self_update(daemon: &Daemon, report: &mut BootReport) {
     report.self_update = Some(settled);
 }
 
-/// Before the step records are read: remove what a crashed package fetch or unpack left under
-/// each service directory of the packages directory, then finish or undo each placed link left
-/// half done and relink what differs from `current` (design section 6.5). Neither stops the
-/// start: each is an alert, and a reconciliation that could not run is in the report.
+/// After the settlement: the `activate` of hostkeeper's own package that its new binary owes
+/// ([`Daemon::activate_own_package`]); one that defers is tried again every
+/// [`own_package::DEFER_SECS`] of the daemon's clock, by a thread of its own, until it ends or
+/// the daemon is gone. The start goes on either way.
+fn activate_own_package(daemon: &Arc<Daemon>, report: &mut BootReport) {
+    report.own_activate = daemon.activate_own_package();
+    if let Some(OwnActivate::Deferred { .. }) = report.own_activate {
+        let weak = Arc::downgrade(daemon);
+        let clock = Arc::clone(&daemon.ctx().clock);
+        // Detached: it ends once the `activate` ended, or at its next try after the daemon is
+        // gone.
+        drop(std::thread::spawn(move || {
+            retry_own_activate(&weak, &*clock)
+        }));
+    }
+}
+
+/// Tries the `activate` of hostkeeper's own package again every [`own_package::DEFER_SECS`] of
+/// `clock` while it defers; ends once it ended, nothing waits for it, or the daemon is gone.
+pub fn retry_own_activate(daemon: &Weak<Daemon>, clock: &dyn hostkeeper_steps::Clock) {
+    loop {
+        clock.sleep_secs(own_package::DEFER_SECS);
+        let Some(daemon) = daemon.upgrade() else {
+            return;
+        };
+        if !matches!(
+            daemon.activate_own_package(),
+            Some(OwnActivate::Deferred { .. })
+        ) {
+            return;
+        }
+    }
+}
+
+/// The adoption of the package of hostkeeper the host was set up with (docs/design/
+/// packages-native.md, section 10.4); one that cannot be done is an alert, and the start goes
+/// on.
+fn adopt_own_package(daemon: &Daemon, report: &mut BootReport) {
+    let adopted = own_package::adopt(daemon.ctx());
+    if let Err(error) = &adopted {
+        daemon.ctx().alert(
+            own_package::ALERT_OWN_PACKAGE,
+            &format!("the package of hostkeeper was not adopted: {error}"),
+        );
+    }
+    report.adopted = Some(adopted);
+}
+
+/// Before the step records are read: remove what a crashed stage left under each service
+/// directory of the packages directory. A sweep that fails is an alert and does not stop the
+/// start.
 pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
     let ctx = daemon.ctx();
     report.stages.push(Stage::BeforeRecords);
@@ -284,32 +364,35 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
         );
         Default::default()
     });
+    if services.is_empty() {
+        return;
+    }
+    let ports = &ctx.repository_ports;
+    let packages = match HostFs::open(&ports.packages_dir, ports.owner) {
+        Ok(packages) => packages,
+        Err(error) => {
+            ctx.alert(
+                ALERT_START,
+                &format!(
+                    "the package directory cannot be opened, so no leftover is removed: {error}"
+                ),
+            );
+            return;
+        }
+    };
     for service in services.into_values() {
-        if let Err(error) = ctx.packages.remove_orphans(&service) {
+        // The staging directories a stage left, then the `.fetch-*` files a fetch of a `.pkg`
+        // (or an earlier release's fetch) left.
+        let swept = hostkeeper_install::version::remove_orphans(&service, &packages)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                hostkeeper_package::remove_orphan_fetches(&ports.packages_dir, &service)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = swept {
             ctx.alert(ALERT_START, &format!("service={service}: {error}"));
         }
     }
-    let reconciled = reconcile(daemon);
-    if let Err(why) = &reconciled {
-        ctx.alert(
-            ALERT_START,
-            &format!("the placed paths could not be reconciled: {why}"),
-        );
-    }
-    report.reconciled = Some(reconciled);
-    report.stages.push(Stage::Reconcile);
-}
-
-/// The placed paths reconciled with the switches the step records say were begun.
-fn reconcile(daemon: &Daemon) -> Result<hostkeeper_placed::ReconcileReport, String> {
-    let ctx = daemon.ctx();
-    let rebooted = boot_changed(&ctx.dirs.state, &*ctx.clock);
-    let intents = daemon.switch_intents(rebooted).map_err(|e| e.to_string())?;
-    let view = BootView {
-        intents,
-        running: ctx.own_version,
-    };
-    ctx.placer().reconcile(&view).map_err(|e| e.to_string())
 }
 
 /// The step records against the boot id, each unfinished update run to its verdict, and the
@@ -318,44 +401,28 @@ fn boot_pass(daemon: &Daemon, report: &mut BootReport) -> Result<(), StartError>
     Ok(daemon.boot_pass_into(report, &|_| false)?)
 }
 
+/// After the boot pass: the archive version a native service left as `previous` deleted
+/// ([`crate::archive_versions::sweep`]), what it did recorded in `report`. A deletion that
+/// fails is an alert and the start goes on.
+fn delete_archive_versions(daemon: &Daemon, report: &mut BootReport) {
+    report.archive_versions = crate::archive_versions::sweep(daemon.ctx());
+}
+
 /// After the boot pass: the manifest's `boot` step of each service, then the readiness notice
 /// (design section 6.5, [`Daemon::after_boot`]).
 fn after_boot(daemon: &Daemon, report: &mut BootReport, notifier: &dyn ReadyNotifier) {
     daemon.after_boot(report, notifier);
 }
 
-/// Once the daemon is ready: the units of hostkeeper's own update for a host of `kind`, written
-/// where they differ ([`Daemon::install_self_units`]). One that could not be installed is an
-/// alert, and the start goes on. A file that could not be written is written by the next start;
-/// files written whose reload failed stay, and the next start, finding them in place, does not
-/// reload again: systemd reads them at its next reload or boot.
-fn install_self_units(daemon: &Daemon, kind: PlatformKind, report: &mut BootReport) {
-    let installed = daemon
-        .install_self_units(kind)
-        .map_err(|error| error.to_string());
-    if let Err(error) = &installed {
-        daemon.ctx().alert(ALERT_SELF_UNITS, error);
-    }
-    report.self_units = Some(installed);
-    report.stages.push(Stage::SelfUnits);
-}
-
 /// Serves a started daemon, holding its lock: starts its enrollment and heartbeat loops
-/// ([`Links::start`], the enrollment loop first), then serves the admin socket until the socket
-/// fails or the daemon is asked to exit for its own update: then the requests in flight are
-/// answered, the loops are told to stop, and this returns `Ok`, for the binary to exit with
-/// status 0. The readiness notice was sent by [`startup_notifying`], so neither loop starts
-/// before the boot work is over (design section 6.5); a socket that cannot be served starts
-/// neither.
-pub async fn serve(started: Started, links: Links) -> Result<(), StartError> {
-    let path = &started.socket_path;
-    let incoming = socket::incoming(started.listener).map_err(io_at(path))?;
+/// ([`Links::start`], the enrollment loop first) and returns once the daemon is asked to exit for
+/// its own update: then the loops are told to stop, and the binary exits with status 0. The
+/// readiness notice was sent by [`startup_notifying`], so neither loop starts before the boot
+/// work is over (design section 6.5).
+pub async fn serve(started: Started, links: Links) {
     let stop = links.stop.clone();
     links.start(&started.daemon);
-    let daemon = Arc::clone(&started.daemon);
-    let restart = async move { daemon.ctx().restart().wait().await };
     // `started._lock` stays held until this returns.
-    let served = admin::serve_until(Arc::clone(&started.daemon), incoming, restart).await;
+    started.daemon.ctx().restart().wait().await;
     stop.stop();
-    served.map_err(StartError::from)
 }

@@ -228,11 +228,16 @@ pub(crate) fn unix() -> UnixClock {
 
 mod connect;
 mod coordinator;
+mod devices;
 mod generations;
+mod host_groups;
 mod lost;
 mod reads;
 mod records;
 mod records_errors;
+mod releases;
+mod repositories;
+mod running;
 mod schema;
 mod serve;
 mod serving;

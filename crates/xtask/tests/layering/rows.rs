@@ -110,7 +110,7 @@ fn layering_rules_cover_every_surviving_crate() {
     let fewer_dev: Vec<Layer> = LAYERS
         .iter()
         .map(|row| {
-            if row.0 == "hostkeeper-coordinator" {
+            if row.0 == "hostkeeper-hkctl" {
                 (row.0, row.1, oidc_only)
             } else {
                 *row
@@ -120,43 +120,65 @@ fn layering_rules_cover_every_surviving_crate() {
     assert_eq!(
         rows_cover(&fewer_dev, &metadata),
         refused(
-            "hostkeeper-coordinator has dev-dependencies on the workspace crates \
-             {hostkeeper-ctl, hostkeeper-oidc}, but its row in LAYERS names {hostkeeper-oidc}"
+            "hostkeeper-hkctl has dev-dependencies on the workspace crates \
+             {hostkeeper-coordinator, hostkeeper-oidc}, but its row in LAYERS names {hostkeeper-oidc}"
         )
     );
 }
 
-/// Catches: a crate depending on the removed rights crate, here kept as a path crate outside
-/// the workspace (where neither the layers nor the coverage gate would see it), being let
-/// through; the refusal names the chain from the member. The real workspace names the crate
-/// nowhere: its lockfile has no package of that name, and it passes.
+/// The crates of this product that were removed from the workspace: the rights crate, and the CI
+/// client `hostkeeper-ci` (`hostkeeper ci`, replaced by `hkctl` in `set-desired.yml`).
+const REMOVED: [&str; 2] = ["hostkeeper-rights", "hostkeeper-ci"];
+
+/// Catches: a crate depending on a removed crate of [`REMOVED`], here kept as a path crate
+/// outside the workspace (where neither the layers nor the coverage gate would see it), being
+/// let through; the refusal names the chain from the member. The real workspace names neither
+/// crate anywhere: no member and no row in `LAYERS` has its name, its lockfile has no package of
+/// that name, and it passes.
 #[test]
-fn no_crate_depends_on_the_removed_rights_crate() {
+fn no_crate_depends_on_a_removed_crate() {
     let root = workspace_root();
-    assert!(!read_lock(&root).contains_key("hostkeeper-rights"));
+    let lock = read_lock(&root);
+    let members = metadata_of(&root);
+    for gone in REMOVED {
+        assert!(!lock.contains_key(gone), "{gone} is in Cargo.lock");
+        assert!(
+            LAYERS
+                .iter()
+                .all(|row| row.0 != gone && !row.1.contains(&gone)),
+            "{gone} has a row or is a dependency in LAYERS"
+        );
+        assert!(
+            !members["packages"]
+                .as_array()
+                .expect("metadata lists packages")
+                .iter()
+                .any(|package| package["name"] == gone),
+            "{gone} is a member"
+        );
+    }
     assert_eq!(check(&root), Ok(()));
 
-    let mut edits = bare_crate("vendored", "hostkeeper-rights");
-    edits.push(manifest_of(
-        "hostkeeper-steps",
-        layered(
+    for gone in REMOVED {
+        let mut edits = bare_crate("vendored", gone);
+        edits.push(manifest_of(
             "hostkeeper-steps",
-            &format!(
-                "{CONFIG_DEP}{HOOK_DEP}{}",
-                vendored_dep("hostkeeper-rights")
+            layered(
+                "hostkeeper-steps",
+                &format!("{CONFIG_DEP}{HOOK_DEP}{}", vendored_dep(gone)),
+                "",
+                TESTKIT_DEP,
             ),
-            "",
-            TESTKIT_DEP,
-        ),
-    ));
-    let dir = fixture("clean", edits);
-    assert_eq!(
-        check(&dir),
-        refused(
-            "hostkeeper-rights is not a workspace member, \
-             reached through hostkeeper-steps -> hostkeeper-rights"
-        )
-    );
+        ));
+        let dir = fixture("clean", edits);
+        assert_eq!(
+            check(&dir),
+            refused(&format!(
+                "{gone} is not a workspace member, reached through hostkeeper-steps -> {gone}"
+            )),
+            "{gone}"
+        );
+    }
 }
 
 /// Catches: a row of the step runner or the observer that leads to the launchd crate, directly

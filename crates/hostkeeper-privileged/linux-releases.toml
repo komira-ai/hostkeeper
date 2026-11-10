@@ -1,0 +1,60 @@
+# The Linux releases the packages are installed on (tests/linux_packages.rs, docs/design/packages.md
+# section 5.4, "One build, every release"): the one deb and the one rpm that
+# `privileged.yml`'s job `privileged` builds (and pr-device.yml's copy of it) are installed and run in a
+# container of each image below, the oldest and the newest release of each family. A release that is
+# not here is not proved.
+#
+# Each entry has three keys: `name` (the release as people name it), `format` (`deb` or `rpm`:
+# the package the release installs, with dpkg or rpm) and `image` (the container image, pinned
+# by the digest of its index, so a moved tag changes nothing). The job pulls each `image` in a step of
+# its own (the workflow lint holds the steps to this list, one `docker pull <image>` per entry and no
+# other), and the test runs the container with `--pull=never` and `--network=none`.
+#
+# The oldest of each family is the oldest still supported: Debian 11 and openSUSE Leap 15.6 are past
+# their end of life, and Ubuntu 22.04 and AlmaLinux 8 are the oldest of theirs that are not. Arch is
+# rolling, so one entry is both. The digests are the ones the images had on the day they were added;
+# the list moves only by a pull request.
+#
+# The images of Debian, Ubuntu and openSUSE carry no systemd, and the containers run no service
+# manager, so the test puts a stand-in for `systemctl` and `systemd-tmpfiles` where an image lacks
+# them (the packages' scripts run unchanged); AlmaLinux and Arch run the real ones.
+
+[[release]]
+name = "debian:12"
+format = "deb"
+image = "debian@sha256:268fb24c39bca92d326dd83ea3abebe4a3f7751c804ffef23bb6d857dd343ff8"
+
+[[release]]
+name = "debian:13"
+format = "deb"
+image = "debian@sha256:9c6e381421d0f48d1b8133e573f33c185ee16cbf505eda9c4a8a4791b25ea8a6"
+
+[[release]]
+name = "ubuntu:22.04"
+format = "deb"
+image = "ubuntu@sha256:076e7bf82319619f28dd0aa9c02ab34b055ad37100395b4f49a2ffba04fb5e11"
+
+[[release]]
+name = "ubuntu:26.04"
+format = "deb"
+image = "ubuntu@sha256:6a06111c3b0a8600feadb270aec771dc239bf407b25625f93f44ab00e11f4d3c"
+
+[[release]]
+name = "almalinux:8"
+format = "rpm"
+image = "almalinux@sha256:2d0f2eb2a83cc09dbc2eb92fade4dbe8f709628149e81aa00aec70630406603b"
+
+[[release]]
+name = "almalinux:10"
+format = "rpm"
+image = "almalinux@sha256:5a4b41a427c9717be8f4ac2a32aa22efbae5f9124fbcb79a6765394f312acfe8"
+
+[[release]]
+name = "opensuse/leap:16.0"
+format = "rpm"
+image = "opensuse/leap@sha256:a4115e2f5aea9712a7c73974fd94000a034fc3051ef29b5f7722fbf04070dd9d"
+
+[[release]]
+name = "opensuse/tumbleweed"
+format = "rpm"
+image = "opensuse/tumbleweed@sha256:871173bf717af0926bd92324ee6f73ba285e0721f0c8ac00ef2c77f1c88d979e"

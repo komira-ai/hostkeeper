@@ -193,6 +193,7 @@ fn a_mac_leaves_the_answer_set_once_its_seed_is_fetched() {
             .expect("keys"),
         install_disk: &InstallDisk::default(),
         serial_console: None,
+        repositories: None,
     });
     assert_eq!(String::from_utf8(user.body).expect("text"), want.user_data);
     assert!(
@@ -286,6 +287,7 @@ fn the_seed_flags_reach_the_seed_served() {
             .expect("keys"),
         install_disk: &disk,
         serial_console: Some(&console),
+        repositories: None,
     });
     let served = String::from_utf8(user.body).expect("text");
     assert_eq!(served, want.user_data);

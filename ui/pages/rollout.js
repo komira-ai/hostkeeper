@@ -50,7 +50,7 @@ export function forceTargetCount(target, hosts) {
 // count}`, or `{ok: false, error}` when a page could not be read: then no force may be sent.
 export async function prepareForce(api, request) {
   try {
-    const hosts = await allPages((pageToken) => api.call("hostkeeper.operator.v1.Hosts/List",
+    const hosts = await allPages((pageToken) => api.hosts.list(
       pageToken === "" ? {} : { pageToken }), "hosts");
     return { ok: true, request, count: forceTargetCount(request, hosts) };
   } catch (error) {
@@ -70,7 +70,7 @@ export async function sendForce(api, prepared, typed) {
   if (!typedCountMatches(prepared, typed)) {
     return null;
   }
-  return api.call("hostkeeper.operator.v1.Releases/Force", prepared.request);
+  return api.releases.force(prepared.request);
 }
 
 function targetLabel(request) {
@@ -299,7 +299,9 @@ function waitStage(plan) {
   }
 }
 
-// Why the plan orders no new host: the wait with its stage, and the pause with who and why.
+// Why the plan orders no new host: the wait with its stage or, for another service's rollout,
+// the services it waits on (none from a coordinator that does not name them), and the pause
+// with who and why.
 export function planWaiting(plan) {
   if (!plan) {
     return "-";
@@ -307,7 +309,12 @@ export function planWaiting(plan) {
   const parts = [];
   if (plan.waiting !== "PLAN_WAIT_PAUSED") {
     const stage = waitStage(plan);
-    parts.push(enumLabel(plan.waiting, "PLAN_WAIT_") + (stage === null ? "" : `, stage ${stage}`));
+    const on = (plan.waitingOn || []).join(", ");
+    parts.push(
+      enumLabel(plan.waiting, "PLAN_WAIT_") +
+        (stage === null ? "" : `, stage ${stage}`) +
+        (on === "" ? "" : ` on ${on}`),
+    );
   }
   if (plan.paused === true) {
     parts.push(`paused by ${plan.pausedBy || "-"}: ${plan.pauseReason || "-"}`);
@@ -365,7 +372,7 @@ function setDesired(ctx, svc, form) {
     if (trimmed(form.index) !== "") {
       request.releaseIndex = form.index;
     }
-    const reply = await ctx.api.call("hostkeeper.operator.v1.Releases/SetDesired", request);
+    const reply = await ctx.api.releases.setDesired(request);
     ctx.refresh();
     const dropped = list(reply, "droppedRoles");
     return `Set the desired version of ${service} to ${version}.`
@@ -379,7 +386,7 @@ function assignButton(ctx, service, form) {
     if (role === "") {
       return "Name the role.";
     }
-    await ctx.api.call("hostkeeper.operator.v1.Services/Assign", { service, role });
+    await ctx.api.services.assign({ service, role });
     ctx.refresh();
     return `Assigned ${service} to role ${role}.`;
   });
@@ -395,7 +402,7 @@ function unassignButton(ctx, service, form) {
     if (uninstall && !ctx.confirm(`Unassign ${service} from role ${role} and uninstall it from each host that loses its last assignment?`)) {
       return "Not unassigned.";
     }
-    await ctx.api.call("hostkeeper.operator.v1.Services/Unassign", { service, role, uninstall });
+    await ctx.api.services.unassign({ service, role, uninstall });
     ctx.refresh();
     return uninstall
       ? `Unassigned ${service} from role ${role}, uninstalling it where no assignment is left.`
@@ -415,7 +422,7 @@ function minVersionButton(ctx, service, form) {
     if (!ctx.confirm(`Set the minimum version of ${service} for role ${role} to ${version}? No host of the role is ordered below it, rollbacks included.`)) {
       return "Minimum version not changed.";
     }
-    await ctx.api.call("hostkeeper.operator.v1.Services/SetMinVersion",
+    await ctx.api.services.setMinVersion(
       { service, minVersion: { role, version } });
     ctx.refresh();
     return `Set the minimum version of ${service} for role ${role} to ${version}.`;
@@ -474,7 +481,7 @@ function planButtons(ctx, service, plan, withReason) {
       if (!ctx.confirm(`Advance ${service} into stage ${next} of ${planStages(plan).length}? Its hosts are ordered at their next heartbeats.`)) {
         return "Not advanced.";
       }
-      const reply = await ctx.api.call("hostkeeper.operator.v1.Rollouts/Advance", { service, reason });
+      const reply = await ctx.api.rollouts.advance({ service, reason });
       ctx.refresh();
       return reply.plan ? `Advanced ${service} into stage ${stageProgress(reply.plan)}.` : `Advanced ${service}.`;
     })));
@@ -484,7 +491,7 @@ function planButtons(ctx, service, plan, withReason) {
       if (!ctx.confirm(`Resume the plan of ${service}? Its hosts are ordered again from where it stands.`)) {
         return "Not resumed.";
       }
-      await ctx.api.call("hostkeeper.operator.v1.Rollouts/Resume", { service, reason });
+      await ctx.api.rollouts.resume({ service, reason });
       ctx.refresh();
       return `Resumed the plan of ${service}.`;
     })));
@@ -493,7 +500,7 @@ function planButtons(ctx, service, plan, withReason) {
       if (!ctx.confirm(`Pause the plan of ${service}? No host that has not started is ordered; the updates under way finish.`)) {
         return "Not paused.";
       }
-      await ctx.api.call("hostkeeper.operator.v1.Rollouts/Pause", { service, reason });
+      await ctx.api.rollouts.pause({ service, reason });
       ctx.refresh();
       return `Paused the plan of ${service}.`;
     })));
@@ -554,18 +561,18 @@ function serviceSection(ctx, svc, listing) {
           if (version === "") {
             return "Name the version to mark bad.";
           }
-          await ctx.api.call("hostkeeper.operator.v1.Releases/MarkBad", { service, version, reason });
+          await ctx.api.releases.markBad({ service, version, reason });
           ctx.refresh();
           return `Marked ${service} ${version} bad.`;
         })),
         (marks.bad || []).map((version) => action(ctx, `Unmark ${version}`, "unmark-bad", withReason(async (reason) => {
-          await ctx.api.call("hostkeeper.operator.v1.Releases/UnmarkBad", { service, version, reason });
+          await ctx.api.releases.unmarkBad({ service, version, reason });
           ctx.refresh();
           return `Unmarked ${service} ${version}.`;
         }))),
         halted
           ? action(ctx, "Clear the halt", "clear-halt", withReason(async (reason) => {
-            await ctx.api.call("hostkeeper.operator.v1.Releases/ClearHalt", { service, reason });
+            await ctx.api.releases.clearHalt({ service, reason });
             ctx.refresh();
             return `Cleared the halt of ${service}.`;
           }))
@@ -573,13 +580,13 @@ function serviceSection(ctx, svc, listing) {
             if (!ctx.confirm(`Halt ${service}? No host of it is ordered until the halt is cleared.`)) {
               return "Not halted.";
             }
-            await ctx.api.call("hostkeeper.operator.v1.Releases/Halt", { service, reason });
+            await ctx.api.releases.halt({ service, reason });
             ctx.refresh();
             return `Halted ${service}.`;
           })),
         planButtons(ctx, service, plan, withReason),
         action(ctx, "Check convergence", "converge", async () => {
-          const reply = await ctx.api.call("hostkeeper.operator.v1.Releases/Converge", { service });
+          const reply = await ctx.api.releases.converge({ service });
           const c = reply.convergence || {};
           return `${service}: ${enumLabel(c.state, "CONVERGENCE_STATE_")}, desired ${c.desired || "none"}`
             + (c.quiet === true ? ", quiet start" : "") + ".";
@@ -589,14 +596,14 @@ function serviceSection(ctx, svc, listing) {
 export async function render(ctx) {
   let status;
   try {
-    status = await ctx.api.call("hostkeeper.operator.v1.Releases/Status", {});
+    status = await ctx.api.releases.status({});
   } catch (error) {
     return errorView("Rollout", error);
   }
   const services = list(status, "services");
   let listing;
   try {
-    listing = { entries: list(await ctx.api.call("hostkeeper.operator.v1.Services/List", {}), "services") };
+    listing = { entries: list(await ctx.api.services.list({}), "services") };
   } catch (error) {
     listing = { error };
   }

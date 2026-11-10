@@ -13,8 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
-use crate::channel::{ChannelRefusal, ReleaseChannel};
-use crate::converge::{Convergence, role_counts};
+use crate::converge::role_counts;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -23,7 +22,7 @@ use crate::holds::on_bad_version;
 use crate::identity::Identity;
 use crate::membership::{Standing, members, standing};
 use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
-use crate::order_terms::{self, Terms};
+use crate::order_terms::Terms;
 use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
@@ -87,17 +86,22 @@ pub enum SetError {
     /// CI set the version before with another package digest: a changed artifact for a version.
     #[error("digest_conflict: the version was set before with another package digest")]
     DigestConflict,
-    /// The release channel (`--release-channel`) does not hold the version, or its index of the
-    /// version disagrees with the set ([`crate::channel`]).
-    #[error(transparent)]
-    Channel(#[from] ChannelRefusal),
+    /// The set's targets break a rule of the release ([`hostkeeper_release::target`]).
+    #[error("target_invalid: {0}")]
+    TargetInvalid(hostkeeper_release::TargetError),
+    /// The version was set before as another release ([`crate::releases`]).
+    #[error("release_exists: the version was set before as another release")]
+    ReleaseExists,
+    /// A repository entry names a repository the registry does not hold ([`crate::repositories`]).
+    #[error("repository_unknown: a repository entry names a repository the registry lacks")]
+    RepositoryUnknown,
 }
 
 impl SetError {
     /// The closed reason token of a refusal of the version itself (`below_min_version`,
-    /// `unparseable_version`, `bad_version`, `digest_conflict`, `not_in_channel`,
-    /// `channel_digest_mismatch`) or of its release index (`index_invalid`,
-    /// `index_digest_mismatch`), which the answer says; `None` for every other error.
+    /// `unparseable_version`, `bad_version`, `digest_conflict`, `release_exists`,
+    /// `repository_unknown`), of its release index (`index_invalid`, `index_digest_mismatch`) or
+    /// of its targets (`target_invalid`), which the answer says; `None` for every other error.
     #[must_use]
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
@@ -106,7 +110,9 @@ impl SetError {
             Self::UnparseableVersion => Some("unparseable_version"),
             Self::BadVersion => Some("bad_version"),
             Self::DigestConflict => Some("digest_conflict"),
-            Self::Channel(refusal) => Some(refusal.token()),
+            Self::TargetInvalid(_) => Some("target_invalid"),
+            Self::ReleaseExists => Some("release_exists"),
+            Self::RepositoryUnknown => Some("repository_unknown"),
             Self::Unauthorized(_)
             | Self::Unavailable
             | Self::Store(_)
@@ -165,26 +171,7 @@ pub struct Set {
     pub dropped_roles: Vec<String>,
 }
 
-/// The features this coordinator advertises to an agent that announces `agent_features`.
-///
-/// Each name is added in the change that implements what it names, so a name is never
-/// advertised for behaviour that is not there. `deferred-v1`: a `deferred` report ends the
-/// order, holds no slot and backs the host off ([`crate::defer`]). `halt-v1`: the clear
-/// generations of [`crate::halt`]. `heartbeat-v2`: selector membership ([`crate::membership`]).
-/// `forced-v1`: the `force` order of a standing force ([`crate::force`]), which a daemon runs
-/// only while this is advertised. `order-v1`: the order terms of [`crate::order_terms`], and the
-/// agent itself, never the legacy service, as the heartbeat's top level. `verdict-acks-v1`: the
-/// acks of the verdicts stored ([`crate::verdict_file`]). `grpc-v1`: the agent API is served on
-/// the heartbeat listener ([`crate::grpc`]), so an agent may send its next heartbeat there.
-pub const FEATURES: &[&str] = &[
-    "deferred-v1",
-    halt::FEATURE,
-    crate::membership::HEARTBEAT_V2,
-    crate::force::FEATURE,
-    ORDER_FEATURE,
-    verdict_file::FEATURE,
-    crate::grpc::GRPC_FEATURE,
-];
+pub use crate::features::FEATURES;
 
 /// The fields of the answer to a heartbeat that go only to an agent that announced a feature,
 /// each with the feature: the one place that says which. An older agent reads the answer
@@ -236,7 +223,7 @@ pub struct Coordinator {
     pub(crate) clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
-    features: Vec<String>,
+    pub(crate) features: Vec<String>,
     /// Enrollment: the store, the CA and the poll nonces; `None` without `--enrollment-dir`.
     enrollment: Option<Arc<Enrollment>>,
     /// The MDM policy gate; `None` without `--mdm-api-url`.
@@ -244,9 +231,14 @@ pub struct Coordinator {
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
-    /// The release channel a set's version must be in (`--release-channel`); `None`: no set is
-    /// checked against one.
-    pub(crate) channel: Option<ReleaseChannel>,
+    /// The held `Releases.WaitConverged` calls ([`crate::wait`]).
+    pub(crate) waits: crate::wait::Waits,
+    /// What each host's daemon last reported of its repositories ([`crate::repository_push`]).
+    pub(crate) repository_reports: crate::repository_push::Reports,
+    /// What each host heard runs ([`crate::running`]).
+    pub(crate) running: crate::running::Kept,
+    /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
+    pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -280,9 +272,8 @@ impl Coordinator {
         operator: impl Into<OperatorTokens>,
         clock: Clock,
     ) -> Self {
-        let started = clock();
         Self {
-            fleet: Mutex::new(Fleet::new(started, QUIET_START)),
+            fleet: Mutex::new(Fleet::new(clock(), QUIET_START)),
             desired,
             services: Services::default(),
             legacy: None,
@@ -299,7 +290,10 @@ impl Coordinator {
             mdm: None,
             ui: None,
             alerts: crate::alerts::Book::default(),
-            channel: None,
+            waits: crate::wait::Waits::default(),
+            repository_reports: crate::repository_push::Reports::default(),
+            running: crate::running::Kept::default(),
+            repository_origin: None,
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
@@ -393,10 +387,8 @@ impl Coordinator {
     /// Whether the fleet's lock, which every decision and order is made under, is held now.
     #[cfg(test)]
     pub(crate) fn fleet_held(&self) -> bool {
-        matches!(
-            self.fleet.try_lock(),
-            Err(std::sync::TryLockError::WouldBlock)
-        )
+        use std::sync::TryLockError;
+        matches!(self.fleet.try_lock(), Err(TryLockError::WouldBlock))
     }
 
     /// Tells `waits` [`SetProgress::Waits`] each time CI's set of a desired state finds the
@@ -488,10 +480,10 @@ impl Coordinator {
     /// The top-level fields are the legacy service's, when one is set; without one they
     /// belong to no service and only the entries of `services` count. For an agent that
     /// announced [`ORDER_FEATURE`] no legacy service is set, whatever the coordinator's: its
-    /// top level is the agent itself and every update names its service. Such an agent is
-    /// ordered a version only if CI registered a package digest for it, and the update then
-    /// carries the order terms of [`crate::order_terms`]; a version with no digest is not
-    /// ordered to it, and takes no slot. Each entry of `services`
+    /// top level is the agent itself and every update names its service. An update is ordered
+    /// over a transport that carries typed orders alone, with the entry picked for the host
+    /// ([`crate::picks`]) and the order terms of [`crate::order_terms`]; a heartbeat over the
+    /// JSON route is never ordered one. Each entry of `services`
     /// is noted as that service's heartbeat of the host, if the coordinator manages the
     /// service and runs it on the host's role (any other entry is ignored). The services are
     /// decided by priority, the highest first ([`crate::services::ServiceDef::priority`], 0
@@ -504,17 +496,16 @@ impl Coordinator {
     /// [`HeartbeatRefused`]: the heartbeat lists no services (none, or a list that was bad and
     /// dropped) and no legacy service is set.
     pub fn heartbeat(&self, who: Identity, beat: Heartbeat) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false, None)
-            .map(|(answer, _)| answer)
+        self.heartbeat_from(who, beat, None)
     }
 
     /// [`Self::heartbeat`] for a transport that carries typed orders (the `Order` of
     /// `hostkeeper.agent.v1`): with the answer, the operator's order for the host when one is
     /// due ([`crate::orders`]: an `abort` queued for it, or the `force` of a standing force),
     /// which is sent instead of an update, and the answer's reply is then `nothing`. When the
-    /// rollout gate orders an update with its terms (an agent that announced `order-v1`, a
-    /// registered digest), the update is the typed order ([`Order::Update`]): the order id, try
-    /// and package digest of the answer's terms, which the answer carries too.
+    /// rollout gate orders an update with its terms (an entry picked for the host), the update is
+    /// the typed order ([`Order::Update`]): the order id, try and package digest of the answer's
+    /// terms, which the answer carries too, and `root` is kept.
     ///
     /// # Errors
     /// [`HeartbeatRefused`], as for [`Self::heartbeat`].
@@ -522,23 +513,25 @@ impl Coordinator {
         &self,
         who: Identity,
         beat: Heartbeat,
+        root: crate::trusted_root::TrustedRootSaid,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
-        self.answer(who, beat, true, None)
+        self.answer(who, beat, true, None, root)
     }
 
-    fn answer(
+    pub(crate) fn answer(
         &self,
         who: Identity,
         beat: Heartbeat,
         orders: bool,
         machine_id: Option<&str>,
+        root: crate::trusted_root::TrustedRootSaid,
     ) -> Result<(Answer, Option<Order>), HeartbeatRefused> {
         if self.legacy_for(&beat).is_none() && beat.services.is_none() {
             return Err(HeartbeatRefused);
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
-        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, turn);
+        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, (turn, root));
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -558,8 +551,6 @@ impl Coordinator {
         // The terms only to an agent that announced `order-v1` and a coordinator that
         // advertises it.
         let terms = terms.filter(|_| sends("order_id", features.as_deref()));
-        // On a transport that carries typed orders, the update is one too, with the same terms.
-        let order = order.or_else(|| order_terms::typed(&reply, terms.as_ref()).filter(|_| orders));
         let acks = if sends("acks", features.as_deref()) {
             acks
         } else {
@@ -582,13 +573,11 @@ impl Coordinator {
         who: Identity,
         mut beat: Heartbeat,
         orders: bool,
-        turn: Turn,
+        (turn, trusted_root): (Turn, crate::trusted_root::TrustedRootSaid),
     ) -> (ServiceReply, Option<Order>, Option<Terms>, Vec<VerdictAck>) {
         let now = (self.clock)();
         let own = crate::agent_service::own_beat(&self.services, &mut beat);
         let legacy = self.legacy_for(&beat);
-        let order_v1 = self.features.iter().any(|name| name == ORDER_FEATURE)
-            && beat.agent_features.iter().any(|name| name == ORDER_FEATURE);
         let announced = beat.services.clone().unwrap_or_default();
         let node = Node {
             role: who.role.name().to_owned(),
@@ -604,6 +593,7 @@ impl Coordinator {
             sent_unix: beat.sent_unix,
             cert_not_after_unix: beat.cert_not_after_unix,
             last_renew_error: beat.last_renew_error.clone(),
+            trusted_root,
             skewed_beats: 0,
         };
         // The halts are noted under the fleet's lock, which every decision and order below is
@@ -614,6 +604,10 @@ impl Coordinator {
         // rule below reads what it read while the agent resent it.
         let acking =
             verdict_file::asks(&beat) && self.features.iter().any(|f| f == verdict_file::FEATURE);
+        // The verdict of a `clear_record` is no word on a release: no rule below reads it.
+        let cleared = fleet
+            .clear_records
+            .take_verdicts(&who.host_id, legacy, &mut beat);
         let mut heard = if acking {
             let wanted = |name: &str| self.desired.get(name).map(|want| want.version);
             let (heard, superseded) =
@@ -628,7 +622,7 @@ impl Coordinator {
                     );
                 }
             }
-            heard
+            heard.into_iter().chain(cleared).collect()
         } else {
             Vec::new()
         };
@@ -637,6 +631,7 @@ impl Coordinator {
         let held = halt::note(&self.ops, &self.services, legacy, &who, &beat, &node, now);
         let (platform, ops) = (beat.platform, self.ops.state());
         self.note_serving(&who.host_id, &node, &beat, &ops, now);
+        self.note_running(&fleet, &who, &beat, &announced, legacy, turn == Turn::Order);
         let counted =
             |def: &ServiceDef| standing(def, &who.host_id, &node, &ops, now) == Standing::Counted;
         for def in self.services.defs() {
@@ -733,10 +728,8 @@ impl Coordinator {
         }
         let asked = Asked {
             who: &who,
-            platform,
             legacy,
             held: &held,
-            order_v1,
             orders,
             now,
         };
@@ -766,9 +759,8 @@ impl Coordinator {
     /// allow-list accepts. The token is checked before the body is parsed or any state is touched
     /// (the transport has already read the body, at most [`crate::http::MAX_DESIRED_BYTES`]).
     ///
-    /// The version is refused, before anything changes, when the release channel does not hold
-    /// it or holds another artifact for it (with `--release-channel` only, [`crate::channel`]),
-    /// when it is below the service's `min_version`, when the service's `version_scheme` cannot
+    /// The version is refused, before anything changes, when it is below the service's
+    /// `min_version`, when the service's `version_scheme` cannot
     /// read it, when it is marked bad (only the operator's unmark or a force lifts a mark; CI
     /// does not), and when CI set it before with another package digest. A body that names a digest (`release_digest`) records
     /// the version and the digest in the service's registry in the same write as the state
@@ -801,32 +793,6 @@ impl Coordinator {
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
         self.set_desired_verified(&verified, body).await
-    }
-
-    /// Why CI may not set `desired` for `service`, if it may not: the refusals of
-    /// [`Self::set_desired`], in that order.
-    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
-        let (service, version) = (def.name.as_str(), &desired.version);
-        if !def.version_scheme.parses(version) {
-            return Err(SetError::UnparseableVersion);
-        }
-        if def
-            .min_version
-            .as_ref()
-            .is_some_and(|floor| !version.at_least(floor))
-        {
-            return Err(SetError::BelowMinVersion);
-        }
-        if self.ops.marks(service).bad.contains(version) {
-            return Err(SetError::BadVersion);
-        }
-        let registered = self.desired.digests(service).get(version).cloned();
-        if let (Some(before), Some(now)) = (registered, desired.release())
-            && before != now
-        {
-            return Err(SetError::DigestConflict);
-        }
-        Ok(())
     }
 
     /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
@@ -969,22 +935,6 @@ impl Coordinator {
                 .as_deref()
                 .map(Enrollment::server_certificate),
         }
-    }
-
-    /// Where the hosts of `service` stand against its desired state, if `bearer` is a
-    /// GitHub Actions OIDC token the same allow-list accepts as for [`Self::set_desired`]
-    /// (any service may be read with any accepted token). The operator token is no CI token
-    /// and is refused. Read-only, and each token is good once.
-    ///
-    /// # Errors
-    /// [`ConvergenceError`].
-    pub async fn convergence(
-        &self,
-        bearer: Option<&str>,
-        service: &str,
-    ) -> Result<Convergence, ConvergenceError> {
-        self.ci(bearer).await?;
-        self.convergence_verified(service)
     }
 }
 

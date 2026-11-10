@@ -15,11 +15,10 @@ use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::adapters::Adapters;
-use hostkeeper_daemon::admin::service_state;
+use hostkeeper_daemon::adapters::MAIN_UNIT;
 use hostkeeper_daemon::cli::Unwired;
 use hostkeeper_daemon::link_adapters::observation;
 use hostkeeper_daemon::observer::{OwnService, STATUS_DEADLINE, SealedExe, observe, observer_with};
-use hostkeeper_daemon::selfunits::MAIN_UNIT;
 use hostkeeper_daemon::selfupdate::binary_dir;
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{FakeLaunchctl, Label, LaunchctlOutput, PidInfo, PidInfoError, Platform};
@@ -30,9 +29,7 @@ use hostkeeper_observe::{
     VersionView, beat_health,
 };
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
-use hostkeeper_proto::hostkeeper::local::v1::{Liveness, Unhealthy};
 use hostkeeper_steps::Layout;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use support::{OWN, Rig, d};
 
 /// The service of hostkeeper itself.
@@ -71,19 +68,6 @@ impl PidInfo for RunsFile {
             why: e.to_string(),
         })?;
         Ok((meta.dev(), meta.ino()))
-    }
-}
-
-/// A package check that passes everything: these tests unpack nothing.
-struct Passes;
-
-impl MacVerify for Passes {
-    fn quarantine(&self, _path: &Path) -> Result<bool, VerifyIoError> {
-        Ok(false)
-    }
-
-    fn signature(&self, _binary: &Path) -> Result<SignatureVerdict, VerifyIoError> {
-        Ok(SignatureVerdict::Valid)
     }
 }
 
@@ -131,7 +115,6 @@ fn mac_observer(rig: &Rig, print: LaunchctlOutput, exe: &Path) -> hostkeeper_obs
         launchctl,
         asked,
         RunsFile(exe.to_path_buf()),
-        Arc::new(Passes),
     )
     .expect("the macOS set");
     assert_eq!(adapters.own_unit, job());
@@ -167,7 +150,7 @@ fn of_hk(rig: &Rig, observer: &hostkeeper_observe::Observer) -> Observation {
 /// launchd job), so the observer asked launchd nothing. Through the macOS adapters, the daemon
 /// observes its job `dev.hostkeeper.hostkeeper` as the service `hostkeeper`: live, at the version
 /// `current` names, confirmed by the executable the job's process runs (the binary directory's
-/// file of that version), and healthy, in the admin `Status` as in the heartbeat.
+/// file of that version), and healthy, as the heartbeat reports it.
 #[test]
 fn a_mac_daemon_observes_its_own_launchd_job_live_healthy_and_at_its_version() {
     let rig = mac_host("own-mac-live", RUNS, &[BEFORE, RUNS]);
@@ -189,12 +172,6 @@ fn a_mac_daemon_observes_its_own_launchd_job_live_healthy_and_at_its_version() {
             },
             None
         )
-    );
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.liveness, wire.version.as_deref(), wire.healthy),
-        (Liveness::Live as i32, Some(RUNS), true),
-        "{wire:?}"
     );
     assert_eq!(beat_health(&seen), (Health::Healthy, Some(RUNS.to_owned())));
     let beat = observation(&seen);
@@ -229,11 +206,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
     let stopped = printed(&job(), "not running", "\tlast exit code = 1\n");
     let seen = of_hk(&rig, &mac_observer(&rig, stopped, &exe));
     assert_eq!(seen.state, ServiceState::Stopped);
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.liveness, wire.healthy),
-        (Liveness::Stopped as i32, false)
-    );
+    assert_eq!(beat_health(&seen).0, Health::Unhealthy);
 
     let absent = LaunchctlOutput {
         code: Some(113),
@@ -252,16 +225,17 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
         (seen.state.clone(), seen.reason_token()),
         (ServiceState::Live, Some("version_mismatch"))
     );
-    let wire = service_state(&seen);
-    assert_eq!(
-        (wire.version.as_deref(), wire.healthy, wire.unhealthy),
-        (None, false, Unhealthy::VersionMismatch as i32)
+    assert!(
+        matches!(seen.version, VersionView::Mismatch { .. }),
+        "{seen:?}"
     );
+    assert_eq!(beat_health(&seen).0, Health::Unhealthy);
 
-    // A fallback put the previous binary back: the package still names the version that fell
-    // back, the binary directory's `current` the one the job runs, which is what is reported.
+    // The previous binary is back (the hand-over fell back, or an operator put it there): the
+    // package still names the version that fell back, the binary directory's `current` the one
+    // the job runs, which is what is reported.
     Layout::new(&binary_dir(&rig.state))
-        .flip_back()
+        .switch(BEFORE)
         .expect("the previous binary back");
     let seen = of_hk(
         &rig,
@@ -282,7 +256,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
             None
         )
     );
-    assert!(service_state(&seen).healthy);
+    assert_eq!(beat_health(&seen).0, Health::Healthy);
 
     // No binary directory: the package's version, which no file confirms.
     let unstaged = mac_host("own-mac-unstaged", RUNS, &[]);
@@ -293,7 +267,7 @@ fn the_daemons_own_job_is_stopped_absent_or_mismatched_as_launchd_and_its_proces
         (seen.state.clone(), seen.reason_token()),
         (ServiceState::Live, Some("version_unconfirmed"))
     );
-    assert!(service_state(&seen).healthy);
+    assert_eq!(beat_health(&seen).0, Health::Healthy);
 }
 
 /// Catches the daemon's own unit given to another service, or put in place of the units a
@@ -315,7 +289,6 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
         FakeLaunchctl::new(),
         asked.clone(),
         RunsFile(version_file(&rig, RUNS)),
-        Arc::new(Passes),
     )
     .expect("the macOS set");
     let observer = observer_with(
@@ -365,8 +338,7 @@ fn only_hostkeeper_with_no_unit_of_its_own_is_observed_through_the_daemons_job()
 #[test]
 fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     let rig = mac_host("own-linux-sealed", RUNS, &[RUNS]);
-    let exe =
-        SealedExe::new(&rig.packages, &rig.packages, OWN).with_binary_dir(&binary_dir(&rig.state));
+    let exe = SealedExe::new(&rig.packages, OWN).with_binary_dir(&binary_dir(&rig.state));
     let file = fs::File::open(version_file(&rig, RUNS)).expect("the binary");
     let digest = digest_open_file(&file).expect("its digest");
     assert_eq!(exe.digest(HK, RUNS), Some(digest));
@@ -387,7 +359,7 @@ fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
     assert_eq!(exe.digest(HK, "../bin"), None);
     // Without the binary directory, hostkeeper's version is found through its unit as any
     // other's, and the macOS package has none.
-    let plain = SealedExe::new(&rig.packages, &rig.packages, OWN);
+    let plain = SealedExe::new(&rig.packages, OWN);
     assert_eq!(plain.digest(HK, RUNS), None);
 
     let observer = observer_with(
@@ -413,8 +385,11 @@ fn the_sealed_executable_of_hostkeeper_is_its_file_in_the_binary_directory() {
         (ServiceState::Live, None)
     );
     assert_eq!(
-        service_state(&seen).version.as_deref(),
-        Some(RUNS),
+        seen.version,
+        VersionView::Recorded {
+            version: RUNS.to_owned(),
+            confirmed: true,
+        },
         "{seen:?}"
     );
 }

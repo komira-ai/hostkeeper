@@ -5,15 +5,15 @@ use std::collections::BTreeMap;
 
 use hostkeeper_daemon::cli::{GH_BINARY, SIGSTORE_TRUSTED_ROOT};
 use hostkeeper_daemon::console::{ENROLLMENT_ISSUE, ISSUE_LINK};
-use xtask::test_support::NFPM_STAGED;
+use xtask::test_support::{LINUX_PKG_PROGRAMS, NFPM_STAGED};
 
 use crate::attestation_files::staged;
 use crate::nfpm::{self, Config};
 use crate::script::{self, Command};
 use crate::{INSTALLED_UNIT, NFPM, POSTINSTALL, PREREMOVE, altered, config, read, refuses};
 
-const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
-const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
+pub(crate) const ENABLE: [&str; 3] = ["systemctl", "enable", "hostkeeper.service"];
+pub(crate) const DISABLE: [&str; 3] = ["systemctl", "disable", "hostkeeper.service"];
 /// The `case` patterns of a first install: deb `configure` with no previous version, rpm `1`.
 const FIRST_INSTALL: [&str; 2] = ["configure:", "1:"];
 /// The `case` patterns of a removal: deb `remove`, rpm `0`.
@@ -102,6 +102,11 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
             format!("{text}overrides:\n  rpm:\n    depends: [systemd]\n"),
             "[\"overrides\"]",
         ),
+        // The Arch package is withdrawn: its table is a key nfpm.yaml no longer needs.
+        (
+            format!("{text}archlinux:\n  packager: \"The hostkeeper project\"\n"),
+            "[\"archlinux\"]",
+        ),
         (format!("{text}release: \"2\"\n"), "[\"release\"]"),
         (format!("{text}depends:\n  - curl\n"), "[\"depends\"]"),
         (
@@ -136,8 +141,9 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The six files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
-/// root at the daemon's own paths, from where `release nfpm-stage` writes them.
+/// The seven files of the package, sorted as [`Config::files`] sorts them: the two programs
+/// (the static build) at the paths `release check-linux-pkg` requires, and `gh` and the trusted
+/// root at the daemon's own paths, all from where `release nfpm-stage` writes them.
 pub fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
         dst: dst.to_owned(),
@@ -146,8 +152,10 @@ pub fn package_files() -> Vec<nfpm::File> {
         owner: "root".to_owned(),
         group: "root".to_owned(),
     };
+    let [(hostkeeper, hostkeeper_staged), (pxe, pxe_staged)] = LINUX_PKG_PROGRAMS;
     let mut files = vec![
-        file("/usr/bin/hostkeeper", "target/release/hostkeeper", "0755"),
+        file(hostkeeper, &staged(hostkeeper_staged), "0755"),
+        file(pxe, &staged(pxe_staged), "0755"),
         file(INSTALLED_UNIT, "packaging/linux/hostkeeper.service", "0644"),
         file(
             "/usr/lib/tmpfiles.d/hostkeeper.conf",
@@ -260,8 +268,8 @@ fn with_content(text: &str, src: &str, dst: &str) -> String {
 }
 
 /// Catches a package that carries a key, a certificate, a token or a live `hostkeeper.toml`
-/// (by name, or a private key in a source's text), a file too many (the boot server pxe, which has a
-/// package of its own, among them) or too few, a file with another mode, owner, source or place, and a console issue link that is missing, is somewhere else
+/// (by name, or a private key in a source's text), a file too many or too few (hostkeeper-pxe
+/// left out among them), a file with another mode, owner, source or place, and a console issue link that is missing, is somewhere else
 /// than `/etc/issue.d`, or points at another file than the one the daemon writes.
 #[test]
 fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
@@ -322,14 +330,42 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
             "not [",
         ),
         (
-            with_content(&text, "target/release/pxe", "/usr/bin/hostkeeper-pxe"),
+            altered(
+                &text,
+                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n",
+                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0750\n",
+            ),
             "not [",
         ),
         (
             altered(
                 &text,
-                "  - src: target/release/hostkeeper\n    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
+                "  - src: target/nfpm/hostkeeper-pxe\n    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
                 "",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/nfpm/hostkeeper-pxe\n",
+                "  - src: target/nfpm/hostkeeper\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/nfpm/hostkeeper-pxe\n",
+                "  - src: target/release/hostkeeper-pxe\n",
+            ),
+            "not [",
+        ),
+        (
+            altered(
+                &text,
+                "  - src: target/nfpm/hostkeeper\n",
+                "  - src: target/release/hostkeeper\n",
             ),
             "not [",
         ),
@@ -400,6 +436,12 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
     );
     // The rpm is held to the same list.
     assert_eq!(check_manifest(&text, "rpm", repo_source), Ok(()));
+    let extra = "overrides:\n  rpm:\n    contents:\n      - src: target/extra.conf\n        dst: /etc/extra.conf\n        file_info:\n          mode: 0644\n          owner: root\n          group: root\n";
+    let refused = check_manifest(&format!("{text}{extra}"), "rpm", repo_source);
+    assert!(
+        refused.is_err_and(|m| m.contains("the rpm carries")),
+        "an extra file in the rpm alone is refused"
+    );
 }
 
 fn check_one_list(text: &str) -> Result<(), String> {
@@ -423,8 +465,8 @@ fn check_one_list(text: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Catches an override that gives one packager a file, a link or a script the other does not
-/// have.
+/// Catches an override that gives one packager (the deb or the rpm) a file, a link or a script
+/// the other does not have.
 #[test]
 fn rpm_and_deb_share_one_file_list() {
     let text = read(NFPM);
@@ -665,17 +707,17 @@ fn scripts_are_posix_sh_and_touch_only_the_unit_and_tmpfiles() {
     refuses(check_commands, &cases);
 }
 
-const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
-const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
+pub(crate) const TMPFILES_CREATE: [&str; 3] = ["systemd-tmpfiles", "--create", "hostkeeper.conf"];
+pub(crate) const DAEMON_RELOAD: [&str; 2] = ["systemctl", "daemon-reload"];
 
 /// One run of a package script: what the package manager passes, the program that fails (if
 /// any), and the programs it must run and the status it must end with.
-struct Scenario {
-    name: &'static str,
-    args: &'static [&'static str],
-    failing: Option<&'static [&'static str]>,
-    ran: &'static [&'static [&'static str]],
-    status: i32,
+pub(crate) struct Scenario {
+    pub(crate) name: &'static str,
+    pub(crate) args: &'static [&'static str],
+    pub(crate) failing: Option<&'static [&'static str]>,
+    pub(crate) ran: &'static [&'static [&'static str]],
+    pub(crate) status: i32,
 }
 
 /// The post-install script's runs: a first install enables the unit, an upgrade does not; a
@@ -775,7 +817,7 @@ const PREREMOVE_RUNS: [Scenario; 5] = [
 
 /// Runs `text` through every scenario of `runs`, with each program a fake that fails only
 /// for the scenario's failing command.
-fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
+pub(crate) fn check_runs(text: &str, runs: &[Scenario]) -> Result<(), String> {
     let commands = script::parse(text)?;
     for scenario in runs {
         let done = script::run(&commands, scenario.args, |words| {

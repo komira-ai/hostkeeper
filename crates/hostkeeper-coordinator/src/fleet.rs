@@ -20,7 +20,8 @@
 //!
 //! The operator's holds, the hosts a standing force orders and where each service's update plan
 //! stands are kept here as a copy of the ops store's ([`Marks`]), refreshed under the fleet's
-//! lock, so the decisions read them with the beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
+//! lock, so the decisions read them with the beats; the `abort` and `clear_record` orders an
+//! operator queued are kept in memory only, like the other orders.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -103,10 +104,10 @@ impl Host {
             && !self.beat.promotion_pending
     }
 
-    /// Whether the host holds an update slot (a service's plan counts them against the role's
-    /// `max_updating`, [`crate::stages`]): it is updating, its promotion is pending, or its last
-    /// update failed and it has not yet heartbeated healthy. A failed install that left the service absent
-    /// (staged, never run) holds none: like a failed update rolled back, nothing of it runs.
+    /// Whether the host holds an update slot of its service, counted against its role's
+    /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
+    /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
     #[must_use]
     pub fn holds_slot(&self) -> bool {
         let failed = self
@@ -144,6 +145,9 @@ pub struct Node {
     pub cert_not_after_unix: Option<u64>,
     /// Why the host's last step of enrollment or renewal failed, as its last heartbeat said it.
     pub last_renew_error: Option<String>,
+    /// The host's Sigstore trusted root, as its last heartbeat said it: unknown after one that
+    /// said nothing of it.
+    pub trusted_root: crate::trusted_root::TrustedRootSaid,
     /// How many of its heartbeats since the coordinator started were skewed: counted by the
     /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
     pub skewed_beats: u64,
@@ -213,6 +217,8 @@ pub struct Fleet {
     /// The `abort` orders an operator queued, per host and service, each with its order id: sent
     /// once, at the host's next heartbeat ([`crate::orders`]).
     aborts: BTreeMap<(HostId, String), String>,
+    /// The `clear_record` orders an operator queued ([`crate::clear_record`]).
+    pub(crate) clear_records: crate::clear_record::Queue,
     /// The canaries that failed a release, per service and version, by node id
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
@@ -230,6 +236,8 @@ pub struct Fleet {
     /// Whether the store's link to its database is lost (`docs/design/coordinator-storage.md`,
     /// section 5), read from the backend at each take of the fleet's lock: nothing is ordered.
     pub(crate) store_lost: bool,
+    /// The installers daemons said over gRPC and the releases the picks read ([`crate::picks`]).
+    pub(crate) picks: crate::picks::Picks,
 }
 
 impl Fleet {
@@ -251,10 +259,12 @@ impl Fleet {
             verdicts: Verdicts::default(),
             marks: Marks::default(),
             aborts: BTreeMap::new(),
+            clear_records: crate::clear_record::Queue::default(),
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
             store_lost: false,
+            picks: crate::picks::Picks::default(),
         }
     }
 
@@ -483,6 +493,7 @@ impl Fleet {
         self.orders.retain(|(o, _), _| o != id);
         self.bake.retain(|(_, o), _| o != id);
         self.nodes.remove(id);
+        self.picks.forget(id);
         true
     }
 

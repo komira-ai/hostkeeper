@@ -40,7 +40,7 @@ fn halting(reason: &str) -> Heartbeat {
 fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> ServiceReply {
     rig.at(at);
     rig.coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat")
         .reply
 }

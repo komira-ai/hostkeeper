@@ -1,7 +1,8 @@
 #!/bin/sh
-# The post-install script of the hostkeeper deb and rpm (packaging/linux/nfpm.yaml). It makes
-# the daemon's directories and enables the unit on a first install; it never starts the unit,
-# so a host whose config is not placed yet runs no daemon until the next boot.
+# The post-install script of the hostkeeper deb and rpm (packaging/linux/nfpm.yaml).
+# It makes the daemon's directories and enables the unit on a first
+# install; it never starts the unit, so a host whose config is not placed yet runs no daemon
+# until the next boot.
 #
 # The package manager passes: deb (postinst) `configure` and the version it replaces, which is
 # empty on a first install; rpm (%post) the number of installed copies, 1 on a first install.

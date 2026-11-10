@@ -4,7 +4,9 @@
 //! under the same lock; `import` and `export` move the state from those files into the database
 //! and back ([`crate::transfer`]).
 //!
-//! Everything is a flag; the coordinator reads no environment variable. Without
+//! Everything is a flag; the coordinator reads no environment variable. `serve --config <file>`
+//! takes flags from a TOML file, put in place of it before the arguments are parsed
+//! ([`config_file`]). Without
 //! `--enrollment-dir` it holds no CA key: its certificate and key are files the farm CA issued,
 //! and the CA certificate it checks updaters against is a file too. With it, it is also the
 //! hosts' CA ([`crate::enrollment`]): `--ca-key-file` is the CA's key (made with `--ca-init`),
@@ -22,9 +24,9 @@
 //! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
-//! a directory ([`Serve::with_default_ui_dir`]). With `--release-channel` a set of the
-//! desired state is refused unless the release channel holds the version (`crate::channel`):
-//! the URL is checked at start (`https://` only), and the channel is fetched only by a set.
+//! a directory ([`Serve::with_default_ui_dir`]).
+//! With `--health-listen` (a loopback address) it also serves `GET /healthz` in plain HTTP to a
+//! probe on the same machine (`crate::health`).
 //! How the sockets are bound is a function the caller gives ([`bind_tcp`] in the binary), so
 //! the whole start can be driven over in-memory connections.
 //!
@@ -67,16 +69,15 @@ use crate::alerts::{
 };
 use crate::audit_file::wall_clock;
 use crate::backup::{Backup, Report, Restore, backup, restore};
-use crate::channel::ReleaseChannel;
-use crate::channel_https::{ChannelUrl, HttpsChannel};
 use crate::desired::DesiredStore;
 use crate::enrollment::{MacAllowlist, MacPolicy, Setup, StoreAt, os_random, setup};
 use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
+use crate::health::{self, Serving};
 use crate::http::Surface;
 use crate::inventory::RecordWindow;
 use crate::listen::{CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve};
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
-use crate::mdm::{Mdm, MdmFlags};
+use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::services::Services;
@@ -88,6 +89,9 @@ use crate::verdict_file::VerdictFile;
 
 #[path = "config_error.rs"]
 mod error;
+
+#[path = "config_file.rs"]
+mod config_file;
 
 pub use error::StartError;
 
@@ -130,8 +134,8 @@ pub struct Cli {
     reason = "parsed once per process from its arguments; boxing `Serve` would change every caller for no saving"
 )]
 pub enum Command {
-    /// Serve the heartbeat and private listeners, and the LAN listener when `--lan-listen` is
-    /// given, until SIGTERM or SIGINT.
+    /// Serve the heartbeat and private listeners, the LAN listener when `--lan-listen` is
+    /// given and the health listener when `--health-listen` is, until SIGTERM or SIGINT.
     Serve(Serve),
     /// Copy the state of a stopped coordinator into a new directory, with the SHA-256 of each
     /// file in its manifest. The CA's key is not copied.
@@ -149,7 +153,16 @@ pub enum Command {
 
 /// The flags of `serve`.
 #[derive(Clone, Debug, Args)]
+// The store of the enrollment and the MDM gate's records: the directory or the database (which
+// refuses the directory beside it, naming it, at start).
+#[group(id = "records_store", args = ["enrollment_dir", "database_dsn_file"], multiple = true)]
 pub struct Serve {
+    /// A TOML file of flags of `serve`, each key a flag's name without `--` (a string or an
+    /// integer is its value, `true` a flag with no value, an array the flag once per element),
+    /// put in place of this flag before the others are parsed: a flag it gives may not be given
+    /// again.
+    #[arg(long, value_name = "FILE")]
+    pub config: Option<PathBuf>,
     /// Where updaters dial (mutual TLS).
     #[arg(long)]
     pub heartbeat_listen: SocketAddr,
@@ -169,6 +182,14 @@ pub struct Serve {
     /// start. Requires --ca-key-file.
     #[arg(long, requires = "ca_key_file")]
     pub lan_listen: Option<SocketAddr>,
+    /// A health listener, plain HTTP with no TLS and no token, for a probe on this machine: it
+    /// answers `GET` and `HEAD` of `/healthz` only, `200 ok` while every listener is bound and
+    /// serving and the store takes writes, and `503` with one reason token otherwise
+    /// (`starting`, `not_writer`, `store_unreachable`). It takes a loopback address
+    /// (127.0.0.0/8 or ::1): any other, a wildcard among them, is refused at start. Without it
+    /// there is no health listener.
+    #[arg(long)]
+    pub health_listen: Option<SocketAddr>,
     /// The coordinator's certificate chain (PEM), issued by the farm CA with the role
     /// `coordinator`.
     #[arg(long)]
@@ -338,32 +359,6 @@ pub struct Serve {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
     )]
     pub live_rollouts: usize,
-    /// The release channel the hosts fetch packages from, as `https://<host>[:<port>][/<path>]`
-    /// (the daemon config's `release_channel`). With it, a set of the desired state is refused
-    /// `not_in_channel` unless `<channel>/<service>/<version>/index.json` is there (retry once
-    /// the channel holds it), and `channel_digest_mismatch` when that index is of another
-    /// service or version or lists no package with the set's digest. Only `https://` is taken;
-    /// another scheme stops the start. Without it nothing is fetched and no set is refused for
-    /// the channel.
-    #[arg(long)]
-    pub release_channel: Option<String>,
-    /// How long the connection to the release channel and its TLS handshake may take, in
-    /// seconds.
-    #[arg(
-        long,
-        default_value_t = 10,
-        requires = "release_channel",
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub release_channel_connect_secs: u64,
-    /// How long one fetch from the release channel may take in all, in seconds.
-    #[arg(
-        long,
-        default_value_t = 30,
-        requires = "release_channel",
-        value_parser = clap::value_parser!(u64).range(1..)
-    )]
-    pub release_channel_timeout_secs: u64,
     /// How long a host the coordinator has heard from may go without a heartbeat before it is an
     /// alert (`silent_host`), in seconds.
     #[arg(
@@ -407,6 +402,8 @@ pub struct Bound {
     pub control: SocketAddr,
     /// The LAN listener, when `--lan-listen` is given.
     pub lan: Option<SocketAddr>,
+    /// The health listener, when `--health-listen` is given.
+    pub health: Option<SocketAddr>,
 }
 
 /// What a running coordinator is made of.
@@ -424,6 +421,9 @@ pub struct Parts {
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
     /// TLS and surface.
     pub lan_listen: Option<SocketAddr>,
+    /// Where to bind the health listener (`--health-listen`, a loopback address), when there
+    /// is one.
+    pub health_listen: Option<SocketAddr>,
     /// How often to look at the TLS files and the tokens file.
     pub reload: Duration,
     /// The lock of the state files, held for as long as the coordinator runs: dropping the
@@ -437,8 +437,9 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` or `--lan-listen` is a wildcard address, `--quiet-secs` is below two
-/// heartbeat intervals, `--release-channel` is not an `https://` base URL,
+/// `--private-listen` or `--lan-listen` is a wildcard address, `--health-listen` is not a
+/// loopback address, `--quiet-secs` is below two
+/// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, the legacy service or an
 /// allow-list entry names a service `--rollout-file` does not define, an entry names no
@@ -462,6 +463,12 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     {
         return Err(StartError::LanListen(lan));
     }
+    if let Some(health) = flags
+        .health_listen
+        .filter(|health| !health.ip().to_canonical().is_loopback())
+    {
+        return Err(StartError::HealthListen(health));
+    }
     if flags.quiet_secs < QUIET_START.as_secs() {
         return Err(StartError::QuietBelowFloor {
             secs: flags.quiet_secs,
@@ -482,19 +489,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let services = Services::from_file(&flags.rollout_file)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
-    let channel = flags
-        .release_channel
-        .as_deref()
-        .map(|text| -> Result<ReleaseChannel, StartError> {
-            let fetcher = HttpsChannel::new(
-                ChannelUrl::parse(text)?,
-                roots.clone(),
-                Duration::from_secs(flags.release_channel_connect_secs),
-                Duration::from_secs(flags.release_channel_timeout_secs),
-            )?;
-            Ok(ReleaseChannel::new(Arc::new(fetcher)))
-        })
-        .transpose()?;
     let legacy = flags.legacy_service.as_deref();
     if let Some(name) = legacy.filter(|name| services.get(name).is_none()) {
         return Err(StartError::LegacyService(name.to_owned()));
@@ -513,7 +507,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             }
         }
     }
-    let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots, KEY_FETCH_TIMEOUT)
+    let keys = HttpsKeys::new(&oidc.entries()[0].issuer, roots.clone(), KEY_FETCH_TIMEOUT)
         .map_err(StartError::Keys)?;
     // The wall clock is read for the validity of CI's tokens and the expiry of their spent
     // ids, and for nothing the coordinator decides.
@@ -524,6 +518,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         marker,
         held,
         records,
+        devices,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let verifier = Verifier::new(
         oidc,
@@ -556,10 +551,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_ops(ops)
         .with_verdicts(verdicts)
         .with_ui(ui)
-        .with_alert_thresholds(alert_thresholds(flags));
-    if let Some(channel) = channel {
-        coordinator = coordinator.with_release_channel(channel);
-    }
+        .with_alert_thresholds(alert_thresholds(flags))
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -591,12 +584,17 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 .map_or(DEFAULT_MAX_PENDING, |max| {
                     usize::try_from(max).unwrap_or(usize::MAX)
                 });
-            // clap holds the MDM gate's flags to --enrollment-dir, where its device records are.
-            let mdm = match &store {
-                StoreAt::Dir(dir) => {
-                    Mdm::open(&flags.mdm, dir, Arc::new(SystemClock), os_random())?
+            // The gate's device records are kept with the enrollment store: in its directory, or
+            // in the database, opened with it when the gate's flags are given.
+            let devices = match &store {
+                StoreAt::Dir(dir) => Some(Devices::Files(dir)),
+                StoreAt::Records(_) => devices.map(Devices::Store),
+            };
+            let mdm = match devices {
+                Some(devices) => {
+                    Mdm::open(&flags.mdm, devices, Arc::new(SystemClock), os_random())?
                 }
-                StoreAt::Records(_) => None,
+                None => None,
             };
             let enrollment = setup(
                 Arc::new(RealFs),
@@ -642,6 +640,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,
         lan_listen: flags.lan_listen,
+        health_listen: flags.health_listen,
         reload: interval,
         lock: held,
     })
@@ -695,14 +694,56 @@ async fn together(
 }
 
 /// Binds the listeners with `bind` (which answers the address bound and the function that
-/// accepts connections): the heartbeat listener, the private one, then the LAN listener when
-/// there is one, then the MDM gate's webhook listener when the coordinator runs the gate; calls
-/// `ready` with their addresses, and serves until the future is dropped. The LAN listener serves
-/// the heartbeat listener's TLS and surface. It never returns `Ok`.
+/// accepts connections): the health listener first when there is one, which from then on
+/// answers `starting` until the rest are bound; then the heartbeat listener, the private one,
+/// the LAN listener when there is one, and the MDM gate's webhook listener when the coordinator
+/// runs the gate; calls `ready` with their addresses, and serves until the future is dropped.
+/// The LAN listener serves the heartbeat listener's TLS and surface. It never returns `Ok`.
 ///
 /// # Errors
 /// An address cannot be bound; the store is deposed ([`StartError::Deposed`]).
 pub async fn run<Bind, Binding, Accept, Next, Stream>(
+    parts: Parts,
+    bind: Bind,
+    ready: impl FnOnce(Bound),
+) -> Result<Infallible, StartError>
+where
+    Bind: Fn(SocketAddr) -> Binding,
+    Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
+    Accept: FnMut() -> Next + Send,
+    Next: Future<Output = io::Result<Stream>> + Send,
+    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+{
+    let serving = Serving::default();
+    let (health, probing) = match parts.health_listen {
+        Some(addr) => {
+            let (addr, accept) = bind(addr).await?;
+            tracing::info!(%addr, "serving the health listener");
+            let probing = health::serve(
+                accept,
+                Arc::clone(&parts.coordinator),
+                serving.clone(),
+                CLIENT_PATIENCE,
+                MAX_CONNECTIONS,
+            );
+            (Some(addr), Either::Left(probing))
+        }
+        None => (None, Either::Right(std::future::pending())),
+    };
+    let rest = run_listeners(parts, bind, |bound| {
+        ready(Bound { health, ..bound });
+        serving.set();
+    });
+    match select(pin!(probing), pin!(rest)).await {
+        Either::Left((never, _)) => match never {},
+        Either::Right((ended, _)) => ended,
+    }
+}
+
+/// [`run`] past the health listener: binds the other listeners, calls `ready` with their
+/// addresses (`health` none), and serves them until the future is dropped or the store is
+/// deposed.
+async fn run_listeners<Bind, Binding, Accept, Next, Stream>(
     parts: Parts,
     bind: Bind,
     ready: impl FnOnce(Bound),
@@ -734,6 +775,7 @@ where
         heartbeat: heartbeat_addr,
         control: control_addr,
         lan: lan.as_ref().map(|(addr, _)| *addr),
+        health: None,
     });
     let lan = lan.map(|(_, accept)| Listener {
         accept,
@@ -793,15 +835,19 @@ where
 }
 
 /// The line `serve` prints once its listeners are bound ([`start`]): the version, then where
-/// each listener is, `lan=` (with `--lan-listen` only) after `control=`.
+/// each listener is, `lan=` (with `--lan-listen` only) after `control=`, and `health=` (with
+/// `--health-listen` only) last.
 #[must_use]
 pub fn start_line(bound: &Bound) -> String {
     let lan = bound
         .lan
         .map_or_else(String::new, |lan| format!(" lan={lan}"));
+    let health = bound
+        .health
+        .map_or_else(String::new, |health| format!(" health={health}"));
     let (heartbeat, control) = (bound.heartbeat, bound.control);
     let version = env!("CARGO_PKG_VERSION");
-    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}")
+    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}{health}")
 }
 
 /// Resolves on SIGTERM or SIGINT.
@@ -859,6 +905,13 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
+    let args = match config_file::expand(args, config_file::read_file) {
+        Ok(args) => args,
+        Err(why) => {
+            eprintln!("hostkeeper-coordinator: {why}");
+            return ExitCode::from(2);
+        }
+    };
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(usage) => {

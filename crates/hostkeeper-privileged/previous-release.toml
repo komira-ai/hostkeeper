@@ -1,0 +1,28 @@
+# The published release of hostkeeper the cross-release rig runs (tests/self_update_across_releases.rs,
+# docs/design/two-programs.md section 4.5, item X1): the release tag, its version, and for each release
+# platform the URL of the release's binary tarball and the SHA-256 of that tarball.
+#
+# The `privileged` and `macos-device` jobs of privileged.yml, and their copies in pr-device.yml, download
+# the URL of their platform with curl and check it against the SHA-256 (their env PREVIOUS_RELEASE_URL
+# and PREVIOUS_RELEASE_SHA256, which the workflow lint holds equal to this file) into
+# target/previous-release/hostkeeper.tar.gz. The test checks that file against this pin again, takes the
+# daemon binary out of it, and fetches nothing itself (hostkeeper_privileged::across).
+#
+# The pin moves only by a pull request: to the release each floor pull request of the staged path
+# names (S2a to R1, S3 to R2), in that same pull request, and with stage 9 of the move to native
+# packages (docs/design/packages-native.md, A24) to a release from A19 on, which installs `apt`
+# entries and updates itself through its .deb. The pin is v0.1.218, A19's own release.
+tag = "v0.1.218"
+version = "0.1.218"
+
+[linux-arm64]
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-linux-arm64.tar.gz"
+sha256 = "c5af3b7b77276faf3f5b855486a43b11e7e946a0d2d939dae461c06ec34957de"
+
+[linux-x86_64]
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-linux-x86_64.tar.gz"
+sha256 = "f6a483efffc178273d22a49d3412aae4596162a476608c89cf7d2d380ae6e7ea"
+
+[macos-arm64]
+url = "https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz"
+sha256 = "5f2a333b3c180f94538ed3fee80e7941f6c33c0e2d42684cf3d367554cebcce7"

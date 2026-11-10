@@ -6,41 +6,47 @@
 //! record and the try rules ([`checks::try_rule`]); where the service is in its life
 //! ([`checks::installed_rule`]: nothing while it is being uninstalled, `install` only with no
 //! release installed, `update` and `force_rollback` only with one); an `update` below the
-//! running version is refused; the package from the [`crate::packages::Packages`] port, outside
-//! the step lock; its manifest, read by the manifest's loader for the order's service and
-//! version and this daemon's version; the release it replaces, none for an `install`; the paths
-//! it places checked against `placed.json` and the disk (`path_conflict`); then the step lock
-//! and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every refusal before
-//! the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
+//! running version is refused; the order's entry, which it must carry (`order_invalid`
+//! otherwise), judged by [`crate::entry::check`] (nothing is fetched for an entry that fails);
+//! the version staged by the entry's installer ([`crate::repository::Repository::stage`]),
+//! outside the step lock; its manifest, read from its `target.json` for the order's service and
+//! version and this daemon's version; the release it replaces, none for an `install`; then the
+//! step lock and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every
+//! refusal before the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
 //! confirms its switch: under its locks, before a pending promotion is watched, the service's
 //! package directory is pruned to `current` and `previous` ([`crate::prune::confirmed_switch`]),
 //! keeping the order's target. A resend answered from the record prunes nothing.
 //!
 //! An `install` is the update path with no previous release: no `updater.previous_*` key in the
 //! params file and no `previous_digest` in the step record. The runner's switch
-//! ([`crate::place::hooked_switch`]) places the package and points `current` at it immediately
+//! ([`crate::place::hooked_switch`]) installs the package and points `current` at it immediately
 //! before `cutover`; before `rollback` it takes an install off the host, and puts an update back
-//! on the release it replaced. After `cleanup` it commits the placed paths and removes those the
-//! release no longer lists.
+//! on the release it replaced.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
 
-use hostkeeper_config::manifest::{Expected, Manifest};
+use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_config::platform::Platform;
+use hostkeeper_hook::{Class, Phase};
 use hostkeeper_hook::{Params, Verdict};
+use hostkeeper_install::repository::DRIFT_REPAIRED;
+use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
 use hostkeeper_steps::record::{Loaded, Record, RecordError};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
 
 use crate::checks::{self, OrderKey, TryRule};
+use crate::entry;
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT, PREVIOUS};
 use crate::locks::{Held, Holder, Package, ServiceGuard};
-use crate::packages::VersionDir;
 use crate::prune;
 use crate::refusal::Refusal;
+use crate::repository;
+use crate::selfupdate;
+use crate::target;
 use crate::verb::{Hooked, HookedVerb};
 
 /// `update`: refused below the running version, and for a service with no release installed.
@@ -131,6 +137,9 @@ fn steps(
     // runs, so the prune never waits for the promotion. The watcher then runs here, under the
     // same locks, and its end is the reply.
     let update = &prepared.update;
+    // Only this update's own `activate` may make it `drift_repaired`: what an earlier force or a
+    // resumed update left is dropped.
+    drop(ctx.repository().take_repaired(service));
     let ended = runner.run_until_watching(update);
     if let Ok(Finished {
         verdict: Verdict::Succeeded { promotion_pending },
@@ -140,10 +149,31 @@ fn steps(
         let watching = *promotion_pending;
         prune::confirmed_switch(ctx, guard, service, &order.version);
         if watching {
-            return Ok(ran(runner.run(update)));
+            let ended = runner.run(update);
+            return Ok(repaired(ctx, service, ran(ended)));
         }
     }
-    Ok(ran(ended))
+    Ok(repaired(ctx, service, ran(ended)))
+}
+
+/// `reply` with the reason `drift_repaired` when the update `Succeeded` with no reason of its own
+/// and its `activate` found the package at a version hostkeeper did not set and installed the
+/// desired one over it (packages-repositories.md section 4.4). The drift is taken either way,
+/// so a later update never reports it.
+fn repaired(ctx: &Ctx, service: &ServiceName, reply: Reply) -> Reply {
+    let drift = ctx.repository().take_repaired(service);
+    match reply {
+        Reply::Finished {
+            verdict: verdict @ Verdict::Succeeded { .. },
+            reason: None,
+            resent,
+        } if drift.is_some() => Reply::Finished {
+            verdict,
+            reason: Some(DRIFT_REPAIRED.to_owned()),
+            resent,
+        },
+        other => other,
+    }
 }
 
 /// The try rules ([`checks::try_rule`]) for `order`, given the service's step record `last`:
@@ -186,7 +216,9 @@ pub(crate) fn answer(
 /// An order checked and ready for the step runner: its package's version directory and the
 /// runner's order.
 pub(crate) struct Prepared {
-    pub dir: VersionDir,
+    pub dir: Staged,
+    /// The entry the version directory was staged for, as its `target.json` holds it.
+    pub entry: Entry,
     pub update: UpdateOrder,
 }
 
@@ -231,21 +263,41 @@ pub(crate) fn prepare(
         let running = running.as_ref().map_or("", Version::as_str);
         Reply::refused(refusal, format!("{} is below {running}", order.version))
     })?;
+    let Some(entry) = &order.entry else {
+        return Err(Reply::refused(
+            Refusal::OrderInvalid,
+            format!(
+                "{} of {service} carries no entry to stage the version from",
+                verb.name()
+            ),
+        ));
+    };
+    entry::check(
+        ctx.own_version,
+        &ctx.installers(),
+        service,
+        &order.digest,
+        entry,
+    )?;
+    let Some(native) = repository::native_of_entry(entry) else {
+        return Err(Reply::refused(
+            Refusal::OrderInvalid,
+            format!(
+                "the installer {:?} of the entry has no steps in this daemon",
+                entry.installer
+            ),
+        ));
+    };
+    same_installer(ctx, service, running.as_ref(), entry)?;
     let dir = ctx
-        .packages
-        .version_dir(
-            service,
-            &order.version,
-            &order.digest,
-            order.index_digest.as_ref(),
-        )
-        .map_err(|e| Reply::refused(checks::package_refusal(&e), e))?;
+        .repository()
+        .stage(native, service, &order.version, entry)?;
     let expected = Expected {
         name: service.clone(),
         version: order.version.clone(),
         platform: Platform::current(),
     };
-    let manifest = Manifest::load(dir.dir(), &expected, &ctx.own_version)
+    let manifest = target::manifest(dir.dir(), &expected, &ctx.own_version)
         .map_err(|e| Reply::refused(Refusal::from(&e), e))?;
     let previous = match verb {
         HookedVerb::Install => None,
@@ -253,25 +305,63 @@ pub(crate) fn prepare(
             previous(ctx, service, &order.version, running)?
         }
     };
-    // The runner's switch places this package, whether or not it replaces a release: its paths
-    // are checked now, before anything changes.
-    claims_check(ctx, &manifest)?;
     let declared = declared_params(&manifest.params)?;
-    let update = update_order(order, &dir, &manifest, previous, declared);
-    Ok(Prepared { dir, update })
+    let update = update_order(order, &dir, &manifest, previous, declared, &ctx.own_version);
+    Ok(Prepared {
+        dir,
+        entry: entry.clone(),
+        update,
+    })
 }
 
-/// The paths `manifest` places, checked against `placed.json` and what is on disk: a path
-/// another service owns, or one occupied by anything the record does not list, is
-/// `path_conflict`; a unit or `[[files]]` entry that breaks a rule of linking is
-/// `manifest_mismatch`. Reads only.
-fn claims_check(ctx: &Ctx, manifest: &Manifest) -> Result<(), Reply> {
-    let placer = ctx.placer();
-    placer
-        .desired(manifest)
-        .and_then(|claims| placer.check(&claims))
-        .map_err(|e| Reply::refused(Refusal::from(&e), e))
+/// The installer of the release `running` of `service`, as its sealed `target.json` names it,
+/// against the order's (`entry`'s): a service keeps the installer it was installed with until it
+/// is uninstalled (packages.md section 5.1), so another is `Failed`, `release`,
+/// `installer_changed`, with nothing fetched. A version whose `target.json` does not read, or
+/// that holds none (a version this daemon did not stage), is `release_unreadable`. A service
+/// with no release running has no installer to keep.
+fn same_installer(
+    ctx: &Ctx,
+    service: &ServiceName,
+    running: Option<&Version>,
+    entry: &Entry,
+) -> Result<(), Reply> {
+    let Some(running) = running else {
+        return Ok(());
+    };
+    let dir = ctx
+        .dirs
+        .packages
+        .join(service.as_str())
+        .join(running.as_str());
+    let installed = target::read(&dir)
+        .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?
+        .ok_or_else(|| {
+            Reply::refused(
+                Refusal::ReleaseUnreadable,
+                format!(
+                    "{} holds no {}: it was not staged by an installer of this daemon",
+                    dir.display(),
+                    target::TARGET_FILE
+                ),
+            )
+        })?
+        .installer;
+    match installed == entry.installer {
+        true => Ok(()),
+        false => Err(Reply::Finished {
+            verdict: Verdict::Failed {
+                phase: Phase::BeforeCommit,
+                class: Class::Release,
+            },
+            reason: Some(REASON_INSTALLER_CHANGED.to_owned()),
+            resent: false,
+        }),
+    }
 }
+
+/// The reason of an order whose installer is not the one the service runs.
+pub const REASON_INSTALLER_CHANGED: &str = "installer_changed";
 
 /// A manifest's `[params]` as the hook's declared params. The manifest's loader already refuses
 /// what [`Params::parse_declared`] refuses (a non-scalar, an `updater.*` key); a table it let
@@ -294,41 +384,47 @@ fn previous(
         true => installed::linked_version(&ctx.dirs.packages, service, PREVIOUS),
         false => running,
     };
-    let seal = |version: Version| {
-        let dir = ctx
-            .dirs
-            .packages
-            .join(service.as_str())
-            .join(version.as_str());
-        Staged::seal(&dir)
-            .map(|staged| (version, staged))
-            .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))
-    };
+    let seal = |version: Version| sealed(ctx, service, &version).map(|staged| (version, staged));
     replaced.map(seal).transpose()
+}
+
+/// The version directory of `service` at `version` the host keeps, sealed; one that does not
+/// seal is `release_unreadable`.
+fn sealed(ctx: &Ctx, service: &ServiceName, version: &Version) -> Result<Staged, Reply> {
+    let dir = ctx
+        .dirs
+        .packages
+        .join(service.as_str())
+        .join(version.as_str());
+    Staged::seal(&dir).map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))
 }
 
 /// The order for the step runner: the package's version directory and hook, the bounds and
 /// params of its manifest, the release it replaces and the order's digest and try.
 fn update_order(
     order: &Hooked,
-    dir: &VersionDir,
+    dir: &Staged,
     manifest: &Manifest,
     previous: Option<(Version, Staged)>,
     declared_params: Params,
+    own: &HostkeeperVersion,
 ) -> UpdateOrder {
     let hook = &manifest.hook;
     let timeouts = &hook.timeout_secs;
+    let previous_hook = previous.as_ref().and_then(|(version, staged)| {
+        crate::target::previous_hook(staged.dir(), &order.service, version, own)
+    });
     let (previous_version, previous) = previous.map(|(v, s)| (v.to_string(), s)).unzip();
     UpdateOrder {
         service: order.service.to_string(),
         target_version: order.version.to_string(),
         previous_version,
         artifact_digest: order.digest.to_string(),
-        staged: dir.staged().clone(),
+        staged: dir.clone(),
         previous,
-        // The program only: the leading arguments of `command` have no field in the step
-        // launcher's call yet, which carries the step's own arguments alone.
         hook_binary: hook.command.first().map(PathBuf::from).unwrap_or_default(),
+        hook_args: hook.command.iter().skip(1).cloned().collect(),
+        previous_hook,
         bounds: Bounds {
             // `prepare = 0` is the unbounded `prepare` of the manifest.
             prepare_secs: timeouts.prepare.map_or(0, NonZeroU64::get),
@@ -346,6 +442,10 @@ fn update_order(
         declared_params,
         min_updater_protocol: None,
         order_try: Some(order.order_try.get()),
+        // A version whose manifest names no command (a repository package without one) runs the
+        // built-in steps ([`crate::builtin`]).
+        builtin_steps: selfupdate::builtin_steps(&order.service, manifest.min_hostkeeper)
+            | hook.command.is_empty(),
     }
 }
 

@@ -1,0 +1,12 @@
+# mdm-cert.timer: runs mdm-cert-renew.service once a day. A unit of the mdm package.
+[Unit]
+Description=mdm TLS certificate renewal, once a day
+
+[Timer]
+OnCalendar=*-*-* 04:23:00
+Unit=mdm-cert-renew.service
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

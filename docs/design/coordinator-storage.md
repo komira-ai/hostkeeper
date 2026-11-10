@@ -6,13 +6,15 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` and `0002`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0008`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
-`0003`, section 3.2), and C5, the compose deployment with its backups, restore and drill (sections 9 and
+`0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
+[packages.md](packages.md) section 3.6), the MDM gate's device records (migration `0005`, the table `mdm_devices`,
+sections 2 and 3.6: `crates/hostkeeper-coordinator/src/store/postgres/devices.rs`), what each host's daemon last said it runs (migration `0006`, the table `enrollment_host_running`, section 3.6), the registry of package repositories (migration `0007`, section 3.2, from [packages-repositories.md](packages-repositories.md) section 3), and C5, the compose deployment with its backups, restore and drill (sections 9 and
 10: `docs/deploy/coordinator/`, and the `xtask db-backup` verb in `crates/xtask/src/db_backup.rs`). Every other
 statement about new code is **Designed**, and section 13 lists the build items, C1 to C11, one pull request each. The tags are those of hostkeeper-design.md: **Built** names code on `main` with a path, **Designed** means
-nothing implements it yet.
+nothing implements it yet. The placement tables (`assignments`, the role scope of `min_versions`) and the per-service keying of `desired` and the plan's position are superseded by [hostgroups.md](hostgroups.md) section 8 (migration `0008`, whose tables are built; nothing reads them yet).
 
 Ruling: the coordinator runs as one container and Postgres 16 as a second, on one machine for now, later on separate
 small Linux servers. The coordinator's durable state moves from its files into that database. The file lock goes, and a
@@ -69,17 +71,19 @@ storage trait (section 4.1).
 | The platform of each inventory record (`linux-x86_64`, `linux-arm64`) | `platforms` of `<ops-file>.halts`, by host id | column `inventory.platform` |
 | The audit log | `<ops-file>.audit` and its sealed segments; the ring of 64 in the ops file | table `audit`; the ring is the newest 64 rows |
 | Enrollment requests, issued certificates, hosts, deny rows, Mac nonces, the serial counter | `--enrollment-dir/*.pb` | the tables of section 3.6 |
+| The MDM gate's device records | `--enrollment-dir/mdm-devices/<enrollment id>.pb` | table `mdm_devices` (section 3.6) |
 | The single-writer lock | `flock` on `<state-file>.lock`; the enrollment store's own `flock` on `<enrollment-dir>/lock` | an advisory lock on one session, and the row `lease` (section 5); the enrollment store keeps its in-process mutex |
 | Staged halts file, restore marker | `<ops-file>.halts.next`, `<state-file>.restore-unfinished` | gone: a transaction commits or does not |
 | The unfinished-halt marker | `<ops-file>.halts.unfinished` | a file still, named by `--halt-marker-file` (section 4.3) |
 | Rollout file, tokens, OIDC allow-list, TLS files, CA key and certificate, server certificate, Mac allowlist, MDM pkg allowlist, UI | files | files, unchanged |
 | Fleet, orders, bake, deferrals, tries, poll nonces, the enrollment store's live-machine map | memory | memory, unchanged |
 
-The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8, built before this store) are a table of the same
-database, `mdm_devices`, added by M8's migration (the next free number when it lands, after C3). Until then they are a
-file per device, `<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, behind the gate's `DeviceStore`; the table is a
-second `DeviceStore`, and the import reads the files into it once the table lands; until then the import refuses an
-enrollment store that holds them.
+The MDM gate's device records (hostkeeper-mdm.md section 6.1, task M8) are kept where the coordinator keeps its other
+state, so the gate runs on either store. On the file store they are a file per device,
+`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`; on the database they are the table `mdm_devices` of migration
+`0005` (**Built**). Both are the gate's `DeviceStore`, and both pass the gate's one case list
+(`crates/hostkeeper-mdm-gate/src/conformance.rs`). The import reads the files into the table and the export writes
+them back (section 11).
 
 ## 3. The schema
 
@@ -126,12 +130,21 @@ desired(
 desired_digests(                         -- the Registry: every version CI set, at most 4096 a service
   service text, version text, release jsonb NOT NULL,   -- a digest string or an IndexRecord
   PRIMARY KEY (service, version))
+
+releases(                                -- migration 0004: the release a version was set with targets
+  service text, version text,
+  targets jsonb NOT NULL,                -- per platform, its TargetList as proto3 JSON
+  release_index_digest text,             -- the index set with the targets; NULL for none
+  PRIMARY KEY (service, version))
 ```
 
 A service's row and its registry rows change in one transaction, so they are never apart (today they are one file,
 `desired.rs`). The registry's cap and its eviction (keep the desired version, `last_good` and the bad versions) stay in
-Rust (`registry.rs`). `--legacy-service` keeps its meaning for the JSON routes; the single-state file form it selects is
-a file encoding and has no table.
+Rust (`registry.rs`). A version set with targets is written as one set with neither a digest nor an index, and its
+release in `releases`, in the same transaction; the releases of a service keep the registry's cap and eviction rule
+(`releases.rs`), and are what the file store keeps in `<state-file>.releases`. `0004` is `may-run`: an older release
+never reads the table. So is `0007`, the repository registry's (`repositories.rs`). `--legacy-service` keeps its
+meaning for the JSON routes; the single-state file form it selects is a file encoding and has no table.
 
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
 `SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`). The file
@@ -326,6 +339,36 @@ certificate, a host, a deny row and a nonce are never deleted, as today. The rul
 a machine id or MAC already bound, one certificate per request and round, a host id another key holds) stay in the
 enrollment crate's code, under its store lock, as today.
 
+```sql
+mdm_devices(enrollment_id text PRIMARY KEY,  -- 1 to 64 ASCII letters, digits and '-', NanoHUB's id
+  record bytea NOT NULL)                     -- the file's bytes: schema, record, the record's SHA-256
+```
+
+**Built** (migration `0005`, `may-run`: an older release never reads the table). A row holds the record as the
+gate's file holds it, the protobuf message the gate's own writer makes, and a load reads it with the gate's own
+reader, unlike the typed columns of the other tables (section 14). The record is the gate's: its fields are added
+by the gate's own additive rule (fields 18, 19 and 20 were added to schema 1 so the release before reads them),
+and the gate's reader already refuses a record that is not whole or is of a newer schema and skips a field it does
+not know, so the row is exactly as strict as the file, and a record moves between a file and a row byte for byte.
+As columns, every field the gate adds would be a migration of this store, and a second reader of the same record
+that could disagree with the gate's. A record of another enrollment id than its key is refused, as a file of
+another name is. A save is one transaction on the writing session, fenced as every commit is
+(`crates/hostkeeper-coordinator/src/store/postgres/devices.rs`); a save that fails, or whose outcome is not known,
+is an error, and the gate does not take the record.
+
+What a host's daemon last said it runs (packages-native.md section 10.6) is the field `running` of the host's file
+(`hosts/<host id>.pb`, field 10 of the enrollment store's `Host`). On the database it is not a column of
+`enrollment_hosts`, which would make the migration `refuse` and stop a rollback of the coordinator:
+
+```sql
+enrollment_host_running(host_id text PRIMARY KEY,  -- the host's row in enrollment_hosts
+  running bytea NOT NULL)                          -- the encoded message hostkeeper.enrollment.store.v1.Running
+```
+
+**Built** (migration `0006`, `may-run`: an older release never reads the table nor touches it). A read of a host
+joins the two tables; a write of a host upserts the row, or deletes it for a host with no record (an approval), in one
+transaction. A row that does not decode is `Corrupt` at the start and for an export; `export` writes it into the file.
+
 ### 3.7 Bookkeeping
 
 ```sql
@@ -421,7 +464,7 @@ Each of these is one transaction, where today it is several file writes:
 These stay ordered sequences of transactions, because each partial state they can leave is already the safe side and is
 finished by the next call, as today:
 
-- **`set_desired`:** the operator's audit row, the desired state, the end of a standing force, the lift of an updater's
+- **`set_desired`:** the operator's audit row (and CI's, for a set with targets), the desired state and its release, the end of a standing force, the lift of an updater's
   halt. A failed lift leaves the service halted.
 - **`Hosts.Retire`:** the deny row, then the assignments and the `host_retire` row, then the retire. A failed middle
   step leaves the host refused, and a repeat finishes it.
@@ -493,7 +536,7 @@ that lowers it needs storage first. They are kept, with storage now the database
   today. For an operations change, a desired state, a force and a verdict acknowledgement, the audit row is in the same
   transaction as the change, so `audit_unavailable` (which keeps its proto value and its meaning) is never returned by
   the Postgres store: there is no case where the change is written and its line is not. `set_desired` writes its audit
-  row first, as today, so it cannot leave a change without its line. An enrollment change's audit row is the second
+  row first, as today (an operator's, and CI's with targets), so it cannot leave a change without its line. An enrollment change's audit row is the second
   transaction (section 4.2): when it fails, the change stands, the failure is logged, and `audit_to` writes the row at
   the next start, as today; an approval is never refused `audit_unavailable`. The runbook rows that speak of the audit
   file's disk (`enrollment.md`'s `audit_unavailable` row and its "free the disk of the audit file";
@@ -517,6 +560,9 @@ that lowers it needs storage first. They are kept, with storage now the database
   coordinator's own.
 - **Every write on that session.** A transaction can commit only on the session that holds the lock. That is the fence:
   a coordinator that lost its session cannot commit anything, because the lock went with the session.
+- **Letting go.** A coordinator that ends (its store stopped or dropped) runs `pg_advisory_unlock_all` on the writing
+  session before it closes it, so the lock is free when the store is gone and a successor takes it at once. Closing the
+  session alone returns before the server has ended it and freed the lock.
 - **Losing the session.** When a commit or a check finds the session gone (the server restarted, the network dropped,
   the server ended it), the coordinator:
   1. orders nothing from then on, as in its quiet start, and its status says it is quiet; it refuses every storage-first
@@ -604,12 +650,12 @@ daemon-config key of option (a) would be additions to public interfaces, flagged
 - **Flags beside it.** `--database-dsn-file` refuses `--state-file`, `--ops-file`, `--enrollment-dir`,
   `--audit-max-bytes` and `--audit-retained-segments`, naming the flag. It requires `--halt-marker-file`. Enrollment is
   on when `--ca-key-file` is given, which keeps requiring `--server-cert-file` and `--server-name`; the store is the
-  database's. The MDM gate's flags keep requiring `--enrollment-dir`, where the gate's device records are (section
-  2), so until M8's table lands the gate does not run on the database store. The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
+  database's. The MDM gate's flags need enrollment, `--ca-key-file` with `--enrollment-dir` or
+  `--database-dsn-file`, and with the database its device records are the table `mdm_devices` (section 2). The file store stays selectable by `--state-file` for one release after the farm moves (section 11).
 
 ## 9. Deployment: compose
 
-`docs/deploy/coordinator/compose.yaml` (build item C5, **Built**), beside the channel-sync compose file. As built,
+`docs/deploy/coordinator/compose.yaml` (build item C5, **Built**). As built,
 both images are pinned by version and digest, the `postgres` service is optional behind the compose profile
 `postgres` (a machine with a Postgres server already names that server in the connection-string file, by loopback
 or by its socket directory mounted into the coordinator), and the coordinator waits for it only when it runs
@@ -705,14 +751,16 @@ volumes:
   files, run `password.sql` again through the same `docker compose exec ... psql --file`, and restart the coordinator.
   C5's acceptance is the setup above on a fresh machine, ending in a healthy database and a coordinator that holds the
   lock.
-- **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator has none
-  of its own: its image has no shell or client to run one. It exits on a refusal and the restart policy starts it again
-  (section 5).
+- **Health.** The database has a health check and the coordinator starts only once it passes. The coordinator's image
+  has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
+  refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
+  instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
+  `starting`, `store_unreachable` and `not_writer` (two-programs.md section 2.7,
+  [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
 
-- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), like the
-  channel-sync timer beside them, the unit running the installed xtask binary's `db-backup` (which numbers each dump past the highest
+- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), the unit running the installed xtask binary's `db-backup` (which numbers each dump past the highest
   there, keeps only a dump whose command succeeded and wrote something, and only then removes the oldest): every six hours, `docker compose exec -T postgres pg_dump --format=custom --username=hostkeeper
   --dbname=hostkeeper` (over the container's own socket) into a backup directory on the host, owner-only, keeping the
   last 28 dumps (one week). The coordinator keeps running: a dump is one consistent snapshot. Copy the directory off the
@@ -745,8 +793,9 @@ written whole by `FileRecords::read_snapshot` and `Snapshot::files`
 (`crates/hostkeeper-enrollment/src/enroll/records/files.rs`); the runbook is
 [coordinator-state.md](../operations/coordinator-state.md). Where C4 decided what this section leaves
 open: the ops file's audit ring entries that its audit file holds no line of are not imported (they
-have no time), and `state_imported` is numbered past them; until M8's table lands, an enrollment
-store that holds MDM device records is refused; and a history the import found pruned is exported
+have no time), and `state_imported` is numbered past them; the MDM gate's device records
+(`<enrollment-dir>/mdm-devices/*.pb`) are read by the gate's own reader and written as rows of
+`mdm_devices`, and `export` writes them back as the same files; and a history the import found pruned is exported
 as the sealed segment `<ops-file>.audit.2`, so the file store gives back the same
 `audit_pruned_before`. An import also refuses flags that name no file, and says how many audit
 lines it could not read and so did not import; `export` runs the migrations a start runs before it
@@ -821,7 +870,7 @@ on the database and the back-out window has closed.
   request and round. Its negative cases run it against backends that are wrong in one way each (a commit that writes
   half, a load that drops order, a spend that forgets) and expect the failure of that clause, so the suite is shown to
   catch what it claims (rule T15).
-- **Postgres in CI, as jobscheduler runs it.** The existing `test` job gains a `postgres` service container pinned by
+- **Postgres in CI, as jobscheduler runs it.** The test jobs (now each `test-shard` of ci.yml) carry a `postgres` service container pinned by
   digest, with trust authentication on loopback and no password; no new job (rule B9). A GitHub service container
   takes no start command, so the trust setting is the image's own variable, `POSTGRES_HOST_AUTH_METHOD: trust`, in the
   workflow's `services:` block: a setting of a throwaway third-party container that lives for one job, as jobscheduler's
@@ -836,7 +885,7 @@ on the database and the back-out window has closed.
   `pg_terminate_backend` from a second session, a failed commit by a trigger the test installs, a refused setting by
   `ALTER DATABASE ... SET`; no test sleeps or bounds an elapsed time (rule T10).
 - **Coverage.** The Postgres store is a module of the coordinator crate, measured by the same gate at 99% of lines and
-  branches in the `test` job, which has the server. Nothing is excluded or feature-gated out of the measurement.
+  branches in the check `test`, over the test shards, each of which has the server. Nothing is excluded or feature-gated out of the measurement.
 - **Named tests**, by build item:
 
 | Test | Proves | Item |
@@ -895,6 +944,13 @@ on the database and the back-out window has closed.
 | `the_write_id_and_the_replaced_state_come_back_in_the_record` | `SetDesiredResponse.record` | C6 |
 | `an_older_release_is_refused_on_a_database_with_0003` | `0003` says `refuse` | C6 |
 | `a_service_image_not_pinned_by_digest_is_refused` | the workflow lint's new rule | C3 |
+| `the_device_store_cases_pass_on_postgres` | the gate's `DeviceStore` cases, the list the file store passes, on `mdm_devices` | M8 |
+| `the_cases_fail_against_a_store_that_breaks_each_one` | the gate's case list catches what each case claims | M8 |
+| `the_release_before_starts_on_a_database_with_0005_and_this_one_on_its` | `0005` says `may-run`, both ways | M8 |
+| `the_gate_on_the_database_keeps_its_records_in_mdm_devices` | the gate on `--database-dsn-file`, across a restart | M8 |
+| `a_device_row_the_gate_cannot_read_stops_the_start` | a row is as strict as a file | M8 |
+| `import_writes_each_device_record_file_as_a_row_of_mdm_devices` | the import of `mdm-devices/*.pb` | M8 |
+| `export_writes_the_device_records_back_as_the_files_they_were` | the back-out keeps the device records, byte for byte | M8 |
 
 ## 13. Build items, one pull request each, in this order
 
@@ -921,7 +977,7 @@ tests in its own pull request.
 | One database or one per store | One database, one schema. | The flows that cross stores (force, retire) can then commit together, and one lock covers everything. |
 | What decisions read | Memory, as today; the database is read at start, by lists and by the import. | A heartbeat costs no query, and the gate's code does not change. |
 | How a change reaches the database | The state before and after, compared in memory; only changed rows are written. | The stores' call sites and edits stay as they are; a change costs what it changes. |
-| Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today. | The tables can be queried and constrained; each JSON value keeps its reader's strictness. |
+| Typed columns or the records' encodings as blobs | Typed columns, with `jsonb` only for the values that are JSON today; the MDM gate's device records alone are their file's bytes (section 3.6). | The tables can be queried and constrained; each JSON value keeps its reader's strictness. The device record is the gate's own format, versioned by the gate's additive rule, and its reader is already as strict as a row must be. |
 | Generations and write ids | Columns added by C6 with the API that honours them; not in `0001`. | They are what the operator API already describes; adding them before anything maintains them would store numbers that mean nothing. |
 | The audit's numbers | Assigned by the coordinator under its writers' lock, not by a sequence. | One writer; no gaps from rolled-back transactions; the import keeps the file numbers. |
 | Audit retention | Keep every row; the rotation flags stay with the file store. | The history is small in rows, and keeping it removes the "pruned before" cases. |

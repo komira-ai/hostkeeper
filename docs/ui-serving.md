@@ -48,6 +48,19 @@ it again.
   only while the plan waits for a manual advance), `Rollouts.Pause` (while it is not paused) and
   `Rollouts.Resume` (while it is paused), each with the reason typed in the section and a
   confirmation first.
+- **Release**: type a service and a version to see the release it was set with, as
+  `Releases.GetRelease` answers it: the digest of the release index, and for each platform its
+  entries in the order set (installer, digest, size, locations, attestation digest, package and
+  oldest daemon). An installer name is shown as it is, whatever it is. Below them, each host of
+  the service with the entry it is picked by the coordinator's rule
+  ([packages design](design/packages.md), section 3.3), worked out from `Hosts.List`: the entry of
+  the installer it runs the service with, else the first entry whose installer its daemon lists;
+  or why none (`no_target`, `no_build_for_host`, `installer_dropped`, or `unheard` while the
+  coordinator has read no installer of a daemon that announced `target-v1`). A host whose platform
+  `Hosts.List` does not name (one whose only word of the service is that it is a member) is
+  `unknown: platform not reported`: the coordinator, which knows it, may pick it an entry. Counts of each pick
+  cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
+  version never set with targets) is shown as the API says it.
 - **Host**: the services assigned to that host, how each is assigned (to the host or through its
   role), the installed version against the desired one, and the minimum version.
 - Each action is one API call, and the Audit page shows it by the token's name. A refused call
@@ -60,7 +73,9 @@ it again.
 - `/ui/` is the directory's `index.html`, and a path ending in `/` is the `index.html` of that
   directory.
 - Only files ending in `.html`, `.css`, `.js`, `.json`, `.svg`, `.png` or `.ico`, of at most
-  4 MiB, are served; anything else is `404`. A path that leaves the directory (`..`, an absolute
+  4 MiB, are served; anything else is `404`. So `ui/gen/client.d.ts`, the TypeScript declarations
+  of the generated client `ui/gen/client.js`, is in the image but not served: the app does not
+  load it. A path that leaves the directory (`..`, an absolute
   path, their percent-encoded or backslash forms, or a symbolic link to a file outside) is `404`,
   and the file outside is never opened. Hidden files (a name starting with `.`) are `404`.
 - Each file is read from disk on each request; nothing is cached in memory.

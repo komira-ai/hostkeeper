@@ -22,6 +22,7 @@ use hostkeeper_enrollment::enroll::records::{
 use hostkeeper_enrollment::enroll::{FIRST_SERIAL, MacNonceHash, StoreError};
 use hostkeeper_enrollment::names::{HostId, KeyHash};
 use postgres::Row;
+use prost::Message as _;
 
 use super::rows::{Stmt, Val};
 use super::session::Session;
@@ -33,11 +34,21 @@ const REQUEST_COLUMNS: &str = "request_id, state, expired_unix, expired_after_se
     round, serial, renewal_of, image, csr_der, spki_der, mac_nonce_presented, machine_id, \
     dmi_serial, dmi_product_uuid, addresses, mac_serial, mac_platform_uuid, bmc_mac, \
     approved_host_id, approved_role, approved_services, approved_replace, approver, \
-    approved_unix, approved_reason, approved_mac_nonce";
+    approved_unix, approved_reason, approved_mac_nonce, approved_host_group";
 
-/// The columns of `enrollment_hosts`.
+/// The columns of `enrollment_hosts`, in the order of the table: every one of them, as a write
+/// sets them all (`ROW(EXCLUDED.*)`); migration `0008` added the last three.
 const HOST_COLUMNS: &str = "host_id, key_hash, machine_id, role, services, duplicate, first_heartbeat_unix, \
-    first_serving_unix";
+    first_serving_unix, host_group, moving_from, facts_generation";
+
+/// What a read of a host takes: the columns of `enrollment_hosts` and the running record
+/// (`enrollment_host_running`, migration `0006`) of the same host, which a host without one has
+/// `NULL` for ([`host_of`] reads the columns of [`HOST_READ`]).
+const HOST_FROM: &str = "enrollment_hosts LEFT JOIN enrollment_host_running USING (host_id)";
+
+/// The columns [`HOST_FROM`] gives, in the order [`host_of`] reads them.
+const HOST_READ: &str = "host_id, key_hash, machine_id, role, services, duplicate, \
+    first_heartbeat_unix, first_serving_unix, running, host_group, moving_from, facts_generation";
 
 /// The columns of `enrollment_issued`.
 const ISSUED_COLUMNS: &str = "request_id, round, serial, host_id, not_after, certificate_der";
@@ -113,6 +124,16 @@ fn state_of(state: i32, table: &str) -> Result<i16, StoreError> {
     })
 }
 
+/// An empty text as `NULL`, the way a column of a name added later keeps "none": a row written
+/// before it has `NULL` there too.
+fn empty_or_null(text: &str) -> Val {
+    if text.is_empty() {
+        Val::Null
+    } else {
+        Val::Text(text.to_owned())
+    }
+}
+
 /// The statement that writes `record` over the record of its key.
 fn upsert(record: &Record) -> Result<Stmt, StoreError> {
     let text = |s: &str| Val::Text(s.to_owned());
@@ -125,7 +146,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                 format!(
                     "INSERT INTO enrollment_requests ({REQUEST_COLUMNS}) VALUES ($1, $2, $3, $4, \
                      $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, \
-                     $21, $22, $23, $24, $25, $26, $27) ON CONFLICT (request_id) DO UPDATE SET \
+                     $21, $22, $23, $24, $25, $26, $27, $28) ON CONFLICT (request_id) DO UPDATE SET \
                      ({REQUEST_COLUMNS}) = ROW(EXCLUDED.*)"
                 ),
                 vec![
@@ -159,6 +180,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                     },
                     approved(&|a| text(&a.reason)),
                     approved(&|a| Val::Bytes(a.mac_nonce_sha256.clone())),
+                    approved(&|a| empty_or_null(&a.host_group)),
                 ],
             )
         }
@@ -180,7 +202,7 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
         Record::Host(h) => (
             format!(
                 "INSERT INTO enrollment_hosts ({HOST_COLUMNS}) VALUES ($1, $2, $3, $4, $5, $6, $7, \
-                 $8) ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
+                 $8, $9, $10, $11) ON CONFLICT (host_id) DO UPDATE SET ({HOST_COLUMNS}) = ROW(EXCLUDED.*)"
             ),
             vec![
                 text(&h.host_id),
@@ -195,6 +217,12 @@ fn upsert(record: &Record) -> Result<Stmt, StoreError> {
                 },
                 match h.first_serving_unix {
                     Some(at) => Val::Int(int(at, "enrollment_hosts")?),
+                    None => Val::Null,
+                },
+                empty_or_null(&h.host_group),
+                Val::text_or_null(h.moving_from.as_deref()),
+                match h.facts_generation {
+                    Some(n) => Val::Int(int(n, "enrollment_hosts")?),
                     None => Val::Null,
                 },
             ],
@@ -233,6 +261,7 @@ fn request_of(row: &Row) -> pb::Request {
     let approved = row
         .get::<_, Option<String>>(19)
         .map(|host_id| pb::Approval {
+            host_group: row.get::<_, Option<String>>(27).unwrap_or_default(),
             host_id,
             role: row.get::<_, Option<String>>(20).unwrap_or_default(),
             services: row.get::<_, Option<Vec<String>>>(21).unwrap_or_default(),
@@ -269,10 +298,27 @@ fn request_of(row: &Row) -> pb::Request {
     }
 }
 
-fn host_of(row: &Row) -> pb::Host {
-    pb::Host {
+/// The host of a row of [`HOST_FROM`], its columns in [`HOST_READ`]' order.
+///
+/// # Errors
+/// [`StoreError::Corrupt`] when the running record does not decode: a host is not read with
+/// its running record dropped, which the next heartbeat would write over without a trace.
+fn host_of(row: &Row) -> Result<pb::Host, StoreError> {
+    let host_id: String = row.get(0);
+    let running = match row.get::<_, Option<Vec<u8>>>(8) {
+        Some(bytes) => {
+            Some(
+                pb::Running::decode(bytes.as_slice()).map_err(|e| StoreError::Corrupt {
+                    path: at(&format!("enrollment_host_running/{host_id}")),
+                    reason: format!("the running record does not decode: {e}"),
+                })?,
+            )
+        }
+        None => None,
+    };
+    Ok(pb::Host {
         schema: SCHEMA,
-        host_id: row.get(0),
+        host_id,
         key_hash: row.get(1),
         machine_id: row.get(2),
         role: row.get(3),
@@ -280,7 +326,40 @@ fn host_of(row: &Row) -> pb::Host {
         duplicate: row.get(5),
         first_heartbeat_unix: row.get::<_, Option<i64>>(6).map(unsigned),
         first_serving_unix: row.get::<_, Option<i64>>(7).map(unsigned),
+        running,
+        host_group: row.get::<_, Option<String>>(9).unwrap_or_default(),
+        moving_from: row.get(10),
+        facts_generation: row.get::<_, Option<i64>>(11).map(unsigned),
+    })
+}
+
+/// The statement that writes the running record of `host` over the one it has, or removes it
+/// when the host has none, so a host written without one (an approval) holds none.
+fn running_stmt(host: &pb::Host) -> Stmt {
+    match &host.running {
+        Some(running) => Stmt {
+            sql: "INSERT INTO enrollment_host_running (host_id, running) VALUES ($1, $2) \
+                  ON CONFLICT (host_id) DO UPDATE SET running = EXCLUDED.running"
+                .to_owned(),
+            params: vec![
+                Val::Text(host.host_id.clone()),
+                Val::Bytes(running.encode_to_vec()),
+            ],
+        },
+        None => Stmt {
+            sql: "DELETE FROM enrollment_host_running WHERE host_id = $1".to_owned(),
+            params: vec![Val::Text(host.host_id.clone())],
+        },
     }
+}
+
+/// The statements that write `record`: its row, and for a host its running record.
+fn statements(record: &Record) -> Result<Vec<Stmt>, StoreError> {
+    let mut out = vec![upsert(record)?];
+    if let Record::Host(host) = record {
+        out.push(running_stmt(host));
+    }
+    Ok(out)
 }
 
 fn deny_of(row: &Row) -> pb::Deny {
@@ -325,7 +404,11 @@ fn nonce_of(row: &Row) -> pb::MacNonce {
 ///
 /// # Errors
 /// The client's error.
-pub(super) fn read_all(session: &mut Session) -> Result<Snapshot, postgres::Error> {
+///
+/// The outer error is the client's; the inner one a running record that does not decode.
+pub(super) fn read_all(
+    session: &mut Session,
+) -> Result<Result<Snapshot, StoreError>, postgres::Error> {
     let mut all = |columns: &str, table: &str, key: &str| {
         session.query(
             &format!("SELECT {columns} FROM {table} ORDER BY {key}"),
@@ -335,20 +418,21 @@ pub(super) fn read_all(session: &mut Session) -> Result<Snapshot, postgres::Erro
     let requests = all(REQUEST_COLUMNS, "enrollment_requests", "request_id")?;
     let issued = all(ISSUED_COLUMNS, "enrollment_issued", "request_id")?;
     // A host id's order is its bytes', as the files list them, whatever the database's collation.
-    let hosts = all(HOST_COLUMNS, "enrollment_hosts", "host_id COLLATE \"C\"")?;
+    let hosts = all(HOST_READ, HOST_FROM, "host_id COLLATE \"C\"")?;
     let deny = all(DENY_COLUMNS, "enrollment_deny", "host_id COLLATE \"C\"")?;
     let nonces = all(NONCE_COLUMNS, "mac_nonces", "nonce_sha256")?;
     let next: i64 = session
         .query_one("SELECT next FROM enrollment_serial", &[])?
         .get(0);
-    Ok(Snapshot {
+    let hosts: Result<Vec<pb::Host>, StoreError> = hosts.iter().map(host_of).collect();
+    Ok(hosts.map(|hosts| Snapshot {
         requests: requests.iter().map(request_of).collect(),
         issued: issued.iter().map(issued_of).collect(),
-        hosts: hosts.iter().map(host_of).collect(),
+        hosts,
         deny: deny.iter().map(deny_of).collect(),
         mac_nonces: nonces.iter().map(nonce_of).collect(),
         serial: Some(unsigned(next)).filter(|next| *next != FIRST_SERIAL),
-    })
+    }))
 }
 
 /// The statements that write every record of `snapshot` into tables that hold none, and set the
@@ -370,7 +454,7 @@ pub(super) fn writes(snapshot: &Snapshot) -> Result<Vec<Stmt>, StoreError> {
     let mut out = Vec::new();
     for record in records {
         record.key()?;
-        out.push(upsert(&record)?);
+        out.extend(statements(&record)?);
     }
     if let Some(next) = snapshot.serial {
         out.push(Stmt {
@@ -385,13 +469,10 @@ pub(super) fn writes(snapshot: &Snapshot) -> Result<Vec<Stmt>, StoreError> {
 fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
     store
         .read(|session| {
-            let hosts = session
-                .query(&format!("SELECT {HOST_COLUMNS} FROM enrollment_hosts"), &[])?
+            let hosts: Result<BTreeMap<String, pb::Host>, StoreError> = session
+                .query(&format!("SELECT {HOST_READ} FROM {HOST_FROM}"), &[])?
                 .iter()
-                .map(|row| {
-                    let host = host_of(row);
-                    (host.host_id.clone(), host)
-                })
+                .map(|row| host_of(row).map(|host| (host.host_id.clone(), host)))
                 .collect();
             let deny = session
                 .query(&format!("SELECT {DENY_COLUMNS} FROM enrollment_deny"), &[])?
@@ -401,13 +482,13 @@ fn copy_of(store: &Postgres) -> Result<Copy, StoreError> {
                     (deny.host_id.clone(), deny)
                 })
                 .collect();
-            Ok(Copy {
+            Ok(hosts.map(|hosts| Copy {
                 hosts,
                 deny,
                 stale: false,
-            })
+            }))
         })
-        .map_err(|why| failed(at("enrollment_hosts"), &why))
+        .map_err(|why| failed(at("enrollment_hosts"), &why))?
 }
 
 impl PgRecords {
@@ -444,7 +525,7 @@ impl PgRecords {
         let mut statements = Vec::with_capacity(records.len());
         for record in records {
             record.key()?;
-            statements.push(upsert(record)?);
+            statements.extend(self::statements(record)?);
         }
         let place = records
             .first()
@@ -626,6 +707,13 @@ impl Records for PgRecords {
     fn set_first_serving(&self, host: &pb::Host, at_unix: u64) -> Result<(), StoreError> {
         self.commit(&[Record::Host(pb::Host {
             first_serving_unix: Some(at_unix),
+            ..host.clone()
+        })])
+    }
+
+    fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
+        self.commit(&[Record::Host(pb::Host {
+            running: Some(running),
             ..host.clone()
         })])
     }

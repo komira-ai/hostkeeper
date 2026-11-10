@@ -1,7 +1,6 @@
 //! Test doubles of the daemon's ports, for this crate's tests and the tests of the crates that
 //! build on it (behind the feature `testing`): a clock that moves only when told to, a launcher
-//! that plays a script and can hold a step until released, a package store that builds version
-//! directories in a test's directory, a readiness notifier that counts its notices, a
+//! that plays a script and can hold a step until released, a readiness notifier that counts its notices, a
 //! connection that counts the bytes read from it, and prunes that delete nothing or record
 //! their calls. The launcher and the notifier can write what
 //! they are asked to one shared [`Log`], so that a test sees the order across both.
@@ -16,26 +15,22 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
-use std::task::{Context, Poll};
 
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::Step;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
-    PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, tree_digest,
+    PruneStep, StepCall, StepExit, StepLauncher, ToolCall, ToolExit,
 };
-use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
-use tonic::transport::server::Connected;
 
 use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
-use crate::packages::{PackageError, Packages, VersionDir};
+use crate::packages::{PackageError, Packages, Pinned};
 use crate::prune::Prune;
-use crate::verb::PackageDigest;
 use crate::watchers::Watchers;
 
 pub use signal::{Ending, Missed, Notice, Party, Signal, Spawned, Tell, spawn};
@@ -176,6 +171,8 @@ pub struct Ran {
     pub executable: PathBuf,
     /// The staged release, given to `prepare` only.
     pub artifact: Option<PathBuf>,
+    /// The arguments given before the step.
+    pub hook_args: Vec<String>,
 }
 
 /// A step held inside the launcher, or a sleep held on the clock, until the test releases it.
@@ -282,11 +279,21 @@ pub struct ScriptedLauncher {
     stop_seen: Mutex<Vec<Notice<String>>>,
     running: AtomicUsize,
     most_running: AtomicUsize,
+    tools: Mutex<Option<ToolAnswer>>,
 }
+
+/// What answers each tool run ([`StepLauncher::run_tool`]) of a [`ScriptedLauncher`].
+pub type ToolAnswer = Arc<dyn Fn(&ToolCall<'_>) -> Result<ToolExit, LaunchError> + Send + Sync>;
 
 impl ScriptedLauncher {
     pub fn new() -> Arc<ScriptedLauncher> {
         Arc::new(ScriptedLauncher::default())
+    }
+
+    /// Every later tool run is answered by `answer`; with none, a tool run is refused as by a
+    /// launcher that runs no tool.
+    pub fn answer_tools(&self, answer: ToolAnswer) {
+        *lock(&self.tools) = Some(answer);
     }
 
     /// The exit codes of the next runs of `step` for `service`.
@@ -407,6 +414,17 @@ impl ScriptedLauncher {
 }
 
 impl StepLauncher for ScriptedLauncher {
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
+        let answer = lock(&self.tools).clone();
+        match answer {
+            Some(answer) => answer(call),
+            None => Err(LaunchError::NoStart(format!(
+                "the scripted launcher runs no tool: {}",
+                call.program.display()
+            ))),
+        }
+    }
+
     fn run(&self, call: &StepCall<'_>) -> Result<StepExit, LaunchError> {
         let key = (call.service.to_owned(), call.invocation.step);
         note(&self.log, format!("run {}", call.unit));
@@ -416,6 +434,7 @@ impl StepLauncher for ScriptedLauncher {
             unit: call.unit.to_owned(),
             executable: call.executable.to_path_buf(),
             artifact: call.invocation.artifact.clone(),
+            hook_args: call.hook_args.to_vec(),
         });
         let now = self.running.fetch_add(1, Ordering::SeqCst) + 1;
         self.most_running.fetch_max(now, Ordering::SeqCst);
@@ -540,16 +559,15 @@ cleanup = 1300
     )
 }
 
-/// A package store that serves version directories a test made under the packages directory:
-/// `<packages-dir>/<service>/<version>/`, with its `manifest.toml` and a hook at `bin/hook`. It
-/// does not compare digests; a test makes a package fail with [`FakePackages::fail`].
+/// A package store that serves the artifacts a test gave it by their pin ([`Packages::pinned`]):
+/// the `.pkg` of a `macos-pkg` entry. It compares no digest beyond the one the artifact was
+/// added under; a test makes a fetch fail with [`FakePackages::fail`].
 pub struct FakePackages {
     root: PathBuf,
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
-    index_digests: Mutex<Vec<Option<String>>>,
-    swept: Mutex<Vec<String>>,
-    notify: Mutex<Vec<Notice<String>>>,
+    entries: Mutex<Vec<Option<Target>>>,
+    pinned: Mutex<BTreeMap<(String, String), Vec<u8>>>,
 }
 
 fn dir_0755(dir: &Path) {
@@ -558,111 +576,72 @@ fn dir_0755(dir: &Path) {
 }
 
 impl FakePackages {
-    /// Serves version directories under `packages_dir`.
+    /// Serves artifacts into staging files under `packages_dir`.
     pub fn new(packages_dir: &Path) -> Arc<FakePackages> {
         Arc::new(FakePackages {
             root: packages_dir.to_path_buf(),
             failures: Mutex::default(),
             asked: Mutex::default(),
-            index_digests: Mutex::default(),
-            swept: Mutex::default(),
-            notify: Mutex::default(),
+            entries: Mutex::default(),
+            pinned: Mutex::default(),
         })
     }
 
-    /// Makes the version directory of `service` at `version` with `manifest` as its manifest.
-    pub fn add(&self, service: &str, version: &str, manifest: &str) -> PathBuf {
-        let dir = self.root.join(service).join(version);
-        for made in [&self.root, &self.root.join(service), &dir, &dir.join("bin")] {
-            dir_0755(made);
-        }
-        let files = [
-            (dir.join("manifest.toml"), manifest, 0o644),
-            (dir.join("bin/hook"), "#!hook\n", 0o755),
-        ];
-        for (path, text, mode) in files {
-            fs::write(&path, text).unwrap_or_default();
-            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap_or_default();
-        }
-        dir
+    /// Makes the fetch of the artifact of `service` whose digest is `digest` fail with `error`.
+    pub fn fail(&self, service: &str, digest: &str, error: PackageError) {
+        lock(&self.failures).insert((service.to_owned(), digest.to_owned()), error);
     }
 
-    /// Writes the seal of `service` at `version` (`<version>.seal` beside it): the tree digest
-    /// of its directory as it is now, and `package_digest`.
-    pub fn seal(&self, service: &str, version: &str, package_digest: &str) {
-        let dir = self.root.join(service);
-        let tree = tree_digest(&dir.join(version)).unwrap_or_default();
-        let seal = Seal::new(&tree, package_digest).map(|seal| seal.to_json());
-        fs::write(
-            dir.join(format!("{version}.seal")),
-            seal.unwrap_or_default(),
-        )
-        .unwrap_or_default();
-    }
-
-    /// Points the link `link` (`current`, `previous`) of `service` at `version`.
-    pub fn link(&self, service: &str, link: &str, version: &str) {
-        let path = self.root.join(service).join(link);
-        fs::remove_file(&path).unwrap_or_default();
-        std::os::unix::fs::symlink(version, &path).unwrap_or_default();
-    }
-
-    /// Makes the package of `service` at `version` fail with `error`.
-    pub fn fail(&self, service: &str, version: &str, error: PackageError) {
-        lock(&self.failures).insert((service.to_owned(), version.to_owned()), error);
-    }
-
-    /// Every package asked for, as (service, version), in order.
+    /// Every artifact asked for, as (service, digest), in order.
     pub fn asked(&self) -> Vec<(String, String)> {
         lock(&self.asked).clone()
     }
 
-    /// The index digest of every package asked for, in the order of [`FakePackages::asked`]:
-    /// `None` for an order that named none.
-    pub fn index_digests(&self) -> Vec<Option<String>> {
-        lock(&self.index_digests).clone()
+    /// The entry of every artifact asked for, in the order of [`FakePackages::asked`].
+    pub fn entries(&self) -> Vec<Option<Target>> {
+        lock(&self.entries).clone()
     }
 
-    /// Every service whose orphans were asked to be removed, in order.
-    pub fn swept(&self) -> Vec<String> {
-        lock(&self.swept).clone()
-    }
-
-    /// A signal of `<service> <version>` of every package asked for from now on.
-    pub fn notified(&self) -> Signal<String> {
-        let (notice, signal) = Signal::new();
-        lock(&self.notify).push(notice);
-        signal
+    /// Serves `bytes` as the artifact of `service` whose entry's digest is `digest`
+    /// ([`Packages::pinned`]); an entry with another digest is `package_digest_mismatch`
+    /// ([`PackageError::DigestMismatch`]).
+    pub fn add_pinned(&self, service: &str, digest: &str, bytes: &[u8]) {
+        lock(&self.pinned).insert((service.to_owned(), digest.to_owned()), bytes.to_vec());
     }
 }
 
 impl Packages for FakePackages {
-    fn version_dir(
-        &self,
-        service: &ServiceName,
-        version: &Version,
-        _digest: &PackageDigest,
-        index_digest: Option<&PackageDigest>,
-    ) -> Result<VersionDir, PackageError> {
-        let key = (service.to_string(), version.to_string());
+    /// The bytes [`FakePackages::add_pinned`] gave for the entry's digest, written to a file
+    /// under the service's package directory that is removed when the answer is dropped; the
+    /// failure [`FakePackages::fail`] set for the service at the entry's digest wins. Each ask is
+    /// one of [`FakePackages::asked`], keyed by the digest, and its entry one of
+    /// [`FakePackages::entries`].
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
+        let key = (service.to_string(), entry.digest.clone());
+        lock(&self.entries).push(Some(entry.clone()));
         lock(&self.asked).push(key.clone());
-        lock(&self.index_digests).push(index_digest.map(|d| d.as_str().to_owned()));
-        for notice in lock(&self.notify).iter() {
-            notice.send(format!("{service} {version}"));
+        if let Some(failure) = lock(&self.failures).get(&key).cloned() {
+            return Err(failure);
         }
-        let failure = lock(&self.failures).get(&key).cloned();
-        let dir = self.root.join(&key.0).join(&key.1);
-        let seal = || {
-            Staged::seal(&dir)
-                .map(VersionDir::new)
-                .map_err(|e| PackageError::Other(e.to_string()))
-        };
-        failure.map_or_else(seal, Err)
+        let bytes = lock(&self.pinned)
+            .get(&key)
+            .cloned()
+            .ok_or_else(|| PackageError::DigestMismatch(format!("no artifact of {}", key.1)))?;
+        let dir = self.root.join(service.as_str());
+        dir_0755(&dir);
+        let file = PinnedFile(dir.join(format!(".fetch-pinned-{}", entry.digest)));
+        fs::write(&file.0, bytes).map_err(|e| PackageError::Other(e.to_string()))?;
+        let path = file.0.clone();
+        Ok(Pinned::new(&path, Box::new(file)))
     }
+}
 
-    fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
-        lock(&self.swept).push(service.to_string());
-        Ok(())
+/// A file [`FakePackages::pinned`] wrote, removed when dropped.
+struct PinnedFile(PathBuf);
+
+impl Drop for PinnedFile {
+    fn drop(&mut self) {
+        let _ = fs::remove_file(&self.0);
     }
 }
 
@@ -734,64 +713,6 @@ impl ReadyNotifier for FakeNotifier {
             false => Ok(()),
         }
     }
-}
-
-/// A connection that counts the bytes read from it: a test of a server shows with it that
-/// nothing of a refused connection was read.
-#[derive(Debug)]
-pub struct Counted<IO> {
-    io: IO,
-    read: Arc<AtomicUsize>,
-}
-
-impl<IO> Counted<IO> {
-    /// `io`, and the count of the bytes read from it.
-    pub fn new(io: IO) -> (Counted<IO>, Arc<AtomicUsize>) {
-        let read = Arc::new(AtomicUsize::new(0));
-        let counted = Counted {
-            io,
-            read: Arc::clone(&read),
-        };
-        (counted, read)
-    }
-}
-
-impl<IO: AsyncRead + Unpin> AsyncRead for Counted<IO> {
-    fn poll_read(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &mut ReadBuf<'_>,
-    ) -> Poll<io::Result<()>> {
-        let before = buf.filled().len();
-        let polled = Pin::new(&mut self.io).poll_read(cx, buf);
-        let read = buf.filled().len() - before;
-        self.read.fetch_add(read, Ordering::SeqCst);
-        polled
-    }
-}
-
-impl<IO: AsyncWrite + Unpin> AsyncWrite for Counted<IO> {
-    fn poll_write(
-        mut self: Pin<&mut Self>,
-        cx: &mut Context<'_>,
-        buf: &[u8],
-    ) -> Poll<io::Result<usize>> {
-        Pin::new(&mut self.io).poll_write(cx, buf)
-    }
-
-    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_flush(cx)
-    }
-
-    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
-        Pin::new(&mut self.io).poll_shutdown(cx)
-    }
-}
-
-impl<IO> Connected for Counted<IO> {
-    type ConnectInfo = ();
-
-    fn connect_info(&self) -> Self::ConnectInfo {}
 }
 
 /// A prune that deletes nothing: the prune of the tests that do not look at pruning.
@@ -885,4 +806,27 @@ impl Prune for RecordingPrune {
             false => Ok(()),
         })
     }
+}
+
+/// The repository installer's ports of a test host whose root is `root` and whose packages
+/// directory is `packages_dir`, with the repository entries `repositories`: what is staged is
+/// given to the owner of `root`, the test's own user.
+pub fn repository_ports(
+    packages_dir: &Path,
+    root: &Path,
+    repositories: hostkeeper_install::repository::Repositories,
+) -> Arc<crate::repository::RepositoryPorts> {
+    use std::os::unix::fs::MetadataExt;
+    let owner = fs::metadata(root).map_or(hostkeeper_install::version::Owner::ROOT, |made| {
+        hostkeeper_install::version::Owner {
+            uid: made.uid(),
+            gid: made.gid(),
+        }
+    });
+    Arc::new(crate::repository::RepositoryPorts::new(
+        packages_dir,
+        root,
+        repositories,
+        owner,
+    ))
 }

@@ -18,7 +18,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{self, Heartbeat};
 use hostkeeper_wire::{HostId, Platform};
 
-use crate::converge::{Convergence, HaltNote, RoleCounts, State};
+use crate::converge::{Convergence, HaltNote, PickCounts, RoleCounts, State};
 use crate::decide::{Gate, Skip, Why};
 use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Node;
@@ -66,10 +66,15 @@ pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
         state: convergence_state(convergence.state).into(),
         roles: convergence.roles.iter().map(role_counts).collect(),
         halt: convergence.halt.as_ref().map(halt_note),
-        hosts: convergence.hosts.as_ref().map(host_counts),
+        hosts: host_counts(convergence.hosts.as_ref(), convergence.picks.as_ref()),
         coordinator_commit: convergence.commit.to_owned(),
         record: None,
         force: None,
+        installer_dropped: convergence
+            .picks
+            .as_ref()
+            .map(|picks| picks.dropped.clone())
+            .unwrap_or_default(),
     }
 }
 
@@ -91,6 +96,7 @@ fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::Ser
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
         plan: one.plan.clone(),
+        host_group: String::new(),
     }
 }
 
@@ -139,15 +145,30 @@ fn role_counts(counts: &RoleCounts) -> proto::RoleCounts {
     }
 }
 
-/// The hosts a service does not count, by why.
-fn host_counts(counts: &HostCounts) -> proto::HostCounts {
-    proto::HostCounts {
+/// The hosts a service does not count, by why, with the picks of a version set with targets;
+/// none when there are neither.
+fn host_counts(
+    counts: Option<&HostCounts>,
+    picks: Option<&PickCounts>,
+) -> Option<proto::HostCounts> {
+    if counts.is_none() && picks.is_none() {
+        return None;
+    }
+    let (counts, picks) = (
+        counts.copied().unwrap_or_default(),
+        picks.cloned().unwrap_or_default(),
+    );
+    Some(proto::HostCounts {
         missing: count(counts.missing),
         absent: count(counts.absent),
         excluded: count(counts.excluded),
         unmanaged: count(counts.unmanaged),
         deferred: count(counts.deferred),
-    }
+        picked: count(picks.picked),
+        no_target: count(picks.no_target),
+        no_build_for_host: count(picks.no_build_for_host),
+        installer_dropped: count(picks.installer_dropped),
+    })
 }
 
 /// The halt a convergence names. It carries no report: the convergence keeps the host, the check
@@ -304,9 +325,9 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
 /// heard it, its agent and features, and one entry per service that heard it (each as
 /// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
 /// last heartbeat is `unix_now` less the seconds the host has been silent. What the last
-/// heartbeat said of the host's clock and certificate is in the host's own fields
-/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`), not in the heartbeat put
-/// back together.
+/// heartbeat said of the host's clock, certificate and trusted root is in the host's own fields
+/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`, `trusted_root_age_secs`,
+/// `trusted_root_reason`), not in the heartbeat put back together.
 pub(crate) fn host(
     id: &HostId,
     node: &Node,
@@ -368,6 +389,8 @@ pub(crate) fn host(
         cert_not_after_unix: node.cert_not_after_unix,
         last_renew_error: node.last_renew_error.clone(),
         clock_skew_beats: node.skewed_beats,
+        trusted_root_age_secs: node.trusted_root.age_secs,
+        trusted_root_reason: node.trusted_root.reason.into(),
         role: node.role.clone(),
         node_id,
         // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.
@@ -420,12 +443,16 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
         }),
         pinned: None,
         record_try: beat.record_try,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        installer: None,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        drift: None,
     }
 }
 
 /// A verdict of the host. The proto's start time, `forced` flag, detail and log lines have no
 /// source on the heartbeat wire.
-fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
+pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
     agent::UpdateResult {
         target: result.target.as_str().to_owned(),
         outcome: outcome(result.outcome).into(),
@@ -532,6 +559,9 @@ fn skip_of(skip: Skip) -> proto::GateReason {
         Skip::FailedHere => proto::GateReason::FailedHere,
         Skip::Deferred => proto::GateReason::Deferred,
         Skip::NoPackageForPlatform => proto::GateReason::NoPackageForPlatform,
+        Skip::NoTarget => proto::GateReason::NoTarget,
+        Skip::NoBuildForHost => proto::GateReason::NoBuildForHost,
+        Skip::InstallerDropped => proto::GateReason::InstallerDropped,
         Skip::Unsupported | Skip::NoDigest => proto::GateReason::Unspecified,
     }
 }

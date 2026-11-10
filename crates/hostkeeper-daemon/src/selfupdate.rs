@@ -1,9 +1,11 @@
-//! The update of hostkeeper itself (design section 6.6): an `update` or an `install` of the
-//! service `hostkeeper` followed by the self-update follow-on, recorded `Succeeded` only once the
-//! new binary has run.
+//! The update of hostkeeper itself (design section 6.6): an `update`, an `install` or a
+//! `force_rollback` of the service `hostkeeper` followed by the self-update follow-on, recorded
+//! `Succeeded` only once the new binary has run.
 //!
-//! [`run`] is the executor's path for an `update` and an `install` of the service `hostkeeper`;
-//! every other service's orders are untouched. An `install` is what a daemon the deb or the pkg
+//! [`run`] is the executor's path for an `update`, an `install` and a `force_rollback` of the
+//! service `hostkeeper` (a `force_rollback` is a hand-over to the version it names, lower ones
+//! included: docs/design/packages-native.md, sections 10.4 and 10.6); every other service's
+//! orders are untouched. An `install` is what a daemon the deb or the pkg
 //! installed is ordered first: it runs, but no package of it is installed, so an `update` of it
 //! would be refused `not_installed`. The install places the package and, when the release is not
 //! the binary that runs, swaps the binary as an update does; when it is, the install is
@@ -17,33 +19,56 @@
 //! 2. an update that waits for the restart answers a resend of its own order `Deferred`
 //!    `awaiting_restart`, and any other order `busy`;
 //! 3. the try rules, as for every `update` and `install`;
+//!    While the record waits for the `activate` of hostkeeper's own package (below), an order for
+//!    that version runs the `activate` again and is answered with how it went, and any other is
+//!    `busy`;
 //! 4. the step record of every other service: while any holds an unfinished update (`pending`,
 //!    `running`, or `done` between two steps), or cannot be read, the order is `busy`, and
-//!    nothing is written;
+//!    nothing is written; then a release older than this daemon below an installer of what the
+//!    host holds is `Failed` before the commit, of class release (`rollback_below_installer`,
+//!    [`crate::rollback_floor`]), with nothing staged;
 //! 5. the checks of every `update` (or `install`: none of hostkeeper is installed yet), and the
 //!    package;
 //! 6. the step lock, waited for (a running step of another service is never interrupted), and
 //!    the records of step 4 read again under it;
-//! 7. the protocol of the new binary ([`ProtocolProbe`]), asked of the file of the verified release
-//!    before anything is staged, unless the release is the version that runs, whose binary is never
-//!    staged and so is not asked (an install of the version a pkg or a hand upgrade put on the host
-//!    goes on to its steps without running the probe): a protocol this daemon cannot fall back from
-//!    is `Failed` before the commit, of class release (`protocol_unsupported`), and a probe that
-//!    cannot be read is `Failed` before the commit, of class environment (`protocol_unreadable`); a
-//!    release without the binary is `Failed` before the commit, of class release
-//!    (`self_binary_missing`), and a release that changed since it was verified, or cannot be read
-//!    now, is refused (`release_unreadable`). Nothing is written for any of them;
+//! 7. the release judged ([`judge`]) before anything is staged: a release older than this
+//!    daemon's [`OLDEST_READER`] (or whose version is not `major.minor.patch`) is `Failed` before
+//!    the commit, of class release (`protocol_unsupported`), since it could not read this
+//!    daemon's files, and any other is accepted, as is the version that runs, whose binary is
+//!    never staged (an install of the version a pkg or a hand upgrade put on the host goes on to
+//!    its steps). Nothing is asked of the new binary: a daemon older than the release's floor,
+//!    its manifest's `min_hostkeeper`, never gets here, since the manifest's loader deferred the
+//!    order `daemon_too_old` at step 5. A release without the binary is `Failed` before the
+//!    commit, of class release (`self_binary_missing`), and a release that changed since it was
+//!    verified, or cannot be read now, is refused (`release_unreadable`). Nothing is written for
+//!    any of them;
 //! 8. the hook's steps through the step runner, which holds the success back
-//!    ([`hostkeeper_steps::StepRunner::with_held_success`]);
-//! 9. the follow-on ([`hostkeeper_steps::follow_on`]): the new binary staged in the binary
-//!    directory ([`binary_dir`]), the record written as waiting for the restart, `current`
-//!    switched. The reply is `Deferred` `awaiting_restart`, never `Succeeded`, and the daemon is
-//!    asked to exit with status 0 ([`Restart`]). Its unit (`packaging/linux/hostkeeper.service`)
-//!    starts `current` of the binary directory and has `Restart=always`, so that clean exit
-//!    starts the new binary; the drop-in and fallback unit the daemon writes at its start
-//!    (`crate::selfunits`) put the previous one back if the new one fails its start limit. The
-//!    step lock is released only after the switch, so a step of another service that waits for
-//!    it starts after the swap.
+//!    ([`hostkeeper_steps::StepRunner::with_held_success`]). For a release whose floor is above
+//!    [`LEGACY_FLOOR`] the steps are built in ([`builtin_steps`]): each succeeds at once and no
+//!    command of the release runs, and the record is the one a hook that does nothing gives.
+//!    Below it the command runs;
+//! 9. the follow-on ([`hostkeeper_steps::follow_on`]), the hand-over (docs/design/two-programs.md,
+//!    4.3): the new binary ([`release_binary`]: `tree/usr/bin/hostkeeper` of a `.deb`,
+//!    `tree/usr/local/bin/hostkeeper` of a `.pkg`)
+//!    staged in the binary directory ([`binary_dir`]), the link `next`
+//!    pointed at it, the record written as waiting for the restart into it with a start count of
+//!    0. `current` is not moved. The reply is `Deferred` `awaiting_restart`, never `Succeeded`,
+//!    and the daemon is asked to exit with status 0 ([`Restart`]). Its unit
+//!    (`packaging/linux/units/hostkeeper.service`) starts `current` of the binary directory and
+//!    has `Restart=always`, so that clean exit starts the old binary again, which execs `next`
+//!    while its start count lasts ([`crate::handover`]); three starts of the new binary that do
+//!    not settle the update make the old one settle it `Failed` and run. The step lock is
+//!    released only after the hand-over, so a step of another service that waits for it starts
+//!    after it.
+//!
+//! **Through a native installer** (docs/design/packages-native.md, section 10.4): an update to a
+//! native version, or on a host where hostkeeper runs from its native package, switches nothing
+//! before the new binary has run ([`crate::own_package`]): the step runner's switch and the
+//! built-in steps do nothing for it. The new binary, once it confirmed itself at its start,
+//! installs its own package ([`Daemon::activate_own_package`]): its confirmation leaves the
+//! `activate` pending in the record ([`hostkeeper_steps::settle_activating`]), and the verdict is
+//! written, and reported, only after the `activate`. An update or an install of the version that
+//! runs, which needs no restart, runs the `activate` at once, under the order.
 //!
 //! At start, after the lock of the state directory and before the boot pass,
 //! [`Daemon::settle_self_update`] settles an update that waits for the restart
@@ -52,66 +77,61 @@
 //! `daemon_too_old`); any other binary records it `Failed` and its version bad. The binary that
 //! ran the order exited before its `Deferred` reached a heartbeat, and the coordinator ends the
 //! order once the host runs its target, so it never orders it again for a resend to be
-//! answered: the wait keeps the order's id, the settlement (by this start, or by the fallback
-//! verb before the previous binary starts) keeps it in the finished record, and every start
-//! of a daemon lists the record's verdict under that id and the record's try for the heartbeat
-//! to send until the coordinator acknowledges it (`crate::link_adapters::recorded`). A wait
-//! written by a daemon from before the id was kept names no order, and its verdict is reported
-//! by no binary.
+//! answered: the wait keeps the order's id, the settlement (by this start) keeps
+//! it in the finished record, and every start of a daemon lists the record's verdict under that
+//! id and the record's try for the heartbeat to send until the coordinator acknowledges it
+//! (`crate::link_adapters::recorded`). A wait written by a daemon from before the id was kept
+//! names no order, and its verdict is reported by no binary.
 //!
-//! The protocol rule: a new binary of protocol `P` is accepted when
-//! `SELF_UPDATE_PROTOCOL <= P <= SELF_UPDATE_PROTOCOL + 1`. "Can fall back from" means that the
-//! previous binary reads every file the new one writes, which holds when a release of protocol
-//! `N + 1` adds readers and writes only formats protocol `N` reads, and only the release after it
-//! writes the formats of `N + 1`.
+//! "Can fall back from" means that the binary that runs reads every file the new one writes. The
+//! floor carries that rule: a release that writes a new format sets [`OLDEST_READER`] to the
+//! release that first read it, and the release builder writes that as the floor of hostkeeper's
+//! package.
 
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_placed::PlacedRecord;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_release::Installer;
 use hostkeeper_steps::record::{
-    AwaitingRestart, Loaded, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
+    AwaitingRestart, Loaded, PendingActivate, REASON_SELF_UPDATE_FALLBACK, RecordError, State,
 };
-use hostkeeper_steps::selfupdate::settle_with;
+use hostkeeper_steps::selfupdate::settle_activating;
 use hostkeeper_steps::{
-    ArtifactError, BadVersions, FollowOn, LaunchError, Layout, ProbeCall, ProbeExit,
-    SelfUpdateError, Settled, StepLauncher, StepRunner, follow_on,
+    ArtifactError, BadVersions, FollowOn, Layout, OLDEST_READER, SelfUpdateError, Settled,
+    StepRunner, follow_on,
 };
 use tokio::sync::Notify;
 
 use crate::executor::{Ctx, Daemon, Reply};
 use crate::files;
 use crate::installed;
-use crate::locks::ServiceGuard;
+use crate::locks::{Holder, ServiceGuard};
+use crate::own_package::{self, DEFER_SECS, OwnActivate, REASON_ACTIVATE_PENDING};
 use crate::refusal::Refusal;
+use crate::rollback_floor::{self, REASON_ROLLBACK_BELOW_INSTALLER};
 use crate::verb::{Hooked, HookedVerb};
 use crate::verbs::force::SELF_SERVICE;
 use crate::verbs::update;
 
-/// The self-update protocol of this binary: what the verb `self-update-protocol` prints, and
-/// what a new binary's protocol is compared with ([`accepted`]). It is apart from the step
-/// runner's `UPDATER_PROTOCOL`, which an order's `min_updater_protocol` is compared with.
-pub const SELF_UPDATE_PROTOCOL: u32 = 1;
-/// The verb a new binary is asked for its protocol with.
-pub const PROTOCOL_VERB: &str = "self-update-protocol";
-/// The transient unit the probe runs in.
-pub const PROBE_UNIT: &str = "hostkeeper-self-update-protocol";
-/// The bound of the probe, in seconds (`RuntimeMaxSec=`).
-pub const PROBE_TIMEOUT_SECS: u64 = 10;
-/// The most bytes of the probe's output that are read.
-pub const PROBE_OUTPUT_BYTES: usize = 64;
-/// The hostkeeper binary in a release of the service `hostkeeper`.
-pub const RELEASE_BINARY: &str = "bin/hostkeeper";
+/// The hostkeeper binary in a version of the service `hostkeeper` staged from its `.deb`
+/// (`apt`): the package's `/usr/bin/hostkeeper` in the version's tree
+/// (docs/design/packages-native.md, section 10.4, step 1).
+pub const APT_RELEASE_BINARY: &str = "tree/usr/bin/hostkeeper";
+/// The hostkeeper binary in a version of the service `hostkeeper` staged from its `.pkg`
+/// (`macos-pkg`): the package's `/usr/local/bin/hostkeeper` in the version's tree.
+pub const PKG_RELEASE_BINARY: &str = "tree/usr/local/bin/hostkeeper";
 /// The binary directory's name in the state directory of the service `hostkeeper`.
 pub const BINARY_DIR: &str = "bin";
 /// The reason of the `Deferred` of an update whose new binary has not run yet.
 pub const REASON_AWAITING_RESTART: &str = "awaiting_restart";
-/// The reason of the `Failed` of a new binary whose protocol could not be read.
-pub const REASON_PROTOCOL_UNREADABLE: &str = "protocol_unreadable";
-/// The reason of the `Failed` of a new binary whose protocol this daemon cannot fall back from.
+/// The reason of the `Failed` of a release this daemon cannot fall back to, or that could not
+/// read this daemon's files: one older than [`OLDEST_READER`].
 pub const REASON_PROTOCOL_UNSUPPORTED: &str = "protocol_unsupported";
 /// The reason of the `Failed` of a release that has no hostkeeper binary to stage.
 pub const REASON_SELF_BINARY_MISSING: &str = "self_binary_missing";
@@ -119,90 +139,68 @@ pub const REASON_SELF_BINARY_MISSING: &str = "self_binary_missing";
 /// deferral a confirmed self-update could not clear.
 pub const ALERT_SELF_UPDATE: &str = "self_update_unsettled";
 
-/// What the verb `self-update-protocol` prints: [`SELF_UPDATE_PROTOCOL`] and a newline.
-pub fn protocol_line() -> String {
-    format!("{SELF_UPDATE_PROTOCOL}\n")
+/// The floor every release of hostkeeper before stage 2 of docs/design/two-programs.md declares
+/// (`min_hostkeeper` of its package): a release whose floor is above this runs built-in steps
+/// ([`builtin_steps`]); one whose floor is this or lower runs its hook's command.
+pub const LEGACY_FLOOR: HostkeeperVersion = HostkeeperVersion {
+    major: 0,
+    minor: 1,
+    patch: 53,
+};
+
+/// How step 7 judges a release of hostkeeper ([`judge`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Judgement {
+    /// It goes on to its steps.
+    Accepted,
+    /// It is `Failed` before the commit, of class release ([`REASON_PROTOCOL_UNSUPPORTED`]).
+    Unsupported,
 }
 
-/// Whether a new binary of protocol `protocol` is one this daemon can fall back from:
-/// [`SELF_UPDATE_PROTOCOL`] or the one after it.
-pub fn accepted(protocol: u32) -> bool {
-    (SELF_UPDATE_PROTOCOL..=SELF_UPDATE_PROTOCOL.saturating_add(1)).contains(&protocol)
+/// How a daemon of version `running` judges the release `version` of hostkeeper (step 7 of the
+/// module): the version that runs is [`Accepted`] with no check; a release older than
+/// [`OLDEST_READER`], or whose version is not `major.minor.patch`, is [`Unsupported`] (the
+/// backward rule, since it could not read this daemon's files), and any other is [`Accepted`].
+/// The forward rule, a floor above `running`, is the manifest loader's, before this.
+///
+/// [`Accepted`]: Judgement::Accepted
+/// [`Unsupported`]: Judgement::Unsupported
+pub fn judge(running: HostkeeperVersion, version: &str) -> Judgement {
+    match HostkeeperVersion::parse(version) {
+        Ok(target) if (target == running) | (target >= OLDEST_READER) => Judgement::Accepted,
+        _ => Judgement::Unsupported,
+    }
+}
+
+/// The hostkeeper binary of a version of the service `hostkeeper` staged as `staged` (its
+/// `target.json`), relative to the version's directory: [`PKG_RELEASE_BINARY`] for a
+/// `macos-pkg` version, and [`APT_RELEASE_BINARY`] for any other, which only `apt` stages.
+pub fn release_binary(staged: &Target) -> &'static str {
+    match staged.installer.parse::<Installer>() {
+        Ok(Installer::MacosPkg) => PKG_RELEASE_BINARY,
+        _ => APT_RELEASE_BINARY,
+    }
+}
+
+/// Whether the update of `service` to a release whose floor is `floor` runs built-in steps
+/// ([`hostkeeper_steps::UpdateOrder::builtin_steps`]): hostkeeper's own package whose floor is
+/// above [`LEGACY_FLOOR`], whose hook's command no daemon runs (docs/design/two-programs.md,
+/// section 4.4).
+pub fn builtin_steps(service: &ServiceName, floor: HostkeeperVersion) -> bool {
+    (service.as_str() == SELF_SERVICE) & (floor > LEGACY_FLOOR)
 }
 
 /// The binary directory of hostkeeper's own update under the state directory `state_dir`:
 /// `<state-dir>/hostkeeper/bin`, with `versions/<version>`, `current` and `previous`
-/// ([`Layout::new`]). The fallback unit's `--dir` is this directory, and its parent is the state
-/// directory of the service `hostkeeper`, where the step record and the list of bad versions are.
+/// ([`Layout::new`]). Its parent is the state directory of the service `hostkeeper`, where the
+/// step record and the list of bad versions are.
 pub fn binary_dir(state_dir: &Path) -> PathBuf {
     state_dir.join(SELF_SERVICE).join(BINARY_DIR)
 }
 
-/// Asks a binary for its self-update protocol.
-pub trait ProtocolProbe: Send + Sync {
-    /// The protocol of `binary`, a file of a verified release.
-    fn protocol(&self, binary: &Path) -> Result<u32, ProbeError>;
-}
-
-/// Why a probe gave no protocol.
-#[derive(Debug, thiserror::Error)]
-pub enum ProbeError {
-    #[error("the probe could not run: {0}")]
-    Launch(#[from] LaunchError),
-    /// It ended with another status than 0, or was killed (`None`): by its bound, or a signal.
-    #[error("the probe ended with the status {0:?}")]
-    Exit(Option<i32>),
-    /// It printed something else than one line of decimal digits.
-    #[error("the probe printed {0:?}, which is not one line of a decimal number")]
-    Output(String),
-}
-
-/// The probe of the host: `<binary> self-update-protocol`, run through the step launcher in a
-/// transient unit bounded by [`PROBE_TIMEOUT_SECS`], at most [`PROBE_OUTPUT_BYTES`] of its output
-/// read.
-pub struct LauncherProbe {
-    launcher: Arc<dyn StepLauncher>,
-}
-
-impl LauncherProbe {
-    pub fn new(launcher: Arc<dyn StepLauncher>) -> LauncherProbe {
-        LauncherProbe { launcher }
-    }
-}
-
-impl ProtocolProbe for LauncherProbe {
-    fn protocol(&self, binary: &Path) -> Result<u32, ProbeError> {
-        let exit = self.launcher.run_probe(&ProbeCall {
-            service: SELF_SERVICE,
-            executable: binary,
-            args: &[PROTOCOL_VERB],
-            unit: PROBE_UNIT,
-            timeout_secs: PROBE_TIMEOUT_SECS,
-            output_bytes: PROBE_OUTPUT_BYTES,
-        })?;
-        read_protocol(&exit)
-    }
-}
-
-/// The protocol a probe printed: it exited 0, and its whole output is one line of decimal digits,
-/// the newline at its end optional, that is a `u32`.
-pub fn read_protocol(exit: &ProbeExit) -> Result<u32, ProbeError> {
-    if exit.code != Some(0) {
-        return Err(ProbeError::Exit(exit.code));
-    }
-    let text = String::from_utf8_lossy(&exit.output);
-    let line = text.strip_suffix('\n').unwrap_or(&text);
-    let digits = !exit.truncated & !line.is_empty() & line.bytes().all(|b| b.is_ascii_digit());
-    let printed = || ProbeError::Output(text.to_string());
-    match digits {
-        true => line.parse().map_err(|_| printed()),
-        false => Err(printed()),
-    }
-}
-
 /// The daemon's request to exit with status 0 so that its unit starts the new binary: asked once
-/// the follow-on switched `current`; the admin socket's server waits for it ([`Restart::wait`]),
-/// answers what is in flight and returns.
+/// the follow-on switched `current`; [`crate::start::serve`] waits for it ([`Restart::wait`]),
+/// tells the loops to stop and returns.
 #[derive(Debug, Default)]
 pub struct Restart {
     asked: AtomicBool,
@@ -302,28 +300,35 @@ fn steps(
     if let Some(awaiting) = awaiting {
         return waiting_for(awaiting, version);
     }
+    let activating = last.as_ref().and_then(|rec| rec.progress.activate.as_ref());
+    if let Some(pending) = activating {
+        return activate_waiting(ctx, guard, service, pending, version);
+    }
     if let Some(answer) = update::answer(verb, order, last.as_deref())? {
         return Ok(answer);
     }
     others_idle(ctx, service)?;
+    let placed = below_installer(ctx, version)?;
     let prepared = update::prepare(ctx, verb, order, last.as_deref())?;
     files::make_private(&ctx.service_dir(service))
         .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let runner = ctx.runner(service);
     let _step = guard.step(&ctx.step_lock);
     others_idle(ctx, service)?;
-    let release = prepared.dir.staged();
-    let binary = match release.check(Path::new(RELEASE_BINARY)) {
-        Ok(binary) => binary,
+    let release = &prepared.dir;
+    let staged = &prepared.entry;
+    let binary = Path::new(release_binary(staged));
+    match release.check(binary) {
+        Ok(_) => {}
         Err(ArtifactError::BadHookPath(_) | ArtifactError::HookMissing(_)) => {
             return Ok(failed(Class::Release, REASON_SELF_BINARY_MISSING));
         }
         // The tree cannot be read now, or is not the one verified: nothing runs from it.
         Err(error) => return Err(Reply::refused(Refusal::ReleaseUnreadable, error)),
-    };
+    }
     let running = ctx.own_version.to_string();
-    if let Some(refused) = probed(ctx.probe(), &binary, &running, version) {
-        return Ok(refused);
+    if judge(ctx.own_version, version) == Judgement::Unsupported {
+        return Ok(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED));
     }
     let finished = match runner.run(&prepared.update) {
         Ok(finished) => finished,
@@ -332,8 +337,21 @@ fn steps(
     let layout = Layout::new(&binary_dir(&ctx.dirs.state));
     files::make_private(layout.dir()).map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
     let store = ctx.store(service);
-    let binary = Path::new(RELEASE_BINARY);
     let order_id = order.order_id.as_deref();
+    // `placed.json` as the rollback's check read it: only this order, under the service's lock,
+    // changes hostkeeper's installer.
+    let left = own_package::deferred(Some(staged), &placed);
+    if let (true, true, Verdict::Succeeded { promotion_pending }) =
+        (running == version, left, &finished.verdict)
+    {
+        // The version that runs needs no restart: its package is activated now, the record
+        // waiting for it first so that a crash in between is resumed by the next start.
+        // The runner held the success back, so the record holds this update unfinished.
+        store
+            .pend_activate(version, *promotion_pending, order_id)
+            .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
+        return Ok(activated(ctx, service));
+    }
     match follow_on(
         &finished, &store, &layout, &running, version, release, binary, order_id,
     ) {
@@ -349,18 +367,73 @@ fn steps(
     }
 }
 
-/// Step 7: the refusal of the new binary `binary` of `version` by its protocol, asked of `probe`;
-/// `None` when it is accepted. A release of the version that runs (`running`) is not asked: the
-/// follow-on stages no binary for it ([`FollowOn::NotNeeded`]), so nothing of it is ever run, and
-/// the order goes on as the module says (an install of it is `Succeeded` once its steps ran).
-fn probed(probe: &dyn ProtocolProbe, binary: &Path, running: &str, version: &str) -> Option<Reply> {
-    if running == version {
-        return None;
+/// A rollback of hostkeeper below an installer of what the host holds
+/// ([`rollback_floor::below`]): `Failed` before the commit, of class release,
+/// [`REASON_ROLLBACK_BELOW_INSTALLER`], with nothing staged; `placed.json` that cannot be read
+/// refuses the order (`store_failed`). `placed.json` as it read it.
+fn below_installer(ctx: &Ctx, version: &str) -> Result<PlacedRecord, Reply> {
+    let record = ctx
+        .placer()
+        .store()
+        .load()
+        .map_err(|e| Reply::refused(Refusal::StoreFailed, e))?;
+    match rollback_floor::below(&record, ctx.own_version, version) {
+        None => Ok(record),
+        Some(why) => {
+            ctx.alert(ALERT_SELF_UPDATE, &format!("service={SELF_SERVICE}: {why}"));
+            Err(failed(Class::Release, REASON_ROLLBACK_BELOW_INSTALLER))
+        }
     }
-    match probe.protocol(binary) {
-        Ok(protocol) if accepted(protocol) => None,
-        Ok(_) => Some(failed(Class::Release, REASON_PROTOCOL_UNSUPPORTED)),
-        Err(_) => Some(failed(Class::Environment, REASON_PROTOCOL_UNREADABLE)),
+}
+
+/// The answer while the `activate` of hostkeeper's own package at `pending.version` waits: an
+/// order for that version tries it again now, under the step lock, and is answered with how it
+/// went; any other is `busy`.
+fn activate_waiting(
+    ctx: &Ctx,
+    guard: &ServiceGuard<'_>,
+    service: &ServiceName,
+    pending: &PendingActivate,
+    version: &str,
+) -> Result<Reply, Reply> {
+    if pending.version != version {
+        return Err(Reply::refused(
+            Refusal::Busy,
+            format!(
+                "{SELF_SERVICE} waits for the activate of its package {}",
+                pending.version
+            ),
+        ));
+    }
+    let _step = guard.step(&ctx.step_lock);
+    Ok(activated(ctx, service))
+}
+
+/// The `activate` of hostkeeper's own package the record waits for, run now, as the reply of
+/// the order: its verdict, or `Deferred` [`REASON_ACTIVATE_PENDING`] while it is to be tried
+/// again.
+fn activated(ctx: &Ctx, service: &ServiceName) -> Reply {
+    let deferred = Reply::Finished {
+        verdict: Verdict::Deferred {
+            retry_after_secs: Some(DEFER_SECS),
+        },
+        reason: Some(REASON_ACTIVATE_PENDING.to_owned()),
+        resent: false,
+    };
+    let Some(OwnActivate::Ended(_)) = own_package::activate_pending(ctx, service) else {
+        return deferred;
+    };
+    // The verdict as the record now holds it, the promotion it kept included.
+    match ctx.store(service).load() {
+        Ok(Loaded::Current(rec)) => match rec.state {
+            State::Finished { verdict, reason } => Reply::Finished {
+                verdict,
+                reason,
+                resent: false,
+            },
+            _ => deferred,
+        },
+        _ => deferred,
     }
 }
 
@@ -405,8 +478,8 @@ fn others_idle(ctx: &Ctx, own: &ServiceName) -> Result<(), Reply> {
 
 /// The first service of the state directory `state` but `own` whose step record, as `load`
 /// reads it, holds an unfinished update (or cannot be read), in the words of the refusal; `None`
-/// when there is none. `Err` when the records cannot be listed. The one rule of both the
-/// self-update order ([`run`]) and the fallback verb on macOS (`crate::fallback`).
+/// when there is none. `Err` when the records cannot be listed. The rule of the
+/// self-update order ([`run`]).
 pub(crate) fn unfinished_other(
     state: &Path,
     own: &str,
@@ -461,6 +534,29 @@ impl Daemon {
             }
             Ok(())
         };
-        settle_with(&layout, &ctx.store(service), &running, &mut clear)
+        let activate = own_package::needs_activate(ctx, &running)?;
+        settle_activating(&layout, &ctx.store(service), &running, &mut clear, activate)
+    }
+
+    /// The `activate` of hostkeeper's own package the step record waits for, run under the
+    /// service's lock and the step lock ([`own_package::activate_pending`]): at start, after the
+    /// settlement, and again every [`DEFER_SECS`] while it defers ([`crate::start`]). `None`
+    /// when nothing waits; `Deferred` `busy`, with nothing run, while an order holds the
+    /// service's lock (it runs the `activate` itself when it is for that version).
+    pub fn activate_own_package(&self) -> Option<OwnActivate> {
+        let ctx = self.ctx();
+        let services = installed::service_dirs(&ctx.dirs.state).ok()?;
+        let service = services.get(SELF_SERVICE)?;
+        let guard = match ctx.locks.take_for(service, Holder::OwnActivate) {
+            Ok(guard) => guard,
+            Err(held) => {
+                return Some(OwnActivate::Deferred {
+                    reason: Refusal::Busy.token().to_owned(),
+                    detail: format!("{service} is locked by {}", held.holder),
+                });
+            }
+        };
+        let _step = guard.step(&ctx.step_lock);
+        own_package::activate_pending(ctx, service)
     }
 }

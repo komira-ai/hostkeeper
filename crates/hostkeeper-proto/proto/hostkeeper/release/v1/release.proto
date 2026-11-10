@@ -1,0 +1,264 @@
+// hostkeeper.release.v1: a release of a service as CI sets it and as the coordinator forwards it
+// to a host: for each platform an ordered list of entries, one per installer (`TargetList`,
+// `Target`). An artifact entry names where its bytes are (`Location`), its attestation bundle
+// (`Blob`) and the manifest hostkeeper reads beside it (`Manifest`), which is not inside the
+// artifact and not attested (docs/design/packages.md sections 3 and 4). A repository entry
+// (`repository` set) names instead a package, its version and the entry of the host's own
+// repository configuration to install it from, pinned by the package file's SHA-256, with the
+// same manifest (docs/design/packages-repositories.md section 2). A `Repository` is one package
+// repository of the coordinator's registry, which the coordinator sends the hosts that need it
+// and from which their daemons write their repository configuration (section 3 there).
+//
+// Served by: nobody. This file declares messages and no service. `operator.proto` and
+// `agent.proto` import it, so the coordinator forwards to a host, field for field, the entry CI
+// sent.
+//
+// Authentication: none; nothing here is called.
+//
+// Refusals: none here; nothing here is called. The coordinator refuses a release whose lists or
+// manifests break the checks of the crate `hostkeeper-release` with `target_invalid`, and a
+// daemon a manifest it cannot take with `manifest_invalid` (`daemon_too_old` when it is older
+// than `min_hostkeeper`, `installer_not_listed` for an installer it does not list).
+//
+// Units: a digest is SHA-256 as 64 lower-case hex characters, and a size whole bytes from 1 up.
+// A platform's list holds 1 to 8 entries, no installer twice; an installer is 1 to 32 bytes of
+// `[a-z0-9-]`. An artifact and an attestation each have 1 to 8 locations, with at most 2048
+// bytes of locators in all per entry; a locator is 1 to 1024 bytes of URL path characters with
+// no scheme, `//`, query, fragment, `%`, or `.` or `..` segment. An attestation is 1 byte to
+// 1 MiB. A repository is 1 to 32 bytes of `[a-z0-9-]`; a package version 1 to 128 bytes of
+// `[A-Za-z0-9.+~:_-]`, a digit first; a repository entry's package 1 to 128 bytes of
+// `[A-Za-z0-9+._@-]`, a letter or digit first. An entry is at most 24 KiB encoded, its manifest
+// at most 16 KiB. Every bound is whole seconds: each step of a hook's `timeout_secs`
+// (`StepBounds`), `verify_deadline_secs`, `promotion_ceiling_secs` and each of
+// `installer_bounds`, which is 1 to 3600. A manifest holds at most 64 `run` entries, 256 `place`
+// entries, 64 params and 32 containers.
+// A `Repository`'s bounds are its fields' comments.
+//
+// Extending: add fields and messages; never renumber, rename, retype or remove one, and never
+// reuse a number (the compatibility test in this crate refuses each). A field beside a list's
+// `entries` or on a `Target` is the additive route for a later constraint (packages.md section
+// 11); `TargetList` stays the value of every platform's key.
+syntax = "proto3";
+
+package hostkeeper.release.v1;
+
+// One platform's artifacts, in CI's order of preference: a host takes the entry of the installer
+// it runs, else the first whose installer its daemon announces.
+message TargetList {
+  // 1 to 8 entries, no installer twice.
+  repeated Target entries = 1;
+}
+
+// One entry of a platform: its format's installer and what that installer installs, with its
+// manifest. An entry is a repository entry when `repository` is set, and an artifact entry when
+// it is not; the coordinator tells them apart by that field alone, never by the installer's
+// name. An order carries the one entry the coordinator picked for the host.
+message Target {
+  // The installer that installs it: `hostkeeper-archive`, `tarball`, `macos-pkg` and
+  // `oci-image` for an artifact entry, `apt` for a repository entry, or any other name of 1 to
+  // 32 bytes of `[a-z0-9-]`, which no daemon lists and so is never picked.
+  string installer = 1;
+  // Where the artifact's bytes are, in preference order: 1 to 8. None for a repository entry.
+  repeated Location locations = 2;
+  // Required: the SHA-256 of the artifact, or of a repository entry's package file (its pin).
+  string digest = 3;
+  // The artifact's size: 1 up to the host's `max_package_bytes`. 0 for a repository entry.
+  uint64 bytes = 4;
+  // A Sigstore bundle that lists this artifact's digest: required for an artifact entry,
+  // refused for a repository entry.
+  Blob attestation = 5;
+  // Required: what hostkeeper needs to know of the service, for this entry. A repository
+  // entry's names the package, by `package`.
+  Manifest manifest = 6;
+  // Set: a repository entry. The name of an entry of the host's repository configuration:
+  // 1 to 32 bytes of `[a-z0-9-]`.
+  optional string repository = 7;
+  // With `repository` only, and required with it: the version as the package manager spells
+  // it, epoch and revision included (`1:1.6.0-1`): 1 to 128 bytes of `[A-Za-z0-9.+~:_-]`, a
+  // digit first.
+  optional string package_version = 8;
+}
+
+// A file fetched by digest, as the attestation bundle is.
+message Blob {
+  // The SHA-256 of the file.
+  string digest = 1;
+  // Its size: 1 byte to 1 MiB.
+  uint64 bytes = 2;
+  // Where it is, in preference order: 1 to 8.
+  repeated Location locations = 3;
+}
+
+// A store the host's own configuration defines and a path relative to it.
+message Location {
+  // The store's name in the host's `stores.toml`: 1 to 32 bytes of `[a-z0-9-]`.
+  string store = 1;
+  // The path below the store's base: the grammar of the Units paragraph.
+  string locator = 2;
+}
+
+// What hostkeeper needs to know of the service to install, run and observe one artifact. The
+// installer is the entry's (`Target.installer`); the service's name and version are the call's.
+message Manifest {
+  // The identity the format's own tool knows the package by. Required for `apt` and
+  // `macos-pkg`, and for every repository entry; refused for every other installer.
+  optional string package = 1;
+  // The hand-over from the old version to the new. Absent only for `hostkeeper-archive`, whose
+  // manifest is inside the attested archive.
+  Hook hook = 2;
+  // The units the service runs, at most 64: on Linux systemd units (`<service>` or
+  // `<service>-…`, with `.service`, `.socket` or `.timer`), on macOS launchd labels
+  // (`<service>` or `<service>.…`).
+  repeated string run = 3;
+  // The health URL the observer probes: `http://` to `127.0.0.1` or `[::1]`. Absent: none.
+  optional string health_url = 4;
+  // `tarball` only: the tree's files the daemon links into the system; at most 256.
+  repeated Place place = 5;
+  // Settings opaque to hostkeeper, given to the hook: at most 64, none named `updater` or
+  // `updater.…`.
+  map<string, Param> params = 6;
+  // The oldest daemon that may install it: `major.minor.patch`. A daemon older than it defers
+  // the order `daemon_too_old`, whatever else the manifest holds.
+  string min_hostkeeper = 7;
+  // `oci-image` only, and required for it: how to run the image; at most 32.
+  repeated Container containers = 8;
+  // The bounds of the installer's own steps. Required for every installer but
+  // `hostkeeper-archive`.
+  InstallerBounds installer_bounds = 9;
+}
+
+// The service's hook, with the contract of `crates/hostkeeper-hook`.
+message Hook {
+  // A program and its leading arguments, given before the step's name. For a native installer
+  // (`apt`, `macos-pkg`) the program is an absolute path of plain names, a file the package
+  // installs; for any other it is a relative path of plain names, a regular file of the staged
+  // tree reached through no link. Empty: the daemon's built-in steps, and the only value
+  // `oci-image` takes.
+  repeated string command = 1;
+  // The hook's additive step run at boot: 1 to 64 bytes of `[a-z0-9_]`, no step's name. Needs a
+  // `command`, whatever the installer.
+  optional string boot = 2;
+  // The bound of each step.
+  StepBounds timeout_secs = 3;
+  // How long `verify` may keep deferring: at least `verify` plus `rollback`.
+  uint64 verify_deadline_secs = 4;
+  // The longest the new version may wait to be promoted; not 0. Absent: no ceiling.
+  optional uint64 promotion_ceiling_secs = 5;
+  // How often `cleanup` is tried again. Absent: 3.
+  optional uint32 cleanup_retries = 6;
+}
+
+// The bound of each hook step, in seconds. Every bound but `prepare` is above 0; `prepare` 0 is
+// unbounded.
+message StepBounds {
+  uint64 prepare = 1;
+  uint64 cutover = 2;
+  uint64 verify = 3;
+  uint64 rollback = 4;
+  uint64 cleanup = 5;
+  // Absent: the hook has no `uninstall` step.
+  optional uint64 uninstall = 6;
+}
+
+// The bound of each installer step, 1 to 3600.
+message InstallerBounds {
+  uint64 stage_secs = 1;
+  uint64 activate_secs = 2;
+  uint64 remove_secs = 3;
+}
+
+// A file of a tarball's tree the daemon links into the system.
+message Place {
+  // `unit` or `file`.
+  string kind = 1;
+  // The path in the tree, relative, of plain names.
+  string source = 2;
+  // For a unit, its unit file's name (on Linux a unit of the service, on macOS
+  // `<label>.plist` of a label of the service); for a file,
+  // an absolute path outside the paths hostkeeper keeps for itself and the system's.
+  string path = 3;
+}
+
+// One param: a scalar.
+message Param {
+  oneof value {
+    string text = 1;
+    int64 integer = 2;
+    double float = 3;
+    bool flag = 4;
+  }
+}
+
+// One container an `oci-image` installer runs, as a unit it writes from a fixed template.
+message Container {
+  // The unit: a `.service` of the service, also in `run`, and no other container's.
+  string unit = 1;
+  // The arguments after the image, which the runtime passes to the image's entry point.
+  repeated string args = 2;
+  repeated Port ports = 3;
+  repeated Volume volumes = 4;
+}
+
+// A port the container publishes.
+message Port {
+  // On the host: 1024 to 65535.
+  uint32 host = 1;
+  // In the container: 1 to 65535.
+  uint32 container = 2;
+  // Published on `127.0.0.1` only; otherwise on every address.
+  bool loopback_only = 3;
+}
+
+// A host directory the container mounts.
+message Volume {
+  // Absolute, `/var/lib/<service>` or below it, with no `.` or `..` segment.
+  string host_path = 1;
+  // Absolute, in the container.
+  string container_path = 2;
+  bool read_only = 3;
+}
+
+// A package repository of the coordinator's registry (packages-repositories.md section 3): where
+// hosts install repository entries from, and the keys that sign it. The operator sets it with
+// `Repositories.Put`; the coordinator sends it to each Linux host whose services name it
+// (`HeartbeatResponse.repositories`), and the host's daemon writes it as one entry of its
+// repository configuration per suite, `<name>-<suite>.sources`, all signed by the keyring
+// `<name>.gpg`. A repository entry of a release names one of those entries (`Target.repository`).
+//
+// A private repository (`access` `hosts`, docs/design/hostgroups.md section 6.6) is read by the
+// coordinator alone, from `uri` with the credential of `credential_file`; a host reads it only
+// through the coordinator's agent listener, into a local mirror its apt reads as `file:`. Each of
+// its suites is the suite of one host group. The coordinator sends a host the entry with the
+// host's own group as its one suite, and only when `suites` lists that group, and never sends
+// `credential_file`.
+message Repository {
+  // 1 to 32 bytes of `[a-z0-9-]`; each `<name>-<suite>` is one too.
+  string name = 1;
+  // The package manager the repository serves: `apt`. Any other is refused.
+  string kind = 2;
+  // The repository's root, `https://` and a host, at most 512 bytes of `[A-Za-z0-9._~:/-]`.
+  string uri = 3;
+  // Its channels, 1 to 8, each 1 to 31 bytes of `[a-z0-9-]`, none twice (`testing`, `stable`).
+  repeated string suites = 4;
+  // The components of every suite, 1 to 16, each 1 to 64 bytes of `[A-Za-z0-9._-]`, none twice.
+  repeated string components = 5;
+  // The fingerprints of the keys that may sign the repository, primary keys or subkeys, 1 to 8,
+  // none twice: 40 (a version 4 key) or 64 (version 6) upper-case hex characters. Each is a key
+  // of `keyring`, and each primary key of `keyring` has its own or one of its subkeys' here.
+  repeated string fingerprints = 6;
+  // The binary OpenPGP keyring the suites are signed with (what `gpg --export` writes), 1 byte
+  // to 64 KiB: public keys only.
+  bytes keyring = 7;
+  // Who reads the repository: `public` (empty is read as `public`: every entry written before
+  // the field), which hosts read from `uri` themselves, or `hosts`, a private repository, which
+  // only the coordinator reads from `uri`, and hosts through it. Any other is refused.
+  string access = 8;
+  // `hosts` only, and required for it in `Repositories.Put`: the absolute path, on the
+  // coordinator's machine, of the file that holds the value of the `Authorization` header the
+  // coordinator sends `uri` (one line of printable ASCII, at most 4 KiB, in a regular file of the
+  // coordinator's user with mode 0600 or 0400). Refused with `public`. Never sent to a host: an entry
+  // a host is sent names none, and a host refuses a set whose entry names one. Not a secret
+  // itself: the file holds the secret, and neither its bytes nor the header are ever logged,
+  // answered or stored.
+  string credential_file = 9;
+}

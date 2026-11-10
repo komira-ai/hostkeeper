@@ -10,7 +10,9 @@
 //! the enrollment loop first, each on a worker of its [`Dispatch`]; [`crate::start::serve`] calls
 //! it once the boot work is over and the readiness notice was sent, so neither loop runs while
 //! the boot pass does. The heartbeat loop works on the daemon through the four adapters of
-//! [`crate::link_adapters`] ([`Links::heartbeater`]).
+//! [`crate::link_adapters`] ([`Links::heartbeater`]). On a Linux host it also gives the repository
+//! sets the coordinator pushes to [`crate::repository_push::RepositoryPush`]; on every host it
+//! gives the host's facts the coordinator sends to the facts file ([`FactsFile`]).
 //!
 //! The watchdog: after each heartbeat, whatever it came to, the heartbeat loop tells the service
 //! manager it is alive ([`Links::watchdog`], `WATCHDOG=1` under systemd), and nothing else sends
@@ -50,17 +52,19 @@ use hostkeeper_enroll::{Enroller, RETRY_SECS};
 use hostkeeper_link::{
     CertSource, ClientIdentity, CoordinatorLink, Dispatch, GrpcLinkError, GrpcMtlsLink, Heartbeat,
     Heartbeater, JsonMtlsLink, LinkError, LoopConfig, NegotiatedLink, Platform, Ports, Reply,
-    Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
+    RepositorySink, Sleeper, StopFlag, TcpDial, TcpTransport, Tick, UnixClock,
 };
 use hostkeeper_steps::Clock;
 
 use crate::console::ConsoleIssue;
 use crate::executor::Daemon;
+use crate::facts_file::FactsFile;
 use crate::link_adapters::{
-    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal,
+    DaemonHalts, DaemonObserver, DaemonOrders, DaemonRecords, DaemonRenewal, NoTrustedRoot,
 };
 use crate::node::NodeState;
 use crate::notify::Watchdog;
+use crate::repository_push::RepositoryPush;
 
 pub use hostkeeper_enroll::RenewalState;
 pub use hostkeeper_link::Log;
@@ -122,7 +126,7 @@ pub struct Links {
 
 impl Links {
     /// Starts the enrollment loop, then the heartbeat loop, each on a worker of
-    /// [`Links::dispatch`]. Each loop writes what the admin `Status` reports of it into the
+    /// [`Links::dispatch`]. Each loop writes what [`Daemon::status`] reports of it into the
     /// daemon's [`crate::node::NodeState`]: the enrollment loop the host's enrollment after each
     /// step, the heartbeat loop its link after each heartbeat, at the second of [`Links::clock`].
     pub fn start(self, daemon: &Arc<Daemon>) {
@@ -162,10 +166,10 @@ impl Links {
         }));
     }
 
-    /// The heartbeat loop over `daemon`: its executor, held halts, installed services and
-    /// observer are the daemon's ([`crate::link_adapters`]); its step-record directory, where the
+    /// The heartbeat loop over `daemon`: its executor, held halts, installed services and observer
+    /// are the daemon's ([`crate::link_adapters`]), and it reports no trusted root; its step-record directory, where the
     /// deferrals live, is the daemon's state directory; it announces this build's platform and
-    /// the daemon's own version.
+    /// the daemon's own version, and the installers the daemon decided at its start.
     pub fn heartbeater(&self, daemon: &Arc<Daemon>) -> Heartbeater {
         let ctx = daemon.ctx();
         Heartbeater::new(
@@ -174,6 +178,8 @@ impl Links {
                 agent_version: Version::from(ctx.own_version),
                 state_dir: ctx.dirs.state.clone(),
                 period_secs: self.period,
+                installers: ctx.announcement.names(),
+                private_repository: reads_private_repositories(PLATFORM),
             },
             Ports {
                 link: Arc::clone(&self.link),
@@ -184,8 +190,20 @@ impl Links {
                 dispatch: Arc::clone(&self.dispatch),
                 halts: Arc::new(DaemonHalts::new(Arc::clone(daemon))),
                 renewal: Arc::new(DaemonRenewal::new(self.renewal.clone())),
+                trusted_root: Arc::new(NoTrustedRoot),
                 clock: Arc::clone(&self.clock),
                 log: Arc::clone(&self.log),
+                repositories: RepositoryPush::new(
+                    Arc::clone(&ctx.repository_ports),
+                    ctx.announcement.clone(),
+                    Arc::clone(&self.log),
+                )
+                .map(|push| Arc::new(push) as Arc<dyn RepositorySink>),
+                facts: Some(Arc::new(FactsFile::new(
+                    ctx.dirs.facts.clone(),
+                    PLATFORM,
+                    Arc::clone(&self.log),
+                ))),
             },
         )
     }
@@ -255,6 +273,14 @@ impl EnrollLoop<'_> {
             }
         }
     }
+}
+
+/// Whether a daemon of `platform` announces `private-repository-v1` whatever its other ports:
+/// every Mac daemon does, since its `coordinator` store reads a config package from the
+/// coordinator ([`crate::coordinator_store`]). A Linux daemon announces it when it has a
+/// repository sink (the link's rule), which is when its mirror reads private repositories.
+pub const fn reads_private_repositories(platform: Platform) -> bool {
+    matches!(platform, Platform::DarwinArm64)
 }
 
 /// The platform this daemon was built for.

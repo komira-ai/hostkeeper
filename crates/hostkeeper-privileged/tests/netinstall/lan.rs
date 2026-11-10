@@ -6,7 +6,7 @@
 //! - the boot server, `pxe`, at `.3`;
 //! - the guest, by a tap device of the bridge's namespace, which QEMU opens there;
 //! - the test's own host namespace, at `.1`: the coordinator's private and LAN listeners and the
-//!   release channel are bound there, and `hostkeeper ctl` and SSH dial the LAN from there.
+//!   release channel are bound there, and the operator's calls and SSH dial the LAN from there.
 //!
 //! The bridge is in a namespace of its own so that no firewall of the host (a Docker `FORWARD`
 //! policy, with `br_netfilter`) sees its frames. Nothing on the LAN routes beyond it: the router's

@@ -26,6 +26,10 @@ fn beat() -> Heartbeat {
         services: Vec::new(),
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -433,7 +437,7 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         http(
             200,
             &format!(
-                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
+                r#"{{"reply":"update","service":"web","version":"{to}","features":["deferred-v1","halt-v1","heartbeat-v2","forced-v1","order-v1","verdict-acks-v1","grpc-v1","install-v1","abort-v1","clear-record-v1","target-v1","unknown-v9"],"halts":{{"web":3,"-x":1}}}}"#
             ),
         )
     };
@@ -442,6 +446,8 @@ fn an_update_without_its_terms_is_not_run_and_is_logged_once_per_change() {
         features: ANNOUNCED.to_vec(),
         halt_generations: vec![(service("web"), 3)],
         acknowledged: Vec::new(),
+        repositories: None,
+        facts: None,
     };
     let line = |whom: &str, to: &str, why: &str| {
         format!("error: the coordinator's update of {whom} to {to} is not run: {why}")
@@ -514,6 +520,7 @@ fn an_update_with_its_terms_is_the_loops_update_order() {
                     version: version("2.0"),
                     digest: crate::digest(),
                     index_digest: None,
+                    entry: None,
                 }),
             }),
             ..Reply::default()

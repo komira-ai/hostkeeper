@@ -21,8 +21,9 @@ use hostkeeper_wire::Platform;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::Serialize;
-use serde::de::DeserializeOwned;
 
+use super::at::At;
+use super::groups;
 use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
 use crate::assignment::{Entry, ServiceAssignments};
 use crate::desired::{self, StoreError};
@@ -35,8 +36,9 @@ use crate::ops::{
 use crate::rollouts::{Pause, Rollout};
 use crate::verdict_file::{self, VerdictsError};
 
-/// The desired state's tables.
-pub(crate) const DESIRED: [Table; 2] = [
+/// The desired state's tables, the releases' (`0004`), the registry's (`0007`) and the host
+/// groups' (`0008`) last.
+pub(crate) const DESIRED: [Table; 8] = [
     Table {
         name: "desired",
         keys: &[("service", KeyTy::Text)],
@@ -58,6 +60,12 @@ pub(crate) const DESIRED: [Table; 2] = [
         keys: &[("service", KeyTy::Text), ("version", KeyTy::Text)],
         values: &[("release", Ty::Json)],
     },
+    super::releases::TABLE,
+    super::repositories::TABLE,
+    super::repositories::GENERATION,
+    groups::HOST_GROUPS,
+    groups::PACKAGES,
+    groups::DESIRED,
 ];
 
 /// The verdicts' tables.
@@ -74,8 +82,8 @@ pub(crate) const VERDICTS: [Table; 2] = [
     },
 ];
 
-/// The operations state's tables.
-pub(crate) const OPS: [Table; 14] = [
+/// The operations state's tables, the host groups' (`0008`) last.
+pub(crate) const OPS: [Table; 18] = [
     Table {
         name: "services",
         keys: &[("service", KeyTy::Text)],
@@ -160,6 +168,7 @@ pub(crate) const OPS: [Table; 14] = [
             ("used_request_id", Ty::Text),
             ("used_unix", Ty::Int),
             ("platform", Ty::Text),
+            ("host_group", Ty::Text),
         ],
     },
     Table {
@@ -201,6 +210,10 @@ pub(crate) const OPS: [Table; 14] = [
         keys: &[("service", KeyTy::Text), ("node_id", KeyTy::Text)],
         values: &[],
     },
+    groups::MIN_VERSIONS,
+    groups::SERVICES,
+    groups::ROLLOUTS,
+    groups::ROLLOUT_DONE,
 ];
 
 /// Where an error of a table says it is: the table, as a path the stores' errors name.
@@ -283,10 +296,15 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
         row.extend(super::generations::columns(held.records.get(&service))?);
         desired.insert(vec![text(&service)], row);
     }
-    Ok(Tables::from([
+    let releases = super::releases::rows(&held.releases);
+    let mut tables = Tables::from([
         ("desired", desired),
         ("desired_digests", digests),
-    ]))
+        ("releases", releases),
+    ]);
+    super::repositories::insert(&held.repositories, &mut tables)?;
+    groups::insert_groups(&held.host_groups, &mut tables)?;
+    Ok(tables)
 }
 
 /// The desired state the rows `tables` hold, read as the desired-state file's reader reads it.
@@ -334,6 +352,9 @@ pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
         }
     })?;
     held.records = super::generations::records_of(tables.get("desired").unwrap_or(&empty))?;
+    held.releases = super::releases::of(tables.get("releases").unwrap_or(&empty))?;
+    held.repositories = super::repositories::of_tables(tables)?;
+    held.host_groups = groups::groups_of(tables)?;
     Ok(held)
 }
 
@@ -348,7 +369,7 @@ fn key_text(key: &[KeyVal], i: usize) -> String {
 
 /// A value as the JSON its file holds: text as a string, JSON as itself; `None` for `NULL`, which
 /// the file leaves out.
-fn json_of(value: &Val) -> Option<serde_json::Value> {
+pub(crate) fn json_of(value: &Val) -> Option<serde_json::Value> {
     match value {
         Val::Text(text) => Some(text.clone().into()),
         Val::Json(value) => Some(value.clone()),
@@ -620,6 +641,7 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
                     None => Val::Null,
                 },
                 Val::Text(record.platform.map_or("", |p| p.as_str()).to_owned()),
+                Val::text_or_null(Some(record.host_group.as_str()).filter(|g| !g.is_empty())),
             ],
         );
     }
@@ -644,86 +666,8 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
             put("rollout_done", vec![text(service), text(node)], vec![]);
         }
     }
+    groups::insert_marks(&state.host_groups, &mut tables)?;
     Ok(tables)
-}
-
-/// How one row of the operations state's tables is refused at load.
-fn refused(table: &str, key: &[KeyVal], why: impl std::fmt::Display) -> OpsError {
-    let key: Vec<String> = key
-        .iter()
-        .map(|k| match k {
-            KeyVal::Text(text) => text.clone(),
-            KeyVal::Int(n) => n.to_string(),
-        })
-        .collect();
-    OpsError::Invalid {
-        path: place(table),
-        why: format!("the row {}: {why}", key.join("/")),
-    }
-}
-
-/// The reader of one row of the operations state: its table, its key and its values.
-struct At<'a> {
-    table: &'static str,
-    key: &'a [KeyVal],
-    values: &'a [Val],
-}
-
-impl At<'_> {
-    fn no(&self, why: impl std::fmt::Display) -> OpsError {
-        refused(self.table, self.key, why)
-    }
-
-    fn key(&self, i: usize) -> Result<String, OpsError> {
-        self.key
-            .get(i)
-            .and_then(KeyVal::as_text)
-            .map(str::to_owned)
-            .ok_or_else(|| self.no("a key column is not text"))
-    }
-
-    fn text(&self, i: usize) -> Result<Option<String>, OpsError> {
-        match self.values.get(i) {
-            Some(Val::Text(text)) => Ok(Some(text.clone())),
-            Some(Val::Null) | None => Ok(None),
-            Some(_) => Err(self.no("a column is not text")),
-        }
-    }
-
-    fn required(&self, i: usize) -> Result<String, OpsError> {
-        self.text(i)?
-            .ok_or_else(|| self.no("a column that is required is empty"))
-    }
-
-    fn version(&self, i: usize) -> Result<Option<Version>, OpsError> {
-        self.text(i)?
-            .map(|text| Version::parse(&text).map_err(|e| self.no(e)))
-            .transpose()
-    }
-
-    fn count(&self, i: usize) -> Result<u64, OpsError> {
-        match self.values.get(i) {
-            Some(Val::Int(n)) => u64::try_from(*n).map_err(|_| self.no("a counter is negative")),
-            _ => Err(self.no("a counter is not a number")),
-        }
-    }
-
-    fn position(&self, i: usize) -> Result<i64, OpsError> {
-        self.values
-            .get(i)
-            .and_then(Val::as_int)
-            .ok_or_else(|| self.no("a position is not a number"))
-    }
-
-    fn json<T: DeserializeOwned>(&self, i: usize) -> Result<Option<T>, OpsError> {
-        match self.values.get(i) {
-            Some(Val::Json(value)) => serde_json::from_value(value.clone())
-                .map(Some)
-                .map_err(|e| self.no(e)),
-            Some(Val::Null) | None => Ok(None),
-            Some(_) => Err(self.no("a column is not JSON")),
-        }
-    }
 }
 
 /// The operations state the rows `tables` hold, its ring left empty: every value parsed again,
@@ -901,6 +845,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             InventoryRecord {
                 host_id: at.key(0)?,
                 role: at.required(0)?,
+                host_group: at.text(12)?.unwrap_or_default(),
                 data_macs: macs,
                 bmc_mac: at.required(2)?,
                 serial: at.required(3)?,
@@ -982,6 +927,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
             .done
             .insert(at.key(1)?);
     }
+    state.host_groups = groups::marks_of(tables)?;
     Ok(state)
 }
 

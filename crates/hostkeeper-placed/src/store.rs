@@ -1,36 +1,38 @@
-//! `placed.json`: which service owns each placed path (design section 10, "Placed-path ownership
-//! record").
+//! `placed.json`: what the daemon records of the services it installed (design section 10,
+//! "Placed-path ownership record").
 //!
 //! ```json
 //! {
 //!   "schema": 1,
-//!   "paths": {
-//!     "/etc/tierstore/tierstore.conf": {
-//!       "service": "tierstore",
-//!       "version": "1.5.0",
-//!       "kind": "file",
-//!       "state": "placed",
-//!       "link_target": "/var/lib/hostkeeper/packages/tierstore/current/files/tierstore.conf"
-//!     }
-//!   },
-//!   "uninstalling": { "other": {}, "old": { "hook_done": true } }
+//!   "uninstalling": { "other": {}, "old": { "hook_done": true } },
+//!   "installed": {
+//!     "web": { "installer": "apt", "package": "web", "version": "1.4.0-1", "repository": "main",
+//!              "links": ["/etc/systemd/system/multi-user.target.wants/web.service"] }
+//!   }
 //! }
 //! ```
 //!
+//! `installed` maps a service to its installer and, for a repository package, also its package,
+//! version, repository and the enablement links its `activate` wrote, `pending` while an install
+//! is under way (packages-lifecycle.md section 6.5). The installer's name is kept as written: the
+//! daemon refuses to act for a service of one it has no steps of, and the record is read whatever
+//! it names. It is written only when not empty.
+//!
 //! Schema 1, changed additively only: a key this daemon does not know, at the top level, in an
-//! entry or in a tombstone, is kept as it is when the record is written again. A record with a
-//! newer schema, one that does not parse, or one whose known fields break their rules (schema 1,
-//! every path and link target absolute in the path grammar, services and versions in their
-//! grammars), is an error naming the file, and the file is left as it is. `reload_pending`,
-//! written only when set, says a `daemon-reload` is owed. A write needs the lock of the file
-//! ([`crate::PlacedLock`]). Every write is a temporary file in the same directory, an `fsync`
-//! of the file, a rename and an `fsync` of the directory.
+//! entry or in a tombstone, is kept as it is when the record is written again. The `paths` and
+//! `reload_pending` keys of the placed-path linking an earlier release wrote are such keys: they
+//! are read as they are and written back as they were, so a release that still reads them finds
+//! them. A record with a newer schema, one that does not parse, or one whose known fields break
+//! their rules (schema 1, services in their grammar), is an error naming the file, and the file
+//! is left as it is. A write needs the lock of the file ([`crate::PlacedLock`]). Every write is a
+//! temporary file in the same directory, an `fsync` of the file, a rename and an `fsync` of the
+//! directory.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_config::names::{check_path, is_service_name, is_version};
+use hostkeeper_config::names::is_service_name;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -44,76 +46,6 @@ pub const SCHEMA: u64 = 1;
 /// The temporary name `placed.json` is written under, beside it. `~` is outside the path
 /// grammar, so no placed path can have this name.
 pub const TEMPORARY_FILE: &str = ".hk~placed.json~tmp";
-
-/// What a placed path is.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PathKind {
-    /// A file of `units/`, at `<unit dir>/<name>`.
-    Unit,
-    /// A `[[files]]` entry, at its `path`.
-    File,
-    /// The `WantedBy=` link of a `run` unit, at `<unit dir>/<target>.wants/<unit>`.
-    WantsLink,
-}
-
-/// Where a placed path is in the write-ahead protocol.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PathState {
-    /// Recorded before its link is made; the link may or may not be there yet.
-    Pending,
-    /// Linked and confirmed.
-    Placed,
-}
-
-/// One placed path.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Entry {
-    pub service: String,
-    pub version: String,
-    pub kind: PathKind,
-    pub state: PathState,
-    /// The target the link at the path has: a path into `<packages>/<service>/current/`, or for
-    /// a `wants_link` the placed unit.
-    pub link_target: PathBuf,
-    /// The keys of a newer writer, kept on rewrite.
-    #[serde(flatten)]
-    extra: Map<String, Value>,
-}
-
-impl Entry {
-    pub fn new(
-        service: &str,
-        version: &str,
-        kind: PathKind,
-        state: PathState,
-        link_target: &Path,
-    ) -> Entry {
-        Entry {
-            service: service.to_owned(),
-            version: version.to_owned(),
-            kind,
-            state,
-            link_target: link_target.to_path_buf(),
-            extra: Map::new(),
-        }
-    }
-
-    /// Takes every field of `wanted` but the keys of a newer writer, which are kept.
-    pub(crate) fn assign(&mut self, wanted: Entry) {
-        let extra = std::mem::take(&mut self.extra);
-        *self = Entry { extra, ..wanted };
-    }
-
-    /// Whether `other` records the same link of the same version, whatever the state of each.
-    pub fn same_link(&self, other: &Entry) -> bool {
-        (self.service == other.service)
-            & (self.version == other.version)
-            & (self.kind == other.kind)
-            & (self.link_target == other.link_target)
-    }
-}
 
 /// The tombstone of a service being uninstalled (design section 4.7, "Uninstall", step 1). Its
 /// paths are not linked while it stands. Its fields say how far the uninstall got, so that a
@@ -133,21 +65,66 @@ pub struct Tombstone {
     extra: Map<String, Value>,
 }
 
+/// How a service was installed. A repository package's entry also names the package, the version installed (or being installed while `pending`), the
+/// repository and the enablement links its `activate` wrote (packages-repositories.md section
+/// 4.3); a `macos-pkg` entry names the package's identifier, the version and the directories its
+/// installs created (section 4.7). Each of these keys is written only when set, so an entry of
+/// the installer alone is written as before.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct InstalledEntry {
+    /// The installer's name, as the entry spells it.
+    pub installer: String,
+    /// The package, as the package manager knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub package: Option<String>,
+    /// The version the package manager installed, as it spells it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    /// The entry of the host's repository configuration the version came from.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
+    /// The enablement links of the `run` units the installer wrote, absolute.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub links: BTreeSet<String>,
+    /// Written before the install, cleared once the package manager shows `version`.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub pending: bool,
+    /// The directories a `macos-pkg` install created that were not on the host before, as
+    /// logical paths: its `remove` deletes them once they are empty.
+    #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
+    pub created_dirs: BTreeSet<String>,
+    /// The keys of a newer writer, kept on rewrite.
+    #[serde(flatten)]
+    extra: Map<String, Value>,
+}
+
+impl InstalledEntry {
+    /// An entry for `installer`, naming nothing else.
+    pub fn new(installer: &str) -> InstalledEntry {
+        InstalledEntry {
+            installer: installer.to_owned(),
+            package: None,
+            version: None,
+            repository: None,
+            links: BTreeSet::new(),
+            pending: false,
+            created_dirs: BTreeSet::new(),
+            extra: Map::new(),
+        }
+    }
+}
+
 /// The contents of `placed.json`.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PlacedRecord {
     pub schema: u64,
-    /// Each placed path, by its absolute system path.
-    #[serde(default)]
-    pub paths: BTreeMap<PathBuf, Entry>,
     /// The tombstones, by service.
     #[serde(default)]
     pub uninstalling: BTreeMap<String, Tombstone>,
-    /// A `daemon-reload` is owed: set in the same write that records a change to placed links,
-    /// cleared only after a reload succeeded, so a crash or a failed reload leaves it due.
-    /// Written only when set.
-    #[serde(default, skip_serializing_if = "is_false")]
-    pub reload_pending: bool,
+    /// The installer of each installed service; a service without an entry has none recorded.
+    /// Written only when not empty.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub installed: BTreeMap<String, InstalledEntry>,
     /// The keys of a newer writer, kept on rewrite.
     #[serde(flatten)]
     extra: Map<String, Value>,
@@ -157,23 +134,19 @@ impl Default for PlacedRecord {
     fn default() -> PlacedRecord {
         PlacedRecord {
             schema: SCHEMA,
-            paths: BTreeMap::new(),
             uninstalling: BTreeMap::new(),
-            reload_pending: false,
+            installed: BTreeMap::new(),
             extra: Map::new(),
         }
     }
 }
 
 impl PlacedRecord {
-    /// The paths of `service`, with their entries.
-    pub fn of_service<'a>(
-        &'a self,
-        service: &'a str,
-    ) -> impl Iterator<Item = (&'a PathBuf, &'a Entry)> + 'a {
-        self.paths
-            .iter()
-            .filter(move |(_, entry)| entry.service == service)
+    /// The installer recorded for `service`; `None` for a service with none.
+    pub fn installer_of(&self, service: &str) -> Option<&str> {
+        self.installed
+            .get(service)
+            .map(|entry| entry.installer.as_str())
     }
 }
 
@@ -186,34 +159,20 @@ fn require(ok: bool, why: impl FnOnce() -> String) -> Result<(), String> {
     ok.then_some(()).ok_or_else(why)
 }
 
-/// Checks that `path` is an absolute path in the path grammar (no `.` or `..` component).
-fn require_path(what: &str, path: &Path) -> Result<(), String> {
-    let text = path
-        .to_str()
-        .ok_or_else(|| format!("{what} {} is not UTF-8", path.display()))?;
-    check_path(text).map_err(|why| format!("{what} {} {why}", path.display()))
-}
-
-/// The rules on the known fields of a record that parsed: schema 1, every path and link
-/// target absolute and in the path grammar, every service a service name, every version a
-/// version. A record that breaks one is never used to name a path.
+/// The rules on the known fields of a record that parsed: schema 1 and every service a service
+/// name. A record that breaks one is never used to name a service.
 fn validate(record: &PlacedRecord) -> Result<(), String> {
     require(record.schema == SCHEMA, || {
         format!("its schema is {}, not {SCHEMA}", record.schema)
     })?;
-    for (path, entry) in &record.paths {
-        require_path("the path", path)?;
-        require_path("the link target", &entry.link_target)?;
-        require(is_service_name(&entry.service), || {
-            format!("{:?} is not a service name", entry.service)
-        })?;
-        require(is_version(&entry.version), || {
-            format!("{:?} is not a version", entry.version)
-        })?;
-    }
     record.uninstalling.keys().try_for_each(|service| {
         require(is_service_name(service), || {
             format!("the tombstone {service:?} is not a service name")
+        })
+    })?;
+    record.installed.keys().try_for_each(|service| {
+        require(is_service_name(service), || {
+            format!("the installed service {service:?} is not a service name")
         })
     })
 }

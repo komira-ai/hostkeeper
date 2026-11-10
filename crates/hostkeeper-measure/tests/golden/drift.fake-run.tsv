@@ -1,0 +1,29 @@
+# Plan drift, run fake-run: A hand-made change on a host, detected and repaired. Written by `hostkeeper-measure analyze` from the run's records.
+# A raw row is one value of a measure; a derived row is computed from the raw rows of its measure,
+# as its how column says. A time is the difference of two stamps of the one clock its how column
+# names: the coordinator's (whole seconds; a host's heartbeat stamp up to one poll interval late)
+# or the runner's (up to one poll interval late). A last value is only of a complete repetition.
+# kind	id	value	unit	how	cells
+raw	detection-rep-1	8	s	plan drift, run fake-run, repetition 1: the operator's change to the coordinator showing hello unhealthy; runner clock	
+raw	detection-rep-3	8	s	plan drift, run fake-run, repetition 3: the operator's change to the coordinator showing hello unhealthy; runner clock	
+derived	detection-n	2		plan drift, run fake-run: the number of raw rows of detection	
+derived	detection-missing	1		plan drift, run fake-run: the values of detection the repetitions did not record	
+derived	detection-min	8	s	plan drift, run fake-run: the least raw value of detection	
+derived	detection-median	8	s	plan drift, run fake-run: the median raw value of detection	
+derived	detection-max	8	s	plan drift, run fake-run: the greatest raw value of detection	
+raw	undetected-rep-1	0	changes	plan drift, run fake-run, repetition 1: changes the watch did not see within its timeout	
+raw	undetected-rep-2	1	changes	plan drift, run fake-run, repetition 2: changes the watch did not see within its timeout	
+raw	undetected-rep-3	0	changes	plan drift, run fake-run, repetition 3: changes the watch did not see within its timeout	
+derived	undetected-n	3		plan drift, run fake-run: the number of raw rows of undetected	
+derived	undetected-missing	0		plan drift, run fake-run: the values of undetected the repetitions did not record	
+derived	undetected-min	0	changes	plan drift, run fake-run: the least raw value of undetected	
+derived	undetected-median	0	changes	plan drift, run fake-run: the median raw value of undetected	
+derived	undetected-max	1	changes	plan drift, run fake-run: the greatest raw value of undetected	
+raw	repair-rep-1	10	s	plan drift, run fake-run, repetition 1: SetDesired of the repair to the host's succeeded, healthy update; coordinator clock	
+raw	repair-rep-2	12	s	plan drift, run fake-run, repetition 2: SetDesired of the repair to the host's succeeded, healthy update; coordinator clock	
+raw	repair-rep-3	14	s	plan drift, run fake-run, repetition 3: SetDesired of the repair to the host's succeeded, healthy update; coordinator clock	
+derived	repair-n	3		plan drift, run fake-run: the number of raw rows of repair	
+derived	repair-missing	0		plan drift, run fake-run: the values of repair the repetitions did not record	
+derived	repair-min	10	s	plan drift, run fake-run: the least raw value of repair	
+derived	repair-median	12	s	plan drift, run fake-run: the median raw value of repair	
+derived	repair-max	14	s	plan drift, run fake-run: the greatest raw value of repair	

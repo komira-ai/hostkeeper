@@ -5,16 +5,19 @@
 //! of the table, not the daemon's.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 
 use hostkeeper_daemon::boot::{BootReport, Outcome};
 use hostkeeper_daemon::{Daemon, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::{CrashPoint, Finished, ResumeAction};
-use support::{IRREVERSIBLE, PENDING_LINE, Rig, crash_at, d, finished, name, update};
+use support::{IRREVERSIBLE, PENDING_LINE, crash_at, finished, name};
+use support_host::NativeHost;
 
 #[derive(Clone, Copy, Debug)]
 enum Fixture {
@@ -29,7 +32,7 @@ const DEFER_LINE: &str = r#"{"retry_after_secs":100}"#;
 
 /// Scripts the hook of `web` for the fixture. A step run again answers as it did the first
 /// time, as a hook deciding from the world would.
-fn script(rig: &Rig, fixture: Fixture) {
+fn script(rig: &NativeHost, fixture: Fixture) {
     let launcher = &rig.launcher;
     match fixture {
         Fixture::Success => {}
@@ -43,21 +46,30 @@ fn script(rig: &Rig, fixture: Fixture) {
     }
 }
 
-/// A rig with `web`'s package 2.0.0, its hook scripted, and a booted daemon's boot id written.
-fn rig_for(fixture: Fixture, id: &str) -> Rig {
-    let rig = Rig::new(id);
-    rig.add("web", "2.0.0");
-    script(&rig, fixture);
+/// A host with `web` running its base version, `web`'s package 2.0.0 staged and a booted
+/// daemon's boot id written, made once for a sweep and copied into the rig of each of its runs
+/// ([`rig_for`]): the sweep's subject is what a daemon killed at each write leaves, not the
+/// staging of the versions each run starts from.
+fn template() -> NativeHost {
+    let rig = NativeHost::new("sweep-template");
+    rig.add_staged("web", "2.0.0");
     let (_, _) = rig.booted();
     rig
 }
 
+/// A rig that is `template` with the hook of `web` scripted for the fixture.
+fn rig_for(template: &NativeHost, fixture: Fixture, id: &str) -> NativeHost {
+    let rig = NativeHost::like(id, template);
+    script(&rig, fixture);
+    rig
+}
+
 /// The verdict of the fixture run without a crash, and how many record writes it took.
-fn baseline(fixture: Fixture) -> (Finished, u64) {
-    let rig = rig_for(fixture, &format!("sweep-base-{fixture:?}"));
+fn baseline(template: &NativeHost, fixture: Fixture) -> (Finished, u64) {
+    let rig = rig_for(template, fixture, &format!("sweep-base-{fixture:?}"));
     let count = Arc::new(AtomicU64::new(0));
     let daemon = rig.daemon().with_stores(crash_at(None, Arc::clone(&count)));
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     let Reply::Finished {
         verdict, reason, ..
     } = reply
@@ -110,12 +122,17 @@ fn by_the_table(action: ResumeAction) -> Option<Finished> {
 
 /// The fixture's update run by a daemon killed at `at`: the rig, the record the daemon left, and
 /// how many steps had run.
-fn first_crash(fixture: Fixture, at: CrashPoint, id: &str) -> (Rig, Option<Record>, usize) {
-    let rig = rig_for(fixture, id);
+fn first_crash(
+    template: &NativeHost,
+    fixture: Fixture,
+    at: CrashPoint,
+    id: &str,
+) -> (NativeHost, Option<Record>, usize) {
+    let rig = rig_for(template, fixture, id);
     let dying = rig
         .daemon()
         .with_stores(crash_at(Some(at), Arc::new(AtomicU64::new(0))));
-    let reply = dying.order(&update("web", "2.0.0", &d(), 1));
+    let reply = dying.order(&rig.update("web", "2.0.0", 1));
     assert!(
         matches!(reply, Reply::Interrupted { .. }),
         "{fixture:?} killed at {at:?}: {reply:?}"
@@ -135,7 +152,7 @@ fn settle(daemon: &Daemon, report: &BootReport) {
 
 /// The update ended as the table says for `found`, ran no committed step again and skipped no
 /// rollback.
-fn check(rig: &Rig, found: &Record, before: usize, want: &Finished, what: &str) {
+fn check(rig: &NativeHost, found: &Record, before: usize, want: &Finished, what: &str) {
     let action = expected_cell(found);
     let expected = by_the_table(action).unwrap_or_else(|| want.clone());
     assert_eq!(rig.verdict("web"), Some(expected), "{what}");
@@ -151,9 +168,9 @@ fn check(rig: &Rig, found: &Record, before: usize, want: &Finished, what: &str) 
     }
 }
 
-fn crash_once(fixture: Fixture, at: CrashPoint, want: &Finished) {
+fn crash_once(template: &NativeHost, fixture: Fixture, at: CrashPoint, want: &Finished) {
     let what = format!("{fixture:?} killed at {at:?}");
-    let (rig, found, before) = first_crash(fixture, at, &format!("sweep-{fixture:?}"));
+    let (rig, found, before) = first_crash(template, fixture, at, &format!("sweep-{fixture:?}"));
     rig.reboot();
     let (daemon, report) = rig.booted();
     settle(&daemon, &report);
@@ -170,14 +187,39 @@ fn crash_once(fixture: Fixture, at: CrashPoint, want: &Finished) {
     check(&rig, &found, before, want, &what);
 }
 
-fn sweep(fixture: Fixture) {
-    let (want, writes) = baseline(fixture);
-    assert!(writes >= 7, "{fixture:?}: {writes} writes");
-    for n in 1..=writes {
-        for at in [CrashPoint::BeforeWrite(n), CrashPoint::AfterWrite(n)] {
-            crash_once(fixture, at, &want);
+/// How many threads run the points of a sweep: a run waits on the disk at each write of a
+/// record, and the runs do not depend on one another.
+const THREADS: usize = 8;
+
+/// Both crash points of each write from the first to the `writes`th.
+fn points(writes: u64) -> Vec<CrashPoint> {
+    (1..=writes)
+        .flat_map(|n| [CrashPoint::BeforeWrite(n), CrashPoint::AfterWrite(n)])
+        .collect()
+}
+
+/// `run` for every point of `points`, on [`THREADS`] threads, each with a template host of its
+/// own ([`template`]); a failed assertion of any run fails the sweep.
+fn spread(points: &[CrashPoint], run: impl Fn(&NativeHost, CrashPoint) + Sync) {
+    let next = AtomicUsize::new(0);
+    std::thread::scope(|scope| {
+        for _ in 0..THREADS.min(points.len()) {
+            scope.spawn(|| {
+                let template = template();
+                while let Some(at) = points.get(next.fetch_add(1, Ordering::SeqCst)) {
+                    run(&template, *at);
+                }
+            });
         }
-    }
+    });
+}
+
+fn sweep(fixture: Fixture) {
+    let (want, writes) = baseline(&template(), fixture);
+    assert!(writes >= 7, "{fixture:?}: {writes} writes");
+    spread(&points(writes), |template, at| {
+        crash_once(template, fixture, at, &want);
+    });
 }
 
 /// Catches a start after a reboot that leaves an update somewhere the table does not: a clean
@@ -197,8 +239,8 @@ fn a_boot_id_sweep_over_every_step_position_reaches_the_table_verdict() {
 
 /// The start after the boot killed at every write of its own, then a third start: the verdict
 /// is still the one the table gives the record the first start found.
-fn crash_during_start(fixture: Fixture, at: CrashPoint, want: &Finished) {
-    let (rig, found, _) = first_crash(fixture, at, &format!("sweep2-count-{fixture:?}"));
+fn crash_during_start(template: &NativeHost, fixture: Fixture, at: CrashPoint, want: &Finished) {
+    let (rig, found, _) = first_crash(template, fixture, at, &format!("sweep2-count-{fixture:?}"));
     let Some(found) = found else {
         return;
     };
@@ -212,7 +254,8 @@ fn crash_during_start(fixture: Fixture, at: CrashPoint, want: &Finished) {
     for k in 1..=writes {
         for again in [CrashPoint::BeforeWrite(k), CrashPoint::AfterWrite(k)] {
             let what = format!("{fixture:?} killed at {at:?}, its start killed at {again:?}");
-            let (rig, _, before) = first_crash(fixture, at, &format!("sweep2-{fixture:?}"));
+            let (rig, _, before) =
+                first_crash(template, fixture, at, &format!("sweep2-{fixture:?}"));
             rig.reboot();
             let dying = rig
                 .daemon()
@@ -239,11 +282,9 @@ fn a_start_killed_at_every_write_of_its_own_still_reaches_the_table_verdict() {
         Fixture::Deferred,
         Fixture::Watched,
     ] {
-        let (want, writes) = baseline(fixture);
-        for n in 1..=writes {
-            for at in [CrashPoint::BeforeWrite(n), CrashPoint::AfterWrite(n)] {
-                crash_during_start(fixture, at, &want);
-            }
-        }
+        let (want, writes) = baseline(&template(), fixture);
+        spread(&points(writes), |template, at| {
+            crash_during_start(template, fixture, at, &want);
+        });
     }
 }

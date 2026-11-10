@@ -22,17 +22,22 @@
 //!
 //! A desired state may name the digest of its version's package (`release_digest`), or the
 //! record of the version's release index (`release_index`: the index's digest and the package
-//! digest of each platform it lists, [`crate::release_index`]), never both; and each service's
-//! state in the file carries the registry of every version CI has set with a release
+//! digest of each platform it lists, [`crate::registry::IndexRecord`]), never both; and each
+//! service's state in the file carries the registry of every version CI has set with a release
 //! (`digests`, [`crate::registry`]: a package digest, or the record of an index), written in the
 //! same replacement of the file as the state, so a crash leaves both or neither. The keys are
 //! written only when they hold something: a farm whose CI sends no digest keeps the bytes it
 //! had, which earlier builds read, and a farm that sets no index never has `release_index`.
 //! Earlier builds refuse a file that has the key `release_index` or `digests` (their reader
 //! refuses a key it does not know), so a coordinator rolled back below this one refuses to
-//! start rather than run without the digests. A request never writes the record: the keys
-//! `release_index` and `release_index_digest` of a set are the index's text and its SHA-256,
-//! which are checked and turned into the record ([`Desired::parse_request_noting`]).
+//! start rather than run without the digests. None of it orders a host anything: only a release
+//! set with targets does ([`crate::picks`]), and a version kept as a digest or an index picks
+//! every host nothing. A request never writes the record: the keys `release_index` and
+//! `release_index_digest` of a set are the index's text and its SHA-256, which are checked
+//! ([`index_checked`]) and turned into a record of the digest alone; the text is not read.
+//! The host groups and their desired versions are the map form's top-level key `host_groups`,
+//! written only while a group is held ([`crate::host_groups`]); earlier builds refuse it as they
+//! refuse any key they do not know.
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, OpenOptions};
@@ -41,13 +46,14 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use hostkeeper_wire::RoleName;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::{Platform, RoleName};
 
 use serde::{Deserialize, Serialize};
 
-use crate::registry::{Digest, IndexRecord, Package, Registry, RegistryError, Release};
-use crate::release_index;
+use crate::ops_file;
+use crate::registry::{Digest, IndexRecord, Registry, RegistryError, Release};
+use crate::releases::Release as Kept;
 use crate::services::Services;
 use crate::store::{BackendError, Commit, Files, Shared};
 use crate::write_record::{WriteAsk, WriteError, WriteId, WriteRecord};
@@ -218,12 +224,14 @@ pub struct Desired {
     #[serde(serialize_with = "write_min_up")]
     pub min_up: RoleLimits,
     /// The digest of the package of `version`, as CI set it ([`crate::registry`]); none when CI
-    /// sent none. Written only when there is one.
+    /// sent none. Written only when there is one. It orders nothing: only a release set with
+    /// targets does ([`crate::picks`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_digest: Option<Digest>,
-    /// The record of the release index of `version`, as CI set it: each host is ordered the
-    /// package the index lists for its platform. None when CI sent no index; never with a
-    /// `release_digest`. Written only when there is one.
+    /// The record of the release index of `version`, as CI set it: the digest of the index, whose
+    /// text is not read. None when CI sent no index; never with a `release_digest`. Written only
+    /// when there is one. It orders nothing: only a release set with targets does
+    /// ([`crate::picks`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_index: Option<IndexRecord>,
 }
@@ -246,7 +254,7 @@ pub enum DesiredError {
     /// The registry of digests of a service is refused.
     #[error(transparent)]
     Registry(#[from] RegistryError),
-    /// A release index that cannot be taken as the version's: see [`crate::release_index`].
+    /// A release index that cannot be taken as the version's: see [`index_checked`].
     #[error("index_invalid: {0}")]
     IndexInvalid(&'static str),
     /// The text of a release index does not have the SHA-256 the set named.
@@ -351,12 +359,10 @@ impl Desired {
         let mut desired: Self = serde_json::from_value(fields.into()).map_err(malformed)?;
         desired.checked()?;
         desired.refuse_unnamed(services)?;
-        desired.release_index = release_index::checked(
+        desired.release_index = index_checked(
             index_text.as_ref(),
             index_digest.as_ref(),
             desired.release_digest.is_some(),
-            &service,
-            &desired.version,
         )?;
         let has = |role: &str| def.roles.contains(role);
         let mut dropped = desired.max_updating.retain(&FORMAT_ROLES, has);
@@ -410,26 +416,9 @@ impl Desired {
         }
     }
 
-    /// The package a host of `platform` is ordered of the version; none when CI set no release
-    /// or the release index lists no package for the platform.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        self.release()
-            .and_then(|release| release.package_for(platform))
-    }
-
-    /// Whether the version has a release index that lists no package for `platform`: a host of
-    /// that platform is not ordered the version.
-    #[must_use]
-    pub fn lacks_package_for(&self, platform: Platform) -> bool {
-        self.release_index
-            .as_ref()
-            .is_some_and(|record| record.package_for(platform).is_none())
-    }
-
     /// Whether the state is acceptable: every limit key a role name, every count within
     /// [`MAX_COUNT`], and no package digest beside a release index.
-    fn checked(&self) -> Result<(), DesiredError> {
+    pub(crate) fn checked(&self) -> Result<(), DesiredError> {
         if self.release_digest.is_some() && self.release_index.is_some() {
             return Err(DesiredError::Malformed(
                 "release_digest and release_index are exclusive".to_owned(),
@@ -454,6 +443,54 @@ impl Desired {
     }
 }
 
+/// The refusal `index_invalid`, saying `why`.
+const fn invalid(why: &'static str) -> DesiredError {
+    DesiredError::IndexInvalid(why)
+}
+
+/// The record of the release index a set named by `text` and `digest`, if it named one: none when
+/// it named neither. `has_package_digest` says that the same set names a package digest. The text
+/// is not read, only its SHA-256 is held to the digest the set named, in this order, and the first
+/// check that fails refuses the set:
+///
+/// 1. one of the two keys without the other, either not text, or the package digest as well
+///    (`index_invalid`);
+/// 2. a digest that is not 64 lowercase hex characters (`index_invalid`);
+/// 3. a text whose SHA-256 is not the digest (`index_digest_mismatch`): the index was changed or
+///    cut on its way.
+///
+/// What is kept of an index that passed is its digest alone, with no package.
+fn index_checked(
+    text: Option<&serde_json::Value>,
+    digest: Option<&serde_json::Value>,
+    has_package_digest: bool,
+) -> Result<Option<IndexRecord>, DesiredError> {
+    let (text, digest) = match (text, digest) {
+        (None, None) => return Ok(None),
+        (Some(text), Some(digest)) => (text, digest),
+        _ => {
+            return Err(invalid(
+                "release_index and release_index_digest come together",
+            ));
+        }
+    };
+    if has_package_digest {
+        return Err(invalid("release_index is not set with a package digest"));
+    }
+    let (Some(text), Some(digest)) = (text.as_str(), digest.as_str()) else {
+        return Err(invalid("release_index and its digest are text"));
+    };
+    let digest = Digest::parse(digest)
+        .map_err(|_| invalid("release_index_digest is not 64 lowercase hex characters"))?;
+    if ops_file::digest(text.as_bytes()) != digest.as_str() {
+        return Err(DesiredError::IndexDigestMismatch);
+    }
+    Ok(Some(IndexRecord {
+        digest,
+        packages: BTreeMap::new(),
+    }))
+}
+
 /// What the store holds: the desired state of each service, and the registry of digests of each.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Held {
@@ -464,98 +501,18 @@ pub(crate) struct Held {
     /// How each service's writes are recorded ([`crate::write_record`]), kept only over a backend
     /// that keeps them; a service never written is not listed.
     pub(crate) records: BTreeMap<String, WriteRecord>,
-}
-
-/// One service's state as the file writes it: the desired state, then its registry when it holds
-/// any.
-#[derive(Serialize)]
-struct EntryOut<'a> {
-    #[serde(flatten)]
-    desired: &'a Desired,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    digests: Option<&'a Registry>,
-}
-
-/// The state file in its map form, as written.
-#[derive(Serialize)]
-struct MapFileOut<'a> {
-    services: BTreeMap<&'a str, EntryOut<'a>>,
-}
-
-/// The desired state and the registry of one service's entry in the file: the state's own keys,
-/// read strictly, and `digests`.
-fn parse_entry(value: serde_json::Value) -> Result<(Desired, Registry), DesiredError> {
-    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
-    let mut fields: serde_json::Map<String, serde_json::Value> =
-        serde_json::from_value(value).map_err(malformed)?;
-    let digests = match fields.remove("digests") {
-        Some(value) => Registry::read(value)?,
-        None => Registry::default(),
-    };
-    let desired: Desired = serde_json::from_value(fields.into()).map_err(malformed)?;
-    desired.checked()?;
-    Ok((desired, digests))
-}
-
-/// The services in `bytes`: a map file, or the single state of earlier builds as the
-/// legacy service's (`legacy`; with none set that file is refused).
-pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, DesiredError> {
-    let malformed = |e: serde_json::Error| DesiredError::Malformed(e.to_string());
-    let value: serde_json::Value = serde_json::from_slice(bytes).map_err(malformed)?;
-    let mut held = Held::default();
-    let Some(services) = value.get("services").cloned() else {
-        let name = legacy.ok_or(DesiredError::NoLegacyService)?;
-        let (desired, digests) = parse_entry(value)?;
-        held.insert(name, desired, digests);
-        return Ok(held);
-    };
-    if let Some(other) = value
-        .as_object()
-        .and_then(|map| map.keys().find(|key| *key != "services"))
-    {
-        return Err(DesiredError::Malformed(format!("unknown field `{other}`")));
-    }
-    let services: BTreeMap<String, serde_json::Value> =
-        serde_json::from_value(services).map_err(malformed)?;
-    for (name, entry) in services {
-        let (desired, digests) = parse_entry(entry)?;
-        held.insert(&name, desired, digests);
-    }
-    Ok(held)
-}
-
-/// The text of the file holding `held`: the single state of earlier builds while `legacy` is the
-/// only service, which earlier builds read and whose reader refuses the map form; the map
-/// otherwise.
-///
-/// # Errors
-/// The state could not be serialised.
-pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
-    let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
-        [(name, only)] if Some(name.as_str()) == legacy => {
-            serde_json::to_vec_pretty(&held.entry(name, only))
-        }
-        _ => serde_json::to_vec_pretty(&MapFileOut {
-            services: held
-                .desired
-                .iter()
-                .map(|(name, desired)| (name.as_str(), held.entry(name, desired)))
-                .collect(),
-        }),
-    };
-    let mut text = encoded?;
-    text.push(b'\n');
-    Ok(text)
+    /// The releases each service's versions were set with ([`crate::releases`]), kept beside the
+    /// state and its registry, never in their file; a service with none is not listed.
+    pub(crate) releases: crate::releases::Books,
+    /// The registry of package repositories ([`crate::repositories`]), kept beside the state
+    /// and never in its file; the default registry (generation 0, none) when none was put.
+    pub(crate) repositories: crate::repositories::Registry,
+    /// The host groups and their desired versions ([`crate::host_groups`]), in the state file
+    /// under `host_groups` only while one is held.
+    pub(crate) host_groups: crate::host_groups::HostGroups,
 }
 
 impl Held {
-    fn insert(&mut self, name: &str, desired: Desired, digests: Registry) {
-        self.desired.insert(name.to_owned(), desired);
-        if !digests.is_empty() {
-            self.digests.insert(name.to_owned(), digests);
-        }
-    }
-
     fn digests_of(&self, service: &str) -> Registry {
         self.digests.get(service).cloned().unwrap_or_default()
     }
@@ -564,15 +521,11 @@ impl Held {
     fn record_of(&self, service: &str) -> WriteRecord {
         self.records.get(service).cloned().unwrap_or_default()
     }
-
-    /// The entry of `name`, whose state is `desired`, as the file writes it.
-    fn entry<'a>(&'a self, name: &str, desired: &'a Desired) -> EntryOut<'a> {
-        EntryOut {
-            desired,
-            digests: self.digests.get(name).filter(|r| !r.is_empty()),
-        }
-    }
 }
+
+#[path = "desired_file.rs"]
+mod file;
+pub(crate) use file::{encode, parse_file};
 
 /// Why the state file could not be read or written.
 #[derive(Debug, thiserror::Error)]
@@ -629,6 +582,25 @@ pub struct DesiredStore {
 impl std::fmt::Debug for DesiredStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DesiredStore").finish_non_exhaustive()
+    }
+}
+
+/// What a write records beside the state: its version's digest or index in the registry, its
+/// release ([`crate::releases`]), and its write id.
+struct Staging {
+    digests: Option<(Version, Release)>,
+    release: Option<Arc<Kept>>,
+    id: Option<WriteId>,
+}
+
+impl Staging {
+    /// A write of `digests` alone.
+    const fn digests(digests: Option<(Version, Release)>) -> Self {
+        Self {
+            digests,
+            release: None,
+            id: None,
+        }
     }
 }
 
@@ -765,8 +737,10 @@ impl DesiredStore {
     }
 
     /// [`Self::record`] for a write that asks `ask` of the store: with `if_generation`, only
-    /// over that generation; with a write id, kept as the last write's. Answers the service's
-    /// record after the write, none over a backend that keeps no records.
+    /// over that generation; with a write id, kept as the last write's; with `release`, kept as
+    /// the release of the state's version in the same commit ([`crate::releases::record`], under
+    /// the cap's `keep`). Answers the service's record after the write, none over a backend that
+    /// keeps no records.
     ///
     /// # Errors
     /// [`WriteError`], as [`Self::admits`] (checked under the writers' lock, so no write lands
@@ -777,11 +751,17 @@ impl DesiredStore {
         desired: Desired,
         keep: impl Fn(&Version) -> bool,
         ask: &WriteAsk,
+        release: Option<Arc<Kept>>,
     ) -> Result<Option<WriteRecord>, WriteError> {
-        let release = desired
+        let digests = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        let staged = self.staged(service, desired, release, &keep, ask.write_id.clone());
+        let release = Staging {
+            digests,
+            release,
+            id: ask.write_id.clone(),
+        };
+        let staged = self.staged(service, desired, release, &keep);
         self.admit(&staged.before, service, ask)?;
         let record = staged.after.records.get(service).cloned();
         self.commit_staged(staged)?;
@@ -829,7 +809,7 @@ impl DesiredStore {
         release: Option<(Version, Release)>,
         keep: &dyn Fn(&Version) -> bool,
     ) -> Result<Recorded, StoreError> {
-        let staged = self.staged(service, desired, release, keep, None);
+        let staged = self.staged(service, desired, Staging::digests(release), keep);
         self.commit_staged(staged)
     }
 
@@ -869,19 +849,24 @@ impl DesiredStore {
         let release = desired
             .release()
             .map(|release| (desired.version.clone(), release));
-        self.staged(service, desired, release, &keep, None)
+        self.staged(service, desired, Staging::digests(release), &keep)
     }
 
-    /// The state with `desired` set for `service` and its release recorded; over a backend that
-    /// keeps write records, with the service's record raised by one write whose id is `id`.
+    /// The state with `desired` set for `service` and what `staging` records with it: its
+    /// version's digest or index in the registry, its release beside it; over a backend that
+    /// keeps write records, with the service's record raised by one write of `staging`'s id.
     fn staged(
         &self,
         service: &str,
         desired: Desired,
-        release: Option<(Version, Release)>,
+        staging: Staging,
         keep: &dyn Fn(&Version) -> bool,
-        id: Option<WriteId>,
     ) -> Staged<'_> {
+        let Staging {
+            digests: release,
+            release: kept,
+            id,
+        } = staging;
         let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
         let before = self.lock().clone();
         let mut after = before.clone();
@@ -890,6 +875,10 @@ impl DesiredStore {
                 .record_of(service)
                 .after(before.desired.get(service), &desired, id);
             after.records.insert(service.to_owned(), record);
+        }
+        if let Some(kept) = kept {
+            let book = after.releases.entry(service.to_owned()).or_default();
+            crate::releases::record(book, &desired.version, kept, keep);
         }
         after.desired.insert(service.to_owned(), desired);
         if let Some((version, release)) = release {
@@ -903,6 +892,69 @@ impl DesiredStore {
             before,
             after,
         }
+    }
+
+    /// `read` over the registry of package repositories now, without copying its keyrings.
+    pub(crate) fn with_repositories<T>(
+        &self,
+        read: impl FnOnce(&crate::repositories::Registry) -> T,
+    ) -> T {
+        read(&self.lock().repositories)
+    }
+
+    /// The desired state with the registry `edit` makes of the registry now, staged under the
+    /// writers' lock and not committed: for `Repositories.Put` and `Repositories.Remove`, which
+    /// commit it with their audit entries ([`crate::ops::OpsStore::decide_changes_with`]). The
+    /// edit runs under the lock, on the registry it replaces, so a limit it checks holds however
+    /// many callers there are.
+    ///
+    /// # Errors
+    /// The edit's own error: nothing was staged.
+    pub(crate) fn stage_repositories<E>(
+        &self,
+        edit: impl FnOnce(&crate::repositories::Registry) -> Result<crate::repositories::Registry, E>,
+    ) -> Result<Staged<'_>, E> {
+        let writer = self.writing.lock().unwrap_or_else(PoisonError::into_inner);
+        let before = self.lock().clone();
+        let mut after = before.clone();
+        after.repositories = edit(&before.repositories)?;
+        Ok(Staged {
+            store: self,
+            _writer: writer,
+            before,
+            after,
+        })
+    }
+
+    /// The release `version` of `service` was set with, if any.
+    #[must_use]
+    pub(crate) fn release(&self, service: &str, version: &str) -> Option<Arc<Kept>> {
+        self.lock()
+            .releases
+            .get(service)
+            .and_then(|book| book.get(version))
+            .cloned()
+    }
+
+    /// The releases of every service's desired version and of the `other` versions, by service
+    /// and version: those the decisions read ([`crate::picks`]). A version with none is not
+    /// listed.
+    pub(crate) fn releases_of(
+        &self,
+        other: Vec<(String, Version)>,
+    ) -> BTreeMap<(String, String), Arc<Kept>> {
+        let held = self.lock();
+        let wanted = held
+            .desired
+            .iter()
+            .map(|(service, d)| (service.clone(), d.version.clone()));
+        wanted
+            .chain(other)
+            .filter_map(|(service, version)| {
+                let kept = held.releases.get(&service)?.get(version.as_str())?.clone();
+                Some(((service, version.as_str().to_owned()), kept))
+            })
+            .collect()
     }
 
     /// Takes the desired state of a commit of unknown outcome that `landing` found landed into

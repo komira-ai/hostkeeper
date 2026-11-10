@@ -1,0 +1,103 @@
+# A new Linux host, from its first contact to running its first service.
+# docs/report/results/README.md describes the plans and how a run becomes a result;
+# `hostkeeper-measure check --plan` checks this file.
+id = "enrollment"
+title = "A new Linux host enrolled and running its first service"
+measures = """
+A new host from its first contact with the coordinator to enrolled and running its first \
+service: its enrollment request, the operator's approval (or the inventory's), the certificate \
+issued at the host's next poll, its first heartbeat, and its first heartbeat with a managed \
+service installed, healthy and not updating. Every step is timed by the coordinator's own \
+stamps. Run it when a host is enrolled, with no other enrollment pending."""
+records = """
+The audit entries `enroll_requested`, `enroll_approve` (or `enrollment.auto_approved`) and \
+`enroll_issued`, each with its time, read with `hkctl audit list`; then the host's \
+`firstHeartbeatUnix` and `firstServingUnix`, read with `hkctl hosts get`. The runner polls every \
+2 s."""
+repetitions = 1
+states = [
+    "A new host was enrolled and serving its first service {total.max} s after its enrollment request, of which {operator.max} s was the operator's time before approving.",
+    "From approval, the certificate took {issue.max} s, the first heartbeat {first-heartbeat.max} s more, and the first service serving {first-serving.max} s more.",
+]
+
+[hosts]
+says = "One new Linux host, not yet enrolled: host-1 in the records."
+pick = "none"
+
+[[step]]
+id = "start"
+do = "operator"
+says = "Bootstrap the new host and start its daemon, as for any host the lab adopts; approve its request with hkctl enrollment approve, naming its first service, once hkctl enrollment list shows it."
+
+[[step]]
+id = "requested"
+do = "watch"
+until = { what = "audit", actions = ["enroll_requested"] }
+poll_secs = 2
+timeout_secs = 1800
+
+[[step]]
+id = "approved"
+do = "watch"
+until = { what = "audit", actions = ["enroll_approve", "enrollment.auto_approved"] }
+poll_secs = 2
+timeout_secs = 3600
+
+[[step]]
+id = "issued"
+do = "watch"
+until = { what = "audit", actions = ["enroll_issued"] }
+poll_secs = 2
+timeout_secs = 900
+
+[[step]]
+id = "serving"
+do = "watch"
+until = { what = "beating" }
+poll_secs = 2
+timeout_secs = 1800
+
+[[measure]]
+id = "operator"
+kind = "span"
+says = "the request to its approval: the operator's time"
+unit = "s"
+from = "requested/seen"
+to = "approved/seen"
+pick = "first"
+
+[[measure]]
+id = "issue"
+kind = "span"
+says = "the approval to the certificate issued"
+unit = "s"
+from = "approved/seen"
+to = "issued/seen"
+pick = "first"
+
+[[measure]]
+id = "first-heartbeat"
+kind = "span"
+says = "the certificate issued to the first heartbeat"
+unit = "s"
+from = "issued/seen"
+to = "serving/first-heartbeat"
+pick = "first"
+
+[[measure]]
+id = "first-serving"
+kind = "span"
+says = "the first heartbeat to the first service serving"
+unit = "s"
+from = "serving/first-heartbeat"
+to = "serving/first-serving"
+pick = "first"
+
+[[measure]]
+id = "total"
+kind = "span"
+says = "the request to the first service serving"
+unit = "s"
+from = "requested/seen"
+to = "serving/first-serving"
+pick = "first"

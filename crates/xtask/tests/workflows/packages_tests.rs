@@ -1,0 +1,948 @@
+//! The rules of the package-channel jobs of `release.yml` ([`super::packages`]): the repository's
+//! file passes, and each rule is shown to refuse its defect by putting the defect into one job of
+//! the repository's `release.yml` and reading the problem the lint reports.
+
+use super::lint::lint;
+use super::packages::{
+    NEWEST_RUN, PUBLISH_ENV, SIGNING_ENV, STAGES, UBUNTU_IMAGE, docker_line_ok, id_token_condition,
+    job_names, rows,
+};
+use super::release::publish_problems;
+use super::workflows;
+use super::xtask_calls::{call_problem, commands, xtask_args};
+
+/// The repository's release.yml.
+fn release_yml() -> String {
+    workflows()
+        .into_iter()
+        .find(|(file, _)| file == "release.yml")
+        .map(|(_, text)| text)
+        .expect("release.yml exists")
+}
+
+/// Every problem the lint and the publish rule find in `text` as release.yml.
+fn problems(text: &str) -> Vec<String> {
+    let mut found = lint("release.yml", text);
+    found.extend(publish_problems("release.yml", text));
+    found
+}
+
+/// The byte range of the job `name` in `text`: from its header to the next job's header.
+fn job_range(text: &str, name: &str) -> (usize, usize) {
+    let start = text
+        .find(&format!("\n  {name}:\n"))
+        .unwrap_or_else(|| panic!("release.yml has no job {name}"))
+        + 1;
+    let end = text[start..]
+        .match_indices("\n  ")
+        .map(|(at, _)| start + at + 1)
+        .find(|&at| {
+            let rest = &text[at + 2..];
+            !rest.starts_with(' ')
+                && !rest.starts_with('#')
+                && rest.split_once(":\n").is_some_and(|(n, _)| {
+                    n.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+                })
+        })
+        .unwrap_or(text.len());
+    (start, end)
+}
+
+/// `text` with the first `from` inside the job `name` replaced by `to`.
+fn in_job(text: &str, name: &str, from: &str, to: &str) -> String {
+    let (start, end) = job_range(text, name);
+    let job = &text[start..end];
+    assert!(
+        job.contains(from),
+        "{from:?} is not in the job {name}:\n{job}"
+    );
+    format!(
+        "{}{}{}",
+        &text[..start],
+        job.replacen(from, to, 1),
+        &text[end..]
+    )
+}
+
+#[track_caller]
+fn assert_refused(text: &str, want: &str) {
+    let found = problems(text);
+    assert!(
+        found.iter().any(|p| p.contains(want)),
+        "no problem holds {want:?}; found {found:?}"
+    );
+}
+
+#[test]
+fn the_package_channel_jobs_of_the_repository_pass() {
+    // Catches: a rule that refuses the jobs as they are, so that every case below would fail for
+    // that reason instead of the defect it adds.
+    assert_eq!(problems(&release_yml()), Vec::<String>::new());
+}
+
+#[test]
+fn the_rows_hold_the_key_and_the_role_in_no_job_and_the_role_in_exactly_the_writers_and_readers() {
+    // Catches: a table that lets one job hold the signing key and assume the cloud role, or a
+    // job that assumes the role without an exact `if:` for its `id-token: write`.
+    let all = rows();
+    assert_eq!(all.len(), 46);
+    let mut names = job_names();
+    names.dedup();
+    assert_eq!(names.len(), all.len(), "a job has two rows");
+    for row in &all {
+        let role = row.permissions.contains(&("id-token", "write"));
+        let assumes = row.verbs.iter().any(|v| v == "assume");
+        assert_eq!(
+            role, assumes,
+            "{}: id-token and channels assume go together",
+            row.name
+        );
+        assert!(
+            !(role && row.environment == Some(SIGNING_ENV)),
+            "{} holds the key and the role",
+            row.name
+        );
+        assert_eq!(role, row.environment == Some(PUBLISH_ENV), "{}", row.name);
+        assert_eq!(
+            id_token_condition("release.yml", &row.name).is_some(),
+            role,
+            "{}",
+            row.name
+        );
+        let signs = row
+            .verbs
+            .iter()
+            .any(|v| v.ends_with("sign") && v != "rpm check-signed");
+        assert_eq!(
+            signs,
+            row.environment == Some(SIGNING_ENV),
+            "{} signs",
+            row.name
+        );
+    }
+    assert_eq!(id_token_condition("ci.yml", "testing-apt-read"), None);
+    assert_eq!(id_token_condition("release.yml", "testing-apt-index"), None);
+}
+
+#[test]
+fn a_missing_or_extra_job_is_refused() {
+    // Catches: a package job deleted (its row unchecked), and a job added beside them that could
+    // write or sign without a row.
+    let text = release_yml();
+    let (start, end) = job_range(&text, "check-pkg");
+    let without = format!("{}{}", &text[..start], &text[end..]);
+    assert_refused(&without, "release.yml: job check-pkg is missing");
+    assert_refused(&without, "release.yml: jobs are [");
+    let extra =
+        format!("{text}  notify:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo done\n");
+    assert_refused(&extra, "release.yml: jobs are [");
+}
+
+#[test]
+fn a_job_with_other_needs_or_another_if_is_refused() {
+    // Catches: a job that runs without the job it reads from, a retry that runs when it should
+    // not, and a stable job that no longer waits for the decision.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "check-pkg",
+            "needs: [plan, newest, testing-pkg-upload]",
+            "needs: [plan, testing-pkg-upload]",
+        ),
+        "release.yml: job check-pkg needs [\"plan\", \"testing-pkg-upload\"], not [\"newest\", \"plan\", \"testing-pkg-upload\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "stable-apt-write-2",
+            "!cancelled() && !failure() && ",
+            "",
+        ),
+        "release.yml: job stable-apt-write-2 needs the exact `if:",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-pkg",
+            " && needs.promote-check.outputs.promote == 'true'",
+            "",
+        ),
+        "release.yml: job promote-pkg needs the exact `if:",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-rpm-read-2",
+            " && needs.testing-rpm-write.outputs.conflict == 'true'",
+            "",
+        ),
+        "release.yml: job testing-rpm-read-2 needs the exact `if:",
+    );
+}
+
+#[test]
+fn a_job_in_the_wrong_environment_or_with_other_permissions_is_refused() {
+    // Catches: the index job (the key) in the environment that holds the role, the read job in
+    // none, the key's job given the token that mints the role's credentials, and a write scope.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "environment: apt-signing",
+            "environment: apt-publish",
+        ),
+        "release.yml: job testing-apt-index is in the environment Some(\"apt-publish\"), not Some(\"apt-signing\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "    environment: apt-publish\n",
+            "",
+        ),
+        "release.yml: job testing-apt-read is in the environment None",
+    );
+    let both = in_job(
+        &text,
+        "testing-apt-index",
+        "      attestations: read\n",
+        "      attestations: read\n      id-token: write\n",
+    );
+    assert_refused(
+        &both,
+        "release.yml: job testing-apt-index needs exactly the permissions",
+    );
+    assert_refused(
+        &both,
+        "job testing-apt-index: `id-token: write` is not allowed in release.yml",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-apt",
+            "      contents: read\n",
+            "      contents: write\n",
+        ),
+        "job check-apt: `contents: write` is not allowed in release.yml",
+    );
+}
+
+#[test]
+fn id_token_write_needs_the_jobs_exact_if() {
+    // Catches: a job that assumes the role under a wider condition than its row's, such as one
+    // that runs on a failed or cancelled run.
+    let text = release_yml();
+    let (start, end) = job_range(&text, "testing-apt-read-2");
+    let job = &text[start..end];
+    let wide = job.replacen(
+        " && needs.testing-apt-write.outputs.conflict == 'true' }}",
+        " }}",
+        1,
+    );
+    let text = format!("{}{wide}{}", &text[..start], &text[end..]);
+    assert_refused(
+        &text,
+        "job testing-apt-read-2: `id-token: write` needs the exact `if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && needs.testing-apt-write.outputs.conflict == 'true' }}`",
+    );
+}
+
+#[test]
+fn a_job_that_runs_a_verb_of_another_row_is_refused() {
+    // Catches: the job with the key assuming the role (so that one compromised step holds both),
+    // a read job that also writes, and an index job that signs what the other index job signs.
+    let text = release_yml();
+    let assume = "      - run: cargo xtask channels assume --role-arn x --session-name hostkeeper-x --region us-east-1 --token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\" --env-file \"$GITHUB_ENV\"\n";
+    let step = |job: &str, run: &str| {
+        let (start, end) = job_range(&text, job);
+        let job_text = text[start..end].trim_end_matches('\n');
+        format!("{}{job_text}\n{run}\n{}", &text[..start], &text[end..])
+    };
+    assert_refused(
+        &step("testing-apt-index", assume.trim_end()),
+        "release.yml: job testing-apt-index runs the `channels` verbs",
+    );
+    assert_refused(
+        &step(
+            "testing-apt-read",
+            "      - run: cargo xtask channels apt write --suite testing --bucket b --distribution-id d --hostname h --next n --no-pool",
+        ),
+        "release.yml: job testing-apt-read runs the `channels` verbs",
+    );
+    assert_refused(
+        &step(
+            "testing-apt-index",
+            "      - run: cargo xtask channels rpm sign --rpms r --out o --version 1.2.3 --sums s --work w --fingerprint f --signed-at 1",
+        ),
+        "release.yml: job testing-apt-index runs the `channels` verbs",
+    );
+}
+
+#[test]
+fn channels_runs_in_no_job_outside_the_package_channels() {
+    // Catches: the package tool run by the jobs that publish or verify the release, which hold
+    // other rights than the package jobs' rows.
+    let text = release_yml();
+    let (start, end) = job_range(&text, "verify");
+    let job = text[start..end].trim_end_matches('\n');
+    let changed = format!(
+        "{}{job}\n      - run: cargo xtask channels gate --label verify --setting A=b\n\n{}",
+        &text[..start],
+        &text[end..]
+    );
+    assert_refused(
+        &changed,
+        "release.yml: job verify builds (`cargo xtask channels gate",
+    );
+}
+
+#[test]
+fn only_the_signing_jobs_name_the_key_and_only_the_job_that_assumes_it_names_the_role() {
+    // Catches: the key's secrets in a job that holds the role, a secret of another name in the
+    // key's job, and the role's variable in the key's job.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "        with:\n          name: apt-current\n",
+            "        env:\n          K: ${{ secrets.APT_GPG_PRIVATE_KEY }}\n        with:\n          name: apt-current\n",
+        ),
+        "release.yml: job testing-apt-read names the secret Some(\"APT_GPG_PRIVATE_KEY\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}\n        run: cargo xtask channels gate",
+            "          APT_GPG_PASSPHRASE: ${{ secrets.OTHER }}\n        run: cargo xtask channels gate",
+        ),
+        "release.yml: job testing-apt-index names the secret Some(\"OTHER\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "          READ_ENABLED: ${{ needs.testing-apt-read.outputs.enabled }}\n",
+            "          READ_ENABLED: ${{ needs.testing-apt-read.outputs.enabled }}\n          R: ${{ vars.APT_PUBLISH_ROLE_ARN }}\n",
+        ),
+        "release.yml: job testing-apt-index names APT_PUBLISH_ROLE_ARN",
+    );
+}
+
+#[test]
+fn every_step_after_the_gate_runs_under_the_gate() {
+    // Catches: a step that writes whether or not the settings exist, a gate named for another
+    // job, a gate that is not right after the build of xtask, and the rpm tree read before the
+    // repository variable says it is deployed.
+    let text = release_yml();
+    let gated = "        if: ${{ steps.gate.outputs.enabled == 'true' }}\n        env:\n          APT_BUCKET: ${{ vars.APT_BUCKET }}\n        run: cargo xtask channels apt read --suite testing";
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            gated,
+            &gated.replacen(
+                "        if: ${{ steps.gate.outputs.enabled == 'true' }}\n",
+                "",
+                1,
+            ),
+        ),
+        "release.yml: job testing-apt-read has step 6 that does not run under `if: ${{ steps.gate.outputs.enabled == 'true' }}`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "--label testing-apt-read ",
+            "--label testing-apt-write ",
+        ),
+        "release.yml: job testing-apt-read needs a gate that starts `cargo xtask channels gate --label testing-apt-read --output \"$GITHUB_OUTPUT\"`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "      - name: Compile xtask\n        run: cargo xtask --help\n",
+            "",
+        ),
+        "release.yml: job testing-apt-read must run its gate right after the checkout, the toolchain and the compile of xtask",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-rpm-read",
+            " --require \"RPM_REPO_READY=$RPM_REPO_READY\"",
+            "",
+        ),
+        "release.yml: job testing-rpm-read must be off while the repository variable RPM_REPO_READY is not `true`",
+    );
+}
+
+#[test]
+fn the_last_attempt_fails_on_a_lost_race_and_stable_writes_no_pool() {
+    // Catches: a third attempt that asks for a fourth, a first attempt that fails on the race it
+    // is built to retry, a stable write that uploads packages again, and a testing write that
+    // does not upload them.
+    let text = release_yml();
+    assert_refused(
+        &in_job(&text, "testing-apt-write-3", " --last", ""),
+        "release.yml: job testing-apt-write-3 passes --last exactly in the third attempt",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-rpm-write",
+            "--version \"${TAG#v}\" --output",
+            "--version \"${TAG#v}\" --last --output",
+        ),
+        "release.yml: job testing-rpm-write passes --last exactly in the third attempt",
+    );
+    assert_refused(
+        &in_job(&text, "stable-apt-write", " --no-pool", ""),
+        "release.yml: job stable-apt-write passes --no-pool exactly when it writes the index of stable",
+    );
+    assert_refused(
+        &in_job(&text, "stable-rpm-write-2", " --no-pool", ""),
+        "release.yml: job stable-rpm-write-2 passes --no-pool exactly when it writes the index of stable",
+    );
+}
+
+#[test]
+fn a_job_names_only_the_suite_its_row_says() {
+    // Catches: the stable write that writes testing, the testing index merged into stable, and a
+    // read of stable in a testing job.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "stable-apt-write",
+            "--suite stable",
+            "--suite testing",
+        ),
+        "release.yml: job stable-apt-write passes --suite [\"testing\"], not [\"stable\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "--suite testing",
+            "--suite stable",
+        ),
+        "release.yml: job testing-apt-read passes --suite [\"stable\"], not [\"testing\"]",
+    );
+}
+
+#[test]
+fn a_session_of_the_role_starts_with_the_products_prefix() {
+    // Catches: the role assumed under a name that does not say whose release it is.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "--session-name \"hostkeeper-",
+            "--session-name \"other-",
+        ),
+        "release.yml: job testing-apt-read assumes the role under the session \"other-testing-apt-read-$GITHUB_RUN_ID\"",
+    );
+}
+
+#[test]
+fn every_assume_step_passes_the_token_request_url_as_a_flag() {
+    // Catches: a step that leaves the URL to the environment (the flag dropped), or passes
+    // another value for it.
+    let text = release_yml();
+    let flag = " --token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\"";
+    assert!(text.matches(flag).count() >= 1);
+    let want = "release.yml: job testing-apt-read assumes the role without `--token-url \"$ACTIONS_ID_TOKEN_REQUEST_URL\"`";
+    assert_refused(&in_job(&text, "testing-apt-read", flag, ""), want);
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            flag,
+            " --token-url \"https://token.example/request\"",
+        ),
+        want,
+    );
+}
+
+#[test]
+fn a_package_job_works_on_the_newest_release_of_the_run() {
+    // Catches: a job that checks out another commit than the release it publishes, takes its
+    // commit or tag from the plan (the oldest release's), or downloads another release's files.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "          ref: ${{ needs.newest.outputs.commit }}\n",
+            "          ref: ${{ github.sha }}\n",
+        ),
+        "release.yml: job testing-apt-index needs a first step that checks out `ref: ${{ needs.newest.outputs.commit }}`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "      COMMIT: ${{ needs.newest.outputs.commit }}",
+            "      COMMIT: ${{ github.sha }}",
+        ),
+        "release.yml: job testing-apt-index needs `env: COMMIT: ${{ needs.newest.outputs.commit }}`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-index",
+            "          name: release-${{ needs.newest.outputs.tag }}\n",
+            "          name: release-assets\n",
+        ),
+        "release.yml: job testing-apt-index downloads the artifact Some(\"release-assets\")",
+    );
+}
+
+#[test]
+fn the_newest_job_reads_the_last_entry_of_the_matrix_and_nothing_else() {
+    // Catches: the first entry of the matrix (the oldest release), and a second step.
+    let text = release_yml();
+    assert!(text.contains(NEWEST_RUN));
+    assert_refused(
+        &in_job(&text, "newest", "'.include[-1] |", "'.include[0] |"),
+        "release.yml: job newest needs exactly the one step",
+    );
+}
+
+#[test]
+fn docker_runs_only_in_the_install_checks_with_an_image_pinned_by_digest() {
+    // Catches: docker in a job that publishes, an install check whose image moves, a container
+    // with privilege or a mount, and a matrix image that is a tag.
+    let text = release_yml();
+    let mut found = problems(&text);
+    found.retain(|p| p.contains("docker"));
+    assert_eq!(found, Vec::<String>::new());
+    assert_refused(
+        &in_job(
+            &text,
+            "verify",
+            "      - run: mkdir \"$RUNNER_TEMP/binary\"\n",
+            "      - run: docker run --rm alpine true\n",
+        ),
+        "release.yml: job verify builds (`docker run --rm alpine true`)",
+    );
+    assert_refused(
+        &in_job(&text, "check-apt", UBUNTU_IMAGE, "ubuntu:24.04"),
+        "release.yml: job check-apt builds (`docker run --rm --volume",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-apt",
+            "docker run --rm ",
+            "docker run --rm --privileged ",
+        ),
+        "release.yml: job check-apt builds (`docker run --rm --privileged",
+    );
+    assert_refused(
+        &in_job(&text, "check-apt", ":ro\"", "\" --volume /:/host"),
+        "release.yml: job check-apt builds (`docker run",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-rpm",
+            "          - fedora@sha256:",
+            "          - fedora:41@@sha256:",
+        ),
+        "release.yml: job check-rpm: the image Some(\"fedora:41@@sha256:",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-rpm",
+            "        image:\n          - fedora@sha256:a7d72ba2745b100a3351087472e5ee7b2450af7cf331e7673007e3817612839c\n",
+            "        image:\n          - fedora\n",
+        ),
+        "is not pinned by digest",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-rpm",
+            "IMAGE: ${{ matrix.image }}",
+            "IMAGE: fedora:latest",
+        ),
+        "release.yml: job check-rpm must start its container from `IMAGE: ${{ matrix.image }}`",
+    );
+    assert!(docker_line_ok(
+        "check-rpm",
+        "docker run --detach --name check-rpm \"$IMAGE\" sleep infinity"
+    ));
+    assert!(!docker_line_ok(
+        "check-rpm",
+        "docker run --detach --name check-rpm fedora sleep infinity"
+    ));
+    assert!(!docker_line_ok(
+        "verify",
+        "docker run --detach --name check-rpm \"$IMAGE\" sleep infinity"
+    ));
+}
+
+#[test]
+fn the_install_check_command_inside_the_container_is_read_like_any_xtask_call() {
+    // Catches: a check whose flags the binary would refuse, which a `docker run` line would hide
+    // from the rule that reads every `cargo xtask` call.
+    let words = |line: &str| commands(line).into_iter().next().expect("one command");
+    let ok = format!(
+        "docker run --rm --volume \"$PWD/target/debug/xtask:/usr/local/bin/xtask:ro\" {UBUNTU_IMAGE} xtask channels check-apt --package p --arch amd64 --version 1.2.3 --commit {}",
+        "0".repeat(40)
+    );
+    let command = words(&ok);
+    let args = xtask_args(&command).expect("the call inside the container");
+    assert_eq!(args[..2], ["channels".to_owned(), "check-apt".to_owned()]);
+    assert_eq!(call_problem(args), None);
+    let bad = words(&ok.replace("--arch", "--archx"));
+    let args = xtask_args(&bad).expect("the call inside the container");
+    assert!(call_problem(args).is_some_and(|p| p.contains("--archx")));
+    // Not a call: a docker command that names no image, or runs another program.
+    assert_eq!(
+        xtask_args(&words("docker run --rm alpine xtask channels gate")),
+        None
+    );
+    assert_eq!(
+        xtask_args(&words(&format!("docker run {UBUNTU_IMAGE} ls xtask"))),
+        None
+    );
+    let text = release_yml();
+    assert_refused(
+        &in_job(&text, "check-apt", "--arch \"$ARCH\"", "--archx \"$ARCH\""),
+        "`cargo xtask channels check-apt`",
+    );
+}
+
+#[test]
+fn promote_check_gives_decide_every_stage_from_its_own_job() {
+    // Catches: a stage left out of the decision (a failed check then promotes), a stage given the
+    // result of another job, and a stage the verb does not know.
+    let text = release_yml();
+    assert_eq!(STAGES.len(), 10);
+    let result = " --result \"check-pkg=$CHECK_PKG\"";
+    assert_refused(
+        &in_job(&text, "promote-check", result, ""),
+        "release.yml: job promote-check gives `channels decide` no `--result check-pkg=$CHECK_PKG`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-check",
+            "CHECK_RPM: ${{ needs.check-rpm.result }}",
+            "CHECK_RPM: ${{ needs.check-apt.result }}",
+        ),
+        "release.yml: job promote-check needs `CHECK_RPM: ${{ needs.check-rpm.result }}`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-check",
+            result,
+            &format!("{result} --result \"extra=$X\""),
+        ),
+        "release.yml: job promote-check gives `channels decide` 11 results, not the 10 stages",
+    );
+}
+
+/// The step of every gated job that downloads the release's files.
+const DOWNLOAD: &str = "        with:\n          name: release-${{ needs.newest.outputs.tag }}\n          path: dist\n";
+
+/// The check of the files against SHA256SUMS, as each of those jobs has it.
+const SUMS_STEP: &str = "      - name: The files match SHA256SUMS\n        if: ${{ steps.gate.outputs.enabled == 'true' }}\n        working-directory: dist\n        run: sha256sum --check --strict SHA256SUMS\n";
+
+/// The check of the files' attestations, as each of those jobs has it.
+const ATTESTED_STEP: &str = "      - name: The files are the attested assets of this commit\n        if: ${{ steps.gate.outputs.enabled == 'true' }}\n        env:\n          GH_TOKEN: ${{ github.token }}\n        run: cargo xtask release check dist --version \"${TAG#v}\" --commit \"$COMMIT\"\n";
+
+#[test]
+fn the_release_files_are_checked_in_every_job_that_signs_or_publishes_them() {
+    // Catches: the rule held to fewer jobs than take the release's files (a job that signs the
+    // apt or rpm index, puts the packages or the installers into the pool, or promotes them),
+    // so that one of them could sign or publish bytes the release never attested; and a job
+    // that takes the files without both checks.
+    let text = release_yml();
+    // The gated jobs: those that sign or write. `check-pkg` takes the files too, to compare what
+    // the store serves with them, and neither signs nor writes.
+    let taking: Vec<String> = rows()
+        .into_iter()
+        .filter(|row| row.gated)
+        .map(|row| row.name)
+        .filter(|name| {
+            let (start, end) = job_range(&text, name);
+            text[start..end].contains(DOWNLOAD)
+        })
+        .collect();
+    let mut want: Vec<String> = Vec::new();
+    for job in [
+        "testing-apt-index",
+        "testing-apt-write",
+        "testing-rpm-index",
+        "testing-rpm-write",
+    ] {
+        want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
+    }
+    for job in ["stable-apt-index", "stable-rpm-index"] {
+        want.extend(["", "-2", "-3"].map(|n| format!("{job}{n}")));
+    }
+    // Hello's failing build is signed and written by one attempt, from the same checked files.
+    want.extend(["testing-fail-apt-index", "testing-fail-apt-write"].map(str::to_owned));
+    want.extend(["testing-pkg-upload".to_owned(), "promote-pkg".to_owned()]);
+    let mut got = taking.clone();
+    got.sort();
+    want.sort();
+    assert_eq!(got, want);
+    for name in &taking {
+        let (start, end) = job_range(&text, name);
+        let job = &text[start..end];
+        assert!(
+            job.contains(&format!("{SUMS_STEP}{ATTESTED_STEP}")),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_job_that_uses_the_release_files_before_it_checked_them_is_refused() {
+    // Catches: a job that signs or publishes the release's files without checking them against
+    // SHA256SUMS or against their attestations (a `.deb` or an installer the release never
+    // attested signed into the repository or put into the store, which every host then
+    // trusts), a check of another directory or without the job's token (the online check of
+    // `release check` cannot run), a download elsewhere than the directory the checks read, and
+    // a verb run before the checks.
+    let text = release_yml();
+    let pkg = "testing-pkg-upload";
+    let attested_want = "needs the step `cargo xtask release check dist --version \"${TAG#v}\" --commit \"$COMMIT\"` with `GH_TOKEN: ${{ github.token }}` right after the check of SHA256SUMS";
+    let sums_want = "needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files";
+    assert_refused(
+        &in_job(&text, pkg, ATTESTED_STEP, ""),
+        &format!("release.yml: job {pkg} {attested_want}"),
+    );
+    assert_refused(
+        &in_job(&text, "testing-apt-index", SUMS_STEP, ""),
+        &format!("release.yml: job testing-apt-index {sums_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "stable-apt-index",
+            SUMS_STEP,
+            &SUMS_STEP.replace("        working-directory: dist\n", ""),
+        ),
+        &format!("release.yml: job stable-apt-index {sums_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-write",
+            ATTESTED_STEP,
+            &ATTESTED_STEP.replace(
+                "        env:\n          GH_TOKEN: ${{ github.token }}\n",
+                "",
+            ),
+        ),
+        &format!("release.yml: job testing-apt-write {attested_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-rpm-index-2",
+            ATTESTED_STEP,
+            &ATTESTED_STEP.replace("release check dist ", "release check pool "),
+        ),
+        &format!("release.yml: job testing-rpm-index-2 {attested_want}"),
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-pkg",
+            DOWNLOAD,
+            &DOWNLOAD.replace("path: dist", "path: files"),
+        ),
+        "release.yml: job promote-pkg downloads the release's files elsewhere than `dist`, which its checks read",
+    );
+    let assume = "      - name: Assume the apt publish role through OIDC\n";
+    let (start, end) = job_range(&text, pkg);
+    let job = &text[start..end];
+    let at = job.find(assume).expect("the upload assumes the role");
+    let step_end = at + job[at..].find("\n      - ").expect("a step after it") + 1;
+    let step = &job[at..step_end];
+    let moved = in_job(&text, pkg, step, "");
+    let first_download = "      - uses: actions/download-artifact@";
+    let moved = in_job(
+        &moved,
+        pkg,
+        first_download,
+        &format!("{step}{first_download}"),
+    );
+    assert_refused(
+        &moved,
+        &format!(
+            "release.yml: job {pkg} runs `channels assume` before it checked the release's files"
+        ),
+    );
+    // The same job, its steps in their order, passes: the refusal above is the move's.
+    assert!(
+        problems(&text)
+            .iter()
+            .all(|p| !p.contains("before it checked the release's files")),
+        "{:?}",
+        problems(&text)
+    );
+}
+
+#[test]
+fn hellos_failing_build_has_its_three_jobs_in_one_attempt_in_the_suite_testing_fail() {
+    // Catches: the failing build's publish deleted, or its jobs reading and writing the suite
+    // `testing` (where apt would take the failing build for the release's hello), and the
+    // artifacts of the two apt trees of a run sharing a name.
+    let text = release_yml();
+    let all = rows();
+    for step in ["read", "index", "write"] {
+        let name = format!("testing-fail-apt-{step}");
+        let row = all.iter().find(|r| r.name == name).expect("a row");
+        assert_eq!(row.suites, ["testing-fail"], "{name}");
+        assert_eq!(row.write.is_some(), step == "write", "{name}");
+    }
+    assert!(all.iter().all(|r| !r.name.starts_with("testing-fail-rpm")));
+    let without = {
+        let (start, end) = job_range(&text, "testing-fail-apt-index");
+        format!("{}{}", &text[..start], &text[end..])
+    };
+    assert_refused(
+        &without,
+        "release.yml: job testing-fail-apt-index is missing",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-read",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-read passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "--suite testing-fail",
+            "--suite testing",
+        ),
+        "release.yml: job testing-fail-apt-write passes --suite [\"testing\"], not [\"testing-fail\"]",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "name: apt-fail-next\n",
+            "name: apt-next\n",
+        ),
+        "release.yml: job testing-fail-apt-index hands on the artifact \"apt-next\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-read",
+            "name: apt-current\n",
+            "name: apt-fail-current\n",
+        ),
+        "release.yml: job testing-apt-read hands on the artifact \"apt-fail-current\": the jobs of testing-fail-* and only they name artifacts apt-fail-*, so the two apt trees of a run never share one",
+    );
+}
+
+#[test]
+fn the_failing_builds_write_passes_last_as_its_only_attempt() {
+    // Catches: a write of the failing build that retries on a lost race (it has no second
+    // attempt to retry in), and a family whose last attempt is read as the third.
+    let text = release_yml();
+    assert_refused(
+        &in_job(&text, "testing-fail-apt-write", " --last", ""),
+        "release.yml: job testing-fail-apt-write passes --last exactly in the only attempt, which fails on a lost race instead of asking for another",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-apt-write",
+            "--version \"${TAG#v}\" --output",
+            "--version \"${TAG#v}\" --last --output",
+        ),
+        "release.yml: job testing-apt-write passes --last exactly in the third attempt",
+    );
+}
+
+#[test]
+fn the_failing_builds_jobs_are_not_stages_of_the_promotion() {
+    // Catches: a failing build whose publish holds, or decides, the promotion of the release.
+    let text = release_yml();
+    assert!(STAGES.iter().all(|s| !s.contains("testing-fail")));
+    assert_refused(
+        &in_job(
+            &text,
+            "promote-check",
+            "testing-apt-write,",
+            "testing-apt-write, testing-fail-apt-write,",
+        ),
+        "release.yml: job promote-check needs [",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "check-apt",
+            "testing-apt-write-3]",
+            "testing-apt-write-3, testing-fail-apt-write]",
+        ),
+        "release.yml: job check-apt needs [",
+    );
+}
+
+#[test]
+fn the_failing_builds_jobs_keep_the_signing_key_and_the_cloud_role_apart_and_check_the_files() {
+    // Catches: a testing-fail job that holds both the archive key and the publish role, signs
+    // outside the signing environment, or signs and publishes files it has not checked against
+    // SHA256SUMS and their attestations.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "      attestations: read\n",
+            "      attestations: read\n      id-token: write\n",
+        ),
+        "release.yml: job testing-fail-apt-index needs exactly the permissions",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-index",
+            "environment: apt-signing",
+            "environment: apt-publish",
+        ),
+        "release.yml: job testing-fail-apt-index is in the environment Some(\"apt-publish\"), not Some(\"apt-signing\")",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n          KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}\n",
+        ),
+        "release.yml: job testing-fail-apt-write names the secret Some(\"APT_GPG_PRIVATE_KEY\"), which only the signing jobs may name, and only the key's",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "testing-fail-apt-write",
+            "run: sha256sum --check --strict SHA256SUMS",
+            "run: ls",
+        ),
+        "release.yml: job testing-fail-apt-write needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files",
+    );
+}

@@ -29,6 +29,7 @@ const COMMIT: &str = "c0ffee";
 
 fn conv(state: State) -> Convergence {
     Convergence {
+        picks: None,
         desired: None,
         quiet: false,
         state,
@@ -208,6 +209,7 @@ fn status_lists_every_service_in_name_order_with_the_top_level_facts() {
             reason: Some("freeze".to_owned()),
             at_unix: None,
             by_name: Some("alice".to_owned()),
+            host_group: None,
         }]
     );
 }
@@ -396,6 +398,7 @@ fn convergence_carries_desired_halt_hosts_and_roles() {
     assert_eq!(
         map_convergence(&c),
         proto::Convergence {
+            installer_dropped: Vec::new(),
             desired: Some("3.0".to_owned()),
             quiet: true,
             state: proto::ConvergenceState::Halted as i32,
@@ -421,6 +424,10 @@ fn convergence_carries_desired_halt_hosts_and_roles() {
                 report: None,
             }),
             hosts: Some(proto::HostCounts {
+                picked: 0,
+                no_target: 0,
+                no_build_for_host: 0,
+                installer_dropped: 0,
                 missing: 1,
                 absent: 2,
                 excluded: 3,
@@ -866,6 +873,8 @@ fn full_heartbeat_maps_every_fact_into_the_service_beat() {
     assert_eq!(
         out.beat,
         Some(agent::ServiceBeat {
+            installer: None,
+            drift: None,
             name: "web".to_owned(),
             version: "2.0".to_owned(),
             health: agent::Health::Healthy as i32,

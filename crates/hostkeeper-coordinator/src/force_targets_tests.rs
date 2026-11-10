@@ -13,9 +13,9 @@ use serde_json::{Value, json};
 use crate::desired::StoreError;
 use crate::force::{ForceRecord, ForceTargets, end_by_ci};
 use crate::marks_support::{
-    DB, NEW_DAEMON, OLD_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request,
-    hold, hosts_target, operator, ops_bytes, rig, role_target, runs, scope_host, set, start,
-    unhold, update,
+    DB, NEW_DAEMON, OLD_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_only,
+    force_request, hold, hosts_target, native_target, operator, ops_bytes, rig, role_target, runs,
+    scope_host, set, start, unhold, update,
 };
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, ServiceOps, Write};
 use crate::orders::Order;
@@ -108,10 +108,17 @@ fn order_for(rig: &Rig, host: &str, b: Heartbeat) -> Option<Order> {
     ask_typed(rig, host, DAEMON, b).1
 }
 
+/// The force the typed heartbeat `b` of `host` (role `daemon`) is answered with, if any: the gate's
+/// update of a host that runs another version is no force.
+fn force_for(rig: &Rig, host: &str, b: Heartbeat) -> Option<Order> {
+    force_only(order_for(rig, host, b))
+}
+
 /// The order of the force number `generation` of `ver` of `web`, whose package digest is the
 /// one `n` registered and whose halt generation is `halt_generation`.
 fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
     Order::Force {
+        target: Some(native_target(WEB, n)),
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),
@@ -141,14 +148,6 @@ fn skipped(response: &proto::ForceResponse) -> Vec<(&str, &str)> {
         .collect()
 }
 
-/// The body that has CI set `ver` of `web` with the digest `n`.
-fn set_body(ver: &str, n: u8) -> String {
-    format!(
-        r#"{{"service":"web","version":"{ver}","release_digest":"{}"}}"#,
-        digest(n)
-    )
-}
-
 /// Proves: a role target orders only the hosts of that role that run the service, and the record
 /// of the force names the role.
 ///
@@ -171,7 +170,7 @@ async fn a_role_force_orders_only_the_hosts_of_that_role() {
     let record = marks(&rig).force.expect("a force");
     assert_eq!(record.targets, ForceTargets::Role(STORAGE.to_owned()));
     assert_eq!(record.hosts, ["s1"]);
-    assert!(order_for(&rig, "d1", both("1.0", "1.0")).is_none());
+    assert!(force_for(&rig, "d1", both("1.0", "1.0")).is_none());
     let (_, order) = ask_typed(&rig, "s1", STORAGE, both("1.0", "1.0"));
     assert_eq!(order, Some(forced("2.0", 2, 1, 1)));
 }
@@ -311,7 +310,7 @@ async fn a_host_the_force_does_not_target_gets_no_force() {
 
     force_at(&rig, "2.0", hosts_target(&["d1"]), false);
 
-    assert!(order_for(&rig, "d2", both("1.0", "1.0")).is_none());
+    assert!(force_for(&rig, "d2", both("1.0", "1.0")).is_none());
     assert_eq!(
         order_for(&rig, "d1", both("1.0", "1.0")),
         Some(forced("2.0", 2, 1, 1))
@@ -359,7 +358,7 @@ async fn a_target_held_after_the_force_gets_no_force_until_released() {
     force_fleet(&rig, "2.0", false);
 
     hold(&rig, WEB, scope_host("d1")).expect("held");
-    assert!(order_for(&rig, "d1", both("1.0", "1.0")).is_none());
+    assert!(force_for(&rig, "d1", both("1.0", "1.0")).is_none());
     unhold(&rig, WEB, scope_host("d1")).expect("released");
     assert_eq!(
         order_for(&rig, "d1", both("1.0", "1.0")),
@@ -377,7 +376,7 @@ async fn a_host_whose_daemon_no_longer_announces_force_gets_none() {
     force_fleet(&rig, "2.0", false);
 
     let old = beat_of(OLD_DAEMON, vec![runs(WEB, "1.0"), runs(DB, "1.0")]);
-    assert!(order_for(&rig, "d1", old).is_none());
+    assert!(force_only(order_for(&rig, "d1", old)).is_none());
     assert_eq!(
         order_for(&rig, "d1", both("1.0", "1.0")),
         Some(forced("2.0", 2, 1, 1))
@@ -392,6 +391,8 @@ async fn a_host_whose_daemon_no_longer_announces_force_gets_none() {
 #[tokio::test]
 async fn a_force_that_cannot_be_written_is_refused_as_store_failed() {
     let mut rig = two_hosts("force-store-failed").await;
+    // The sets of the versions, which are audited, wrote the ops file already.
+    let written = ops_bytes(&rig);
     rig.coordinator = start(&rig.dir, &rig.clock, "").with_ops(unwritable(OpsState::default()));
     rig.at(2_100);
     ask(&rig, "d1", DAEMON, both("1.0", "1.0"));
@@ -403,8 +404,17 @@ async fn a_force_that_cannot_be_written_is_refused_as_store_failed() {
         proto::ReleasesRefusal::StoreFailed
     );
     assert!(marks(&rig).force.is_none());
-    assert!(order_for(&rig, "d1", both("1.0", "1.0")).is_none());
-    assert_eq!(ops_bytes(&rig), None);
+    assert!(force_for(&rig, "d1", both("1.0", "1.0")).is_none());
+    assert_eq!(ops_bytes(&rig), written);
+}
+
+/// The body that has CI set `ver` of `web` with the package digest `n`: a set with no release, which
+/// is not audited.
+fn set_body(ver: &str, n: u8) -> String {
+    format!(
+        r#"{{"service":"web","version":"{ver}","release_digest":"{}"}}"#,
+        digest(n)
+    )
 }
 
 /// Proves: when the ops file cannot be written, CI's set of another version answers
@@ -415,7 +425,6 @@ async fn a_force_that_cannot_be_written_is_refused_as_store_failed() {
 #[tokio::test]
 async fn a_ci_set_that_cannot_end_the_force_answers_an_ops_error() {
     let mut rig = two_hosts("force-end-failed").await;
-    registered(&rig, &[("3.0", 3)]).await;
     let failing = Arc::new(AtomicBool::new(false));
     let switch = Arc::clone(&failing);
     let ops = OpsStore::refusing(
@@ -438,7 +447,7 @@ async fn a_ci_set_that_cannot_end_the_force_answers_an_ops_error() {
     assert!(marks(&rig).force.is_some());
 
     failing.store(true, Ordering::SeqCst);
-    let body = set_body("3.0", 3);
+    let body = set_body("4.0", 3);
     let err = rig
         .coordinator
         .set_desired(Some(&ci_token()), body.as_bytes())
@@ -526,4 +535,77 @@ async fn a_forced_host_that_is_updating_takes_no_update_slot() {
         ServiceReply::Nothing,
         "d2 holds the one slot now"
     );
+}
+
+/// Proves: a force of a version set with targets is recorded in the ops file with one digest (the
+/// SHA-256 of the release's stored form, or the digest of the index set beside the targets) and
+/// no `release_index`, the keys the release before reads from a record: the record names exactly
+/// the keys its strict reader allows, and an old record with a `release_index` still reads and
+/// is written back as it was.
+///
+/// Catches: a record with a key the release before refuses, or an old record with an index
+/// refused or rewritten.
+#[tokio::test]
+async fn a_force_of_a_release_records_one_digest_and_no_index() {
+    let rig = two_hosts("force-record-shape").await;
+    force_fleet(&rig, "2.0", false);
+    let ops: serde_json::Value =
+        serde_json::from_slice(&ops_bytes(&rig).expect("the ops file")).expect("JSON");
+    let record = ops["services"][WEB]["force"].as_object().expect("a force");
+    let mut keys: Vec<&str> = record.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "by",
+            "digest",
+            "generation",
+            "halt_generation",
+            "hosts",
+            "include_held",
+            "reason",
+            "targets",
+            "version"
+        ]
+    );
+    let digest = record["digest"].as_str().expect("a digest");
+    assert!(Digest::parse(digest).is_ok(), "{digest}");
+
+    // A record of the release before names the digests of the index it was set over, and reads.
+    let old = json!({
+        "version": "2.0", "generation": 1, "reason": "fix", "by": "operator",
+        "digest": "11".repeat(32),
+        "release_index": {"digest": "11".repeat(32), "packages": {"linux-x86_64": "22".repeat(32)}},
+        "halt_generation": 1, "targets": "fleet", "include_held": false, "hosts": ["d1"],
+    });
+    let read: ForceRecord = serde_json::from_value(old.clone()).expect("an old record");
+    assert_eq!(serde_json::to_value(&read).expect("JSON"), old);
+}
+
+/// Proves: a force of a version CI set over a release index is accepted and recorded with the
+/// digest of the index and the index record, as the release before wrote it, and it orders no
+/// host: a release index is not read, so no entry is picked (`no_build_for_host`).
+///
+/// Catches: a force of such a version refused, or recorded without its index.
+#[tokio::test]
+async fn a_force_of_a_version_set_over_an_index_is_recorded_and_orders_no_host() {
+    let rig = two_hosts("force-index-version").await;
+    let index_digest =
+        crate::index_set_support::set_index(&rig, WEB, "3.0", &[("linux-x86_64", 1)]).await;
+    let response = force_fleet(&rig, "3.0", false);
+    assert_eq!(response.targeted, 0);
+    let skipped: Vec<(&str, &str)> = response
+        .skipped
+        .iter()
+        .map(|s| (s.node_id.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(
+        skipped,
+        [("d1", "no_build_for_host"), ("d2", "no_build_for_host")]
+    );
+    let ops: serde_json::Value =
+        serde_json::from_slice(&ops_bytes(&rig).expect("the ops file")).expect("JSON");
+    let record = &ops["services"][WEB]["force"];
+    assert_eq!(record["digest"], index_digest);
+    assert_eq!(record["release_index"]["digest"], index_digest);
 }

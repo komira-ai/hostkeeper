@@ -1,28 +1,35 @@
 #![cfg(feature = "privileged")]
 //! hostkeeper's update of itself under the host's systemd, as root: the daemon runs as the main
-//! unit made of `packaging/linux/hostkeeper.service`, with the drop-in and the fallback unit of
-//! `hostkeeper_steps::selfupdate`, from `current` of its binary directory, and is ordered to the
-//! next version (`support::self_update` says how the host is made and what is a fixture).
+//! unit made of hostkeeper's package unit (`packaging/linux/units/hostkeeper.service`), which
+//! starts `current` of its binary directory, or of the bootstrap unit the deb installs
+//! (`packaging/linux/hostkeeper.service`), which starts the packaged binary. It is ordered to the
+//! next version, which it hands over to: it stages the binary, links `next` at it and exits 0;
+//! the unit starts the binary `current` names, the old one, which execs the new one while its
+//! start count lasts (`support::self_update` says how the host is made and what is a fixture).
 //!
 //! What each test proves:
 //! - a next binary that starts settles the update `Succeeded` and is what the unit runs;
-//! - a next binary that cannot start makes systemd spend the start limit and fail the unit,
-//!   `OnFailure=` runs the fallback, which puts the previous binary back (`flip_back`) and
-//!   records the update `Failed` and the version bad, and the unit runs the previous binary;
+//! - a next binary that cannot start is started three times by the old binary, which then
+//!   settles the update `Failed` and the version bad and runs as the daemon, with `current`
+//!   never moved; systemd's unit is never failed;
 //! - the version that fell back, offered again, is refused from the bad list and nothing moves;
 //! - a daemon killed with `SIGKILL` while its update waits for the restart is started again by
-//!   systemd, and that start settles the update: `Succeeded` when the kill came after the
-//!   follow-on's switch, `Failed(self_update_fallback)` when it came before it;
-//! - a unit with the drop-in that cannot start, while no update waits, spends its start limit
-//!   before `OnFailure=` runs the fallback unit, whose verb then fails (`ExecStart=-`) and which
-//!   starts the unit again, burst after burst, until it can start; with kbf's text, which lacks
-//!   the `-`, it is left failed.
+//!   systemd, and the hand-over goes on: killed after the exec, the new binary's next start
+//!   settles the update `Succeeded`; killed before it, with a next binary that cannot start,
+//!   the old binary falls back after three starts of the new one;
+//! - a unit that cannot start while no update waits is retried until it can: it has no start
+//!   limit, so systemd never leaves it failed.
 //!
-//! - a daemon the deb installed and enabled (no package of hostkeeper, the deb's `WantedBy=` link
-//!   in the unit directory) is ordered the install of the next release, which carries the real
-//!   unit: the install places it around the deb's link, the probe of the new binary runs in its
-//!   transient unit through the shipped launcher, the unit restarts into the new binary, which
-//!   settles the install `Succeeded` and reports it.
+//! - a daemon the deb installed and enabled (the bootstrap unit over a packaged binary named by
+//!   its version, an empty binary directory, no version of hostkeeper in the packages directory)
+//!   starts by seeding the binary directory with the packaged binary and running `current`; it is
+//!   ordered the install of the next release, whose `.deb` carries the package unit: the install
+//!   stages it, the unit restarts the packaged binary, which runs `current`, which execs the new
+//!   binary, which settles the install `Succeeded`, installs the package and reports it.
+//!
+//! The next release is a native package (`support::self_update` says how): the order carries the
+//! `apt` entry of its `.deb`, which the daemon stages from the test's signed apt repository, and
+//! whose package the new binary, once it confirmed itself, installs with apt.
 //!
 //! Every wait polls systemd or the files for a state (`support::wait_until`) and stops at once
 //! when the state can no longer come; no test asserts how long anything took.
@@ -35,15 +42,14 @@ use std::path::PathBuf;
 
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_privileged::rig::service_unit;
-use hostkeeper_steps::Layout;
+use hostkeeper_steps::handover::HAND_OVER_TRIES;
 use hostkeeper_steps::record::{Record, State};
-use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin};
 use hostkeeper_steps::systemd::SYSTEMCTL;
 use rustix::process::{Pid, Signal, kill_process};
 use support::self_update::{
-    DEB_UNIT, FALLBACK_REASON, HK, Host, N, NEXT, Plan, UNIT_FILE, count, refused_line,
+    DEB_UNIT, FALLBACK_REASON, HK, Host, N, NEXT, Plan, REAL_UNIT, count, refused_line,
 };
-use support::{Bench, journal, property, run, run_ok, show, wait_until};
+use support::{Bench, journal, property, run, run_ok, wait_until};
 
 /// The record of an update to [`NEXT`] that ended with `verdict` and `reason`, and waits for
 /// nothing.
@@ -60,6 +66,17 @@ fn assert_finished(rec: &Record, verdict: Verdict, reason: Option<&str>) {
     assert_eq!(rec.progress.awaiting_restart, None, "{rec:?}");
 }
 
+/// Checks that the daemon staged [`NEXT`] of hostkeeper for the entry that the order carried: the
+/// version directory it left holds that entry as its sealed `target.json`.
+fn assert_staged_for_the_entry(host: &Host) {
+    assert_eq!(
+        host.staged_entry().as_ref(),
+        Some(host.entry()),
+        "the daemon staged the version for the entry of the order\n{}",
+        host.journals()
+    );
+}
+
 fn succeeded() -> Verdict {
     Verdict::Succeeded {
         promotion_pending: false,
@@ -73,11 +90,12 @@ fn fell_back() -> Verdict {
     }
 }
 
-/// Catches a self-update whose new binary never runs (`current` not switched, the unit not
-/// restarted on the clean exit, the unit running another file), or whose record is left
-/// waiting or is closed by the wrong binary: the record says `Succeeded` once the new binary
-/// started, `current` names it, `previous` names the old one, and the unit's main process runs
-/// the new binary's file; the new daemon reports itself as the new version with the verdict.
+/// Catches a self-update whose new binary never runs (`next` not linked, the unit not restarted
+/// on the clean exit, the old binary not execing the new one, the unit running another file), or
+/// whose record is left waiting or is closed by the wrong binary: the record says `Succeeded`
+/// once the new binary started, `current` names it (its start finished the switch), `previous`
+/// names the old one, `next` is gone, and the unit's main process runs the new binary's file; the
+/// new daemon reports itself as the new version with the verdict.
 #[test]
 fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_runs() {
     let host = Host::start("su_good", Plan::default());
@@ -91,7 +109,9 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
         host.layout().previous().expect("previous").as_deref(),
         Some(N)
     );
+    assert_eq!(host.layout().next().expect("next"), None, "next is removed");
     assert!(!host.next_is_bad());
+    assert_staged_for_the_entry(&host);
     wait_until(|| {
         host.check_not_stuck();
         host.beats().iter().any(|beat| {
@@ -107,15 +127,26 @@ fn a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_r
     });
 }
 
-/// Catches the self-update of a daemon the deb installed stopping after it placed the package
-/// (the deb's enable link refused as a placed path that `placed.json` does not list, the probe
-/// refused for a launcher that runs none, or a verdict never reported for a service that is not
-/// listed): ordered the install of [`NEXT`], the host runs it as its self-update; the record
+/// Catches a deb whose bootstrap unit does not bring the daemon up (the packaged binary not
+/// seeding the empty binary directory, not running `current`, or its unit restarted into the
+/// packaged binary alone) and the self-update of a daemon the deb installed stopping after it
+/// placed the package
+/// (the deb's enable link refused, or a verdict
+/// never reported for a service that is not listed): ordered the install of [`NEXT`], the host
+/// runs it as its self-update; the record
 /// settles `Succeeded` once the new binary started; the unit's main process runs the new binary,
 /// `current` naming it and `previous` the deb's; the package is installed (`current` of the
 /// packages directory) with its unit linked in the unit directory and the deb's link left as
 /// the deb made it; the new daemon reports itself and hostkeeper at the new version with the
-/// install's verdict.
+/// install's verdict. Before the order, `current` names [`N`] (seeded by the packaged start,
+/// which left nothing `previous`) and the unit's main process runs `versions/N`; after it, the
+/// unit's main process runs `versions/NEXT` (the bootstrap unit restarted the packaged binary,
+/// which ran `current`, which exec'd `next`): a stage-2 binary started from the bootstrap unit
+/// seeds and hands over. The install is set by targets: the order carries the `apt` entry of the
+/// release (the repository, the package version, the pin, a manifest with its floor), which passes
+/// the daemon's receipt check, and the daemon stages the version for that entry. Catches: an entry
+/// the daemon refuses (`order_invalid`, `manifest_invalid`, `installer_not_listed`) on the host the
+/// deb leaves, or one it drops on its way to the stage.
 #[test]
 fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it() {
     let host = Host::start(
@@ -126,11 +157,14 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
         },
     );
     host.runs(N);
+    assert_eq!(host.current().as_deref(), Some(N));
+    assert_eq!(host.layout().previous().expect("previous"), None);
     host.offer_install(1);
 
     let rec = host.settled();
     assert_finished(&rec, succeeded(), None);
     host.runs(NEXT);
+    assert_staged_for_the_entry(&host);
     assert_eq!(
         host.layout().previous().expect("previous").as_deref(),
         Some(N)
@@ -140,19 +174,11 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
         fs::read_link(paths.packages.join(HK).join("current")).ok(),
         Some(PathBuf::from(NEXT))
     );
-    assert_eq!(
-        fs::read_link(paths.wants()).ok(),
-        Some(PathBuf::from(DEB_UNIT))
-    );
-    assert_eq!(
-        fs::read_link(paths.fixture.join("units").join(UNIT_FILE)).ok(),
-        Some(
-            paths
-                .packages
-                .join(HK)
-                .join("current/units")
-                .join(UNIT_FILE)
-        )
+    wait_until(|| host.package_version().as_deref() == Some(NEXT));
+    assert!(host.package_held(), "the installed package is held");
+    assert!(
+        fs::symlink_metadata(DEB_UNIT).is_ok_and(|meta| meta.is_file()),
+        "the package's unit is installed"
     );
     wait_until(|| {
         host.check_not_stuck();
@@ -170,15 +196,21 @@ fn a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it
     });
 }
 
-/// Catches a fallback that never runs (no `OnFailure=`, no start limit, a restart policy that
-/// gives up without failing the unit), a fallback that runs and leaves `current` on the bad
-/// binary, and a fallback that does not record the failure: systemd starts the new binary until
-/// the start limit (the window's starts are the old binary's first one and then the new one's)
-/// and fails the unit there, which triggers `OnFailure=`; the fallback unit runs once and ends
-/// well; the record says `Failed` after the commit, of class release, `self_update_fallback`; the
-/// version is bad; and the unit runs the old binary again, `current` naming it.
+/// Catches a hand-over that does not fall back, or falls back by moving `current`: the unit
+/// restarts the old binary after its clean exit, which execs the new one; the new binary exits 1
+/// at its start, so systemd restarts the old binary, which execs it again, and a third time; at
+/// the fourth start the count is spent, the old binary settles the update `Failed` after the
+/// commit, of class release, `self_update_fallback`, marks the version bad and runs as the daemon.
+/// The new binary was started exactly [`HAND_OVER_TRIES`] times, `current` never moved (no
+/// `previous`, no `next`), the unit runs the old binary again, and systemd never failed the unit
+/// (no start limit, so no `OnFailure=` either).
+/// The update is set by targets: the order carries the `apt` entry of the release, which the old
+/// daemon's receipt check passes and whose version it stages, so the fall-back is proven for the
+/// version staged through an entry. The new binary never confirmed itself, so its package is never
+/// installed: dpkg has no package of hostkeeper. Catches: an entry order whose new binary is staged and
+/// handed over to but never falls back, or an entry the old daemon refuses before it stages.
 #[test]
-fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_the_old_one_back() {
+fn a_next_binary_that_cannot_start_three_times_is_fallen_back_from_by_the_old_one() {
     let host = Host::start(
         "su_bad",
         Plan {
@@ -191,42 +223,31 @@ fn a_next_binary_that_cannot_start_spends_the_start_limit_and_the_fallback_puts_
     let rec = host.fall_back();
     assert_finished(&rec, fell_back(), Some(FALLBACK_REASON));
     assert!(host.next_is_bad());
+    assert_staged_for_the_entry(&host);
     assert_eq!(
-        host.layout().previous().expect("previous").as_deref(),
-        Some(N)
+        host.package_version(),
+        None,
+        "the package of a binary that never confirmed itself is not installed"
     );
+    assert_eq!(host.layout().previous().expect("previous"), None);
+    assert_eq!(host.layout().next().expect("next"), None);
 
     let main = journal(&host.main);
     assert_eq!(
         count(&main, &refused_line(NEXT)),
-        START_LIMIT_BURST as usize - 1,
-        "the new binary started on every start the limit left after the old one's\n{main}"
+        HAND_OVER_TRIES as usize,
+        "the new binary was started once per try of the hand-over\n{main}"
     );
-    // With `RestartMode=direct` systemd (255) records the unit's result as the last start's
-    // (`exit-code`), not `start-limit-hit`: the start limit is its message, and the fallback is
-    // what it triggers once the unit has failed there.
-    let refused_start = main.find(": Start request repeated too quickly.");
-    let on_failure = main.find(": Triggering OnFailure= dependencies.");
-    assert!(
-        refused_start
-            .zip(on_failure)
-            .is_some_and(|(limit, fail)| limit < fail),
-        "systemd failed the unit at its start limit, then triggered OnFailure=\n{main}"
-    );
-    wait_until(|| {
-        host.check_not_stuck();
-        support::property(&host.fallback, "ActiveState") == "inactive"
-    });
-    let fallback = show(
-        &host.fallback,
-        &["InvocationID", "Result", "ExecMainStatus"],
-    );
-    assert!(
-        !fallback["InvocationID"].is_empty(),
-        "the fallback ran: {fallback:?}"
-    );
-    assert_eq!(fallback["Result"], "success", "{fallback:?}");
-    assert_eq!(fallback["ExecMainStatus"], "0", "{fallback:?}");
+    for refused in [
+        ": Start request repeated too quickly.",
+        ": Triggering OnFailure= dependencies.",
+    ] {
+        assert!(
+            !main.contains(refused),
+            "systemd spent no start limit: {refused}\n{main}"
+        );
+    }
+    assert_ne!(property(&host.main, "ActiveState"), "failed");
 }
 
 /// Catches a version that fell back being tried again (staged, switched to, or its hook run),
@@ -284,9 +305,10 @@ fn the_version_that_fell_back_offered_again_is_refused_from_the_bad_list_and_not
 }
 
 /// The daemon of a host started with `hold_exit`, ordered to [`NEXT`] and held between the
-/// follow-on's switch and its exit: checks that the record waits for the restart into
-/// [`NEXT`] and that `current` names it, and gives the daemon's pid.
-fn held_after_the_switch(host: &Host) -> u32 {
+/// follow-on's hand-over and its exit: checks that the record waits for the restart into
+/// [`NEXT`] with `next` and a start count of 0, that `next` names it and `current` still names
+/// [`N`], and gives the daemon's pid.
+fn held_after_the_hand_over(host: &Host) -> u32 {
     host.runs(N);
     host.offer(1);
     let held = host.paths().held;
@@ -311,16 +333,22 @@ fn held_after_the_switch(host: &Host) -> u32 {
         !matches!(waiting.state, State::Finished { .. }),
         "{waiting:?}"
     );
+    let awaiting = waiting
+        .progress
+        .awaiting_restart
+        .as_ref()
+        .unwrap_or_else(|| panic!("{waiting:?}"));
     assert_eq!(
-        waiting
-            .progress
-            .awaiting_restart
-            .as_ref()
-            .map(|awaiting| awaiting.version.as_str()),
-        Some(NEXT),
+        (
+            awaiting.version.as_str(),
+            awaiting.next.as_deref(),
+            awaiting.starts
+        ),
+        (NEXT, Some(NEXT), Some(0)),
         "{waiting:?}"
     );
-    assert_eq!(host.current().as_deref(), Some(NEXT));
+    assert_eq!(host.current().as_deref(), Some(N));
+    assert_eq!(host.layout().next().expect("next").as_deref(), Some(NEXT));
     pid
 }
 
@@ -339,158 +367,193 @@ fn kill_and_settle(host: &Host, pid: u32) -> Record {
     rec
 }
 
-/// Catches a self-update left in progress when its daemon is killed after the follow-on's
-/// switch and before its exit (a record that keeps waiting, a unit not started again after
-/// `SIGKILL`, a start that does not settle): systemd starts `current`, now the new binary, and
-/// its start settles the record `Succeeded`; the unit runs the new binary.
+/// Catches a self-update left in progress when the new binary is killed after the hand-over
+/// exec'd it and before it settled (a record that keeps waiting, a unit not started again after
+/// `SIGKILL`, a second start that does not settle): the daemon hands over and exits; the unit
+/// starts the old binary, which execs [`NEXT`], which is held at its start (the exec happened and
+/// nothing is settled: the count is 1, `current` still [`N`]); it is killed; systemd starts the
+/// old binary again, which execs [`NEXT`] a second time, and that start settles the record
+/// `Succeeded`; the unit runs the new binary.
 #[test]
-fn a_daemon_killed_after_the_switch_is_settled_succeeded_by_the_new_binarys_start() {
+fn a_daemon_killed_after_the_exec_is_settled_succeeded_by_the_new_binarys_start() {
     let host = Host::start(
-        "su_kill_switched",
+        "su_kill_exec",
         Plan {
-            hold_exit: true,
+            hold_start: true,
             ..Plan::default()
         },
     );
-    let pid = held_after_the_switch(&host);
+    host.runs(N);
+    host.offer(1);
+    let held = host.paths().held_start;
+    let mut pid = None;
+    wait_until(|| {
+        host.check_not_stuck();
+        pid = fs::read_to_string(&held)
+            .ok()
+            .filter(|text| text.ends_with('\n'))
+            .and_then(|text| text.trim().parse::<u32>().ok());
+        pid.is_some()
+    });
+    let pid = pid.expect("the pid of the held new binary");
+    assert_eq!(pid, host.main_pid(), "the unit's main process is held");
+    assert_eq!(
+        host.main_exe(),
+        host.binary_of(NEXT),
+        "the old binary exec'd the new one"
+    );
+    assert_eq!(
+        host.current().as_deref(),
+        Some(N),
+        "nothing is switched yet"
+    );
+    let waiting = host.record().expect("the record of the update");
+    assert_eq!(
+        waiting
+            .progress
+            .awaiting_restart
+            .as_ref()
+            .and_then(|a| a.starts),
+        Some(1),
+        "{waiting:?}"
+    );
     let rec = kill_and_settle(&host, pid);
     assert_finished(&rec, succeeded(), None);
     host.runs(NEXT);
+    assert_eq!(
+        host.layout().previous().expect("previous").as_deref(),
+        Some(N)
+    );
+    assert_eq!(host.layout().next().expect("next"), None);
     assert!(!host.next_is_bad());
 }
 
 /// Catches a self-update left in progress, or confirmed by the wrong binary, when its daemon is
-/// killed after the follow-on wrote the record and before its switch: the binary directory is
-/// put back as it was before the switch (`current` names the old version and there is no
-/// `previous`; the switch is the rename of those links, so a kill before it leaves exactly
-/// this), then the daemon is killed. systemd starts the old binary, and its start settles the
-/// record `Failed(self_update_fallback)` and the version bad; the unit runs the old binary.
+/// killed after the follow-on handed over and before it exits (before any exec): the old binary
+/// is killed holding its exit; systemd starts it again, and the hand-over goes on from the
+/// record: with a new binary that cannot start, the old binary execs it three times and at the
+/// fourth start settles the update `Failed(self_update_fallback)` and the version bad; the unit
+/// runs the old binary, and `current` was never moved.
 #[test]
-fn a_daemon_killed_before_the_switch_is_settled_fell_back_by_the_old_binarys_start() {
+fn a_daemon_killed_before_the_exec_falls_back_after_three_starts() {
     let host = Host::start(
-        "su_kill_unswitched",
+        "su_kill_before",
         Plan {
             hold_exit: true,
+            next_fails: true,
             ..Plan::default()
         },
     );
-    let pid = held_after_the_switch(&host);
-    let layout = host.layout();
-    let tmp = layout.dir().join("current.rewind");
-    std::os::unix::fs::symlink(
-        layout
-            .version_path(N)
-            .strip_prefix(layout.dir())
-            .expect("in the directory"),
-        &tmp,
-    )
-    .expect("a link to the old binary");
-    fs::rename(&tmp, layout.current_path()).expect("current back on the old binary");
-    fs::remove_file(layout.previous_path()).expect("no previous");
-    assert_eq!(host.current().as_deref(), Some(N));
-
+    let pid = held_after_the_hand_over(&host);
     let rec = kill_and_settle(&host, pid);
     assert_finished(&rec, fell_back(), Some(FALLBACK_REASON));
     assert!(host.next_is_bad());
     host.runs(N);
+    assert_eq!(host.layout().previous().expect("previous"), None);
+    assert_eq!(host.layout().next().expect("next"), None);
+    assert_eq!(
+        count(&journal(&host.main), &refused_line(NEXT)),
+        HAND_OVER_TRIES as usize,
+        "the new binary was started once per try"
+    );
 }
 
-/// The units of a fallback test, linked from the bench's directory, and the file whose absence
-/// keeps the main unit from starting.
-struct Fallback {
+/// The unit of a retry test, linked from the bench's directory, and the file whose absence keeps
+/// it from starting.
+struct Gated {
     main: String,
-    fallback: String,
     gate: PathBuf,
 }
 
-/// The units of a fallback test: `main`, the fixture's `serve` behind an `ExecStartPre=` that
-/// fails until the gate file exists, with the drop-in of `hostkeeper_steps::selfupdate::
-/// main_dropin` naming `fallback`; and `fallback`, the text of `fallback_unit` for `main` over a
-/// binary directory whose `previous` is the fixture program, which refuses the verb's arguments
-/// and exits 1, as the verb does when no update waits for its restart. With `ignores` false the
-/// `-` of `ExecStart=-` is taken out (kbf's text). `main` has been asked to start once.
-fn fallback_rig(bench: &Bench, ignores: bool) -> Fallback {
-    let rig = &bench.rig;
-    let (main, fallback) = (rig.unit(), rig.unit());
-    let bin = bench.scratch().join("bin");
-    fs::create_dir(&bin).expect("the binary directory");
-    std::os::unix::fs::symlink(rig.fixture(), bin.join("previous")).expect("previous");
-    let written = fallback_unit(&Layout::new(&bin), &service_unit(&main));
-    let text = if ignores {
-        written
-    } else {
-        written.replacen("ExecStart=-", "ExecStart=", 1)
-    };
-    let fallback_file = bench.scratch().join(service_unit(&fallback));
-    fs::write(&fallback_file, text).expect("the fallback unit");
-    let gate = bench.scratch().join("gate");
-    let serve = rig.unit_file_text().expect("the fixture's unit").replacen(
-        "[Service]\n",
-        &format!(
-            "[Service]\nExecStartPre=/usr/bin/test -e {}\n",
-            gate.display()
-        ),
-        1,
-    );
-    let dropin = main_dropin(&service_unit(&fallback), START_LIMIT_BURST);
-    let main_file = bench.scratch().join(service_unit(&main));
-    fs::write(&main_file, format!("{serve}\n{dropin}")).expect("the main unit");
-    for file in [&fallback_file, &main_file] {
-        run_ok(
-            SYSTEMCTL,
-            &["link", "--system", file.to_str().expect("UTF-8")],
-        );
-    }
-    // The start fails at its `ExecStartPre=`; systemd's restarts go on from there.
-    let _ = run(
-        SYSTEMCTL,
-        &["start", "--system", service_unit(&main).as_str()],
-    );
-    Fallback {
-        main,
-        fallback,
-        gate,
-    }
+/// The value of each of `keys` in the real unit [`REAL_UNIT`]: its lines that begin with one.
+fn real_lines(keys: &[&str]) -> String {
+    REAL_UNIT
+        .lines()
+        .filter(|line| keys.iter().any(|key| line.starts_with(key)))
+        .map(|line| format!("{line}\n"))
+        .collect()
 }
 
-/// Catches the dead end of a daemon left failed when it cannot start and no update waits for
-/// its restart, under the host's systemd: the main unit fails [`START_LIMIT_BURST`] starts, and
-/// only then (`RestartMode=direct`) does `OnFailure=` start the fallback unit the daemon writes;
-/// its verb exits 1, and the fallback still resets the main unit and starts it again, burst after
-/// burst (`StartLimitIntervalSec=0` of its own), so that once the main unit can start it is
-/// active.
-#[test]
-fn a_unit_that_spends_its_start_limit_with_no_update_waiting_is_started_again() {
-    let bench = Bench::new("fallback_starts");
-    let units = fallback_rig(&bench, true);
-    wait_until(|| property(&units.fallback, "ExecMainExitTimestampMonotonic") != "0");
-    assert_ne!(
-        property(&units.fallback, "ExecMainStatus"),
-        "0",
-        "the verb failed"
+/// The unit of a retry test: `main`, the fixture's `serve` behind an `ExecStartPre=` that fails
+/// until the gate file exists, with the start limit and restart settings of the real package
+/// unit (`StartLimitIntervalSec=`, `Restart=`, `RestartSec=`, `RestartMode=`) in place of the
+/// fixture's. `main` has been asked to start once, without waiting for the start job, which a
+/// unit that is retried for good never finishes.
+fn gated_rig(bench: &Bench) -> Gated {
+    let rig = &bench.rig;
+    let main = rig.unit();
+    let gate = bench.scratch().join("gate");
+    let serve = rig.unit_file_text().expect("the fixture's unit");
+    let serve: String = serve
+        .lines()
+        .filter(|line| {
+            !["StartLimit", "Restart"]
+                .iter()
+                .any(|key| line.starts_with(key))
+        })
+        .map(|line| format!("{line}\n"))
+        .collect();
+    let serve = serve
+        .replacen(
+            "[Unit]\n",
+            &format!("[Unit]\n{}", real_lines(&["StartLimitIntervalSec="])),
+            1,
+        )
+        .replacen(
+            "[Service]\n",
+            &format!(
+                "[Service]\nExecStartPre=/usr/bin/test -e {}\n{}",
+                gate.display(),
+                real_lines(&["Restart=", "RestartSec=", "RestartMode="])
+            ),
+            1,
+        );
+    let main_file = bench.scratch().join(service_unit(&main));
+    fs::write(&main_file, serve).expect("the main unit");
+    run_ok(
+        SYSTEMCTL,
+        &["link", "--system", main_file.to_str().expect("UTF-8")],
     );
+    // The start fails at its `ExecStartPre=`; systemd's restarts go on from there. With no start
+    // limit the unit stays in its automatic restarts for good, which keeps a start job pending,
+    // so the start is not waited for.
+    let _ = run(
+        SYSTEMCTL,
+        &[
+            "start",
+            "--no-block",
+            "--system",
+            service_unit(&main).as_str(),
+        ],
+    );
+    Gated { main, gate }
+}
+
+/// Catches the dead end of a daemon left failed when it cannot start and no update waits for its
+/// restart, under the host's systemd: the main unit, with the start limit and restart settings
+/// of the real package unit, fails more starts than the limit the releases before the hand-over
+/// set (three within 300 seconds) and is still not failed, because it has none; once it can
+/// start it is active.
+#[test]
+fn a_unit_that_cannot_start_with_no_update_waiting_is_retried_until_it_can() {
+    let bench = Bench::new("retry_starts");
+    let units = gated_rig(&bench);
+    // More failed starts than the old limit, counted from the journal; the unit is never failed.
+    let failed_starts = usize::try_from(HAND_OVER_TRIES).expect("a small count") + 2;
+    wait_until(|| {
+        assert_ne!(
+            property(&units.main, "ActiveState"),
+            "failed",
+            "{}",
+            journal(&units.main)
+        );
+        count(&journal(&units.main), "Control process exited") > failed_starts
+    });
     let log = journal(&units.main);
-    let first = log
-        .find("Triggering OnFailure=")
-        .expect("the fallback was started by OnFailure=");
-    assert_eq!(
-        count(&log[..first], "Control process exited"),
-        usize::try_from(START_LIMIT_BURST).expect("a small burst"),
-        "OnFailure= ran once the start limit was spent, not at the first failed start"
+    assert!(
+        !log.contains("Start request repeated too quickly") && !log.contains("OnFailure="),
+        "{log}"
     );
     fs::write(&units.gate, "").expect("open the gate");
     wait_until(|| property(&units.main, "ActiveState") == "active");
-}
-
-/// The control of the test above, with kbf's fallback text (no `-`): the verb's exit 1 fails the
-/// fallback unit before its `ExecStartPost=` lines, and the main unit stays failed even once it
-/// could start. Catches a test above that would pass whatever the fallback unit says.
-#[test]
-fn without_the_dash_the_fallback_leaves_the_unit_failed() {
-    let bench = Bench::new("fallback_fails");
-    let units = fallback_rig(&bench, false);
-    wait_until(|| property(&units.fallback, "ActiveState") == "failed");
-    fs::write(&units.gate, "").expect("open the gate");
-    assert_eq!(property(&units.main, "ActiveState"), "failed");
-    assert_ne!(property(&units.fallback, "ExecMainStatus"), "0");
 }

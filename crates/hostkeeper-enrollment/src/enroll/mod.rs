@@ -45,6 +45,7 @@ mod poll;
 pub mod records;
 mod reject;
 mod rows;
+mod running;
 mod store;
 
 use std::io;
@@ -54,6 +55,7 @@ pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
 pub use reject::{RejectError, Rejection};
+pub use running::{HostRunning, RunningService};
 pub use store::{DEFAULT_MAX_PENDING, EnrollmentStore, FIRST_SERIAL, LIVE_WINDOW_SECS};
 
 use crate::ca::{ProfileError, SignError};
@@ -273,6 +275,14 @@ pub struct EnrolledHost {
     /// reported a service it manages for the host installed and healthy, unix seconds
     /// ([`EnrollmentStore::note_serving`]); `None` until it does.
     pub first_serving_unix: Option<u64>,
+    /// The role the host was approved for.
+    pub role: Role,
+    /// What the host's daemon last said it runs, as far as the store kept it
+    /// ([`EnrollmentStore::note_running`]); `None` until a heartbeat after the approval.
+    pub running: Option<HostRunning>,
+    /// When the coordinator accepted the heartbeat `running` was last written from, unix
+    /// seconds; `None` with it.
+    pub running_unix: Option<u64>,
 }
 
 /// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's

@@ -116,6 +116,61 @@ fn the_mdm_kit_binary_is_checked_against_its_own_program_name() {
 }
 
 #[test]
+fn the_coordinator_updater_is_checked_against_its_own_program_name() {
+    // Catches: the coordinator updater's binary refused as not shipped, held to the coordinator's
+    // stamp (whose name it starts with), or accepted printing the coordinator's or the daemon's,
+    // or its developer stamp (no commit).
+    let binary = Path::new("/opt/bin/hostkeeper-coordinator-update");
+    let own = "hostkeeper-coordinator-update 0.1.5+abcdef012345";
+    let run =
+        |printed: &str| check_binary(&printing(true, printed, ""), binary, &version(), &pinned());
+    assert_eq!(
+        run(&format!("{own}\n")),
+        Ok(vec![format!(
+            "/opt/bin/hostkeeper-coordinator-update: {own}"
+        )])
+    );
+    for other in [
+        STAMP,
+        "hostkeeper-coordinator 0.1.5+abcdef012345",
+        "hostkeeper-coordinator-update 0.1.5",
+    ] {
+        let printed = format!("{other}\n");
+        assert_eq!(
+            run(&printed),
+            Err(Error::Failed(format!(
+                "/opt/bin/hostkeeper-coordinator-update --version printed {printed:?}, not {own:?}"
+            ))),
+            "{other}"
+        );
+    }
+}
+
+#[test]
+fn the_mdm_packages_program_is_checked_against_its_own_program_name() {
+    // Catches: `bin/mdm`, the mdm package's program, refused as not shipped, or held to the old
+    // kit's `hostkeeper-mdm` stamp, or accepted printing that stamp or its developer stamp.
+    let binary = Path::new("/build/target/release/mdm");
+    let own = "mdm 0.1.5+abcdef012345";
+    let run =
+        |printed: &str| check_binary(&printing(true, printed, ""), binary, &version(), &pinned());
+    assert_eq!(
+        run(&format!("{own}\n")),
+        Ok(vec![format!("/build/target/release/mdm: {own}")])
+    );
+    for other in ["hostkeeper-mdm 0.1.5+abcdef012345", "mdm 0.1.5"] {
+        let printed = format!("{other}\n");
+        assert_eq!(
+            run(&printed),
+            Err(Error::Failed(format!(
+                "/build/target/release/mdm --version printed {printed:?}, not {own:?}"
+            ))),
+            "{other}"
+        );
+    }
+}
+
+#[test]
 fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
     // Catches: a check that runs any file it is given, or that takes the program name from the
     // output instead of from the file name the binary ships under.
@@ -128,7 +183,7 @@ fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
     let refused = |path: &Path| -> Result<Vec<String>, Error> {
         Err(Error::Failed(format!(
             "{} is not a shipped binary: its file name is none of \
-             [\"hostkeeper\", \"hostkeeper-coordinator\", \"hostkeeper-mdm\"]",
+             [\"hostkeeper\", \"hostkeeper-coordinator\", \"hostkeeper-mdm\", \"hostkeeper-coordinator-update\", \"mdm\"]",
             path.display()
         )))
     };
@@ -136,6 +191,7 @@ fn a_binary_that_is_not_shipped_is_refused_before_it_runs() {
         Path::new("/opt/bin/hostkeeperd"),
         Path::new("/opt/bin/hostkeeper.old"),
         Path::new("/opt/bin/hostkeeper-mdm-core"),
+        Path::new("/opt/bin/hostkeeper-coordinator-updater"),
         Path::new("/"),
         Path::new(OsStr::from_bytes(b"/opt/bin/\xff")),
     ] {

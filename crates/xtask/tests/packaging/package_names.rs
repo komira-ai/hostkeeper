@@ -3,8 +3,8 @@
 use crate::nfpm::Config;
 use crate::{NFPM, altered, read};
 
-/// The platforms of hostkeeper's packages: the closed list of the release index (one package
-/// per OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
+/// The platforms of hostkeeper's packages: the closed list of platforms (one package per
+/// OS and CPU family). Held here until hostkeeper-config's shared `Platform` replaces it.
 #[derive(Clone, Copy, Debug)]
 enum Platform {
     LinuxX86_64,
@@ -30,7 +30,8 @@ impl Platform {
     }
 }
 
-/// The file names of the deb and then the rpm of every Linux platform, for version 1.2.3.
+/// The file names of the deb and then the rpm of every Linux platform,
+/// for version 1.2.3.
 fn file_names(text: &str) -> Result<Vec<String>, String> {
     let config = Config::parse(text)?;
     let mut out = Vec::new();
@@ -44,7 +45,7 @@ fn file_names(text: &str) -> Result<Vec<String>, String> {
 
 /// Catches a package name, version or architecture that does not come out as
 /// `hostkeeper_<version>_<arch>.deb` and `hostkeeper-<version>-1.<arch>.rpm` for both
-/// architectures, or a value read from any other variable of the environment.
+/// architectures, or an Arch package still named after its withdrawal, or a value read from any other variable of the environment.
 #[test]
 fn package_file_names_follow_the_pattern() {
     let text = read(NFPM);
@@ -55,6 +56,10 @@ fn package_file_names_follow_the_pattern() {
         "hostkeeper-1.2.3-1.aarch64.rpm",
     ];
     assert_eq!(file_names(&text), Ok(wanted.map(str::to_owned).to_vec()));
+    assert_eq!(
+        Config::parse(&text).and_then(|c| c.file_name("archlinux", "1.2.3", "amd64")),
+        Err("no packager \"archlinux\"".to_owned())
+    );
     let names = |t: &str| file_names(t).map(|names| names.join(" "));
     // A fixed architecture names the arm64 packages amd64.
     let fixed = names(&altered(&text, "arch: \"${ARCH}\"", "arch: amd64"));

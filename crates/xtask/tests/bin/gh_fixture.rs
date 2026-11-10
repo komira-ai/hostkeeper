@@ -1,29 +1,54 @@
-//! The `gh` the channel-sync deploy test (tests/channel_sync.rs) puts on the `PATH` of the
-//! committed unit's and sidecar's commands. A program of the tests, not shipped; it reaches no
+//! The `gh`, `curl`, `cargo` and `rustup` the workflow lint's run tests put on the `PATH` of the
+//! committed steps they run with bash (tests/workflows/targets_run_tests.rs and
+//! tests/workflows/hello_run_tests.rs). A program of the tests, not shipped; it reaches no
 //! network.
 //!
-//! It answers from `releases/` beside its own file, and appends each command line to `calls`
-//! there:
+//! Started as `gh`, it answers from `releases/` beside its own file, and appends each command
+//! line to `calls` there:
 //!
 //! - `gh api repos/<o>/<n>/releases?per_page=100` prints `releases/<o>/<n>/list.json`, or `[]`
-//!   when there is none;
-//! - `gh release download <tag> --repo <o>/<n> --pattern <name> --dir <dir>` copies
-//!   `releases/<o>/<n>/<tag>/<name>` into `<dir>`, and fails like GitHub (HTTP 404) when there is
-//!   no such file;
+//!   when there is none (the coordinator-update unit's test, tests/coordinator_update_unit.rs);
 //! - `gh attestation verify <file> [--bundle <b>] --repo <r> --signer-workflow <w> --source-ref
 //!   <ref> --source-digest <c> ...` prints one attestation of `<file>`'s SHA-256 by `<w>` on
-//!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about.
-//!
+//!   `<ref>` at `<c>`: every file verifies as signed by whom it is asked about (the same test);
 //! - `gh release list --repo <o>/<n> ... --json tagName --jq <filter>` runs `jq --raw-output
 //!   <filter>` over `releases/<o>/<n>/release-list.json` (`[{"tagName": ...}, ...]`, `[]` when
 //!   there is none) and prints what it prints, as `gh` does with `--jq`.
 //!
 //! Anything else exits 2.
 //!
-//! Started as `curl` (a link named `curl`), it is the fake origin of the release channel test of
-//! release.yml (tests/workflows/channel_run_tests.rs): `curl ... --output <file> https://<rest>`
-//! copies `channel/<rest>` beside its own file to `<file>`, and when there is none fails as curl
-//! does for an HTTP 404 with `--fail` (exit 22). It never waits, whatever retry flags it is given.
+//! Started as `curl` (a link named `curl`), it is the fake origin of hello-desired.yml's download:
+//! `curl --remote-name-all --output-dir <dir> <url>...` takes each `https://` argument as a URL that may hold curl's globs, `{a,b,...}` sets
+//! one after another and not nested, and copies each URL `https://<rest>` a glob expands to from
+//! `channel/<rest>` beside its own file to `<dir>/<its last path segment>`, in order. A missing
+//! one is a failed transfer, as curl's for an HTTP 404 with `--fail`: with `--fail-early` it ends
+//! the run at once with exit 22; without it the run goes on, and exits as its last transfer did,
+//! as curl does. It never waits, whatever retry flags it is given.
+//!
+//! A `curl` with both `--output <file>` and `--write-out <format>` is the coordinator's version
+//! route as release.yml's job `coordinator` asks it (tests/workflows/coordinator_wait_run_tests.rs):
+//! it appends `<METHOD> <path>` to `answers/calls` as below and reads the same answer file. With
+//! one, it writes the body to `<file>`, prints `<format>` with `%{http_code}` made the status and
+//! `\n` a line break, and exits 22 for a status of 400 or more when given `--fail-with-body`
+//! (curl's exit for an HTTP error), else 0. With no answer file the coordinator gave no answer:
+//! it prints `<format>` with the status `000` and exits 7, curl's exit when it cannot connect. It
+//! never waits, whatever retry flags it is given.
+//!
+//! Any other `curl` with `--write-out` is the Docker Engine API and the coordinator's version route of
+//! the coordinator-update unit's test (tests/coordinator_update_unit.rs): it takes the request's
+//! method (`-X`, else `GET`) and the path and query of its URL, appends `<METHOD> <path>` to
+//! `answers/calls` beside its own file, and prints the answer file `answers/<key>`, where the key
+//! is `<METHOD> <path>` with every character but a letter or a digit made `_`: its first line is
+//! the HTTP status, the rest the body, then a line break and the status, as `--write-out
+//! '\n%{http_code}'` prints them. With no such file the answer is a 404. A `curl ... --output
+//! <file> -- https://github.com/<o>/<n>/releases/download/<tag>/<name>` (the same test's release
+//! download) copies `releases/<o>/<n>/<tag>/<name>` beside its own file to `<file>`, and a missing
+//! one exits 22. Any other `curl` exits 2.
+//!
+//! Started as `cargo`, for both tests: `cargo xtask <args>` runs the program `xtask` beside
+//! its own file (the test links this crate's real binary there) with `<args>`, and exits as it
+//! exits; anything else exits 2. Started as `rustup`: `rustup toolchain install` does nothing and
+//! succeeds (the toolchain is the one running the test); anything else exits 2.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -58,20 +83,6 @@ fn answer(data: &Path, args: &[String]) -> ExitCode {
                 return ExitCode::FAILURE;
             }
             ExitCode::SUCCESS
-        }
-        ["release", "download", tag, ..] => {
-            let (Some(repo), Some(name), Some(dir)) = (
-                value(args, "--repo"),
-                value(args, "--pattern"),
-                value(args, "--dir"),
-            ) else {
-                return ExitCode::from(2);
-            };
-            let from = data.join(repo).join(tag).join(name);
-            match std::fs::copy(&from, Path::new(dir).join(name)) {
-                Ok(_) => ExitCode::SUCCESS,
-                Err(_) => fail("HTTP 404: Not Found"),
-            }
         }
         ["attestation", "verify", file, ..] => {
             let (Some(workflow), Some(source_ref), Some(commit)) = (
@@ -126,21 +137,171 @@ fn answer(data: &Path, args: &[String]) -> ExitCode {
     }
 }
 
-/// The fake `curl` of the channel: see the module's documentation.
-fn curl(dir: &Path, args: &[String]) -> ExitCode {
-    let (Some(output), Some(url)) = (value(args, "--output"), args.last()) else {
+/// Every URL the curl glob `url` names, in curl's order: the first set varies slowest.
+fn expand(url: &str) -> Vec<String> {
+    let Some((head, rest)) = url.split_once('{') else {
+        return vec![url.to_owned()];
+    };
+    let Some((set, tail)) = rest.split_once('}') else {
+        return vec![url.to_owned()];
+    };
+    set.split(',')
+        .flat_map(|choice| expand(&format!("{head}{choice}{tail}")))
+        .collect()
+}
+
+/// The fake `curl --remote-name-all --output-dir <dir> <url>...`: see the module's documentation.
+fn curl_remote_names(dir: &Path, args: &[String]) -> ExitCode {
+    let Some(into) = value(args, "--output-dir") else {
         return ExitCode::from(2);
     };
-    let Some(rest) = url.strip_prefix("https://") else {
-        eprintln!("curl: (1) Protocol not supported or disabled");
-        return ExitCode::from(1);
+    if std::fs::create_dir_all(into).is_err() {
+        return fail("cannot make the output directory");
+    }
+    let early = args.iter().any(|a| a == "--fail-early");
+    let mut last = ExitCode::SUCCESS;
+    for url in args.iter().filter(|a| a.starts_with("https://")) {
+        for one in expand(url) {
+            let rest = one.trim_start_matches("https://");
+            let name = rest.rsplit('/').next().unwrap_or_default();
+            last = ExitCode::SUCCESS;
+            if std::fs::copy(dir.join("channel").join(rest), Path::new(into).join(name)).is_err() {
+                eprintln!("curl: (22) The requested URL returned error: 404");
+                if early {
+                    return ExitCode::from(22);
+                }
+                last = ExitCode::from(22);
+            }
+        }
+    }
+    last
+}
+
+/// The fake `curl`: see the module's documentation.
+fn curl(dir: &Path, args: &[String]) -> ExitCode {
+    if args.iter().any(|a| a == "--remote-name-all") {
+        return curl_remote_names(dir, args);
+    }
+    if let (Some(file), Some(format)) = (value(args, "--output"), value(args, "--write-out")) {
+        return curl_status(dir, args, file, format);
+    }
+    if args.iter().any(|a| a == "--write-out") {
+        return curl_answer(dir, args);
+    }
+    if let (Some(file), Some(url)) = (value(args, "--output"), value(args, "--")) {
+        return curl_release_asset(dir, file, url);
+    }
+    ExitCode::from(2)
+}
+
+/// The fake `curl ... --output <file> -- https://github.com/<o>/<n>/releases/download/<tag>/<name>`:
+/// copies `releases/<o>/<n>/<tag>/<name>` beside its own file to `<file>`; a missing one is curl's
+/// failed transfer of an HTTP 404 with `--fail`, exit 22.
+fn curl_release_asset(dir: &Path, file: &str, url: &str) -> ExitCode {
+    let Some(rest) = url.strip_prefix("https://github.com/") else {
+        return ExitCode::from(2);
     };
-    match std::fs::copy(dir.join("channel").join(rest), output) {
+    let from = dir
+        .join("releases")
+        .join(rest.replacen("/releases/download/", "/", 1));
+    match std::fs::copy(from, file) {
         Ok(_) => ExitCode::SUCCESS,
         Err(_) => {
             eprintln!("curl: (22) The requested URL returned error: 404");
             ExitCode::from(22)
         }
+    }
+}
+
+/// The key of a request's answer file: `<METHOD> <path>` with every character but a letter or a
+/// digit made `_`.
+fn answer_key(method: &str, path: &str) -> String {
+    format!("{method} {path}")
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '_' })
+        .collect()
+}
+
+/// The request's method and the path (with its query) of its URL, appended to `answers/calls`;
+/// none when it names no URL or the log cannot be written.
+fn logged_request<'a>(dir: &Path, args: &'a [String]) -> Option<(&'a str, &'a str)> {
+    let method = value(args, "-X").unwrap_or("GET");
+    let url = args
+        .iter()
+        .find(|a| a.starts_with("http://") || a.starts_with("https://"))?;
+    let after_scheme = url.split_once("://").map_or("", |(_, rest)| rest);
+    let path = after_scheme.find('/').map_or("/", |at| &after_scheme[at..]);
+    std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(dir.join("answers/calls"))
+        .and_then(|mut log| writeln!(log, "{method} {path}"))
+        .ok()?;
+    Some((method, path))
+}
+
+/// The fake answer of one `--output <file> --write-out <format>` request (see the module).
+fn curl_status(dir: &Path, args: &[String], file: &str, format: &str) -> ExitCode {
+    let Some((method, path)) = logged_request(dir, args) else {
+        return ExitCode::from(2);
+    };
+    let print = |status: &str| {
+        print!(
+            "{}",
+            format.replace("%{http_code}", status).replace("\\n", "\n")
+        );
+    };
+    let Ok(text) = std::fs::read_to_string(dir.join("answers").join(answer_key(method, path)))
+    else {
+        print("000");
+        eprintln!("curl: (7) Failed to connect");
+        return ExitCode::from(7);
+    };
+    let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    if std::fs::write(file, body).is_err() {
+        return fail("cannot write --output");
+    }
+    print(status);
+    let error = status.parse::<u16>().map_or(true, |s| s >= 400);
+    if error && args.iter().any(|a| a == "--fail-with-body") {
+        eprintln!("curl: (22) The requested URL returned error: {status}");
+        return ExitCode::from(22);
+    }
+    ExitCode::SUCCESS
+}
+
+/// The fake answer of one `--write-out` request (see the module).
+fn curl_answer(dir: &Path, args: &[String]) -> ExitCode {
+    let Some((method, path)) = logged_request(dir, args) else {
+        return ExitCode::from(2);
+    };
+    let text = std::fs::read_to_string(dir.join("answers").join(answer_key(method, path)))
+        .unwrap_or_else(|_| "404\n{\"message\":\"not found\"}".to_owned());
+    let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+    print!("{body}\n{status}");
+    ExitCode::SUCCESS
+}
+
+/// The fake `cargo`: see the module's documentation.
+fn cargo(dir: &Path, args: &[String]) -> ExitCode {
+    let Some(("xtask", rest)) = args
+        .split_first()
+        .map(|(first, rest)| (first.as_str(), rest))
+    else {
+        return ExitCode::from(2);
+    };
+    match std::process::Command::new(dir.join("xtask"))
+        .args(rest)
+        .status()
+    {
+        Ok(status) if status.success() => ExitCode::SUCCESS,
+        Ok(status) => ExitCode::from(
+            status
+                .code()
+                .and_then(|c| u8::try_from(c).ok())
+                .unwrap_or(1),
+        ),
+        Err(_) => fail("cannot run xtask"),
     }
 }
 
@@ -152,8 +313,12 @@ fn main() -> ExitCode {
     let Some(dir) = exe.parent() else {
         return fail("no directory of its own");
     };
-    if exe.file_name().is_some_and(|name| name == "curl") {
-        return curl(dir, &args);
+    match exe.file_name().and_then(|name| name.to_str()) {
+        Some("curl") => return curl(dir, &args),
+        Some("cargo") => return cargo(dir, &args),
+        Some("rustup") if args == ["toolchain", "install"] => return ExitCode::SUCCESS,
+        Some("rustup") => return ExitCode::from(2),
+        _ => {}
     }
     let data: PathBuf = dir.join("releases");
     let logged = std::fs::OpenOptions::new()

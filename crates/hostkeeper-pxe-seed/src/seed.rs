@@ -13,7 +13,10 @@
 //!   there.
 //! - The installed system's cloud-config: the host name (the record's host id); one account,
 //!   `operator`, with its password locked, the given SSH keys and sudo; the daemon config at
-//!   `/etc/hostkeeper/hostkeeper.toml`, owned by root, mode 0600, byte for byte (as base64); the
+//!   `/etc/hostkeeper/hostkeeper.toml`, owned by root, mode 0600, byte for byte (as base64); when
+//!   the operator gave repository files, each of them first, at
+//!   `/etc/hostkeeper/repositories/<file name>`, owned by root, mode 0644, byte for byte (as
+//!   base64), so the entries are there when the daemon's config appears; the
 //!   datasource list `[ NoCloud, None ]`; and, with a serial console, the kernel's `console=`
 //!   and an enabled serial getty.
 //! - `meta-data`: the instance id, from the host id.
@@ -23,7 +26,7 @@
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 
-use crate::inputs::{BootServer, DaemonConfigText, InstallDisk, SerialConsole};
+use crate::inputs::{BootServer, DaemonConfigText, InstallDisk, RepositoryFiles, SerialConsole};
 use crate::keys::AuthorizedKeys;
 use crate::layout::{NO_MIRROR_PATH, deb_path};
 use crate::menu::Install;
@@ -38,6 +41,9 @@ const DEB_IN_TARGET: &str = "/var/tmp/hostkeeper.deb";
 /// after the installer's own `99-installer.cfg` (`_` after `-`), so its list is the one in
 /// force whatever the installer's file says.
 const DATASOURCE_FILE: &str = "/etc/cloud/cloud.cfg.d/99_hostkeeper.cfg";
+
+/// Where the installed system keeps its repository entries and keyrings.
+const REPOSITORIES_DIR: &str = "/etc/hostkeeper/repositories";
 
 /// The GRUB defaults file of the installed system that adds the serial console.
 const GRUB_CONSOLE_FILE: &str = "/etc/default/grub.d/99_hostkeeper.cfg";
@@ -57,6 +63,8 @@ pub struct SeedInputs<'a> {
     pub install_disk: &'a InstallDisk,
     /// The installed system's serial console, if any.
     pub serial_console: Option<&'a SerialConsole>,
+    /// The files of the installed system's `/etc/hostkeeper/repositories/`, if any.
+    pub repositories: Option<&'a RepositoryFiles>,
 }
 
 /// The two files of a NoCloud seed.
@@ -121,6 +129,23 @@ fn user_data(inputs: &SeedInputs<'_>) -> String {
         .map(|key| format!("          - {}\n", quoted(key)))
         .collect();
     let config = STANDARD.encode(inputs.daemon_config.as_str());
+    let repositories: String = inputs
+        .repositories
+        .map(RepositoryFiles::files)
+        .unwrap_or_default()
+        .iter()
+        .map(|(name, bytes)| {
+            format!(
+                "      - path: {REPOSITORIES_DIR}/{name}
+        owner: \"root:root\"
+        permissions: \"0644\"
+        encoding: b64
+        content: {}
+",
+                STANDARD.encode(bytes)
+            )
+        })
+        .collect();
     let mut text = format!(
         "\
 #cloud-config
@@ -153,7 +178,7 @@ autoinstall:
         sudo: \"ALL=(ALL) NOPASSWD:ALL\"
         ssh_authorized_keys:
 {keys}    write_files:
-      - path: /etc/hostkeeper/hostkeeper.toml
+{repositories}      - path: /etc/hostkeeper/hostkeeper.toml
         owner: \"root:root\"
         permissions: \"0600\"
         encoding: b64

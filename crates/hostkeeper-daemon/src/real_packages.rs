@@ -1,269 +1,135 @@
-//! The real package store: the four steps of design section 5.5 behind the [`Packages`] port.
+//! The real package store: the fetch of a `macos-pkg` entry's `.pkg` by its pin behind the
+//! [`Packages`] port.
 //!
-//! [`RealPackages::version_dir`] sweeps what a crashed fetch or unpack left, downloads the
-//! package of the order ([`hostkeeper_package::fetch_package`], which refuses a release index
-//! whose SHA-256 is not the order's index digest, when the order has one), proves it
-//! ([`hostkeeper_package::prove`]), compares the proven archive's SHA-256 with the digest the
-//! order names, then unpacks it ([`hostkeeper_unpack::unpack`]) and seals the version directory.
-//! It takes no lock: the daemon holds the service's lock around the call.
+//! A `macos-pkg` entry carries no attestation, and its `.pkg` is not unpacked here:
+//! [`RealPackages::pinned`] fetches it from the entry's locations and the host's mirrors, through
+//! the host's stores ([`hostkeeper_package::stores::load`]; a host without the file has none),
+//! by its pin alone ([`hostkeeper_package::entry::fetch_pinned`]) into a staging file of the
+//! service's package directory, removed when the file is dropped, and the `macos-pkg` installer's
+//! `stage` checks its signature ([`crate::macos_pkg`]). Each store that gave other bytes is logged
+//! as `store_digest_mismatch`. It sweeps nothing: it runs inside a stage, whose staging directory
+//! the daemon's start sweeps.
 //!
-//! Every failure of those libraries reaches the daemon as one [`PackageError::Refused`] built by
-//! [`refusal_of`], the one table that maps a library's reason token onto a [`Refusal`]. The
+//! Every failure of the fetch reaches the daemon as one [`PackageError::Refused`] built by
+//! [`refusal_of`], the one table that maps the library's reason token onto a [`Refusal`]. The
 //! outcome and the class are the library's own.
-//!
-//! The store also reports the Sigstore trusted root its verifier checks attestations with
-//! ([`RealPackages::with_trusted_root`], [`crate::trusted_root`]): its age and, when it needs
-//! attention, a reason, which the admin `Status` carries.
 
-use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_config::daemon::{Bounds, DaemonConfig, HttpsUrl, Sha256Hex, TrustedSigners};
-use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_hook::{Class, Outcome};
-use hostkeeper_package::fetch::FetchEnv;
-use hostkeeper_package::ports::{Fetcher, Verifier};
-use hostkeeper_package::prove::ProveEnv;
+use hostkeeper_config::daemon::Bounds;
+use hostkeeper_config::names::ServiceName;
+use hostkeeper_package::entry::{PinnedEnv, fetch_pinned};
+use hostkeeper_package::ports::Fetcher;
+use hostkeeper_package::stores::Stores;
 use hostkeeper_package::{
-    ATTESTATION_UNAVAILABLE, FETCH_FAILED, INDEX_DIGEST_MISMATCH, INDEX_INVALID,
-    NO_PACKAGE_FOR_PLATFORM, NO_SPACE, NOT_ATTESTED, PACKAGE_DIGEST_MISMATCH, PackageFailure,
-    PackageOrder, Platform, fetch_package, prove, remove_orphan_fetches,
+    FETCH_FAILED, NO_SPACE, NO_STORE, PACKAGE_DIGEST_MISMATCH, PackageFailure,
+    STORE_DIGEST_MISMATCH,
 };
-use hostkeeper_steps::{Clock, Staged};
-use hostkeeper_unpack::{
-    HostFs, Limits, Owner, PackageFs, Platform as UnpackPlatform, REASON_ARTIFACT_CHANGED,
-    REASON_BAD_ARCHIVE, REASON_DAEMON_TOO_OLD, REASON_DIGEST_MISMATCH, REASON_IO_ERROR,
-    REASON_MANIFEST_MISMATCH, REASON_NO_SPACE, REASON_RESERVED_VERSION, REASON_VERIFY_UNAVAILABLE,
-    REASON_VERSION_TOO_LONG, UnpackError, UnpackOrder,
-};
+use hostkeeper_proto::hostkeeper::release::v1::Target;
+use hostkeeper_steps::Clock;
 
-use crate::adapters::PackageCheck;
-use crate::packages::{PackageError, PackageRefusal, Packages, VersionDir};
+use crate::packages::{PackageError, PackageRefusal, Packages, Pinned};
 use crate::refusal::Refusal;
-use crate::trusted_root::{RootReport, TrustedRoot};
-use crate::verb::PackageDigest;
 
-/// What failed, as [`refusal_of`] takes it.
-#[derive(Clone, Copy, Debug)]
-pub enum Failure<'a> {
-    /// A download or a proof was refused.
-    Package(PackageFailure),
-    /// The unpack was refused.
-    Unpack(&'a UnpackError),
-    /// The proven archive has a SHA-256 other than the order's.
-    OrderDigest { expected: &'a str, found: &'a str },
-}
-
-/// The library token of a fetch or a proof, and the refusal it is reported as.
+/// The library token of a fetch, and the refusal it is reported as.
 const PACKAGE_TOKENS: &[(&str, Refusal)] = &[
-    (INDEX_DIGEST_MISMATCH, Refusal::IndexDigestMismatch),
-    (INDEX_INVALID, Refusal::IndexInvalid),
-    (NO_PACKAGE_FOR_PLATFORM, Refusal::NoPackageForPlatform),
     (PACKAGE_DIGEST_MISMATCH, Refusal::DigestMismatch),
     (FETCH_FAILED, Refusal::FetchFailed),
-    (ATTESTATION_UNAVAILABLE, Refusal::AttestationUnavailable),
     (NO_SPACE, Refusal::NoSpace),
-    (NOT_ATTESTED, Refusal::NotAttested),
+    (NO_STORE, Refusal::NoStore),
+    (STORE_DIGEST_MISMATCH, Refusal::StoreDigestMismatch),
 ];
 
-/// The reason token of an unpack error, and the refusal it is reported as.
-const UNPACK_TOKENS: &[(&str, Refusal)] = &[
-    (REASON_BAD_ARCHIVE, Refusal::BadArchive),
-    (REASON_DIGEST_MISMATCH, Refusal::DigestMismatch),
-    (REASON_MANIFEST_MISMATCH, Refusal::ManifestMismatch),
-    (REASON_DAEMON_TOO_OLD, Refusal::DaemonTooOld),
-    (REASON_NO_SPACE, Refusal::NoSpace),
-    (REASON_ARTIFACT_CHANGED, Refusal::ArtifactChanged),
-    (REASON_RESERVED_VERSION, Refusal::ReservedVersion),
-    (REASON_VERSION_TOO_LONG, Refusal::VersionTooLong),
-    (REASON_VERIFY_UNAVAILABLE, Refusal::VerifyUnavailable),
-    (REASON_IO_ERROR, Refusal::PackageIoError),
-];
-
-/// The refusal `token` is in `table`; `package_failed` for a token a library added since.
-fn lookup(table: &[(&str, Refusal)], token: &str) -> Refusal {
-    table
+/// The one mapping of a failure of the fetch onto the daemon's closed set: the refusal from the
+/// library's reason token (`package_failed` for a token the library added since), the outcome and
+/// the class from the library.
+pub fn refusal_of(failed: PackageFailure) -> PackageRefusal {
+    let refusal = PACKAGE_TOKENS
         .iter()
-        .find(|(known, _)| *known == token)
-        .map_or(Refusal::PackageFailed, |(_, refusal)| *refusal)
-}
-
-/// The one mapping of a failure of the package libraries onto the daemon's closed set: the
-/// refusal from the library's reason token, the outcome and the class from the library. An
-/// archive whose SHA-256 is not the order's is `digest_mismatch`, `Failure`, `Release`.
-pub fn refusal_of(failure: Failure<'_>) -> PackageRefusal {
-    let (table, outcome, class, token, detail) = match failure {
-        Failure::Package(failed) => (
-            PACKAGE_TOKENS,
-            failed.outcome,
-            failed.class,
-            failed.reason,
-            failed.to_string(),
-        ),
-        Failure::Unpack(error) => {
-            let (outcome, class, token) = error.outcome();
-            (UNPACK_TOKENS, outcome, class, token, error.to_string())
-        }
-        Failure::OrderDigest { expected, found } => {
-            return PackageRefusal {
-                refusal: Refusal::DigestMismatch,
-                outcome: Outcome::Failure,
-                class: Class::Release,
-                detail: format!("the package's SHA-256 is {found}, not the order's {expected}"),
-            };
-        }
-    };
+        .find(|(known, _)| *known == failed.reason)
+        .map_or(Refusal::PackageFailed, |(_, refusal)| *refusal);
     PackageRefusal {
-        refusal: lookup(table, token),
-        outcome,
-        class,
-        detail,
+        refusal,
+        outcome: failed.outcome,
+        class: failed.class,
+        detail: failed.to_string(),
     }
 }
 
-/// A failure of the host's disk that no library classified: tried again later.
-fn io_refusal(detail: String) -> PackageRefusal {
-    PackageRefusal {
-        refusal: Refusal::PackageIoError,
-        outcome: Outcome::Deferred,
-        class: Class::Environment,
-        detail,
-    }
-}
+/// Where the store writes a line for the log: a store that gave other bytes than an entry names.
+pub type Log = Arc<dyn Fn(&str) + Send + Sync>;
 
-fn refused(refusal: PackageRefusal) -> PackageError {
-    PackageError::Refused(refusal)
-}
-
-/// Fetches, proves, unpacks and seals packages with the real libraries.
+/// Fetches an entry's artifact by its pin with the real library.
 pub struct RealPackages {
     fetcher: Box<dyn Fetcher + Send + Sync>,
-    verifier: Box<dyn Verifier + Send + Sync>,
+    coordinator: Option<Box<dyn Fetcher + Send + Sync>>,
     clock: Arc<dyn Clock>,
     bounds: Bounds,
-    release_channel: HttpsUrl,
-    signers: TrustedSigners,
+    stores: Stores,
+    log: Log,
     root: PathBuf,
-    platform: Platform,
-    fs: Arc<dyn PackageFs + Send + Sync>,
-    check: PackageCheck,
-    trusted_root: Option<Arc<TrustedRoot>>,
 }
 
 impl RealPackages {
-    /// A store over the packages directory `root`, which exists, with the release channel, the
-    /// trusted signer and the bounds of `config`, for the host's platform. Everything it
-    /// unpacks is given to `owner`, which is [`Owner::ROOT`] in the daemon.
-    pub fn open(
+    /// A store over the packages directory `root`, which exists, resolving the locations of an
+    /// entry through `stores`, the host's `stores.toml`, within the `bounds` of the daemon config.
+    pub fn new(
         fetcher: Box<dyn Fetcher + Send + Sync>,
-        verifier: Box<dyn Verifier + Send + Sync>,
         clock: Arc<dyn Clock>,
-        config: &DaemonConfig,
+        bounds: Bounds,
+        stores: Stores,
         root: &Path,
-        owner: Owner,
-    ) -> io::Result<RealPackages> {
-        let fs = HostFs::open(root, owner)?;
-        Ok(RealPackages {
-            fetcher,
-            verifier,
-            clock,
-            bounds: config.bounds.clone(),
-            release_channel: config.release_channel.clone(),
-            signers: config.trusted_signers.clone(),
-            root: root.to_path_buf(),
-            platform: Platform::current(),
-            fs: Arc::new(fs),
-            check: None,
-            trusted_root: None,
-        })
-    }
-
-    /// The same store, with `check` judging every staged tree before it is sealed: on macOS the
-    /// quarantine and code-signature check ([`crate::adapters::Adapters`]), none on Linux.
-    pub fn with_package_check(self, check: PackageCheck) -> RealPackages {
-        RealPackages { check, ..self }
-    }
-
-    /// The same store, reporting `root`, the trusted root its verifier checks attestations
-    /// with ([`Packages::trusted_root`]).
-    pub fn with_trusted_root(self, root: Arc<TrustedRoot>) -> RealPackages {
+    ) -> RealPackages {
         RealPackages {
-            trusted_root: Some(root),
+            fetcher,
+            coordinator: None,
+            clock,
+            bounds,
+            stores,
+            log: Arc::new(|line| eprintln!("hostkeeper daemon: {line}")),
+            root: root.to_path_buf(),
+        }
+    }
+
+    /// The same store, asking the locations of the `coordinator` store through `fetcher`
+    /// ([`crate::coordinator_store::CoordinatorFetcher`]); without it such a location is
+    /// `no_store`.
+    pub fn with_coordinator(self, fetcher: Box<dyn Fetcher + Send + Sync>) -> RealPackages {
+        RealPackages {
+            coordinator: Some(fetcher),
             ..self
         }
+    }
+
+    /// The same store, writing its log lines (a `store_digest_mismatch` for each store that gave
+    /// other bytes than an entry names) through `log`; they go to standard error otherwise.
+    pub fn with_log(self, log: Log) -> RealPackages {
+        RealPackages { log, ..self }
     }
 }
 
 impl Packages for RealPackages {
-    fn version_dir(
-        &self,
-        service: &ServiceName,
-        version: &Version,
-        digest: &PackageDigest,
-        index_digest: Option<&PackageDigest>,
-    ) -> Result<VersionDir, PackageError> {
-        self.remove_orphans(service)?;
-        let order = PackageOrder {
-            service: service.clone(),
-            version: version.clone(),
-            index_digest: index_digest.and_then(|d| Sha256Hex::parse(d.as_str())),
-        };
-        let fetch = FetchEnv {
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
+        let env = PinnedEnv {
             fetcher: &*self.fetcher,
             clock: &*self.clock,
             bounds: &self.bounds,
-            release_channel: &self.release_channel,
+            coordinator: self
+                .coordinator
+                .as_deref()
+                .map(|fetcher| fetcher as &dyn Fetcher),
+            stores: &self.stores,
             packages_root: &self.root,
-            platform: self.platform,
         };
-        let staged = fetch_package(&fetch, &order)
-            .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
-        let proof = ProveEnv {
-            fetcher: &*self.fetcher,
-            verifier: &*self.verifier,
-            clock: &*self.clock,
-            bounds: &self.bounds,
-            signers: &self.signers,
-        };
-        let verified = prove(&proof, staged)
-            .map_err(|failed| refused(refusal_of(Failure::Package(failed))))?;
-        if verified.sha256().as_str() != digest.as_str() {
-            return Err(refused(refusal_of(Failure::OrderDigest {
-                expected: digest.as_str(),
-                found: verified.sha256().as_str(),
-            })));
+        let pinned = fetch_pinned(&env, service, entry)
+            .map_err(|failed| PackageError::Refused(refusal_of(failed)))?;
+        for store in &pinned.other_bytes {
+            (self.log)(&format!(
+                "{STORE_DIGEST_MISMATCH}: the store {store} gave other bytes than the entry names for {service}"
+            ));
         }
-        let unpack_order = UnpackOrder {
-            service: service.clone(),
-            version: version.clone(),
-            platform: hostkeeper_config::platform::Platform::current(),
-            package_digest: verified.sha256().clone(),
-        };
-        let unpacked = hostkeeper_unpack::unpack(
-            verified.path(),
-            &unpack_order,
-            &Limits::from(&self.bounds),
-            &*self.fs,
-            match &self.check {
-                Some(mac) => UnpackPlatform::MacOs(mac.as_ref()),
-                None => UnpackPlatform::Linux,
-            },
-        )
-        .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
-        let staged =
-            Staged::seal(&unpacked.dir).map_err(|error| refused(io_refusal(error.to_string())))?;
-        Ok(VersionDir::with_manifest(staged, unpacked.manifest))
-    }
-
-    fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
-        hostkeeper_unpack::remove_orphans(service, &*self.fs)
-            .map_err(|error| refused(refusal_of(Failure::Unpack(&error))))?;
-        remove_orphan_fetches(&self.root, service)
-            .map_err(|error| refused(io_refusal(error.to_string())))
-    }
-
-    fn trusted_root(&self) -> Option<RootReport> {
-        self.trusted_root.as_ref().map(|root| root.report())
+        let path = pinned.path().to_path_buf();
+        Ok(Pinned::new(&path, Box::new(pinned)))
     }
 }

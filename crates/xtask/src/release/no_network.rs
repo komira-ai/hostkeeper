@@ -35,29 +35,61 @@ const COMMAND: &str = concat!("Command::", "new");
 const CFG_TEST: &str = concat!("#[cfg(", "test)]");
 
 /// The test files that start a process on purpose, and why.
-const PROCESS_TESTS: [(&str, &str); 9] = [
+const PROCESS_TESTS: [(&str, &str); 17] = [
     ("tests/cli.rs", "runs the xtask binary as a process"),
     (
-        "tests/workflows/channel_run_tests.rs",
-        "runs the committed steps of release.yml's channel job with bash, with a fake gh and curl",
+        "tests/coordinator_update_unit.rs",
+        "runs the coordinator updater's unit command with the fake gh as its gh and curl",
+    ),
+    (
+        "tests/channels_cli.rs",
+        "runs the xtask binary as a process on the channel verbs' flags",
+    ),
+    (
+        "tests/channels_publish_cli.rs",
+        "runs the xtask binary as a process on the apt, rpm and installer channel verbs",
+    ),
+    (
+        "tests/channels_check_apt_cli.rs",
+        "runs the xtask binary as a process on the apt install check, with a fake env",
+    ),
+    (
+        "tests/release_image_cli.rs",
+        "runs the xtask binary as a process on the image index and layout verbs",
+    ),
+    (
+        "tests/release_linux.rs",
+        "runs the xtask binary as a process on crafted packages",
+    ),
+    (
+        "tests/workflows/targets_run_tests.rs",
+        "runs the committed steps of release.yml's targets job with bash, with a fake gh and cargo",
+    ),
+    (
+        "tests/workflows/set_desired_calls_tests.rs",
+        "runs the committed set step of set-desired.yml with bash, with a fake hkctl",
+    ),
+    (
+        "tests/workflows/coordinator_wait_run_tests.rs",
+        "runs the committed wait and error steps of release.yml's coordinator job with bash, with a fake curl",
+    ),
+    (
+        "tests/workflows/hello_run_tests.rs",
+        "runs the committed steps of hello-desired.yml's release job with bash, with a fake curl and cargo",
     ),
     (
         "tests/bin/gh_fixture.rs",
-        "the fake gh runs jq over its scratch release list, as gh --jq does",
-    ),
-    (
-        "tests/channel_sync.rs",
-        "runs the committed unit's and sidecar's channel-sync commands with a fake gh",
+        "the fake gh runs jq over its scratch release list, as gh --jq does; the fake cargo runs the xtask binary beside it",
     ),
     (
         "tests/coordinator_deploy.rs",
         "runs the committed database backup unit's command with a fake docker",
     ),
-    (
-        "tests/package_launch.rs",
-        "starts the packaged test fixture through the package unit's ExecStart",
-    ),
     ("tests/hygiene/main.rs", "lists the tracked files with git"),
+    (
+        "tests/workflows/pr_paths_tests.rs",
+        "lists the tracked files with git, and runs pr-device.yml's diff with git in a scratch repository",
+    ),
     (
         "tests/wallclock/main.rs",
         "lists the tracked files with git",

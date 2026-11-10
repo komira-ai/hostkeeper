@@ -8,12 +8,14 @@ use std::time::Duration;
 use hostkeeper_wire::wire::Outcome;
 
 use crate::assignment::ServiceAssignments;
-use crate::decide::{Decision, Gate, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
 use crate::services::Services;
 use crate::stages::{View, reach};
-use crate::testutil::{beat, desired, id, last, role, secs, unhealthy, version};
+use crate::testutil::{
+    beat, decide_why, desired, id, last, native, role, secs, unhealthy, version,
+};
 
 const NOW: Duration = Duration::from_secs(100);
 
@@ -41,6 +43,11 @@ fn fleet(running: &[&str]) -> Fleet {
     f
 }
 
+/// `f` as the hosts of [`native`] for `w`.
+fn n(f: &Fleet, w: &Desired) -> Fleet {
+    native(f, &BTreeMap::from([("app".to_owned(), w.clone())]))
+}
+
 fn why(s: &Services, w: &Desired, f: &Fleet, host: &str) -> Decision {
     let all = BTreeMap::from([("app".to_owned(), w.clone())]);
     decide_why(s, &all, "app", f, &id(host), NOW)
@@ -61,16 +68,16 @@ fn a_manual_stage_that_comes_apart_as_hosts_join_waits_for_its_advance() {
     let w = want(10, 0);
     let ten = vec!["1.0"; 10];
     let f = fleet(&ten);
-    let none = View::at(def, &w, 0, BTreeSet::new(), &f, NOW);
+    let none = View::at(def, &w, 0, BTreeSet::new(), &n(&f, &w), NOW);
     assert_eq!(none.current, 0, "the first stage waits for an operator");
-    let entered = reach(def, &w, none, true, &f, NOW)
+    let entered = reach(def, &w, none, true, &n(&f, &w), NOW)
         .expect("entered")
         .entered;
     // h01 rolled; an eleventh host joins.
     let mut running = vec!["2.0"];
     running.extend(vec!["1.0"; 10]);
     let f = fleet(&running);
-    let view = View::at(def, &w, entered, BTreeSet::new(), &f, NOW);
+    let view = View::at(def, &w, entered, BTreeSet::new(), &n(&f, &w), NOW);
     let sizes: Vec<usize> = view.stages.iter().map(|st| st.hosts).collect();
     assert_eq!(sizes, [1, 2, 11]);
     assert_eq!(view.current, 1, "only the first stage is entered");
@@ -110,10 +117,10 @@ fn a_host_below_its_minimum_version_is_not_in_the_plan() {
         why(&s, &w, &f, "h03"),
         Decision::Gate(Gate::BelowMinVersion)
     );
-    let view = View::effective(def, &w, None, &f, NOW);
+    let view = View::effective(def, &w, None, &n(&f, &w), NOW);
     assert_eq!(view.members.len(), 2);
     assert!(view.finished());
-    assert!(!crate::stages::is_live(def, Some(&w), &f, NOW));
+    assert!(!crate::stages::is_live(def, Some(&w), &n(&f, &w), NOW));
 }
 
 /// Proves: with `min_up = 3` of 3 hosts of the role, a host that is unhealthy is still ordered

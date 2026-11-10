@@ -3,8 +3,9 @@
 //!
 //! The state is the files `serve` keeps, named by the same flags:
 //!
-//! - beside `--state-file`: the state file itself, the spent ids of CI's tokens (`.jti`) and the
-//!   verdicts (`.verdicts`);
+//! - beside `--state-file`: the state file itself, the releases set with targets
+//!   (`.releases`), the registry of package repositories (`.repositories`), the spent ids of CI's
+//!   tokens (`.jti`) and the verdicts (`.verdicts`);
 //! - beside the ops file (`--ops-file`, by default the state file's name with `.ops` added): the
 //!   ops file itself, the audit file (`.audit`) and each of its sealed segments (`.audit.<n>`,
 //!   named `ops-audit.<n>` in a snapshot, with the number it has), the halts file (`.halts`), a
@@ -55,6 +56,8 @@ use crate::audit_file;
 use crate::jti_file::jti_path;
 use crate::lock::{LockError, StateLock, lock_path};
 use crate::ops_file::{halts_path, staged_path, unfinished_path};
+use crate::releases::releases_path;
+use crate::repositories::repositories_path;
 use crate::verdict_file::verdicts_path;
 
 /// The name of the manifest in a snapshot.
@@ -96,9 +99,11 @@ const AUDIT: &str = "ops-audit";
 /// Where the coordinator's state is: the flags `serve` names it by.
 #[derive(Clone, Debug, Args)]
 pub struct StatePaths {
-    /// The desired-state file, as `serve --state-file` names it. The spent ids of CI's tokens
-    /// (`<state-file>.jti`) and the verdicts (`<state-file>.verdicts`) are beside it, and the
-    /// lock taken is `<state-file>.lock`, the one `serve` holds.
+    /// The desired-state file, as `serve --state-file` names it. The releases
+    /// (`<state-file>.releases`), the registry of package repositories
+    /// (`<state-file>.repositories`), the spent ids of CI's tokens (`<state-file>.jti`) and the
+    /// verdicts (`<state-file>.verdicts`) are beside it, and the lock taken is
+    /// `<state-file>.lock`, the one `serve` holds.
     #[arg(long)]
     pub state_file: PathBuf,
     /// The ops file, as `serve --ops-file` names it. Default: the state file's name with `.ops`
@@ -126,6 +131,8 @@ impl StatePaths {
         let ops = self.ops_file();
         vec![
             ("state", state.clone()),
+            ("state-releases", releases_path(state)),
+            ("state-repositories", repositories_path(state)),
             ("state-jti", jti_path(state)),
             ("state-verdicts", verdicts_path(state)),
             ("ops", ops.clone()),

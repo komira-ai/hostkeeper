@@ -10,7 +10,8 @@
 //! - `load_gives_back`: a load gives back what was committed, every list in its order; an entry
 //!   at its default may come back as absent ([`normal`]), which the code reads the same. A state's
 //!   audit ring is the entries of the lines committed with it, as a store keeps it, which a
-//!   backend may give back from the lines it holds.
+//!   backend may give back from the lines it holds. The desired state holds a release (targets
+//!   and an index digest), given back equal.
 //! - `failed_keeps`: a commit of one part that fails leaves that part as it was.
 //! - `numbering_continues`: a backend started again holds every audit line, in order, and its
 //!   newest number ([`Backend::last_seq`]), so a store numbers on from it.
@@ -33,6 +34,8 @@ use crate::desired::{self, Desired, StoreError};
 use crate::jti_file::jti_path;
 use crate::ops::{AuditEntry, OpsError, OpsState};
 use crate::registry::{Digest, Release};
+use crate::repositories::Registry;
+use crate::repositories_support::komira;
 use crate::testutil::{scratch, version};
 use crate::verdict_file::{self, verdicts_path};
 
@@ -70,6 +73,7 @@ pub(crate) fn normal(mut state: OpsState) -> OpsState {
     state
         .rollouts
         .retain(|_, rollout| *rollout != Default::default());
+    state.host_groups = state.host_groups.without_defaults();
     state
 }
 
@@ -149,6 +153,43 @@ pub(crate) fn desired_at(at: &str, fill: char) -> desired::Held {
     registry.record(&version(at), Release::Package(digest), |_| true);
     held.desired.insert("kbf".to_owned(), desired);
     held.digests.insert("kbf".to_owned(), registry);
+    held
+}
+
+/// A desired state of `kbf` at `at` that also holds the release of that version: two platforms,
+/// the first with two entries, one with a release index digest.
+pub(crate) fn desired_with_release(at: &str, fill: char) -> desired::Held {
+    use hostkeeper_proto::hostkeeper::release::v1::{Location, Target, TargetList};
+    let entry = |installer: &str, c: char| Target {
+        installer: installer.to_owned(),
+        locations: vec![Location {
+            store: "github".to_owned(),
+            locator: format!("example-org/kbf/releases/download/v{at}/kbf-{installer}"),
+        }],
+        digest: c.to_string().repeat(64),
+        bytes: 4096,
+        ..Target::default()
+    };
+    let targets = std::collections::BTreeMap::from([
+        (
+            "linux-x86_64".to_owned(),
+            TargetList {
+                entries: vec![entry("tarball", fill), entry("deb", 'd')],
+            },
+        ),
+        (
+            "macos-arm64".to_owned(),
+            TargetList {
+                entries: vec![entry("tarball", 'e')],
+            },
+        ),
+    ]);
+    let index = Digest::parse(&"9".repeat(64)).expect("a digest");
+    let mut held = desired_at(at, fill);
+    held.releases.entry("kbf".to_owned()).or_default().insert(
+        at.to_owned(),
+        Arc::new(crate::releases::Release::new(targets, Some(index))),
+    );
     held
 }
 
@@ -258,10 +299,50 @@ fn all_or_nothing(subject: &dyn Subject) -> Outcome {
     })
 }
 
+/// Puts two host groups and their desired versions into `desired`, and into `ops` the marks of
+/// two of their packages, one at its default, and an inventory record's group.
+fn with_host_groups(desired: &mut desired::Held, ops: &mut OpsState) {
+    use crate::host_groups::{GroupMarks, HostGroup, HostGroups};
+    let web = crate::host_groups::tests::web();
+    let canary = HostGroup {
+        packages: vec!["hostkeeper".to_owned()],
+        generation: 1,
+        desired: std::collections::BTreeMap::new(),
+        ..web.clone()
+    };
+    desired.host_groups = HostGroups(
+        [("web", web), ("web-canary", canary)]
+            .into_iter()
+            .filter_map(|(name, group)| Some((name.parse().ok()?, group)))
+            .collect(),
+    );
+    let marks = std::collections::BTreeMap::from([
+        (
+            "tierstore".to_owned(),
+            crate::host_groups::tests::every_mark(),
+        ),
+        ("hostkeeper".to_owned(), GroupMarks::default()),
+    ]);
+    if let Ok(name) = "web".parse() {
+        ops.host_groups.0.insert(name, marks);
+    }
+    ops.inventory[1].host_group = "web".to_owned();
+}
+
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (desired, mut ops, verdicts) = (desired_at("2.0", 'c'), rich_ops(), rich_verdicts());
-    let audit = lines(1, 3);
+    let (mut desired, mut ops, verdicts) = (
+        desired_with_release("2.0", 'c'),
+        rich_ops(),
+        rich_verdicts(),
+    );
+    desired.repositories = Registry::default()
+        .put(komira(1))
+        .and_then(|registry| registry.put(komira(2)))
+        .map_err(|why| format!("the registry could not be made: {why}"))?;
+    with_host_groups(&mut desired, &mut ops);
+    let mut audit = lines(1, 3);
+    audit[1].detail.host_group = Some("web".to_owned());
     ops.audit = ring(&audit);
     live.commit(&Commit {
         desired: Some((&desired::Held::default(), &desired)),
@@ -278,6 +359,26 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let back = loaded(&subject.restarted())?;
     check(back.desired == desired, || {
         format!("the desired state came back as {:?}", back.desired)
+    })?;
+    check(back.desired.releases == desired.releases, || {
+        format!("the releases came back as {:?}", back.desired.releases)
+    })?;
+    check(back.desired.host_groups == desired.host_groups, || {
+        format!(
+            "the host groups came back as {:?}",
+            back.desired.host_groups
+        )
+    })?;
+    check(
+        back.ops.host_groups.clone().without_defaults()
+            == ops.host_groups.clone().without_defaults(),
+        || format!("the groups' marks came back as {:?}", back.ops.host_groups),
+    )?;
+    check(back.desired.repositories == desired.repositories, || {
+        format!(
+            "the repositories came back as {:?}",
+            back.desired.repositories
+        )
     })?;
     check(normal(back.ops.clone()) == normal(ops), || {
         format!("the operations state came back as {:?}", back.ops)
@@ -579,6 +680,8 @@ enum Flaw {
     KeepsFailed,
     /// A load gives the exclusions back in the other order.
     DropsOrder,
+    /// A load gives no release back.
+    DropsReleases,
     /// It says it holds no audit line.
     ForgetsNumbers,
     /// A page asked for the newest lines answers the oldest.
@@ -599,6 +702,9 @@ impl Backend for Flawed {
         let mut loaded = self.inner.load()?;
         if self.flaw == Flaw::DropsOrder {
             loaded.ops.excluded.reverse();
+        }
+        if self.flaw == Flaw::DropsReleases {
+            loaded.desired.releases.clear();
         }
         Ok(loaded)
     }
@@ -696,6 +802,7 @@ fn the_suite_fails_against_a_backend_that_breaks_each_clause() {
     let cases = [
         (Flaw::WritesHalf, "all_or_nothing"),
         (Flaw::DropsOrder, "load_gives_back"),
+        (Flaw::DropsReleases, "load_gives_back"),
         (Flaw::KeepsFailed, "failed_keeps"),
         (Flaw::ForgetsNumbers, "numbering_continues"),
         (Flaw::IgnoresNewest, "audit_pages"),

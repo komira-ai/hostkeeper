@@ -25,7 +25,8 @@ store hold in the tables of one Postgres database (16 or newer), in the schema `
 desired state and its registry of digests, the spent CI token ids, the verdicts, every operator
 change (exclusions, labels, halts and their reports, holds, assignments, minimum versions,
 uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
-the whole audit log, and the enrollment store. The design is
+the host groups (each group's packages, policy, generation and desired versions, and each (group,
+package)'s minimum version, marks and plan position), the whole audit log, and the enrollment store. The design is
 [coordinator-storage.md](../design/coordinator-storage.md).
 
 - **The connection string** is the one line of the file `--database-dsn-file` names, a libpq
@@ -41,9 +42,10 @@ the whole audit log, and the enrollment store. The design is
   `--enrollment-dir`, `--audit-max-bytes` and `--audit-retained-segments`, each named
   (`--database-dsn-file and --ops-file are both given: ...`), and it requires `--halt-marker-file`.
   Enrollment is on when `--ca-key-file` is given (with `--server-cert-file` and `--server-name`, as
-  with the file store); the enrollment store is the database's. The MDM gate's flags still need
-  `--enrollment-dir`, where its device records are, so the gate does not run on the database store
-  in this release.
+  with the file store); the enrollment store is the database's. The MDM gate runs on either store:
+  its flags need enrollment as with the file store (`--ca-key-file`, and `--enrollment-dir` or
+  `--database-dsn-file`), and on the database its device records are the rows of the table
+  `mdm_devices`.
 - **The start.** `serve` opens one session, takes the coordinator's advisory lock of the database
   without waiting, runs the migrations the database lacks (each in its own transaction, recorded in
   `schema_version`), raises the lease's epoch, and loads the state. Nothing is read or written
@@ -65,7 +67,7 @@ the whole audit log, and the enrollment store. The design is
   Decisions read memory: a heartbeat in the steady state runs no query.
 - **Generations and write ids.** The database keeps, with each service's desired state, its
   generation (one more for every accepted set, a set identical to the state held included, and a
-  force), the write id of the last set (`hostkeeper ctl releases set-desired --write-id`, 1 to
+  force), the write id of the last set (`hkctl releases set-desired --write-id`, 1 to
   128 visible ASCII characters), and the version and minimums the last change of version replaced.
   `Releases.SetDesired` answers them as its `record` and `Releases.Converge` shows them, so a writer
   that lost an answer can look up whether its write landed. A set with `--if-generation <n>` is
@@ -77,6 +79,16 @@ the whole audit log, and the enrollment store. The design is
   (migration 3, generations)`). The file store keeps none of them: there a set that names
   `--if-generation` or `--write-id` is refused `invalid_request`, and a set identical to the
   state held writes nothing.
+- **Host groups.** Migration `0008` adds the tables of the host groups (`host_groups`,
+  `host_group_packages`, `group_desired`, `group_min_versions`, `group_services`,
+  `group_rollouts`, `group_rollout_done`) and a `host_group` column to `enrollment_hosts` (with
+  `moving_from` and `facts_generation`), `enrollment_requests` (`approved_host_group`), `inventory`
+  and `audit`; a row written before has `NULL` there and is read as naming no group. This release
+  keeps the groups but places no host by them yet. `0008` says older releases must not run on it:
+  a coordinator of the release before is refused on a database that has it (`the database's
+  schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
+  release is restoring the dump taken before it. The tables of placement by roles stay as they
+  are.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a
@@ -151,8 +163,18 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
 - The entries of the ops file's audit ring that its audit file has no line of (changes older than
   the audit file) are not imported, and the import says how many; the row `state_imported` is
   numbered past them.
-- The MDM gate's device records (`<enrollment-dir>/mdm-devices`) have no table yet: an enrollment
-  store that holds them is refused, and a coordinator that runs the gate stays on the file store.
+- The MDM gate's device records (`<enrollment-dir>/mdm-devices/<enrollment id>.pb`) are read by the
+  gate's own reader, which refuses a record `serve` would refuse, and written as the rows of
+  `mdm_devices`; `export` writes them back as the same files, byte for byte.
+- What each host's daemon last said it runs, kept in the host's file (`hosts/<host id>.pb`), is the
+  row of the host in `enrollment_host_running`; `export` writes it back into the host's file.
+- The host groups and their desired versions (the state file's `host_groups`) are the rows of
+  `host_groups`, `host_group_packages` and `group_desired`; each (group, package)'s marks (the ops
+  file's `host_groups`) the rows of `group_min_versions`, `group_services`, `group_rollouts` and
+  `group_rollout_done`; `export` writes both keys back only when the database holds one.
+- The registry of package repositories (`<state-file>.repositories`) is written as the rows of
+  `repositories`, one per repository, and the one row of `repository_generation`; `export` writes
+  the file back, also for a registry whose last repository was removed (its generation is not 0).
 - No file is changed: the file coordinator can start again on the same files.
 
 A second import needs an empty database: drop it and create it again first.
@@ -187,17 +209,19 @@ The rest of this page is the file store.
 
 | file | holds | without it |
 |---|---|---|
-| `--state-file` | The desired state of each service (version, limits, minimums) and the package digest of every version CI has set. | No service has a desired version until CI sets it again. |
+| `--state-file` | The desired state of each service (version, limits, minimums) and the package digest of every version CI has set; and, under `host_groups`, each host group (its packages in order, its policy, its generation, who changed it last) with its desired version of each package. `host_groups` is written only while a group is held, and a coordinator before groups refuses the file then. | No service has a desired version until CI sets it again; no host group is held. |
+| `<state-file>.releases` | The release each version was set with by a `SetDesired` with targets: per platform, its artifacts in the order set, and the digest of the release index set with them ([packages.md](../design/packages.md) section 3.6). Written once a version is set with targets. A coordinator before targets does not read it. | `Releases.GetRelease` answers `release_unknown` for every version, and a version can be set again with other targets. |
+| `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
-| `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, uninstall intents, the host inventory, the marks of last good and bad versions, and the audit ring. | All of it. |
-| `<ops-file>.audit` | Every change to the ops file, one JSON line each. | The audit history. |
+| `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
+| `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
 | `<ops-file>.audit.<n>` | The sealed segments of the audit file, the older changes, one JSON line each ([holds-and-force.md](holds-and-force.md#the-audit-file)). Written once the audit file has been rotated. | The audit history before the newest rotation. |
 | `<ops-file>.halts` | The halt reports, who raised each halt, the reports kept while a halt stood, each service's clear generation, and each service's update plan position (`rollouts`: the version it is for, the stages entered, the hosts recorded done, an operator's pause; [rollout-plans.md](rollout-plans.md#what-a-restart-keeps)). Written once there is a halt or a plan that went past its first stage or was paused. | The halt reports and the clear generations: a halted service halts again after its clear. The plan positions: each plan starts at its first stage with no host recorded done, and an operator's pause is gone, so a paused plan goes on until it is paused again. |
 | `<ops-file>.halts.next` | Only after a crash in the middle of a change: the halts file that change staged. The next start settles it. | The ops file holds that change and the halts file does not: what the change added to the halts file (a clear's generation, the reports of its acknowledgements) is lost. |
 | `<ops-file>.halts.unfinished` | Only while a change that raises protection (a halt, a bad mark, a pause) or an operator's abort is in memory and not yet written, and after a crash in that window: the marker, listing the audit number of each such change (`{"unwritten":[41,42]}`). A start removes it when the ops file holds every change it lists; otherwise it refuses to start, naming the changes that did not land, until the operator makes them again by hand if they still matter and removes the marker. A marker the release before wrote (an empty file) refuses a start as it did. | A change it lists that did not land may be lost without notice. |
-| `--enrollment-dir` | The enrollment store ([enrollment-coordinator.md](../enrollment-coordinator.md#state-files)): the requests, the certificates issued, the approved hosts (host id, key hash, role, services), the deny rows, the Mac nonces, the next certificate serial, and, with the MDM gate, its record of each device (`mdm-devices/`). | No enrolled host's heartbeat or renewal is admitted. Each host has to enroll again and be approved again. Hosts that were denied are no longer denied. |
+| `--enrollment-dir` | The enrollment store ([enrollment-coordinator.md](../enrollment-coordinator.md#state-files)): the requests, the certificates issued, the approved hosts (host id, key hash, role, services, host group, the group a move is from, the generation of its facts; a renewal keeps the last three), the deny rows, the Mac nonces, the next certificate serial, and, with the MDM gate, its record of each device (`mdm-devices/`). | No enrolled host's heartbeat or renewal is admitted. Each host has to enroll again and be approved again. Hosts that were denied are no longer denied. |
 
 ## Backing up
 

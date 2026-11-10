@@ -141,6 +141,7 @@ pub(crate) fn advance_as(
         proto::AdvanceRequest {
             service: service.to_owned(),
             reason: reason.to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -156,6 +157,7 @@ pub(crate) fn pause_as(
         proto::PauseRequest {
             service: service.to_owned(),
             reason: reason.to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -171,6 +173,7 @@ pub(crate) fn resume_as(
         proto::ResumeRequest {
             service: service.to_owned(),
             reason: reason.to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -234,6 +237,7 @@ pub(crate) fn entry_of(seq: u64, action: &str, reason: &str) -> proto::AuditEntr
         reason: Some(reason.to_owned()),
         at_unix: None,
         by_name: Some("operator".to_owned()),
+        host_group: None,
     }
 }
 

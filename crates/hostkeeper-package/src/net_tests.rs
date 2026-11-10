@@ -36,6 +36,8 @@ impl Scripted {
         Response {
             status: self.status,
             content_length: self.length,
+            location: None,
+            www_authenticate: None,
             body: Box::new(ScriptedBody {
                 data: Cursor::new(self.body),
                 error: self.error,

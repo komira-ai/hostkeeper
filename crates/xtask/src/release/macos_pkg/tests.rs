@@ -99,7 +99,7 @@ pub(super) fn distribution_text() -> String {
 }
 
 /// One portable (`odc`) cpio entry: a header, the name and its NUL, the data.
-pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
+pub(crate) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) -> Vec<u8> {
     let header = format!(
         "070707{:06o}{:06o}{mode:06o}{uid:06o}{gid:06o}{:06o}{:06o}{:011o}{:06o}{:011o}",
         1,
@@ -115,20 +115,20 @@ pub(super) fn odc_entry(name: &str, mode: u32, uid: u32, gid: u32, data: &[u8]) 
 }
 
 /// A cpio archive of `entries`, then the trailer, then a block's padding.
-pub(super) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
+pub(crate) fn odc(entries: &[Vec<u8>]) -> Vec<u8> {
     let mut bytes = entries.concat();
     bytes.extend(odc_entry(TRAILER, 0, 0, 0, b""));
     bytes.extend([0_u8; 120]);
     bytes
 }
 
-pub(super) fn gzip(bytes: &[u8]) -> Vec<u8> {
+pub(crate) fn gzip(bytes: &[u8]) -> Vec<u8> {
     let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
     gz.write_all(bytes).expect("compress");
     gz.finish().expect("compress")
 }
 
-pub(super) fn dir_entry(name: &str) -> Vec<u8> {
+pub(crate) fn dir_entry(name: &str) -> Vec<u8> {
     odc_entry(name, 0o040_755, 0, 0, b"")
 }
 
@@ -334,28 +334,20 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
 }
 
 #[test]
-fn gh_and_the_trusted_root_are_where_the_daemon_reads_them_on_a_mac() {
-    // Catches: the pkg installing `gh` or the trusted root at another path than the one the
-    // daemon reads on a Mac, so the daemon's fetch or verify finds nothing; and the daemon
-    // reading a CA bundle other than macOS's own, which the pkg does not install.
-    let mac = hostkeeper_daemon::cli::HostFiles::for_platform(
-        hostkeeper_launchd::PlatformKind::Macos,
-        |_| false,
-    );
-    assert_eq!(Path::new("/").join(gh_path()), mac.gh);
-    assert_eq!(Path::new("/").join(trusted_root_path()), mac.trusted_root);
+fn gh_and_the_trusted_root_are_installed_where_the_pkg_names_them() {
+    // Catches: the pkg installing `gh` or the trusted root at another path than the one it
+    // names, under `/usr/local/lib/hostkeeper` (the daemon reads neither; `hostkeeper-pxe` does).
     assert_eq!(
         (gh_path().as_str(), trusted_root_path().as_str()),
         (GH, ROOT)
     );
-    assert_eq!(mac.ca_bundle, Path::new("/etc/ssl/cert.pem"));
 }
 
 #[test]
 fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses() {
     // Catches: a plist that does not parse, that names another label than the daemon's, or that
-    // runs another program than `current` of the self-update binary directory (the binary the
-    // pkg installs among them).
+    // runs another program than the binary the pkg installs (`current` of the self-update binary
+    // directory among them).
     let text = plist_text().expect("the plist");
     assert_eq!(
         text,
@@ -374,10 +366,7 @@ fn the_plist_parses_and_names_the_label_and_the_binary_hostkeeper_launchd_uses()
         .iter()
         .filter_map(plist::Value::as_string)
         .collect();
-    assert_eq!(
-        args,
-        ["/var/lib/updater/state/hostkeeper/bin/current", "daemon"]
-    );
+    assert_eq!(args, ["/usr/local/bin/hostkeeper", "daemon"]);
     let mut problems = Vec::new();
     plist_problems(text.as_bytes(), &mut problems);
     assert_eq!(problems, Vec::<String>::new());
@@ -405,13 +394,13 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
         ),
         (
             text.replace(
-                "/var/lib/updater/state/hostkeeper/bin/current",
-                "/usr/local/bin/hostkeeper",
+                "<string>/usr/local/bin/hostkeeper</string>",
+                "<string>/var/lib/updater/state/hostkeeper/bin/current</string>",
             ),
             vec![format!(
-                "{at}: the job runs Some(\"/usr/local/bin/hostkeeper\"), not \
-                 \"/var/lib/updater/state/hostkeeper/bin/current\", current of the binary \
-                 directory a self-update switches"
+                "{at}: the job runs Some(\"/var/lib/updater/state/hostkeeper/bin/current\"), not \
+                 \"/usr/local/bin/hostkeeper\", the binary the pkg installs, whose start seeds \
+                 the binary directory of a self-update and runs current"
             )],
         ),
         (
@@ -429,9 +418,7 @@ fn a_plist_that_does_not_parse_or_names_another_label_or_program_is_listed() {
             "<?xml version=\"1.0\"?><plist version=\"1.0\"><dict></dict></plist>".to_owned(),
             vec![
                 format!("{at}: the label is None, not \"dev.hostkeeper.hostkeeper\""),
-                format!(
-                    "{at}: the job runs None, not \"/var/lib/updater/state/hostkeeper/bin/current\""
-                ),
+                format!("{at}: the job runs None, not \"/usr/local/bin/hostkeeper\""),
                 format!(
                     "{at}: StandardOutPath is None, not \"/var/log/hostkeeper/daemon.out.log\", \
                      the file the pkg's newsyslog entry rotates in the directory the pkg makes"
@@ -488,9 +475,9 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_w
         *fake.calls.borrow(),
         [PkgCall {
             root: root.clone(),
-            scripts: scripts.clone(),
+            scripts: Some(scripts.clone()),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
-            version: version(),
+            version: version().to_string(),
             pkg: component.clone(),
         }]
     );
@@ -499,7 +486,7 @@ fn build_lays_out_exactly_the_payload_and_the_postinstall_with_their_modes_and_w
         [ProductCall {
             component: component.clone(),
             identifier: "dev.hostkeeper.hostkeeper".to_owned(),
-            version: version(),
+            version: version().to_string(),
             product: pkg.clone(),
         }]
     );
@@ -740,9 +727,9 @@ fn pkgbuild_runs_once_with_a_fixed_argument_list_and_the_scripts_directory() {
     assert_eq!(
         cli.build_pkg(
             Path::new("/stage/root"),
-            Path::new("/stage/scripts"),
+            Some(Path::new("/stage/scripts")),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/out/x.pkg")
         ),
         Ok(())
@@ -762,7 +749,7 @@ fn productbuild_runs_once_over_the_component_with_a_fixed_argument_list_and_no_s
         cli.build_product(
             Path::new("/stage/hostkeeper.pkg"),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/out/x.pkg")
         ),
         Ok(())
@@ -781,7 +768,7 @@ fn a_productbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
         cli.build_product(
             Path::new(component),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/p.pkg"),
         )
     };
@@ -814,9 +801,9 @@ fn a_pkgbuild_that_fails_or_cannot_start_is_a_port_error_with_its_words() {
     let build = |cli: &PkgbuildCli<FakeExec>, root: &str| {
         cli.build_pkg(
             Path::new(root),
-            Path::new("/s"),
+            Some(Path::new("/s")),
             "dev.hostkeeper.hostkeeper",
-            &version(),
+            &version().to_string(),
             Path::new("/p.pkg"),
         )
     };
@@ -843,7 +830,13 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
     let (good, scripts, pkg) = (Path::new("/r"), Path::new("/s"), Path::new("/p.pkg"));
     for (root, scripts, pkg) in [(bad, scripts, pkg), (good, bad, pkg), (good, scripts, bad)] {
         let e = cli
-            .build_pkg(root, scripts, "dev.hostkeeper.hostkeeper", &version(), pkg)
+            .build_pkg(
+                root,
+                Some(scripts),
+                "dev.hostkeeper.hostkeeper",
+                &version().to_string(),
+                pkg,
+            )
             .expect_err("not UTF-8");
         assert_eq!(
             e,
@@ -854,7 +847,12 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
         );
     }
     let e = cli
-        .build_product(bad, "dev.hostkeeper.hostkeeper", &version(), pkg)
+        .build_product(
+            bad,
+            "dev.hostkeeper.hostkeeper",
+            &version().to_string(),
+            pkg,
+        )
         .expect_err("not UTF-8");
     assert_eq!(
         e,
@@ -864,7 +862,12 @@ fn a_path_that_is_not_utf8_is_a_port_error_and_runs_nothing() {
         )
     );
     let e = cli
-        .build_product(good, "dev.hostkeeper.hostkeeper", &version(), bad)
+        .build_product(
+            good,
+            "dev.hostkeeper.hostkeeper",
+            &version().to_string(),
+            bad,
+        )
         .expect_err("not UTF-8");
     assert_eq!(e.why, "the path is not UTF-8");
     assert!(cli.exec.calls.borrow().is_empty());

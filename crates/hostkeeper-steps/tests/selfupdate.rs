@@ -1,5 +1,4 @@
-//! The updater's own update: stage beside, switch, restart; a binary that exits at start is
-//! replaced by the previous one.
+//! The updater's own update: stage beside, switch, restart.
 
 mod support;
 
@@ -7,14 +6,10 @@ use std::fs;
 use std::io;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::{HookSel, Loaded, Progress, RECORD_FILE, SCHEMA, State};
-use hostkeeper_steps::selfupdate::{
-    FollowOn, Layout, START_LIMIT_BURST, SelfUpdateError, fallback_unit, follow_on, main_dropin,
-    settle,
-};
+use hostkeeper_steps::selfupdate::{FollowOn, Layout, SelfUpdateError, follow_on, settle};
 use hostkeeper_steps::{ArtifactError, Finished, Record, RecordStore, Settled, Staged};
 use support::Scratch;
 
@@ -112,6 +107,37 @@ fn staging_adds_a_version_and_moves_no_link() {
     assert!(layout.stage("1.2.4", &s.path().join("absent")).is_err());
 }
 
+/// Catches a `next` that points at what no hand-over can start, or that moves another link: only a
+/// staged executable binary of the binary directory is linked, a repeat changes nothing, and
+/// `current` and `previous` stay as they were.
+#[test]
+fn next_points_only_at_a_staged_binary_of_the_binary_directory() {
+    let s = Scratch::new("su-next");
+    let layout = Layout::new(&s.path().join("bin"));
+    layout.stage("1.0.0", &binary(s.path(), "a", "a")).unwrap();
+    assert_eq!(layout.next().unwrap(), None);
+    assert_eq!(
+        layout.set_next("1.1.0").unwrap_err().kind(),
+        io::ErrorKind::NotFound
+    );
+    assert_eq!(
+        layout.set_next("a/b").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+    assert_eq!(layout.next().unwrap(), None);
+    layout.set_next("1.0.0").unwrap();
+    layout.set_next("1.0.0").unwrap();
+    assert_eq!(layout.next().unwrap(), Some("1.0.0".to_owned()));
+    assert_eq!(links(&layout), (None, None));
+    layout.remove_next().unwrap();
+    assert_eq!(layout.next().unwrap(), None);
+    let packages = Layout::package(&s.path().join("packages"));
+    assert_eq!(
+        packages.set_next("1.0.0").unwrap_err().kind(),
+        io::ErrorKind::InvalidInput
+    );
+}
+
 /// Catches a switch that loses the way back: `previous` becomes what `current` was, a switch to
 /// the version already current changes nothing (so a repeat after a crash keeps the real previous
 /// one), and a version that was never staged is refused.
@@ -141,22 +167,6 @@ fn a_switch_remembers_the_previous_binary_and_is_idempotent() {
     );
 }
 
-/// Catches a flip back that does nothing, or flips twice: with no previous binary it reports
-/// `false`; after a switch it points `current` at the previous one once.
-#[test]
-fn flipping_back_restores_the_previous_binary_once() {
-    let s = Scratch::new("su-flip");
-    let layout = Layout::new(&s.path().join("bin"));
-    assert!(!layout.flip_back().unwrap());
-    layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
-    layout.stage("v2", &binary(s.path(), "b", "b")).unwrap();
-    layout.switch("v1").unwrap();
-    layout.switch("v2").unwrap();
-    assert!(layout.flip_back().unwrap());
-    assert_eq!(layout.current().unwrap(), Some("v1".to_owned()));
-    assert!(!layout.flip_back().unwrap());
-}
-
 /// Catches a link move that trips on what a crash left: a temporary link from an earlier attempt
 /// is replaced, and one that cannot be removed is an error rather than a silent skip; a `current`
 /// that is not a link is an error too.
@@ -180,8 +190,9 @@ fn leftovers_of_a_crash_are_replaced_and_odd_files_refused() {
 }
 
 /// Catches a follow-on that restarts when it should not or not when it should: only a succeeded
-/// update that is not already this version stages, switches and asks for the restart; a repeat
-/// after a crash gives the same state; a failed update, or the new binary started, does nothing.
+/// update that is not already this version stages, points `next` and asks for the restart, and
+/// moves no `current`; a repeat after a crash gives the same state; a failed update, or the new
+/// binary started, does nothing.
 #[test]
 fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
     let s = Scratch::new("su-follow");
@@ -263,8 +274,12 @@ fn the_follow_on_restarts_only_after_a_success_that_changes_the_binary() {
         FollowOn::Restart
     );
     assert_eq!(
-        (layout.current().unwrap(), layout.previous().unwrap()),
-        (Some("v2".into()), Some("v1".into()))
+        (
+            layout.current().unwrap(),
+            layout.previous().unwrap(),
+            layout.next().unwrap()
+        ),
+        (Some("v1".into()), None, Some("v2".into()))
     );
     let pending = done(Verdict::Succeeded {
         promotion_pending: true,
@@ -306,63 +321,6 @@ fn system_binary(name: &str) -> PathBuf {
         .expect("a system binary")
 }
 
-/// Catches a fallback that leaves the host with a broken updater: a binary that exits at
-/// start fails `START_LIMIT_BURST` starts of the link the unit runs; the flip the fallback unit
-/// makes puts the previous binary back, and the next start succeeds.
-#[test]
-fn a_binary_that_exits_at_start_is_replaced_by_the_previous() {
-    let s = Scratch::new("su-exits-at-start");
-    let layout = Layout::new(&s.path().join("bin"));
-    layout.stage("good", &system_binary("true")).unwrap();
-    layout.switch("good").unwrap();
-    let ran = Command::new(layout.current_path()).status().unwrap();
-    assert!(ran.success());
-
-    let new = release(s.path(), "bad", &system_binary("false"));
-    assert_eq!(
-        follow_on(
-            &ok(),
-            &updating(&s, "bad"),
-            &layout,
-            "good",
-            "bad",
-            &new,
-            Path::new(UPDATER),
-            None
-        )
-        .unwrap(),
-        FollowOn::Restart
-    );
-    for _ in 0..START_LIMIT_BURST {
-        let started = Command::new(layout.current_path()).status().unwrap();
-        assert!(!started.success());
-    }
-    assert!(layout.flip_back().unwrap());
-    assert!(
-        Command::new(layout.current_path())
-            .status()
-            .unwrap()
-            .success()
-    );
-    assert_eq!(layout.current().unwrap(), Some("good".to_owned()));
-}
-
-/// Catches the unit texts drifting from what the fallback needs: the drop-in restarts the unit and
-/// names the fallback after the burst; the fallback runs the previous binary's verb, then starts
-/// the main unit again.
-#[test]
-fn the_units_run_the_fallback_after_the_burst() {
-    assert_eq!(
-        main_dropin("updater-fallback.service", START_LIMIT_BURST),
-        "[Unit]\nOnFailure=updater-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    );
-    let layout = Layout::new(Path::new("/usr/libexec/kbf-updater"));
-    assert_eq!(
-        fallback_unit(&layout, "kbf-updater.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-/usr/libexec/kbf-updater/previous self-update-fallback --dir /usr/libexec/kbf-updater\nExecStartPost=/usr/bin/systemctl reset-failed kbf-updater.service\nExecStartPost=/usr/bin/systemctl start --no-block kbf-updater.service\n"
-    );
-}
-
 fn links(layout: &Layout) -> (Option<String>, Option<String>) {
     (layout.current().unwrap(), layout.previous().unwrap())
 }
@@ -401,23 +359,6 @@ fn the_versions_current_and_previous_point_at_are_not_staged_over() {
     layout.stage("v3", &other).unwrap();
     layout.stage("v3", &binary(s.path(), "d", "d")).unwrap();
     assert_eq!(version_text(&layout, "v3"), "d");
-}
-
-/// Catches a flip back to a binary that is not there (the unit would then run nothing): with
-/// `versions/<previous>` missing, `flip_back` is an error and `current` is not changed.
-#[test]
-fn flipping_back_to_a_missing_binary_is_refused() {
-    let s = Scratch::new("su-flip-missing");
-    let layout = Layout::new(&s.path().join("bin"));
-    layout.stage("v1", &binary(s.path(), "a", "a")).unwrap();
-    layout.stage("v2", &binary(s.path(), "b", "b")).unwrap();
-    layout.switch("v1").unwrap();
-    layout.switch("v2").unwrap();
-    fs::remove_file(layout.dir().join("versions/v1")).unwrap();
-    let err = layout.flip_back().unwrap_err();
-    assert_eq!(err.kind(), io::ErrorKind::NotFound);
-    assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
-    assert_eq!(fs::read_to_string(layout.current_path()).unwrap(), "b");
 }
 
 /// Catches a follow-on that stages a file nothing verified: the binary is taken from the release
@@ -476,12 +417,13 @@ fn the_follow_on_stages_only_a_binary_of_the_verified_release() {
     assert!(!layout.dir().join("versions/v2").exists());
     assert!(!layout.dir().join("versions/v3").exists());
     assert_eq!(links(&layout), (Some("v1".into()), None));
+    assert_eq!(layout.next().unwrap(), None);
 }
 
 /// Catches a follow-on to a version already in place copying over it, or never getting there: when
-/// `current` or `previous` already names the version (a repeat after a crash, or a return to the
-/// binary before), it is switched to without being staged again if its file holds the verified
-/// binary's bytes, and refused with nothing changed if it does not.
+/// `current` or `previous` already names the version (a return to the binary before), `next` is
+/// pointed at it without staging it again if its file holds the verified binary's bytes, and the
+/// follow-on is refused with nothing changed if it does not.
 #[test]
 fn the_follow_on_to_a_version_in_place_stages_nothing() {
     let s = Scratch::new("su-follow-in-place");
@@ -505,6 +447,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         .unwrap(),
         FollowOn::Restart
     );
+    // The start of v2 finishes the switch, as its settlement does.
+    layout.switch("v2").unwrap();
     // Back to the binary before, which `previous` names.
     let v1 = release(s.path(), "v1", &a);
     assert_eq!(
@@ -521,7 +465,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         .unwrap(),
         FollowOn::Restart
     );
-    assert_eq!(links(&layout), (Some("v1".into()), Some("v2".into())));
+    assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
+    assert_eq!(layout.next().unwrap(), Some("v1".into()));
     assert_eq!(version_text(&layout, "v1"), "a");
     // A release that calls itself v2 with other bytes than the v2 in place.
     let not_v2 = release(s.path(), "not-v2", &binary(s.path(), "z", "z"));
@@ -541,7 +486,8 @@ fn the_follow_on_to_a_version_in_place_stages_nothing() {
         "{err:?}"
     );
     assert_eq!(version_text(&layout, "v2"), "b");
-    assert_eq!(links(&layout), (Some("v1".into()), Some("v2".into())));
+    assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
+    assert_eq!(layout.next().unwrap(), Some("v1".into()));
 }
 
 /// The file of a version, its inode and its bytes, to see that it was not written over.
@@ -592,14 +538,13 @@ fn staging_one_version_never_writes_over_another() {
     assert!(!layout.dir().join("versions/v3").exists());
 }
 
-/// Catches a fallback that is not a binary being taken for one: with `versions/<previous>` a
-/// dangling link, a link to a binary, a directory or a file without an execute bit, `flip_back`
-/// and `switch` are errors and change no link; and a missing fallback is an error even when
-/// `current` already points at it (the fallback unit would otherwise report a flip it cannot
-/// run as nothing to do).
+/// Catches a version that is not a binary being taken for one: with `versions/<v1>` a dangling
+/// link, a link to a binary, a directory or a file without an execute bit, `switch` is an error
+/// and changes no link; and a missing version is an error even when `current` already points at
+/// it (the switch would otherwise report as nothing to do a link the unit cannot run).
 #[test]
-fn a_fallback_that_is_not_an_executable_file_is_refused() {
-    let s = Scratch::new("su-flip-odd");
+fn a_version_that_is_not_an_executable_file_is_refused() {
+    let s = Scratch::new("su-switch-odd");
     let layout = Layout::new(&s.path().join("bin"));
     let a = binary(s.path(), "a", "a");
     layout.stage("v1", &a).unwrap();
@@ -636,14 +581,8 @@ fn a_fallback_that_is_not_an_executable_file_is_refused() {
             .or_else(|_| fs::remove_dir(&v1))
             .unwrap();
         make(&v1);
-        let err = layout.flip_back().unwrap_err();
+        let err = layout.switch("v1").unwrap_err();
         assert_eq!(err.kind(), io::ErrorKind::InvalidData, "{what}");
-        assert_eq!(
-            links(&layout),
-            (Some("v2".into()), Some("v1".into())),
-            "{what}"
-        );
-        assert!(layout.switch("v1").is_err(), "{what}");
         assert_eq!(
             links(&layout),
             (Some("v2".into()), Some("v1".into())),
@@ -652,14 +591,14 @@ fn a_fallback_that_is_not_an_executable_file_is_refused() {
     }
 
     // `current` and `previous` both name v3, whose file is gone.
-    let s = Scratch::new("su-flip-same-missing");
+    let s = Scratch::new("su-switch-same-missing");
     let layout = Layout::new(&s.path().join("bin"));
     layout.stage("v3", &binary(s.path(), "c", "c")).unwrap();
     layout.switch("v3").unwrap();
     symlink("versions/v3", layout.dir().join("previous")).unwrap();
     assert_eq!(links(&layout), (Some("v3".into()), Some("v3".into())));
     fs::remove_file(layout.dir().join("versions/v3")).unwrap();
-    let err = layout.flip_back().unwrap_err();
+    let err = layout.switch("v3").unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::NotFound);
     assert_eq!(links(&layout), (Some("v3".into()), Some("v3".into())));
 }
@@ -749,9 +688,6 @@ fn a_settlement_keeps_the_order_to_report_until_its_verdict_is_acknowledged() {
             id,
         )
         .unwrap();
-        if running == "v1" {
-            layout.flip_back().unwrap();
-        }
         assert_eq!(settle(&layout, &store, running).unwrap(), outcome);
         let reported = |store: &RecordStore| match store.load().unwrap() {
             Loaded::Current(rec) => rec.progress.report_order_id,

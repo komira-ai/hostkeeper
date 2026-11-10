@@ -95,7 +95,9 @@ fn every_refusal_token_keeps_the_token_grammar() {
     };
     assert_eq!(Refusal::from(&too_old), Refusal::DaemonTooOld);
     assert_eq!(
-        Refusal::from(&ManifestRefusal::TooLarge),
+        Refusal::from(&ManifestRefusal::Unreadable {
+            why: "it is not UTF-8 text".to_owned()
+        }),
         Refusal::ManifestMismatch
     );
 }

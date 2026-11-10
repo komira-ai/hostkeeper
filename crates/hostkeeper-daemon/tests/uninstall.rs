@@ -2,8 +2,11 @@
 //! then left, the refusals before anything changes, and what it never touches.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
@@ -13,8 +16,10 @@ use hostkeeper_daemon::testing::{AdditiveFault, Signal, spawn};
 use hostkeeper_daemon::{Daemon, Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Verdict};
 use hostkeeper_placed::testing::{Event, FakeUnitControl, FsWrite, UnitCall};
-use hostkeeper_placed::{Entry, PathKind, PathState};
-use support::{Rig, TARGET, d, install, name, snapshot, uninstall, update};
+use hostkeeper_steps::ToolCall;
+use support::{Rig, d, name, snapshot, uninstall, update};
+use support_apt::bridge;
+use support_host::NativeHost;
 
 fn finished(verdict: Verdict, reason: Option<&str>) -> Reply {
     Reply::Finished {
@@ -33,37 +38,66 @@ fn succeeded() -> Reply {
     )
 }
 
-/// `service` installed at `version` from a package that places a unit, its `WantedBy=` link and
-/// a file, with an `uninstall` bound of 300 seconds.
-fn installed(rig: &Rig, daemon: &Daemon, service: &str, version: &str) {
-    rig.placed(service, version, Some(300));
+/// `service` installed at `version` from a package that runs a unit, with an `uninstall` bound
+/// of 300 seconds. The version directories the install seals are read-only; they are opened up
+/// for the user the test runs as, as root's mode lets an uninstall delete them on a host.
+fn installed(farm: &NativeHost, daemon: &Daemon, service: &str, version: &str) {
+    farm.publish_placed(service, version, Some(300));
     assert_eq!(
-        daemon.order(&install(service, version, &d(), 1)),
+        daemon.order(&farm.install(service, version, 1)),
         succeeded()
     );
+    farm.open_up();
 }
 
-/// Whether nothing of `service` is left: no package directory, no step record, no placed path
-/// on disk or in `placed.json`, no tombstone.
-fn gone(rig: &Rig, service: &str) -> bool {
+/// The enablement link of the unit `<service>.service`, as the host names it.
+fn wants_link(service: &str) -> String {
+    format!("/etc/systemd/system/multi-user.target.wants/{service}.service")
+}
+
+/// Whether nothing of `service` is left: no package directory, no step record, no installed
+/// package, no enablement link, no record of its installer, no tombstone.
+fn gone(farm: &NativeHost, service: &str) -> bool {
+    let rig = farm.rig();
     let record = rig.placed_record();
-    let placed = rig
-        .placed_paths(service)
-        .iter()
-        .any(|path| rig.there(path) | record.paths.contains_key(path));
     !rig.packages.join(service).exists()
         & !rig.state.join(service).join("step-record.json").exists()
-        & !placed
-        & record.of_service(service).next().is_none()
+        & farm.apt.host.installed(service).is_none()
+        & !rig.there(wants_link(service))
+        & !record.installed.contains_key(service)
         & !record.uninstalling.contains_key(service)
+}
+
+/// Puts a mark in the rig's placement log for each run of `dpkg --purge` and of `systemctl
+/// daemon-reload` of the daemon's step launcher, so that the installer's work reads in its place
+/// among the writes and the stops of the uninstall; the fake host answers every run.
+fn mark_installer_runs(farm: &NativeHost) {
+    let log = farm.rig().placed_log.clone();
+    let host = bridge(std::sync::Arc::clone(&farm.apt.host));
+    farm.rig()
+        .launcher
+        .answer_tools(std::sync::Arc::new(move |call: &ToolCall<'_>| {
+            let tool = call.program.file_name().and_then(|name| name.to_str());
+            let first = call.args.first().and_then(|arg| arg.to_str());
+            match (tool, first) {
+                (Some("dpkg"), Some("--purge")) => log.push(Event::Mark("dpkg --purge".to_owned())),
+                (Some("systemctl"), Some("daemon-reload")) => {
+                    log.push(Event::Mark("daemon-reload".to_owned()))
+                }
+                _ => {}
+            }
+            host(call)
+        }));
 }
 
 /// The events of the rig's placement log as a test reads them: each write of `placed.json` as
 /// `placed.json`, each removal as `remove <host path without its leading />` (a directory with
-/// a `/`), each stop and reload, each mark; the temporary files, fsyncs, starts and queries of
-/// units are left out.
+/// a `/`) of a path at most three levels below the root, which is the version directory and no
+/// file inside it, each stop and reload, each mark; the temporary files, fsyncs, starts and
+/// queries of units are left out.
 fn effects(rig: &Rig) -> Vec<String> {
     let below = |path: &Path| path.strip_prefix("/").unwrap_or(path).display().to_string();
+    let shallow = |path: &Path| path.strip_prefix("/").unwrap_or(path).components().count() <= 3;
     rig.placed_log
         .events()
         .into_iter()
@@ -71,8 +105,12 @@ fn effects(rig: &Rig) -> Vec<String> {
             Event::Fs(FsWrite::Rename { to, .. }) if to.ends_with("placed.json") => {
                 Some("placed.json".to_owned())
             }
-            Event::Fs(FsWrite::Remove(path)) => Some(format!("remove {}", below(&path))),
-            Event::Fs(FsWrite::RemoveDir(path)) => Some(format!("remove {}/", below(&path))),
+            Event::Fs(FsWrite::Remove(path)) if shallow(&path) => {
+                Some(format!("remove {}", below(&path)))
+            }
+            Event::Fs(FsWrite::RemoveDir(path)) if shallow(&path) => {
+                Some(format!("remove {}/", below(&path)))
+            }
             Event::Unit(UnitCall::Stop(unit)) => Some(format!("stop {unit}")),
             Event::Unit(UnitCall::DaemonReload) => Some("daemon-reload".to_owned()),
             Event::Mark(mark) => Some(mark),
@@ -82,16 +120,18 @@ fn effects(rig: &Rig) -> Vec<String> {
 }
 
 /// Catches a step of the uninstall run out of the order of design section 4.7, for example the
-/// paths dropped or the package removed before the hook ran: the tombstone is written first; the
-/// `run` unit is stopped; the hook's `uninstall` step runs, and its success is recorded; the
-/// units are disabled, the placed links removed, the paths dropped from `placed.json` in the
-/// write that owes the `daemon-reload`, the reload runs; then, last, `current`, the seal, the
-/// version directory and the step record go, and the tombstone with them.
+/// package removed before the hook ran: the tombstone is written first; the `run` unit is
+/// stopped; the hook's `uninstall` step runs, and its success is recorded; the installer's
+/// `remove` purges the package, takes its enablement links away and runs the `daemon-reload`;
+/// then, last, `current`, the seal, the version directory and the package directory go, the
+/// state directory with them, and the tombstone with them.
 #[test]
 fn uninstall_runs_the_sequence_in_the_documented_order() {
-    let rig = Rig::new("uninstall-order");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "web", "1.0.0");
+    let farm = NativeHost::new("uninstall-order");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web", "1.0.0");
+    mark_installer_runs(&farm);
     let marks = rig.placed_log.clone();
     rig.launcher.during_additive(move |call| {
         marks.push(Event::Mark(format!("hook {}", call.step)));
@@ -100,50 +140,32 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
 
     assert_eq!(daemon.order(&uninstall("web", 4)), succeeded());
 
-    let wants = format!("units/{TARGET}.wants/web.service");
-    let conf = rig
-        .conf_path("web")
-        .strip_prefix("/")
-        .expect("absolute")
-        .display()
-        .to_string();
-    let version = "packages/web/1.0.0";
     let want = [
         // 1. The tombstone.
-        "placed.json".to_owned(),
+        "placed.json",
         // 2. The `run` unit stopped.
-        "stop web.service".to_owned(),
+        "stop web.service",
         // 3. The hook's `uninstall` step, and its success recorded.
-        "hook uninstall".to_owned(),
-        "placed.json".to_owned(),
-        // 4. and 5. Disabled (the unit stopped again before its links go), unlinked, the paths
-        // dropped in the write that owes the reload, `daemon-reload`, the reload no longer owed.
-        "stop web.service".to_owned(),
-        format!("remove {wants}"),
-        format!("remove {conf}"),
-        "remove units/web.service".to_owned(),
-        "placed.json".to_owned(),
-        "daemon-reload".to_owned(),
-        "placed.json".to_owned(),
-        // 6. Last: `current`, the seal, the version directory, the package directory; then the
+        "hook uninstall",
+        "placed.json",
+        // 4. The installer's `remove`: the package purged, the units' links taken away, the
+        // service manager reloaded, and the record of the installer dropped.
+        "dpkg --purge",
+        "daemon-reload",
+        "placed.json",
+        // 5. Last: `current`, the seal, the version directory, the package directory; then the
         // step record and its directory (the daemon's own, not through the placement's
         // filesystem); then the tombstone goes.
-        "remove packages/web/current".to_owned(),
-        "remove packages/web/1.0.0.seal".to_owned(),
-        format!("remove {version}/bin/hook"),
-        format!("remove {version}/bin/"),
-        format!("remove {version}/files/web.conf"),
-        format!("remove {version}/files/"),
-        format!("remove {version}/manifest.toml"),
-        format!("remove {version}/units/web.service"),
-        format!("remove {version}/units/"),
-        format!("remove {version}/"),
-        "remove packages/web/".to_owned(),
-        "placed.json".to_owned(),
-    ];
-    assert_eq!(effects(&rig), want);
+        "remove packages/web/current",
+        "remove packages/web/1.0.0.seal",
+        "remove packages/web/1.0.0/",
+        "remove packages/web/",
+        "placed.json",
+    ]
+    .map(str::to_owned);
+    assert_eq!(effects(rig), want);
     assert!(!rig.state.join("web").exists());
-    assert!(gone(&rig, "web"));
+    assert!(gone(&farm, "web"));
     let ran = rig.launcher.additive_runs();
     assert_eq!(ran.len(), 1);
     assert_eq!(
@@ -154,8 +176,13 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
         ),
         ("uninstall", "updater-web-uninstall-1", 300)
     );
-    assert_eq!(ran[0].hook_args, ["update-hook"]);
-    assert_eq!(ran[0].executable, rig.packages.join("web/1.0.0/bin/hook"));
+    // The package's hook is the program at its fixed path, run with no argument of its own.
+    assert!(ran[0].hook_args.is_empty());
+    assert_eq!(
+        ran[0].executable,
+        rig.packages
+            .join("web/1.0.0/tree/usr/lib/web/hostkeeper-hook")
+    );
     let params = hostkeeper_hook::Params::parse(&ran[0].params).expect("the params file");
     assert_eq!(params.target_version(), Some("1.0.0"));
     assert_eq!(
@@ -175,12 +202,13 @@ fn uninstall_runs_the_sequence_in_the_documented_order() {
 /// next order, once the unit stops, finishes the uninstall.
 #[test]
 fn a_stuck_unit_ends_failed_unit_stuck_with_nothing_removed() {
-    let rig = Rig::new("uninstall-stuck");
-    installed(&rig, &rig.daemon(), "web", "1.0.0");
+    let farm = NativeHost::new("uninstall-stuck");
+    let rig = farm.rig();
+    installed(&farm, &farm.daemon(), "web", "1.0.0");
     let before = snapshot(rig.scratch.path());
     let stuck = Arc::new(FakeUnitControl::new(rig.placed_log.clone()));
     stuck.fail_stop("web.service");
-    let daemon = rig.daemon_with(rig.placed_fs.clone(), stuck);
+    let daemon = farm.daemon_with(rig.placed_fs.clone(), stuck);
     assert_eq!(
         daemon.order(&uninstall("web", 1)),
         finished(
@@ -202,8 +230,8 @@ fn a_stuck_unit_ends_failed_unit_stuck_with_nothing_removed() {
         .collect();
     assert_eq!(changed, [placed]);
 
-    assert_eq!(rig.daemon().order(&uninstall("web", 2)), succeeded());
-    assert!(gone(&rig, "web"));
+    assert_eq!(farm.daemon().order(&uninstall("web", 2)), succeeded());
+    assert!(gone(&farm, "web"));
 }
 
 /// Catches an exit of the `uninstall` step read as another verdict, or a bound that is not the
@@ -213,10 +241,11 @@ fn a_stuck_unit_ends_failed_unit_stuck_with_nothing_removed() {
 /// run is bounded by the manifest's `uninstall` bound.
 #[test]
 fn uninstall_hook_exit_codes_map_to_verdicts() {
-    let rig = Rig::new("uninstall-exits");
-    let daemon = rig.daemon();
+    let farm = NativeHost::new("uninstall-exits");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
     for service in ["ok", "fails", "defers", "halts", "killed"] {
-        installed(&rig, &daemon, service, "1.0.0");
+        installed(&farm, &daemon, service, "1.0.0");
     }
     rig.launcher.additive_replies(
         "fails",
@@ -236,7 +265,7 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
     // A release whose step record is gone runs its step in generation 0.
     fs::remove_file(rig.state.join("ok/step-record.json")).expect("the record gone");
     assert_eq!(daemon.order(&uninstall("ok", 1)), succeeded());
-    assert!(gone(&rig, "ok"));
+    assert!(gone(&farm, "ok"));
     assert_eq!(
         rig.launcher.additive_runs()[0].unit,
         "updater-ok-uninstall-0"
@@ -283,10 +312,8 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
             rig.packages.join(service).join("1.0.0").exists(),
             "{service}"
         );
-        assert!(
-            rig.placed_paths(service).iter().all(|p| rig.there(p)),
-            "{service}"
-        );
+        assert!(farm.apt.host.installed(service).is_some(), "{service}");
+        assert!(rig.there(wants_link(service)), "{service}");
     }
     let bounds: Vec<u64> = rig
         .launcher
@@ -309,30 +336,35 @@ fn uninstall_hook_exit_codes_map_to_verdicts() {
 /// stopped and no hook ran.
 #[test]
 fn uninstall_unsupported_is_refused_before_anything_changes() {
-    let rig = Rig::new("uninstall-refused");
-    let daemon = rig.daemon();
-    rig.placed("web", "1.0.0", None);
-    assert_eq!(daemon.order(&install("web", "1.0.0", &d(), 1)), succeeded());
+    let farm = NativeHost::new("uninstall-refused");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    farm.publish_placed("web", "1.0.0", None);
+    assert_eq!(daemon.order(&farm.install("web", "1.0.0", 1)), succeeded());
     for service in ["lost", "halted", "garbled", "altered", "unsealed"] {
-        installed(&rig, &daemon, service, "1.0.0");
+        installed(&farm, &daemon, service, "1.0.0");
     }
     // hostkeeper's install is its self-update, which this package (no binary) cannot run: its
     // package is put in place as an install leaves it.
     rig.placed("hostkeeper", "1.0.0", Some(300));
     rig.store.link("hostkeeper", "current", "1.0.0");
     rig.launcher.lose("lost", hostkeeper_hook::Step::Verify);
-    rig.placed("lost", "2.0.0", Some(300));
-    let lost = daemon.order(&update("lost", "2.0.0", &d(), 2));
+    farm.publish_placed("lost", "2.0.0", Some(300));
+    let lost = daemon.order(&farm.update("lost", "2.0.0", 2));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
     rig.launcher
         .exits("halted", hostkeeper_hook::Step::Prepare, &[76]);
-    rig.placed("halted", "2.0.0", Some(300));
+    farm.publish_placed("halted", "2.0.0", Some(300));
     assert_eq!(
-        daemon.order(&update("halted", "2.0.0", &d(), 2)),
+        daemon.order(&farm.update("halted", "2.0.0", 2)),
         finished(Verdict::Halt, None)
     );
     fs::write(rig.state.join("garbled").join("held-halt"), "x\n").expect("a garbled halt");
-    fs::write(rig.packages.join("altered/1.0.0/bin/hook"), "#!changed\n").expect("altered");
+    let hook = rig
+        .packages
+        .join("altered/1.0.0/tree/usr/lib/altered/hostkeeper-hook");
+    fs::set_permissions(&hook, fs::Permissions::from_mode(0o755)).expect("its mode");
+    fs::write(&hook, "#!changed\n").expect("altered");
     fs::remove_file(rig.packages.join("unsealed/1.0.0.seal")).expect("the seal gone");
     rig.placed_log.clear();
     let before = snapshot(rig.scratch.path());
@@ -362,7 +394,7 @@ fn uninstall_unsupported_is_refused_before_anything_changes() {
         "the manifest of web 1.0.0 has no [hook.timeout_secs] uninstall"
     );
     assert!(rig.placed_record().uninstalling.is_empty());
-    assert!(effects(&rig).is_empty());
+    assert!(effects(rig).is_empty());
     assert!(rig.launcher.additive_runs().is_empty());
     assert_eq!(snapshot(rig.scratch.path()), before);
 }
@@ -372,9 +404,10 @@ fn uninstall_unsupported_is_refused_before_anything_changes() {
 /// the recording filesystem logs no operation below either.
 #[test]
 fn uninstall_never_touches_the_services_data_directory() {
-    let rig = Rig::new("uninstall-data");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "web", "1.0.0");
+    let farm = NativeHost::new("uninstall-data");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web", "1.0.0");
     let data = rig.scratch.path().join("var/lib/web");
     let config = rig.scratch.path().join("etc/web");
     for dir in [&data, &config] {
@@ -419,26 +452,25 @@ fn uninstall_never_touches_the_services_data_directory() {
 }
 
 /// Catches an uninstall that removes what is another service's: `api` and `web` both installed,
-/// `web` uninstalled; every entry of `api` in `placed.json`, its links, its version directory,
-/// its seal, its `current` and its step record are as they were. The held halt generation of
+/// `web` uninstalled; the entry of `api` in `placed.json`, its package, its enablement link, its
+/// version directory, its seal, its `current` and its step record are as they were. The held halt generation of
 /// `web` stays (it is never lowered), and with it `web`'s state directory.
 #[test]
-fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
-    let rig = Rig::new("uninstall-other");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "web", "1.0.0");
-    installed(&rig, &daemon, "api", "2.0.0");
+fn uninstall_leaves_other_services_package_and_versions_alone() {
+    let farm = NativeHost::new("uninstall-other");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web", "1.0.0");
+    installed(&farm, &daemon, "api", "2.0.0");
     HaltStore::new(&rig.state)
         .raise(&name("web"), 4)
         .expect("a held halt");
     // What else a crash may leave in the state directory goes; the held halt stays.
     fs::write(rig.state.join("web/params.toml.tmp"), "x").expect("a stray file");
-    let api_entries: Vec<(PathBuf, Entry)> = rig
-        .placed_record()
-        .of_service("api")
-        .map(|(path, entry)| (path.clone(), entry.clone()))
-        .collect();
-    assert_eq!(api_entries.len(), 3);
+    let api_entry = rig.placed_record().installed.get("api").cloned();
+    assert!(api_entry.is_some(), "api is recorded as installed");
+    let api_package = farm.apt.host.installed("api");
+    assert!(api_package.is_some(), "api's package is installed");
     let api_dir = rig.packages.join("api");
     let api_before = snapshot(&api_dir);
     let record_before = fs::read(rig.state.join("api/step-record.json")).expect("api's record");
@@ -446,30 +478,15 @@ fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
     assert_eq!(daemon.order(&uninstall("web", 1)), succeeded());
 
     let record = rig.placed_record();
-    let api_after: Vec<(PathBuf, Entry)> = record
-        .of_service("api")
-        .map(|(path, entry)| (path.clone(), entry.clone()))
-        .collect();
-    assert_eq!(api_after, api_entries);
-    assert!(
-        api_after
-            .iter()
-            .all(|(_, entry)| entry.state == PathState::Placed)
-    );
-    assert!(
-        api_after
-            .iter()
-            .any(|(_, entry)| entry.kind == PathKind::WantsLink)
-    );
-    for path in rig.placed_paths("api") {
-        assert!(rig.there(&path), "{}", path.display());
-    }
+    assert_eq!(record.installed.get("api").cloned(), api_entry);
+    assert_eq!(farm.apt.host.installed("api"), api_package);
+    assert!(rig.there(wants_link("api")));
     assert_eq!(snapshot(&api_dir), api_before);
     assert_eq!(
         fs::read(rig.state.join("api/step-record.json")).expect("api's record"),
         record_before
     );
-    assert!(gone(&rig, "web"));
+    assert!(gone(&farm, "web"));
     assert_eq!(
         fs::read_to_string(rig.state.join("web/held-halt")).expect("the held halt"),
         "4\n"
@@ -483,10 +500,11 @@ fn uninstall_leaves_other_services_placed_paths_and_versions_alone() {
 /// verdict for the heartbeat; a halted uninstall is left halted by the start.
 #[test]
 fn boot_resumes_a_tombstoned_uninstall_without_an_order() {
-    let rig = Rig::new("uninstall-boot");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "web", "1.0.0");
-    installed(&rig, &daemon, "api", "1.0.0");
+    let farm = NativeHost::new("uninstall-boot");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web", "1.0.0");
+    installed(&farm, &daemon, "api", "1.0.0");
     rig.launcher.additive_exits("web", &[1]);
     rig.launcher.additive_exits("api", &[76]);
     assert!(matches!(
@@ -502,7 +520,7 @@ fn boot_resumes_a_tombstoned_uninstall_without_an_order() {
     );
     drop(daemon);
 
-    let (_restarted, report) = rig.booted();
+    let (_restarted, report) = farm.booted();
     assert_eq!(
         report.services["web"].verdict(),
         Some(support::ok()),
@@ -515,7 +533,7 @@ fn boot_resumes_a_tombstoned_uninstall_without_an_order() {
             ..
         }
     ));
-    assert!(gone(&rig, "web"));
+    assert!(gone(&farm, "web"));
     assert!(rig.placed_record().uninstalling["api"].halted);
     let runs: Vec<String> = rig
         .launcher
@@ -533,9 +551,10 @@ fn boot_resumes_a_tombstoned_uninstall_without_an_order() {
 /// one whose unit cannot be stopped keeps the service locked, every later order of it `busy`.
 #[test]
 fn an_uninstall_holds_its_service_and_a_lost_step_is_interrupted() {
-    let rig = Rig::new("uninstall-lock");
-    let daemon = Arc::new(rig.daemon());
-    installed(&rig, &daemon, "web", "1.0.0");
+    let farm = NativeHost::new("uninstall-lock");
+    let rig = farm.rig();
+    let daemon = Arc::new(farm.daemon());
+    installed(&farm, &daemon, "web", "1.0.0");
     let (entered, on_entered) = Signal::new();
     let (release, on_release) = mpsc::channel::<()>();
     let on_release = Mutex::new(on_release);
@@ -563,10 +582,11 @@ fn an_uninstall_holds_its_service_and_a_lost_step_is_interrupted() {
     release.send(()).expect("release");
     assert_eq!(running.join().expect("the order"), succeeded());
 
-    let rig = Rig::new("uninstall-lost");
-    let daemon = rig.daemon();
-    installed(&rig, &daemon, "lost", "1.0.0");
-    installed(&rig, &daemon, "stuck", "1.0.0");
+    let farm = NativeHost::new("uninstall-lost");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "lost", "1.0.0");
+    installed(&farm, &daemon, "stuck", "1.0.0");
     rig.launcher.additive_fault("lost", AdditiveFault::Lost);
     rig.launcher
         .additive_fault("stuck", AdditiveFault::LostUnstoppable);
@@ -587,24 +607,26 @@ fn an_uninstall_holds_its_service_and_a_lost_step_is_interrupted() {
 /// nothing.
 #[test]
 fn an_uninstall_of_a_service_with_nothing_installed_removes_what_is_left() {
-    let rig = Rig::new("uninstall-absent");
-    let daemon = rig.daemon();
-    rig.placed("web", "1.0.0", Some(300));
+    let farm = NativeHost::new("uninstall-absent");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    farm.publish_placed("web", "1.0.0", Some(300));
     rig.launcher
         .exits("web", hostkeeper_hook::Step::Prepare, &[1]);
     assert!(matches!(
-        daemon.order(&install("web", "1.0.0", &d(), 1)),
+        daemon.order(&farm.install("web", "1.0.0", 1)),
         Reply::Finished {
             verdict: Verdict::Failed { .. },
             ..
         }
     ));
+    farm.open_up();
     rig.placed_log.clear();
     assert_eq!(daemon.order(&uninstall("web", 1)), succeeded());
-    assert!(gone(&rig, "web"));
+    assert!(gone(&farm, "web"));
     assert!(rig.launcher.additive_runs().is_empty());
     assert!(
-        !effects(&rig)
+        !effects(rig)
             .iter()
             .any(|effect| effect.starts_with("stop "))
     );
@@ -619,4 +641,38 @@ fn an_uninstall_of_a_service_with_nothing_installed_removes_what_is_left() {
     assert_eq!(rig.daemon().order(&uninstall("api", 1)), succeeded());
     assert!(!rig.packages.join("api").exists());
     assert!(!rig.state.exists());
+}
+
+/// Catches an uninstall that removes a service by the steps of another installer: a service
+/// `placed.json` records with an installer this daemon has no steps of (one a newer binary
+/// installed, before a fallback) is stopped and its hook run, and then nothing of it is
+/// removed: the uninstall is interrupted naming the installer, and its links, its package and
+/// its tombstone stay for a daemon that has those steps.
+#[test]
+fn an_uninstall_of_a_service_of_an_installer_without_steps_removes_nothing() {
+    let farm = NativeHost::new("uninstall-installer");
+    let rig = farm.rig();
+    let daemon = farm.daemon();
+    installed(&farm, &daemon, "web", "1.0.0");
+    let mut record = rig.placed_record();
+    record.installed.insert(
+        "web".to_owned(),
+        hostkeeper_placed::InstalledEntry::new("oci-image"),
+    );
+    rig.save_placed(&record);
+    let reply = daemon.order(&uninstall("web", 1));
+    assert_eq!(
+        reply,
+        Reply::Interrupted {
+            refusal: Refusal::LinkFailed,
+            detail:
+                "web is installed by the installer \"oci-image\", which this daemon has no steps of"
+                    .to_owned(),
+        }
+    );
+    let after = rig.placed_record();
+    assert!(after.uninstalling["web"].hook_done);
+    assert!(rig.there(wants_link("web")));
+    assert!(farm.apt.host.installed("web").is_some());
+    assert!(rig.packages.join("web").join("1.0.0").exists());
 }

@@ -47,6 +47,37 @@ or triggers an automatic rollback. It keeps what it runs, and is ordered again w
 whose index lists its platform is set. A version set with one package digest is ordered to every
 host, as before.
 
+## A release with targets: the entry each host is picked
+
+A version set with targets (`SetDesired` with `targets`, [packages.md](../design/packages.md)
+section 3) is ordered to each host as one entry of its platform's list: the entry of the
+installer the host runs the service with, wherever it stands in the list, else the first entry
+whose installer the host's daemon lists. The daemon lists its installers in its heartbeats over
+gRPC (`Hosts.Get` shows them as `installers`, and each service's in its heartbeat); a daemon that
+does not announce `target-v1` counts as listing `hostkeeper-archive` alone, and is ordered the
+archive entry in today's form. A host the release picks nothing for is ordered nothing for that
+version, keeps what it runs, and is never counted as failed or missing:
+
+- `no_target` (`GATE_REASON_NO_TARGET`): the release has no list for the host's platform;
+- `no_build_for_host` (`GATE_REASON_NO_BUILD_FOR_HOST`): the host does not run the service and no
+  entry is of an installer its daemon lists;
+- `installer_dropped` (`GATE_REASON_INSTALLER_DROPPED`): the host runs the service with an
+  installer the list has no entry of, or that its daemon no longer lists. A host changes a
+  service's installer only by an uninstall and an install, or by the move to native packages
+  (docs/design/packages-native.md section 10.6): a host running it from `hostkeeper-archive` is
+  picked a native entry its daemon lists, and a host running it natively, going back to a lower
+  version whose list has no native entry, is picked that list's `hostkeeper-archive` entry.
+
+None of them holds the convergence, but `Converge` counts the hosts picked an entry and those
+picked none by why (`HostCounts.picked`, `no_target`, `no_build_for_host`,
+`installer_dropped`), names the `installer_dropped` hosts (`Convergence.installer_dropped`), and
+is not converged while no host was picked an entry (a misspelt installer, say). A host that does
+not report the service shows its `no_target` or `no_build_for_host` in `Hosts.Get`. A daemon
+announcing `target-v1` whose installers the coordinator has not read yet (its first heartbeat
+after its start, or any after the coordinator's start, comes over JSON) is ordered nothing until
+its next heartbeat over gRPC, and is held `not_a_member` meanwhile. Only an archive entry goes on
+the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
+
 ## Marks
 
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
@@ -60,6 +91,23 @@ host, as before.
 - `Hosts.Abort` queues an `abort` of a service for the host's next heartbeat. It takes no slot,
   is sent once, and only to a daemon that announced the `abort-v1` feature; an abort asked
   again while one is queued queues nothing more.
+- `Hosts.ClearRecord` orders a host to set aside its step record of a service when that record
+  does not read (`clear_record`), at the host's next heartbeat. It takes no slot and is sent once.
+  It is accepted only for a host whose daemon announced the `clear-record-v1` feature in its last
+  heartbeat; any other is refused `daemon_too_old` and nothing is ordered. It answers the order's
+  id, `clear-record-<n>`, where `n` is the number of its `record_cleared` audit entry; asked again
+  while the order waits, it answers the same id and audits nothing. A call whose audit line
+  cannot be written is refused `store_failed` or `audit_unavailable`, and nothing is ordered.
+  The order is kept in memory only: a restart of the coordinator before the host's next heartbeat
+  forgets it, and the operator asks again. The host renames the record to
+  `step-record.json.corrupt` only when it does not read, and reports the order's verdict as the
+  service's last update, at the version the service runs: `succeeded` with the reason
+  `record_cleared`, or failed with `record_reads` (the record reads, is absent, or is of a newer
+  hostkeeper), `busy` (another order of the service holds it) or `store_failed`. The
+  coordinator acknowledges that verdict and `Hosts.Get` shows it as the service's last update
+  until the host reports a verdict of another order, but it is no word on a release: it never
+  replaces the host's standing verdict, so a failure the host fell back from still keeps that
+  version from being ordered to it, and a failed clear holds no update slot.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
   until the host's own heartbeats or its order's age free it; an excluded host whose last update
@@ -99,7 +147,9 @@ The reply lists the hosts ordered (`targeted`), the held pairs it skipped (`held
 other hosts it does not order with a reason: `daemon_too_old` for a daemon that did not
 announce the `forced-v1` feature, `unknown_target` for a listed host that does not run the
 service, `no_package_for_platform` for a host whose platform the version's release index lists
-no package for. A held pair is ordered only when the call sets `include_held`, for that call only, and
+no package for, and, for a version set with targets, `no_target`, `no_build_for_host` or
+`installer_dropped` for a host the release picks no entry for (each host forced is ordered the
+entry the rollout gate would pick it). A held pair is ordered only when the call sets `include_held`, for that call only, and
 no hold is removed.
 
 A host that reports the force failed is not ordered again; a second force, to another version,
@@ -109,8 +159,8 @@ While it stands, the automatic rollback of the service is suspended, and the hos
 take no update slot and no place in a stage. The new desired version the force sets starts the
 service's update plan over for the hosts it does not order.
 
-The `force` and `abort` orders travel only on the typed heartbeat of `hostkeeper.agent.v1`; the
-JSON heartbeat route carries neither.
+The `force`, `abort` and `clear_record` orders travel only on the typed heartbeat of
+`hostkeeper.agent.v1`; the JSON heartbeat route carries none of them.
 
 ## The audit file
 
@@ -153,8 +203,8 @@ Every change is one JSON line of the audit file `<ops-file>.audit`, appended and
 
 A change is not made without its audit line. When the line cannot be appended (a full disk, a
 file that cannot be opened), the call is refused with `audit_unavailable` (gRPC `UNAVAILABLE`)
-and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator,
-and every other call above that changes the ops state. Asking again once the disk has room is
+and changes nothing: `Releases.Force`, `Services.Hold`, `Releases.SetDesired` by an operator
+or with targets, and every other call above that changes the ops state. Asking again once the disk has room is
 safe. The line is appended before the ops file is written, so an audit line can name a change
 whose ops-file write then failed (`store_failed`), or the first lines of a force refused at a
 later one, never the other way round; a force, which

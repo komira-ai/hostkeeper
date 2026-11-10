@@ -1,7 +1,8 @@
 //! The real coordinator in process, and a host whose heartbeat loop talks to it: the
 //! coordinator's heartbeat with typed orders (`Coordinator::heartbeat_with_orders`, what its
 //! gRPC route answers) behind a link that calls it as the host `host-1` of the role `daemon`,
-//! and the loop's beats and orders mapped to and from the coordinator's types word for word.
+//! and the loop's beats (with what each says of the daemon's trusted root) and orders mapped to
+//! and from the coordinator's types word for word.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -15,6 +16,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::orders::Order as Ordered;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
+use hostkeeper_coordinator::trusted_root::TrustedRootSaid;
 use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
 use hostkeeper_daemon::Daemon;
 use hostkeeper_daemon::links::Links;
@@ -27,7 +29,7 @@ use hostkeeper_link::testing::{
 use hostkeeper_link::{
     Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink, DEFAULT_HEARTBEAT_SECS,
     Feature, Health, Heartbeat, Heartbeater, LinkError, Order, OrderId, OrderRef, OrderResult,
-    Outcome, PackageDigest, Reason, Reply, ServiceFacts, StopFlag, Target, Verb,
+    Outcome, PackageDigest, Reason, Reply, RootReason, ServiceFacts, StopFlag, Target, Verb,
 };
 use hostkeeper_oidc::testkit::{
     STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
@@ -41,6 +43,7 @@ use hostkeeper_wire::identity::Identity;
 use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
 
 use super::selfupdate::{HK, SelfRig};
+use super::typed::GrpcInProcess;
 use super::{OWN, Rig, d};
 
 /// The operator token of the coordinator.
@@ -84,6 +87,13 @@ pub fn coordinator_with(
         )
         .expect("the desired state");
     }
+    coordinator_over(dir, service, rollout)
+}
+
+/// [`coordinator_with`] on whatever state `dir` holds: none is written, so nothing is desired
+/// until CI sets a version ([`super::typed::set_release`]).
+pub fn coordinator_over(dir: &Path, service: &str, rollout: &str) -> Arc<Coordinator> {
+    let state = dir.join("desired.json");
     let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
     let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
     let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
@@ -227,6 +237,23 @@ pub fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
     }
 }
 
+/// What the loop's heartbeat says of the daemon's trusted root, as the coordinator's gRPC route
+/// reads it from the request: no report is no age and an unknown reason.
+pub fn root_said(beat: &Heartbeat) -> TrustedRootSaid {
+    let Some(root) = beat.trusted_root else {
+        return TrustedRootSaid::default();
+    };
+    TrustedRootSaid {
+        age_secs: root.age_secs,
+        reason: match root.reason {
+            None => pb::TrustedRootReason::None,
+            Some(RootReason::Stale) => pb::TrustedRootReason::Stale,
+            Some(RootReason::Missing) => pb::TrustedRootReason::Missing,
+            Some(RootReason::Unparseable) => pb::TrustedRootReason::Unparseable,
+        },
+    }
+}
+
 /// The coordinator's typed order as the loop reads it: the protobuf order it sends, word for
 /// word in the loop's types.
 pub fn link_order(ordered: &Ordered) -> Order {
@@ -237,6 +264,7 @@ pub fn link_order(ordered: &Ordered) -> Order {
         digest: PackageDigest::new(digest).expect("a digest"),
         index_digest: (!index.is_empty())
             .then(|| PackageDigest::new(index).expect("an index digest")),
+        entry: None,
     };
     let named = |service: &str| ServiceName::new(service).expect("a service");
     let verb = match order.verb.expect("a verb") {
@@ -254,6 +282,7 @@ pub fn link_order(ordered: &Ordered) -> Order {
         )),
         pb::order::Verb::Uninstall(a) => Verb::Uninstall(named(&a.service)),
         pb::order::Verb::Abort(a) => Verb::Abort(named(&a.service)),
+        pb::order::Verb::ClearRecord(a) => Verb::ClearRecord(named(&a.service)),
         other => panic!("a verb these scenarios do not order: {other:?}"),
     };
     Order {
@@ -278,7 +307,7 @@ impl CoordinatorLink for InProcess {
         };
         let (answer, ordered) = self
             .coordinator
-            .heartbeat_with_orders(who, wire_beat(beat))
+            .heartbeat_with_orders(who, wire_beat(beat), root_said(beat))
             .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
         let order = ordered.as_ref().map(link_order);
         self.ordered
@@ -311,6 +340,8 @@ impl CoordinatorLink for InProcess {
                     },
                 })
                 .collect(),
+            repositories: None,
+            facts: None,
         })
     }
 }
@@ -322,6 +353,8 @@ pub struct Host {
     pub dispatch: Arc<ManualDispatch>,
     pub log: Arc<RecordingLog>,
     pub ordered: Arc<Mutex<Vec<Option<Order>>>>,
+    /// The request of each heartbeat the host sent, in order.
+    pub sent: Arc<Mutex<Vec<pb::HeartbeatRequest>>>,
     _started: Option<start::Started>,
 }
 
@@ -347,12 +380,11 @@ impl Host {
         let ordered = Arc::new(Mutex::new(Vec::new()));
         let dispatch = Arc::new(ManualDispatch::default());
         let log = Arc::new(RecordingLog::default());
+        let link = Arc::new(GrpcInProcess::new(coordinator, Arc::clone(&ordered)));
+        let sent = Arc::clone(&link.sent);
         let links = Links {
             enroller: Box::new(|| Err("the scenario has no enrollment".to_owned())),
-            link: Arc::new(InProcess {
-                coordinator: Arc::clone(coordinator),
-                ordered: Arc::clone(&ordered),
-            }),
+            link,
             certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("host-1")))),
             clock: Arc::new(FakeClock::new(2_000_000_000, 7)),
             log: log.clone(),
@@ -370,6 +402,7 @@ impl Host {
             dispatch,
             log,
             ordered,
+            sent,
             _started: started,
         }
     }
@@ -394,7 +427,7 @@ pub fn order_and_try(host: &Host, n: usize) -> (Verb, u64) {
     (order.verb, order.order_try)
 }
 
-/// A daemon of `version` on the self-update rig `s`, its probe the rig's, its update of
+/// A daemon of `version` on the self-update rig `s`, its update of
 /// hostkeeper settled as a start of that binary settles it.
 pub fn hostkeeper_daemon(s: &SelfRig, version: &str) -> (Arc<Daemon>, Settled) {
     let daemon = s.daemon_at(version);
@@ -409,6 +442,7 @@ pub fn hostkeeper_at(version: &str) -> Target {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a digest"),
         index_digest: None,
+        entry: None,
     }
 }
 

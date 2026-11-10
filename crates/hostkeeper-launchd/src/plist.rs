@@ -14,14 +14,12 @@ use crate::label::Label;
 /// The state directory of the daemon the daemon job runs: the daemon's default
 /// (`hostkeeper_daemon::cli::DEFAULT_STATE_DIR`), which the job gives it by passing no flag.
 pub const DAEMON_STATE_DIR: &str = "/var/lib/updater/state";
-/// The program the daemon job runs: `current` of the binary directory of hostkeeper's own update
-/// under [`DAEMON_STATE_DIR`] (`hostkeeper_daemon::selfupdate::binary_dir`, laid out by
-/// `hostkeeper_steps::Layout::new`), the link a self-update switches to the new binary. The job
-/// starts what that link names, so the clean exit after a switch starts the new binary.
-pub const DAEMON_PROGRAM: &str = "/var/lib/updater/state/hostkeeper/bin/current";
-/// The binary the pkg installs, on the `PATH` of a root shell: the `hostkeeper` of the command
-/// line, and the first binary of the binary directory, which the pkg's `postinstall` puts in
-/// (`hostkeeper self-update-seed`) so that [`DAEMON_PROGRAM`] starts it before any self-update.
+/// The binary the pkg installs, on the `PATH` of a root shell, and the program the daemon job
+/// runs (docs/design/two-programs.md, section 4.1): `hostkeeper daemon` started from this path
+/// (one of `hostkeeper_daemon::packaged::PACKAGED_BINARIES`) gives the binary directory of
+/// hostkeeper's own update under [`DAEMON_STATE_DIR`] its first binary when `current` starts
+/// none, and execs `current` with its own arguments, so the binary the last self-update chose
+/// runs as the job's process at each start.
 pub const INSTALLED_BINARY: &str = "/usr/local/bin/hostkeeper";
 /// The directory the daemon job's output files are in.
 pub const DAEMON_LOG_DIR: &str = "/var/log/hostkeeper";
@@ -45,14 +43,14 @@ pub struct DaemonJob {
 }
 
 impl DaemonJob {
-    /// The job of an installed host: the daemon label, [`DAEMON_PROGRAM`] (`current` of the
-    /// self-update binary directory, not [`INSTALLED_BINARY`]), and two files in
+    /// The job of an installed host: the daemon label, [`INSTALLED_BINARY`] (the pkg's binary,
+    /// which execs `current` of the self-update binary directory), and two files in
     /// [`DAEMON_LOG_DIR`].
     pub fn standard() -> DaemonJob {
         let logs = Path::new(DAEMON_LOG_DIR);
         DaemonJob {
             label: Label::daemon(),
-            program: PathBuf::from(DAEMON_PROGRAM),
+            program: PathBuf::from(INSTALLED_BINARY),
             stdout: logs.join("daemon.out.log"),
             stderr: logs.join("daemon.err.log"),
         }
@@ -112,12 +110,12 @@ pub enum PlistError {
 
 /// The daemon job's plist: `Label`, `ProgramArguments`, `RunAtLoad` and `KeepAlive` true, and
 /// the two output paths. It is the one plist of the daemon, the one its own update relies on
-/// too: `KeepAlive` is plain `true`, launchd's counterpart of the Linux unit's `Restart=always`
+/// too: `KeepAlive` is plain `true`, launchd's counterpart of the Linux units' `Restart=always`
 /// with no start limit (`packaging/linux/hostkeeper.service`), so that the clean exit the updater
-/// makes after it switched to a new binary (`hostkeeper_steps::selfupdate::follow_on`) starts
-/// that binary; a `SuccessfulExit` condition would leave the daemon stopped after that exit. The
-/// Linux unit also restarts a daemon whose heartbeat loop hangs (`WatchdogSec=`); this job has no
-/// watchdog.
+/// makes after it handed over to a new binary (`hostkeeper_steps::selfupdate::follow_on`) starts
+/// the job's program again, which execs that binary; a `SuccessfulExit` condition would leave the
+/// daemon stopped after that exit. The Linux units also restart a daemon whose heartbeat loop
+/// hangs (`WatchdogSec=`); this job has no watchdog.
 pub fn daemon_plist(job: &DaemonJob) -> Result<String, PlistError> {
     let argv = vec![utf8(job.program.as_os_str())?, "daemon".to_owned()];
     job_plist(

@@ -11,14 +11,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
 use super::lint::{
-    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, PRIVILEGED_ON,
-    PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
+    HOSTED_RUNNERS, ID_TOKEN_ALLOWED, MACOS_DEVICE_JOB, MACOS_DEVICE_RUNNERS, OPENRC_DEVICE_JOB,
+    PRIVILEGED_ON, PRIVILEGED_RUNNERS, PRIVILEGED_WORKFLOW, WRITE_ALLOWED, entries, entry, lint,
     privileged_runners, root_line, scalars,
 };
 use super::net_install::{
     self, NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE,
     NET_INSTALL_JOB, NET_JOBS, apt_steps,
 };
+use super::openrc::OPENRC_FIRST_LINE;
 use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
 use super::yaml::{self, Node, Value};
@@ -336,7 +337,7 @@ fn word_count(text: &str, word: &str) -> usize {
 }
 
 /// The `run:` values of every step of `job`, in order.
-fn runs(job: &Node) -> Vec<&str> {
+pub fn runs(job: &Node) -> Vec<&str> {
     let steps = match entry(job, "steps").map(|s| &s.value) {
         Some(Value::Seq(steps)) => steps.as_slice(),
         _ => &[],
@@ -357,7 +358,8 @@ fn test_targets(run: &str) -> BTreeSet<String> {
         .collect()
 }
 
-const BUILD: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --no-run";
+pub const BUILD: &str =
+    "cargo test -p hostkeeper-privileged --features privileged --locked --no-run";
 const RUN: &str = "cargo test -p hostkeeper-privileged --features privileged --locked --config \"target.'cfg(unix)'.runner = 'sudo'\"";
 
 /// How many times `sudo` stands as a word among the values of `node` (a comment is not a value).
@@ -479,7 +481,6 @@ const FIRST_BOOT_JOB: &str = "first-boot";
 const FIRST_BOOT_FIRST_LINE: &str = "#![cfg(all(target_os = \"linux\", feature = \"privileged\"))]";
 /// The first line of a privileged test file of [`MACOS_DEVICE_JOB`]: the tests against launchd.
 const MACOS_FIRST_LINE: &str = "#![cfg(all(target_os = \"macos\", feature = \"privileged\"))]";
-
 /// Whether `text` starts with the attribute `first`, as rustfmt may break it over lines: the same
 /// characters, whitespace aside, up to the attribute's closing bracket.
 pub fn starts_with_attribute(text: &str, first: &str) -> bool {
@@ -489,7 +490,7 @@ pub fn starts_with_attribute(text: &str, first: &str) -> bool {
 
 /// The privileged test targets of crates/hostkeeper-privileged whose first line is `first`: the
 /// files of its `tests/` that start with it, by name without `.rs`.
-fn privileged_targets(first: &str) -> BTreeSet<String> {
+pub fn privileged_targets(first: &str) -> BTreeSet<String> {
     let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../hostkeeper-privileged/tests");
     let mut found = BTreeSet::new();
     for entry in std::fs::read_dir(&dir).expect("list the privileged crate's tests") {
@@ -508,13 +509,14 @@ fn privileged_targets(first: &str) -> BTreeSet<String> {
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
-/// the macOS job's.
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
+/// macOS job's and the OpenRC job's.
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     BTreeMap::from([
         ("privileged", privileged_targets(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
         (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
+        (OPENRC_DEVICE_JOB, privileged_targets(OPENRC_FIRST_LINE)),
     ])
 }
 
@@ -558,8 +560,12 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
     assert_eq!(
         targets["privileged"],
         BTreeSet::from([
+            "install_apt".to_owned(),
+            "linux_packages".to_owned(),
+            "mdm_cert_units".to_owned(),
             "observer".to_owned(),
             "self_update".to_owned(),
+            "self_update_across_releases".to_owned(),
             "tierstore_shaped".to_owned(),
             "transient_unit".to_owned(),
             "unit_control".to_owned()
@@ -575,24 +581,37 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
             "device_mac".to_owned(),
             "device_mac_e2e".to_owned(),
             "device_mac_selfupdate".to_owned(),
-            "unpack_mac".to_owned()
+            "install_macos_pkg".to_owned()
         ])
     );
     assert_eq!(
         targets.keys().copied().collect::<Vec<_>>(),
-        [FIRST_BOOT_JOB, MACOS_DEVICE_JOB, "privileged"]
+        [
+            FIRST_BOOT_JOB,
+            MACOS_DEVICE_JOB,
+            OPENRC_DEVICE_JOB,
+            "privileged"
+        ]
     );
     assert_eq!(
         shape_problems(PRIVILEGED_WORKFLOW, text, &targets),
         Vec::<String>::new()
     );
-    // The jobs a release waits for are this file's three: no network-install job is among them.
+    // The jobs a release waits for are this file's four: no network-install job is among them.
     let jobs: Vec<&str> = entry(&doc, "jobs")
         .map_or(&[][..], entries)
         .iter()
         .filter_map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(jobs, ["privileged", FIRST_BOOT_JOB, MACOS_DEVICE_JOB]);
+    assert_eq!(
+        jobs,
+        [
+            "privileged",
+            FIRST_BOOT_JOB,
+            MACOS_DEVICE_JOB,
+            OPENRC_DEVICE_JOB
+        ]
+    );
     // Root in no other workflow, but in net-install.yml (net_install_tests.rs holds its jobs to
     // their shape) and in the jobs of pr-device.yml that are copies of this file's
     // (pr_device_tests.rs holds them to that).

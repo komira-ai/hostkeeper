@@ -3,16 +3,14 @@
 
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use hostkeeper_hook::Step;
 use hostkeeper_launchd::label::Label;
 use hostkeeper_launchd::plist::{
-    DAEMON_LOG_DIR, DAEMON_PROGRAM, DAEMON_STATE_DIR, DaemonJob, INSTALLED_BINARY, PlistError,
-    ServiceJob, StepJob, daemon_plist, service_plist, step_plist,
+    DAEMON_LOG_DIR, DaemonJob, INSTALLED_BINARY, PlistError, ServiceJob, StepJob, daemon_plist,
+    service_plist, step_plist,
 };
-use hostkeeper_placed::lint::check_unit_text;
-use hostkeeper_steps::Layout;
 
 const HEADER: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
 <!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \
@@ -210,17 +208,17 @@ fn the_daemon_plist_matches_the_golden_bytes() {
     assert_eq!(xml, include_str!("golden/daemon.plist"));
 }
 
-/// Catches a daemon job that starts the installed binary (`/usr/local/bin/hostkeeper`) or any
-/// other path than `current` of the self-update binary directory, `<state-dir>/hostkeeper/bin`,
-/// laid out as the steps crate lays it out: launchd would then start the binary it ran before
-/// after the clean exit of a self-update, and the update would fall back at every release.
+/// Catches a daemon job whose program is any other path than the binary the pkg installs
+/// (`/usr/local/bin/hostkeeper`): `hostkeeper daemon` started from that path seeds the self-update
+/// binary directory and execs `current` of it, so a job naming `current` itself or another path
+/// would skip the seed or start a binary the packaged start does not know.
 #[test]
-fn the_daemon_job_starts_current_of_the_self_update_binary_directory() {
-    let layout = Layout::new(&Path::new(DAEMON_STATE_DIR).join("hostkeeper").join("bin"));
-    assert_eq!(PathBuf::from(DAEMON_PROGRAM), layout.current_path());
-    assert_eq!(DaemonJob::standard().program, layout.current_path());
-    assert_ne!(DAEMON_PROGRAM, INSTALLED_BINARY);
+fn the_daemon_job_starts_the_installed_binary() {
     assert_eq!(INSTALLED_BINARY, "/usr/local/bin/hostkeeper");
+    assert_eq!(
+        DaemonJob::standard().program,
+        PathBuf::from(INSTALLED_BINARY)
+    );
 }
 
 /// Catches a change to a step plist's bytes: key order, tabs, header or trailer.
@@ -235,7 +233,7 @@ fn the_step_plist_matches_the_golden_bytes() {
 #[test]
 fn the_daemon_plist_runs_as_root_with_keepalive_and_nothing_else() {
     let job = DaemonJob::standard();
-    assert_eq!(job.program, PathBuf::from(DAEMON_PROGRAM));
+    assert_eq!(job.program, PathBuf::from(INSTALLED_BINARY));
     assert_eq!(
         job.stdout,
         PathBuf::from(DAEMON_LOG_DIR).join("daemon.out.log")
@@ -256,7 +254,7 @@ fn the_daemon_plist_runs_as_root_with_keepalive_and_nothing_else() {
         ("Label".to_owned(), s(Label::daemon().as_str())),
         (
             "ProgramArguments".to_owned(),
-            strs(&[DAEMON_PROGRAM, "daemon"]),
+            strs(&[INSTALLED_BINARY, "daemon"]),
         ),
         ("RunAtLoad".to_owned(), Val::Bool(true)),
         ("KeepAlive".to_owned(), Val::Bool(true)),
@@ -593,24 +591,4 @@ fn service_plist_refuses_text_that_is_not_utf8() {
     for job in service_jobs_with(&|| OsString::from_vec(vec![0xff])) {
         assert_eq!(service_plist(&job), expected);
     }
-}
-
-/// Catches a service plist whose first `ProgramArguments` string the placed-unit lint does not
-/// read as the program: a plist through `current` passes, and one that names a version directory, or
-/// another service's `current`, is refused.
-#[test]
-fn the_placed_unit_lint_reads_the_service_programs_first_argument() {
-    let packages = std::path::Path::new("/var/lib/hostkeeper/packages");
-    let xml = service_plist(&standard_service_job()).expect("renders");
-    assert_eq!(
-        check_unit_text(packages, "hello", "hello.a.plist", &xml),
-        Ok(())
-    );
-    let elsewhere = service_plist(&ServiceJob {
-        program: PathBuf::from("/var/lib/hostkeeper/packages/hello/1.2.3/bin/hello"),
-        ..standard_service_job()
-    })
-    .expect("renders");
-    assert!(check_unit_text(packages, "hello", "hello.a.plist", &elsewhere).is_err());
-    assert!(check_unit_text(packages, "other", "hello.a.plist", &xml).is_err());
 }

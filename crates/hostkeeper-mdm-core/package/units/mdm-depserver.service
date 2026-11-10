@@ -1,0 +1,37 @@
+# mdm-depserver.service: NanoDEP's API server, which holds the Apple Business
+# Manager token. A unit of the mdm package.
+#
+# Listens on loopback only and is never proxied. Its API key comes from
+# EnvironmentFile as NANODEP_API, never from argv.
+[Unit]
+Description=mdm NanoDEP depserver (loopback only)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mdm
+Group=mdm
+Slice=mdm.slice
+EnvironmentFile=/etc/mdm/nanodep.env
+ExecStart=/var/lib/hostkeeper/packages/mdm/current/bin/depserver -listen 127.0.0.1:9001 -storage filekv -storage-dsn /var/lib/mdm/dep
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mdm/dep
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

@@ -101,6 +101,8 @@ enum Defect {
     WideMark,
     /// The first serving heartbeat also clears the first heartbeat.
     WideServing,
+    /// What the host runs also clears the first serving heartbeat.
+    WideRunning,
     /// A commit told to fail writes anyway.
     WritesWhenFailing,
     /// A commit with a record whose key does not parse writes the records before it.
@@ -276,6 +278,18 @@ impl Records for Broken {
         self.inner.set_first_serving(host, at_unix)
     }
 
+    fn set_running(&self, host: &pb::Host, running: pb::Running) -> Result<(), StoreError> {
+        self.up()?;
+        if self.defect == Defect::WideRunning {
+            let cleared = pb::Host {
+                first_serving_unix: None,
+                ..host.clone()
+            };
+            return self.inner.set_running(&cleared, running);
+        }
+        self.inner.set_running(host, running)
+    }
+
     fn set_duplicate(&self, host: &pb::Host) -> Result<(), StoreError> {
         self.up()?;
         if self.defect == Defect::WideMark {
@@ -343,6 +357,7 @@ fn the_records_suite_fails_against_records_that_break_each_clause() {
         (Defect::ForgetsReservation, Clause::Serial),
         (Defect::WideMark, Clause::HostMarks),
         (Defect::WideServing, Clause::HostMarks),
+        (Defect::WideRunning, Clause::HostMarks),
         (Defect::WritesWhenFailing, Clause::FailedCommit),
         (Defect::KeepsBeforeUnkeyed, Clause::Unkeyed),
         (Defect::LockOnce, Clause::Lock),
@@ -831,6 +846,9 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
     for (call, held) in [("deny", HostHeld::Denied), ("retire", HostHeld::Retired)] {
         let missing = KeyHash::of_spki(b"a key whose request is gone");
         let orphan = pb::Host {
+            facts_generation: None,
+            host_group: String::new(),
+            moving_from: None,
             schema: 1,
             host_id: "web-1".to_owned(),
             key_hash: missing.as_bytes().to_vec(),
@@ -840,6 +858,7 @@ fn a_deny_whose_request_cannot_be_read_still_denies_the_host() {
             duplicate: false,
             first_heartbeat_unix: None,
             first_serving_unix: None,
+            running: None,
         };
         let files = Files::new("records-orphan");
         let memory: Arc<dyn Records> = Arc::new(MemoryRecords::new());

@@ -6,25 +6,22 @@
 //! CA's SHA-256, as enrollment and the operator leave them on a host.
 
 mod support;
+mod support_apt;
 
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::http::{Surface, handle};
 use hostkeeper_coordinator::listen::{Listener, MAX_CONNECTIONS, serve};
-use hostkeeper_coordinator::ops::OpsStore;
-use hostkeeper_coordinator::service::{Clock, Coordinator};
-use hostkeeper_coordinator::services::Services;
+use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_daemon::Daemon;
-use hostkeeper_daemon::cli::{HostFiles, host_links};
+use hostkeeper_daemon::cli::host_links;
 use hostkeeper_daemon::links::{HostLink, coordinator_link};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::RecordingLog;
@@ -32,139 +29,30 @@ use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClientIdentity, CoordinatorLink, Dispatch, Feature, Heartbeat, Job,
     LinkError, Platform, Renewal, TrustFault,
 };
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::TlsSource;
 use http_body_util::{BodyExt, Full};
-use rcgen::{
-    BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType,
-};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use support::coordinated::coordinator_over;
+use support::pki::{Ca, HOST, Leaf, config, enroll, files_under, scratch};
+use support::typed::set_release;
 use support::{OWN, Rig, alerting, lines};
+use support_apt::{AptRig, services};
 
 /// The operator token of the coordinator, for its status.
-const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
+const OPERATOR: &str = support::coordinated::OPERATOR;
 
 /// How long the coordinator waits for a client, as its own default.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// The node id of the host's certificate.
-const HOST: &str = "d1";
-
 /// The heartbeat period the tests give `host_links`; nothing waits for it.
 const PERIOD: NonZeroU64 = NonZeroU64::new(60).expect("not zero");
 
-/// A test certificate authority.
-struct Ca {
-    issuer: CertifiedIssuer<'static, KeyPair>,
-    der: Vec<u8>,
-    pem: String,
-}
-
-/// A certificate of a [`Ca`] and its key: the PEM of both, and the key as PKCS#8 DER, as
-/// enrollment writes it into a generation of the pki directory.
-struct Leaf {
-    cert_pem: String,
-    key_pem: String,
-    key_der: Vec<u8>,
-}
-
-impl Ca {
-    fn new(common_name: &str) -> Ca {
-        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.distinguished_name = named(common_name);
-        params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::DigitalSignature,
-        ];
-        let issuer = CertifiedIssuer::self_signed(params, KeyPair::generate().expect("a CA key"))
-            .expect("a CA certificate");
-        Ca {
-            der: issuer.der().to_vec(),
-            pem: issuer.pem(),
-            issuer,
-        }
-    }
-
-    /// Its SHA-256 in hex, as the daemon config pins it.
-    fn sha256_hex(&self) -> String {
-        Sha256::digest(&self.der)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-
-    fn leaf(&self, common_name: &str, names: Vec<SanType>, usage: ExtendedKeyUsagePurpose) -> Leaf {
-        let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
-        params.distinguished_name = named(common_name);
-        params.subject_alt_names = names;
-        params.extended_key_usages = vec![usage];
-        // rcgen's default: a P-256 key, the only kind the pki directory holds.
-        let key = KeyPair::generate().expect("a key");
-        let cert = params.signed_by(&key, &self.issuer).expect("signed");
-        Leaf {
-            cert_pem: cert.pem(),
-            key_pem: key.serialize_pem(),
-            key_der: key.serialize_der(),
-        }
-    }
-
-    /// The coordinator's certificate: for the loopback address, a server's only.
-    fn coordinator(&self) -> Leaf {
-        self.leaf(
-            "coordinator",
-            vec![SanType::IpAddress([127, 0, 0, 1].into())],
-            ExtendedKeyUsagePurpose::ServerAuth,
-        )
-    }
-
-    /// The certificate of the updater [`HOST`] on a host of role `daemon`, as the coordinator
-    /// reads one by default.
-    fn host(&self) -> Leaf {
-        let uri = |text: &str| SanType::URI(text.to_owned().try_into().expect("a URI"));
-        self.leaf(
-            HOST,
-            vec![
-                uri("urn:hostkeeper:role:updater"),
-                uri("urn:hostkeeper:host-role:daemon"),
-                SanType::DnsName(HOST.to_owned().try_into().expect("a DNS name")),
-            ],
-            ExtendedKeyUsagePurpose::ClientAuth,
-        )
-    }
-}
-
-fn named(common_name: &str) -> DistinguishedName {
-    let mut name = DistinguishedName::new();
-    name.push(DnType::CommonName, common_name);
-    name
-}
-
-/// A coordinator that runs `web` on the role `daemon` and wants it at 2.0, over the files of
-/// `dir`; its clock is past its quiet start, so it orders at once.
+/// A coordinator that runs `web` on the role `daemon`, over the files of `dir`, ordering at
+/// once (no quiet period). Nothing is desired until CI sets a version ([`Listening::set_web`]).
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
-    std::fs::write(
-        dir.join("desired.json"),
-        format!(
-            r#"{{"services":{{"web":{{"version":"2.0","min_up":{{}},"digests":{{"2.0":"{}"}}}}}}}}"#,
-            "0a".repeat(32)
-        ),
-    )
-    .expect("the desired state");
-    let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
-    let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    let seconds = Arc::new(AtomicU64::new(1_000));
-    let reading = Arc::clone(&seconds);
-    let clock: Clock = Arc::new(move || Duration::from_secs(reading.load(Ordering::SeqCst)));
-    let (verifier, _) = hostkeeper_oidc::testkit::static_verifier();
-    let rollout = "[[service]]\nname = \"web\"\nroles = [\"daemon\"]\n";
-    let coordinator = Coordinator::new(desired, verifier, OPERATOR.to_owned(), clock)
-        .with_services(Services::parse(rollout).expect("the rollout file"))
-        .with_ops(ops);
-    seconds.store(1_100, Ordering::SeqCst);
-    Arc::new(coordinator)
+    coordinator_over(dir, "web", "")
 }
 
 /// The coordinator's heartbeat listener on a loopback socket of port 0, served on a runtime of
@@ -232,6 +120,11 @@ impl Listening {
             runtime,
             _dir: dir,
         }
+    }
+
+    /// CI sets `web` to 2.0 with the release that lists `entry` for every platform.
+    fn set_web(&self, entry: &Target) {
+        set_release(&self.coordinator, "web", "2.0", entry);
     }
 
     /// The connections the listener took so far: for each, the protocols its client offered.
@@ -345,43 +238,6 @@ fn grpc() -> Vec<String> {
     vec!["h2".to_owned()]
 }
 
-/// A daemon config whose coordinator is `coordinator` and whose CA pin is `pin`.
-fn config(coordinator: &str, pin: &str) -> DaemonConfig {
-    let text = format!(
-        "coordinator = \"{coordinator}\"\nca_sha256 = \"{pin}\"\n\
-         release_channel = \"https://releases.example\"\n\n[trusted_signers]\n\
-         organisation = \"komira-ai\"\nworkflow = \".github/workflows/release.yml\"\n\
-         refs = [\"refs/tags/*\"]\nhosted_runner = true\n"
-    );
-    DaemonConfig::parse(&text).expect("a daemon config")
-}
-
-fn scratch(name: &str) -> Scratch {
-    Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch directory")
-}
-
-/// The host's files under `root`, its pki directory `root/pki`.
-fn files_under(root: &Path) -> HostFiles {
-    HostFiles {
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
-        pki: root.join("pki"),
-        console: None,
-    }
-}
-
-/// Writes a complete generation of the pki directory `pki`, as enrollment leaves it: `leaf`'s
-/// certificate and key and `ca`'s bundle in `gen-1`, and `current` naming it.
-fn enroll(pki: &Path, leaf: &Leaf, ca: &Ca) {
-    let generation = pki.join("gen-1");
-    std::fs::create_dir_all(&generation).expect("a generation");
-    std::fs::write(generation.join("cert.pem"), &leaf.cert_pem).expect("the certificate");
-    std::fs::write(generation.join("key"), &leaf.key_der).expect("the key");
-    std::fs::write(generation.join("ca.pem"), &ca.pem).expect("the CA bundle");
-    std::os::unix::fs::symlink("gen-1", pki.join("current")).expect("current");
-}
-
 /// A dispatcher that keeps each job for the test, which never runs it: the order a reply
 /// carries is seen to reach the daemon, and nothing of it runs.
 struct Kept(Mutex<Sender<Job>>);
@@ -407,6 +263,10 @@ fn bare_beat() -> Heartbeat {
         services: Vec::new(),
         sent_unix: 0,
         renewal: Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -431,15 +291,16 @@ fn identity_of(leaf: &Leaf) -> ClientIdentity {
 fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemon() {
     let ca = Ca::new("hostkeeper test ca");
     let listening = Listening::new("shipped-link-coordinator", &ca);
-    let rig = Rig::new("shipped-link-daemon");
-    rig.add("web", "1.0");
+    let apt = AptRig::new("shipped-link-daemon");
+    services::based(&apt, "web");
+    listening.set_web(&services::publish(&apt, "web", "2.0"));
     let daemon = Arc::new(Daemon::new(
         listening.config(&ca),
-        rig.dirs(),
-        rig.ports(),
+        apt.rig.dirs(),
+        apt.ports(),
         OWN,
     ));
-    let files = files_under(rig.scratch.path());
+    let files = files_under(apt.rig.scratch.path());
     enroll(&files.pki, &ca.host(), &ca);
     let (dispatch, jobs) = kept();
     let links = hostkeeper_daemon::links::Links {
@@ -474,12 +335,11 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
     assert_eq!(host["platform"], platform);
     assert_eq!(host["agent"]["name"], "hostkeeper");
     assert_eq!(host["agent"]["version"], OWN.to_string());
-    assert_eq!(host["holds_slot"], true, "the update of web is ordered");
-    assert!(
-        jobs.try_recv().is_ok(),
-        "the coordinator's order, which it sends with its terms only to a daemon that \
-         announced order-v1, is handed to the executor"
+    assert_eq!(
+        host["holds_slot"], false,
+        "the JSON route carries no order: it holds no slot"
     );
+    assert!(jobs.try_recv().is_err(), "the JSON reply orders nothing");
 
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
     assert_eq!(
@@ -487,7 +347,17 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
         [json(), grpc()],
         "the next one over gRPC, answered there"
     );
-    assert_eq!(listening.hosts_of_web().len(), 1, "still the one host");
+    let hosts = listening.hosts_of_web();
+    assert_eq!(hosts.len(), 1, "still the one host");
+    assert_eq!(
+        hosts[0]["holds_slot"], true,
+        "the update of web is ordered, from the release's apt entry, to a daemon that announced apt"
+    );
+    assert!(
+        jobs.try_recv().is_ok(),
+        "the coordinator's order, which it sends with its terms only to a daemon that \
+         announced order-v1, is handed to the executor"
+    );
 }
 
 /// Catches a link of the shipped daemon that answers without asking the coordinator (as the
@@ -530,7 +400,8 @@ fn the_link_of_host_links_answers_the_coordinators_reply() {
             Feature::ForcedV1,
             Feature::OrderV1,
             Feature::VerdictAcksV1,
-            Feature::GrpcV1
+            Feature::GrpcV1,
+            Feature::TargetV1
         ],
         "the announced features the coordinator echoes: all but install-v1 and abort-v1"
     );

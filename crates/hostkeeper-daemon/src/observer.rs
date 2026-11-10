@@ -7,10 +7,10 @@
 //! - [`observe`] makes one observation of such a service, with [`STATUS_DEADLINE`] for each
 //!   probe. It takes no lock of the daemon's.
 //! - [`SealedExe`] is the observer's [`ExpectedExe`] over the package tree: the digest of the
-//!   executable the first `[units] run` unit of a version starts, found through its unit file
-//!   (`ExecStart=`) or its launchd plist (`Program`, else the first `ProgramArguments` string);
-//!   for the daemon's own service, `hostkeeper`, the file of the version in the binary directory
-//!   its unit starts `current` of ([`SealedExe::with_binary_dir`]).
+//!   executable the first `[units] run` unit of a version starts, found through its unit file in
+//!   the extracted tree (`ExecStart=`); for the daemon's own service, `hostkeeper`, the file of
+//!   the version in the binary directory its unit starts `current` of
+//!   ([`SealedExe::with_binary_dir`]).
 //! - [`OwnService`] is how the daemon itself runs on the host: the unit or launchd job it runs
 //!   as, and its binary directory. The observer watches that unit as the service `hostkeeper`
 //!   whenever the package's manifest names no `[units] run` (a Mac's package has none: the
@@ -26,22 +26,27 @@ use std::fs::{self, File};
 use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
-use hostkeeper_config::manifest::{Expected, HostkeeperVersion, Manifest};
-use hostkeeper_config::names::{PLIST_SUFFIX, ServiceName, UNIT_SUFFIXES, UnitName, Version};
+use hostkeeper_config::manifest::{Expected, HostkeeperVersion};
+use hostkeeper_config::names::{PLIST_SUFFIX, ServiceName, UnitName, Version};
+use hostkeeper_install::repository::TREE;
+use hostkeeper_install::repository::tree::unit_file;
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{
     Current, Deadline, ExpectedExe, HttpHealthClient, Observation, ObserveOptions, Observer,
     ProcProbe, ProcessProbe, ProcessRunner, ServiceInput, ServiceManager, SystemdManager,
     TcpConnect, beat_health,
 };
-use hostkeeper_placed::lint::{COMMAND_PREFIXES, plist_program};
 use hostkeeper_proto::hostkeeper::agent::v1::Health;
 
 use hostkeeper_steps::Layout;
 
 use crate::executor::ServiceStatus;
 use crate::installed::{self, CURRENT};
+use crate::launchd_plist::plist_program;
 use crate::verbs::force::SELF_SERVICE;
+
+/// The characters systemd reads as prefixes of a command, before its path.
+const COMMAND_PREFIXES: [char; 5] = ['-', '@', '+', '!', ':'];
 
 /// How long each probe of a status read may wait, to connect and for each read after that.
 pub const STATUS_DEADLINE: Deadline = Deadline {
@@ -49,11 +54,11 @@ pub const STATUS_DEADLINE: Deadline = Deadline {
     read: Duration::from_secs(1),
 };
 
-/// How long one `systemctl show` may take.
-const SYSTEMCTL_DEADLINE: Duration = Duration::from_secs(5);
+/// How long one `systemctl show`, or one `rc-service <service> status` on OpenRC, may take.
+pub const SHOW_DEADLINE: Duration = Duration::from_secs(5);
 
-/// How many bytes of a `systemctl show` answer are read.
-const SYSTEMCTL_OUTPUT_CAP: usize = 64 * 1024;
+/// How many bytes of a `systemctl show` (or an `rc-service` status) answer are read.
+pub const SHOW_OUTPUT_CAP: usize = 64 * 1024;
 
 /// The `/proc` tree of the host.
 const PROC: &str = "/proc";
@@ -79,7 +84,7 @@ pub fn service_input(
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    let manifest = Manifest::load(&dir, &expected, own).ok()?;
+    let manifest = crate::target::manifest(&dir, &expected, own).ok()?;
     let started = (service.as_str() == SELF_SERVICE)
         .then(|| Layout::new(binaries).current().ok().flatten())
         .flatten();
@@ -110,15 +115,12 @@ pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)
 
 /// The digests of the executables sealed with each version, read from the package tree at
 /// `packages`: the file the first `[units] run` unit of the version starts, named by the
-/// `ExecStart=` of its unit file (the template's file for an instance) for a systemd unit, and
-/// for a launchd label by the `Program` of `units/<label>.plist`, else its first
-/// `ProgramArguments` string ([`plist_program`]). The path must go through
-/// `<packages>/<service>/current/` as the host spells the packages directory, and the rest of it
-/// be plain names. The file is the one at the same place under the version's own directory.
+/// `ExecStart=` of its unit file in the extracted tree (the template's file for an instance), and
+/// the file at that path under the tree ([`repository_exe`]).
 ///
-/// A version has no digest when it has no seal (`<version>.seal`), its manifest does not load,
-/// it runs no unit, the command is not through `current` or has a `..`, or the file cannot be
-/// read.
+/// A version has no digest when it has no seal (`<version>.seal`) or no `target.json`, its
+/// manifest does not load, it runs no unit, the command is not an absolute path of plain names,
+/// or the file cannot be read.
 ///
 /// Given the daemon's binary directory ([`SealedExe::with_binary_dir`]), a version of the
 /// service `hostkeeper` is instead the file `versions/<version>` of that directory: the copy of
@@ -129,18 +131,15 @@ pub fn service_health(status: &ServiceStatus) -> Option<(Health, Option<String>)
 #[derive(Debug)]
 pub struct SealedExe {
     packages: PathBuf,
-    host_packages: PathBuf,
     own: HostkeeperVersion,
     binaries: Option<PathBuf>,
 }
 
 impl SealedExe {
-    /// The sealed executables under `packages`, whose unit files spell that directory
-    /// `host_packages`, for a daemon of version `own`.
-    pub fn new(packages: &Path, host_packages: &Path, own: HostkeeperVersion) -> SealedExe {
+    /// The sealed executables under `packages`, for a daemon of version `own`.
+    pub fn new(packages: &Path, own: HostkeeperVersion) -> SealedExe {
         SealedExe {
             packages: packages.to_path_buf(),
-            host_packages: host_packages.to_path_buf(),
             own,
             binaries: None,
         }
@@ -168,29 +167,47 @@ impl SealedExe {
         let sealed = fs::metadata(service_dir.join(format!("{version}.seal")))
             .is_ok_and(|seal| seal.is_file());
         sealed.then_some(())?;
-        let dir = service_dir.join(version);
-        let manifest = Manifest::load(&dir, &expected, &self.own).ok()?;
-        let unit = manifest.run.first()?;
-        let word = if UNIT_SUFFIXES.iter().any(|suffix| unit.ends_with(suffix)) {
-            let template = UnitName::of(service, unit, false)
-                .ok()
-                .and_then(|name| name.template());
-            let text = std::iter::once(unit.clone())
-                .chain(template)
-                .find_map(|file| fs::read_to_string(dir.join("units").join(file)).ok());
-            text.as_deref().and_then(exec_start).map(str::to_owned)?
-        } else {
-            let file = dir.join("units").join(format!("{unit}{PLIST_SUFFIX}"));
-            plist_program(&fs::read_to_string(file).ok()?)?
-        };
-        let through = self.host_packages.join(service).join(CURRENT);
-        let rest = Path::new(&word)
-            .strip_prefix(through)
-            .ok()
-            .filter(|rest| is_plain(rest))?;
-        Some(dir.join(rest))
+        repository_exe(&service_dir.join(version), &expected, &self.own)
     }
 }
+
+/// Where the executable of the repository version in `dir` is (packages-lifecycle.md section
+/// 6.6): the first `run` unit's file in the extracted tree (`tree/usr/lib/systemd/system/<unit>`
+/// or `tree/lib/systemd/system/<unit>`, the template's for an instance), its `ExecStart=` program
+/// an absolute path of plain names that the package installs, and the file at that path under
+/// `tree/`: for a `.deb` that installs `/usr/bin/x`, `tree/usr/bin/x`. A `.pkg`'s `run` entry is
+/// a launchd label, whose job is `tree/Library/LaunchDaemons/<label>.plist` (no systemd unit of
+/// that name is in its tree): its program is the plist's (`Program`, else the first of
+/// `ProgramArguments`), read the same way.
+fn repository_exe(dir: &Path, expected: &Expected, own: &HostkeeperVersion) -> Option<PathBuf> {
+    let manifest = crate::target::manifest(dir, expected, own).ok()?;
+    let unit = manifest.run.first()?;
+    let template = UnitName::of(expected.name.as_str(), unit, false)
+        .ok()
+        .and_then(|name| name.template());
+    let tree = dir.join(TREE);
+    let unit_text = std::iter::once(unit.clone())
+        .chain(template)
+        .find_map(|file| unit_file(&tree, &file))
+        .and_then(|rel| fs::read_to_string(tree.join(rel)).ok());
+    let program = match unit_text {
+        Some(text) => exec_start(&text)?.to_owned(),
+        None => {
+            let plist = tree
+                .join(LAUNCH_DAEMONS)
+                .join(format!("{unit}{PLIST_SUFFIX}"));
+            plist_program(&fs::read_to_string(plist).ok()?)?
+        }
+    };
+    let rest = Path::new(&program)
+        .strip_prefix("/")
+        .ok()
+        .filter(|rest| is_plain(rest))?;
+    Some(tree.join(rest))
+}
+
+/// Where a `.pkg` puts its jobs' plists, relative to its tree.
+const LAUNCH_DAEMONS: &str = "Library/LaunchDaemons";
 
 /// The program of the first `ExecStart=` line of a systemd unit: its first word, without the
 /// prefixes systemd reads before it.
@@ -227,8 +244,8 @@ pub struct OwnService {
 }
 
 /// The observer of a Linux host: `systemctl show` for the units, `/proc` for the processes, TCP
-/// to the loopback for health, and the executables sealed under `packages_dir` ([`SealedExe`],
-/// the unit files spelling that directory as it is) to confirm the version, for a daemon of
+/// to the loopback for health, and the executables sealed under `packages_dir` ([`SealedExe`])
+/// to confirm the version, for a daemon of
 /// version `own` that runs as `own_service`. Making it reads nothing.
 pub fn host_observer(
     packages_dir: &Path,
@@ -255,8 +272,7 @@ pub fn observer_with(
     own: HostkeeperVersion,
     own_service: &OwnService,
 ) -> Observer {
-    let expected =
-        SealedExe::new(packages_dir, packages_dir, own).with_binary_dir(&own_service.binary_dir);
+    let expected = SealedExe::new(packages_dir, own).with_binary_dir(&own_service.binary_dir);
     Observer::new(
         hostkeeper_observe::Ports {
             manager,
@@ -271,7 +287,7 @@ pub fn observer_with(
 
 /// The host's systemd: `systemctl show`, bounded in time and output.
 pub fn systemd_manager() -> SystemdManager<ProcessRunner> {
-    SystemdManager::new(ProcessRunner::new(SYSTEMCTL_OUTPUT_CAP), SYSTEMCTL_DEADLINE)
+    SystemdManager::new(ProcessRunner::new(SHOW_OUTPUT_CAP), SHOW_DEADLINE)
 }
 
 /// The host's `/proc`.

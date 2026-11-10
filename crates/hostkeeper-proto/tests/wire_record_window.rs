@@ -78,6 +78,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("record_bmc_mac", 19),
             ("record_state", 20),
             ("record_approve_until_unix", 21),
+            ("record_host_group", 22),
         ],
     ),
     (
@@ -98,6 +99,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("used_by_request_id", 13),
             ("used_unix", 14),
             ("platform", 15),
+            ("host_group", 16),
         ],
     ),
     (
@@ -112,6 +114,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("approve_until_unix", 7),
             ("approve_for_secs", 8),
             ("platform", 9),
+            ("host_group", 10),
         ],
     ),
     (
@@ -158,6 +161,9 @@ const CASES: [(&str, &str, &[&str]); 2] = [
             "record_contested",
             "invalid_window",
             "record_used",
+            "services_retired",
+            "host_group_differs",
+            "unknown_host_group",
         ],
     ),
     (

@@ -23,18 +23,27 @@ pub const CALL_SECS: u64 = 10;
 /// The production [`Transport`]: TCP to the coordinator's address, bounded by [`CALL_SECS`].
 pub struct TcpTransport {
     clock: Arc<dyn Clock>,
+    secs: u64,
 }
 
 impl TcpTransport {
     pub fn new(clock: Arc<dyn Clock>) -> TcpTransport {
-        TcpTransport { clock }
+        TcpTransport {
+            clock,
+            secs: CALL_SECS,
+        }
     }
 }
 
 impl Transport for TcpTransport {
     fn connect(&self, host: &str, port: u16) -> io::Result<Box<dyn Conn>> {
+        self.connect_within(host, port, self.secs)
+    }
+
+    /// Bounded by `secs` from the connect, in place of [`CALL_SECS`].
+    fn connect_within(&self, host: &str, port: u16, secs: u64) -> io::Result<Box<dyn Conn>> {
         let addrs: Vec<SocketAddr> = (host, port).to_socket_addrs()?.collect();
-        let deadline = self.clock.mono_secs().saturating_add(CALL_SECS);
+        let deadline = self.clock.mono_secs().saturating_add(secs);
         connect_any(&addrs, Arc::clone(&self.clock), deadline)
             .map(|conn| Box::new(conn) as Box<dyn Conn>)
     }
@@ -84,7 +93,7 @@ fn left_of(clock: &dyn Clock, deadline: u64) -> io::Result<Duration> {
     match deadline.saturating_sub(clock.mono_secs()) {
         0 => Err(io::Error::new(
             io::ErrorKind::TimedOut,
-            "the heartbeat took longer than its bound",
+            "the call took longer than its bound",
         )),
         secs => Ok(Duration::from_secs(secs)),
     }

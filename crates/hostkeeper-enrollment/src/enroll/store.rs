@@ -12,8 +12,8 @@ use super::rows::{
     DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, corrupt, deny_state,
 };
 use super::{
-    Approval, ApprovalRecord, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome,
-    RecordedApproval, RequestState, RequestView, StoreError,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, NewRequest, PostError,
+    PostOutcome, RecordedApproval, RequestState, RequestView, StoreError,
 };
 use crate::ca::check_request;
 use crate::fs::Fs;
@@ -48,6 +48,10 @@ pub struct EnrollmentStore {
     /// managed service installed and healthy ([`EnrollmentStore::note_serving`]); an approval
     /// of the host takes it out.
     pub(super) served: Mutex<BTreeSet<HostId>>,
+    /// Per host, what its host record is known to hold of what it runs, so a heartbeat that says
+    /// the same takes neither the lock nor a read ([`EnrollmentStore::note_running`]); an
+    /// approval of the host takes it out.
+    pub(super) running: Mutex<BTreeMap<HostId, HostRunning>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
@@ -83,6 +87,7 @@ impl EnrollmentStore {
             max_pending: DEFAULT_MAX_PENDING,
             heard: Mutex::new(BTreeSet::new()),
             served: Mutex::new(BTreeSet::new()),
+            running: Mutex::new(BTreeMap::new()),
         }
     }
 
@@ -563,6 +568,12 @@ impl EnrollmentStore {
             .iter()
             .map(|s| s.as_str().to_owned())
             .collect();
+        // What a renewal keeps of the host it renews; a new key starts the host anew.
+        let renewed = current
+            .as_ref()
+            .filter(|_| renewal.is_some())
+            .map(|h| &h.pb);
+        let host_group = renewed.map(|h| h.host_group.clone()).unwrap_or_default();
         records.push(Record::Host(pb::Host {
             schema: SCHEMA,
             host_id: host.to_string(),
@@ -571,11 +582,17 @@ impl EnrollmentStore {
             role: decision.role.as_str().to_owned(),
             services: services.clone(),
             // Only a new key clears a duplicate mark; a renewal keeps the host's.
-            duplicate: renewal.is_some() && current.is_some_and(|h| h.pb.duplicate),
+            duplicate: renewed.is_some_and(|h| h.duplicate),
             // Every approval, a renewal's too, waits for its own first heartbeat, and for its own
             // first heartbeat that reports a managed service serving.
             first_heartbeat_unix: None,
             first_serving_unix: None,
+            // ... and for what its daemon says it runs.
+            running: None,
+            // A renewal keeps the host's group, the move under way and its facts' generation.
+            host_group: host_group.clone(),
+            moving_from: renewed.and_then(|h| h.moving_from.clone()),
+            facts_generation: renewed.and_then(|h| h.facts_generation),
         }));
         row.set_state(RequestState::Approved);
         row.pb.approved = Some(pb::Approval {
@@ -590,6 +607,7 @@ impl EnrollmentStore {
                 .as_ref()
                 .map(|(hash, _)| hash.as_bytes().to_vec())
                 .unwrap_or_default(),
+            host_group,
         });
         records.push(Record::Request(row.pb));
         if let Some((_, mut file)) = nonce {
@@ -608,6 +626,10 @@ impl EnrollmentStore {
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);
         self.served
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.running
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .remove(host);

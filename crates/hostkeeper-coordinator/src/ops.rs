@@ -7,7 +7,8 @@
 //! it), the host inventory ([`crate::inventory`]), the per-service marks later changes fill (a
 //! halt, the last good version, the bad versions, the force that stands: [`crate::force`]), where
 //! each service's update plan stands (the stages entered, the hosts done, an operator's pause:
-//! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), and a ring of
+//! [`crate::rollouts`]; kept in the halts file beside this one, not in this file), the marks of
+//! each (host group, package) (`crate::host_groups`, all of them in this file), and a ring of
 //! the last changes made. A key this build added is written only when it holds
 //! something, so a file that never held one keeps the shape the release before reads; once it
 //! does, the release before refuses the file, as it should: it would ignore a hold, a force or an
@@ -96,8 +97,10 @@ use crate::audit_file::{
     AuditLine, DEFAULT_ROTATION, Logged, Query, Rotation, UnixClock, wall_clock,
 };
 use crate::desired::{Staged, StoreError};
+use crate::facts::Generations;
 use crate::force::ForceRecord;
 use crate::holds::HoldMark;
+use crate::host_groups::GroupsMarks;
 use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
@@ -296,12 +299,12 @@ pub struct AuditEntry {
     /// `coordinator` for the coordinator's own changes, `ci` for CI's, `mdm-nonce` for a Mac's
     /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
-    /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`,
-    /// `halt`, `mark_bad`, `unmark_bad`, `abort`, `hold`, `unhold`, `assign`, `unassign`,
-    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made;
-    /// the coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
-    /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a
-    /// plan enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
+    /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`, `halt`,
+    /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `hold`, `unhold`, `assign`, `unassign`,
+    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
+    /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
+    /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan
+    /// enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
     /// `rollout_resume` (an operator's); CI's: `lift_halt`, `force_ended`, and `unmark_bad` in a
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
@@ -315,6 +318,9 @@ pub struct AuditEntry {
     /// The node it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub node_id: Option<String>,
+    /// The host group it concerned, if any ([`crate::host_groups`]).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host_group: Option<String>,
     /// The operator's reason, if one was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
@@ -330,6 +336,7 @@ impl AuditEntry {
             action: action.to_owned(),
             service: None,
             node_id: None,
+            host_group: None,
             reason: None,
         }
     }
@@ -369,6 +376,10 @@ pub struct OpsState {
     /// the halts file beside this one ([`crate::ops_file`]), never in this file.
     #[serde(skip)]
     pub rollouts: BTreeMap<String, Rollout>,
+    /// The marks of each (host group, package) (`crate::host_groups`): its halt, plan position
+    /// and every other mark in this file, written only when there are any.
+    #[serde(default, skip_serializing_if = "GroupsMarks::is_empty")]
+    pub(crate) host_groups: GroupsMarks,
 }
 
 impl Default for OpsState {
@@ -383,6 +394,7 @@ impl Default for OpsState {
             assignments: BTreeMap::new(),
             inventory: Vec::new(),
             rollouts: BTreeMap::new(),
+            host_groups: GroupsMarks::default(),
         }
     }
 }
@@ -407,6 +419,7 @@ impl OpsState {
             .retain(|_, entries| *entries != ServiceAssignments::default());
         self.rollouts
             .retain(|_, rollout| *rollout != Rollout::default());
+        self.host_groups = self.host_groups.without_defaults();
         self
     }
 }
@@ -493,6 +506,8 @@ pub struct OpsStore {
     /// `current` is only locked to read or to swap, never across the backend's commit.
     writing: Mutex<()>,
     backend: Shared,
+    /// The generation of each host's facts ([`crate::facts`]).
+    generations: Generations,
     /// Seconds since the epoch, for the lines of the audit.
     unix: UnixClock,
     /// How long the approval window of a new inventory record is, and the longest it may be.
@@ -547,6 +562,7 @@ pub(crate) fn parse(path: &Path, bytes: &[u8]) -> Result<OpsState, OpsError> {
             state.schema
         )));
     }
+    state.host_groups.check().map_err(invalid)?;
     Ok(state)
 }
 
@@ -587,6 +603,7 @@ impl OpsStore {
         Self {
             current: Mutex::new(state),
             writing: Mutex::new(()),
+            generations: Generations::from(backend.last_seq()),
             backend,
             unix: wall_clock(),
             record_window: RecordWindow::default(),
@@ -599,6 +616,11 @@ impl OpsStore {
             #[cfg(test)]
             interleave: Mutex::new(None),
         }
+    }
+
+    /// The generation of the facts of the host `node_id` ([`crate::facts`]).
+    pub(crate) fn facts_generation(&self, node_id: &str) -> u64 {
+        self.generations.of(node_id)
     }
 
     /// The store with `marker` as the file it lists its pending changes in.
@@ -793,6 +815,7 @@ impl OpsStore {
         }
         .map_err(OpsError::from)?;
         *self.lock() = next;
+        self.generations.raise(&entries);
         if let Some(staged) = staged {
             staged.finish();
         }

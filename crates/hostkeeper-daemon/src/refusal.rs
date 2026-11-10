@@ -34,6 +34,8 @@ pub enum Refusal {
     /// The package needs a newer hostkeeper than this daemon (`min_hostkeeper`).
     DaemonTooOld,
     /// The release channel has no such package.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     PackageNotFound,
     /// The package's bytes are not the digest the order names.
     DigestMismatch,
@@ -56,8 +58,8 @@ pub enum Refusal {
     /// The dead-man could not stop a step at its bound: the service stays locked. A `force` that
     /// could not stop the running step of its service ends with it too.
     Unstopped,
-    /// A `force` or a `force_rollback` of the service `hostkeeper`, which updates itself by its
-    /// own path.
+    /// A `force` of the service `hostkeeper`, which updates itself by its own path (a
+    /// `force_rollback` of it is a hand-over to the version it names).
     SelfService,
     /// An `install` of a service that has a release installed (`current` names one).
     AlreadyInstalled,
@@ -72,10 +74,9 @@ pub enum Refusal {
     /// `[hook.timeout_secs] uninstall`, or the service is `hostkeeper` itself, which the package
     /// manager removes. Refused before anything changes.
     UninstallUnsupported,
-    /// The package claims a path another service owns, or one occupied by something
-    /// `placed.json` does not list. Refused before anything changes.
+    /// A `current` or `previous` of the service is not a link to a version beside it.
     PathConflict,
-    /// `placed.json` could not be read or written, or a placed link, `current` or a directory of
+    /// `placed.json` could not be read or written, or `current`, `previous` or a directory of
     /// the service could not be made or removed.
     LinkFailed,
     /// An `update` of the service `hostkeeper` while its local list of bad versions
@@ -83,11 +84,17 @@ pub enum Refusal {
     BadVersionsUnreadable,
     /// The release index or the package could not be downloaded, or the host could not write it
     /// down for a reason other than a full disk.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     FetchFailed,
     /// The attestation bundle could not be downloaded, or the verifier could not run or ran out
     /// of time.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     AttestationUnavailable,
     /// The package is not attested by the trusted signer.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     NotAttested,
     /// The archive breaks a bound or a shape rule of design section 5.5.
     BadArchive,
@@ -95,11 +102,17 @@ pub enum Refusal {
     /// another archive.
     ArtifactChanged,
     /// The release index is not the index of the version asked for.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     IndexInvalid,
     /// The release index received does not have the SHA-256 the order names for it; it is
     /// refused before it is read.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     IndexDigestMismatch,
     /// The release index lists no package for this host's platform.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
     NoPackageForPlatform,
     /// The order's version is a name the package directory holds for itself.
     ReservedVersion,
@@ -111,22 +124,42 @@ pub enum Refusal {
     /// On macOS, the check of the staged tree (quarantine attribute, code signature) cannot be
     /// made now: the package is not judged, and the order is tried again later.
     VerifyUnavailable,
+    /// The order's entry is not sound: its digest is not the order's `package_digest`, or a
+    /// location of its artifact or attestation breaks the grammar of a store name or of a
+    /// locator. Refused before anything is fetched.
+    OrderInvalid,
+    /// The entry's installer is not one this daemon lists. Reported as a deferral, not a
+    /// refusal: the coordinator's copy of the list can be one restart stale.
+    InstallerNotListed,
+    /// The entry is of a repository installer and names no repository: only a coordinator that
+    /// dropped the field sends it. Reported as a deferral, not a refusal: the coordinator is
+    /// upgraded by its operator and the next order is judged again.
+    CoordinatorTooOld,
+    /// The entry's manifest breaks a rule of its installer. Refused before anything is fetched.
+    ManifestInvalid,
+    /// The host's `stores.toml` defines no store a location of the entry names, and no store is
+    /// a mirror.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
+    NoStore,
+    /// Every source that answered gave other bytes than the entry names, and only mirrors did.
+    /// The daemon produces it no more (it stages from the host's package manager); the token
+    /// stays in the closed set.
+    StoreDigestMismatch,
     /// `abort` of a service with no running step and none that could not be stopped: nothing is
-    /// written. The admin socket's `AdminRefusal` token.
+    /// written.
     NothingRunning,
     /// `clear_record` of a step record that reads, is absent, or is of a newer schema: only a
-    /// corrupt record is cleared. The admin socket's `AdminRefusal` token.
+    /// corrupt record is cleared.
     RecordReads,
     /// `clear_halt` with a halt generation not above the one the service is held under: nothing
     /// is written.
     StaleHaltGeneration,
-    /// `clear_record` in a coordinator's order: it is the admin socket's alone.
-    Forbidden,
 }
 
 impl Refusal {
     /// Every refusal, in the order of the enum.
-    pub const ALL: [Refusal; 45] = [
+    pub const ALL: [Refusal; 50] = [
         Refusal::InvalidOrder,
         Refusal::NotImplemented,
         Refusal::Busy,
@@ -168,10 +201,15 @@ impl Refusal {
         Refusal::VersionTooLong,
         Refusal::PackageIoError,
         Refusal::VerifyUnavailable,
+        Refusal::OrderInvalid,
+        Refusal::InstallerNotListed,
+        Refusal::CoordinatorTooOld,
+        Refusal::ManifestInvalid,
+        Refusal::NoStore,
+        Refusal::StoreDigestMismatch,
         Refusal::NothingRunning,
         Refusal::RecordReads,
         Refusal::StaleHaltGeneration,
-        Refusal::Forbidden,
     ];
 
     /// The token.
@@ -218,10 +256,15 @@ impl Refusal {
             Refusal::VersionTooLong => "version_too_long",
             Refusal::PackageIoError => "io_error",
             Refusal::VerifyUnavailable => "verify_unavailable",
+            Refusal::OrderInvalid => "order_invalid",
+            Refusal::InstallerNotListed => "installer_not_listed",
+            Refusal::CoordinatorTooOld => "coordinator_too_old",
+            Refusal::ManifestInvalid => "manifest_invalid",
+            Refusal::NoStore => "no_store",
+            Refusal::StoreDigestMismatch => "store_digest_mismatch",
             Refusal::NothingRunning => "nothing_running",
             Refusal::RecordReads => "record_reads",
             Refusal::StaleHaltGeneration => "stale_halt_generation",
-            Refusal::Forbidden => "forbidden",
         }
     }
 }
@@ -238,14 +281,11 @@ impl From<&ManifestRefusal> for Refusal {
 }
 
 impl From<&PlacedError> for Refusal {
-    /// `path_conflict` for a path held by another service or by something `placed.json` does not
-    /// list, `manifest_mismatch` for a package whose paths or units break a rule of linking,
-    /// `uninstalling` for a tombstoned service, and `link_failed` for every failure of the host.
+    /// `path_conflict` for a `current` or `previous` that is not a link to a version beside it,
+    /// and `link_failed` for every failure of the host.
     fn from(error: &PlacedError) -> Refusal {
         match error {
             PlacedError::PathConflict { .. } => Refusal::PathConflict,
-            PlacedError::Claim(_) | PlacedError::Lint(_) => Refusal::ManifestMismatch,
-            PlacedError::Tombstoned { .. } => Refusal::Uninstalling,
             _ => Refusal::LinkFailed,
         }
     }

@@ -1,8 +1,8 @@
 # Rollout plans: stages, advance, pause and resume
 
 How a service rolls a new version out, and what an operator can do to it. The design is
-[rollout-update-plans.md](../design/rollout-update-plans.md). `hostkeeper ctl` is [ctl.md](../ctl.md).
-Every `hostkeeper ctl rollouts` call takes the operator token only: a CI token is refused with
+[rollout-update-plans.md](../design/rollout-update-plans.md). `hkctl` is [cli.md](../cli.md).
+Every `hkctl rollouts` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing (one exception: a
 `Pause` stands without its audit line, see Pause and Resume below). Each call names a
 service and gives a reason (1 to 256 bytes, no control character), and is an entry of the audit log
@@ -47,7 +47,7 @@ service. A held, excluded or forced host is in no stage and does not stop one fr
 
 ## Reading a plan
 
-`Releases.Status` (`hostkeeper ctl releases status`) and the Rollout page show, per service, the
+`Releases.Status` (`hkctl releases status`) and the Rollout page show, per service, the
 plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `baking`, `done` or
 `failed`; the current stage ("stage 2 of 3"); and why the plan waits:
 
@@ -71,7 +71,7 @@ role's `max_updating` is reached, and `baking` that the current stage is baking.
 ## Advance
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     rollouts advance --service hello --reason "stage 1 looks healthy"
 ```
 
@@ -95,8 +95,10 @@ before it done, and writes the same `rollout_advance` entry under the name `coor
 ## Pause and Resume
 
 ```
-hostkeeper ctl ... rollouts pause --service hello --reason "waiting for the storage team"
-hostkeeper ctl ... rollouts resume --service hello --reason "storage team is done"
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    rollouts pause --service hello --reason "waiting for the storage team"
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    rollouts resume --service hello --reason "storage team is done"
 ```
 
 `Rollouts.Pause` stops the plan ordering any host that has not started. The updates already
@@ -139,11 +141,16 @@ every heartbeat that brings a verdict, so it can be reached in the middle of a s
 ## Across services: `--live-rollouts`
 
 `hostkeeper-coordinator serve --live-rollouts N` (default 1, 1 to 16) is how many services may
-have a live rollout at once. A rollout is live when one of its hosts holds an update slot or bakes
-the desired version, or when its plan has started a host and still has one to order (a paused plan
-and one waiting for an Advance are live). A service whose rollout is not live is told
-`rollout_elsewhere` while N others are; a service that is live is never held by the others. The
-default keeps one service's rollout at a time across the fleet, as the coordinator did before.
+have a live rollout at once. A rollout is live when one of its hosts runs an update (updating,
+its promotion pending, or under an order) or bakes the desired version, or when its plan has
+started a host and still has one to order (a paused plan and one waiting for an Advance are live).
+A failed host does not make its service live: it still counts against its own role's
+`max_updating`, but a halted service, a version marked bad, a plan held by a failed host and a
+service whose only occupants are failed hosts order nothing until an operator acts, so they hold
+no other service. A service whose rollout is not live is told `rollout_elsewhere` while N others
+are, and its plan in `Releases.Status` names them (`waiting_on`); a service that is live is never
+held by the others. The default keeps one service's rollout at a time across the fleet, as the
+coordinator did before.
 
 ## What a restart keeps
 

@@ -1,0 +1,80 @@
+// Generated from hostkeeper-proto's descriptors by hostkeeper-ui-tests (`client_gen`). Do not
+// edit: `cargo test -p hostkeeper-ui-tests --test client` fails when this file differs from what
+// the descriptors make, and writes the current text beside its test binary.
+//
+// `createClient(call)` returns one object per service of the operator API, each with one
+// function per method: `releases.setDesired(request)` is
+// `call("hostkeeper.operator.v1.Releases/SetDesired", request)`, and returns what `call`
+// returns. `ui/api.js` gives it the `call` that sends the request. The types of every
+// request and reply are in `client.d.ts`.
+
+export function createClient(call) {
+  return Object.freeze({
+    alerts: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Alerts/List", request),
+    }),
+    audit: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Audit/List", request),
+    }),
+    enrollment: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Enrollment/List", request),
+      approve: (request) => call("hostkeeper.operator.v1.Enrollment/Approve", request),
+      reject: (request) => call("hostkeeper.operator.v1.Enrollment/Reject", request),
+      addRecord: (request) => call("hostkeeper.operator.v1.Enrollment/AddRecord", request),
+      listRecords: (request) => call("hostkeeper.operator.v1.Enrollment/ListRecords", request),
+      removeRecord: (request) => call("hostkeeper.operator.v1.Enrollment/RemoveRecord", request),
+      openRecord: (request) => call("hostkeeper.operator.v1.Enrollment/OpenRecord", request),
+    }),
+    hostGroups: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.HostGroups/List", request),
+      get: (request) => call("hostkeeper.operator.v1.HostGroups/Get", request),
+      put: (request) => call("hostkeeper.operator.v1.HostGroups/Put", request),
+      remove: (request) => call("hostkeeper.operator.v1.HostGroups/Remove", request),
+      move: (request) => call("hostkeeper.operator.v1.HostGroups/Move", request),
+    }),
+    hosts: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Hosts/List", request),
+      get: (request) => call("hostkeeper.operator.v1.Hosts/Get", request),
+      exclude: (request) => call("hostkeeper.operator.v1.Hosts/Exclude", request),
+      include: (request) => call("hostkeeper.operator.v1.Hosts/Include", request),
+      setLabels: (request) => call("hostkeeper.operator.v1.Hosts/SetLabels", request),
+      abort: (request) => call("hostkeeper.operator.v1.Hosts/Abort", request),
+      retire: (request) => call("hostkeeper.operator.v1.Hosts/Retire", request),
+      clearRecord: (request) => call("hostkeeper.operator.v1.Hosts/ClearRecord", request),
+    }),
+    mdm: Object.freeze({
+      listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
+    }),
+    releases: Object.freeze({
+      setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),
+      converge: (request) => call("hostkeeper.operator.v1.Releases/Converge", request),
+      force: (request) => call("hostkeeper.operator.v1.Releases/Force", request),
+      unmarkBad: (request) => call("hostkeeper.operator.v1.Releases/UnmarkBad", request),
+      clearHalt: (request) => call("hostkeeper.operator.v1.Releases/ClearHalt", request),
+      status: (request) => call("hostkeeper.operator.v1.Releases/Status", request),
+      markBad: (request) => call("hostkeeper.operator.v1.Releases/MarkBad", request),
+      halt: (request) => call("hostkeeper.operator.v1.Releases/Halt", request),
+      waitConverged: (request) => call("hostkeeper.operator.v1.Releases/WaitConverged", request),
+      getRelease: (request) => call("hostkeeper.operator.v1.Releases/GetRelease", request),
+    }),
+    repositories: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Repositories/List", request),
+      get: (request) => call("hostkeeper.operator.v1.Repositories/Get", request),
+      put: (request) => call("hostkeeper.operator.v1.Repositories/Put", request),
+      remove: (request) => call("hostkeeper.operator.v1.Repositories/Remove", request),
+    }),
+    rollouts: Object.freeze({
+      advance: (request) => call("hostkeeper.operator.v1.Rollouts/Advance", request),
+      pause: (request) => call("hostkeeper.operator.v1.Rollouts/Pause", request),
+      resume: (request) => call("hostkeeper.operator.v1.Rollouts/Resume", request),
+    }),
+    services: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Services/List", request),
+      assign: (request) => call("hostkeeper.operator.v1.Services/Assign", request),
+      unassign: (request) => call("hostkeeper.operator.v1.Services/Unassign", request),
+      setMinVersion: (request) => call("hostkeeper.operator.v1.Services/SetMinVersion", request),
+      hold: (request) => call("hostkeeper.operator.v1.Services/Hold", request),
+      unhold: (request) => call("hostkeeper.operator.v1.Services/Unhold", request),
+    }),
+  });
+}

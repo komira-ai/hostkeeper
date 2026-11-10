@@ -40,7 +40,7 @@ async fn the_wire_and_proto_service_limits_are_one_constant() {
     let over_json = heard_json(code, &body);
     let over_grpc =
         heard_proto(&beat(&farm.coordinator, &who, &proto_message(&at_the_limit)).await);
-    assert_eq!(over_json, over_grpc);
+    assert_eq!(over_json, over_grpc.without_update());
     assert!(
         matches!(over_json, Heard::Told { .. }),
         "{MAX_SERVICES} services are answered"
@@ -192,11 +192,10 @@ async fn oversize_grpc_messages_are_refused_at_the_json_limits() {
         )
         .await;
         assert_eq!(reply.token(), (Code::Ok, ""), "{under} bytes");
-        assert!(
-            reply
-                .decode::<operator::ListAuditResponse>()
-                .entries
-                .is_empty()
+        // The padded request lists what the audit holds: CI's two sets of the farm.
+        assert_eq!(
+            reply.decode::<operator::ListAuditResponse>().entries.len(),
+            2
         );
     }
     let reply = grpc_call(

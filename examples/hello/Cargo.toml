@@ -15,9 +15,14 @@ description = "hello: the smallest real service a hostkeeper package carries, an
 # The hook contract the daemon reads a step with: the strict and lenient last-line readers, the
 # exit outcomes, what runs next, and the params file the daemon writes.
 hostkeeper-hook = { path = "../../crates/hostkeeper-hook" }
-# The manifest loader, which the tests load the committed package goldens with.
-hostkeeper-config = { path = "../../crates/hostkeeper-config" }
 hostkeeper-testkit = { path = "../../crates/hostkeeper-testkit" }
+# `poll` on the listener in the socket tests (tests/support/mod.rs, used by tests/server_socket.rs
+# and tests/program.rs): a test waits until a connection is in the listener's queue before it
+# starts the server, instead of racing the kernel.
+rustix = { workspace = true, features = ["event"] }
+# The committed package goldens' `manifest.toml`, which the tests read the hook command, the units,
+# the health URL and the params from.
+toml.workspace = true
 
 [lints]
 workspace = true

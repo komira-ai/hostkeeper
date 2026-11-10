@@ -318,7 +318,7 @@ impl Host for RealHost {
                     (_, true) => Kind::Dir,
                     _ => Kind::Other,
                 },
-                mode: st.st_mode & 0o7777,
+                mode: permissions(st.st_mode),
                 uid: st.st_uid,
                 gid: st.st_gid,
                 size: u64::try_from(st.st_size).unwrap_or(0),
@@ -458,6 +458,12 @@ impl Host for RealHost {
             trusted,
         }))
     }
+}
+
+/// The permission bits of a raw mode, at the width the platform gives it (`u32` on Linux, `u16`
+/// on macOS).
+fn permissions(mode: impl Into<u32>) -> u32 {
+    mode.into() & 0o7777
 }
 
 #[cfg(test)]

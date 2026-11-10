@@ -134,6 +134,7 @@ fn pause(rig: &Rig) -> Result<proto::PauseResponse, proto::RolloutsRefusal> {
         proto::PauseRequest {
             service: WEB.to_owned(),
             reason: "watching the farm".to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -144,6 +145,7 @@ fn resume(rig: &Rig) -> Result<proto::ResumeResponse, proto::RolloutsRefusal> {
         proto::ResumeRequest {
             service: WEB.to_owned(),
             reason: "looks fine".to_owned(),
+            host_group: String::new(),
         },
     )
 }
@@ -176,6 +178,8 @@ async fn the_default_plan_over_eight_hosts_is_three_stages_of_one_four_and_eight
             paused_by: None,
             pause_reason: None,
             finished: false,
+            waiting_on: vec![],
+            host_group: String::new(),
         }
     );
     let stages: Vec<(String, Option<u32>)> = [1, 2, 2, 2, 3, 3, 3, 3]
@@ -430,18 +434,24 @@ async fn db_rolls(rig: &Rig) {
 }
 
 /// Proves: while another service's rollout is live, a service whose own is not says
-/// ROLLOUT_ELSEWHERE and its hosts' gate is `rollout_elsewhere`; with `--live-rollouts 2` the
-/// same service does not wait, and its first host is ordered.
-/// Catches: a service that waits for a rollout elsewhere though the coordinator allows two, and
-/// one that does not wait for a live rollout though it allows one.
+/// ROLLOUT_ELSEWHERE, names the service it waits on (`waiting_on`), and its hosts' gate is
+/// `rollout_elsewhere`; with `--live-rollouts 2` the same service does not wait, names none, and
+/// its first host is ordered.
+/// Catches: a service that waits for a rollout elsewhere though the coordinator allows two, one
+/// that does not wait for a live rollout though it allows one, and a wait that does not say
+/// which service holds it.
 #[tokio::test]
 async fn a_service_waits_for_another_services_rollout_unless_two_may_be_live() {
     let rig = rig("plan-status-elsewhere", "");
     db_rolls(&rig).await;
     set(&rig, WEB, "2.0", 1).await;
+    let waits = plan(&rig);
     assert_eq!(
-        plan(&rig).waiting,
-        i32::from(proto::PlanWait::RolloutElsewhere)
+        (waits.waiting, waits.waiting_on),
+        (
+            i32::from(proto::PlanWait::RolloutElsewhere),
+            vec![DB.to_owned()]
+        )
     );
     assert_eq!(gate_of(&rig, "d3"), proto::GateReason::RolloutElsewhere);
 
@@ -450,7 +460,11 @@ async fn a_service_waits_for_another_services_rollout_unless_two_may_be_live() {
     rig.at(2_000);
     db_rolls(&rig).await;
     set(&rig, WEB, "2.0", 1).await;
-    assert_eq!(plan(&rig).waiting, i32::from(proto::PlanWait::None));
+    let free = plan(&rig);
+    assert_eq!(
+        (free.waiting, free.waiting_on),
+        (i32::from(proto::PlanWait::None), vec![])
+    );
     let ordered = ask(
         &rig,
         "d3",

@@ -30,7 +30,7 @@ use hostkeeper_pxe_packets::dhcp::{
 };
 use hostkeeper_pxe_packets::tftp::FileSet;
 use hostkeeper_pxe_seed::inputs::{
-    BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, SerialConsole,
+    BootServer, DaemonConfigText, InstallDisk, LinuxPlatform, RepositoryFiles, SerialConsole,
 };
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::layout::MENU_DIR;
@@ -62,6 +62,9 @@ pub struct Settings {
     pub install_disk: InstallDisk,
     /// `--serial-console`.
     pub serial_console: Option<SerialConsole>,
+    /// `--repositories`, checked by the daemon's loader: the files the seeds write to
+    /// `/etc/hostkeeper/repositories/`.
+    pub repositories: Option<RepositoryFiles>,
     /// `--reinstall`.
     pub reinstall: BTreeSet<HostId>,
     /// `--tftp-timeout-ms`: how long a TFTP transfer waits for an ACK before it sends again.
@@ -438,6 +441,7 @@ impl Server {
             keys: &self.settings.keys,
             install_disk: &self.settings.install_disk,
             serial_console: self.settings.serial_console.as_ref(),
+            repositories: self.settings.repositories.as_ref(),
         });
         Some(match file {
             SeedFile::UserData => made.user_data,

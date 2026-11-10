@@ -22,6 +22,7 @@ const BMC: &str = "0c:c4:7a:00:00:01";
 /// after [`NOW`] and which no approval used.
 fn open_record(host: &str, data: &str) -> InventoryRecord {
     InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: "storage".to_owned(),
         data_macs: vec![data.to_owned()],

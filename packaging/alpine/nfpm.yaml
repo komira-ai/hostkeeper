@@ -1,0 +1,80 @@
+# The apk of the hostkeeper daemon for Alpine Linux, which runs it under OpenRC
+# (packaging/alpine/hostkeeper.initd), for nfpm. Run from the repository root, after the daemon
+# is built for the architecture as a static musl binary and staged at target/nfpm/hostkeeper, as
+# for the deb and the rpm (`cargo xtask release nfpm-stage --binaries`,
+# packaging/linux/nfpm.yaml), so every Linux package carries the same file:
+#
+#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/alpine/nfpm.yaml --packager apk --target <directory>
+#
+# VERSION is the release's MAJOR.MINOR.PATCH in digits, with no `v` and no prerelease or build
+# suffix. ARCH is amd64 for the platform linux-x86_64 and arm64 for linux-arm64, as in
+# packaging/linux/nfpm.yaml; nfpm maps them to the apk architectures x86_64 and aarch64 and
+# names the files hostkeeper_<version>_<x86_64|aarch64>.apk. The package carries the daemon, its
+# init script, the template of its config, the pinned `gh` and the Sigstore trusted root its
+# attestation check runs on, and nothing else: no key, no certificate, no token and no
+# hostkeeper.toml, which whoever installs the package places (packaging/alpine/README.md).
+#
+# It is not the package of packaging/linux/nfpm.yaml with another packager. It leaves out the
+# systemd unit and the tmpfiles rules (the init script makes the directories itself), the
+# console's issue link (/etc/issue.d is a systemd host's directory; the console of an Alpine host
+# reads /etc/issue), and `hostkeeper-pxe`, the boot server of network install
+# (docs/design/network-install.md, section 3), which runs on a systemd host and is carried by
+# the deb and the rpm.
+#
+# The package depends on OpenRC 0.62 or later: OpenRC 0.62 (Alpine 3.22) is the oldest the
+# device tests run the package on. Its scripts are packaging/alpine/scripts/postinstall.sh, which apk runs as
+# .post-install on a first install, and preremove.sh, which apk runs as .pre-deinstall on a
+# removal. apk runs neither on an upgrade (it runs .post-upgrade, which the package does not
+# have), so an upgrade leaves the service in the runlevels as it was.
+#
+# `gh` and the trusted root are taken from target/nfpm/, which `cargo xtask release nfpm-stage`
+# writes (see packaging/linux/nfpm.yaml); the daemon is the build of
+#
+#   cargo build --locked --release --target <x86_64|aarch64>-unknown-linux-musl -p hostkeeper --bin hostkeeper
+name: hostkeeper
+arch: "${ARCH}"
+platform: linux
+version: "${VERSION}"
+section: admin
+priority: optional
+maintainer: "The hostkeeper project <https://github.com/komira-ai/hostkeeper>"
+description: hostkeeper, the update daemon of a host; it installs and updates its services from signed packages
+vendor: komira-ai
+homepage: https://github.com/komira-ai/hostkeeper
+license: Apache-2.0
+depends:
+  - openrc>=0.62
+contents:
+  - src: target/nfpm/hostkeeper
+    dst: /usr/bin/hostkeeper
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: packaging/alpine/hostkeeper.initd
+    dst: /etc/init.d/hostkeeper
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: packaging/linux/hostkeeper.toml.template
+    dst: /usr/share/hostkeeper/hostkeeper.toml.template
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+  - src: target/nfpm/gh
+    dst: /usr/lib/hostkeeper/gh
+    file_info:
+      mode: 0755
+      owner: root
+      group: root
+  - src: target/nfpm/trusted_root.json
+    dst: /usr/lib/hostkeeper/trusted_root.json
+    file_info:
+      mode: 0644
+      owner: root
+      group: root
+scripts:
+  postinstall: packaging/alpine/scripts/postinstall.sh
+  preremove: packaging/alpine/scripts/preremove.sh

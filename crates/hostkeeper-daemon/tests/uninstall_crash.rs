@@ -3,6 +3,8 @@
 //! same directories.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -12,14 +14,14 @@ use std::sync::Arc;
 use hostkeeper_daemon::{Outcome, Reply};
 use hostkeeper_hook::Verdict;
 use hostkeeper_placed::testing::{Event, FaultFs, FsWrite, Log};
-use support::{Rig, d, install, uninstall};
+use support::uninstall;
+use support_host::NativeHost;
 
-/// A rig with `web` installed from a package that places a unit, its `WantedBy=` link and a
-/// file, with an `uninstall` bound.
-fn installed(name: &str) -> Rig {
-    let rig = Rig::new(name);
-    rig.placed("web", "1.0.0", Some(300));
-    let reply = rig.daemon().order(&install("web", "1.0.0", &d(), 1));
+/// A host with `web` installed from a package that runs a unit, with an `uninstall` bound.
+fn installed(name: &str) -> NativeHost {
+    let farm = NativeHost::new(name);
+    farm.publish_placed("web", "1.0.0", Some(300));
+    let reply = farm.daemon().order(&farm.install("web", "1.0.0", 1));
     assert!(
         matches!(
             reply,
@@ -30,7 +32,9 @@ fn installed(name: &str) -> Rig {
         ),
         "{reply:?}"
     );
-    rig
+    // The uninstall deletes the sealed, read-only version directory, as root does on a host.
+    farm.open_up();
+    farm
 }
 
 /// The paths removed in `log`, files and directories.
@@ -44,14 +48,16 @@ fn removed(log: &Log) -> BTreeSet<PathBuf> {
         .collect()
 }
 
-/// Whether nothing of `web` is left on the host.
-fn gone(rig: &Rig) -> bool {
+/// Whether nothing of `web` is left on the host: no package directory, state directory,
+/// installed package, enablement link, record of its installer or tombstone.
+fn gone(farm: &NativeHost) -> bool {
+    let rig = farm.rig();
     let record = rig.placed_record();
-    let links = rig.placed_paths("web").iter().any(|path| rig.there(path));
     !rig.packages.join("web").exists()
         & !rig.state.join("web").exists()
-        & !links
-        & record.of_service("web").next().is_none()
+        & farm.apt.host.installed("web").is_none()
+        & !rig.there("/etc/systemd/system/multi-user.target.wants/web.service")
+        & !record.installed.contains_key("web")
         & !record.uninstalling.contains_key("web")
 }
 
@@ -66,9 +72,10 @@ fn gone(rig: &Rig) -> bool {
 #[test]
 fn a_crash_during_uninstall_resumes_at_the_tombstone() {
     // How many writes a whole uninstall makes.
-    let rig = installed("crash-count");
+    let farm = installed("crash-count");
+    let rig = farm.rig();
     let counting = Arc::new(FaultFs::new(rig.scratch.path(), Log::new()));
-    let daemon = rig.daemon_with(counting.clone(), rig.units.clone());
+    let daemon = farm.daemon_with(counting.clone(), rig.units.clone());
     assert!(matches!(
         daemon.order(&uninstall("web", 1)),
         Reply::Finished {
@@ -76,15 +83,16 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
             ..
         }
     ));
-    assert!(gone(&rig));
+    assert!(gone(&farm));
     let total = counting.writes();
     assert!(total > 20, "{total} writes");
 
     for n in 1..=total {
-        let rig = installed(&format!("crash-{n}"));
+        let farm = installed(&format!("crash-{n}"));
+        let rig = farm.rig();
         let first = Log::new();
         let failing = Arc::new(FaultFs::failing_at(rig.scratch.path(), n, first.clone()));
-        let dying = rig.daemon_with(failing, rig.units.clone());
+        let dying = farm.daemon_with(failing, rig.units.clone());
         let reply = dying.order(&uninstall("web", 1));
         assert!(
             !matches!(
@@ -93,13 +101,13 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
                     verdict: Verdict::Succeeded { .. },
                     ..
                 }
-            ) | gone(&rig),
+            ) | gone(&farm),
             "n={n}: {reply:?}"
         );
         drop(dying);
         let tombstone = rig.placed_record().uninstalling.get("web").cloned();
         // The hook runs again unless its success is recorded, or the uninstall had finished.
-        let hook_again = match (&tombstone, gone(&rig)) {
+        let hook_again = match (&tombstone, gone(&farm)) {
             (Some(tombstone), _) => !tombstone.hook_done,
             (None, finished) => !finished,
         };
@@ -107,7 +115,7 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
 
         let second = Log::new();
         let fs = Arc::new(FaultFs::new(rig.scratch.path(), second.clone()));
-        let restarted = rig.daemon_with(fs, rig.units.clone());
+        let restarted = farm.daemon_with(fs, rig.units.clone());
         fs::create_dir_all(&rig.state).expect("the state directory");
         let report = restarted.boot_pass().expect("the start pass");
         match &tombstone {
@@ -118,7 +126,7 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
                 );
             }
             None => {
-                if !gone(&rig) {
+                if !gone(&farm) {
                     assert!(matches!(
                         restarted.order(&uninstall("web", 1)),
                         Reply::Finished {
@@ -129,7 +137,7 @@ fn a_crash_during_uninstall_resumes_at_the_tombstone() {
                 }
             }
         }
-        assert!(gone(&rig), "n={n}: something of web is left");
+        assert!(gone(&farm), "n={n}: something of web is left");
         let hooks_after = rig.launcher.additive_runs().len() - hooks_before;
         assert_eq!(
             hooks_after,

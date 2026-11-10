@@ -7,9 +7,14 @@ approval: there is no approve step for a server that matches its record
 that needs a second look, waits for an operator to [approve](#approve) it by hand. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
-`hostkeeper ctl` is [ctl.md](../ctl.md).
+`hkctl` is [cli.md](../cli.md).
 
-Every `hostkeeper ctl enrollment` call takes the operator token only: a CI token is refused with
+`hkctl` is the operator's command line. It is the release asset `hkctl-<version>`, verified as
+[verify-a-release.md](../deploy/verify-a-release.md) says, and needs bash 3.2 or later and curl
+7.55 or later. Only its owner may read its `--token-file` (mode 0600): `hkctl` refuses a file its
+group or others may read.
+
+Every `hkctl enrollment` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing. An approval and
 every change to a record is an entry of the audit log, under the name of the token that made it.
 The commands below reach the coordinator's private listener (`--private-listen`):
@@ -26,7 +31,7 @@ are written as six pairs of hex digits separated all by `:` or all by `-`, or as
 digits, in either case, and are kept as lower-case `aa:bb:cc:dd:ee:ff`.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
@@ -48,12 +53,12 @@ once: [The record is the approval](#the-record-is-the-approval) says how. Give t
 unless you want to approve its server by hand.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment remove-record --host-id web-17 --reason "wrong BMC MAC"
 ```
 
@@ -81,7 +86,7 @@ The flow for each server, from the operator's side:
 3. Enter the record:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id web-17 --role web \
     --data-macs 00:00:5e:00:53:01 --bmc-mac 00:00:5e:00:53:a1 \
     --approve-for-secs 43200 --notes "rack 4, unit 17"
@@ -140,7 +145,7 @@ window fields; the end of the window is audited `record_open` with the reason. A
 that matches it is approved then.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment open-record --host-id web-17 --approve-for-secs 86400 \
     --reason "rack delayed to Thursday"
 ```
@@ -196,6 +201,63 @@ Place the config:
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`
    and `chmod 0600 /etc/hostkeeper/hostkeeper.toml`.
 
+The repository entries need no step here: once enrolled, the host's daemon writes
+`/etc/hostkeeper/repositories/` from the coordinator's registry at its first heartbeat, for the
+repositories its services name ([packages-repositories.md](../design/packages-repositories.md)
+section 3.2, [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)), and
+announces `apt` from the heartbeat after. Place them by hand only on a host that must install
+from the project's package repository before it reaches the coordinator; the registry's set then
+adopts the files when they are the same bytes, and replaces them otherwise. As root:
+
+1. Make the directory: `install -d -o root -g root -m 0755 /etc/hostkeeper/repositories`.
+2. Fetch the repository's keyring into it:
+
+   ```
+   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+     --output /etc/hostkeeper/repositories/komira.gpg \
+     https://packages.komira.ai/apt/komira-archive-keyring.gpg
+   ```
+
+3. Write one entry per channel, `komira-testing.sources` and `komira-stable.sources`, each one
+   stanza. The testing one:
+
+   ```
+   Types: deb
+   URIs: https://packages.komira.ai/apt
+   Suites: testing
+   Components: main
+   Signed-By: /etc/hostkeeper/repositories/komira.gpg
+   ```
+
+   The stable one is the same with `Suites: stable`. The entry's name is the file's stem, the
+   name a release's entry gives as its `repository`. A host that runs hello's failing-build
+   proof ([hello.md](../hello.md), step 4) also gets `komira-testing-fail.sources`, the same with
+   `Suites: testing-fail`: the suite that lists that build alone
+   ([package-repositories.md](../deploy/package-repositories.md)). These are the bytes the
+   registry's repository `komira` is written as (with the suite `testing-fail` listed when the
+   proof runs), so the first set the coordinator sends keeps them.
+4. Make every file root's and closed to writes by others:
+   `chown root:root /etc/hostkeeper/repositories/*` and
+   `chmod 0644 /etc/hostkeeper/repositories/*`.
+5. Check the directory with the daemon's own loader:
+   `hostkeeper check-repositories`. It prints one line per entry (its name, its suite, its
+   keyring and the keyring's SHA-256) and exits 0, or prints the loader's refusal, naming the
+   file, and exits 1: fix that file before the daemon starts. To check the files before they are
+   in place, put them in another directory, with each `Signed-By` naming
+   `/etc/hostkeeper/repositories/<keyring>` as above, and run
+   `hostkeeper check-repositories --dir <that directory>`.
+
+The directory holds those files and nothing else. The daemon checks it at its start and does not
+start on any defect: another file, a `.sources` whose name is not 1 to 32 bytes of `[a-z0-9-]`,
+a stanza that is not exactly one `deb` stanza with one `https://` or `file:/` URI, one suite, a
+component and `Signed-By` a keyring of the directory, a key that turns off apt's checks
+(`Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure`, `Check-Valid-Until:
+no`), a keyring over 1 MiB, empty, or not of its name's kind (armor is read only from a file
+named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. `hostkeeper check-repositories`
+refuses exactly what the start refuses. A host installed by network gets the
+same files from `hostkeeper-pxe serve --repositories` ([network-install.md](network-install.md)).
+Rotating the key is [repository-keys.md](repository-keys.md).
+
 Start the unit by hand, since the package does not: `systemctl start hostkeeper.service`. The unit
 is `Type=notify`, so the command returns once the daemon has finished its boot work. Its lines go
 to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper daemon: `:
@@ -208,20 +270,22 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
   (exit 3); nothing on the host changed. The loader reports one key at a time. systemd keeps
   starting the daemon again, so once the file is fixed the next start loads it; nothing needs
   resetting.
+- `/etc/hostkeeper/repositories: /etc/hostkeeper/repositories/<file>: <why>`: the repository
+  entries break a rule of the list above (exit 3); fix or remove the file named, and the next start
+  reads the directory again.
 - `the coordinator presents a CA whose SHA-256 is <hex>, not the pinned ca_sha256; nothing was
   sent`: `ca_sha256` or `coordinator` is wrong.
 - `the coordinator could not be reached: Enroll was answered with the status <code>: "<token>"`:
   the coordinator refused the request; the token is in
   [Refusals of the host's calls](#refusals-of-the-hosts-calls).
 
-On the host, as root, `hostkeeper admin status` reports its enrollment over the daemon's admin
-socket (`/run/hostkeeper/admin.sock`, [docs/admin.md](../admin.md)), and a Linux node's console
-shows it ([Check the key hash](#check-the-key-hash)).
+On the host, as root, the daemon's journal (`journalctl -u hostkeeper`; [docs/admin.md](../admin.md)) says what the enrollment loop waits for, and a Linux node's console
+shows the key hash ([Check the key hash](#check-the-key-hash)).
 
 ## The pending request and its match
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
@@ -229,9 +293,9 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 and `key_sha256` (the same value: the SHA-256 of the request's public key), the host's `claims`
 (machine id, DMI serial and product UUID, network addresses, BMC MAC; serial and platform UUID on
 a Mac), `image`, `first_seen_unix`, `renewal_of` for a returning host, `duplicate_claim` and
-`mac_nonce_presented`, and how it matches the inventory. `--output json` prints the field names
-in lower camel case (`keySha256`) and leaves out a field at its default (`false`, an empty
-string).
+`mac_nonce_presented`, and how it matches the inventory. `hkctl` prints the gateway's JSON body,
+with the field names in lower camel case (`keySha256`) and a field at its default (`false`, an
+empty string) left out.
 
 The match is worked out when the request is listed and again when it is approved, from the
 records as they are then. A record matches a Linux request when one of its data MACs is among the
@@ -290,7 +354,7 @@ matches a Mac request when its serial equals the claimed serial, letters compare
 MACs are not compared. Record a Mac with `--serial` and no MAC:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment add-record --host-id mac-03 --role build --serial C02XK1ABJG5J
 ```
 
@@ -325,7 +389,7 @@ gate pushes a nonce to the other at its next look.
 With `--mdm-pkg-allowlist` and `--mdm-host` the gate also sends the Mac the newest pkg on its
 allowlist, before its daemon has posted, and again an hour after the Mac's last answer until a
 request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
-`hostkeeper ctl mdm list-devices` shows the count and the last send
+`hkctl mdm list-devices` shows the count and the last send
 ([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
 posts did not install the pkg: read `/var/log/install.log` on the Mac.
 
@@ -375,8 +439,7 @@ openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER |
 
 The key is a P-256 key, PKCS#8 DER; the hash is that of its public key's DER
 SubjectPublicKeyInfo, and must equal `key_sha256` of the request. Once the host is enrolled, the
-same key is `/etc/updater/pki/current/key`. `hostkeeper admin status` gives it too, as
-`enrollment.key_sha256` ([docs/admin.md](../admin.md)).
+same key is `/etc/updater/pki/current/key`. The coordinator's `hkctl enrollment list` shows it as `key_sha256` ([docs/admin.md](../admin.md)).
 
 ## Approve
 
@@ -392,7 +455,7 @@ answer: the host takes it at its next poll, within seconds.
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --role web --services api --reason "racked in row 4, key checked on the console"
 ```
@@ -401,7 +464,7 @@ A request that matches no record or several, or a renewal, approved under a host
 names:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --reason "no record yet, key checked on the console"
 ```
@@ -417,7 +480,7 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 - the host id was denied (`denied` without it).
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-id web-17 --role web --services api --replace true \
     --reason "web-17 rebuilt on new disks, key checked on the console"
@@ -430,7 +493,7 @@ When the approval stands but its services could not be assigned, the coordinator
 services of an approval were not assigned: assign them with Services.Assign`. Assign them:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     services assign --node-id web-17 --service api
 ```
 
@@ -444,7 +507,7 @@ is answered `DENIED`, and a repost of the same key changes nothing. The rejectio
 rejected succeeds and audits nothing.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
 ```
 
@@ -465,7 +528,7 @@ true`, under each service assigned to it once its heartbeat names that service, 
 `live` while it heartbeats within 45 seconds:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases status --service api
 ```
 
@@ -481,7 +544,9 @@ as First heartbeat ("not yet" for an enrolled host not heard since). `first_serv
 same clock and kept and cleared the same way, is the first heartbeat since that approval that
 reported a service the coordinator manages for the host (not hostkeeper itself) healthy, with no
 update of it under way: when the host began serving (absent until then). `hosts list` answers every
-host the same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
+host the same way, a page at a time, and lists with them the enrolled hosts that are not denied
+and have not been heard since the coordinator started: not live, with no heartbeat time, and with
+`running` and `running_unix` as the enrollment kept them (below). [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 
@@ -491,7 +556,7 @@ logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.
 
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
-step failed (until a step succeeds), and the host's own clock. `hostkeeper ctl hosts get
+step failed (until a step succeeds), and the host's own clock. `hkctl hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
 `clock_skew_beats`: how many of the host's heartbeats since the coordinator started said a time
 more than `--clock-skew-secs` (120 by default) from the coordinator's clock, either way. The Host
@@ -522,7 +587,7 @@ which is cancelled. What its role or the rollout file assigns is not. It is sent
 what it runs stays as it is. The reason may be left out.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
 ```
 
@@ -573,7 +638,7 @@ approve; a queue that still fills needs a larger `--max-pending-enrollments` or 
 
 The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
 `remove-record`, `open-record`)
-refuses with exactly one of these tokens; `hostkeeper ctl` exits 2 on INVALID_ARGUMENT and
+refuses with exactly one of these tokens; `hkctl` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
 | token | code | cause | fix |
@@ -601,6 +666,9 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no role | give one field, within the maximum, for a record with a role |
 | `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
+| `services_retired` | INVALID_ARGUMENT | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
+| `host_group_differs` | FAILED_PRECONDITION | only a coordinator that holds host groups gives it; this release's coordinator does not hold host groups and never gives it | none in this release |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` with `--host-group` naming a group the coordinator does not hold; this release's coordinator holds no host group, so it refuses every `--host-group` | leave out `--host-group`; name the role with `--role` |
 
 ## Refusals of the host's calls
 

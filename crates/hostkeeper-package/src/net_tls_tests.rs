@@ -138,6 +138,10 @@ fn standard_reply() -> Reply {
             "/moved-away" => "302 Found\r\nLocation: https://other.example/pkg/1.tar".to_owned(),
             "/moved-here" => format!("302 Found\r\nLocation: https://127.0.0.1:{port}/pkg/1.tar"),
             "/moved-to-http" => format!("302 Found\r\nLocation: http://127.0.0.1:{port}/pkg/1.tar"),
+            "/challenge" => {
+                "401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"https://r.example/t\""
+                    .to_owned()
+            }
             "/moved-again" => format!("302 Found\r\nLocation: https://127.0.0.1:{port}/moved-here"),
             _ => "200 OK\r\nSet-Cookie: session=1\r\nContent-Length: 5".to_owned(),
         };
@@ -269,6 +273,45 @@ fn ureq_tls_requests_carry_no_cookie_or_credentials() {
             assert!(!names.contains(&refused.to_owned()), "{refused} in {head}");
         }
     }
+}
+
+/// Sent with `open_with`, a request carries the `Authorization` value it was given (and none when
+/// it was given none), a 302 comes back unfollowed with its `Location` although the transport was
+/// made to follow redirects, and a 401 comes back with its `WWW-Authenticate` value.
+///
+/// Catches a credential not sent, one sent when none was given, a redirect followed behind the
+/// fetcher's back (so a credential could cross origins), and the two headers not read.
+#[test]
+fn ureq_tls_open_with_sends_the_header_and_returns_redirects_and_challenges() {
+    let server = TlsServer::start(standard_reply());
+    let transport = UreqTransport::following_redirects(&[der_of(CA_PEM)], 3);
+    let moved = transport
+        .open_with(&server.url("/moved-here"), Some("Basic dTpz"), timeouts())
+        .expect("the redirect itself");
+    assert_eq!(moved.status, 302);
+    assert_eq!(moved.location, Some(server.url("/pkg/1.tar")));
+    assert_eq!(moved.www_authenticate, None);
+    let challenged = transport
+        .open_with(&server.url("/challenge"), None, timeouts())
+        .expect("the challenge");
+    assert_eq!(challenged.status, 401);
+    assert_eq!(
+        challenged.www_authenticate.as_deref(),
+        Some("Bearer realm=\"https://r.example/t\"")
+    );
+    assert_eq!(challenged.location, None);
+    let heads = server.finish();
+    assert_eq!(heads.len(), 2);
+    assert!(
+        heads[0].contains("authorization: Basic dTpz\r\n"),
+        "{}",
+        heads[0]
+    );
+    assert!(
+        !header_names(&heads[1]).contains(&"authorization".to_owned()),
+        "{}",
+        heads[1]
+    );
 }
 
 /// End to end through [`NetFetcher`]: the body of a 200 reaches the sink after its announced

@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 3] = [
+const PINNED: [(i32, &str, &str); 8] = [
     (
         1,
         "state",
@@ -19,6 +19,31 @@ const PINNED: [(i32, &str, &str); 3] = [
         3,
         "generations",
         "f08728227dac47c098dc32e55d8d40e0727379678205830ef1b5729a6882ac23",
+    ),
+    (
+        4,
+        "releases",
+        "ac5c3d331b404227ee7de2955e1d559b1c2a7644744e91418d7d6e5f357bc86a",
+    ),
+    (
+        5,
+        "mdm_devices",
+        "9ffd9dc58ad104072ebccea2c3b570a4f8879f40d2b5271197dd30706ed273d0",
+    ),
+    (
+        6,
+        "host_running",
+        "02a0c986c0884717965f5526d7af642322c78fdedb115e7809522bf2ef0dd789",
+    ),
+    (
+        7,
+        "repositories",
+        "afe77486621ecacc805b7892be3aeca7e1549d74129b49e68ee1b5c05206cb66",
+    ),
+    (
+        8,
+        "host_groups",
+        "3122feea58f3c4327d4ff2416b287ec7c01abf340c6532b0df49243d72efa7ae",
     ),
 ];
 
@@ -40,9 +65,12 @@ fn what(statement: &str) -> String {
 }
 
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
-/// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations")], each file's
-/// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering,
-/// and says older releases must not run on it.
+/// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
+/// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups")], each file's
+/// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
+/// the first three and `host_groups` say older releases must not run on them, and `releases`,
+/// `mdm_devices`, `host_running` and `repositories` that they may (an older release never reads
+/// any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
 /// one that runs the new), and a shipped file the runner would refuse at every start.
@@ -51,7 +79,16 @@ fn the_shipped_migrations_are_unchanged() {
     let listed: Vec<(i32, &str)> = SHIPPED.iter().map(|(n, name, _)| (*n, *name)).collect();
     assert_eq!(
         listed,
-        vec![(1, "state"), (2, "first_serving"), (3, "generations")]
+        vec![
+            (1, "state"),
+            (2, "first_serving"),
+            (3, "generations"),
+            (4, "releases"),
+            (5, "mdm_devices"),
+            (6, "host_running"),
+            (7, "repositories"),
+            (8, "host_groups")
+        ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
         .iter()
@@ -71,6 +108,11 @@ fn the_shipped_migrations_are_unchanged() {
             (1, "state", OlderReleases::Refuse),
             (2, "first_serving", OlderReleases::Refuse),
             (3, "generations", OlderReleases::Refuse),
+            (4, "releases", OlderReleases::MayRun),
+            (5, "mdm_devices", OlderReleases::MayRun),
+            (6, "host_running", OlderReleases::MayRun),
+            (7, "repositories", OlderReleases::MayRun),
+            (8, "host_groups", OlderReleases::Refuse),
         ]
     );
 }

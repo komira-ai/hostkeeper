@@ -4,7 +4,9 @@
 //! host: a step is a transient unit with `RuntimeMaxSec=` and nothing else, systemd ends it at
 //! its bound with its whole control group, an unbounded `prepare` gets `RuntimeMaxSec=infinity`
 //! and the dead-man leaves it alone, the dead-man stops a unit by name, a unit's name can be used
-//! again after it failed, and what the launcher keeps of a long output.
+//! again after it failed, and what the launcher keeps of a long output. A tool run
+//! (`StepLauncher::run_tool`, docs/design/packages.md section 5.3) is a transient unit with
+//! `PrivateNetwork=yes`: the tool sees the loopback interface alone.
 //!
 //! The fixture's `sleep` starts one child in the step's control group and writes both pids,
 //! which is how a test knows the step is running and checks that nothing of the group is left.
@@ -21,7 +23,7 @@ use hostkeeper_privileged::fixture::{self, FAILED_REASON, Mode, ok_report};
 use hostkeeper_privileged::{Rig, SERVICE};
 use hostkeeper_steps::{
     Bound, Captured, DeadMan, RING_BYTES, StepCall, StepExit, StepLauncher, SystemdLauncher,
-    SystemdRunProcess, Watch,
+    SystemdRunProcess, ToolCall, ToolNetwork, Watch,
 };
 use support::{Bench, FakeClock, StopOnDrop};
 
@@ -38,6 +40,7 @@ fn secs(n: u64) -> Bound {
 fn call<'a>(rig: &'a Rig, unit: &'a str, step: Step, params: &Path, bound: Bound) -> StepCall<'a> {
     StepCall {
         service: SERVICE,
+        hook_args: &[],
         invocation: Invocation {
             step,
             // `prepare` is given a staged release; the fixture only reads its params.
@@ -333,4 +336,147 @@ fn a_long_output_is_kept_to_its_last_bytes_with_the_last_line() {
     assert!(kept.ends_with(format!("{}\n", report.to_line()).as_bytes()));
     let log_text = String::from_utf8_lossy(&captured.stderr.bytes()).into_owned();
     assert!(log_text.contains("fixture: cleanup ok"), "{log_text:?}");
+}
+
+/// The tool `program` with `args`, in the unit `unit`, bounded by `timeout_secs`.
+fn tool<'a>(unit: &'a str, program: &'a Path, args: &'a [std::ffi::OsString]) -> ToolCall<'a> {
+    ToolCall {
+        service: SERVICE,
+        unit,
+        program,
+        args,
+        timeout_secs: 600,
+        network: ToolNetwork::Offline,
+        writable: None,
+        working_dir: None,
+        env: &[],
+    }
+}
+
+/// Catches a tool run that keeps the host's network, or whose end is not read as a step's: `wc
+/// -l /proc/net/dev` run by the launcher's `run_tool` exits 0 and its last line counts the two
+/// header lines and `lo` alone, the one interface of a network namespace of its own (the host
+/// the job runs on has more); and a running tool's unit has `PrivateNetwork=yes` where a
+/// transient unit started with no property has `no`, its `RuntimeMaxSec=` the call's bound, and
+/// it ends with no exit code when the launcher stops it.
+#[test]
+fn a_tool_runs_in_a_real_transient_unit_with_no_network() {
+    let bench = Bench::new("tool_no_network");
+    let rig = &bench.rig;
+    let launcher = launcher();
+
+    let counted = rig.unit();
+    let args = ["-l", "/proc/net/dev"].map(std::ffi::OsString::from);
+    let exit = launcher
+        .run_tool(&tool(&counted, Path::new("/usr/bin/wc"), &args))
+        .expect("the launcher runs the tool");
+    assert_eq!(exit.code, Some(0), "{exit:?}");
+    assert_eq!(
+        String::from_utf8_lossy(&exit.stdout).trim(),
+        "3 /proc/net/dev",
+        "{exit:?}"
+    );
+
+    let (sleeping, plain) = (rig.unit(), rig.unit());
+    let args = ["600"].map(std::ffi::OsString::from);
+    std::thread::scope(|scope| {
+        let running =
+            scope.spawn(|| launcher.run_tool(&tool(&sleeping, Path::new("/usr/bin/sleep"), &args)));
+        let _stop = StopOnDrop(&sleeping);
+        support::wait_until(|| {
+            running.is_finished() || support::property(&sleeping, "ActiveState") == "active"
+        });
+        support::start_serve(rig, &plain);
+        let _plain = StopOnDrop(&plain);
+        let asked = ["PrivateNetwork", "RuntimeMaxUSec"];
+        let unit = support::show(&sleeping, &asked);
+        let base = support::show(&plain, &asked);
+        assert_eq!(unit.get("PrivateNetwork").map(String::as_str), Some("yes"));
+        assert_eq!(base.get("PrivateNetwork").map(String::as_str), Some("no"));
+        assert_eq!(
+            unit.get("RuntimeMaxUSec").map(String::as_str),
+            Some("10min")
+        );
+        launcher
+            .stop(&sleeping)
+            .expect("the launcher stops the tool");
+        let exit = running.join().expect("the run thread").expect("the run");
+        assert_eq!(
+            exit.code, None,
+            "a tool the launcher stopped has no exit code"
+        );
+    });
+}
+
+/// Catches a fetch run that loses the host's network or writes outside its paths: the
+/// repository installer's two fetch commands run as `ToolNetwork::Fetch`, confined to the paths
+/// they may write (packages-repositories.md section 4.6). `wc -l /proc/net/dev` in such a unit
+/// counts more than the two header lines and `lo`, so it keeps the network; `touch` in the
+/// writable directory, in its working directory, with the call's environment, exits 0; `touch`
+/// in `/tmp`, the unit's own (`PrivateTmp=yes`: apt runs `gpgv` with its files there), exits 0
+/// and leaves nothing in the host's `/tmp`; and `touch` of a file beside the writable directory
+/// fails: the job's scratch is under `/home`, which `ProtectSystem=strict` alone leaves writable
+/// and `ProtectHome=read-only` makes read-only.
+#[test]
+fn a_fetch_tool_keeps_the_network_and_writes_only_its_paths() {
+    let bench = Bench::new("tool_fetch");
+    let rig = &bench.rig;
+    let launcher = launcher();
+    let base =
+        Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("tool-fetch-{}", std::process::id()));
+    let writable = base.join("work");
+    std::fs::create_dir_all(&writable).expect("the writable directory");
+    let paths = [writable.as_path()];
+    let fetch = |unit: &str, program: &str, args: &[&str]| {
+        let args: Vec<std::ffi::OsString> = args.iter().map(std::ffi::OsString::from).collect();
+        launcher
+            .run_tool(&ToolCall {
+                network: ToolNetwork::Fetch,
+                writable: Some(&paths),
+                working_dir: Some(&writable),
+                env: &[("HK_FIXTURE", "x")],
+                ..tool(unit, Path::new(program), &args)
+            })
+            .expect("the launcher runs the tool")
+    };
+
+    let exit = fetch(&rig.unit(), "/usr/bin/wc", &["-l", "/proc/net/dev"]);
+    let lines: u32 = String::from_utf8_lossy(&exit.stdout)
+        .split_whitespace()
+        .next()
+        .and_then(|n| n.parse().ok())
+        .expect("a count");
+    assert!(
+        lines > 3,
+        "a fetch unit sees the host's interfaces: {exit:?}"
+    );
+
+    let inside = fetch(&rig.unit(), "/usr/bin/sh", &["-c", "touch \"$HK_FIXTURE\""]);
+    assert_eq!(inside.code, Some(0), "{inside:?}");
+    assert!(
+        writable.join("x").is_file(),
+        "touch ran in the working directory"
+    );
+
+    let tmp = format!("/tmp/hk-fetch-{}", std::process::id());
+    let in_tmp = fetch(&rig.unit(), "/usr/bin/touch", &[&tmp]);
+    assert_eq!(
+        in_tmp.code,
+        Some(0),
+        "the unit's /tmp is writable: {in_tmp:?}"
+    );
+    assert!(!Path::new(&tmp).exists(), "the unit's /tmp is its own");
+
+    let outside = base.join("outside");
+    let refused = fetch(
+        &rig.unit(),
+        "/usr/bin/touch",
+        &[&outside.display().to_string()],
+    );
+    assert_ne!(refused.code, Some(0), "{refused:?}");
+    assert!(
+        !outside.exists(),
+        "nothing was written beside the writable directory"
+    );
+    let _ = std::fs::remove_dir_all(&base);
 }

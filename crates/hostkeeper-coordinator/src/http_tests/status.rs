@@ -6,14 +6,7 @@ use super::*;
 const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
 async fn beat_from(rig: &Rig, name: &str, role: &str, body: &str) {
-    let (code, _) = call(
-        rig,
-        Surface::Heartbeat,
-        &updater(name, role),
-        request("POST", HEARTBEAT_PATH, None, body),
-    )
-    .await;
-    assert_eq!(code, 200);
+    native_beat(rig, name, role, body).await;
 }
 
 /// kbf wants 2.0 and `other` wants 3.0; the daemon `d1` runs kbf at 2.0 and `other` at 1.0.
@@ -29,14 +22,7 @@ async fn farm(name: &str) -> Rig {
         r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        let (code, _) = raw(
-            &rig,
-            Surface::Control,
-            &None,
-            request("POST", DESIRED_PATH, Some(&ci_token()), body),
-        )
-        .await;
-        assert_eq!(code, 200);
+        rig.set(body).await;
     }
     rig.at(2_000);
     beat_from(

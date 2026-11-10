@@ -88,6 +88,33 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
     assert_eq!(exit_code(args), ExitCode::from(2));
 }
 
+/// Catches: the release channel still a flag: `--release-channel` and its two deadlines are no
+/// flags of `serve` any more, so a start that passes one is a usage error (exit 2), the usage
+/// names none of them, and a start without them reads the files as before.
+#[test]
+fn the_release_channel_flags_are_gone() {
+    let files = Files::new("config-no-release-channel");
+    let serve_help =
+        Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"]).expect_err("help");
+    let text = serve_help.to_string();
+    assert!(!text.contains("release-channel"), "{text}");
+    for flag in [
+        "--release-channel",
+        "--release-channel-connect-secs",
+        "--release-channel-timeout-secs",
+    ] {
+        let mut args = files.args();
+        args.extend([
+            OsString::from(flag),
+            OsString::from("https://channel.example"),
+        ]);
+        let refused = Cli::try_parse_from(args.clone()).expect_err("an unknown flag");
+        assert_eq!(refused.kind(), ErrorKind::UnknownArgument, "{flag}");
+        assert_eq!(exit_code(args), ExitCode::from(2), "{flag}");
+    }
+    build_given(&flags_of(files.args())).expect("a start without the channel");
+}
+
 /// Catches: the certificate namespaces and the legacy service not being flags with the
 /// defaults the project ships: without them the prefixes are `urn:hostkeeper:` ones and there
 /// is no legacy service; with them they are what was given.
@@ -388,6 +415,7 @@ async fn run_binds_both_listeners_and_reports_them() {
             heartbeat: "192.0.2.9:1".parse().expect("an address"),
             control: "192.0.2.9:2".parse().expect("an address"),
             lan: None,
+            health: None,
         })
     );
 }

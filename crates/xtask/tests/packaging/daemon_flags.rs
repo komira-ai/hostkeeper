@@ -7,16 +7,17 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DaemonFlags, SeedFlags,
+    Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags,
 };
+use hostkeeper_daemon::layout::RUN_SUBDIR;
+use hostkeeper_launchd::Platform;
 
 use crate::tmpfiles;
 use crate::unit::{self, Unit};
-use crate::{TEMPLATE, TMPFILES, UNIT, altered, linux, read, refuses};
+use crate::{Kind, PACKAGE_UNIT, TEMPLATE, TMPFILES, UNIT, altered, linux, read, refuses};
 
 /// The keys of a unit that run a command line.
-const COMMAND_KEYS: [&str; 3] = ["ExecStart", "ExecReload", "ExecStop"];
+const COMMAND_KEYS: [&str; 4] = ["ExecStart", "ExecStartPre", "ExecReload", "ExecStop"];
 
 /// The keys that put an environment variable in front of a command.
 const ENVIRONMENT_KEYS: [&str; 4] = [
@@ -37,25 +38,15 @@ pub fn parse(words: &[String]) -> Result<Command, String> {
 
 /// The flags of a command line of the daemon, as the binary parses them ([`parse`]).
 pub fn parse_flags(words: &[String]) -> Result<DaemonFlags, String> {
-    match parse(words)? {
-        Command::Daemon(flags) => Ok(flags),
-        other => Err(format!("the line runs {other:?}, not the daemon")),
-    }
+    let Command::Daemon(flags) = parse(words)? else {
+        return Err("the words are not the daemon verb's".to_owned());
+    };
+    Ok(flags)
 }
 
-/// The flags of the seed's command line, as the binary parses them ([`parse`]).
-pub fn parse_seed(words: &[String]) -> Result<SeedFlags, String> {
-    match parse(words)? {
-        Command::SelfUpdateSeed(flags) => Ok(flags),
-        other => Err(format!("the line runs {other:?}, not the seed")),
-    }
-}
-
-/// A command line of the CI client that parses, which a unit of the daemon must not run.
-const CI_LINE: &str = "ci set-desired --service web --version 1.0.0 --package-digest \
-    0000000000000000000000000000000000000000000000000000000000000000 \
-    --endpoint https://coordinator.example --ca-file ca.pem --audience web-release \
-    --work-dir work --web-roots roots.pem";
+/// A command line of a verb the binary had before the hand-over and no longer has (it has only
+/// `daemon`), which a unit of the daemon must not run.
+const REMOVED_VERB_LINE: &str = "self-update-protocol";
 
 fn check_unit_lines(text: &str) -> Result<(), String> {
     let unit = Unit::parse(text)?;
@@ -67,17 +58,11 @@ fn check_unit_lines(text: &str) -> Result<(), String> {
                 entry.line
             ));
         }
-        let parsed = match key {
-            "ExecStartPre" => {
-                let line = entry.value.strip_prefix('-').unwrap_or(&entry.value);
-                Some(parse_seed(&unit::command_words(line)?).map(drop))
-            }
-            _ if COMMAND_KEYS.contains(&key) => {
-                Some(parse_flags(&unit::command_words(&entry.value)?).map(drop))
-            }
-            _ => None,
-        };
-        if let Some(Err(e)) = parsed {
+        // A `-` before a command only lets a failure pass; the words are what the binary parses.
+        let line = entry.value.strip_prefix('-').unwrap_or(&entry.value);
+        if COMMAND_KEYS.contains(&key)
+            && let Err(e) = parse_flags(&unit::command_words(line)?)
+        {
             return Err(format!(
                 "line {}: {key}= does not parse under the binary's own flags: {e}",
                 entry.line
@@ -102,98 +87,99 @@ pub fn services(root: &Path, dir: &Path, out: &mut Vec<String>) {
 }
 
 /// Catches a unit whose command line the binary would refuse: an unknown subcommand, a flag it
-/// no longer has, a flag without its value, a seed line that is not the seed; and any environment
-/// set for a command.
+/// no longer has (`--admin-socket` among them), a flag without its value, a verb the binary no
+/// longer has; and any environment set for a command. Each of the two units is held to it.
 #[test]
 fn every_unit_command_line_parses_under_the_binarys_own_flags() {
     let mut found = Vec::new();
     services(&linux(), &linux(), &mut found);
     found.sort();
     for known in [
-        "hostkeeper.service",
+        UNIT,
         "overlay/usr/lib/systemd/system/hostkeeper.service",
+        PACKAGE_UNIT,
     ] {
         assert!(found.iter().any(|f| f == known), "{known} not in {found:?}");
     }
     for relative in &found {
         assert_eq!(check_unit_lines(&read(relative)), Ok(()), "{relative}");
     }
-    let text = read(UNIT);
-    let cases = [
-        (
-            altered(
-                &text,
-                "toml --state-dir /var/lib/updater/state",
-                "toml --state-directory /var/lib/updater/state",
+    for kind in Kind::ALL {
+        let text = kind.read();
+        let cases = [
+            (
+                altered(
+                    &text,
+                    "toml --state-dir /var/lib/updater/state",
+                    "toml --state-directory /var/lib/updater/state",
+                ),
+                "--state-directory",
             ),
-            "--state-directory",
-        ),
-        (
-            altered(&text, "current daemon --config", "current serve --config"),
-            "serve",
-        ),
-        (
-            altered(
-                &text,
-                "self-update-seed --state-dir",
-                "self-update-sed --state-dir",
+            (
+                altered(&text, " daemon --config", " serve --config"),
+                "serve",
             ),
-            "ExecStartPre= does not parse",
-        ),
-        (
-            altered(&text, " --binary /usr/bin/hostkeeper\n", "\n"),
-            "ExecStartPre= does not parse",
-        ),
-        (
-            altered(
-                &text,
-                "-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper",
-                "-/usr/bin/hostkeeper daemon",
+            (
+                altered(
+                    &text,
+                    " --notify-systemd\n",
+                    " --notify-systemd --heartbeat-secs\n",
+                ),
+                "does not parse under the binary's own flags",
             ),
-            "not the seed",
-        ),
-        (
-            altered(
-                &text,
-                " --admin-socket /run/hostkeeper/admin.sock --notify-systemd\n",
-                " --notify-systemd --admin-socket\n",
+            (
+                altered(
+                    &text,
+                    "--notify-systemd\n",
+                    "--notify-systemd\nEnvironment=RUST_LOG=debug\n",
+                ),
+                "(Environment=)",
             ),
-            "does not parse under the binary's own flags",
-        ),
-        (
-            altered(
-                &text,
-                "--notify-systemd\n",
-                "--notify-systemd\nEnvironment=RUST_LOG=debug\n",
+            (
+                altered(
+                    &text,
+                    "--notify-systemd\n",
+                    "--notify-systemd\nExecReload=/usr/bin/hostkeeper reload\n",
+                ),
+                "ExecReload= does not parse",
             ),
-            "(Environment=)",
-        ),
-        (
-            altered(
-                &text,
-                "--notify-systemd\n",
-                "--notify-systemd\nExecReload=/usr/bin/hostkeeper reload\n",
+            (
+                altered(
+                    &text,
+                    "--notify-systemd\n",
+                    "--notify-systemd\nExecStop=/usr/bin/hostkeeper daemon --stop\n",
+                ),
+                "ExecStop= does not parse",
             ),
-            "ExecReload= does not parse",
-        ),
-        (
-            altered(
-                &text,
-                "--notify-systemd\n",
-                "--notify-systemd\nExecStop=/usr/bin/hostkeeper daemon --stop\n",
+            (
+                altered(
+                    &text,
+                    "--notify-systemd\n",
+                    &format!(
+                        "--notify-systemd\nExecReload=/usr/bin/hostkeeper {REMOVED_VERB_LINE}\n"
+                    ),
+                ),
+                "unrecognized subcommand 'self-update-protocol'",
             ),
-            "ExecStop= does not parse",
-        ),
-        (
-            altered(
-                &text,
-                "--notify-systemd\n",
-                &format!("--notify-systemd\nExecReload=/usr/bin/hostkeeper {CI_LINE}\n"),
-            ),
-            "not the daemon",
-        ),
-    ];
-    refuses(check_unit_lines, &cases);
+        ];
+        refuses(check_unit_lines, &cases);
+    }
+}
+
+/// Catches the seed line of the package unit before the hand-over drifting back in: its verb,
+/// `self-update-seed`, is gone from the binary, so a unit that ran it before its start would fail
+/// that command at every start. Each of the two units is held to it.
+#[test]
+fn a_seed_line_before_the_start_does_not_parse_under_the_binarys_own_flags() {
+    const OLD_SEED: &str = "ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper\nExecStart=";
+    for kind in Kind::ALL {
+        let text = kind.read();
+        let cases = [(
+            altered(&text, "ExecStart=", OLD_SEED),
+            "ExecStartPre= does not parse under the binary's own flags: error: unrecognized subcommand 'self-update-seed'",
+        )];
+        refuses(check_unit_lines, &cases);
+    }
 }
 
 /// The directories of a path's parent, or an error naming what has none.
@@ -205,6 +191,16 @@ fn parent_of(path: &Path) -> Result<&Path, String> {
 fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Result<(), String> {
     let unit = Unit::parse(unit_text)?;
     let words = unit::command_words(unit.single("Service", "ExecStart")?)?;
+    if let Some(entry) = unit
+        .entries
+        .iter()
+        .find(|e| e.key.starts_with("RuntimeDirectory"))
+    {
+        return Err(format!(
+            "line {}: {}= makes a directory under /run; the tmpfiles rules make the run directory",
+            entry.line, entry.key
+        ));
+    }
     let flags = parse_flags(&words)?;
     let defaults = parse_flags(&["hostkeeper".to_owned(), "daemon".to_owned()])?;
     let literals = [
@@ -220,12 +216,6 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
             &flags.packages_dir,
             &defaults.packages_dir,
             DEFAULT_PACKAGES_DIR,
-        ),
-        (
-            "--admin-socket",
-            &flags.admin_socket,
-            &defaults.admin_socket,
-            DEFAULT_ADMIN_SOCKET,
         ),
     ];
     for (flag, unit_value, parsed_default, constant) in literals {
@@ -247,11 +237,6 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
             DEFAULT_PACKAGES_DIR,
             "/var/lib/hostkeeper/packages",
         ),
-        (
-            "--admin-socket",
-            DEFAULT_ADMIN_SOCKET,
-            "/run/hostkeeper/admin.sock",
-        ),
     ];
     if let Some((flag, constant, literal)) = design.iter().find(|(_, c, l)| c != l) {
         return Err(format!(
@@ -263,12 +248,14 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
         .filter(|line| line.kind == "d")
         .map(|line| PathBuf::from(line.path))
         .collect();
-    let socket_dir = parent_of(&flags.admin_socket)?;
+    // The daemon binds no socket and the unit names no path of its run directory, which the
+    // daemon makes 0700 at each start and the tmpfiles rules make at boot (design section 4).
+    let run_dir = Platform::linux().run_dir.join(RUN_SUBDIR);
     let wanted = [
         ("state directory", flags.state_dir.as_path()),
         ("packages directory", flags.packages_dir.as_path()),
         ("config's directory", parent_of(&flags.config)?),
-        ("socket's directory", socket_dir),
+        ("run directory", run_dir.as_path()),
     ];
     for (what, dir) in wanted {
         if !made.iter().any(|m| m == dir) {
@@ -278,13 +265,6 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
             ));
         }
     }
-    let runtime = unit.single("Service", "RuntimeDirectory")?;
-    if socket_dir.file_name().and_then(|n| n.to_str()) != Some(runtime) {
-        return Err(format!(
-            "RuntimeDirectory={runtime} is not the socket's directory {}",
-            socket_dir.display()
-        ));
-    }
     let comment = format!("install the result as {DEFAULT_CONFIG},");
     if !template_text.contains(&comment) {
         return Err(format!("the template does not say {comment:?}"));
@@ -293,61 +273,83 @@ fn check_paths(unit_text: &str, tmpfiles_text: &str, template_text: &str) -> Res
 }
 
 /// Catches a path of the packaging that is not the binary's default and design section 4.1's:
-/// a flag of the unit, a directory the tmpfiles rules make, the `RuntimeDirectory=` of the
-/// socket, or the config path the template tells the host to install to.
+/// a flag of either unit, a unit that passes the `--admin-socket` flag the binary no longer has
+/// or sets a `RuntimeDirectory=` (the run directory is the one the tmpfiles rules make), a
+/// directory the tmpfiles rules make, or the config path the template tells the host to install
+/// to.
 #[test]
 fn packaging_paths_equal_the_daemon_defaults() {
-    let (unit, rules, template) = (read(UNIT), read(TMPFILES), read(TEMPLATE));
-    assert_eq!(check_paths(&unit, &rules, &template), Ok(()));
-    let in_unit = |text: &str| check_paths(text, &rules, &template);
-    let unit_cases = [
-        (
-            altered(
-                &unit,
-                "--config /etc/hostkeeper/hostkeeper.toml",
-                "--config /etc/hostkeeper/other.toml",
+    let (rules, template) = (read(TMPFILES), read(TEMPLATE));
+    for kind in Kind::ALL {
+        let unit = kind.read();
+        assert_eq!(check_paths(&unit, &rules, &template), Ok(()));
+        let in_unit = |text: &str| check_paths(text, &rules, &template);
+        let unit_cases = [
+            (
+                altered(
+                    &unit,
+                    "--config /etc/hostkeeper/hostkeeper.toml",
+                    "--config /etc/hostkeeper/other.toml",
+                ),
+                "--config is",
             ),
-            "--config is",
-        ),
-        (
-            altered(
-                &unit,
-                "--state-dir /var/lib/updater/state --packages-dir",
-                "--state-dir /var/lib/updater/other --packages-dir",
+            (
+                altered(
+                    &unit,
+                    "--state-dir /var/lib/updater/state --packages-dir",
+                    "--state-dir /var/lib/updater/other --packages-dir",
+                ),
+                "--state-dir is",
             ),
-            "--state-dir is",
-        ),
-        (
-            altered(
-                &unit,
-                "--packages-dir /var/lib/hostkeeper/packages",
-                "--packages-dir /var/lib/hostkeeper/other",
+            (
+                altered(
+                    &unit,
+                    "--packages-dir /var/lib/hostkeeper/packages",
+                    "--packages-dir /var/lib/hostkeeper/other",
+                ),
+                "--packages-dir is",
             ),
-            "--packages-dir is",
-        ),
-        (
-            altered(
-                &unit,
-                "--admin-socket /run/hostkeeper/admin.sock",
-                "--admin-socket /run/other/admin.sock",
+            (
+                altered(
+                    &unit,
+                    " --notify-systemd\n",
+                    " --notify-systemd --admin-socket /run/hostkeeper/admin.sock\n",
+                ),
+                "unexpected argument '--admin-socket'",
             ),
-            "--admin-socket is",
-        ),
-        (
-            altered(
-                &unit,
-                "RuntimeDirectory=hostkeeper",
-                "RuntimeDirectory=other",
+            (
+                altered(
+                    &unit,
+                    " --notify-systemd\n",
+                    " --notify-systemd --admin-socket /run/other/admin.sock\n",
+                ),
+                "unexpected argument '--admin-socket'",
             ),
-            "RuntimeDirectory=other",
-        ),
-    ];
-    refuses(in_unit, &unit_cases);
+            (
+                altered(
+                    &unit,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nRuntimeDirectory=hostkeeper\n",
+                ),
+                "RuntimeDirectory= makes a directory",
+            ),
+            (
+                altered(
+                    &unit,
+                    "WatchdogSec=60\n",
+                    "WatchdogSec=60\nRuntimeDirectoryMode=0700\n",
+                ),
+                "RuntimeDirectoryMode= makes a directory",
+            ),
+        ];
+        refuses(in_unit, &unit_cases);
+    }
+    let unit = read(UNIT);
     let in_rules = |text: &str| check_paths(&unit, text, &template);
     let rule_cases = [
         (
             altered(&rules, "d      /run/hostkeeper ", "d      /run/hostkeepr "),
-            "the socket's directory",
+            "the run directory",
         ),
         (
             altered(&rules, "d      /etc/hostkeeper ", "d      /etc/hostkeepr "),

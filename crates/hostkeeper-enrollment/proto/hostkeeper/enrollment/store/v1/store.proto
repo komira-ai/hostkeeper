@@ -70,6 +70,9 @@ message Approval {
   // The SHA-256 of the Mac nonce this approval consumed; empty when none. This field is the
   // consumption: the nonce's own file is marked after it, and again at the store's next open.
   bytes mac_nonce_sha256 = 8;
+  // The host group the host was approved into; empty on an approval that named none, as every
+  // approval before host groups.
+  string host_group = 9;
 }
 
 message Request {
@@ -134,6 +137,37 @@ message Host {
   // reported a service the coordinator manages for it installed and healthy; absent until then.
   // Written once; an approval writes the file anew without it.
   optional uint64 first_serving_unix = 9;
+  // What the host's daemon last said it runs, as far as the coordinator kept it; absent until
+  // the first heartbeat after the approval. Rewritten when the agent or a service changes,
+  // not when only the time does. An approval writes the file anew without it.
+  optional Running running = 10;
+  // The host group the host is in; empty on a host written before host groups. A renewal keeps
+  // it.
+  string host_group = 11;
+  // While a move's sequence runs, the group the host moves from; absent otherwise. A renewal
+  // keeps it.
+  optional string moving_from = 12;
+  // The generation of the host's facts, which a move, a change of its labels and an approval
+  // raise; absent until its facts are first made. A renewal keeps it.
+  optional uint64 facts_generation = 13;
+}
+
+// What a host runs, as its daemon said in a heartbeat the coordinator accepted.
+message Running {
+  string agent_name = 1;
+  string agent_version = 2;
+  // Each service the daemon reported that is not absent, by service name.
+  repeated RunningService services = 3;
+  // When the coordinator accepted the heartbeat this was last written from, in unix seconds.
+  uint64 at_unix = 4;
+}
+
+// One service a host runs.
+message RunningService {
+  string service = 1;
+  string version = 2;
+  // The installer it runs with; empty when the coordinator did not know it.
+  string installer = 3;
 }
 
 enum DenyState {

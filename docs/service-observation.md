@@ -34,8 +34,8 @@ as, which the platform's adapters name: `hostkeeper.service` on Linux, which its
 installer pkg places and the macOS package does not name (`Observer::with_run_of`: units given
 for a service whose manifest names none). Its version is confirmed against the file of that
 version in the daemon's binary directory (`<state-dir>/hostkeeper/bin/versions/<version>`, the
-copy of the release's binary that the self-update staged and that the unit starts through
-`bin/current`), not through the unit file, whose program is outside the package. So the daemon
+copy of the release's binary that the self-update staged and that the unit or the job runs through
+`bin/current`: the package unit starts it, and the bootstrap unit's and the plist's packaged binary execs it), not through the unit file, whose program is outside the package. So the daemon
 reports its own service live, healthy and at the version it runs on both platforms; while the
 package's `current` names a version the job does not run (the moment between the switch and the
 restart, or after a fallback), it is `version_mismatch`.
@@ -104,7 +104,7 @@ Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`
 
 kbf's agent took liveness from services on a registration socket, `/run/updater/register.sock`.
 hostkeeper does not carry it. At start, before any unit is touched, the daemon calls
-`unlink_stale_registration_socket` with its run directory (`updater` beside the admin
-socket's directory, `/run/updater` by default), right after it takes the lock on the state
+`unlink_stale_registration_socket` with its run directory (`updater` in the platform's run
+directory, `/run/updater` by default), right after it takes the lock on the state
 directory: a `register.sock` left there is removed (whatever its file kind), a missing one is
 fine, and any other error stops the start.

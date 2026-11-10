@@ -4,6 +4,7 @@
 GET /ui/*
 GET /v1/convergence
 GET /v1/status
+GET /v1/version
 HEAD /ui/*
 POST /v1/desired
 POST /v1/operator

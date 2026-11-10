@@ -1,4 +1,5 @@
-//! What the encoded messages do across versions, with the generated types: a reader of the
+//! What the encoded messages do across versions, with the generated types (the frozen
+//! `hostkeeper.local.v1` ones dynamic): a reader of the
 //! release before reads what it knows of a newer message and keeps the rest, a newer reader
 //! reads an older message, an unknown enum number reads as UNSPECIFIED and is kept, and an
 //! `optional` field tells absent from zero. The release before is this crate's descriptor set
@@ -15,11 +16,9 @@ use hostkeeper_proto::hostkeeper::agent::v1::{
     FailurePhase, Force, Health, HeartbeatRequest, HeartbeatResponse, Order, Outcome, PinReport,
     Platform, ServiceBeat, UpdateResult, order,
 };
-use hostkeeper_proto::hostkeeper::local::v1::{
-    AbortResponse, ClearRecordResponse, RecordProblem, ServiceRecord, StatusResponse, StepOutcome,
-    StepRecord,
-};
 
+#[path = "support/frozen.rs"]
+mod frozen;
 #[path = "support/kbf_tables.rs"]
 mod kbf_tables;
 
@@ -199,16 +198,24 @@ fn a_forced_update_that_failed_on_its_target_is_reported() {
     assert_eq!(service.health(), Health::Unhealthy);
     assert!(service.last_update.as_ref().is_some_and(|u| u.forced));
 
-    let record = StepRecord {
-        version: "1.5".to_owned(),
-        forced: true,
-        outcome: StepOutcome::Failed.into(),
-        order_try: 3,
-        ..StepRecord::default()
-    };
-    let read = StepRecord::decode(record.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.outcome(), StepOutcome::Failed);
-    assert!(read.forced);
+    let record = frozen::local(
+        "StepRecord",
+        [
+            ("version", Value::String("1.5".to_owned())),
+            ("forced", Value::Bool(true)),
+            (
+                "outcome",
+                frozen::variant("StepOutcome", "STEP_OUTCOME_FAILED"),
+            ),
+            ("order_try", Value::U64(3)),
+        ],
+    );
+    let read = frozen::read_back(&record);
+    assert_eq!(frozen::enum_name(&read, "outcome"), "STEP_OUTCOME_FAILED");
+    assert_eq!(
+        read.get_field_by_name("forced").as_deref(),
+        Some(&Value::Bool(true))
+    );
 }
 
 /// Catches: outcomes that can only say a forced update failed on its target: one that failed
@@ -234,54 +241,35 @@ fn a_forced_update_that_failed_before_its_switch_is_reported() {
     assert_eq!(result.phase(), FailurePhase::BeforeCommit);
     assert_ne!(read.version, result.target);
 
-    let record = StepRecord {
-        version: "1.5".to_owned(),
-        forced: true,
-        outcome: StepOutcome::Failed.into(),
-        phase: FailurePhase::BeforeCommit.into(),
-        order_try: 4,
-        ..StepRecord::default()
-    };
-    let read = StepRecord::decode(record.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.phase(), FailurePhase::BeforeCommit);
-    assert!(read.forced && !read.committed);
-}
-
-/// Catches: an Admin status that cannot say a step record is unreadable, an abort that cannot
-/// return the record it closed, and a clear that cannot say what it cleared.
-#[test]
-fn the_admin_calls_carry_a_record_problem_and_the_closed_record() {
-    let status = StatusResponse {
-        services: vec![ServiceRecord {
-            service: "db".to_owned(),
-            record_problem: RecordProblem::Unreadable.into(),
-            ..ServiceRecord::default()
-        }],
-        ..StatusResponse::default()
-    };
-    let read = StatusResponse::decode(status.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.services[0].record_problem(), RecordProblem::Unreadable);
-    assert_eq!(read.services[0].current, None);
-
-    let aborted = AbortResponse {
-        record: Some(StepRecord {
-            order_id: "o-17".to_owned(),
-            order_try: 2,
-            outcome: StepOutcome::Failed.into(),
-            phase: FailurePhase::Halt.into(),
-            ..StepRecord::default()
-        }),
-    };
-    let read = AbortResponse::decode(aborted.encode_to_vec().as_slice()).expect("decodes");
-    let record = read.record.expect("a record");
-    assert_eq!(record.phase(), FailurePhase::Halt);
-    assert_eq!((record.order_id.as_str(), record.order_try), ("o-17", 2));
-
-    let cleared = ClearRecordResponse {
-        problem: RecordProblem::NewerSchema.into(),
-    };
-    let read = ClearRecordResponse::decode(cleared.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(read.problem(), RecordProblem::NewerSchema);
+    let record = frozen::local(
+        "StepRecord",
+        [
+            ("version", Value::String("1.5".to_owned())),
+            ("forced", Value::Bool(true)),
+            (
+                "outcome",
+                frozen::variant("StepOutcome", "STEP_OUTCOME_FAILED"),
+            ),
+            (
+                "phase",
+                Value::EnumNumber(FailurePhase::BeforeCommit.into()),
+            ),
+            ("order_try", Value::U64(4)),
+        ],
+    );
+    let read = frozen::read_back(&record);
+    assert_eq!(
+        read.get_field_by_name("phase").as_deref(),
+        Some(&Value::EnumNumber(FailurePhase::BeforeCommit.into()))
+    );
+    assert_eq!(
+        read.get_field_by_name("forced").as_deref(),
+        Some(&Value::Bool(true))
+    );
+    assert_eq!(
+        read.get_field_by_name("committed").as_deref(),
+        Some(&Value::Bool(false))
+    );
 }
 
 /// Catches: an order that cannot say one verb with its typed arguments, or that reads back as
@@ -293,6 +281,7 @@ fn an_order_is_one_verb_with_typed_arguments() {
             order_id: "o-18".to_owned(),
             r#try: 1,
             verb: Some(order::Verb::Force(Force {
+                target: None,
                 service: "db".to_owned(),
                 version: "1.4".to_owned(),
                 package_digest: "ab".repeat(32),
@@ -367,7 +356,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 6] = [
+const RPCS: [(&str, &[&str]); 7] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -387,6 +376,7 @@ const RPCS: [(&str, &[&str]); 6] = [
             "SetLabels(SetLabelsRequest) SetLabelsResponse",
             "Abort(AbortRequest) AbortResponse",
             "Retire(RetireRequest) RetireResponse",
+            "ClearRecord(ClearRecordRequest) ClearRecordResponse",
         ],
     ),
     (
@@ -400,6 +390,8 @@ const RPCS: [(&str, &[&str]); 6] = [
             "Status(StatusRequest) StatusResponse",
             "MarkBad(MarkBadRequest) MarkBadResponse",
             "Halt(HaltRequest) HaltResponse",
+            "WaitConverged(WaitConvergedRequest) WaitConvergedResponse",
+            "GetRelease(GetReleaseRequest) GetReleaseResponse",
         ],
     ),
     (
@@ -421,11 +413,38 @@ const RPCS: [(&str, &[&str]); 6] = [
         "hostkeeper.operator.v1.Alerts",
         &["List(ListAlertsRequest) ListAlertsResponse"],
     ),
+    (
+        "hostkeeper.operator.v1.HostGroups",
+        &[
+            "List(ListHostGroupsRequest) ListHostGroupsResponse",
+            "Get(GetHostGroupRequest) GetHostGroupResponse",
+            "Put(PutHostGroupRequest) PutHostGroupResponse",
+            "Remove(RemoveHostGroupRequest) RemoveHostGroupResponse",
+            "Move(MoveHostRequest) MoveHostResponse",
+        ],
+    ),
 ];
 
-/// The fields of the enrollment, abort, retire, audit and force-report messages, pinned by name
-/// and number.
-const FIELDS: [(&str, &[(&str, u32)]); 32] = [
+/// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
+/// messages, pinned by name and number.
+const FIELDS: [(&str, &[(&str, u32)]); 37] = [
+    (
+        "hostkeeper.agent.v1.HeartbeatRequest",
+        &[
+            ("platform", 1),
+            ("agent", 2),
+            ("features", 3),
+            ("services", 4),
+            ("sent_unix", 5),
+            ("cert_not_after_unix", 6),
+            ("last_renew_error", 7),
+            ("trusted_root_age_secs", 8),
+            ("trusted_root_reason", 9),
+            ("installers", 10),
+            ("repositories", 11),
+            ("facts_generation", 12),
+        ],
+    ),
     (
         "hostkeeper.agent.v1.HeartbeatResponse",
         &[
@@ -433,6 +452,8 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("features", 2),
             ("halt_generations", 3),
             ("acks", 4),
+            ("repositories", 5),
+            ("facts", 6),
         ],
     ),
     (
@@ -546,6 +567,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("node_id", 6),
             ("by_name", 7),
             ("newest", 8),
+            ("host_group", 9),
         ],
     ),
     (
@@ -559,6 +581,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("reason", 6),
             ("at_unix", 7),
             ("by_name", 8),
+            ("host_group", 9),
         ],
     ),
     (
@@ -598,7 +621,18 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("clock_skew_beats", 16),
             ("first_heartbeat_unix", 17),
             ("first_serving_unix", 18),
+            ("trusted_root_age_secs", 19),
+            ("trusted_root_reason", 20),
+            ("installers", 21),
+            ("running", 22),
+            ("running_unix", 23),
+            ("repositories", 24),
+            ("host_group", 25),
         ],
+    ),
+    (
+        "hostkeeper.operator.v1.RunningService",
+        &[("service", 1), ("version", 2), ("installer", 3)],
     ),
     (
         "hostkeeper.operator.v1.RemoveRecordRequest",
@@ -618,6 +652,15 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
         &[("entry", 1), ("update_in_flight", 2)],
     ),
     (
+        "hostkeeper.operator.v1.ClearRecordRequest",
+        &[("node_id", 1), ("service", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.ClearRecordResponse",
+        &[("order_id", 1)],
+    ),
+    ("hostkeeper.agent.v1.ClearRecord", &[("service", 1)]),
+    (
         "hostkeeper.operator.v1.ApproveRequest",
         &[
             ("request_id", 1),
@@ -627,6 +670,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
             ("services", 5),
             ("replace", 6),
             ("reason", 7),
+            ("host_group", 8),
         ],
     ),
     (
@@ -650,7 +694,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 32] = [
 /// Catches: a name on the wire renamed or renumbered without this test changing with it: the
 /// features daemons announce, the order's verbs, every refusal token, the enrollment and poll
 /// states, the coordinator's RPCs with their messages, the fields of the enrollment, abort,
-/// audit and force-report messages, and the kbf JSON keys and the fields that carry them.
+/// clear-record, audit and force-report messages, and the kbf JSON keys and the fields that carry them.
 /// Callers branch on each, and the daemon and the coordinator are built against them apart.
 #[test]
 fn wire_names_are_pinned() {
@@ -658,11 +702,16 @@ fn wire_names_are_pinned() {
         feature_names(),
         [
             "abort-v1",
+            "clear-record-v1",
             "deferred-v1",
+            "facts-v1",
             "forced-v1",
             "halt-v1",
             "heartbeat-v2",
             "install-v1",
+            "private-repository-v1",
+            "repositories-v1",
+            "target-v1",
             "verdict-acks-v1"
         ]
     );
@@ -685,10 +734,11 @@ fn wire_names_are_pinned() {
         ("uninstall", 7),
         ("abort", 8),
         ("clear_halt", 9),
+        ("clear_record", 10),
     ];
     assert_eq!(fields, want.map(|(name, number)| (name.to_owned(), number)));
 
-    let cases: [(&str, &str, &[&str]); 16] = [
+    let cases: [(&str, &str, &[&str]); 17] = [
         (
             "hostkeeper.agent.v1.CoordinatorRefusal",
             "COORDINATOR_REFUSAL_",
@@ -723,6 +773,7 @@ fn wire_names_are_pinned() {
                 "silent_host",
                 "cert_near_expiry",
                 "store_unreachable",
+                "trusted_root",
             ],
         ),
         (
@@ -752,6 +803,7 @@ fn wire_names_are_pinned() {
                 "capacity",
                 "store_failed",
                 "audit_unavailable",
+                "daemon_too_old",
             ],
         ),
         (
@@ -780,6 +832,15 @@ fn wire_names_are_pinned() {
                 "channel_digest_mismatch",
                 "index_digest_mismatch",
                 "index_invalid",
+                "invalid_wait",
+                "too_many_waits",
+                "target_invalid",
+                "release_exists",
+                "release_unknown",
+                "repository_unknown",
+                "not_in_host_group",
+                "ambiguous_host_group",
+                "limits_in_host_group",
             ],
         ),
         (
@@ -797,6 +858,9 @@ fn wire_names_are_pinned() {
                 "unknown_role",
                 "below_min_version",
                 "audit_unavailable",
+                "placed_by_host_group",
+                "unknown_host_group",
+                "not_in_host_group",
             ],
         ),
         (
@@ -844,6 +908,11 @@ fn wire_names_are_pinned() {
             "hostkeeper.local.v1.EnrollmentState",
             "ENROLLMENT_STATE_",
             &["unenrolled", "pending", "enrolled", "unreadable"],
+        ),
+        (
+            "hostkeeper.agent.v1.TrustedRootReason",
+            "TRUSTED_ROOT_REASON_",
+            &["none", "stale", "missing", "unparseable"],
         ),
     ];
     for (name, prefix, want) in cases {

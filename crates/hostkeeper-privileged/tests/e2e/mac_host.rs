@@ -1,19 +1,25 @@
 //! The Mac the end-to-end test of `tests/device_mac_e2e.rs` runs against: a directory tree under
 //! `/var` (a link to `/private/var`, as the daemon's default packages directory is reached), the
-//! fixed host paths the real daemon uses on a Mac, the daemon as a launchd job of the system
-//! domain, and the reads of launchd's state the test asserts on.
+//! program `hostkeeper-selfupdate-daemon` as a launchd job of the system domain on the real
+//! coordinator's link, the places hello's `.pkg` installs at, and the reads of launchd's state
+//! the test asserts on.
 //!
-//! The daemon reads some paths from no flag: the CA bundle its package fetch trusts
-//! (`/etc/ssl/cert.pem`), `gh` and the Sigstore trusted root (`/usr/local/lib/hostkeeper`), the
-//! pki directory (`/etc/updater`), the placed-path state (`/var/lib/hostkeeper`) and launchd's
-//! directory (`/Library/LaunchDaemons`), where it links a package's plists and writes its own
-//! fallback job. A test that drives it for real puts files at those places, which is only safe on
-//! a throwaway machine, which the hosted runner of `privileged.yml` is. [`MacHost::new`] moves
-//! aside whatever is at the places it takes over (another test of the crate may have left it),
-//! and the drop boots out every job the test made or the daemon loaded, removes what the test
-//! and the daemon wrote there, puts back what was moved aside and writes the CA bundle back as
-//! it was, whether the test passed or failed. When the test is failing, the drop first prints
-//! the daemon's output, the jobs' output and the hook's record to the log.
+//! The daemon is the shipped daemon on the Mac's own adapters, with the three ports the program
+//! replaces (`tests/bin/selfupdate_daemon.rs` says which and why): the `macos-pkg` signers file
+//! and the `.pkg` files it fetches by their pins are the fixture's (`fixture/`), the installer's
+//! signature check is answered as a signed package for a package the fixture serves, and its pki
+//! directory is the fixture's (`fixture/pki`), so the host's own are not touched. Its enrollment
+//! is the real one: the coordinator in process approves it, and it beats over mutual TLS.
+//!
+//! A package installs at fixed paths of the host: hello's files under
+//! `/Library/Application Support/hello` and its plists in `/Library/LaunchDaemons`, which a
+//! test that installs it for real puts there, which is only safe on a throwaway machine, which
+//! the hosted runner of `privileged.yml` is. [`MacHost::new`] moves aside whatever is at the
+//! places it takes over (another test of the crate may have left it), and the drop boots out
+//! every job the test made or the package loaded, removes what the test and the installer wrote
+//! there, forgets the package's receipt, puts back what was moved aside, whether the test passed
+//! or failed. When the test is failing, the drop first prints the daemon's output, the jobs'
+//! output and the hook's record to the log.
 //!
 //! Every read of launchd goes through `LaunchctlProcess::system`, the `launchctl` adapter the
 //! daemon uses. Nothing here asserts how long anything takes; a wait polls a state
@@ -21,58 +27,32 @@
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, PoisonError};
 use std::time::Duration;
 
-use std::num::NonZeroU64;
-use std::os::unix::fs::MetadataExt;
-use std::sync::Arc;
-
-use hostkeeper_config::daemon::Sha256Hex;
-use hostkeeper_package::gh::{FileTrust, GhVerifier, OwnedBy, Runner, Spawn, SystemRunner};
-use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier};
-use hostkeeper_steps::{Clock, Stamp};
-
-use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_daemon::adapters::Adapters;
-use hostkeeper_daemon::cli::{HostFiles, host_ports};
-use hostkeeper_daemon::start::Settings;
-use hostkeeper_daemon::verb::PackageDigest;
+use hostkeeper_daemon::boot::BOOT_ID_FILE;
+use hostkeeper_daemon::cli::DEFAULT_FACTS_FILE;
+use hostkeeper_install::macos_pkg::receipt;
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print, print_args};
-use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess, Platform};
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
-use hostkeeper_proto::hostkeeper::local::v1::{StatusRequest, StatusResponse};
+use hostkeeper_launchd::{Label, Launchctl, LaunchctlProcess};
 use hostkeeper_steps::record::RECORD_FILE;
-use hyper_util::rt::TokioIo;
-use tonic::transport::{Endpoint, Uri};
 
-use super::hello::{SERVICE, SLOTS, label};
+use super::hello::{IDENTIFIER, SERVICE, SLOTS, SUPPORT, label, plist_path};
+use super::macos_pkg::{PKGS_DIR, SIGNERS_FILE, serve, signers_file_text};
 
-/// The daemon program: `hostkeeper`, built with these tests (it holds `daemon` and `ctl`).
-pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
-/// The CA bundle the daemon's package fetch trusts on a Mac (a fixed path of the daemon).
-const CA_BUNDLE: &str = "/etc/ssl/cert.pem";
-/// The directory of the programs the daemon trusts on a Mac: `gh` and the Sigstore trusted root.
-const LIBRARY_DIR: &str = "/usr/local/lib/hostkeeper";
-/// The `gh` the daemon checks attestations with on a Mac.
-pub const GH_PATH: &str = "/usr/local/lib/hostkeeper/gh";
-/// The Sigstore trusted root the daemon hands `gh` on a Mac.
-pub const TRUSTED_ROOT_PATH: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
-/// The directory the enrollment loop keeps its key and certificate in.
-const PKI_DIR: &str = "/etc/updater";
-/// The daemon's placed-path state directory.
-pub const PLACED_DIR: &str = "/var/lib/hostkeeper";
-/// Where launchd reads the plists of the system domain, and the daemon links a package's.
-pub const LAUNCHD_DIR: &str = "/Library/LaunchDaemons";
+/// The program `hostkeeper-selfupdate-daemon`, which the test copies to the name of its version.
+pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-selfupdate-daemon");
+/// The version the daemon runs as: the name of the file it runs from.
+pub const DAEMON_VERSION: &str = "1.0.0";
 /// The deadline of one `launchctl` command: `bootout` waits for the job to end.
 const LAUNCHCTL_DEADLINE: Duration = Duration::from_secs(60);
-/// How many reads of the admin socket [`MacHost::start_daemon`] makes before it gives up.
-const STATUS_TRIES: u32 = 240;
+/// How many looks [`MacHost::start_daemon`] takes at the job and the state directory before it
+/// gives up.
+const START_TRIES: u32 = 240;
+/// The deadline of `pkgutil --forget`.
+const PKGUTIL_DEADLINE: Duration = Duration::from_secs(120);
 
 /// `launchctl`, as the daemon runs it.
 pub fn launchctl() -> LaunchctlProcess {
@@ -181,46 +161,18 @@ fn daemon_plist(label: &Label, argv: &[String], out: &Path, err: &Path) -> Strin
     )
 }
 
-/// One package [`MacHost::check_package_store`] takes through the daemon's store: its version,
-/// SHA-256, file name, bytes and Sigstore bundle.
-pub struct CheckedPackage {
-    pub version: String,
-    pub sha256: String,
-    pub file_name: String,
-    pub bytes: Vec<u8>,
-    pub bundle: Vec<u8>,
-}
-
 /// The labels of hello's two slots.
 fn slot_labels() -> [Label; 2] {
     SLOTS.map(label)
 }
 
-/// The places of the host this rig takes over: the daemon's programs, its pki and placed
-/// state, its fallback job's plist, and the plists of hello's two slots.
+/// The places of the host this rig takes over: the directory hello's package installs in, the
+/// plists of hello's two slots, and the daemon's default facts file (a daemon started without
+/// `--facts-file` writes it).
 fn taken_places() -> Vec<PathBuf> {
-    let mut places = vec![
-        PathBuf::from(LIBRARY_DIR),
-        PathBuf::from(PKI_DIR),
-        PathBuf::from(PLACED_DIR),
-        fallback_plist(),
-    ];
-    places.extend(slot_labels().map(|label| plist_link(&label)));
+    let mut places = vec![PathBuf::from(SUPPORT), PathBuf::from(DEFAULT_FACTS_FILE)];
+    places.extend(SLOTS.map(plist_path));
     places
-}
-
-/// The daemon's fallback job, which it writes and loads at every start on a Mac.
-fn fallback_label() -> Label {
-    Label::parse(&hostkeeper_daemon::selfunits::fallback_label()).expect("a label")
-}
-
-fn fallback_plist() -> PathBuf {
-    Path::new(LAUNCHD_DIR).join(format!("{}.plist", fallback_label()))
-}
-
-/// Where the daemon links the plist of `label`.
-pub fn plist_link(label: &Label) -> PathBuf {
-    Path::new(LAUNCHD_DIR).join(format!("{label}.plist"))
 }
 
 /// The test's view of the Mac: its directory tree and what it changed outside it.
@@ -231,16 +183,15 @@ pub struct MacHost {
     base: PathBuf,
     /// The label of the daemon's job, once [`MacHost::start_daemon`] loaded it.
     daemon: Mutex<Option<Label>>,
-    /// The bytes of the CA bundle before [`MacHost::trust_ca`] first appended to it.
-    ca_bundle: Mutex<Option<Vec<u8>>>,
     /// The places taken over that were there already, each with where it was moved aside.
     saved: Vec<(PathBuf, PathBuf)>,
 }
 
 impl MacHost {
     /// Checks that the test runs as root, moves aside what is at the places the rig takes over,
-    /// and makes the test's tree and the host directories the daemon reads programs from and
-    /// keeps its placed state in.
+    /// and makes the test's tree: the daemon's directories and the fixture's (the signers file,
+    /// the directory the `.pkg` files are served from; the pki directory is the enrollment's to
+    /// make).
     ///
     /// `tag` is 1 to 8 characters of `[a-z0-9]`; it names the tree
     /// (`/var/hk-e2e-<tag>-<pid>`) and the daemon's job.
@@ -260,7 +211,6 @@ impl MacHost {
             "the device tests run as root (privileged.yml's cargo runner `sudo`)"
         );
         // A job left loaded by another test would run beside this one's.
-        bootout_quiet(&fallback_label());
         for label in slot_labels() {
             bootout_quiet(&label);
         }
@@ -276,8 +226,8 @@ impl MacHost {
                 (place, aside)
             })
             .collect();
-        // Under /var, a link to /private/var, as the daemon's default `/var/lib/hostkeeper` is:
-        // the seal names each version by its real path, which the check before each step judges.
+        // Under /var, a link to /private/var, as the daemon's default directories are: the seal
+        // names each version by its real path, which the check before each step judges.
         let base = PathBuf::from(format!("/var/hk-e2e-{tag}-{pid}"));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));
@@ -285,17 +235,23 @@ impl MacHost {
             tag: tag.to_owned(),
             base,
             daemon: Mutex::new(None),
-            ca_bundle: Mutex::new(None),
             saved,
         };
         make_dir(&host.base, 0o755);
         make_dir(&host.packages(), 0o755);
         make_dir(&host.state(), 0o755);
         make_dir(&host.records(), 0o755);
-        make_dir(&host.base.join("logs"), 0o755);
-        make_dir(&host.base.join("run"), 0o700);
-        make_dir(Path::new(PLACED_DIR), 0o755);
-        make_dir(Path::new(LIBRARY_DIR), 0o755);
+        make_dir(&host.log_dir(), 0o755);
+        make_dir(&host.base.join("bin"), 0o755);
+        make_dir(&host.fixture(), 0o755);
+        make_dir(&host.fixture().join(PKGS_DIR), 0o755);
+        make_dir(&host.fixture().join("placed"), 0o755);
+        make_dir(&host.fixture().join("units"), 0o755);
+        put(
+            &host.fixture().join(SIGNERS_FILE),
+            signers_file_text().as_bytes(),
+            0o644,
+        );
         host
     }
 
@@ -319,16 +275,14 @@ impl MacHost {
         self.base.join("hooks")
     }
 
-    /// The directory the jobs of `version`'s plists send their output to (made here).
-    pub fn log_dir(&self, version: &str) -> PathBuf {
-        let dir = self.base.join("logs").join(version);
-        make_dir(&dir, 0o755);
-        dir
+    /// The directory the jobs' output goes to.
+    pub fn log_dir(&self) -> PathBuf {
+        self.base.join("logs")
     }
 
-    /// The daemon's `--admin-socket` (short: a socket path is limited to about 100 bytes).
-    pub fn admin_socket(&self) -> PathBuf {
-        self.base.join("run").join("admin.sock")
+    /// The fixture's directory (the module says what is in it).
+    pub fn fixture(&self) -> PathBuf {
+        self.base.join("fixture")
     }
 
     /// The daemon's `--config`.
@@ -347,50 +301,9 @@ impl MacHost {
         serde_json::from_slice(&bytes).ok()
     }
 
-    /// Puts the `gh` program at the path the daemon runs it from on a Mac, mode 0755, owned by
-    /// root. Its bytes are written to a new file: `fs::copy` clones the file on macOS and keeps
-    /// the owner of the source (the runner's user, who unpacked it), and the daemon trusts a `gh`
-    /// owned by root only.
-    ///
-    /// # Panics
-    /// The program cannot be read or written, or the new file is not root's.
-    pub fn install_gh(&self, gh: &Path) {
-        let to = Path::new(GH_PATH);
-        let bytes = fs::read(gh).unwrap_or_else(|e| panic!("read {}: {e}", gh.display()));
-        put(to, &bytes, 0o755);
-        let owner = fs::metadata(to).map(|meta| meta.uid());
-        assert_eq!(owner.ok(), Some(0), "{} is root's", to.display());
-    }
-
-    /// Puts the Sigstore trusted root (`jsonl`) where the daemon reads it on a Mac, mode 0644.
-    pub fn install_trusted_root(&self, jsonl: &str) {
-        put(Path::new(TRUSTED_ROOT_PATH), jsonl.as_bytes(), 0o644);
-    }
-
-    /// Makes the daemon's package fetch trust the CA `pem` by appending it to the host's CA
-    /// bundle. The first call keeps the bundle's original bytes, which the drop puts back.
-    ///
-    /// # Panics
-    /// The bundle cannot be read or written.
-    pub fn trust_ca(&self, pem: &str) {
-        let mut original = self
-            .ca_bundle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if original.is_none() {
-            let bytes = fs::read(CA_BUNDLE).unwrap_or_else(|e| panic!("read {CA_BUNDLE}: {e}"));
-            *original = Some(bytes);
-        }
-        let mut bundle = fs::OpenOptions::new()
-            .append(true)
-            .open(CA_BUNDLE)
-            .unwrap_or_else(|e| panic!("open {CA_BUNDLE}: {e}"));
-        // A bundle that does not end in a newline would swallow the first line of the PEM.
-        let ends_in_newline = original.as_deref().is_none_or(|b| b.last() == Some(&b'\n'));
-        let separator = if ends_in_newline { "" } else { "\n" };
-        bundle
-            .write_all(format!("{separator}{pem}\n").as_bytes())
-            .unwrap_or_else(|e| panic!("append to {CA_BUNDLE}: {e}"));
+    /// Serves the `.pkg` at `pkg` to the daemon by its pin; the pin and the size in bytes.
+    pub fn serve_pkg(&self, pkg: &Path) -> (String, u64) {
+        serve(&self.fixture(), pkg)
     }
 
     /// Writes the daemon config at [`MacHost::config_path`], mode 0600, owned by root.
@@ -399,11 +312,13 @@ impl MacHost {
     }
 
     /// Starts the daemon as the launchd job `dev.hostkeeper.ci-<tag>-<pid>` of the system
-    /// domain, heartbeating every second, and waits until it answers `Status` on its admin
-    /// socket.
+    /// domain, heartbeating every second over the coordinator's link, and waits until launchd
+    /// runs it and it has recorded the boot id in its state directory (it has taken the state
+    /// directory's lock before that). The coordinator learns of the daemon once its enrollment
+    /// is approved, which the caller does next.
     ///
     /// # Panics
-    /// The job cannot be loaded, or the daemon never answers.
+    /// The job cannot be loaded, or never runs with its state directory taken.
     pub fn start_daemon(&self) {
         let label = Label::parse(&format!(
             "dev.hostkeeper.ci-{}-{}",
@@ -411,9 +326,17 @@ impl MacHost {
             std::process::id()
         ))
         .expect("a label");
+        // The program runs from a file named by its version, as the program's version is.
+        let program = self.base.join("bin").join(DAEMON_VERSION);
+        let bytes = fs::read(DAEMON).unwrap_or_else(|e| panic!("read {DAEMON}: {e}"));
+        put(&program, &bytes, 0o755);
         let text = |path: PathBuf| path.display().to_string();
         let argv = vec![
-            DAEMON.to_owned(),
+            text(program),
+            "--fixture-dir".to_owned(),
+            text(self.fixture()),
+            "--fixture-link".to_owned(),
+            "coordinator".to_owned(),
             "daemon".to_owned(),
             "--config".to_owned(),
             text(self.config_path()),
@@ -421,8 +344,8 @@ impl MacHost {
             text(self.state()),
             "--packages-dir".to_owned(),
             text(self.packages()),
-            "--admin-socket".to_owned(),
-            text(self.admin_socket()),
+            "--facts-file".to_owned(),
+            text(self.base.join("facts.json")),
             "--heartbeat-secs".to_owned(),
             "1".to_owned(),
         ];
@@ -445,151 +368,25 @@ impl MacHost {
             "bootstrap {label}: {}",
             loaded.stderr_text()
         );
-        super::wait_for("the daemon answers Status", STATUS_TRIES, || {
-            self.status().is_ok()
-        });
+        self.wait_started(&label);
     }
 
-    /// Takes each `(version, digest)` of `service` through the daemon's own package store on
-    /// this Mac, as an order does before its first step: `host_ports` over the daemon config
-    /// `config` and the host's files and adapters, then `version_dir` (fetch from the release
-    /// channel, the attestation checked by the installed `gh`, the digest, the unpack with the
-    /// Mac's quarantine and code-signature checks, the seal), into a packages directory of its
-    /// own, so that the daemon's stays untouched. A refusal there is one the daemon would give
-    /// the order and report only once the service is listed, so it fails the test here with
-    /// the daemon's own reason and detail.
+    /// Waits until launchd runs the job `label` (`state = running`) and the daemon has recorded
+    /// the boot id in [`MacHost::state`] (it took the state directory's lock before that).
     ///
     /// # Panics
-    /// The store cannot be built, or it refuses a version.
-    pub fn check_package_store(&self, config: &str, service: &str, versions: &[CheckedPackage]) {
-        let parsed = DaemonConfig::parse(config).expect("the daemon config parses");
-        let settings = Settings {
-            config: self.config_path(),
-            state_dir: self.base.join("check-state"),
-            packages_dir: self.base.join("check-packages"),
-            admin_socket: self.base.join("run").join("check.sock"),
-            trusted_uid: 0,
-            trusted_root_max_age_days: NonZeroU64::new(3650).expect("not zero"),
-        };
-        make_dir(&settings.state_dir, 0o755);
-        make_dir(&settings.packages_dir, 0o755);
-        let own = HostkeeperVersion::parse(env!("CARGO_PKG_VERSION")).expect("a version");
-        let adapters = Adapters::for_platform(&Platform::host())
-            .unwrap_or_else(|e| panic!("the Mac's adapters: {e}"));
-        let ports = host_ports(&parsed, &settings, &HostFiles::host(), own, adapters)
-            .unwrap_or_else(|e| panic!("the daemon's ports: {e}"));
-        let name = ServiceName::new(service).expect("a service name");
-        for package in versions {
-            let digest = PackageDigest::new(&package.sha256).expect("a digest");
-            let version = Version::new(&package.version).expect("a version");
-            if let Err(refused) = ports.packages.version_dir(&name, &version, &digest, None) {
-                let why = self.explain_attestation(&parsed, package);
-                panic!("the daemon's package store refuses {service} {version}: {refused}\n{why}");
-            }
-        }
-    }
-
-    /// What the attestation check meets on this Mac, for the message of a refused package:
-    /// the trust check of `gh` and of the trusted root, `gh --version`, and the production
-    /// verifier run on `package` and its bundle, each through the daemon's own `SystemRunner`
-    /// and `OwnedBy`, with the time each took (printed, never judged).
-    fn explain_attestation(&self, config: &DaemonConfig, package: &CheckedPackage) -> String {
-        let files = HostFiles::host();
-        let clock: Arc<dyn Clock> = Arc::new(hostkeeper_daemon::adapters::host_clock());
-        let home = self.base.join("explain-gh");
-        make_dir(&home, 0o700);
-        let mut out = String::new();
-        for path in [&files.gh, &files.trusted_root] {
-            let meta = fs::symlink_metadata(path).map(|m| (m.uid(), format!("{:o}", m.mode())));
-            let parent = path
-                .parent()
-                .map(|dir| fs::metadata(dir).map(|m| (m.uid(), format!("{:o}", m.mode()))));
-            out.push_str(&format!(
-                "trust of {}: {:?} (file {meta:?}, directory {parent:?})\n",
-                path.display(),
-                OwnedBy { uid: 0 }.check(path)
-            ));
-        }
-        let deadline = |secs: u64| {
-            let now = Stamp::now(clock.as_ref());
-            Stamp {
-                mono_secs: now.mono_secs + secs,
-                ..now
-            }
-        };
-        let runner = SystemRunner::new(Arc::clone(&clock));
-        let started = Stamp::now(clock.as_ref());
-        let version = runner.run(&Spawn {
-            program: files.gh.clone(),
-            args: vec!["--version".into()],
-            env: Vec::new(),
-            cwd: home.clone(),
-            deadline: deadline(120),
-        });
-        out.push_str(&format!(
-            "gh --version: {version:?}, after {:?} s\n",
-            started.elapsed_secs(clock.as_ref())
-        ));
-        let archive = home.join(&package.file_name);
-        let bundle = home.join(format!("{}.sigstore.json", package.file_name));
-        put(&archive, &package.bytes, 0o644);
-        put(&bundle, &package.bundle, 0o644);
-        let verifier = GhVerifier::new(
-            files.gh.clone(),
-            files.trusted_root.clone(),
-            home.clone(),
-            Box::new(SystemRunner::new(Arc::clone(&clock))),
-            Box::new(OwnedBy { uid: 0 }),
+    /// The job never runs with the boot id recorded.
+    pub fn wait_started(&self, label: &Label) {
+        let boot_id = self.state().join(BOOT_ID_FILE);
+        super::wait_for(
+            "launchd runs the daemon and it has recorded the boot id",
+            START_TRIES,
+            || {
+                boot_id.exists()
+                    && job_fields(label)
+                        .is_some_and(|job| job.get("state").map(String::as_str) == Some("running"))
+            },
         );
-        let sha256 = Sha256Hex::parse(&package.sha256).expect("a digest");
-        let commit = CommitId::new(super::COMMIT).expect("a commit");
-        let source_ref = SourceRef::new(super::SOURCE_REF).expect("a ref");
-        let until = deadline(600);
-        let started = Stamp::now(clock.as_ref());
-        let verdict = verifier.verify(&Attest {
-            archive: &archive,
-            bundle: &bundle,
-            sha256: &sha256,
-            commit: &commit,
-            source_ref: &source_ref,
-            signers: &config.trusted_signers,
-            deadline: &until,
-        });
-        out.push_str(&format!(
-            "gh attestation verify of {}: {verdict:?}, after {:?} s (the daemon allows {} s)\n",
-            package.file_name,
-            started.elapsed_secs(clock.as_ref()),
-            config.bounds.attestation_timeout_secs
-        ));
-        out
-    }
-
-    /// The daemon's answer to `Status` on its admin socket.
-    pub fn status(&self) -> Result<StatusResponse, String> {
-        let path = self.admin_socket();
-        if !path.exists() {
-            return Err(format!("no socket at {}", path.display()));
-        }
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| format!("a runtime: {e}"))?;
-        let connector = tower::service_fn(move |_: Uri| {
-            let path = path.clone();
-            async move {
-                tokio::net::UnixStream::connect(path)
-                    .await
-                    .map(TokioIo::new)
-            }
-        });
-        runtime
-            .block_on(async move {
-                let channel = Endpoint::from_static("http://admin.invalid")
-                    .connect_with_connector_lazy(connector);
-                AdminClient::new(channel).status(StatusRequest {}).await
-            })
-            .map(|reply| reply.into_inner())
-            .map_err(|e| e.to_string())
     }
 
     /// What a failing test leaves to look at, printed: the daemon's output, the slots' output,
@@ -608,16 +405,12 @@ impl MacHost {
             "daemon stderr".to_owned(),
             &self.base.join("daemon.err.log"),
         );
-        if let Ok(versions) = fs::read_dir(self.base.join("logs")) {
-            for dir in versions.flatten() {
-                if let Ok(logs) = fs::read_dir(dir.path()) {
-                    for log in logs.flatten() {
-                        show(
-                            format!("job output {}", log.file_name().to_string_lossy()),
-                            &log.path(),
-                        );
-                    }
-                }
+        if let Ok(logs) = fs::read_dir(self.log_dir()) {
+            for log in logs.flatten() {
+                show(
+                    format!("job output {}", log.file_name().to_string_lossy()),
+                    &log.path(),
+                );
             }
         }
         let hook = self.records().join(SERVICE);
@@ -641,6 +434,34 @@ impl MacHost {
     }
 }
 
+/// The version of the receipt of hello's package; `None` when `pkgutil` knows none.
+///
+/// # Panics
+/// `pkgutil` cannot be run, or fails in a way that is no missing receipt.
+pub fn receipt_version() -> Option<String> {
+    let args = ["--pkg-info-plist".to_owned(), IDENTIFIER.to_owned()];
+    let out = LaunchctlProcess::new(Path::new("/usr/sbin/pkgutil"), PKGUTIL_DEADLINE)
+        .run(&args)
+        .unwrap_or_else(|e| panic!("pkgutil did not run to its end: {e}"));
+    if out.code != Some(0) {
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        assert!(
+            said.contains(receipt::NO_RECEIPT),
+            "an unexpected pkgutil failure: {said}"
+        );
+        return None;
+    }
+    Some(
+        receipt::parse_pkg_info(&out.stdout)
+            .expect("pkgutil's receipt")
+            .version,
+    )
+}
+
 /// What `launchctl print system/<label>` prints, or why it printed nothing; never panics: this
 /// runs while the test is already failing.
 fn printed_quiet(label: &Label) -> String {
@@ -661,7 +482,7 @@ impl Drop for MacHost {
         if std::thread::panicking() {
             self.print_artifacts();
         }
-        // The daemon first, so that it loads nothing while the rest is unloaded.
+        // The daemon first, so that it orders nothing while the rest is unloaded.
         let daemon = self
             .daemon
             .lock()
@@ -670,7 +491,6 @@ impl Drop for MacHost {
         if let Some(label) = daemon {
             bootout_quiet(&label);
         }
-        bootout_quiet(&fallback_label());
         for label in slot_labels() {
             bootout_quiet(&label);
         }
@@ -681,14 +501,10 @@ impl Drop for MacHost {
                 Err(_) => {}
             }
         }
-        let original = self
-            .ca_bundle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(bytes) = original {
-            let _ = fs::write(CA_BUNDLE, bytes);
-        }
+        // The receipt of hello's package, which a test that failed before its uninstall leaves.
+        let forget = ["--forget".to_owned(), IDENTIFIER.to_owned()];
+        let _ =
+            LaunchctlProcess::new(Path::new("/usr/sbin/pkgutil"), PKGUTIL_DEADLINE).run(&forget);
         for (place, aside) in &self.saved {
             let _ = fs::rename(aside, place);
         }
@@ -697,7 +513,7 @@ impl Drop for MacHost {
     }
 }
 
-/// Makes every directory under `dir` writable by its owner (unpacked trees are mode 0555), so
+/// Makes every directory under `dir` writable by its owner (a sealed tree is mode 0555), so
 /// that the tree can be removed.
 fn open_up(dir: &Path) {
     let Ok(entries) = fs::read_dir(dir) else {

@@ -1,0 +1,27 @@
+# The unit of the hostkeeper coordinator, as its deb and rpm install it
+# (packaging/coordinator/nfpm.yaml). It runs the coordinator as its own user, with the flags of
+# /etc/hostkeeper-coordinator/serve.toml (`serve --config`, docs/deploy/coordinator/package.md),
+# which whoever installs the package writes from /usr/share/hostkeeper-coordinator/serve.toml.template.
+# The package installs it disabled and starts nothing: enable it once the file and the files it
+# names are in place.
+[Unit]
+Description=hostkeeper coordinator
+Documentation=https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/coordinator/package.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=hostkeeper-coordinator
+Group=hostkeeper-coordinator
+ExecStart=/usr/bin/hostkeeper-coordinator serve --config /etc/hostkeeper-coordinator/serve.toml
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ReadWritePaths=/var/lib/hostkeeper-coordinator
+
+[Install]
+WantedBy=multi-user.target

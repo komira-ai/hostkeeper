@@ -38,6 +38,7 @@ pub const PARAMS: &str = "/var/lib/updater/state/web/params.toml";
 pub fn call<'a>(executable: &'a Path, unit: &'a str, step: Step, bound: Bound) -> StepCall<'a> {
     StepCall {
         service: "web",
+        hook_args: &[],
         invocation: Invocation {
             step,
             artifact: None,
