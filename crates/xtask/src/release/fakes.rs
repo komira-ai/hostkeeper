@@ -16,7 +16,8 @@ use super::file_sha256;
 use super::image_index;
 use super::ports::{
     Adapters, AdvisoryCheck, Attestation, BuildPkg, Download, Exec, GitHistory, GitHubRuns, Issue,
-    PortError, Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
+    Job, PortError, Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset,
+    Verifier,
 };
 use crate::testdir::TestDir;
 use std::path::PathBuf;
@@ -204,8 +205,8 @@ pub(crate) struct FakeRuns {
     /// The commits `on_main` says are on `main`.
     pub(crate) on_main: RefCell<Vec<Commit>>,
     issues: RefCell<Vec<Issue>>,
-    /// The names of the jobs of each run, by its id; a run with none listed has no jobs.
-    pub(crate) jobs: RefCell<BTreeMap<u64, Vec<String>>>,
+    /// The jobs of each run, by its id; a run with none listed has no jobs.
+    pub(crate) jobs: RefCell<BTreeMap<u64, Vec<Job>>>,
     /// The writes asked for, in order: `open #<n>`, `edit #<n>` and `close #<n>: <comment>`.
     pub(crate) writes: RefCell<Vec<String>>,
 }
@@ -265,7 +266,7 @@ impl GitHubRuns for FakeRuns {
             .collect())
     }
 
-    fn job_names(&self, _repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+    fn jobs(&self, _repo: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
         Ok(self.jobs.borrow().get(&run).cloned().unwrap_or_default())
     }
 

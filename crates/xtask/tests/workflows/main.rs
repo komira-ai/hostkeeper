@@ -56,6 +56,8 @@ mod previous_release;
 mod previous_release_tests;
 mod privileged_tests;
 mod release;
+mod release_assets;
+mod release_assets_tests;
 mod release_files;
 mod release_native_tests;
 mod release_ref;
