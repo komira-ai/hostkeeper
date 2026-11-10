@@ -104,6 +104,11 @@ fn the_ports_put_the_work_directory_and_lock_beside_the_packages_directory() {
     assert_eq!(ports.dirs.root, PathBuf::from("/"));
     assert_eq!(ports.dirs.work, PathBuf::from("/var/lib/hostkeeper/apt"));
     assert_eq!(
+        ports.dirs.mirror,
+        PathBuf::from("/var/lib/hostkeeper/mirror")
+    );
+    assert!(ports.mirror.is_none());
+    assert_eq!(
         ports.lock,
         PathBuf::from("/var/lib/hostkeeper/installer.lock")
     );
@@ -120,6 +125,7 @@ fn a_packages_directory_without_a_parent_keeps_its_work_inside_itself() {
         Owner::ROOT,
     );
     assert_eq!(ports.dirs.work, PathBuf::from("/apt"));
+    assert_eq!(ports.dirs.mirror, PathBuf::from("/mirror"));
     assert_eq!(ports.lock, PathBuf::from("/installer.lock"));
 }
 

@@ -79,8 +79,9 @@ enum RepositoriesRefusal {
   // UNAVAILABLE: the audit entry could not be written. Nothing changed.
   REPOSITORIES_REFUSAL_AUDIT_UNAVAILABLE = 10;
   // FAILED_PRECONDITION: `Put` of a private repository (`access` `hosts`) whose
-  // `credential_file` the coordinator cannot use: absent, not a regular file, a link, readable or
-  // writable by another user than the coordinator's, empty, more than one line or 4 KiB.
+  // `credential_file` the coordinator cannot use: absent, not a regular file, a link, not the
+  // coordinator user's, of a mode other than 0600 or 0400, empty, more than 4 KiB, or not one
+  // line of printable ASCII.
   REPOSITORIES_REFUSAL_CREDENTIAL_UNUSABLE = 11;
 }
 

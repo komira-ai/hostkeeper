@@ -19,6 +19,12 @@
 //!    (`HeartbeatRequest.installers`); else it is picked nothing, [`Pick::NoBuildForHost`];
 //! 3. a host of a platform the release has no list for is picked nothing, [`Pick::NoTarget`].
 //!
+//! An entry the host would be picked is private ([`Picks::is_private`]) when it is a repository
+//! entry whose channel is one of a private repository of the registry, or an artifact entry all
+//! of whose locations are in the store [`COORDINATOR_STORE`] (a `.pkg` the coordinator serves from
+//! a private repository). A daemon that did not announce [`PRIVATE_FEATURE`] cannot read it, so
+//! the host is picked nothing, [`Pick::NoTarget`] (an older daemon is told `no_target`).
+//!
 //! A daemon that did not announce [`TARGET_FEATURE`] counts as listing `hostkeeper-archive` alone
 //! and running every service from archives. One that did is picked from the installers it said
 //! in its last heartbeat over gRPC ([`Heard`]), which the fleet keeps in memory, as it keeps
@@ -55,12 +61,16 @@ use crate::registry::{
     Digest, IndexKey, IndexRecord, Package, Release as Registered, index_platform,
 };
 use crate::releases::Release;
+use crate::repository_push::PRIVATE_FEATURE;
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
 
 /// The feature a daemon announces to be sent the picked entry in its orders, and to have its
 /// `installers` read.
 pub const TARGET_FEATURE: &str = "target-v1";
+
+/// The store of a location the coordinator serves from a private repository.
+pub const COORDINATOR_STORE: &str = "coordinator";
 
 /// How many installers a daemon may list.
 pub const MAX_INSTALLERS: usize = 16;
@@ -125,6 +135,8 @@ impl Heard {
 pub struct Picks {
     heard: BTreeMap<HostId, Heard>,
     releases: BTreeMap<(String, String), Arc<Release>>,
+    /// The channels of the registry's private repositories.
+    private: BTreeSet<String>,
 }
 
 impl Picks {
@@ -141,6 +153,22 @@ impl Picks {
     /// Replaces the releases the decisions read with `releases`, by service and version.
     pub(crate) fn keep(&mut self, releases: BTreeMap<(String, String), Arc<Release>>) {
         self.releases = releases;
+    }
+
+    /// Replaces the channels of the private repositories the picks read with `channels`.
+    pub(crate) fn keep_private(&mut self, channels: BTreeSet<String>) {
+        self.private = channels;
+    }
+
+    /// Whether `entry` needs a daemon that reads private repositories.
+    fn is_private(&self, entry: &Target) -> bool {
+        match &entry.repository {
+            Some(channel) => self.private.contains(channel),
+            None => {
+                !entry.locations.is_empty()
+                    && entry.locations.iter().all(|l| l.store == COORDINATOR_STORE)
+            }
+        }
     }
 
     /// Adds `release` as the release of `service` at `version` (a force's, before its plan).
@@ -268,6 +296,12 @@ pub(crate) fn pick<'a>(
             .iter()
             .find(|entry| lists(&entry.installer))
             .map_or(Pick::NoBuildForHost, Pick::Entry)
+    };
+    let unreadable =
+        |entry: &Target| fleet.picks.is_private(entry) && !fleet.announced(id, PRIVATE_FEATURE);
+    let picked = match picked {
+        Pick::Entry(entry) if unreadable(entry) => Pick::NoTarget,
+        other => other,
     };
     Some((picked, release))
 }

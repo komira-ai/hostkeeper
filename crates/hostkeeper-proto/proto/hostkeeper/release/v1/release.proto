@@ -255,8 +255,8 @@ message Repository {
   string access = 8;
   // `hosts` only, and required for it in `Repositories.Put`: the absolute path, on the
   // coordinator's machine, of the file that holds the value of the `Authorization` header the
-  // coordinator sends `uri` (one line, at most 4 KiB, a regular file of the coordinator's user
-  // that no other user may read or write). Refused with `public`. Never sent to a host: an entry
+  // coordinator sends `uri` (one line of printable ASCII, at most 4 KiB, in a regular file of the
+  // coordinator's user with mode 0600 or 0400). Refused with `public`. Never sent to a host: an entry
   // a host is sent names none, and a host refuses a set whose entry names one. Not a secret
   // itself: the file holds the secret, and neither its bytes nor the header are ever logged,
   // answered or stored.

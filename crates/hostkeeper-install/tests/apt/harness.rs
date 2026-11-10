@@ -11,8 +11,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::repository::apt::Apt;
 use hostkeeper_install::repository::config::parse;
 use hostkeeper_install::repository::{
-    Bounds, Class, Failure, HostDirs, InstallerLock, Order, Outcome, PackageRecord, Pause, Reason,
-    RecordError, Records, Repositories, RepositoryInstaller, Staged,
+    Bounds, Class, Failure, HostDirs, InstallerLock, Mirror, Order, Outcome, PackageRecord, Pause,
+    Reason, RecordError, Records, Repositories, RepositoryInstaller, Staged,
 };
 
 use crate::apt_fake::{Deb, Events, FakeHost, Inst};
@@ -167,6 +167,8 @@ pub struct Env {
     pub lock: InstallerLock,
     pub repositories: Repositories,
     pub dirs: HostDirs,
+    /// The mirror port of the host; none unless a test gives one.
+    pub mirror: Option<Box<dyn Mirror>>,
     pub events: Events,
     staged: Mutex<u32>,
 }
@@ -176,6 +178,7 @@ impl Env {
         let scratch = Scratch::new(name);
         let base = scratch.path().to_path_buf();
         let (root, work, keys) = (base.join("host"), base.join("work"), base.join("keys"));
+        let mirror = base.join("mirror");
         for dir in [&root, &work, &keys] {
             fs::create_dir_all(dir).expect("a directory");
         }
@@ -197,7 +200,8 @@ impl Env {
             pause: RecPause::default(),
             lock: InstallerLock::new(&lock_path),
             repositories: Repositories::new(vec![entry]),
-            dirs: HostDirs { root, work },
+            dirs: HostDirs { root, work, mirror },
+            mirror: None,
             events,
             scratch,
             staged: Mutex::new(0),
@@ -213,6 +217,7 @@ impl Env {
             repositories: &self.repositories,
             dirs: &self.dirs,
             pause: &self.pause,
+            mirror: self.mirror.as_deref(),
         }
     }
 

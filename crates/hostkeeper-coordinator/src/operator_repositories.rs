@@ -26,6 +26,7 @@ use hostkeeper_release::registry;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::AuditEntry;
 use crate::repositories::{Kept, PutError, Registry, put_reason, remove_reason};
+use crate::repository_credential;
 use crate::service::Coordinator;
 
 /// The refusal a rule of the registry makes of a `Put`: a keyring's is `keyring_invalid`.
@@ -128,7 +129,7 @@ impl Coordinator {
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the reason, or a field of the repository
-    /// that breaks its rule), `keyring_invalid`, `conflict`, `capacity`, `store_failed`,
+    /// that breaks its rule), `keyring_invalid`, `credential_unusable`, `conflict`, `capacity`, `store_failed`,
     /// `audit_unavailable`.
     pub fn repositories_put(
         &self,
@@ -139,6 +140,12 @@ impl Coordinator {
         let why = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
         let repository = request.repository.ok_or(Refusal::InvalidRequest)?;
         registry::check(&repository).map_err(|why| entry_refusal(&why))?;
+        if registry::is_private(&repository) {
+            repository_credential::read(&repository.credential_file).map_err(|why| {
+                tracing::warn!(repository = %repository.name, %why, "refused a private repository");
+                Refusal::CredentialUnusable
+            })?;
+        }
         let audit = entry(by, "repository_put", put_reason(&why, &repository));
         let name = repository.name.clone();
         // The checks that read the registry run under the writers' lock, on the registry the

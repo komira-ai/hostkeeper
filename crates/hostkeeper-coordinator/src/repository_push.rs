@@ -14,6 +14,13 @@
 //! [`MAX_SET`], the registry holds every one, and the host's report holds neither the set's
 //! digest in force nor that digest refused. A host that does not announce the feature, a host
 //! that beats over the JSON route and a Mac are sent nothing and shown nothing.
+//!
+//! The set is made for the host, by its group ([`host_group`]): each entry goes through
+//! `registry::for_host`, so a private repository reaches a host only when its suites list the
+//! host's group, with that group as its one suite and without its credential file; one that does
+//! not list it is left out and the rest is sent. A private repository is sent only to a daemon
+//! that announced [`PRIVATE_FEATURE`] (it mirrors); a set made of nothing a host may be sent is
+//! not sent. The digest is the digest of the host's own set.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Mutex, PoisonError};
@@ -27,11 +34,17 @@ use hostkeeper_wire::HostId;
 
 use crate::fleet::Fleet;
 use crate::identity::Identity;
+use crate::repository_serve::host_group;
 use crate::service::Coordinator;
 
 /// The feature a daemon announces to be sent the repositories its services name and to report
 /// them; the coordinator advertises it ([`crate::service::FEATURES`]).
 pub const FEATURE: &str = "repositories-v1";
+
+/// The feature a daemon announces to be sent the private repositories of its group: it reads them
+/// from the coordinator ([`crate::repository_serve`]) into a mirror. The coordinator reads it
+/// and does not advertise it.
+pub const PRIVATE_FEATURE: &str = "private-repository-v1";
 
 /// The most bytes of the reason of a refusal a report keeps.
 pub(crate) const MAX_REASON: usize = 256;
@@ -157,6 +170,16 @@ fn needed(coordinator: &Coordinator, fleet: &Fleet, id: &HostId) -> BTreeSet<Str
         .collect()
 }
 
+/// The entries of `entries` the host of `group` is sent: every public one, and the private ones
+/// when its daemon reads them (`private`), as `registry::for_host` makes them.
+fn for_group(entries: &[Repository], group: &str, private: bool) -> Vec<Repository> {
+    entries
+        .iter()
+        .filter(|entry| private || !registry::is_private(entry))
+        .filter_map(|entry| registry::for_host(entry, group))
+        .collect()
+}
+
 impl Coordinator {
     /// Notes what a heartbeat over gRPC from `who` said of the repositories, when its daemon
     /// announced [`FEATURE`]: the report, or, when it breaks a rule, nothing (counted and logged
@@ -181,6 +204,8 @@ impl Coordinator {
 
     fn repository_plan(&self, fleet: &Fleet, id: &HostId) -> Plan {
         let named = needed(self, fleet, id);
+        let group = host_group(id, fleet.role_in("", id));
+        let private = fleet.announced(id, PRIVATE_FEATURE);
         let (unregistered, set, generation) = self.desired.with_repositories(|registry| {
             let unregistered: Vec<String> = named
                 .iter()
@@ -190,10 +215,9 @@ impl Coordinator {
             let set = (unregistered.is_empty() && !named.is_empty() && named.len() <= MAX_SET)
                 .then(|| registry.entries_of(named.iter().map(String::as_str)))
                 .flatten()
-                .map(|entries| {
-                    let digest = registry::digest(&entries);
-                    (digest, entries)
-                });
+                .map(|entries| for_group(&entries, &group, private))
+                .filter(|entries| !entries.is_empty())
+                .map(|entries| (registry::digest(&entries), entries));
             (unregistered, set, registry.generation)
         });
         Plan {

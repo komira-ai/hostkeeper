@@ -54,7 +54,7 @@
 //!   order's repository entry, `activate` in the switch, the rollback, the purge at uninstall and
 //!   the drift of each heartbeat; [`target`] the sealed `target.json` of such a version and the
 //!   one reader of a version directory's manifest; [`builtin`] the built-in steps of a version
-//!   with no hook program; [`repository_push`] the repository sets the coordinator pushes, written
+//!   with no hook program; [`mirror`] the files of a private repository, read from the coordinator into a local copy apt reads; [`repository_push`] the repository sets the coordinator pushes, written
 //!   as the host's repository configuration and taken into use without a restart.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
@@ -85,6 +85,7 @@ pub mod builtin;
 pub mod checks;
 pub mod cli;
 pub mod console;
+pub mod coordinator_store;
 pub mod entry;
 pub mod executor;
 mod files;
@@ -102,6 +103,7 @@ pub mod mac;
 pub mod mac_config;
 pub mod mac_files;
 pub mod macos_pkg;
+pub mod mirror;
 pub mod node;
 pub mod notify;
 pub mod observer;

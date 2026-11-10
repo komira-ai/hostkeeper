@@ -316,6 +316,7 @@ impl Host {
     ) -> Result<Proven, PackageFailure> {
         let env = EntryEnv {
             fetcher,
+            coordinator: None,
             verifier,
             clock: &*self.clock,
             bounds: &self.bounds,

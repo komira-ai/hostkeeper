@@ -10,6 +10,7 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_proto::hostkeeper::release::v1::Blob;
 
 use super::*;
+use crate::ports::NetError;
 use crate::testing::{
     BundleSpec, CHANNEL, Failing, FakeClock, FakeFetcher, FakeVerifier, ReadOnlyDir, bundle_json,
     config, full, listing, scratch, serve, service_dir, sha256_hex, signers,
@@ -133,6 +134,7 @@ fn run_with(
     );
     let env = EntryEnv {
         fetcher,
+        coordinator: None,
         verifier: &verifier,
         clock: &FakeClock::at(1),
         bounds: &bounds,
@@ -299,6 +301,7 @@ fn pin_with(
     );
     let env = EntryEnv {
         fetcher,
+        coordinator: None,
         verifier: &verifier,
         clock: &FakeClock::at(1),
         bounds: &bounds,
@@ -479,4 +482,115 @@ fn a_pinned_fetch_with_a_service_path_that_is_not_a_directory_defers() {
     let refusal = pin(scratch.path(), &fetcher, &unattested()).expect_err("refused");
     assert_eq!(refusal, PackageFailure::deferred(FETCH_FAILED));
     assert!(fetcher.calls().is_empty());
+}
+
+/// The path of the pkg of the coordinator tests.
+const PKG_PATH: &str = "/repositories/acme/pool/group/config.pkg";
+
+/// A `macos-pkg` entry whose only location is `PKG_PATH` in the `coordinator` store.
+fn in_coordinator() -> Target {
+    let mut target = unattested();
+    target.locations = vec![Location {
+        store: "coordinator".to_owned(),
+        locator: PKG_PATH[1..].to_owned(),
+    }];
+    target
+}
+
+/// [`pin_with`] for `target` with `coordinator` as the fetcher of the coordinator store.
+fn pin_via(
+    root: &Path,
+    fetcher: &FakeFetcher,
+    coordinator: Option<&FakeFetcher>,
+    target: &Target,
+) -> Result<Pinned, PackageFailure> {
+    let config: DaemonConfig = config(CHANNEL, &"0".repeat(64));
+    let stores = Stores::channel(&config.release_channel);
+    let bounds = Bounds::default();
+    let verifier = FakeVerifier::answering(Ok(()));
+    let signers = signers(
+        "example-org",
+        ".github/workflows/artifacts.yml",
+        &["refs/heads/main"],
+    );
+    let env = EntryEnv {
+        fetcher,
+        coordinator: coordinator.map(|fetcher| fetcher as &dyn Fetcher),
+        verifier: &verifier,
+        clock: &FakeClock::at(1),
+        bounds: &bounds,
+        stores: &stores,
+        packages_root: root,
+        signers: &signers,
+        platform: Platform::MacosArm64,
+    };
+    fetch_pinned(&env, &ServiceName::new("svc").expect("a service"), target)
+}
+
+/// A location in the `coordinator` store is asked of the coordinator fetcher alone, at `/` and
+/// its locator, and the bytes it gives are accepted by the entry's size and SHA-256.
+///
+/// Catches a coordinator location asked of the web fetcher, a path other than `/` and the
+/// locator, and bytes taken without the digest check.
+#[test]
+fn a_coordinator_location_is_fetched_through_the_coordinator_fetcher_by_its_path() {
+    let scratch = scratch("pinned-coordinator");
+    let web = FakeFetcher::new();
+    let coordinator = FakeFetcher::new().route(PKG_PATH, serve(ARCHIVE));
+    let pinned = pin_via(scratch.path(), &web, Some(&coordinator), &in_coordinator())
+        .expect("pinned from the coordinator");
+    assert_eq!(std::fs::read(pinned.path()).expect("the file"), ARCHIVE);
+    assert_eq!(pinned.sha256().as_str(), sha256_hex(ARCHIVE));
+    assert_eq!(pinned.size(), ARCHIVE.len() as u64);
+    assert!(web.calls().is_empty());
+    let calls = coordinator.calls();
+    assert_eq!(calls.len(), 1);
+    assert_eq!(calls[0].url, PKG_PATH);
+}
+
+/// Other bytes from the coordinator are `package_digest_mismatch` (the location is named by the
+/// entry), a 404 and a refused connection defer `fetch_failed`.
+///
+/// Catches coordinator bytes taken without the digest, and a coordinator failure that is not a
+/// deferral.
+#[test]
+fn the_coordinators_wrong_bytes_are_refused_and_its_failures_defer() {
+    let scratch = scratch("pinned-coordinator-bad");
+    let web = FakeFetcher::new();
+    let wrong = FakeFetcher::new().route(PKG_PATH, serve(b"other bytes"));
+    let refusal =
+        pin_via(scratch.path(), &web, Some(&wrong), &in_coordinator()).expect_err("wrong bytes");
+    assert_eq!(refusal, PackageFailure::release(PACKAGE_DIGEST_MISMATCH));
+
+    let missing = FakeFetcher::new();
+    let refusal =
+        pin_via(scratch.path(), &web, Some(&missing), &in_coordinator()).expect_err("a 404");
+    assert_eq!(refusal, PackageFailure::deferred(FETCH_FAILED));
+
+    let refused = FakeFetcher::new().route(PKG_PATH, Box::new(|_, _| Err(NetError::Connect)));
+    let refusal =
+        pin_via(scratch.path(), &web, Some(&refused), &in_coordinator()).expect_err("refused");
+    assert_eq!(refusal, PackageFailure::deferred(FETCH_FAILED));
+    assert!(web.calls().is_empty());
+}
+
+/// Without a coordinator fetcher a coordinator location is no source (`no_store`), nothing is
+/// asked, and a channel location of the same entry is still used.
+///
+/// Catches a coordinator location sent to the web fetcher, and one that hides the entry's other
+/// locations.
+#[test]
+fn without_a_coordinator_fetcher_a_coordinator_location_is_no_store() {
+    let scratch = scratch("pinned-no-coordinator");
+    let web = network();
+    let refusal =
+        pin_via(scratch.path(), &web, None, &in_coordinator()).expect_err("no coordinator");
+    assert_eq!(refusal, PackageFailure::environment(NO_STORE));
+    assert!(web.calls().is_empty());
+
+    let mut both = in_coordinator();
+    both.locations.extend(unattested().locations);
+    let pinned = pin_via(scratch.path(), &web, None, &both).expect("the channel location serves");
+    assert_eq!(pinned.sha256().as_str(), sha256_hex(ARCHIVE));
+    assert_eq!(web.calls().len(), 1);
 }

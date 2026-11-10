@@ -4,7 +4,8 @@
 
 use hostkeeper_link::testing::World;
 use hostkeeper_link::{
-    ANNOUNCED, Feature, PushedSet, REPOSITORIES, Reply, RepositoriesReport, RepositoryRefusal,
+    ANNOUNCED, Feature, PRIVATE_REPOSITORY, PushedSet, REPOSITORIES, Reply, RepositoriesReport,
+    RepositoryRefusal,
 };
 use hostkeeper_proto::hostkeeper::release::v1::Repository;
 
@@ -82,6 +83,7 @@ fn a_host_with_a_repository_configuration_announces_the_feature_and_sends_its_re
     let beats = rig.world.link.beats();
     let mut features = ANNOUNCED.to_vec();
     features.push(REPOSITORIES);
+    features.push(PRIVATE_REPOSITORY);
     assert_eq!(beats[0].features, features);
     assert_eq!(
         beats[0].repositories,
@@ -183,4 +185,35 @@ fn the_report_is_in_the_json_the_bound_measures() {
         unrefused.to_json()["repositories"]["refused"],
         serde_json::Value::Null
     );
+}
+
+/// Proves `private-repository-v1` is announced by a daemon with a repository sink and by one the
+/// wiring says reads private repositories another way, and by no other; and that its name reads
+/// back.
+#[test]
+fn the_private_repository_feature_is_announced_with_a_sink_or_by_the_flag() {
+    assert_eq!(
+        Feature::PrivateRepositoryV1.as_str(),
+        "private-repository-v1"
+    );
+    assert_eq!(
+        Feature::parse("private-repository-v1"),
+        Some(PRIVATE_REPOSITORY)
+    );
+    assert!(!ANNOUNCED.contains(&PRIVATE_REPOSITORY));
+
+    let plain = Rig::new("private-announce-none");
+    let mut heartbeater = plain.heartbeater();
+    heartbeater.beat_once();
+    assert_eq!(plain.world.link.beats()[0].features, ANNOUNCED.to_vec());
+
+    let flagged = Rig::with_world(
+        "private-announce-flag",
+        World::default().reading_private_repositories(),
+    );
+    let mut heartbeater = flagged.heartbeater();
+    heartbeater.beat_once();
+    let mut expected = ANNOUNCED.to_vec();
+    expected.push(PRIVATE_REPOSITORY);
+    assert_eq!(flagged.world.link.beats()[0].features, expected);
 }

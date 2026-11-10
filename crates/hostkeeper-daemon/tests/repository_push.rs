@@ -126,6 +126,7 @@ fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() 
     let beats = link.beats();
     let mut features = ANNOUNCED.to_vec();
     features.push(Feature::RepositoriesV1);
+    features.push(Feature::PrivateRepositoryV1);
     assert_eq!(beats[0].features, features);
     assert_eq!(beats[0].repositories, Some(RepositoriesReport::default()));
     assert_eq!(beats[0].installers, ["hostkeeper-archive"]);

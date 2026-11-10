@@ -16,12 +16,13 @@
 //!
 //! - [`Registry::put`] and [`Registry::remove`] make the registry a change would leave, and
 //!   refuse a repository that clashes with another or past [`MAX_REPOSITORIES`].
+//! - [`Registry::private_channels`] is the channels the pick treats as private ([`crate::picks`]).
 //! - [`Registry::entries_of`] is what a host is sent: the entries its services name, when the
 //!   registry holds every one (`repository_push.rs` adds the generation and the digest).
 //! - [`put_reason`] and [`remove_reason`] are the reasons of the audit entries
 //!   `repository_put` and `repository_remove`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
@@ -193,6 +194,16 @@ impl Registry {
         self.entries.get(name)
     }
 
+    /// The channels (`<name>-<suite>`) of every private repository of the registry.
+    #[must_use]
+    pub(crate) fn private_channels(&self) -> BTreeSet<String> {
+        self.entries
+            .values()
+            .filter(|kept| registry::is_private(&kept.repository))
+            .flat_map(|kept| registry::channels(&kept.repository))
+            .collect()
+    }
+
     /// The registry after a `Put` of `repository`: its generation one more, and the repository
     /// kept at it, replacing the one of its name.
     ///
@@ -301,11 +312,21 @@ pub(crate) fn parse_file(bytes: &[u8]) -> Result<Registry, DesiredError> {
 }
 
 /// The reason of the `repository_put` audit entry: the operator's `why`, then the repository's
-/// name, URI, suites and fingerprints.
+/// name, URI, suites and fingerprints, and, for a private repository, `access hosts credential`
+/// and the credential file's path (a path, never the file's content).
 #[must_use]
 pub(crate) fn put_reason(why: &str, repository: &Repository) -> String {
+    let private = if registry::is_private(repository) {
+        format!(
+            " access {} credential {}",
+            registry::ACCESS_HOSTS,
+            repository.credential_file
+        )
+    } else {
+        String::new()
+    };
     format!(
-        "{why}: {} {} suites {} fingerprints {}",
+        "{why}: {} {} suites {} fingerprints {}{private}",
         repository.name,
         repository.uri,
         repository.suites.join(","),

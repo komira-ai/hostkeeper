@@ -953,6 +953,8 @@ export namespace hostkeeper_release_v1 {
     components?: string[];
     fingerprints?: string[];
     keyring?: string;
+    access?: string;
+    credentialFile?: string;
   }
   export interface StepBounds {
     prepare?: string;

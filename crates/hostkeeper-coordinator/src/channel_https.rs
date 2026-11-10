@@ -85,6 +85,31 @@ impl ChannelUrl {
         })
     }
 
+    /// The host, to dial.
+    pub(crate) fn host(&self) -> &str {
+        &self.host
+    }
+
+    /// The port, to dial.
+    pub(crate) fn port(&self) -> u16 {
+        self.port
+    }
+
+    /// The authority (`host[:port]`), as the `Host` header names it.
+    pub(crate) fn authority(&self) -> &str {
+        &self.authority
+    }
+
+    /// The path under the host that `path` is requested at: the base, a `/`, then `path`.
+    pub(crate) fn target(&self, path: &str) -> String {
+        format!("{}/{path}", self.base)
+    }
+
+    /// The name TLS checks the certificate for.
+    pub(crate) fn server(&self) -> ServerName<'static> {
+        self.server.clone()
+    }
+
     /// The URL of `path` under the base.
     #[must_use]
     pub fn url_of(&self, path: &str) -> String {
@@ -109,8 +134,32 @@ pub enum ChannelTlsError {
     Tls(#[from] rustls::Error),
 }
 
+/// The TLS client that trusts `roots` and speaks HTTP/1.1 only, as a fetch over HTTPS makes it.
+///
+/// # Errors
+/// [`ChannelTlsError::NoRoots`]: `roots` holds no usable certificate;
+/// [`ChannelTlsError::Tls`]: the TLS client configuration is refused.
+pub(crate) fn connector(roots: Roots) -> Result<TlsConnector, ChannelTlsError> {
+    let certs = match roots {
+        Roots::System => rustls_native_certs::load_native_certs().certs,
+        Roots::Given(certs) => certs,
+    };
+    let mut store = rustls::RootCertStore::empty();
+    let (added, _) = store.add_parsable_certificates(certs);
+    if added == 0 {
+        return Err(ChannelTlsError::NoRoots);
+    }
+    let provider = Arc::new(rustls::crypto::ring::default_provider());
+    let mut config = rustls::ClientConfig::builder_with_provider(provider)
+        .with_safe_default_protocol_versions()?
+        .with_root_certificates(store)
+        .with_no_client_auth();
+    config.alpn_protocols = vec![b"http/1.1".to_vec()];
+    Ok(TlsConnector::from(Arc::new(config)))
+}
+
 /// The production dial: a TCP connection to `host:port`.
-fn tcp_dial() -> Dial {
+pub(crate) fn tcp_dial() -> Dial {
     Arc::new(|host: String, port: u16| connect(host, port).boxed())
 }
 
@@ -151,24 +200,9 @@ impl HttpsChannel {
         connect: Duration,
         total: Duration,
     ) -> Result<Self, ChannelTlsError> {
-        let certs = match roots {
-            Roots::System => rustls_native_certs::load_native_certs().certs,
-            Roots::Given(certs) => certs,
-        };
-        let mut store = rustls::RootCertStore::empty();
-        let (added, _) = store.add_parsable_certificates(certs);
-        if added == 0 {
-            return Err(ChannelTlsError::NoRoots);
-        }
-        let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let mut config = rustls::ClientConfig::builder_with_provider(provider)
-            .with_safe_default_protocol_versions()?
-            .with_root_certificates(store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"http/1.1".to_vec()];
         Ok(Self {
             url,
-            connector: TlsConnector::from(Arc::new(config)),
+            connector: connector(roots)?,
             connect,
             total,
             dial: tcp_dial(),

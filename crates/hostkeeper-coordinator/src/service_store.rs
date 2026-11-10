@@ -15,6 +15,7 @@ use std::time::Duration;
 use super::Coordinator;
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::repositories::Registry;
 use crate::store::Health;
 
 impl Coordinator {
@@ -27,7 +28,8 @@ impl Coordinator {
     }
 
     /// Refreshes the releases the picks of `fleet` read ([`crate::picks`]): those of every
-    /// service's desired version and of every standing force's version.
+    /// service's desired version and of every standing force's version, and the channels of the
+    /// registry's private repositories.
     pub(crate) fn keep_releases(&self, fleet: &mut Fleet) {
         let forced = self.ops.read(|state| {
             state
@@ -39,6 +41,9 @@ impl Coordinator {
                 .collect()
         });
         fleet.picks.keep(self.desired.releases_of(forced));
+        fleet
+            .picks
+            .keep_private(self.desired.with_repositories(Registry::private_channels));
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to

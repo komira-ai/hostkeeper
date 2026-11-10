@@ -507,6 +507,7 @@ pub struct World {
     /// [`World::managing_repositories`].
     pub repositories: Arc<FakeRepositories>,
     managing: bool,
+    private: bool,
 }
 
 impl Default for World {
@@ -532,6 +533,7 @@ impl World {
             log: Arc::default(),
             repositories: Arc::default(),
             managing: false,
+            private: false,
         }
     }
 
@@ -539,6 +541,13 @@ impl World {
     /// [`World::repositories`], and it announces `repositories-v1`.
     pub fn managing_repositories(mut self) -> World {
         self.managing = true;
+        self
+    }
+
+    /// The loop announces `private-repository-v1` though the world holds no repository
+    /// configuration: a daemon that reads private repositories another way (a Mac).
+    pub fn reading_private_repositories(mut self) -> World {
+        self.private = true;
         self
     }
 
@@ -572,6 +581,7 @@ impl World {
                 state_dir: PathBuf::from(state_dir),
                 period_secs: DEFAULT_HEARTBEAT_SECS,
                 installers: Vec::new(),
+                private_repository: self.private,
             },
             self.ports(),
         )

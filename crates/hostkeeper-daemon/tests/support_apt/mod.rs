@@ -12,6 +12,7 @@
 
 #[path = "../../../hostkeeper-install/tests/support/apt_fake.rs"]
 pub mod apt_fake;
+pub mod repository_host;
 
 use std::fs;
 use std::path::PathBuf;

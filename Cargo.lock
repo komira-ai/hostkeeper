@@ -1538,11 +1538,13 @@ dependencies = [
  "prost-reflect",
  "rcgen",
  "rustix",
+ "rustls",
  "rustls-pki-types",
  "serde_json",
  "sha2 0.11.0",
  "thiserror",
  "tokio",
+ "tokio-rustls",
  "toml",
  "x509-cert",
 ]

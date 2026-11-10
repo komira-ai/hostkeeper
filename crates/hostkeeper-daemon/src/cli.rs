@@ -65,6 +65,7 @@ use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
+use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
 use crate::files;
 use crate::handover::ProcessExec;
@@ -763,6 +764,12 @@ pub fn host_ports(
         });
     }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
+    let coordinator = crate::mirror::over_coordinator(config, &files.pki, Arc::clone(&clock));
+    if files.repositories.is_some()
+        && let Some(fetch) = &coordinator
+    {
+        repository = repository.with_mirror(Arc::clone(fetch));
+    }
     let fetcher = NetFetcher::new(
         UreqTransport::new(&tls_roots(&files.ca_bundle)),
         Arc::clone(&clock),
@@ -796,7 +803,15 @@ pub fn host_ports(
         path: settings.packages_dir.clone(),
         source,
     })?
-    .with_stores(stores)
+    .with_stores(stores);
+    let packages = match coordinator {
+        Some(fetch) => packages.with_coordinator(Box::new(CoordinatorFetcher::new(
+            fetch,
+            Arc::clone(&clock),
+            config.bounds.max_package_bytes,
+        ))),
+        None => packages,
+    }
     .with_package_check(adapters.package_check)
     .with_trusted_root(trusted_root);
     Ok(Ports {

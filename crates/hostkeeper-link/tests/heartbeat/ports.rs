@@ -135,6 +135,7 @@ fn the_loop_dials_only_the_coordinator_link_port() {
         "beat.rs",
         "deferral.rs",
         "dial.rs",
+        "fetch.rs",
         "grpc.rs",
         "heartbeater.rs",
         "lib.rs",

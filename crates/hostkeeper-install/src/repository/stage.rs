@@ -9,8 +9,9 @@ use std::path::Path;
 
 use sha2::{Digest, Sha256};
 
+use super::mirror::mirrored_name;
 use super::outcome::{Failure, Reason};
-use super::{Order, RepositoryInstaller, Staged, io_failure, record_failure};
+use super::{Mirror, Order, Repository, RepositoryInstaller, Staged, io_failure, record_failure};
 use crate::program;
 
 /// The directory of the staged tree.
@@ -59,12 +60,23 @@ impl RepositoryInstaller<'_> {
             )
         })?;
         let (backend, tools, bound) = (self.backend, self.tools, order.bounds.stage);
+        let mirror = self.mirror_of(repository)?;
         let work = self.fresh_work(&order.service)?;
         backend
             .prepare(&work, repository)
             .map_err(|e| io_failure("the work directory", e))?;
+        // A mirrored repository's index files depend on the architecture, so it is asked first.
+        let mut architecture = None;
+        if let Some(mirror) = mirror {
+            let asked = backend.architecture(tools, bound)?;
+            mirror.index(repository, &asked).map_err(|e| e.failure())?;
+            architecture = Some(asked);
+        }
         backend.update(tools, &work, bound)?;
-        let architecture = backend.architecture(tools, bound)?;
+        let architecture = match architecture {
+            Some(asked) => asked,
+            None => backend.architecture(tools, bound)?,
+        };
         let (package, version) = (order.package.as_str(), order.package_version.as_str());
         let stanza = backend
             .stanza(tools, &work, package, version, &architecture, bound)?
@@ -101,6 +113,17 @@ impl RepositoryInstaller<'_> {
                 .hold()
                 .map_err(|e| io_failure("the installer lock", e))?;
             backend.simulate(tools, &work, package, version, bound)?;
+        }
+        if let Some(mirror) = mirror {
+            let filename = stanza.filename.as_deref().ok_or_else(|| {
+                fail(
+                    Reason::ManifestInvalid,
+                    format!("the index's stanza of {package} {version} has no Filename"),
+                )
+            })?;
+            mirror
+                .pool(repository, filename, &stanza.sha256, stanza.size)
+                .map_err(|e| e.failure())?;
         }
         let file = backend.download(tools, &work, package, version, bound)?;
         let found = file_sha256(&file).map_err(|e| io_failure("the downloaded package", e))?;
@@ -143,6 +166,25 @@ impl RepositoryInstaller<'_> {
             .keep(&work, &file, &meta, &order.repository)
             .map_err(|e| io_failure("the version's copy of the index", e))?;
         Ok(Staged { hook })
+    }
+}
+
+impl<'a> RepositoryInstaller<'a> {
+    /// The mirror `repository` is read from: none for a public repository; for one whose URI is
+    /// in the mirror root, the host's mirror port.
+    fn mirror_of(&self, repository: &Repository) -> Result<Option<&'a dyn Mirror>, Failure> {
+        if mirrored_name(repository, &self.dirs.mirror).is_none() {
+            return Ok(None);
+        }
+        self.mirror.map(Some).ok_or_else(|| {
+            Failure::new(
+                Reason::FetchFailed,
+                format!(
+                    "the repository {} is read from a mirror, and this host has none",
+                    repository.name
+                ),
+            )
+        })
     }
 }
 

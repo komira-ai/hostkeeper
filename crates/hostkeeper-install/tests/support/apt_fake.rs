@@ -17,6 +17,9 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
+#[path = "apt_mirror.rs"]
+pub mod apt_mirror;
+
 use hostkeeper_install::repository::tools::ToolError;
 use hostkeeper_install::repository::{Run, Tool, ToolOutput, Tools};
 use sha2::{Digest, Sha256};
@@ -127,6 +130,8 @@ pub struct Entry {
     pub arch: String,
     pub sha256: String,
     pub size: u64,
+    /// The stanza's `Filename`; none leaves the field out.
+    pub filename: Option<String>,
     pub deb: Deb,
 }
 
@@ -138,13 +143,18 @@ impl Entry {
             arch: deb.arch.clone(),
             sha256: deb.pin(),
             size: deb.bytes.len() as u64,
+            filename: Some(format!("pool/main/{}", deb.file_name())),
             deb,
         }
     }
 
     fn stanza(&self) -> String {
+        let filename = self
+            .filename
+            .as_ref()
+            .map_or_else(String::new, |name| format!("Filename: {name}\n"));
         format!(
-            "Package: {}\nVersion: {}\nArchitecture: {}\nSize: {}\nSHA256: {}\n\n",
+            "Package: {}\nVersion: {}\nArchitecture: {}\nSize: {}\n{filename}SHA256: {}\n\n",
             self.package, self.version, self.arch, self.size, self.sha256
         )
     }
@@ -606,7 +616,12 @@ fn update(s: &State, run: &Run) -> ToolOutput {
          {uri}/dists/stable/InRelease  Could not resolve host\nE: Some index files failed to \
          download. They have been ignored, or old ones used instead.\n"
     );
-    let repo = match s.repos.get(&uri) {
+    let mirrored = if s.repos.contains_key(&uri) {
+        None
+    } else {
+        apt_mirror::read(&uri, &s.debs)
+    };
+    let repo = match s.repos.get(&uri).or(mirrored.as_ref()) {
         Some(repo) if repo.health == Health::Up => repo,
         Some(Repo {
             health: Health::Signature(sig),
@@ -720,11 +735,28 @@ fn download(s: &State, run: &Run) -> ToolOutput {
     let (package, version) = target(run);
     let work = work_of(run);
     let uri = uri_of(&work).unwrap_or_default();
-    let entry = s.repos.get(&uri).and_then(|r| {
+    let mirrored = if s.repos.contains_key(&uri) {
+        None
+    } else {
+        apt_mirror::read(&uri, &s.debs)
+    };
+    let entry = s.repos.get(&uri).or(mirrored.as_ref()).and_then(|r| {
         r.entries
             .iter()
             .find(|e| (e.package == package) & (e.version == version))
     });
+    if let Some(entry) = entry.filter(|_| mirrored.is_some())
+        && !apt_mirror::holds(&uri, entry)
+    {
+        return out(
+            100,
+            "",
+            &format!(
+                "E: Failed to fetch {uri}/{}  File not found\n",
+                entry.filename.clone().unwrap_or_default()
+            ),
+        );
+    }
     let (mode, Some(entry), Some(dir)) = (s.faults.download, entry, run.working_dir.as_ref())
     else {
         return out(

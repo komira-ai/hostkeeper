@@ -133,7 +133,7 @@ fn update_reads_an_unreachable_repository_as_fetch_failed() {
 }
 
 const HELLO: &str = "Package: hello\nVersion: 1.0.0-1\nArchitecture: all\nSize: 1234\n\
-    SHA256: 5C1C1E3F2A7F28A6E7B0C0A8C2C3E4D5F6A7B8C9D0E1F2A3B4C5D6E7F8091A2B\nDescription: a greeting\n";
+    Filename: pool/main/h/hello/hello_1.0.0-1_all.deb\nSHA256: 5C1C1E3F2A7F28A6E7B0C0A8C2C3E4D5F6A7B8C9D0E1F2A3B4C5D6E7F8091A2B\nDescription: a greeting\n";
 
 fn stanza_of(blocks: &[&str]) -> ToolOutput {
     run(0, &blocks.join("\n"), "")
@@ -151,6 +151,7 @@ fn stanza_reads_the_matching_stanza_among_several() {
     let want = Stanza {
         sha256: "5c1c1e3f2a7f28a6e7b0c0a8c2c3e4d5f6a7b8c9d0e1f2a3b4c5d6e7f8091a2b".to_owned(),
         size: 1234,
+        filename: Some("pool/main/h/hello/hello_1.0.0-1_all.deb".to_owned()),
     };
     assert_eq!(
         parse::stanza(&output, "hello", "1.0.0-1", "amd64"),
@@ -158,10 +159,24 @@ fn stanza_reads_the_matching_stanza_among_several() {
     );
     let amd64 = HELLO.replace("all", "amd64");
     let output = stanza_of(&[&other_arch, &amd64]);
+    let want = Stanza {
+        filename: Some("pool/main/h/hello/hello_1.0.0-1_amd64.deb".to_owned()),
+        ..want
+    };
     assert_eq!(
         parse::stanza(&output, "hello", "1.0.0-1", "amd64"),
         Ok(Some(want))
     );
+}
+
+/// Proves a stanza with no `Filename` is read with none, and that its other fields are read.
+#[test]
+fn stanza_without_a_filename_has_none() {
+    let bare = HELLO.replace("Filename: pool/main/h/hello/hello_1.0.0-1_all.deb\n", "");
+    let read = parse::stanza(&stanza_of(&[&bare]), "hello", "1.0.0-1", "amd64")
+        .expect("read")
+        .expect("a stanza");
+    assert_eq!((read.size, read.filename), (1234, None));
 }
 
 /// Proves an output with no stanza of that package, version and architecture is `None`, and so
