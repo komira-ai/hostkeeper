@@ -107,6 +107,10 @@ fn host(rig: &Rig, live: Option<&Path>) -> (Arc<Daemon>, Heartbeater, Arc<FakeLi
 /// lists `apt` from then on, and has the repository installer's entries and the daemon's
 /// installers follow, with no restart; a later set with another keyring is taken the same way.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_host_takes_the_pushed_set_reports_it_and_announces_apt_without_a_restart() {
     let rig = Rig::new("push-linux");
     let live = rig.scratch.path().join("etc/hostkeeper/repositories");

@@ -15,12 +15,23 @@
 //!   are debug builds).
 //! - **The repository** is a signed apt repository (`../install_apt/repo.rs`: the suite `hk`, its
 //!   one component `main`, `InRelease` clear-signed by a key made for the test) in the test's
-//!   tree, which lists every version published so far. The host's entry of it is
-//!   `/etc/hostkeeper/repositories/<REPOSITORY>.sources` with its keyring beside it, the fixed
-//!   place the daemon reads without a flag.
+//!   tree, which lists every version published so far. It is served over https on `127.0.0.1`
+//!   (`super::https`: a static file server of the tree, on a port the system picks, with a
+//!   certificate of a CA made for the test), because the coordinator's registry takes `https://`
+//!   repositories only. The host's apt is told to trust that CA by a drop-in of its
+//!   configuration, [`APT_CONF`], which names the CA's file for this address; the drop removes
+//!   the drop-in. The repository is the registry entry [`Repository::entry`]: the name
+//!   `hostkeeper`, the suite `hk`, so that its one channel is [`REPOSITORY`]; the rig puts it in
+//!   the coordinator's registry before it orders anything (`Repositories.Put`), as a set of `apt`
+//!   entries is refused for a repository the registry does not hold. The host's entry of it is the
+//!   files `hostkeeper_release::registry::render` gives for that entry, in
+//!   `/etc/hostkeeper/repositories/` (`<REPOSITORY>.sources` and the keyring `hostkeeper.gpg`),
+//!   the fixed place the daemon reads without a flag; the released daemon reads the directory at
+//!   its start and takes no pushed set, and this build, pushed the same entry, finds the
+//!   directory as it would write it and adopts it.
 //! - **The entry** a set orders ([`Built::entry`]) is the one `apt` entry `release targets` writes
-//!   for hostkeeper's `.deb` (`crates/xtask/src/release/targets.rs`): the repository entry's
-//!   name, the package version (the release's), the `.deb`'s SHA-256 as the pin, no location, no
+//!   for hostkeeper's `.deb` (`crates/xtask/src/release/targets.rs`): the repository's channel
+//!   ([`REPOSITORY`]), the package version (the release's), the `.deb`'s SHA-256 as the pin, no location, no
 //!   size and no attestation, a manifest that names the package, its `run` unit, the floor and
 //!   the bounds of the installer and of the built-in steps, and a hook with no command. The set
 //!   carries it alone: no release index, no index digest ([`Rig::order`]).
@@ -42,14 +53,16 @@ use hostkeeper_daemon::selfupdate::APT_RELEASE_BINARY;
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Store};
 use hostkeeper_proto::hostkeeper::release::v1::{
-    Hook, InstallerBounds, Manifest, StepBounds, Target, TargetList,
+    Hook, InstallerBounds, Manifest, Repository as RegistryEntry, StepBounds, Target, TargetList,
 };
+use hostkeeper_release::registry;
 use hostkeeper_steps::Layout;
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
 use super::super::e2e::scenario::LOCAL;
 use super::super::e2e::wait_for;
+use super::https::Server;
 use super::linux::{DEB_UNIT, PACKAGE, REPOSITORIES_DIR, unit_text};
 
 /// The one link of hostkeeper's `.deb` (`packaging/linux/nfpm.yaml`): the console's issue file
@@ -61,8 +74,15 @@ const ISSUE_LINK: (&str, &str) = (
 use super::repo::{Key, SUITE, Signing, architecture, run, write_index};
 use super::{Build, HK, Rig, floor};
 
-/// The name of the host's repository entry: the stem of its `.sources` file.
-pub const REPOSITORY: &str = "hostkeeper-x1";
+/// The name the rig's repository has in the registry.
+const REGISTRY_NAME: &str = "hostkeeper";
+/// The channel of the rig's repository, `<registry name>-<suite>`: the name of the host's
+/// repository entry (the stem of its `.sources` file) and the repository of the entries a set
+/// orders.
+pub const REPOSITORY: &str = "hostkeeper-hk";
+/// The drop-in of apt's configuration that makes apt trust the CA of the rig's https server. Its
+/// name starts with `99` so that it is read last and cannot be a file of the system's.
+const APT_CONF: &str = "/etc/apt/apt.conf.d/99hostkeeper-privileged-test";
 /// The unit the package's `run` names.
 const RUN_UNIT: &str = "hostkeeper.service";
 
@@ -145,6 +165,10 @@ struct Stanza {
 pub struct Repository {
     dir: PathBuf,
     key: Key,
+    /// The https server of `dir`, held for as long as the repository is.
+    _server: Server,
+    /// The registry entry of the repository.
+    entry: RegistryEntry,
     work: Scratch,
     stanzas: Mutex<Vec<Stanza>>,
 }
@@ -169,8 +193,9 @@ fn open_directories(dir: &Path) {
 }
 
 impl Repository {
-    /// The repository in the tree of `base` and the host's entry of it: the key, the entry's
-    /// `.sources` file and its keyring in [`REPOSITORIES_DIR`] (root's, mode 0755/0644).
+    /// The repository in the tree of `base`, served over https, and the host's entry of it: the
+    /// key, the files of the registry entry ([`Repository::entry`]) in [`REPOSITORIES_DIR`]
+    /// (root's, mode 0755/0644), and the apt drop-in that trusts the server's CA ([`APT_CONF`]).
     ///
     /// # Panics
     /// A file or a directory cannot be made, or `gpg` fails.
@@ -184,27 +209,56 @@ impl Repository {
         for dir in [config.parent().expect("its parent"), config] {
             fs::set_permissions(dir, fs::Permissions::from_mode(0o755)).expect("its mode");
         }
-        let keyring = config.join(format!("{REPOSITORY}.gpg"));
-        key.export(&keyring);
-        let sources = config.join(format!("{REPOSITORY}.sources"));
-        fs::write(
-            &sources,
-            format!(
-                "Types: deb\nURIs: file:{}\nSuites: {SUITE}\nComponents: main\nSigned-By: {}\n",
-                dir.display(),
-                keyring.display()
-            ),
-        )
-        .expect("write the entry");
-        fs::set_permissions(&sources, fs::Permissions::from_mode(0o644)).expect("entry mode");
+        let server = Server::start(&dir);
+        let exported = base.join("apt-keyring.gpg");
+        key.export(&exported);
+        let keyring = fs::read(&exported).expect("read the exported keyring");
+        let fingerprints: Vec<String> = registry::keys(&keyring)
+            .expect("the exported keyring parses")
+            .into_iter()
+            .flat_map(|key| std::iter::once(key.fingerprint).chain(key.subkeys))
+            .collect();
+        let entry = RegistryEntry {
+            name: REGISTRY_NAME.to_owned(),
+            kind: registry::KIND_APT.to_owned(),
+            uri: format!("https://127.0.0.1:{}", server.port()),
+            suites: vec![SUITE.to_owned()],
+            components: vec!["main".to_owned()],
+            fingerprints,
+            keyring,
+        };
+        registry::check(&entry).expect("the rig's repository is a valid registry entry");
+        assert_eq!(
+            registry::channels(&entry),
+            [REPOSITORY],
+            "the entry's channel is the repository the entries name"
+        );
+        for file in registry::render(std::slice::from_ref(&entry), REPOSITORIES_DIR) {
+            put(config, &file.name, &file.bytes, 0o644);
+        }
+        let ca = base.join("apt-ca.pem");
+        put(base, "apt-ca.pem", server.ca_pem().as_bytes(), 0o644);
+        put(
+            Path::new("/"),
+            APT_CONF.trim_start_matches('/'),
+            format!("Acquire::https::127.0.0.1::CaInfo \"{}\";\n", ca.display()).as_bytes(),
+            0o644,
+        );
         let work = Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "x1deb")
             .expect("the package trees' directory");
         Repository {
             dir,
             key,
+            _server: server,
+            entry,
             work,
             stanzas: Mutex::new(Vec::new()),
         }
+    }
+
+    /// The repository as the coordinator's registry holds it: what the rig puts there.
+    pub fn entry(&self) -> RegistryEntry {
+        self.entry.clone()
     }
 
     /// Builds the `.deb` of hostkeeper at `version` around `binary` with the unit text `unit`,
@@ -287,6 +341,14 @@ impl Repository {
             floor: floor.to_owned(),
             file,
         }
+    }
+}
+
+impl Drop for Repository {
+    /// Removes the apt drop-in; the CA file it names is in the test's tree, the https server stops
+    /// with the field, and the host's entry is at a place the host's drop takes away.
+    fn drop(&mut self) {
+        let _ = fs::remove_file(APT_CONF);
     }
 }
 

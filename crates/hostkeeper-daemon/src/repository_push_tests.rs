@@ -252,6 +252,10 @@ fn the_held_scripts_files_are_what_a_set_for_komira_renders() {
 /// files are there at 0644 in a directory at 0755, the stray is gone, no staging directory is
 /// left, and the entries in use are the set's.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_differing_directory_is_replaced_whole() {
     let rig = Rig::new("push-replace");
     let old = komira(1, 1);
@@ -291,6 +295,10 @@ fn a_missing_directory_and_parent_are_made() {
 /// Proves a live path that is a file, not a directory, is replaced by the set, and the file is
 /// removed.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_file_where_the_directory_belongs_is_replaced() {
     let rig = Rig::with("push-file", Installer::Apt, |base| {
         fs::create_dir_all(base.join("etc/hostkeeper")).expect("the parent");
@@ -304,6 +312,10 @@ fn a_file_where_the_directory_belongs_is_replaced() {
 /// Proves the same bytes with a file the loader refuses (writable by its group) are not adopted:
 /// the directory is replaced by files the loader takes.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn files_the_loader_refuses_are_not_adopted() {
     let rig = Rig::new("push-unsound");
     let set = komira(1, 1);
@@ -322,6 +334,10 @@ fn files_the_loader_refuses_are_not_adopted() {
 
 /// Proves one file missing, or one file's bytes changed, is not adopted either.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_directory_with_a_file_missing_or_changed_is_replaced() {
     for change in 0..2 {
         let rig = Rig::new(&format!("push-partial-{change}"));
@@ -392,6 +408,10 @@ fn a_keyring_that_is_not_the_one_judged_is_refused_and_the_live_directory_kept()
 /// refusal that keeps the live directory, and the leftover staging directory is removed by the
 /// next set.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_staged_directory_the_loader_refuses_is_refused_and_the_live_directory_kept() {
     let rig = Rig::new("push-loader-refuses");
     rig.push.apply(&komira(1, 1));
@@ -471,6 +491,10 @@ fn a_set_that_fails_its_checks_is_refused_and_nothing_is_written() {
 /// file holds the new keyring, the report shows the new generation and digest, and a refusal
 /// that came before is cleared.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_key_rotation_is_applied_and_clears_an_earlier_refusal() {
     let rig = Rig::new("push-rotation");
     let first = komira(1, 1);
@@ -549,6 +573,10 @@ fn a_swap_that_the_filesystem_refuses_is_a_failure() {
 /// Proves a staging directory left by an earlier run, with a file in it, and one that is a plain
 /// file, are removed before the set is staged.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_leftover_staging_directory_or_file_is_removed_first() {
     let rig = Rig::new("push-leftover");
     fs::create_dir_all(rig.staging()).expect("a leftover");

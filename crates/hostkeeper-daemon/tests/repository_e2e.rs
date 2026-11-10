@@ -394,6 +394,10 @@ fn a_put_repository_reaches_the_host_and_apt_resolves_its_package() {
 /// Catches: a registry change the coordinator does not push to a host that already holds a set,
 /// or a daemon that keeps the first keyring.
 #[test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
 fn a_key_rotation_rolls_to_the_host() {
     let ca = Ca::new("hostkeeper test ca");
     let listening = Listening::new("repository-e2e-rotate-coordinator", &ca);

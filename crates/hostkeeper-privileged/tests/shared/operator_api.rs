@@ -18,11 +18,12 @@ use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AddRecordRequest, ApproveRequest, AssignRequest, ConvergeRequest, DesiredState, ForceRequest,
     GetHostRequest, HostList, ListHostsRequest, ListPendingRequest, ListRecordsRequest,
-    ListServicesRequest, RetireRequest, SetDesiredRequest, StatusRequest, UnassignRequest,
-    enrollment_client::EnrollmentClient, force_request::Targets, hosts_client::HostsClient,
-    releases_client::ReleasesClient, services_client::ServicesClient,
+    ListServicesRequest, PutRepositoryRequest, RetireRequest, SetDesiredRequest, StatusRequest,
+    UnassignRequest, enrollment_client::EnrollmentClient, force_request::Targets,
+    hosts_client::HostsClient, releases_client::ReleasesClient,
+    repositories_client::RepositoriesClient, services_client::ServicesClient,
 };
-use hostkeeper_proto::hostkeeper::release::v1::TargetList;
+use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use hostkeeper_testkit::operator::{Operator, canonical_json};
 use serde_json::Value;
 use tonic::Status;
@@ -311,6 +312,21 @@ impl OperatorApi {
                 ..SetDesiredRequest::default()
             },
             "SetDesiredResponse"
+        )
+    }
+
+    /// `Repositories.Put` of `repository`: adds it to the coordinator's registry of package
+    /// repositories, or replaces the one of its name. The reply is the repository as the registry
+    /// now holds it, as `repository`, with the audit entry as `entry`.
+    pub fn put_repository(&self, repository: Repository) -> Result<Value, Status> {
+        rpc!(
+            self,
+            RepositoriesClient.put,
+            PutRepositoryRequest {
+                repository: Some(repository),
+                reason: "privileged test".to_owned(),
+            },
+            "PutRepositoryResponse"
         )
     }
 
