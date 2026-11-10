@@ -23,17 +23,17 @@
 //! lock, so the decisions read them with the beats; the `abort` and `clear_record` orders an
 //! operator queued are kept in memory only, like the other orders.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform, RoleName};
 
-use crate::assignment::{Placement, ServiceAssignments, assigned, effective_min_version};
+use crate::assignment::{Placement, assigned, effective_min_version};
 use crate::bake::Bake;
 use crate::defer::{DeferBackoff, Defers};
-use crate::holds::{HoldMark, holding};
+use crate::holds::holding;
 use crate::rollouts::Rollout;
 use crate::services::ServiceDef;
 use crate::verdicts::Verdicts;
@@ -161,34 +161,9 @@ impl Node {
     }
 }
 
-/// What the fleet keeps of the operator's marks for its decisions: a copy of the holds, of the
-/// hosts each standing force orders, of the assignments, the labels and the exclusions, of where
-/// each service's update plan stands (`rollouts`), of the services that are halted, of the
-/// versions marked bad and of the failures an operator acknowledged (`acked`), as the ops store
-/// holds them ([`crate::holds::marks_of`]), refreshed under the fleet's lock
-/// ([`Fleet::set_marks`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Marks {
-    /// The holds that stand.
-    pub holds: Vec<HoldMark>,
-    /// Per service, the hosts its standing force orders ([`crate::force`]).
-    pub forced: BTreeMap<String, BTreeSet<HostId>>,
-    /// Per service, the operator's assignments ([`crate::assignment`]).
-    pub assignments: BTreeMap<String, ServiceAssignments>,
-    /// Per node id, the labels an operator gave the host.
-    pub labels: BTreeMap<String, BTreeMap<String, String>>,
-    /// The (service, node id) pairs an operator excluded.
-    pub excluded: BTreeSet<(String, String)>,
-    /// Per service, where its update plan stands ([`crate::rollouts`]).
-    pub rollouts: BTreeMap<String, Rollout>,
-    /// The services that are halted.
-    pub halted: BTreeSet<String>,
-    /// Per service, the versions marked bad.
-    pub bad: BTreeMap<String, Vec<Version>>,
-    /// Per service, the failures an operator acknowledged, each a node id and the version it
-    /// failed, by its text: a cleared halt's, and those a version set by hand or forced acknowledged.
-    pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
-}
+#[path = "fleet_groups.rs"]
+mod groups;
+pub use groups::Marks;
 
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
@@ -539,11 +514,11 @@ impl Fleet {
         &mut self,
         service: &str,
         id: HostId,
-        role: &RoleName,
+        role: &str,
         beat: Heartbeat,
         now: Duration,
     ) {
-        self.note(service, id, role.name(), beat, now, false);
+        self.note(service, id, role, beat, now, false);
     }
 
     /// The one place a role enters the fleet: the beat ends an order, counts a bake and a
@@ -828,7 +803,7 @@ impl Fleet {
 
     /// Replaces the operator's marks the fleet decides by with `marks`.
     pub fn set_marks(&mut self, marks: Marks) {
-        self.marks = marks;
+        self.marks = marks.in_mode_of(&self.marks);
     }
 
     /// What the fleet keeps of the host `id` for `service`, counted or not.

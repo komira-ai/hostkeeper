@@ -313,7 +313,8 @@ impl HostCounts {
     }
 }
 
-/// How many hosts of `def` are within the wait that follows a deferral of `version` at `now`.
+/// How many hosts of `def` (those of its group, for a service made for one) are within the wait
+/// that follows a deferral of `version` at `now`.
 #[must_use]
 pub fn deferred_count(
     def: &ServiceDef,
@@ -325,7 +326,7 @@ pub fn deferred_count(
         return 0;
     };
     fleet
-        .hosts_of(&def.name)
+        .hosts_in(def)
         .filter(|(_, host)| host.is_live(now))
         .filter(|(id, _)| {
             fleet

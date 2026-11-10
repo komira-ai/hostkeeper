@@ -10,6 +10,7 @@ mod credentials;
 mod enrollment;
 mod force;
 mod gateway;
+mod group_releases;
 mod heartbeat;
 mod host_group_requests;
 mod host_groups;

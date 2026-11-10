@@ -235,7 +235,8 @@ fn list_and_get_refuse_a_caller_a_bad_token_and_an_unknown_group() {
 }
 
 /// Proves: `Get` answers the group as `List` does, with each package's minimum version as
-/// `Services.SetMinVersion` set it, its convergence (not filled in yet: the empty one), the count
+/// `Services.SetMinVersion` set it, its convergence in the group (in progress while the enrolled
+/// hosts have not been heard from), the count
 /// of hosts, and a page of the node ids of the hosts in the group, those moving into it among
 /// them, by node id, a host in another group and a denied host not.
 ///
@@ -267,19 +268,27 @@ fn get_answers_the_group_with_minimum_versions_convergence_and_its_hosts() {
     assert_eq!(got.next_page_token, "");
     let state = got.host_group.expect("the group");
     assert_eq!((state.generation, state.hosts), (1, 3));
+    let waiting = |desired: Option<&str>| {
+        Some(proto::Convergence {
+            desired: desired.map(str::to_owned),
+            state: proto::ConvergenceState::InProgress.into(),
+            coordinator_commit: crate::BUILD_COMMIT.to_owned(),
+            ..proto::Convergence::default()
+        })
+    };
     assert_eq!(
         state.packages,
         vec![
             proto::GroupPackage {
                 package: SELF.to_owned(),
-                convergence: Some(proto::Convergence::default()),
+                convergence: waiting(None),
                 ..proto::GroupPackage::default()
             },
             proto::GroupPackage {
                 package: "svc".to_owned(),
                 desired_version: Some("2.0".to_owned()),
                 min_version: Some("1.5".to_owned()),
-                convergence: Some(proto::Convergence::default()),
+                convergence: waiting(Some("2.0")),
             },
         ]
     );

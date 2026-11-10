@@ -170,7 +170,7 @@ fn the_host_groups_refusal_tokens_and_numbers_are_pinned() {
 /// keeps its name and number in this build, and this build has the new value under its token.
 #[test]
 fn the_new_values_of_shipped_enums_are_unknown_to_the_release_before() {
-    let cases: [(&str, i32, &str, i32, &str); 12] = [
+    let cases: [(&str, i32, &str, i32, &str); 13] = [
         (
             "ReleasesRefusal",
             29,
@@ -254,6 +254,13 @@ fn the_new_values_of_shipped_enums_are_unknown_to_the_release_before() {
             "WAIT_OUTCOME_NO_DESIRED",
             op::WaitOutcome::NoDesired as i32,
             op::WaitOutcome::NoDesired.as_str_name(),
+        ),
+        (
+            "GateReason",
+            34,
+            "GATE_REASON_INSTALL_ORDER",
+            op::GateReason::InstallOrder as i32,
+            op::GateReason::InstallOrder.as_str_name(),
         ),
     ];
     let (older, now) = (baseline_pool(), current_pool());

@@ -287,38 +287,37 @@ pub(crate) fn entry(by: &str, action: &str, service: &str, reason: String) -> Au
 }
 
 fn apply(
-    service: &str,
+    def: &ServiceDef,
     want: &Desired,
     change: Change,
     ops: &OpsStore,
     store: &DesiredStore,
     fleet: &mut Fleet,
 ) -> Result<(), Failed> {
+    let service = def.name.as_str();
+    let group = def.group();
+    let audited = |action: &str, reason: String| {
+        let mut audit = entry(COORDINATOR, action, service, reason);
+        audit.host_group = group.map(ToString::to_string);
+        audit
+    };
     match change {
         Change::LastGood(version) => {
-            let audit = entry(COORDINATOR, "last_good", service, version.to_string());
+            let audit = audited("last_good", version.to_string());
             ops.change(Write::BeforeMemory, audit, |state| {
-                state
-                    .services
-                    .entry(service.to_owned())
-                    .or_default()
-                    .last_good = Some(version);
+                state.edit_marks_in(group, service, |marks| marks.last_good = Some(version));
             })?;
         }
         Change::ClearLastGood => {
             let why = "the desired version is the first with update hooks".to_owned();
-            let audit = entry(COORDINATOR, "clear_last_good", service, why);
+            let audit = audited("clear_last_good", why);
             ops.change(Write::BeforeMemory, audit, |state| {
-                state
-                    .services
-                    .entry(service.to_owned())
-                    .or_default()
-                    .last_good = None;
+                state.edit_marks_in(group, service, |marks| marks.last_good = None);
             })?;
         }
         Change::MarkBad(version) => {
             let why = format!("{version} failed its release on enough hosts");
-            let audit = entry(COORDINATOR, "mark_bad", service, why);
+            let audit = audited("mark_bad", why);
             // Raising: in memory first, so that a failed write still stops the orders.
             ops.change(Write::AfterMemory, audit, |state| {
                 state
@@ -331,6 +330,10 @@ fn apply(
         }
         Change::RollBackTo(version) => {
             tracing::warn!(%service, from = %want.version, to = %version, "rolling back");
+            if let Some(group) = group {
+                store.set_group_version(group, service, &version)?;
+                return Ok(());
+            }
             let mut back = want.clone();
             // The release of the version gone back to (its package digest or its release index),
             // as CI registered it, if it did: the hosts of each platform are ordered that
@@ -361,18 +364,19 @@ pub fn reconcile(
     fleet: &mut Fleet,
     now: Duration,
 ) {
-    let Some(want) = store.get(&def.name) else {
+    let Some(want) = store.of_def(def) else {
         return;
     };
     let state = ops.state();
-    for change in plan(def, &want, &ops.marks(&def.name), fleet, &state, now) {
-        if let Err(why) = apply(&def.name, &want, change, ops, store, fleet) {
+    let marks = state.marks_in(def.group(), &def.name);
+    for change in plan(def, &want, &marks, fleet, &state, now) {
+        if let Err(why) = apply(def, &want, change, ops, store, fleet) {
             tracing::error!(service = %def.name, %why, "a rollback change was not made");
             return;
         }
     }
     // The plan reads the desired state the changes above left: a rollback starts it over.
-    if let Some(want) = store.get(&def.name) {
+    if let Some(want) = store.of_def(def) {
         crate::rollouts::advance(def, &want, ops, fleet, now);
     }
 }

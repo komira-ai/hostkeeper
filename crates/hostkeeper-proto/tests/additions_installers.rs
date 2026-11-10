@@ -340,7 +340,8 @@ fn an_older_reader_keeps_what_operators_are_shown() {
     let now_reasons = now
         .get_enum_by_name("hostkeeper.operator.v1.GateReason")
         .expect("the reasons");
-    assert_eq!(now_reasons.values().map(|v| v.number()).max(), Some(33));
+    // 34 is `INSTALL_ORDER`, which the host groups add (tests/additions_host_groups.rs).
+    assert_eq!(now_reasons.values().map(|v| v.number()).max(), Some(34));
 
     let convergence = op::Convergence {
         desired: Some("2.0".to_owned()),

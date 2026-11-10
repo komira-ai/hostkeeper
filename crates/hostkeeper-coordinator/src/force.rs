@@ -440,24 +440,40 @@ pub(crate) fn end_by_setter(
     set_by: &str,
 ) -> Result<bool, OpsError> {
     let ended = ops.decide_change(Write::BeforeMemory, |state| {
-        let force = state
-            .services
-            .get_mut(service)
-            .and_then(|marks| marks.force.take_if(|force| force.version != *version))
-            .ok_or(Kept::Standing)?;
-        let mut entry = AuditEntry::new(actor, "force_ended");
-        entry.service = Some(service.to_owned());
-        entry.reason = Some(format!(
-            "{version} set by {set_by}; the force to {} ends",
-            force.version
-        ));
-        Ok::<_, Kept>(entry)
+        end(state, None, service, version, actor, set_by).ok_or(Kept::Standing)
     });
     match ended {
         Ok(_) => Ok(true),
         Err(Kept::Standing) => Ok(false),
         Err(Kept::Store(why)) => Err(why),
     }
+}
+
+/// Ends the standing force of `service` in `state` as [`end_by_setter`] does, and answers the
+/// audit entry of the end; `None` when no force of another version stands. A force of a service
+/// made for a host group stands in the group.
+pub(crate) fn end(
+    state: &mut OpsState,
+    group: Option<&crate::host_groups::GroupName>,
+    service: &str,
+    version: &Version,
+    actor: &str,
+    set_by: &str,
+) -> Option<AuditEntry> {
+    let ends =
+        |marks: &mut crate::ops::ServiceOps| marks.force.take_if(|force| force.version != *version);
+    let force = match group {
+        None => state.services.get_mut(service).and_then(ends),
+        Some(_) => state.edit_marks_in(group, service, ends),
+    }?;
+    let mut entry = AuditEntry::new(actor, "force_ended");
+    entry.service = Some(service.to_owned());
+    entry.host_group = group.map(ToString::to_string);
+    entry.reason = Some(format!(
+        "{version} set by {set_by}; the force to {} ends",
+        force.version
+    ));
+    Some(entry)
 }
 
 impl Coordinator {

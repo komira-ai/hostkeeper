@@ -85,6 +85,7 @@ fn status_of(services: Vec<(&str, ServiceStatus)>, ops: OpsState) -> Status {
             .into_iter()
             .map(|(name, one)| (name.to_owned(), one))
             .collect(),
+        groups: None,
         ops,
         commit: COMMIT,
         server_certificate: None,
@@ -750,6 +751,8 @@ fn every_rollout_hold_maps_to_its_proto_gate_reason() {
         (Some(Why::Gate(Gate::StageWait)), R::StageWait),
         (Some(Why::Gate(Gate::BelowMinUp)), R::BelowMinUp),
         (Some(Why::Gate(Gate::RolloutElsewhere)), R::RolloutElsewhere),
+        (Some(Why::Gate(Gate::InstallOrder)), R::InstallOrder),
+        (Some(Why::Gate(Gate::UninstallOrder)), R::Unspecified),
         (Some(Why::Skip(Skip::NoDesired)), R::NoDesired),
         (Some(Why::Skip(Skip::NotAMember)), R::NotAMember),
         (Some(Why::Skip(Skip::UpToDate)), R::UpToDate),

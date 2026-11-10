@@ -629,6 +629,10 @@ enum GateReason {
   // daemon lists, and back to the archive entry of a lower version whose list has no native
   // entry). Not failed, and `Convergence.installer_dropped` names it.
   GATE_REASON_INSTALLER_DROPPED = 33;
+  // From a coordinator that holds host groups: a package listed before this one in the host's
+  // group is not installed on the host yet and can be, so the install waits and takes no place in
+  // its plan (docs/design/hostgroups.md section 1.4).
+  GATE_REASON_INSTALL_ORDER = 34;
 }
 
 // Whether a service counts a host.

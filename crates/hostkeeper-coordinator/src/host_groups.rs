@@ -5,8 +5,10 @@
 //! generation, the standing force and its generation, the update plan's position).
 //!
 //! This is the stored form, and what writes it is the `HostGroups` calls
-//! ([`crate::operator_host_groups`], [`crate::host_move`]). The placement of hosts and the decision
-//! by group do not read it yet.
+//! ([`crate::operator_host_groups`], [`crate::host_move`]) and the deployments to a group
+//! (`Releases.SetDesired` naming a group, and the coordinator's own rollback). The
+//! decision by group reads it ([`crate::group_scope`]): the marks of one (group, package) are read
+//! and written as the marks of a service ([`crate::ops::OpsState::marks_in`]).
 //!
 //! The groups and their desired versions are part of the desired state ([`crate::desired::Held`]),
 //! kept in the state file under the top-level key `host_groups`; the marks are part of the
@@ -33,7 +35,7 @@ use crate::canary::Canary;
 use crate::defer::DeferBackoff;
 use crate::desired::MAX_COUNT;
 use crate::force::{ForceRecord, SELF_SERVICE};
-use crate::ops::{Halt, HaltAck, OpsState};
+use crate::ops::{Halt, HaltAck, OpsState, ServiceOps};
 use crate::reconcile::{FailThreshold, Rollback};
 use crate::rollouts::Rollout;
 use crate::stages::{Advance, Plan, RawStage};
@@ -606,6 +608,142 @@ impl OpsState {
     /// Takes every mark of `group` out of the state.
     pub(crate) fn drop_group(&mut self, group: &GroupName) {
         self.host_groups.0.remove(group);
+    }
+
+    /// The marks of `service` as a decision in `group` reads them: with no group, the service's
+    /// own; with one, the group's halt, last good version and force beside the package's versions
+    /// marked bad and failure acknowledgements, which are the package's in every group.
+    pub(crate) fn marks_in(&self, group: Option<&GroupName>, service: &str) -> ServiceOps {
+        let own = self.services.get(service).cloned().unwrap_or_default();
+        let Some(group) = group else {
+            return own;
+        };
+        let marks = self.group_marks(group, service);
+        ServiceOps {
+            halt: marks.halt,
+            halt_acked: marks.halt_acked,
+            halt_seen: marks.halt_seen,
+            halt_generation: marks.halt_generation,
+            last_good: marks.last_good,
+            force: marks.force,
+            force_generation: marks.force_generation,
+            ..own
+        }
+    }
+
+    /// The standing halt of `service` as a decision in `group` reads it, without copying the marks.
+    pub(crate) fn halt_in(&self, group: Option<&GroupName>, service: &str) -> Option<&Halt> {
+        match group {
+            None => self.services.get(service)?.halt.as_ref(),
+            Some(group) => self.host_groups.0.get(group)?.get(service)?.halt.as_ref(),
+        }
+    }
+
+    /// The halt reports an operator acknowledged for `service`, as a decision in `group` reads them,
+    /// without copying the marks.
+    pub(crate) fn halt_acked_in(&self, group: Option<&GroupName>, service: &str) -> &[HaltAck] {
+        let acked = match group {
+            None => self.services.get(service).map(|marks| &marks.halt_acked),
+            Some(group) => self
+                .host_groups
+                .0
+                .get(group)
+                .and_then(|packages| packages.get(service))
+                .map(|marks| &marks.halt_acked),
+        };
+        acked.map_or(&[], Vec::as_slice)
+    }
+
+    /// How many halts of `service` an operator has cleared, as a decision in `group` reads it.
+    pub(crate) fn halt_generation_in(&self, group: Option<&GroupName>, service: &str) -> u64 {
+        match group {
+            None => self
+                .services
+                .get(service)
+                .map_or(0, |marks| marks.halt_generation),
+            Some(group) => self
+                .host_groups
+                .0
+                .get(group)
+                .and_then(|packages| packages.get(service))
+                .map_or(0, |marks| marks.halt_generation),
+        }
+    }
+
+    /// Edits the marks [`Self::marks_in`] reads, and writes them back to where each belongs
+    /// ([`Self::put_marks_in`]). Answers what `edit` answers.
+    pub(crate) fn edit_marks_in<R>(
+        &mut self,
+        group: Option<&GroupName>,
+        service: &str,
+        edit: impl FnOnce(&mut ServiceOps) -> R,
+    ) -> R {
+        let mut marks = self.marks_in(group, service);
+        let made = edit(&mut marks);
+        self.put_marks_in(group, service, marks);
+        made
+    }
+
+    /// Keeps `marks` as the marks of `service` as a decision in `group` reads them: with no group,
+    /// the service's own; with one, the group's own to the group's marks (its minimum version and
+    /// plan position stay) and the package's to the package's.
+    fn put_marks_in(&mut self, group: Option<&GroupName>, service: &str, marks: ServiceOps) {
+        let Some(group) = group else {
+            self.services.insert(service.to_owned(), marks);
+            return;
+        };
+        let kept = self
+            .host_groups
+            .0
+            .entry(group.clone())
+            .or_default()
+            .entry(service.to_owned())
+            .or_default();
+        kept.halt = marks.halt;
+        kept.halt_acked = marks.halt_acked;
+        kept.halt_seen = marks.halt_seen;
+        kept.halt_generation = marks.halt_generation;
+        kept.last_good = marks.last_good;
+        kept.force = marks.force;
+        kept.force_generation = marks.force_generation;
+        let own = self.services.entry(service.to_owned()).or_default();
+        own.bad = marks.bad;
+        own.failure_acked = marks.failure_acked;
+        own.bad_by_force = marks.bad_by_force;
+    }
+
+    /// Where the update plan of `service` stands in `group`; with no group, as the plans of the
+    /// services alone are kept.
+    pub(crate) fn rollout_in(&self, group: Option<&GroupName>, service: &str) -> Option<Rollout> {
+        match group {
+            None => self.rollouts.get(service).cloned(),
+            Some(group) => {
+                Some(self.group_marks(group, service).rollout).filter(|rollout| !rollout.is_empty())
+            }
+        }
+    }
+
+    /// Keeps `rollout` as where the update plan of `service` stands in `group`.
+    pub(crate) fn set_rollout_in(
+        &mut self,
+        group: Option<&GroupName>,
+        service: &str,
+        rollout: Rollout,
+    ) {
+        match group {
+            None => {
+                self.rollouts.insert(service.to_owned(), rollout);
+            }
+            Some(group) => {
+                self.host_groups
+                    .0
+                    .entry(group.clone())
+                    .or_default()
+                    .entry(service.to_owned())
+                    .or_default()
+                    .rollout = rollout;
+            }
+        }
     }
 }
 

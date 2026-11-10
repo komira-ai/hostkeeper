@@ -78,16 +78,30 @@ impl Verdicts {
     /// Forgets the verdicts of `service` about every version but `version`, and those `acked`
     /// acknowledges (the same host and the whole report).
     pub fn keep_only(&mut self, service: &str, version: &Version, acked: &[FailureAck]) {
+        self.keep_only_of(service, version, acked, &|_| true);
+    }
+
+    /// [`Self::keep_only`] for the hosts `member` says: the verdicts of any other host stay as
+    /// they are.
+    pub(crate) fn keep_only_of(
+        &mut self,
+        service: &str,
+        version: &Version,
+        acked: &[FailureAck],
+        member: &dyn Fn(&HostId) -> bool,
+    ) {
         if let Some(versions) = self.seen.get_mut(service) {
-            versions.retain(|about, _| about == version.as_str());
-            for verdicts in versions.values_mut() {
+            for (about, verdicts) in versions.iter_mut() {
                 verdicts.retain(|(id, _, _), report| {
                     let node = id.to_string();
-                    !acked
-                        .iter()
-                        .any(|ack| ack.node_id == node && ack.report == *report)
+                    !member(id)
+                        || (about == version.as_str()
+                            && !acked
+                                .iter()
+                                .any(|ack| ack.node_id == node && ack.report == *report))
                 });
             }
+            versions.retain(|_, verdicts| !verdicts.is_empty());
         }
     }
 

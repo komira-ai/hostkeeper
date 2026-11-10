@@ -135,13 +135,18 @@ pub fn by_rollout(def: &ServiceDef, host: &Placement<'_>) -> bool {
 }
 
 /// Whether `def` is assigned to `host`: the host's own entry in `entries`, else its role's, else
-/// the rollout file ([`by_rollout`]).
+/// the rollout file ([`by_rollout`]). A service made for a host group ([`crate::group_scope`]) is
+/// assigned to the hosts of its roles alone, whatever the entries say, and its role is its group's
+/// name, which the fleet records as the role of a host in group mode.
 #[must_use]
 pub fn assigned(
     def: &ServiceDef,
     entries: Option<&ServiceAssignments>,
     host: &Placement<'_>,
 ) -> bool {
+    if def.scope.is_some() {
+        return by_rollout(def, host);
+    }
     let entry = entries.and_then(|e| e.hosts.get(host.node_id).or_else(|| e.roles.get(host.role)));
     match entry {
         Some(Entry::Include) => true,

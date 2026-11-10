@@ -129,6 +129,8 @@ pub mod desired;
 pub mod enrollment;
 pub mod fleet;
 pub mod force;
+pub(crate) mod group_converge;
+pub(crate) mod group_scope;
 pub(crate) mod group_uninstall;
 pub mod grpc;
 pub mod halt;
@@ -140,6 +142,7 @@ pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
+pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
 pub mod jti_file;
@@ -253,6 +256,18 @@ mod first_serving_tests;
 mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;
+#[cfg(test)]
+mod group_converge_tests;
+#[cfg(test)]
+mod group_decision_support;
+#[cfg(test)]
+mod group_decision_tests;
+#[cfg(test)]
+mod group_install_order_tests;
+#[cfg(test)]
+mod group_marks_tests;
+#[cfg(test)]
+mod group_set_desired_tests;
 #[cfg(test)]
 mod group_uninstall_tests;
 #[cfg(test)]

@@ -11,15 +11,18 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Heartbeat, LEGACY_AGENT_NAME};
 use serde::Serialize;
 
-use crate::converge::{Convergence, RoleCounts, converge_service};
+use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
 use crate::decide::Why;
 use crate::desired::Desired;
 use crate::enrollment::ServerCertificate;
 use crate::fleet::{Fleet, Host};
 use crate::halt;
+use crate::holds::on_bad_version;
+use crate::host_groups::GroupName;
 use crate::membership::{Member, account, deferred_count, members};
 use crate::ops::OpsState;
-use crate::services::ServiceDef;
+use crate::service::Coordinator;
+use crate::services::{ServiceDef, Services};
 
 /// One host in the status.
 #[derive(Debug, Serialize)]
@@ -115,6 +118,51 @@ pub struct ServiceStatus {
     pub plan: Option<hostkeeper_proto::hostkeeper::operator::v1::RolloutPlan>,
 }
 
+impl Coordinator {
+    /// The status of `def`, a service of `services` whose desired states are `all` and its own
+    /// `desired`: the rollout file's, or, for a service made for a host group, the group's
+    /// ([`crate::group_scope`]). Its hosts are those of the group alone.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs of one service's status, read under the fleet's lock"
+    )]
+    pub(crate) fn status_of(
+        &self,
+        def: &ServiceDef,
+        services: &Services,
+        all: &BTreeMap<String, Desired>,
+        desired: Option<Desired>,
+        fleet: &Fleet,
+        ops: &OpsState,
+        now: Duration,
+    ) -> ServiceStatus {
+        let roles = role_counts(def, desired.as_ref(), fleet, now);
+        let hosts: Vec<ServiceHostStatus> = fleet
+            .hosts_in(def)
+            .map(|(id, host)| ServiceHostStatus {
+                host: host_status(fleet, &def.name, id, host, now),
+                hold: halt::decide(&self.ops, services, all, &def.name, fleet, id, now).why(),
+                held_on_bad_version: on_bad_version(fleet, ops, &def.name, id),
+            })
+            .collect();
+        let up = hosts.iter().filter(|h| h.host.up).count();
+        let slots_held = hosts.iter().filter(|h| h.host.holds_slot).count();
+        let members = members(def, fleet, ops, desired.as_ref(), now);
+        let convergence = self.pair_convergence(def, desired.as_ref(), fleet, ops, now);
+        let plan = self.plan_in(def, services, desired.as_ref(), all, ops, fleet, now);
+        ServiceStatus {
+            plan,
+            desired,
+            roles,
+            hosts,
+            members,
+            up,
+            slots_held,
+            convergence,
+        }
+    }
+}
+
 /// What an operator reads.
 #[derive(Debug, Serialize)]
 pub struct Status {
@@ -137,6 +185,10 @@ pub struct Status {
     /// Every service the coordinator manages, by name: its desired state, the
     /// counts of its hosts per role, its hosts, and its convergence.
     pub per_service: BTreeMap<String, ServiceStatus>,
+    /// With host groups, every pair of a group and a package it lists, by group and package: the
+    /// services `Releases.Status` answers then. None for a coordinator without host groups.
+    #[serde(skip)]
+    pub(crate) groups: Option<BTreeMap<(GroupName, String), ServiceStatus>>,
     /// What operators changed ([`crate::ops`]): exclusions, labels, the audit ring. Left out
     /// until the first change, so a farm that never uses it reads the status it always did.
     #[serde(skip_serializing_if = "OpsState::is_empty")]
@@ -196,7 +248,7 @@ pub(crate) fn convergence_of(
         picks: desired.and_then(|desired| crate::picks::counts(def, desired, fleet)),
         ..convergence
     };
-    match halt::standing(ops, &def.name) {
+    match halt::standing(ops, def.group(), &def.name) {
         Some(halt) => convergence.halted(halt),
         None => convergence,
     }

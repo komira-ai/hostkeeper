@@ -125,6 +125,9 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::RepositoryUnknown => proto::ReleasesRefusal::RepositoryUnknown,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
+        SetError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
+        SetError::AmbiguousHostGroup => proto::ReleasesRefusal::AmbiguousHostGroup,
+        SetError::LimitsInHostGroup => proto::ReleasesRefusal::LimitsInHostGroup,
         SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
         SetError::Channel(ChannelRefusal::DigestMismatch) => {
             proto::ReleasesRefusal::ChannelDigestMismatch
@@ -142,6 +145,7 @@ pub(crate) fn wait_refusal(why: WaitRefused) -> proto::ReleasesRefusal {
     match why {
         WaitRefused::UnknownService => proto::ReleasesRefusal::UnknownService,
         WaitRefused::TooMany => proto::ReleasesRefusal::TooManyWaits,
+        WaitRefused::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
     }
 }
 
@@ -155,6 +159,7 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
             proto::ReleasesRefusal::KeysUnavailable
         }
         ConvergenceError::UnknownService => proto::ReleasesRefusal::UnknownService,
+        ConvergenceError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
     }
 }
 
@@ -369,6 +374,14 @@ impl ReleasesService {
     pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
         Self { coordinator }
     }
+
+    /// `not_in_host_group` for a request that names a host group while the coordinator holds none.
+    fn no_group_held(&self, named: &str) -> Result<(), Status> {
+        if named.is_empty() || self.coordinator.desired.in_group_mode() {
+            return Ok(());
+        }
+        Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup))
+    }
 }
 
 #[tonic::async_trait]
@@ -389,12 +402,11 @@ impl ReleasesApi for ReleasesService {
             }
         };
         let mut message = request.into_inner();
-        if !message.host_group.is_empty() {
-            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
-        }
+        self.no_group_held(&message.host_group)?;
         // A map left empty is a set without targets: proto3 sends no empty map.
         let targets = std::mem::take(&mut message.targets);
         let targets = (!targets.is_empty()).then_some(targets);
+        let host_group = std::mem::take(&mut message.host_group);
         let (body, ask) = desired_body(message).map_err(refusal::releases)?;
         let setter = match &ci {
             Some(verified) => Setter::Ci(verified),
@@ -402,7 +414,7 @@ impl ReleasesApi for ReleasesService {
         };
         let (set, record) = self
             .coordinator
-            .set_desired_with(&setter, &body, &ask, targets)
+            .set_desired_in(&setter, &body, &ask, targets, &host_group)
             .await
             .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
@@ -425,9 +437,7 @@ impl ReleasesApi for ReleasesService {
             return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
         }
         let message = request.into_inner();
-        if !message.host_group.is_empty() {
-            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
-        }
+        self.no_group_held(&message.host_group)?;
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -436,11 +446,12 @@ impl ReleasesApi for ReleasesService {
             service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
         let release = self
             .coordinator
-            .release_verified(service, &message.version)
+            .release_verified_in(&message.host_group, service, &message.version)
             .map_err(|why| {
                 refusal::releases(match why {
                     ReleaseError::UnknownService => proto::ReleasesRefusal::UnknownService,
                     ReleaseError::Unknown => proto::ReleasesRefusal::ReleaseUnknown,
+                    ReleaseError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
                 })
             })?;
         Ok(Response::new(proto::GetReleaseResponse {
@@ -463,9 +474,7 @@ impl ReleasesApi for ReleasesService {
         }
         // No service names the legacy service, as the JSON route's query does.
         let message = request.into_inner();
-        if !message.host_group.is_empty() {
-            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
-        }
+        self.no_group_held(&message.host_group)?;
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -473,12 +482,12 @@ impl ReleasesApi for ReleasesService {
         let service =
             service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
         self.coordinator
-            .convergence_verified(service)
+            .convergence_in(&message.host_group, service)
             .map(|convergence| {
                 let mut convergence = report::convergence(&convergence);
                 convergence.record = self
                     .coordinator
-                    .write_record(service)
+                    .write_record_in(&message.host_group, service)
                     .as_ref()
                     .map(record_proto);
                 Response::new(proto::ConvergeResponse {
@@ -504,9 +513,7 @@ impl ReleasesApi for ReleasesService {
         let limit = request.extensions().get::<CallLimit>().cloned();
         let connection = request.extensions().get::<ConnectionWaits>().cloned();
         let message = request.into_inner();
-        if !message.host_group.is_empty() {
-            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
-        }
+        self.no_group_held(&message.host_group)?;
         if message.wait_secs == 0 || message.wait_secs > MAX_WAIT_SECS {
             return Err(refusal::releases(proto::ReleasesRefusal::InvalidWait));
         }
@@ -519,7 +526,7 @@ impl ReleasesApi for ReleasesService {
             .ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
         let held = self
             .coordinator
-            .hold_wait(service)
+            .hold_wait(service, &message.host_group)
             .map_err(|why| refusal::releases(wait_refusal(why)))?;
         let wait = Duration::from_secs(message.wait_secs.into());
         if let Some(limit) = limit {
@@ -533,7 +540,7 @@ impl ReleasesApi for ReleasesService {
         let mut convergence = report::convergence(&convergence);
         convergence.record = self
             .coordinator
-            .write_record(service)
+            .write_record_in(&message.host_group, service)
             .as_ref()
             .map(record_proto);
         Ok(Response::new(proto::WaitConvergedResponse {

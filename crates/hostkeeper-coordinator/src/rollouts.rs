@@ -2,7 +2,8 @@
 //! the coordinator entering a stage by itself ([`advance`]), and the operator's
 //! `Rollouts.Advance`, `Rollouts.Pause` and `Rollouts.Resume`.
 //!
-//! The position of a plan ([`Rollout`]) is kept per service in the ops store and written in the
+//! The position of a plan ([`Rollout`]) is kept per service in the ops store (per package of a host
+//! group in the group's marks, [`crate::group_scope`]) and written in the
 //! halts file beside the ops file ([`crate::ops_file`]), whose reader skips a key it does not
 //! know, so the release before still reads both files. It is the desired version it is for, how
 //! far the plan has entered (one past the first stage of the rollout file of its last stage),
@@ -127,17 +128,18 @@ pub(crate) fn advance(
     // Every host heard runs the version and none is to install it: nothing is left to order,
     // and the plan is not built at all.
     let service = def.name.as_str();
+    let group = def.group();
     let rolled = fleet
-        .hosts_of(service)
+        .hosts_in(def)
         .all(|(_, h)| h.beat.version == want.version && h.beat.updating.is_none())
         && fleet
             .nodes()
             .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id));
-    let marks = ops.marks(service);
+    let marks = ops.read(|state| state.marks_in(group, service));
     if rolled || marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
         return;
     }
-    let kept_now = ops.read(|state| state.rollouts.get(service).cloned());
+    let kept_now = ops.read(|state| state.rollout_in(group, service));
     let view = View::of(def, want, kept_now.as_ref(), fleet, now);
     if view.paused.is_some() {
         return;
@@ -149,14 +151,15 @@ pub(crate) fn advance(
         return;
     };
     let record = kept(&view);
-    let audit = entry(
+    let mut audit = entry(
         COORDINATOR,
         "rollout_advance",
         &def.name,
         entered(&def.name, &view),
     );
+    audit.host_group = group.map(ToString::to_string);
     match ops.change(Write::BeforeMemory, audit, |state| {
-        state.rollouts.insert(def.name.clone(), record);
+        state.set_rollout_in(group, &def.name, record);
     }) {
         Ok(_) => fleet.set_marks(ops.read(marks_of)),
         Err(why) => {
@@ -211,9 +214,14 @@ impl Coordinator {
 
     /// The plan of `def` for its desired state `want` (none without one) at `now`, as the status
     /// answers it, over every service's desired state `all` and the ops state `ops`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs of one plan, read under the fleet's lock"
+    )]
     pub(crate) fn plan_in(
         &self,
         def: &ServiceDef,
+        services: &crate::services::Services,
         want: Option<&Desired>,
         all: &BTreeMap<String, Desired>,
         ops: &OpsState,
@@ -221,19 +229,12 @@ impl Coordinator {
         now: Duration,
     ) -> Option<proto::RolloutPlan> {
         let want = want?;
-        let halted = ops
-            .services
-            .get(&def.name)
-            .is_some_and(|marks| marks.halt.is_some() || marks.bad.contains(&want.version));
-        Some(plan_proto(
-            &self.services,
-            all,
-            def,
-            want,
-            halted,
-            fleet,
-            now,
-        ))
+        let halted = crate::halt::standing(ops, def.group(), &def.name).is_some()
+            || ops
+                .services
+                .get(&def.name)
+                .is_some_and(|marks| marks.bad.contains(&want.version));
+        Some(plan_proto(services, all, def, want, halted, fleet, now))
     }
 
     /// The plan of `def` as it stands now, for an answer; none when the service has no desired
@@ -242,7 +243,15 @@ impl Coordinator {
         let want = self.desired.get(&def.name);
         let all = self.desired.all();
         let ops = self.ops.state();
-        self.plan_in(def, want.as_ref(), &all, &ops, fleet, (self.clock)())
+        self.plan_in(
+            def,
+            &self.services,
+            want.as_ref(),
+            &all,
+            &ops,
+            fleet,
+            (self.clock)(),
+        )
     }
 
     /// `Rollouts.Advance`: enters the next stage of a plan that waits for an operator, and every
@@ -425,7 +434,7 @@ pub(crate) fn plan_proto(
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),
         finished: view.finished(),
         waiting_on,
-        host_group: String::new(),
+        host_group: def.group().map(ToString::to_string).unwrap_or_default(),
     }
 }
 

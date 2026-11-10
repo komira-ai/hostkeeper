@@ -31,12 +31,14 @@ pub(crate) enum ReleaseError {
     UnknownService,
     /// The version was never set with targets, or its release was dropped at the cap.
     Unknown,
+    /// The host group named is not held or does not list the service.
+    NotInHostGroup,
 }
 
 /// The release a set of `service` whose state is `desired` names with `targets`, judged by
 /// [`releases::checked`] with the release index of `body`, when it has one: `desired` holds its
 /// record, checked already, and `body` its text.
-fn release_of(
+pub(super) fn release_of(
     body: &[u8],
     service: &str,
     desired: &Desired,
@@ -140,6 +142,32 @@ impl Coordinator {
         ask: &WriteAsk,
         targets: Option<Targets>,
     ) -> Result<(Set, Option<WriteRecord>), SetError> {
+        self.set_desired_in(setter, body, ask, targets, "").await
+    }
+
+    /// [`Self::set_desired_with`] for a set that names the host group `host_group` (none: empty).
+    /// A coordinator that holds a host group sets the desired version of the package in the group,
+    /// or in each group that lists it ([`Self::set_desired_by_group`]); one that holds none
+    /// refuses a set that names a group `not_in_host_group`.
+    ///
+    /// # Errors
+    /// [`SetError`], as [`Self::set_desired_with`].
+    pub(crate) async fn set_desired_in(
+        &self,
+        setter: &Setter<'_>,
+        body: &[u8],
+        ask: &WriteAsk,
+        targets: Option<Targets>,
+        host_group: &str,
+    ) -> Result<(Set, Option<WriteRecord>), SetError> {
+        if self.desired.in_group_mode() {
+            return self
+                .set_desired_by_group(setter, body, ask, targets, host_group)
+                .await;
+        }
+        if !host_group.is_empty() {
+            return Err(SetError::NotInHostGroup);
+        }
         if ask.needs_records() && !self.desired.keeps_write_records() {
             return Err(SetError::Invalid(DesiredError::Unrecorded));
         }
@@ -157,27 +185,12 @@ impl Coordinator {
             }
         };
         if let Setter::Ci(verified) = setter {
-            // An allow-list entry that names no services stands for the legacy service.
-            let admitted = match &verified.services {
-                Some(names) => names.contains(&service),
-                None => self.legacy.as_deref() == Some(service.as_str()),
-            };
-            if !admitted {
-                tracing::warn!(
-                    workflow = %verified.job_workflow_ref,
-                    %service,
-                    "refused a desired state: the allow-list entry does not name the service"
-                );
-                return Err(SetError::Forbidden);
-            }
+            self.ci_admits(verified, &service)?;
         }
         // The release channel before the fleet's lock, which is never held across a wait on the
         // network; a refusal here changes nothing.
-        if let Some(channel) = &self.channel
-            && (release.is_none() || named.release_index.is_some())
-        {
-            channel.check(&service, &named).await?;
-        }
+        self.check_channel(&service, &named, release.as_deref())
+            .await?;
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
             Setter::Operator(name) => (*name, format!("operator token {name}")),
@@ -246,7 +259,7 @@ impl Coordinator {
             // A set of another version ends a force that stands ([`crate::force`]), before
             // the lift: a lift that fails then leaves no force ordering the old version.
             end_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;
-            lift_by_setter(&self.ops, &service, &desired.version, actor, &set_by)?;
+            lift_by_setter(&self.ops, None, &service, &desired.version, actor, &set_by)?;
             record
         };
         match setter {
@@ -271,9 +284,49 @@ impl Coordinator {
         ))
     }
 
+    /// Asks the release channel (`--release-channel`), when there is one, about the set `named` of
+    /// `service`: only a set with an index, or with no targets (`release`), is asked about.
+    ///
+    /// # Errors
+    /// [`SetError::Channel`].
+    pub(super) async fn check_channel(
+        &self,
+        service: &str,
+        named: &Desired,
+        release: Option<&Release>,
+    ) -> Result<(), SetError> {
+        if let Some(channel) = &self.channel
+            && (release.is_none() || named.release_index.is_some())
+        {
+            channel.check(service, named).await?;
+        }
+        Ok(())
+    }
+
+    /// Whether the allow-list entry that admitted `verified` names `service`: an entry that names
+    /// no services stands for the legacy service.
+    ///
+    /// # Errors
+    /// [`SetError::Forbidden`].
+    pub(super) fn ci_admits(&self, verified: &Verified, service: &str) -> Result<(), SetError> {
+        let admitted = match &verified.services {
+            Some(names) => names.iter().any(|name| name == service),
+            None => self.legacy.as_deref() == Some(service),
+        };
+        if !admitted {
+            tracing::warn!(
+                workflow = %verified.job_workflow_ref,
+                %service,
+                "refused a desired state: the allow-list entry does not name the service"
+            );
+            return Err(SetError::Forbidden);
+        }
+        Ok(())
+    }
+
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of
     /// [`Coordinator::set_desired`], in that order.
-    fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
+    pub(super) fn refuse(&self, def: &ServiceDef, desired: &Desired) -> Result<(), SetError> {
         let (service, version) = (def.name.as_str(), &desired.version);
         if !def.version_scheme.parses(version) {
             return Err(SetError::UnparseableVersion);
@@ -303,7 +356,7 @@ impl Coordinator {
     /// index); without targets, when the set names a digest or an index (`names_release`) and the
     /// version has a release. A set with no digest, no index and no targets of a version with a
     /// release changes its limits and keeps the release.
-    fn refuse_release(
+    pub(super) fn refuse_release(
         &self,
         service: &str,
         version: &Version,
@@ -327,7 +380,7 @@ impl Coordinator {
     /// `<name>-<suite>` of that repository's name and one of its suites
     /// ([`registry::channels`]). A set without targets, or with artifact entries alone, is not
     /// checked.
-    fn refuse_repository(
+    pub(super) fn refuse_repository(
         &self,
         def: &ServiceDef,
         release: Option<&Release>,
@@ -372,14 +425,9 @@ impl Coordinator {
             .ok_or(ReleaseError::Unknown)
     }
 
-    /// How the writes of `service` are recorded now, as `Releases.Converge` shows them: none
-    /// when the store keeps no records ([`crate::desired::DesiredStore::write_record`]).
-    pub(crate) fn write_record(&self, service: &str) -> Option<WriteRecord> {
-        self.desired.write_record(service)
-    }
-
     /// Where the hosts of `service` stand against its desired state, as
-    /// [`Self::convergence`] answers once the CI token is checked.
+    /// [`Self::convergence`] answers once the CI token is checked: with host groups, over every
+    /// group that lists the service and has a desired version of it ([`Self::convergence_in`]).
     ///
     /// # Errors
     /// [`ConvergenceError::UnknownService`]: the coordinator manages no such service.
@@ -387,11 +435,7 @@ impl Coordinator {
         &self,
         service: &str,
     ) -> Result<Convergence, ConvergenceError> {
-        let def = self
-            .services
-            .get(service)
-            .ok_or(ConvergenceError::UnknownService)?;
-        Ok(self.convergence_of_def(def))
+        self.convergence_in("", service)
     }
 
     /// Where the hosts of the service `def` defines stand against its desired state, now.

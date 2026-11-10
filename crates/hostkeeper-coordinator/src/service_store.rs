@@ -10,26 +10,69 @@
 //! is committed. When another coordinator led the database meanwhile, the pending changes are
 //! dropped knowingly and the coordinator stops.
 
+#[cfg(test)]
+use std::sync::PoisonError;
 use std::time::Duration;
 
 use super::Coordinator;
+#[cfg(test)]
+use super::SetProgress;
+use hostkeeper_wire::version::Version;
+
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
 use crate::store::Health;
 
 impl Coordinator {
+    /// Whether the fleet's lock, which every decision and order is made under, is held now.
+    #[cfg(test)]
+    pub(crate) fn fleet_held(&self) -> bool {
+        matches!(
+            self.fleet.try_lock(),
+            Err(std::sync::TryLockError::WouldBlock)
+        )
+    }
+
+    /// Tells `waits` [`SetProgress::Waits`] each time CI's set of a desired state finds the
+    /// fleet's lock held and waits for it.
+    #[cfg(test)]
+    pub(crate) fn tell_when_set_waits(&self, waits: std::sync::mpsc::Sender<SetProgress>) {
+        *self
+            .set_waits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner) = Some(waits);
+    }
+
+    /// The fleet's lock, for CI's set of a desired state. Under test, a set that finds the
+    /// lock held first says so to the test that asked ([`Self::tell_when_set_waits`]); then it
+    /// waits for the lock, as every build does.
+    pub(super) fn lock_fleet_for_set(&self) -> std::sync::MutexGuard<'_, Fleet> {
+        #[cfg(test)]
+        self.set_waits
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .filter(|_| self.fleet_held())
+            .for_each(|waits| {
+                let _ = waits.send(SetProgress::Waits);
+            });
+        self.lock_fleet()
+    }
+
     /// Refreshes the operator's marks the decisions of `fleet` read, and whether the store's link
     /// is lost, which a refresh of the marks alone keeps.
     pub(crate) fn refresh_marks(&self, fleet: &mut Fleet) {
         fleet.store_lost = self.ops.health() != Health::Up;
+        fleet.set_group_mode(self.desired.in_group_mode());
         fleet.set_marks(self.ops.read(marks_of));
         self.keep_releases(fleet);
     }
 
     /// Refreshes the releases the picks of `fleet` read ([`crate::picks`]): those of every
-    /// service's desired version and of every standing force's version.
+    /// service's desired version, of every host group's desired versions and of every standing
+    /// force's version.
     pub(crate) fn keep_releases(&self, fleet: &mut Fleet) {
-        let forced = self.ops.read(|state| {
+        let mut other: Vec<(String, Version)> = self.ops.read(|state| {
             state
                 .services
                 .iter()
@@ -38,7 +81,8 @@ impl Coordinator {
                 })
                 .collect()
         });
-        fleet.picks.keep(self.desired.releases_of(forced));
+        other.extend(self.desired.group_versions());
+        fleet.picks.keep(self.desired.releases_of(other));
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to

@@ -226,7 +226,9 @@ where
                 Err(ConvergenceError::Refused(CiRefused::Unavailable)) => {
                     error(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
                 }
-                Err(ConvergenceError::UnknownService) => error(StatusCode::NOT_FOUND, "not_found"),
+                Err(ConvergenceError::UnknownService | ConvergenceError::NotInHostGroup) => {
+                    error(StatusCode::NOT_FOUND, "not_found")
+                }
             }
         }
         (Surface::Heartbeat, _, HEARTBEAT_PATH)
@@ -399,8 +401,10 @@ where
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
         Err(
-            why
-            @ (SetError::Invalid(_) | SetError::UnparseableVersion | SetError::TargetInvalid(_)),
+            why @ (SetError::Invalid(_)
+            | SetError::UnparseableVersion
+            | SetError::TargetInvalid(_)
+            | SetError::LimitsInHostGroup),
         ) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
@@ -411,6 +415,8 @@ where
             | SetError::DigestConflict
             | SetError::ReleaseExists
             | SetError::RepositoryUnknown
+            | SetError::NotInHostGroup
+            | SetError::AmbiguousHostGroup
             | SetError::Channel(_)),
         ) => {
             tracing::warn!(%why, "refused a desired state");

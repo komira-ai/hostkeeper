@@ -37,7 +37,9 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
+use crate::group_scope::group_services;
 use crate::group_uninstall::{cancel_uninstalls, listed_by, order_uninstalls};
+use crate::grpc::report;
 use crate::holds::marks_of;
 use crate::host_group_proto::{body_proto, policy_of};
 use crate::host_groups::{GroupName, HostGroup, ListError, check_packages};
@@ -130,13 +132,14 @@ impl Coordinator {
             .collect())
     }
 
-    /// `group` as `List` and `Get` say it: `hosts` hosts, and, with `ops`, each package's
-    /// minimum version and convergence, which `Get` answers and `List` does not.
+    /// `group` as `List` and `Get` say it: `hosts` hosts, and, with `detail`, each package's
+    /// minimum version, from the ops state, and convergence, by package, which `Get` answers and
+    /// `List` does not.
     fn state_of(
         name: &GroupName,
         group: &HostGroup,
         hosts: u32,
-        ops: Option<&OpsState>,
+        detail: Option<(&OpsState, &BTreeMap<String, proto::Convergence>)>,
     ) -> proto::HostGroupState {
         proto::HostGroupState {
             group: Some(body_proto(name, group)),
@@ -151,11 +154,11 @@ impl Coordinator {
                         .desired
                         .get(package)
                         .map(|desired| desired.version.as_str().to_owned()),
-                    min_version: ops.and_then(|state| {
+                    min_version: detail.and_then(|(state, _)| {
                         let marks = state.group_marks(name, package);
                         marks.min_version.map(|version| version.as_str().to_owned())
                     }),
-                    convergence: ops.map(|_| proto::Convergence::default()),
+                    convergence: detail.and_then(|(_, converged)| converged.get(package).cloned()),
                 })
                 .collect(),
         }
@@ -216,8 +219,9 @@ impl Coordinator {
     /// `HostGroups.Get`: one group as `List` says it, with each package's minimum version and
     /// convergence, and a page of its hosts by node id, those moving into it among them: at most
     /// `limit` (capped at [`MAX_PAGE`]; 0 is the cap) after the page token's, which is the last
-    /// node id of the page before. The convergence of a package is not yet filled in: it is the
-    /// empty one. Changes nothing.
+    /// node id of the page before. The convergence of a package is that of the package in the
+    /// group, as `Releases.Converge` answers it for the group, without its write record. Changes
+    /// nothing.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the name, or a page token that is no node
@@ -258,9 +262,20 @@ impl Coordinator {
             _ => String::new(),
         };
         let count = u32::try_from(hosts.len()).unwrap_or(u32::MAX);
-        let state = self
-            .ops
-            .read(|state| Self::state_of(&name, &group, count, Some(state)));
+        let now = (self.clock)();
+        let fleet = self.lock_fleet();
+        let ops = self.ops.state();
+        let services = group_services(&name, &group, &self.services, &ops, &[]);
+        let desired = self.desired.group_desireds(&name);
+        let converged: BTreeMap<String, proto::Convergence> = services
+            .defs()
+            .map(|def| {
+                let found = self.pair_convergence(def, desired.get(&def.name), &fleet, &ops, now);
+                (def.name.clone(), report::convergence(&found))
+            })
+            .collect();
+        drop(fleet);
+        let state = Self::state_of(&name, &group, count, Some((&ops, &converged)));
         Ok(proto::GetHostGroupResponse {
             host_group: Some(state),
             node_ids: page.into_iter().map(ToString::to_string).collect(),

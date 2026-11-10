@@ -84,10 +84,14 @@ pub(crate) struct World {
 impl World {
     /// A world named `name`, its clock at 2000 s.
     pub(crate) fn new(name: &str) -> Self {
+        Self::over(name, Fake::new())
+    }
+
+    /// A world named `name` over the committed state `fake` holds.
+    pub(crate) fn over(name: &str, fake: Fake) -> Self {
         let records = Arc::new(MemoryRecords::new());
         let enrollment =
             EnrollmentRig::over_records(&format!("{name}-enrollment"), records.clone());
-        let fake = Fake::new();
         let mut rig = Rig::new(name);
         rig.coordinator =
             coordinator_on(&fake, &rig.clock, Some(Arc::clone(&enrollment.enrollment)));
