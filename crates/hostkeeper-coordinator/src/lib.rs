@@ -321,6 +321,8 @@ mod host_held_tests;
 #[cfg(test)]
 mod host_inventory_tests;
 #[cfg(test)]
+mod hosts_groups_tests;
+#[cfg(test)]
 mod hosts_tests;
 #[cfg(test)]
 mod http_tests;
