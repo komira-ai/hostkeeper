@@ -42,8 +42,9 @@ start. In group mode:
   read. The services an approval names still write assignment entries, which place nothing.
 - A host in no group is ordered nothing: no install, no update, no uninstall. It keeps running
   what it runs. A newly approved host is in no group until `Move` puts it in one.
-- The role the coordinator records for a host is the name of its group (empty for a host in none).
-  `Hosts.List` and `Hosts.Get` show it as `role` and as `host_group`. The slots of a package
+- The role the coordinator's fleet records for a host is the name of its group (empty for a host in
+  none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
+  `host_group`; a host in none keeps the role it was approved for and an empty `host_group`. The slots of a package
   (`max_updating`), its `min_up` and its stages count the hosts of one group, so two groups never
   wait on each other; a hold of a role holds the group of that name.
 - The rollout file is still read at start. It gives a package what a package has alone: its

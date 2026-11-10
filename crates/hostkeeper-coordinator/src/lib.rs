@@ -36,8 +36,9 @@
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
 //! - `host_groups`: the stored form of the host groups (their packages, policy, generation and
-//!   desired versions) and of each (group, package)'s marks, which the placement of hosts does
-//!   not read yet; [`operator_host_groups`] and [`host_move`] are the `HostGroups` calls that
+//!   desired versions) and of each (group, package)'s marks, which the decision by group reads
+//!   (`group_scope`: what a heartbeat is decided over, with `group_converge`, `moving` and
+//!   `install_order`); [`operator_host_groups`] and [`host_move`] are the `HostGroups` calls that
 //!   write them, with `group_uninstall`, the uninstall intents a change of a group writes;
 //! - [`order_terms`]: the order id, try and package digest an update answer carries to an agent
 //!   that announced `order-v1`, over a transport that carries typed orders (the JSON route

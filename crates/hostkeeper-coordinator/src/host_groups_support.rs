@@ -348,15 +348,15 @@ pub(crate) fn operator_entry(
 }
 
 /// The audit entry `seq` the coordinator makes when it cancels the uninstall of `service` from
-/// `node`.
-pub(crate) fn cancelled(seq: u64, service: &str, node: &str) -> AuditEntry {
+/// `node` for a change of the group `group`.
+pub(crate) fn cancelled(seq: u64, group: &str, service: &str, node: &str) -> AuditEntry {
     AuditEntry {
         seq,
         by: "coordinator".to_owned(),
         action: "uninstall_cancelled".to_owned(),
         service: Some(service.to_owned()),
         node_id: Some(node.to_owned()),
-        host_group: None,
+        host_group: Some(group.to_owned()),
         reason: None,
     }
 }

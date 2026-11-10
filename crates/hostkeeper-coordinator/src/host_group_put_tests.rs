@@ -249,7 +249,8 @@ fn a_put_orders_the_removed_packages_uninstalled_in_reverse_list_order() {
 /// Proves: a `Put` that lists a package again cancels the uninstall intents of the group's hosts
 /// for it, one `uninstall_cancelled` entry by the coordinator for each after the `Put`'s own, and
 /// leaves the intents of the packages still out; a host that settles an intent by reporting the
-/// package gone is audited `uninstalled`, as an `Unassign`'s is.
+/// package gone is audited `uninstalled`, as an `Unassign`'s is; every one of these entries
+/// names the group.
 ///
 /// Catches: a package put back that is uninstalled from the hosts all the same.
 #[test]
@@ -281,8 +282,8 @@ fn a_put_that_lists_a_package_again_cancels_its_intents() {
                 None,
                 &format!("packages +svc: {REASON}")
             ),
-            cancelled(audited as u64 + 2, "svc", "d1"),
-            cancelled(audited as u64 + 3, "svc", "d2"),
+            cancelled(audited as u64 + 2, "alpha", "svc", "d1"),
+            cancelled(audited as u64 + 3, "alpha", "svc", "d2"),
         ]
     );
     assert_eq!(
@@ -304,6 +305,7 @@ fn a_put_that_lists_a_package_again_cancels_its_intents() {
         (last.service.as_deref(), last.node_id.as_deref()),
         (Some("cfg"), Some("d2"))
     );
+    assert_eq!(last.host_group.as_deref(), Some("alpha"));
 }
 
 /// Proves: every refusal of `Put` is its token and changes nothing (what the store holds, the

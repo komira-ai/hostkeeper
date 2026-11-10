@@ -160,8 +160,9 @@ impl Coordinator {
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
         let unknown = crate::trusted_root::TrustedRootSaid::default();
+        let fleet = self.lock_fleet();
         let basis = self.basis_of(&host);
-        self.reply_to(who, beat, false, (Turn::Hold, unknown), &basis);
+        self.reply_to(fleet, who, beat, false, (Turn::Hold, unknown), &basis);
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
             self.running.forget(&host);

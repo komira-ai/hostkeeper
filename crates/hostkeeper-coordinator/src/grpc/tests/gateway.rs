@@ -373,24 +373,27 @@ async fn gateway_sends_no_cors_headers_and_refuses_options() {
 }
 
 /// Proves: a gateway POST of each method of `HostGroups` is served, not `UNIMPLEMENTED`: with the
-/// operator token it is answered by its handler (the empty body of `List` is a page of no group,
-/// the others refuse it), and with no token at all it is 401 `unauthorized`, before the body is
-/// read. No refusal changes a file.
+/// operator token it is answered by its handler (the empty body of `List` is 200 with a page of
+/// no group, `{}`; that of `Get`, `Put`, `Remove` and `Move` is 400 `invalid_request`), and with
+/// no token at all it is 401 `unauthorized`, before the body is read. No refusal changes a file.
 #[tokio::test]
 async fn gateway_serves_host_groups_and_checks_the_token_first() {
     let gateway = Gateway::new("gw-host-groups");
     let before = gateway.files();
     let unauthorized = refused("UNAUTHENTICATED", "unauthorized");
-    for path in [
-        "/hostkeeper.operator.v1.HostGroups/List",
-        "/hostkeeper.operator.v1.HostGroups/Get",
-        "/hostkeeper.operator.v1.HostGroups/Put",
-        "/hostkeeper.operator.v1.HostGroups/Remove",
-        "/hostkeeper.operator.v1.HostGroups/Move",
+    let invalid = refused("INVALID_ARGUMENT", "invalid_request");
+    for (path, status, body) in [
+        ("List", StatusCode::OK, "{}"),
+        ("Get", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Put", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Remove", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Move", StatusCode::BAD_REQUEST, invalid.as_str()),
     ] {
-        let with_token = gateway.operator(path, "{}").await;
-        assert_ne!(with_token.status, StatusCode::NOT_IMPLEMENTED, "{path}");
-        let without = gateway.send(http("POST", path, None, "{")).await;
+        let path = format!("/hostkeeper.operator.v1.HostGroups/{path}");
+        let with_token = gateway.operator(&path, "{}").await;
+        assert_eq!(with_token.status, status, "{path}");
+        assert_eq!(with_token.text(), body, "{path}");
+        let without = gateway.send(http("POST", &path, None, "{")).await;
         assert_eq!(without.status, StatusCode::UNAUTHORIZED, "{path}");
         assert_eq!(without.text(), unauthorized, "{path}");
     }

@@ -377,6 +377,67 @@ fn a_moved_hosts_next_heartbeat_keeps_the_new_group() {
     );
 }
 
+/// Proves: a heartbeat reads its host's group while it holds the fleet's lock, which a
+/// `HostGroups.Move` of the host also runs under: a heartbeat stopped where it reads the clock to
+/// decide the host finds the fleet locked, so a move can neither land between the read of the
+/// host's group and the lock, nor be undone by a heartbeat that read the group it left.
+///
+/// Catches: a heartbeat that reads the host's group, and takes the fleet's lock after, and so
+/// records the host under the group it was moved out of and ends the move the call began.
+#[test]
+fn a_heartbeat_reads_the_hosts_group_under_the_fleets_lock() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::{Arc, Mutex, TryLockError, mpsc};
+
+    let mut farm = Farm::new("gd-group-under-lock");
+    farm.group("alpha", &["web"], None);
+    farm.group("beta", &["web"], None);
+    farm.host("m1", "alpha");
+    farm.want("alpha", "web", "2.0");
+    farm.want("beta", "web", "3.0");
+
+    let (inside_tx, inside_rx) = mpsc::channel();
+    let done_tx = inside_tx.clone();
+    let (go_tx, go_rx) = mpsc::channel::<()>();
+    let go_rx = Mutex::new(go_rx);
+    let stopped = AtomicBool::new(false);
+    let clock = Arc::clone(&farm.world.coordinator().clock);
+    farm.world.rig.coordinator.clock = Arc::new(move || {
+        if !stopped.swap(true, Ordering::SeqCst) {
+            inside_tx.send(true).expect("the test listens");
+            go_rx
+                .lock()
+                .expect("the receiver")
+                .recv()
+                .expect("the test lets it go on");
+        }
+        clock()
+    });
+
+    let (locked, reply) = std::thread::scope(|scope| {
+        let farm = &farm;
+        let heartbeat = scope.spawn(move || {
+            let reply = farm.tell("m1", &[("web", "1.0")]);
+            // Wakes the test even when the heartbeat never read the clock, so it never waits
+            // without end.
+            let _ = done_tx.send(false);
+            reply
+        });
+        let inside = inside_rx
+            .recv()
+            .expect("the heartbeat reads the clock or ends");
+        assert!(inside, "the heartbeat ended without reading the clock");
+        let locked = matches!(
+            farm.world.coordinator().fleet.try_lock(),
+            Err(TryLockError::WouldBlock)
+        );
+        go_tx.send(()).expect("the heartbeat waits");
+        (locked, heartbeat.join().expect("the heartbeat ends"))
+    });
+    assert!(locked, "the host's group was read outside the fleet's lock");
+    assert_eq!(reply, update("web", "2.0"));
+}
+
 /// What `Hosts.Get` says of the first serving heartbeat of `host`.
 fn first_serving(farm: &Farm, host: &str) -> Option<u64> {
     farm.world

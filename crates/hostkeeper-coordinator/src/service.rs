@@ -515,8 +515,13 @@ impl Coordinator {
         }
         let turn = self.turn_of(&who.host_id, machine_id);
         let asked = beat.agent_features.clone();
+        // The fleet's lock is taken before the host's group is read: a `HostGroups.Move` of the
+        // host runs under that lock, so the group this heartbeat is decided over is never one
+        // the host has been moved out of since it was read.
+        let fleet = self.lock_fleet();
         let basis = self.basis_of(&who.host_id);
-        let (reply, order, terms, acks) = self.reply_to(who, beat, orders, (turn, root), &basis);
+        let (reply, order, terms, acks) =
+            self.reply_to(fleet, who, beat, orders, (turn, root), &basis);
         // Only an agent that announced features gets `features`: an older agent reads the
         // reply strictly and refuses a field it does not know.
         let features: Option<Vec<String>> = (!asked.is_empty()).then(|| {
@@ -555,6 +560,7 @@ impl Coordinator {
 
     fn reply_to(
         &self,
+        mut fleet: std::sync::MutexGuard<'_, Fleet>,
         who: Identity,
         mut beat: Heartbeat,
         orders: bool,
@@ -583,10 +589,10 @@ impl Coordinator {
             trusted_root,
             skewed_beats: 0,
         };
-        // The halts are noted under the fleet's lock, which every decision and order below is
-        // made under: a halt is never raised between another heartbeat's decision to order and
-        // its order. The lock order is the fleet's, then the ops store's, as everywhere.
-        let mut fleet = self.lock_fleet();
+        // `fleet` is the fleet's lock, taken by the caller before the basis was read: every
+        // decision and order below is made under it, so a halt is never raised between another
+        // heartbeat's decision to order and its order. The lock order is the fleet's, then the
+        // ops store's, as everywhere.
         // An agent acknowledged its verdicts is read as still reporting the last one, so every
         // rule below reads what it read while the agent resent it.
         let acking =

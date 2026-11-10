@@ -7,10 +7,14 @@
 //! its last heartbeat and the new group does not list, in the reverse of the old list's order
 //! ([`crate::group_uninstall`]), and the cancelling of the host's intents for the packages the
 //! new group lists. The enrollment store and the operations store are two stores: a commit of the
-//! second that fails writes the host's old record back, so a refused call changes nothing. Every
-//! record the fleet keeps of the host is placed in the new group, whose name is the role the fleet
-//! records for a host, and the host's move begins afresh: a move under way is replaced, and the
-//! admission it had is dropped ([`crate::moving`]).
+//! second that fails writes the host's old record back, so a refused call changes nothing. When
+//! that write back fails too, the call is still refused with the commit's token, and the host
+//! stays in the group it was moved to, moving from the old one by its record, with no audit
+//! entry, no intent and no new facts generation: its next heartbeat begins the move from the
+//! record ([`crate::moving`]). After a commit, every record the fleet keeps of the host is placed
+//! in the new group, whose name is the role the fleet records for a host, and the host's move
+//! begins afresh: a move under way is replaced, and the admission it had is dropped
+//! ([`crate::moving`]).
 //!
 //! The audit entry raises the host's facts generation ([`crate::facts`]), once it is committed:
 //! the facts the host is sent carry the new group, and the host is ordered nothing after its
@@ -20,7 +24,7 @@
 //!
 //! The entry names the host (`node_id`) and the new group (`host_group`); its reason is
 //! `from <old> to <new>: <reason>`, or `into <new>: <reason>` for a host that was in no group.
-//! Each intent cancelled is an `uninstall_cancelled` entry after it. The sequence that follows
+//! Each intent cancelled is an `uninstall_cancelled` entry after it, naming the new group. The sequence that follows
 //! the move (admission, the uninstalls, the installs) is [`crate::moving`].
 
 use hostkeeper_enrollment::enroll::{Membership, StoreError};
@@ -119,7 +123,7 @@ impl Coordinator {
             .ops
             .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
                 let mut entries = vec![audit];
-                entries.extend(cancel_uninstalls(state, &into.packages, &nodes));
+                entries.extend(cancel_uninstalls(state, &to, &into.packages, &nodes));
                 order_uninstalls(state, &wanted);
                 Ok(entries)
             })

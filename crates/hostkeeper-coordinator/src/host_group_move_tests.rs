@@ -156,7 +156,7 @@ fn a_second_move_cancels_the_intents_of_what_the_new_group_lists() {
                 Some("d1"),
                 &format!("from beta to gamma: {REASON}"),
             ),
-            cancelled(audited + 2, "svc", "d1"),
+            cancelled(audited + 2, "gamma", "svc", "d1"),
         ]
     );
     assert_eq!(

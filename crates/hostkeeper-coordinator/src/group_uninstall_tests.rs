@@ -108,8 +108,8 @@ fn each_package_is_given_a_generation_above_every_one_given_before() {
 }
 
 /// Proves: cancelling drops the intents of the hosts named for the packages named, answers one
-/// `uninstall_cancelled` entry by the coordinator for each, packages first and hosts in order,
-/// keeps the counter of a package whose last intent went, and touches neither a host not named,
+/// `uninstall_cancelled` entry by the coordinator for each (naming the group of the change),
+/// packages first and hosts in order, keeps the counter of a package whose last intent went, and touches neither a host not named,
 /// a package not named, nor a package that has no entry.
 ///
 /// Catches: a package put back in a group that is still uninstalled from its hosts, or a
@@ -126,6 +126,7 @@ fn cancelling_drops_the_named_intents_and_answers_one_entry_each() {
     );
     let entries = cancel_uninstalls(
         &mut state,
+        &"alpha".parse().expect("a group name"),
         &names(&["svc", "cfg", "none"]),
         &names(&["d1", "d3"]),
     );
@@ -133,6 +134,7 @@ fn cancelling_drops_the_named_intents_and_answers_one_entry_each() {
         let mut entry = AuditEntry::new("coordinator", "uninstall_cancelled");
         entry.service = Some(service.to_owned());
         entry.node_id = Some(node.to_owned());
+        entry.host_group = Some("alpha".to_owned());
         entry
     };
     assert_eq!(entries, vec![entry("svc", "d1"), entry("cfg", "d1")]);

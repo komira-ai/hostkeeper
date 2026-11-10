@@ -12,6 +12,7 @@
 use hostkeeper_wire::HostId;
 
 use crate::fleet::Fleet;
+use crate::host_groups::GroupName;
 use crate::intents::CANCELLED;
 use crate::ops::{AuditEntry, OpsState};
 use crate::reconcile::COORDINATOR;
@@ -59,9 +60,10 @@ pub(crate) fn order_uninstalls(state: &mut OpsState, wanted: &[Wanted]) {
 
 /// Drops the uninstall intents of `hosts` for `packages`, and answers the audit entries of those
 /// dropped, `uninstall_cancelled` by the coordinator, in the order of `packages` and then of
-/// `hosts`.
+/// `hosts`; each names `group`, the group the change that cancels it is of.
 pub(crate) fn cancel_uninstalls(
     state: &mut OpsState,
+    group: &GroupName,
     packages: &[String],
     hosts: &[String],
 ) -> Vec<AuditEntry> {
@@ -75,6 +77,7 @@ pub(crate) fn cancel_uninstalls(
                 let mut entry = AuditEntry::new(COORDINATOR, CANCELLED);
                 entry.service = Some(package.clone());
                 entry.node_id = Some(host.clone());
+                entry.host_group = Some(group.to_string());
                 cancelled.push(entry);
             }
         }

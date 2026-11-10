@@ -352,7 +352,7 @@ impl Coordinator {
         let done = self.ops.decide_changes_with(staged, |state| {
             state.drop_group_packages(&name, &next.packages);
             let mut entries = vec![audit];
-            entries.extend(cancel_uninstalls(state, &next.packages, &nodes));
+            entries.extend(cancel_uninstalls(state, &name, &next.packages, &nodes));
             order_uninstalls(state, &wanted);
             entries
         })?;
