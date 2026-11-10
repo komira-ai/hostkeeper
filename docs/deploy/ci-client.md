@@ -375,7 +375,10 @@ for that audience, print `::add-mask::<token>` so the log never shows it, and se
 coordinator through a pipe. The coordinator accepts each token once, so each call asks for its
 own. The answer goes to the file of `--response-file`, so that stdout carries only the mask line,
 and the workflow sends each call's diagnostics to a file of its own (`2>`), which the outputs step
-reads. The set:
+reads. The set's diagnostics also go to its step's own log, through `tee` (`2> >(tee <file> >&2)`),
+and the step ends with hkctl's exit code, so a red set step names the cause: the coordinator's code
+(`hkctl: the coordinator answered FAILED_PRECONDITION`) and the `refused: <token>` line, or `no
+answer`. The set:
 
 ```sh
 hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator-ca.pem" \
