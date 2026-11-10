@@ -59,13 +59,15 @@ fn assert_succeeded(rec: &Record, version: &str) {
     assert_eq!(rec.progress.awaiting_restart, None, "{rec:?}");
 }
 
-/// What every restart into [`NEXT`] leaves: the record `Succeeded`, the job's process the new
-/// binary (another process than the old one), `current` naming [`NEXT`] (its start finished the
-/// switch), `previous` [`N`] and no `next`, and the new daemon reporting itself and hostkeeper at
-/// [`NEXT`] with the order succeeded.
+/// What every restart into [`NEXT`] leaves: the record `Succeeded`, the new daemon reporting
+/// itself and hostkeeper at [`NEXT`] with the order succeeded, the job's process the new binary
+/// (another process than the old one), `current` naming [`NEXT`] (its start finished the switch),
+/// `previous` [`N`] and no `next`. The new binary confirms the record before it removes `next`,
+/// so the binary directory is read only after its heartbeat, which it sends once both are done.
 fn assert_restarted_into_next(host: &MacSelfHost, old_pid: u32) {
     let rec = host.settled();
     assert_succeeded(&rec, NEXT);
+    host.reports_succeeded(NEXT, NEXT);
     let pid = host.runs(NEXT);
     assert_ne!(pid, old_pid, "launchd started a new process");
     assert_eq!(
@@ -73,7 +75,6 @@ fn assert_restarted_into_next(host: &MacSelfHost, old_pid: u32) {
         Some(N)
     );
     assert_eq!(host.layout().next().expect("next"), None);
-    host.reports_succeeded(NEXT, NEXT);
 }
 
 /// Catches a Mac self-update whose new binary never runs (`next` not linked, the job not started
@@ -158,7 +159,9 @@ fn an_install_of_the_running_version_is_succeeded_without_a_restart() {
 /// old binary execs [`NEXT`] again, [`HAND_OVER_TRIES`] times in all; at the next start the count
 /// is spent, the old binary settles the update `Failed` after the commit, of class release,
 /// `self_update_fallback`, lists [`NEXT`] bad, and the job runs [`N`] again, `current` never moved
-/// (no `previous`, no `next`).
+/// (no `previous`, no `next`). The old binary settles the record before it removes `next`, and
+/// runs as the daemon only after both: the binary directory is read once its heartbeat reports
+/// the fallback.
 #[test]
 fn a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd() {
     let host = MacSelfHost::new("badnext", Plan::InstalledFailingNext);
@@ -179,6 +182,7 @@ fn a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd() {
     );
     assert_eq!(rec.progress.awaiting_restart, None, "{rec:?}");
     assert!(host.next_is_bad());
+    host.reports_fell_back(N);
     host.runs(N);
     assert_eq!(host.layout().previous().expect("previous"), None);
     assert_eq!(host.layout().next().expect("next"), None);
