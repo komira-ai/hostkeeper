@@ -2,8 +2,10 @@
 //! each version, signed and published on the release channel, and ordered the way CI's set of a
 //! release still orders a Mac.
 //!
-//! No daemon announces `macos-pkg` yet (`hostkeeper_install::announce`), so a Mac can take no
-//! native entry and the Mac half of the rig keeps its archive orders: hostkeeper's package of
+//! A Mac announces `macos-pkg` only with the signers file `/etc/hostkeeper/macos-pkg.toml`
+//! (`hostkeeper_daemon::macos_pkg`), which the rig does not write, and the pinned release
+//! announces it on no Mac, so the rig's Mac takes no native entry and the Mac half of the rig
+//! keeps its archive orders: hostkeeper's package of
 //! each version is built as the release builder lays it out
 //! (`crates/xtask/src/release/package.rs`: `bin/hostkeeper`, `files/trusted_root.json`,
 //! `manifest.toml`; this build's also `bin/hook`), signed and put on the loopback release channel

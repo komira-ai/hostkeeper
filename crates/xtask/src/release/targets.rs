@@ -1,17 +1,21 @@
 //! `release targets`: the `targets` of the set that deploys one package of a release
 //! (docs/design/packages.md, section 3.7; docs/design/packages-native.md, section 10.5). For each
-//! Linux platform the package is released for ([`Package::platforms`]), one native entry and
-//! nothing else: a release is set with native entries alone, so a host installs it from the
-//! project's package repository (stage 9 of packages-native.md section 10.6).
+//! platform the package is released for ([`Package::platforms`]), one native entry and nothing
+//! else: a release is set with native entries alone, so a Linux host installs it from the
+//! project's package repository and a Mac from the release's signed installer (stage 9 of
+//! packages-native.md section 10.6).
 //!
-//! **macOS is left out of every list.** No daemon announces `macos-pkg` yet, so a Mac could take
-//! no entry of a `macos-arm64` list; with none, a Mac shows `no_target` (packages-native.md
-//! section 10.8, A24's condition; no Mac is enrolled). The release still ships its `.pkg`s, and
-//! they are not read here.
+//! **The `macos-arm64` list is the signed `.pkg`'s `macos-pkg` entry alone.** A Mac whose daemon
+//! announces `macos-pkg` (its signers file `/etc/hostkeeper/macos-pkg.toml` loaded, and
+//! `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) takes it; a Mac that does not announce
+//! it is ordered nothing (the coordinator's pick gives it `installer_dropped` or
+//! `no_build_for_host`). mdm has no Mac build, and hello's failing build no `.pkg`, so neither
+//! has a macOS list.
 //!
-//! The native packages are the release's `.deb`s ([`Package::native_name`]), which the release
-//! publishes to the project's repository, suite `testing` ([`crate::channels::spec`]).
-//! hostkeeper's is the daemon's `.deb`, the package that bootstraps a host (section 10.4).
+//! The native packages are the release's `.deb`s and `.pkg`s ([`Package::native_name`]), which
+//! the release publishes to the project's repository, suite `testing`, and to the installers'
+//! `testing` directory ([`crate::channels::spec`]). hostkeeper's are the daemon's `.deb` and its
+//! installer, the packages that bootstrap a host (section 10.4).
 //!
 //! **Hello's failing build is listed only when asked for** (`--fail-ready`): its `.deb`
 //! `hello_<v>-fail-ready_<arch>.deb` is in the suite `testing-fail`, which lists it alone, under
@@ -30,10 +34,17 @@
 //!          command, and its daemon runs built-in steps) and its bounds, its run units, health
 //!          URL, params and min_hostkeeper; `package` the package's name (`hostkeeper`, `hello`,
 //!          `mdm`; the failing build's is hello's); the installer's bounds ([`INSTALLER_BOUNDS`])
+//! macOS    installer macos-pkg, location komira-testing hostkeeper/<release>/<service>-<release>-
+//!          macos-arm64.pkg (the Mac's store of the testing directory, rooted at pkg/), digest
+//!          and bytes the .pkg's; no attestation (the key and the pin bind the bytes,
+//!          packages-native.md section 10.3), no repository, no package version; the manifest
+//!          the Linux one with the .pkg's identifier, launchd labels and program
+//!          ([`manifest::of_pkg`])
 //! ```
 //!
 //! Each native package must be a regular file whose bundle lists its SHA-256, and a `.deb`'s
-//! `control` must name the service, the version and the architecture.
+//! `control` must name the service, the version and the architecture; a `.pkg` has no control to
+//! read.
 //!
 //! Everything is checked before anything is written, and a refusal lists every problem found:
 //! each native package as above. Then the entries pass the coordinator's checks of a set's
@@ -48,15 +59,16 @@ use std::sync::LazyLock;
 
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_config::platform::Platform as IndexPlatform;
-use hostkeeper_proto::hostkeeper::release::v1::{InstallerBounds, Target, TargetList};
+use hostkeeper_proto::hostkeeper::release::v1::{InstallerBounds, Location, Target, TargetList};
 use hostkeeper_release::{Installer, manifest as release_manifest, target};
 use prost_reflect::{DescriptorPool, DynamicMessage, MessageDescriptor};
 use serde_json::{Map, Value};
 
 use self::files::{MAX_BUNDLE_BYTES, bundle_problem, read_capped, regular_file};
-use super::contract::{Package, Platform, Version, bundle_of};
+use super::contract::{Package, Platform, TESTING_ENTRY, Version, bundle_of};
 use super::{Error, answer, file_sha256};
 use crate::channels::apt::{control, deb};
+use crate::channels::spec;
 
 mod files;
 mod manifest;
@@ -95,17 +107,16 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
     let package = request.package;
     let service = ServiceName::new(package.service().name())
         .map_err(|e| Error::Failed(format!("the service: {e}")))?;
-    // macOS is left out of every list: no daemon announces `macos-pkg` yet, so a Mac could take
-    // no entry of it (with no list, its hosts show `no_target`; none is enrolled), and the failing
-    // build has no `.pkg`.
+    // Every list is its platform's native entry alone: a Linux platform's `.deb`, the Mac's
+    // signed `.pkg` (the failing build has none, so no macOS list).
     let mut natives: Vec<_> = package
         .platforms()
         .iter()
         .filter_map(|&platform| {
             let (arch, index) = match platform {
-                Platform::LinuxX86_64 => ("amd64", IndexPlatform::LinuxX86_64),
-                Platform::LinuxArm64 => ("arm64", IndexPlatform::LinuxArm64),
-                Platform::MacosArm64 => return None,
+                Platform::LinuxX86_64 => (Some("amd64"), IndexPlatform::LinuxX86_64),
+                Platform::LinuxArm64 => (Some("arm64"), IndexPlatform::LinuxArm64),
+                Platform::MacosArm64 => (None, IndexPlatform::MacosArm64),
             };
             let name = package.native_name(&request.version, platform)?;
             Some((index, arch, name))
@@ -128,12 +139,13 @@ pub(crate) fn targets(request: &Request) -> Result<Vec<String>, Error> {
 }
 
 /// The native entry of `request`'s package with its installer, from its native package `name` in
-/// the release's directory and the manifest compiled in for the package (none when the package
-/// is missing, which is a problem already); every problem goes to `problems`.
+/// the release's directory (a `.deb` for the Debian architecture `arch`, a Mac's `.pkg` for none)
+/// and the manifest compiled in for the package (none when the package is missing, which is a
+/// problem already); every problem goes to `problems`.
 fn native_of(
     request: &Request,
     service: &ServiceName,
-    (arch, name): (&str, &str),
+    (arch, name): (Option<&str>, &str),
     problems: &mut Vec<String>,
 ) -> Result<Option<(Installer, Target)>, Error> {
     let package = request.package;
@@ -155,7 +167,8 @@ fn native_of(
         }
     }
     let version = package.deb_version(&request.version);
-    if measured.is_some() {
+    // Only a `.deb` has a control to read; a `.pkg` is held to its bundle and its digest.
+    if let (Some(arch), Some(_)) = (arch, &measured) {
         let bytes = std::fs::read(dir.join(name))
             .map_err(Error::io(format!("read {}", dir.join(name).display())))?;
         problems.extend(
@@ -167,6 +180,30 @@ fn native_of(
     let Some(digest) = measured else {
         return Ok(None);
     };
+    if arch.is_none() {
+        let path = dir.join(name);
+        let bytes = std::fs::metadata(&path)
+            .map_err(Error::io(format!("read {}", path.display())))?
+            .len();
+        let installer = Installer::MacosPkg;
+        return Ok(Some((
+            installer,
+            Target {
+                installer: installer.as_str().to_owned(),
+                locations: vec![Location {
+                    store: TESTING_ENTRY.to_owned(),
+                    locator: spec::HOSTKEEPER.pkg_locator(&request.version.to_string(), name),
+                }],
+                digest,
+                bytes,
+                // The key and the pin bind the bytes: a `macos-pkg` entry carries no attestation.
+                attestation: None,
+                manifest: Some(manifest::of_pkg(package, &request.version)),
+                repository: None,
+                package_version: None,
+            },
+        )));
+    }
     let installer = Installer::Apt;
     Ok(Some((
         installer,

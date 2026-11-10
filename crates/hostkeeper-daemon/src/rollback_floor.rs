@@ -26,14 +26,24 @@ pub const REASON_ROLLBACK_BELOW_INSTALLER: &str = "rollback_below_installer";
 /// The first release of hostkeeper whose daemon runs the steps of each installer: a binary
 /// before it cannot stage, activate, roll back or remove a version of it. `hostkeeper-archive`
 /// has none: every release reads it.
-pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 1] = [(
-    Installer::Apt,
-    HostkeeperVersion {
-        major: 0,
-        minor: 1,
-        patch: 211,
-    },
-)];
+pub const INSTALLER_FLOORS: [(Installer, HostkeeperVersion); 2] = [
+    (
+        Installer::Apt,
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 211,
+        },
+    ),
+    (
+        Installer::MacosPkg,
+        HostkeeperVersion {
+            major: 0,
+            minor: 1,
+            patch: 223,
+        },
+    ),
+];
 
 /// The first release of hostkeeper that updates itself through a native installer: its new
 /// binary installs its own package after it confirmed itself, and it runs the move and its

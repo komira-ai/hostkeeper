@@ -84,8 +84,9 @@ use crate::start::{self, Settings, StartError};
 use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
 use hostkeeper_install::announce::OsHost;
+use hostkeeper_install::host::{Host, Ids};
 use hostkeeper_install::macos_pkg::signers::Signers;
-use hostkeeper_install::{Announcement, Family};
+use hostkeeper_install::{Announcement, Family, Tools};
 
 pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
@@ -716,7 +717,9 @@ pub fn load_signers(files: &HostFiles, owner_uid: u32) -> Result<Option<Signers>
 /// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
 /// directory; the prune of step 18 of a force deletes nothing yet. The installers the daemon
 /// announces are decided here, once, from the host's `os-release` under the `os_root` of
-/// `files` ([`hostkeeper_install::announce`]). The directory `gh` runs in
+/// `files` ([`hostkeeper_install::announce`]), its repository entries
+/// ([`crate::repositories::announced`]) and, on a Mac, its signers file and tools
+/// ([`crate::macos_pkg::ports`]: `macos-pkg`, whose installer's ports the daemon then holds). The directory `gh` runs in
 /// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when the stores file of `files` is not sound
 /// ([`StartError::Stores`]; one that is not there gives the store `channel`) or the signers file is
 /// not ([`StartError::MacosPkg`]), when that directory
@@ -734,18 +737,24 @@ pub fn host_ports(
             path: files.stores.clone(),
             source,
         })?;
-    // The signers are checked here and not kept: the daemon's order path runs no installer yet
-    // (item A6 dispatches them), so `macos-pkg` is not in `entry::INSTALLERS` and the daemon does
-    // not announce an installer it cannot run. A6 takes the loaded signers from this call.
-    let _signers = load_signers(files, 0)?;
+    let signers = load_signers(files, 0)?;
+    let macos_pkg = crate::macos_pkg::ports(
+        adapters.kind == PlatformKind::Macos,
+        Host::new(&files.os_root, Ids::MAC),
+        signers,
+        host_tools(),
+    );
     let repositories = repositories::load(files, repositories::ROOT_UID)?;
     let announcement = repositories::announced(announcement, &files.os_root, &repositories);
+    let announcement = crate::macos_pkg::announced(announcement, macos_pkg.as_ref());
+    say_announced(&announcement);
     let mut repository = RepositoryPorts::new(
         &settings.packages_dir,
         Path::new("/"),
         repositories,
         Owner::ROOT,
-    );
+    )
+    .with_macos_pkg(macos_pkg);
     if let Some(dir) = &files.repositories {
         repository = repository.with_managed(Managed {
             dir: dir.clone(),
@@ -821,19 +830,36 @@ pub fn host_ports(
     })
 }
 
-/// The installers the daemon announces, decided from the host's `os-release` under `os_root`
-/// ([`hostkeeper_install::announce`]), said once on standard error.
+/// The installers every host announces, and its family, decided from the host's `os-release`
+/// under `os_root` ([`hostkeeper_install::announce`]).
 fn announced(os_root: &Path) -> Announcement {
-    let announcement = hostkeeper_install::announce(OsHost {
+    hostkeeper_install::announce(OsHost {
         macos: cfg!(target_os = "macos"),
         root: os_root,
-    });
+    })
+}
+
+/// Says once on standard error the installers the daemon announces, the native ones added
+/// ([`crate::repositories::announced`], [`crate::macos_pkg::announced`]), and the family.
+fn say_announced(announcement: &Announcement) {
     eprintln!(
         "hostkeeper daemon: announces the installers {}; the os-release family is {}",
         announcement.names().join(", "),
         announcement.family.map_or("none", Family::as_str)
     );
-    announcement
+}
+
+/// The `macos-pkg` installer's tools on a Mac: the host's own
+/// ([`hostkeeper_install::HostTools`]).
+#[cfg(target_os = "macos")]
+fn host_tools() -> Option<Arc<dyn Tools>> {
+    Some(Arc::new(hostkeeper_install::HostTools))
+}
+
+/// No `macos-pkg` installer's tools: a build for another platform runs none.
+#[cfg(not(target_os = "macos"))]
+fn host_tools() -> Option<Arc<dyn Tools>> {
+    None
 }
 
 /// A service manager and a step launcher that run nothing: each refuses. No platform's adapters

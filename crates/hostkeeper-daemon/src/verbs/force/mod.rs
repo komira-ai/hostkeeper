@@ -287,15 +287,18 @@ fn obtain(
     version: &Version,
     (digest, index_digest, entry): (&PackageDigest, Option<&PackageDigest>, Option<&Entry>),
 ) -> Result<Target, Reply> {
-    let repository = entry.and_then(|entry| {
-        crate::repository::backend_of_entry(entry).map(|backend| (backend, entry))
-    });
+    let repository = entry
+        .and_then(|entry| crate::repository::native_of_entry(entry).map(|native| (native, entry)));
     let staged = match repository {
-        // A repository entry is staged, or found sealed for the same entry, by its installer.
-        Some((backend, entry)) => {
+        // A native entry is staged, or found sealed for the same entry, by its installer.
+        Some((native, entry)) => {
+            let fetch_failed = |error: PackageError| {
+                let refusal = checks::package_refusal(&error);
+                failed_before(package_class(&error), refusal.token())
+            };
             let dir = ctx
                 .repository()
-                .stage(backend, service, version, entry)
+                .stage_with(native, service, version, entry, &fetch_failed)
                 .map_err(force_reply)?;
             Some((dir.dir().to_path_buf(), dir.staged().digest().to_owned()))
         }
@@ -315,7 +318,7 @@ fn obtain(
         }
     };
     let manifest = read_manifest(ctx, service, version, &dir)?;
-    // A repository package places nothing: the package manager installs its files.
+    // A native package places nothing: its installer installs its files.
     if repository.is_none() {
         let placer = ctx.placer();
         placer

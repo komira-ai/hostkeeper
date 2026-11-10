@@ -1,7 +1,10 @@
 //! The repository installer in the daemon (packages-repositories.md section 4): an order whose
 //! entry is a repository entry (`apt`) is staged, activated, rolled back, removed and observed by
 //! [`hostkeeper_install::repository::RepositoryInstaller`] over its backend
-//! ([`hostkeeper_install::backend_of`]), with the daemon's ports.
+//! ([`hostkeeper_install::backend_of`]), with the daemon's ports. An order whose entry is a
+//! `macos-pkg` entry goes through the same steps, each run by the `macos-pkg` installer instead
+//! ([`crate::macos_pkg`]); [`native_of_entry`] tells the two apart, and every step below
+//! dispatches on the entry's installer.
 //!
 //! | Where | What the daemon does for a repository version |
 //! |---|---|
@@ -42,8 +45,10 @@ use hostkeeper_release::Installer;
 use hostkeeper_steps::{Clock, StepExit, StepLauncher, SwitchError, UpdateOrder};
 use hostkeeper_unpack::{FillError, FillOrder, HostFs, Owner, stage_filled};
 
+use crate::checks;
 use crate::executor::Reply;
-use crate::packages::VersionDir;
+use crate::macos_pkg::MacosPkgPorts;
+use crate::packages::{PackageError, Packages, VersionDir};
 use crate::real_packages::{self, refusal_of};
 use crate::refusal::Refusal;
 use crate::repository_push::{Managed, SharedRepositories};
@@ -92,6 +97,9 @@ pub struct RepositoryPorts {
     pub dirs: HostDirs,
     /// The installer lock's file.
     pub lock: PathBuf,
+    /// The `macos-pkg` installer's ports, on a Mac that announces it ([`crate::macos_pkg`]);
+    /// `None` on every other host.
+    pub macos_pkg: Option<Arc<MacosPkgPorts>>,
 }
 
 impl RepositoryPorts {
@@ -115,6 +123,15 @@ impl RepositoryPorts {
                 work: state.join(WORK_DIR),
             },
             lock: state.join(LOCK_FILE),
+            macos_pkg: None,
+        }
+    }
+
+    /// The same ports, with the `macos-pkg` installer's (`None`: the host does not announce it).
+    pub fn with_macos_pkg(self, macos_pkg: Option<MacosPkgPorts>) -> RepositoryPorts {
+        RepositoryPorts {
+            macos_pkg: macos_pkg.map(Arc::new),
+            ..self
         }
     }
 
@@ -148,12 +165,12 @@ fn record_error(error: impl std::fmt::Display) -> RecordError {
 }
 
 impl PlacedRecords {
-    fn placer(&self) -> Placer<'_> {
+    pub(crate) fn placer(&self) -> Placer<'_> {
         Placer::new(self.roots.clone(), &*self.fs, &*self.units)
     }
 
     /// Changes the `installed` entries with `change`, under the placed lock.
-    fn change(
+    pub(crate) fn change(
         &self,
         change: impl FnOnce(&mut BTreeMap<String, InstalledEntry>),
     ) -> Result<(), RecordError> {
@@ -227,6 +244,9 @@ impl Records for PlacedRecords {
 pub struct Repository {
     pub launcher: Arc<dyn StepLauncher>,
     pub ports: Arc<RepositoryPorts>,
+    /// The daemon's package store, which fetches a `macos-pkg` entry's `.pkg` by its pin
+    /// ([`Packages::pinned`]).
+    pub packages: Arc<dyn Packages>,
     pub clock: Arc<dyn Clock>,
     pub roots: Roots,
     pub fs: Arc<dyn Fs + Send + Sync>,
@@ -256,13 +276,16 @@ pub fn first_tool_run() -> u64 {
 
 /// Why a version could not be staged.
 #[derive(Debug, thiserror::Error)]
-enum StageFailure {
+pub(crate) enum StageFailure {
     #[error("{0}")]
     Installer(Failure),
     #[error("{0}")]
     Target(TargetError),
     #[error("{0}")]
     Changed(String),
+    /// The package store could not give the `.pkg` of a `macos-pkg` entry.
+    #[error("{0}")]
+    Fetch(PackageError),
 }
 
 /// The repository installer's backend of `entry`, `None` for an artifact entry.
@@ -272,6 +295,30 @@ pub fn backend_of_entry(entry: &Target) -> Option<&'static dyn Backend> {
         .parse::<Installer>()
         .ok()
         .and_then(backend_of)
+}
+
+/// A native installer whose steps the daemon runs itself, with its own ports: the repository
+/// installer over a backend (`apt`), or `macos-pkg`.
+#[derive(Clone, Copy)]
+pub enum Native {
+    /// A repository installer's backend.
+    Repository(&'static dyn Backend),
+    /// The `macos-pkg` installer ([`crate::macos_pkg`]).
+    MacosPkg,
+}
+
+/// The native installer of `entry`; `None` for an entry of an artifact installer the package
+/// store stages (`hostkeeper-archive`).
+pub fn native_of_entry(entry: &Target) -> Option<Native> {
+    match entry.installer.parse::<Installer>() {
+        Ok(Installer::MacosPkg) => Some(Native::MacosPkg),
+        _ => backend_of_entry(entry).map(Native::Repository),
+    }
+}
+
+/// The answer `no_backend` gives for an entry of `installer`.
+fn no_backend(installer: &str) -> String {
+    format!("the installer {installer:?} has no backend here")
 }
 
 /// The order's verdict for a step that failed before the runner: `Failed` before the commit
@@ -338,7 +385,7 @@ fn names(order: &UpdateOrder) -> Result<(ServiceName, Version), SwitchError> {
 }
 
 impl Repository {
-    fn placer(&self) -> Placer<'_> {
+    pub(crate) fn placer(&self) -> Placer<'_> {
         Placer::new(self.roots.clone(), &*self.fs, &*self.units)
     }
 
@@ -367,7 +414,7 @@ impl Repository {
 
     /// The verdict of a stage of `service` that ended with `failure` ([`finished`]), said in
     /// the log with its detail.
-    fn stage_failed(&self, service: &ServiceName, failure: &Failure) -> Reply {
+    pub(crate) fn stage_failed(&self, service: &ServiceName, failure: &Failure) -> Reply {
         let detail = format!("service={service}: {failure}");
         (self.log)(&match failure.reason().outcome() {
             Outcome::Failed => crate::boot::alert_line(ALERT_STAGE_FAILED, &detail),
@@ -387,25 +434,66 @@ impl Repository {
         Order::from_entry(backend, service, version, entry, self.max_package_bytes)
     }
 
-    /// The sealed version directory of `entry` for `service` at `version`, staged by the
-    /// installer of `backend` when it is not on the host. `Err` is the order's reply.
+    /// The sealed version directory of `entry` for `service` at `version`, staged by its
+    /// native installer `native` when it is not on the host. `Err` is the order's reply; a
+    /// refusal of the package store (the fetch of a `.pkg`) is refused with its token.
     pub fn stage(
         &self,
-        backend: &dyn Backend,
+        native: Native,
         service: &ServiceName,
         version: &Version,
         entry: &Target,
     ) -> Result<VersionDir, Reply> {
+        self.stage_with(native, service, version, entry, &|error| {
+            Reply::refused(checks::package_refusal(&error), error)
+        })
+    }
+
+    /// [`Repository::stage`], with `fetch_failed` the reply to a refusal of the package store
+    /// (a force keeps its class: [`crate::verbs::force`]).
+    pub fn stage_with(
+        &self,
+        native: Native,
+        service: &ServiceName,
+        version: &Version,
+        entry: &Target,
+        fetch_failed: &dyn Fn(PackageError) -> Reply,
+    ) -> Result<VersionDir, Reply> {
+        let backend = match native {
+            Native::Repository(backend) => backend,
+            Native::MacosPkg => return self.stage_pkg(service, version, entry, fetch_failed),
+        };
         let order = self
             .order(backend, service, version, entry)
             .map_err(|failure| self.stage_failed(service, &failure))?;
         let digest = Sha256Hex::parse(&order.pin).ok_or_else(|| {
             Reply::refused(Refusal::OrderInvalid, "the entry's digest is no SHA-256")
         })?;
+        let mut fill = |stage: &Path| {
+            self.with(backend, service, |installer| installer.stage(&order, stage))
+                .map(drop)
+                .map_err(StageFailure::Installer)
+        };
+        self.fill_sealed(service, version, &digest, entry, &mut fill, fetch_failed)
+    }
+
+    /// The sealed version directory of `entry` for `service` at `version`, whose package has
+    /// `digest`: the one on the host when it is sealed for the same entry (another entry is
+    /// `target_changed`), or one staged by `fill` into an empty staging directory, the entry
+    /// written beside it as `target.json`, sealed and published. `Err` is the order's reply.
+    pub(crate) fn fill_sealed(
+        &self,
+        service: &ServiceName,
+        version: &Version,
+        digest: &Sha256Hex,
+        entry: &Target,
+        fill: &mut dyn FnMut(&Path) -> Result<(), StageFailure>,
+        fetch_failed: &dyn Fn(PackageError) -> Reply,
+    ) -> Result<VersionDir, Reply> {
         let fill_order = FillOrder {
             service,
             version,
-            package_digest: &digest,
+            package_digest: digest,
         };
         let mut same = |dir: &Path| match target::read(dir) {
             Ok(Some(sealed)) if sealed == *entry => Ok(()),
@@ -415,8 +503,7 @@ impl Repository {
             Err(error) => Err(StageFailure::Target(error)),
         };
         let mut fill = |stage: &Path| {
-            self.with(backend, service, |installer| installer.stage(&order, stage))
-                .map_err(StageFailure::Installer)?;
+            fill(stage)?;
             target::write(stage, entry).map_err(StageFailure::Target)
         };
         let packages = HostFs::open(&self.ports.packages_dir, self.ports.owner)
@@ -441,6 +528,7 @@ impl Repository {
                 FillError::Fill(StageFailure::Target(error)) => {
                     Reply::refused(Refusal::ReleaseUnreadable, error)
                 }
+                FillError::Fill(StageFailure::Fetch(error)) => fetch_failed(error),
             },
         )?;
         hostkeeper_steps::Staged::seal(&filled.dir)
@@ -472,6 +560,9 @@ impl Repository {
         dir: &Path,
         entry: &Target,
     ) -> Result<(), Failure> {
+        if let Some(Native::MacosPkg) = native_of_entry(entry) {
+            return self.activate_pkg(service, version, dir, entry);
+        }
         let backend = backend_of_entry(entry).ok_or_else(|| {
             Failure::new(
                 Reason::IoError,
@@ -540,13 +631,22 @@ impl Repository {
     /// (docs/design/packages-native.md, section 10.4, step 5). `false` when there was none.
     pub fn unpend(&self, service: &ServiceName) -> Result<bool, RecordError> {
         let records = self.records();
-        match records.load(service)? {
-            Some(mut record) if record.pending => {
-                record.pending = false;
-                records.save(service, &record).map(|()| true)
-            }
-            _ => Ok(false),
+        let pending = records
+            .placer()
+            .store()
+            .load()
+            .map_err(record_error)?
+            .installed
+            .get(service.as_str())
+            .is_some_and(|entry| entry.pending);
+        if pending {
+            records.change(|installed| {
+                installed
+                    .entry(service.to_string())
+                    .and_modify(|entry| entry.pending = false);
+            })?;
         }
+        Ok(pending)
     }
 
     /// The record of `service` dropped: it is installed by `hostkeeper-archive` again (the
@@ -556,7 +656,7 @@ impl Repository {
     }
 
     /// The `installed` entries of `placed.json` as the repository installer reads them.
-    fn records(&self) -> PlacedRecords {
+    pub(crate) fn records(&self) -> PlacedRecords {
         PlacedRecords {
             roots: self.roots.clone(),
             fs: Arc::clone(&self.fs),
@@ -591,19 +691,10 @@ impl Repository {
                 .stop_unit(unit)
                 .map_err(|e| failed(e.to_string()))?;
         }
-        let remove_secs = manifest
-            .installer_bounds
-            .map_or(REMOVE_SECS_WITHOUT_BOUNDS, |bounds| bounds.remove_secs);
-        let backend = backend_of_entry(entry).ok_or_else(|| {
-            failed(format!(
-                "the installer {:?} has no backend here",
-                entry.installer
-            ))
-        })?;
-        self.with(backend, &service, |installer| {
-            installer.remove(&service, remove_secs)
-        })
-        .map_err(switch_error)?;
+        if native_of_entry(entry).is_none() {
+            return Err(failed(no_backend(&entry.installer)));
+        }
+        self.remove(&service, entry).map_err(switch_error)?;
         let placer = self.placer();
         let named = placer
             .current(service.as_str())
@@ -620,17 +711,16 @@ impl Repository {
 
     /// The installer's `remove` of `service`, installed from `entry`, within its `remove_secs`.
     pub fn remove(&self, service: &ServiceName, entry: &Target) -> Result<(), Failure> {
+        if let Some(Native::MacosPkg) = native_of_entry(entry) {
+            return self.remove_pkg(service, entry);
+        }
         let remove_secs = entry
             .manifest
             .as_ref()
             .and_then(|manifest| manifest.installer_bounds)
             .map_or(REMOVE_SECS_WITHOUT_BOUNDS, |bounds| bounds.remove_secs);
-        let backend = backend_of_entry(entry).ok_or_else(|| {
-            Failure::new(
-                Reason::OrderInvalid,
-                format!("the installer {:?} has no backend here", entry.installer),
-            )
-        })?;
+        let backend = backend_of_entry(entry)
+            .ok_or_else(|| Failure::new(Reason::OrderInvalid, no_backend(&entry.installer)))?;
         self.with(backend, service, |installer| {
             installer.remove(service, remove_secs)
         })
@@ -640,12 +730,11 @@ impl Repository {
     /// The drift of `service`, whose `current` version holds `entry`, at this heartbeat: `None`
     /// when there is none, or when the installed version cannot be read (said by `log`).
     pub fn drift(&self, service: &ServiceName, entry: &Target) -> Result<Option<Drift>, Failure> {
-        let backend = backend_of_entry(entry).ok_or_else(|| {
-            Failure::new(
-                Reason::OrderInvalid,
-                format!("the installer {:?} has no backend here", entry.installer),
-            )
-        })?;
+        if let Some(Native::MacosPkg) = native_of_entry(entry) {
+            return self.drift_pkg(service, entry);
+        }
+        let backend = backend_of_entry(entry)
+            .ok_or_else(|| Failure::new(Reason::OrderInvalid, no_backend(&entry.installer)))?;
         let package = entry
             .manifest
             .as_ref()

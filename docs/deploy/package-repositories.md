@@ -127,26 +127,32 @@ every native package (`hello_<version>-fail-ready_<arch>.deb.sigstore.json`). It
 suite **`testing-fail`** of the same apt repository, which lists that build alone, under
 `X.Y.Z~fail.ready`, and nothing else; the pool file is `apt/pool/hostkeeper/hello_<version>~fail.ready_<arch>.deb`,
 the name its control file gives. `testing` and `stable` never list it, and it is never promoted. Its
-`.pkg` is not released (no daemon announces `macos-pkg` yet). A host that is to be ordered it needs
+`.pkg` is not released, so no Mac is ordered the failing build. A host that is to be ordered it needs
 the repository entry `/etc/hostkeeper/repositories/komira-testing-fail.sources` with `Suites: testing-fail`
 and the same keyring as `komira-testing`, which its daemon writes once the coordinator's registry entry
 `komira` lists the suite `testing-fail`.
 
 `cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
-`--service mdm`) lists, for each Linux platform, the native entry alone (docs/design/packages-native.md,
-section 10.5, A24): an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
+`--service mdm`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
+section 10.5, A24): for each Linux platform an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
 above (`/etc/hostkeeper/repositories/komira-testing.sources`, which each Linux host's daemon writes
 from the coordinator's registry entry `komira`, suites `testing` and `stable`:
 [repository-keys.md](../operations/repository-keys.md#put-the-repository-in-the-registry); the
 coordinator refuses the set (`repository_unknown`) while its registry lacks `komira`), at the release's
-version, pinned by the `.deb`'s SHA-256. It writes no `hostkeeper-archive` entry, and no list for macOS
-while no daemon announces `macos-pkg`: the release's `.pkg`s are still published to the store, and a
-Mac (none is enrolled) would show `no_target`. `--service hello --fail-ready`, given explicitly and
-never by default, writes the failing build's entries instead: for each Linux platform, an `apt` entry
-of the repository entry `komira-testing-fail` (the suite `testing-fail`), at the package version
-`<version>~fail.ready`, pinned by the SHA-256 of `hello_<version>-fail-ready_<arch>.deb`, with the
-manifest of the failing build's archive; none for macOS. Without `--fail-ready` the entries are as
-above, and a failing build is never among them.
+version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm has no
+macOS platform) a `macos-pkg` entry of the signed `.pkg`, located in the store `komira-testing` at
+`hostkeeper/<version>/<file>` (the installers' `testing` directory, rooted at `pkg/`) and pinned by
+its SHA-256 and size. It writes no `hostkeeper-archive` entry, and the macOS list carries the
+`.pkg`'s entry alone, which a Mac whose daemon announces `macos-pkg` (its signers file
+`/etc/hostkeeper/macos-pkg.toml` loaded, `/usr/sbin/installer` and `/usr/sbin/pkgutil` present)
+takes; a Mac that does not announce it is ordered nothing (`installer_dropped` or
+`no_build_for_host`, as the coordinator's pick gives). `--service hello --fail-ready`, given
+explicitly and never by default, writes the failing build's entries instead: for each Linux
+platform, an `apt` entry of the repository entry `komira-testing-fail` (the suite `testing-fail`), at
+the package version `<version>~fail.ready`, pinned by the SHA-256 of
+`hello_<version>-fail-ready_<arch>.deb`, with the manifest of the failing build's archive; none for
+macOS, where the failing build has no `.pkg`. Without `--fail-ready` the entries are as above, and a
+failing build is never among them.
 
 hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
 the release) and no hook command: its daemon updates itself through its package with built-in steps

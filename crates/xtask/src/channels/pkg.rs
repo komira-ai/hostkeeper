@@ -13,7 +13,9 @@
 //!
 //! - **testing** is the directory `pkg/hostkeeper/<version>/` ([`spec::Product::pkg_prefix`]):
 //!   the installers, the `.sigstore.json` bundle of each, and a `SHA256SUMS` of exactly these
-//!   files.
+//!   files. A Mac's store of this channel is rooted at `pkg/` and fetches an installer by
+//!   `hostkeeper/<version>/<file>` ([`spec::Product::pkg_locator`]), the location of the
+//!   `macos-pkg` entry of a `macos-arm64` list (`release targets`).
 //!   `channels pkg upload` puts each file once, with `If-None-Match: *`, so a version's file is
 //!   never replaced. It never touches the pointer.
 //! - **stable** is the pointer `pkg/hostkeeper/stable.json` ([`spec::Product::pkg_stable_key`]),

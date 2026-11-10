@@ -5,6 +5,10 @@
 //! for a host running a native installer, but on a rollback to a version whose list has no
 //! native entry; and the releases of the move, accepted over gRPC.
 //!
+//! The same pick for a Mac, whose list is the signed `.pkg` alone (`macos-pkg`, build item of
+//! `release targets` for macOS): ordered to a Mac whose daemon announces `macos-pkg`, nothing to
+//! one that does not.
+//!
 //! `apt` is the native installer here (a repository entry); `deb` and `tarball` are installers
 //! of other formats, which do not move a host.
 
@@ -14,7 +18,7 @@ use std::collections::BTreeMap;
 
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_proto::hostkeeper::release::v1::{Target, TargetList};
+use hostkeeper_proto::hostkeeper::release::v1::{Location, Target, TargetList};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
 use support::targets::{SET_DESIRED, digest, entry, grpc, list, put_komira, repository_entry};
@@ -28,6 +32,7 @@ stages = [100]
 "#;
 
 const X86: agent::Platform = agent::Platform::LinuxX8664;
+const MAC: agent::Platform = agent::Platform::DarwinArm64;
 const ARCHIVE: &str = "hostkeeper-archive";
 
 /// A time past the coordinator's quiet start.
@@ -389,4 +394,141 @@ async fn the_releases_of_the_move_are_accepted() {
     assert_eq!(hook.command[0], "/usr/bin/web");
     hook.boot = Some("restore".to_owned());
     set(&rig, "2.0", x86(vec![booted, web(ARCHIVE, 'f')])).await;
+}
+
+/// The release `service` (`hello` or `hostkeeper`) sets for the Mac and the Linux host at once:
+/// the `macos-arm64` list is the signed `.pkg` alone, as `cargo xtask release targets` writes it
+/// (one artifact entry of `macos-pkg` at a `komira-testing` location, with a digest and a size,
+/// no attestation, a manifest naming the package `dev.hostkeeper.<service>` and its installer
+/// bounds, `run` the launchd labels of the service); `linux-x86_64` is the `apt` entry.
+fn mac_release(service: &str, run: &[&str]) -> (BTreeMap<String, TargetList>, Target, Target) {
+    let mut pkg = entry(service, "macos-pkg", 'd', 52_000_000);
+    pkg.locations = vec![Location {
+        store: "komira-testing".to_owned(),
+        locator: format!("{service}/2.0/{service}.pkg"),
+    }];
+    let manifest = pkg.manifest.as_mut().expect("a manifest");
+    manifest.package = Some(format!("dev.hostkeeper.{service}"));
+    manifest.run = run.iter().map(|label| (*label).to_owned()).collect();
+    let deb = repository_entry(service, "2.0-1", 'a');
+    let targets = BTreeMap::from([
+        ("linux-x86_64".to_owned(), list(vec![deb.clone()])),
+        ("macos-arm64".to_owned(), list(vec![pkg.clone()])),
+    ]);
+    (targets, pkg, deb)
+}
+
+/// Proves: with a release whose `macos-arm64` list is the `macos-pkg` entry alone, for `hello`
+/// (two run labels) and for `hostkeeper` (none): a Mac whose daemon announces
+/// `[hostkeeper-archive, macos-pkg]` and runs no `service` is ordered `install` of the `.pkg`
+/// entry, whole, with the `.pkg`'s digest as the package digest; one that runs it from
+/// `hostkeeper-archive` is ordered `update` of the same entry (the move off the archive); a
+/// Linux host of the same release is still ordered its `apt` entry.
+/// Catches: a Mac held back though its daemon announces the installer, the move off the archive
+/// not made to a list that has no archive entry to fall back to, or the Linux list disturbed by
+/// the Mac's.
+#[tokio::test]
+async fn a_mac_that_announces_macos_pkg_is_picked_the_pkg_entry_and_a_linux_host_its_apt_entry() {
+    for (service, run) in [
+        ("hello", &["hello.a", "hello.b"][..]),
+        ("hostkeeper", &[][..]),
+    ] {
+        let rig = mac_rig(&format!("mac-pkg-{service}"));
+        put_komira(&rig).await;
+        let (targets, pkg, deb) = mac_release(service, run);
+        set_mac(&rig, service, "2.0", targets).await;
+        rig.at(LATER);
+
+        let fresh = Daemon::new("mac1", MAC, &[ARCHIVE, "macos-pkg"]);
+        let order = said(&grpc_beat(&rig, &fresh).await).expect("an install");
+        assert_eq!(
+            (order.0, order.2.as_str(), order.3.as_str(), order.5),
+            ("install", "2.0", digest('d').as_str(), Some(pkg.clone())),
+            "{service}: a Mac running nothing"
+        );
+
+        let archived =
+            Daemon::new("mac2", MAC, &[ARCHIVE, "macos-pkg"]).running(runs(service, "1.0", None));
+        let order = said(&grpc_beat(&rig, &archived).await).expect("an update");
+        assert_eq!(
+            (order.0, order.2.as_str(), order.3.as_str(), order.5),
+            ("update", "2.0", digest('d').as_str(), Some(pkg.clone())),
+            "{service}: a Mac running from archives"
+        );
+
+        let linux = Daemon::new("lin1", X86, &[ARCHIVE, "apt"]).running(runs(service, "1.0", None));
+        let order = said(&grpc_beat(&rig, &linux).await).expect("an update");
+        assert_eq!(
+            (order.0, order.2.as_str(), order.3.as_str(), order.5),
+            ("update", "2.0", digest('a').as_str(), Some(deb)),
+            "{service}: a Linux host"
+        );
+    }
+}
+
+/// Proves: with the same release, a Mac whose daemon announces `hostkeeper-archive` alone (no
+/// signers file, so no `macos-pkg`) is ordered nothing: `no_build_for_host` when it does not run
+/// the service, `installer_dropped` when it runs it from archives, the reason `Releases.Status`
+/// gives and, for the second, the host `Converge` names under `installer_dropped`.
+/// Catches: a Mac sent an installer its daemon does not list, or one kept waiting with no reason
+/// given.
+#[tokio::test]
+async fn a_mac_that_announces_no_macos_pkg_is_picked_nothing_with_the_reason_the_pick_gives() {
+    for (service, run) in [
+        ("hello", &["hello.a", "hello.b"][..]),
+        ("hostkeeper", &[][..]),
+    ] {
+        let rig = mac_rig(&format!("mac-no-pkg-{service}"));
+        put_komira(&rig).await;
+        let (targets, _, _) = mac_release(service, run);
+        set_mac(&rig, service, "2.0", targets).await;
+        rig.at(LATER);
+
+        // `mac3` runs nothing, `mac4` runs the service from archives.
+        let fresh = Daemon::new("mac3", MAC, &[ARCHIVE]);
+        assert_eq!(said(&grpc_beat(&rig, &fresh).await), None, "{service}");
+        let archived = Daemon::new("mac4", MAC, &[ARCHIVE]).running(runs(service, "1.0", None));
+        assert_eq!(said(&grpc_beat(&rig, &archived).await), None, "{service}");
+        assert_eq!(
+            reason(&rig, service, "mac4").await,
+            proto::GateReason::InstallerDropped,
+            "{service}"
+        );
+        assert_eq!(
+            reason(&rig, service, "mac3").await,
+            proto::GateReason::NoBuildForHost,
+            "{service}"
+        );
+        let convergence = converge(&rig, service).await;
+        assert_eq!(convergence.installer_dropped, vec!["mac4".to_owned()]);
+    }
+}
+
+/// The rig of the Mac tests: `hello` and `hostkeeper`, each a service of the `daemon` role.
+fn mac_rig(name: &str) -> Rig {
+    let services = format!(
+        "{SERVICES}\n[[service]]\nname = \"hello\"\nroles = [\"daemon\"]\nstages = [100]\n\n\
+         [[service]]\nname = \"hostkeeper\"\nroles = [\"daemon\"]\nstages = [100]\n"
+    );
+    Rig::new(
+        name,
+        Spec::recorded()
+            .with_services(&services)
+            .with_oidc_services(&["web"])
+            .without_legacy(),
+    )
+    .routed()
+}
+
+/// Sets `service` at `version` with `targets`, as an operator does, with room for every host to
+/// update at once.
+async fn set_mac(rig: &Rig, service: &str, version: &str, targets: BTreeMap<String, TargetList>) {
+    let mut request = support::targets::set(service, version, targets);
+    request
+        .desired
+        .as_mut()
+        .expect("a desired state")
+        .max_updating = [("daemon".to_owned(), 16)].into_iter().collect();
+    let answered = grpc(rig, SET_DESIRED, Some(OPERATOR), &request).await;
+    assert_eq!(answered.code, 0, "{answered:?}");
 }

@@ -89,9 +89,11 @@ makes that directory, owner only, on its first step.
    `cargo xtask release targets --service hello` from the release's assets
    (`docs/design/packages.md`, section 3.7; `docs/design/packages-native.md`, section 10.5): per
    Linux platform, hello's native entry alone, its `.deb` from the repository's `testing` suite
-   (docs/deploy/package-repositories.md), and no list for macOS while no daemon announces
-   `macos-pkg`. A daemon that announces `apt` is ordered it; any other is ordered nothing
-   (`installer_dropped`). CI (`hello-desired.yml`, below) writes and sets them. The failing
+   (docs/deploy/package-repositories.md), and for macOS its signed `.pkg`'s `macos-pkg` entry
+   alone. A daemon that announces `apt` (or, on a Mac, `macos-pkg`: its signers file loaded,
+   `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) is ordered it; any other is ordered
+   nothing (`installer_dropped`, or `no_build_for_host` when the pick finds no build for the
+   host). The failing build has no `.pkg`, so it orders no Mac. CI (`hello-desired.yml`, below) writes and sets them. The failing
    build's `.deb` is in the separate suite `testing-fail` and has the Debian version
    `<version>~fail.ready` (`~` sorts below `<version>`, so apt never takes it for the release);
    only the dispatch of step 4 orders it, with the repository entry `komira-testing-fail`.
@@ -233,14 +235,16 @@ real service depends on it. Dispatch it from main (Actions, `hello-desired`, `Ru
 | `variant` | `hello` or `fail-ready` | `hello` sets `<version>`; `fail-ready` sets `<version>-fail-ready`, the build whose `/readyz` answers 503. |
 
 Its first job, `release`, downloads the variant's `.deb` for each Linux architecture with the
-`.deb`'s attestation bundle, and runs `cargo xtask release targets --service hello` (with
-`--fail-ready` for the failing build) on them: each Linux platform's list holds the variant's
-native entry alone (docs/design/packages-native.md, section 10.5), and macOS has none. For
-`hello` the entry names the repository entry `komira-testing` and the Debian version
-`<version>`; for `fail-ready` the entry `komira-testing-fail` and `<version>~fail.ready`, the
-`.deb` named `hello_<version>-fail-ready_<arch>.deb` in the release. The verb refuses, naming
-every problem, a `.deb`, control file or bundle that does not check out; then nothing is
-set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
+`.deb`'s attestation bundle, and for `hello` its signed `.pkg` with the `.pkg`'s bundle, and runs
+`cargo xtask release targets --service hello` (with `--fail-ready` for the failing build) on
+them: each platform's list holds the variant's native entry alone
+(docs/design/packages-native.md, section 10.5). For `hello` a Linux entry names the repository
+entry `komira-testing` and the Debian version `<version>`, and the macOS list holds the `.pkg`'s
+`macos-pkg` entry, which a Mac whose daemon announces `macos-pkg` takes (a Mac that does not is
+ordered nothing); for `fail-ready` the entry names `komira-testing-fail` and
+`<version>~fail.ready`, the `.deb` named `hello_<version>-fail-ready_<arch>.deb` in the release,
+and macOS has no list (the failing build has no `.pkg`). The verb refuses, naming every problem,
+a `.deb`, `.pkg`, control file or bundle that does not check out; then nothing is set. Its second job calls `set-desired.yml` with the targets alone, so each host is ordered its
 own platform's `.deb`. It is pinned to a hostkeeper release, as any service pins it
 (`docs/deploy/ci-client.md`, "Pinning hostkeeper"), with `wait` left at `true`: the job waits
 for the fleet. Once it has set, `hkctl releases get-release --service hello --version <version>`
