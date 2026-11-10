@@ -327,6 +327,7 @@ async fn a_force_back_to_a_version_with_no_native_entry_skips_the_host() {
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;
@@ -469,6 +470,7 @@ async fn a_stored_release_of_hostkeeper_with_an_archive_entry_still_loads() {
         &proto::GetReleaseRequest {
             service: "hostkeeper".to_owned(),
             version: "2.0".to_owned(),
+            host_group: String::new(),
         },
     )
     .await;

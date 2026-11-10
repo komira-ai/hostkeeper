@@ -232,6 +232,7 @@ async fn an_operator_set_writes_the_state_ci_would_and_one_audit_entry() {
             reason: Some("2.0".to_owned()),
             at_unix,
             by_name: Some("operator".to_owned()),
+            host_group: None,
         }]
     );
 }
@@ -626,6 +627,7 @@ async fn an_operator_converge_writes_nothing() {
         CONVERGE,
         proto::ConvergeRequest {
             service: "kbf".to_owned(),
+            host_group: String::new(),
         },
         Some(OPERATOR),
     );

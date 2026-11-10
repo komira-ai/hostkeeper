@@ -51,6 +51,7 @@ async fn get(rig: &Rig, service: &str, version: &str) -> Answered {
     let ask = proto::GetReleaseRequest {
         service: service.to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     };
     grpc(rig, GET_RELEASE, Some(OPERATOR), &ask).await
 }
@@ -782,10 +783,12 @@ async fn every_other_releases_method_still_reads_4_kib() {
     let invalid_request = json!({"code": "INVALID_ARGUMENT", "reason": "invalid_request"});
     let converge = proto::ConvergeRequest {
         service: "web".to_owned(),
+        host_group: String::new(),
     };
     let get_release = proto::GetReleaseRequest {
         service: "web".to_owned(),
         version: "9.9".to_owned(),
+        host_group: String::new(),
     };
     let status = proto::StatusRequest::default();
     let calls: [(&str, Vec<u8>, String); 3] = [

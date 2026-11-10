@@ -107,6 +107,7 @@ async fn unmark_bad_undoes_mark_bad_and_is_audited() {
             reason: Some("2.0: the crash was the disk".to_owned()),
             at_unix: None,
             by_name: Some("operator".to_owned()),
+            host_group: None,
         })
     );
     assert_eq!(

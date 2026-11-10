@@ -59,6 +59,7 @@ async fn a_set_with_targets_is_kept_and_read_back_on_both_routes() {
         &proto::GetReleaseRequest {
             service: "web".to_owned(),
             version: "2.0".to_owned(),
+            host_group: String::new(),
         },
     )
     .await;

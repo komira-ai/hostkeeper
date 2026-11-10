@@ -80,6 +80,7 @@ impl Releasing {
     async fn converged(&self) -> proto::WriteRecord {
         let request = proto::ConvergeRequest {
             service: WEB.to_owned(),
+            host_group: String::new(),
         };
         self.releases()
             .converge(self.as_ci(request).await)

@@ -190,6 +190,21 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "repository_unknown",
             ),
+            (
+                ReleasesRefusal::NotInHostGroup,
+                FailedPrecondition,
+                "not_in_host_group",
+            ),
+            (
+                ReleasesRefusal::AmbiguousHostGroup,
+                FailedPrecondition,
+                "ambiguous_host_group",
+            ),
+            (
+                ReleasesRefusal::LimitsInHostGroup,
+                InvalidArgument,
+                "limits_in_host_group",
+            ),
         ],
         refusal::releases,
     );
@@ -227,6 +242,21 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 ServicesRefusal::AuditUnavailable,
                 Unavailable,
                 "audit_unavailable",
+            ),
+            (
+                ServicesRefusal::PlacedByHostGroup,
+                FailedPrecondition,
+                "placed_by_host_group",
+            ),
+            (
+                ServicesRefusal::UnknownHostGroup,
+                NotFound,
+                "unknown_host_group",
+            ),
+            (
+                ServicesRefusal::NotInHostGroup,
+                FailedPrecondition,
+                "not_in_host_group",
             ),
         ],
         refusal::services,
@@ -330,6 +360,21 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "record_used",
             ),
+            (
+                EnrollmentRefusal::ServicesRetired,
+                InvalidArgument,
+                "services_retired",
+            ),
+            (
+                EnrollmentRefusal::HostGroupDiffers,
+                FailedPrecondition,
+                "host_group_differs",
+            ),
+            (
+                EnrollmentRefusal::UnknownHostGroup,
+                NotFound,
+                "unknown_host_group",
+            ),
         ],
         refusal::enrollment,
     );
@@ -391,6 +436,16 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 RolloutsRefusal::AuditUnavailable,
                 Unavailable,
                 "audit_unavailable",
+            ),
+            (
+                RolloutsRefusal::AmbiguousHostGroup,
+                FailedPrecondition,
+                "ambiguous_host_group",
+            ),
+            (
+                RolloutsRefusal::NotInHostGroup,
+                FailedPrecondition,
+                "not_in_host_group",
             ),
         ],
         refusal::rollouts,

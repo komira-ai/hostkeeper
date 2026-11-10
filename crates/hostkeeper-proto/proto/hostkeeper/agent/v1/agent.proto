@@ -158,7 +158,8 @@ message HeartbeatRequest {
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
   // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
   // `repositories-v1`, which announces that it writes the repositories the coordinator sends and
-  // reports them in `repositories`):
+  // reports them in `repositories`, and `facts-v1`, which asks for `HeartbeatResponse.facts`
+  // and reports `facts_generation`, and which no daemon of this release announces):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -197,6 +198,10 @@ message HeartbeatRequest {
   // absent from one that predates it. A report that breaks a rule of `RepositoriesReport` is
   // dropped and the coordinator keeps the last one it read.
   optional RepositoriesReport repositories = 11;
+  // The generation of the host's facts the daemon last wrote to its facts file
+  // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
+  // announce `facts-v1`.
+  optional uint64 facts_generation = 12;
 }
 
 // What a host's daemon holds of the repositories the coordinator sends
@@ -457,6 +462,25 @@ message HeartbeatResponse {
   // repository configuration with these entries, and only these, once each passes its checks;
   // absent: keep what it has.
   optional RepositorySet repositories = 5;
+  // The host's facts, for its facts file. A coordinator that holds host groups sends them, to an
+  // agent that announced `facts-v1`, in every answer until a heartbeat reports their generation
+  // (`HeartbeatRequest.facts_generation`), and the agent writes them before it acts on this
+  // answer's order. Absent otherwise; no coordinator or daemon of this release sends or announces
+  // them.
+  HostFacts facts = 6;
+}
+
+// A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon
+// adds its platform; nothing is run when a fact changes.
+message HostFacts {
+  // Raised by a move of the host, a change of its labels and an approval of it.
+  uint64 generation = 1;
+  // The host id it was enrolled as.
+  string host_id = 2;
+  // The host group it is in.
+  string host_group = 3;
+  // The labels an operator set on it, at most 8.
+  map<string, string> labels = 4;
 }
 
 // A host's package repositories, as the coordinator's registry holds them.

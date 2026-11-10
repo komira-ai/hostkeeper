@@ -96,6 +96,7 @@ fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::Ser
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
         plan: one.plan.clone(),
+        host_group: String::new(),
     }
 }
 

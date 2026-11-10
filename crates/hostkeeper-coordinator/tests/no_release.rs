@@ -139,6 +139,7 @@ async fn a_set_with_a_digest_an_index_or_neither_is_accepted_and_orders_nothing(
             &proto::GetReleaseRequest {
                 service: "web".to_owned(),
                 version: "2.0".to_owned(),
+                host_group: String::new(),
             },
         )
         .await;
@@ -172,6 +173,7 @@ async fn a_force_of_a_version_set_with_a_digest_orders_no_host() {
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;
@@ -238,6 +240,7 @@ async fn a_stored_release_with_archive_entries_and_an_index_loads_and_picks_no_a
         &proto::GetReleaseRequest {
             service: "web".to_owned(),
             version: "2.0".to_owned(),
+            host_group: String::new(),
         },
     )
     .await;

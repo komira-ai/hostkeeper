@@ -276,6 +276,7 @@ pub async fn converge(rig: &Rig, service: &str) -> proto::Convergence {
         Some(OPERATOR),
         &proto::ConvergeRequest {
             service: service.to_owned(),
+            host_group: String::new(),
         },
     )
     .await;
