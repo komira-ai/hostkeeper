@@ -6,7 +6,7 @@ section 10, the halts-file storage of the plan position in [rollout-update-plans
 and the device-record file of [hostkeeper-mdm.md](hostkeeper-mdm.md) section 6.1. Where they disagree with this document
 on where the coordinator keeps its state, this document wins. C1 to C4 and C6 are built: the storage trait and its
 fake (section 4.1), the enrollment crate's `Records` port, the Postgres store
-(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0008`, sections 3 to 8),
+(`crates/hostkeeper-coordinator/src/store/postgres/`, with its migrations `0001` to `0009`, sections 3 to 8),
 `import` and `export` (section 11: `crates/hostkeeper-coordinator/src/transfer.rs` and
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`), the generations and write ids (migration
 `0003`, section 3.2), the releases of a set with targets (migration `0004`, section 3.2, from
@@ -65,6 +65,7 @@ storage trait (section 4.1).
 | Desired state and the package digests of every version CI set | `--state-file` | tables `desired`, `desired_digests` |
 | Spent CI token ids | `<state-file>.jti` | table `spent_tokens` |
 | Acknowledged and counted verdicts | `<state-file>.verdicts` | tables `verdict_standing`, `verdict_counted` |
+| The operator's users and the API tokens made in the UI (`docs/design/operator-login.md`, komira-ai/hostkeeper#300) | `<state-file>.accounts` | tables `users`, `api_tokens` (migration `0009`, `may-run`) |
 | Exclusions, labels, holds, assignments, minimums, uninstall intents, bad marks, last good, standing force, inventory | `--ops-file` | the tables of section 3.3 |
 | Halts, halt reports, clear generations | `<ops-file>.halts` with the ops file | tables `halts`, `halt_reports`, column `services.halt_generation` |
 | Plan positions (rollout-update-plans.md section 3) | `rollouts` of `<ops-file>.halts` | tables `rollouts`, `rollout_done` |

@@ -108,6 +108,7 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
+pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
@@ -214,6 +215,8 @@ mod audit_list_tests;
 mod audit_refusal_tests;
 #[cfg(test)]
 mod audit_rotation_tests;
+#[cfg(test)]
+pub(crate) mod backup_accounts_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]

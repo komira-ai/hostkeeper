@@ -22,6 +22,7 @@ use hostkeeper_mdm_gate::DeviceStore;
 use hostkeeper_oidc::Clock;
 
 use super::{Serve, StartError, take_lock};
+use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{ops_path, restore_marker};
 use crate::jti_file::jti_path;
@@ -205,7 +206,8 @@ fn open(
         .with_jti(&jti_path(state), Arc::clone(oidc_clock))?
         .with_desired(state, legacy)
         .with_ops(ops, rotation)?
-        .with_verdicts(&verdicts_path(state));
+        .with_verdicts(&verdicts_path(state))
+        .with_accounts(&accounts_path(state));
     let loaded = files.load()?;
     if let Some(numbers) = marker {
         settle_unfinished(ops, &numbers, &loaded.ops)?;
@@ -221,6 +223,7 @@ impl From<BackendError> for StartError {
             BackendError::Desired(why) => why.into(),
             BackendError::Ops(why) => why.into(),
             BackendError::Verdicts(why) => why.into(),
+            BackendError::Accounts(why) => why.into(),
             BackendError::Jti(why) => why.into(),
             BackendError::Spent => Self::Io(io::Error::other(why)),
         }

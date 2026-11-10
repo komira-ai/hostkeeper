@@ -13,6 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
+use crate::accounts::AccountStore;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -237,6 +238,7 @@ pub struct Coordinator {
     /// Shared with enrollment, which audits its approvals there.
     pub(crate) ops: Arc<OpsStore>,
     pub(crate) verdicts: VerdictFile,
+    accounts: AccountStore,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
     pub(crate) clock: Clock,
@@ -299,6 +301,7 @@ impl Coordinator {
             prefixes: SanPrefixes::default(),
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
+            accounts: AccountStore::volatile(),
             verifier,
             tokens: operator.into(),
             clock,
@@ -393,6 +396,20 @@ impl Coordinator {
         }
         self.verdicts = verdicts;
         self
+    }
+
+    /// The same coordinator over the users and API tokens of `accounts` instead of a store that
+    /// keeps nothing.
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: AccountStore) -> Self {
+        self.accounts = accounts;
+        self
+    }
+
+    /// The operator's users and API tokens the store keeps.
+    #[must_use]
+    pub fn accounts(&self) -> &AccountStore {
+        &self.accounts
     }
 
     /// The same coordinator advertising `features` instead of [`FEATURES`].
