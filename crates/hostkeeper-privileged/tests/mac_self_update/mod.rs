@@ -201,7 +201,9 @@ impl MacSelfHost {
             rustix::process::geteuid().is_root(),
             "the device tests run as root (privileged.yml's cargo runner `sudo`)"
         );
-        let pid = std::process::id();
+        static MADE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let made = MADE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let pid = format!("{}x{made}", std::process::id());
         let base = PathBuf::from(format!("/var/hk-su-{tag}-{pid}"));
         // `create_dir_all` would take over a directory that is already there.
         fs::create_dir(&base).unwrap_or_else(|e| panic!("create {}: {e}", base.display()));

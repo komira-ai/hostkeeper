@@ -289,3 +289,14 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
         "{newest}"
     );
 }
+
+/// Temporary: the restart and fallback tests twenty times in a row under the same launchd.
+#[test]
+fn the_restart_and_fallback_tests_twenty_times() {
+    for round in 0..20 {
+        eprintln!("round {round}");
+        a_next_binary_that_cannot_start_is_fallen_back_from_under_launchd();
+        an_installed_daemon_updated_to_the_next_version_restarts_into_it_under_launchd();
+        a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it();
+    }
+}
