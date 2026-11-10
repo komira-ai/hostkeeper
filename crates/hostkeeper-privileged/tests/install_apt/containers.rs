@@ -55,8 +55,8 @@ impl Repos {
             .expect("the scratch directory");
         let base = scratch.path();
         fs::set_permissions(base, fs::Permissions::from_mode(0o755)).expect("scratch mode");
-        let entry = Key::new(&base.join("gpg-entry"), "entry");
-        let other = Key::new(&base.join("gpg-other"), "other");
+        let entry = Key::new("entry");
+        let other = Key::new("other");
         let mut dirs = Vec::new();
         for case in Case::ALL {
             let repo = base.join(format!("repo-{case:?}"));

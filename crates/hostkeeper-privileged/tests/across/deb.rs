@@ -201,7 +201,7 @@ impl Repository {
         let dir = base.join("apt-repo");
         fs::create_dir(&dir).expect("make the repository");
         fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("its mode");
-        let key = Key::new(&base.join("apt-gpg"), "hostkeeper-x1");
+        let key = Key::new("hostkeeper-x1");
         let config = Path::new(REPOSITORIES_DIR);
         fs::create_dir_all(config).expect("the repository configuration directory");
         for dir in [config.parent().expect("its parent"), config] {
@@ -211,18 +211,9 @@ impl Repository {
         let exported = base.join("apt-keyring.gpg");
         key.export(&exported);
         let keyring = fs::read(&exported).expect("read the exported keyring");
-        // The primary key's fingerprint, as gpg lists it: the registry needs one listed
-        // fingerprint per primary key of the keyring.
-        let listing = run(Command::new("gpg")
-            .args(["--batch", "--no-tty", "--homedir"])
-            .arg(base.join("apt-gpg"))
-            .args(["--with-colons", "--list-keys"]));
-        let fingerprint = String::from_utf8_lossy(&listing)
-            .lines()
-            .find_map(|line| line.strip_prefix("fpr:"))
-            .and_then(|rest| rest.split(':').nth(8))
-            .expect("the key's fingerprint")
-            .to_owned();
+        // The primary key's fingerprint: the registry needs one listed fingerprint per primary
+        // key of the keyring.
+        let fingerprint = key.fingerprint().to_owned();
         let uri = format!("https://127.0.0.1:{}", server.port());
         let entry = RegistryEntry {
             name: REGISTRY_NAME.to_owned(),
