@@ -29,7 +29,9 @@ fn v4(address: std::io::Result<SocketAddr>) -> SocketAddrV4 {
 }
 
 /// Every socket of a run whose flags name port 0 takes a port no socket with `SO_REUSEADDR` can
-/// be bound to as well: the DHCP, proxyDHCP and TFTP sockets, and the HTTP listener.
+/// be bound to as well: the DHCP, proxyDHCP and TFTP sockets, and the HTTP listener (which Linux
+/// shares with no other socket while it listens, `SO_REUSEADDR` or not: that part holds the
+/// listener to the same rule, it does not tell the fix from the code before it).
 ///
 /// Catches a port-0 socket that shares its port: the kernel may then give it a port another run
 /// holds, and a DISCOVER or a TFTP read sent to this run reaches the other one, so the client
