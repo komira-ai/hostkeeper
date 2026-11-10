@@ -326,11 +326,14 @@ pub struct AuditEntry {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// The user or API token the action concerned, if any (`password_reset`, `user_create`,
-    /// `api_token_create` and the rest of [`crate::audit_actions`]); `by` is who did it.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// `api_token_create` and the rest of [`crate::audit_actions`]); `by` is who did it. Kept in
+    /// memory and in the audit file, never in the ops file's ring (`skip`): the release before
+    /// refuses a key it does not know there (B8).
+    #[serde(skip)]
     pub subject: Option<String>,
-    /// The peer address a login came from, if the entry records one.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// The peer address a login came from, if the entry records one. Kept like `subject`: not in
+    /// the ops file's ring.
+    #[serde(skip)]
     pub source: Option<String>,
 }
 
