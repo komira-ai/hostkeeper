@@ -6,7 +6,9 @@
 //!
 //! [`problems`] refuses the workflow when:
 //! - `on` is anything but `workflow_call` alone, or the call declares `secrets`;
-//! - it has `inputs.max_polls` of another type than `number`, or none; an output of
+//! - it has `inputs.max_polls` of another type than `number`, or none; it has no
+//!   `inputs.host_group` of `type: string`, `required: false` and `default: ""` (an empty group
+//!   sends no field, so the default must be empty); an output of
 //!   `workflow_call` is not the job's output of its name ([`CALL_OUTPUTS`]), or the job's
 //!   `outputs` are not those the outputs step writes ([`JOB_OUTPUTS`]);
 //! - it has another job than the one job [`JOB`], or that job's `permissions` is not exactly
@@ -132,6 +134,8 @@ pub const WAIT_IF: &str = "${{ inputs.wait && steps.set-desired.outcome == 'succ
 pub const ALWAYS_IF: &str = "${{ always() }}";
 /// The input that turns the join step on; off unless the caller sets it.
 pub const JOIN_INPUT: &str = "join_tailnet";
+/// The input that names the host group of the set and the wait.
+pub const HOST_GROUP_INPUT: &str = "host_group";
 /// The step that joins the runner to the tailnet, the one action of the job.
 pub const JOIN_STEP: &str = "tailnet";
 /// The join step's `if:`, exactly: it runs only when the caller turns it on.
@@ -249,6 +253,15 @@ pub fn problems(doc: &Node) -> Vec<String> {
     let max_polls = inputs.and_then(|i| entry(i, "max_polls"));
     if max_polls.and_then(|m| text(m, "type")) != Some("number") {
         problems.push("no input `max_polls` of `type: number`".to_owned());
+    }
+    let host_group = inputs.and_then(|i| entry(i, HOST_GROUP_INPUT));
+    if host_group.and_then(|h| text(h, "type")) != Some("string")
+        || host_group.and_then(|h| text(h, "required")) != Some("false")
+        || host_group.and_then(|h| text(h, "default")) != Some("")
+    {
+        problems.push(format!(
+            "no input `{HOST_GROUP_INPUT}` of `type: string` with `required: false` and `default: \"\"`"
+        ));
     }
     let outputs = call.and_then(|c| entry(c, "outputs"));
     for (name, want) in CALL_OUTPUTS {

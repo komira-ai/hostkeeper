@@ -3,7 +3,9 @@
 //! (`--remote-operator-config`, which may be `coordinator.toml` itself), or from several
 //! `[[remote_operator]]` tables, one entry each; a file never has both forms. Every value
 //! that decides who is let in is required: there is no default issuer, audience,
-//! repository or workflow.
+//! repository or workflow. An entry may also name the `services` its token may set (absent:
+//! the coordinator's legacy service alone) and the `host_groups` it may deploy to (absent: any
+//! group that lists the service).
 
 use std::path::Path;
 
@@ -59,6 +61,7 @@ struct Raw {
     runner_environment: Option<String>,
     max_token_lifetime_secs: Option<u64>,
     services: Option<Vec<String>>,
+    host_groups: Option<Vec<String>>,
 }
 
 /// What a token's claims must equal. Built only by [`OidcConfig::parse`], so a value of
@@ -91,6 +94,12 @@ pub struct OidcConfig {
     /// `hostkeeper-coordinator`) reads as its legacy service. `Some([])` (`services = []`)
     /// names no service: a token of the entry may set none.
     pub services: Option<Vec<String>>,
+    /// The host groups a token of this entry may deploy to; `None` when the entry has no
+    /// `host_groups` key, so the token may deploy its services to any group that lists them.
+    /// `Some([])` (`host_groups = []`) names no group: a token of the entry may deploy to
+    /// none. No entry is empty or padded; that each is a host group name is the coordinator's
+    /// check, at start, since the grammar of a group's name is the coordinator's.
+    pub host_groups: Option<Vec<String>>,
 }
 
 fn need(value: Option<String>, name: &str) -> Result<String, ConfigError> {
@@ -192,6 +201,10 @@ impl OidcConfig {
             .services
             .map(|list| clean_list(list, "services"))
             .transpose()?;
+        let host_groups = raw
+            .host_groups
+            .map(|list| clean_list(list, "host_groups"))
+            .transpose()?;
         Ok(Self {
             issuer,
             audience,
@@ -210,6 +223,7 @@ impl OidcConfig {
             )?,
             max_lifetime_secs,
             services,
+            host_groups,
         })
     }
 }

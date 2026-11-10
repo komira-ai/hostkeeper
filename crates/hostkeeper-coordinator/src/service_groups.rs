@@ -3,14 +3,17 @@
 //!
 //! A set that names a group deploys the package to that group alone: one deployment, one audit
 //! entry `set_desired` naming the group. A set that names none is read as one deployment to each
-//! group that lists the package, written in one change, with one audit entry for each. The
+//! group that lists the package, written in one change, with one audit entry for each. A CI token
+//! whose allow-list entry names `host_groups` deploys to those groups alone: a set naming another
+//! group is refused `forbidden` before the group is looked up, a set naming none deploys to each
+//! of those groups that lists the package, and is `forbidden` when only other groups list it. The
 //! package must be listed by the group (`not_in_host_group`); `if_generation` with no group is
-//! accepted only when exactly one group lists the package (`ambiguous_host_group`); the limits of
-//! the desired state are a group's policy (`limits_in_host_group`). A set refused for any group
-//! writes nothing for any: the refusals of a set of a service (the version's scheme, the minimum
-//! version of the package and of the group, a version marked bad, a digest or a release set
-//! before as another, a repository the registry lacks) are decided for every group before the
-//! change is made.
+//! accepted only when exactly one group (of the token's, for a limited token) lists the package
+//! (`ambiguous_host_group`); the limits of the desired state are a group's policy
+//! (`limits_in_host_group`). A set refused for any group writes nothing for any: the refusals of
+//! a set of a service (the version's scheme, the minimum version of the package and of the group,
+//! a version marked bad, a digest or a release set before as another, a repository the registry
+//! lacks) are decided for every group before the change is made.
 //!
 //! The change is one commit: each group's desired version and generation, the version's release,
 //! the audit entries, and for each group the force of another version that ends and the halt the
@@ -35,14 +38,21 @@ use crate::services::{ServiceDef, Services};
 use crate::write_record::{WriteAsk, WriteRecord};
 
 /// The groups a set of `package` that names `host_group` (none: empty) deploys to, in name order.
+/// `permitted` is the `host_groups` of the CI token's allow-list entry, none for an operator or an
+/// entry that names none: the set may deploy to those groups alone.
 fn deployment_targets(
     groups: &HostGroups,
     package: &str,
     host_group: &str,
     ask: &WriteAsk,
+    permitted: Option<&[String]>,
 ) -> Result<Vec<GroupName>, SetError> {
     let lists = |listed: &HostGroup| listed.packages.iter().any(|listed| listed == package);
+    let allowed = |name: &str| permitted.is_none_or(|names| names.iter().any(|n| n == name));
     if !host_group.is_empty() {
+        if !allowed(host_group) {
+            return Err(SetError::Forbidden);
+        }
         let name: GroupName = host_group.parse().map_err(|_| {
             SetError::Invalid(DesiredError::Malformed(
                 "host_group is not a host group name".to_owned(),
@@ -53,14 +63,20 @@ fn deployment_targets(
             _ => Err(SetError::NotInHostGroup),
         };
     }
-    let names: Vec<GroupName> = groups
+    let listing: Vec<GroupName> = groups
         .0
         .iter()
         .filter(|(_, listed)| lists(listed))
         .map(|(name, _)| name.clone())
         .collect();
+    let names: Vec<GroupName> = listing
+        .iter()
+        .filter(|name| allowed(name.as_str()))
+        .cloned()
+        .collect();
     match names.len() {
-        0 => Err(SetError::NotInHostGroup),
+        0 if listing.is_empty() => Err(SetError::NotInHostGroup),
+        0 => Err(SetError::Forbidden),
         1 => Ok(names),
         _ if ask.if_generation.is_some() => Err(SetError::AmbiguousHostGroup),
         _ => Ok(names),
@@ -105,8 +121,10 @@ impl Coordinator {
     ///
     /// # Errors
     /// [`SetError`], as [`Self::set_desired_with`], and [`SetError::NotInHostGroup`],
-    /// [`SetError::AmbiguousHostGroup`] and [`SetError::LimitsInHostGroup`]. The audit entries are
-    /// written with the desired state: [`SetError::Ops`] of
+    /// [`SetError::AmbiguousHostGroup`] and [`SetError::LimitsInHostGroup`];
+    /// [`SetError::Forbidden`] also when the token's entry names `host_groups` that exclude the
+    /// group the set names, or, with none named, every group that lists the package. The audit
+    /// entries are written with the desired state: [`SetError::Ops`] of
     /// [`crate::ops::OpsError::AuditUnavailable`] means nothing is set.
     pub(super) async fn set_desired_by_group(
         &self,
@@ -151,7 +169,17 @@ impl Coordinator {
         // The fleet's lock is held to the end of the set, as for a set of a service: the groups
         // and the marks the refusals are decided on do not change under it.
         let _fleet = self.lock_fleet_for_set();
-        let groups = deployment_targets(&self.desired.host_groups(), &service, host_group, ask)?;
+        let permitted = match setter {
+            Setter::Ci(verified) => verified.host_groups.as_deref(),
+            Setter::Operator(_) => None,
+        };
+        let groups = deployment_targets(
+            &self.desired.host_groups(),
+            &service,
+            host_group,
+            ask,
+            permitted,
+        )?;
         let state = self.ops.state();
         for group in &groups {
             let floor = state.group_marks(group, &service).min_version;
