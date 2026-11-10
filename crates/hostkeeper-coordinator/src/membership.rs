@@ -236,11 +236,9 @@ pub struct Member {
 /// The nodes `def` does not count because they are excluded, absent, missing or unmanaged.
 /// Without a selector, a host is missing only while the order path would tell it to install the
 /// service: it is left out while an operator holds the pair ([`crate::decide::Gate::Held`]), and
-/// while there is no `desired` state or it names no package for the host's platform (no digest,
-/// no release index, or an index that lists none: [`crate::decide::Skip::NoDigest`],
-/// [`crate::decide::Skip::NoPackageForPlatform`]; for a version set with targets, while it is
-/// picked no entry, [`crate::picks`]), as [`crate::converge`] leaves such a host out of every
-/// count.
+/// while there is no `desired` state or the desired version picks the host no entry
+/// ([`crate::picks`]; a version with no release kept picks every host none), as
+/// [`crate::converge`] leaves such a host out of every count.
 #[must_use]
 pub fn members(
     def: &ServiceDef,

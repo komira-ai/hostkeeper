@@ -3,7 +3,8 @@
 //!
 //! The daemon fetches no package through `fetch`, `prove` or `entry` any more: it stages a
 //! package its installer names from the host's package manager (`hostkeeper-install`), and uses
-//! this crate for `stores` alone (a Mac's start renders `stores.toml` from managed preferences).
+//! this crate for `stores` (a Mac's start renders `stores.toml` from managed preferences) and,
+//! at its start, `remove_orphan_fetches`, for the staging files an earlier release's fetch left.
 //! `hostkeeper-pxe` uses `bundle`, `net`, `gh` and `ports`, `hostkeeper-mdm-gate` uses
 //! `stores`, and `xtask`'s release channel staging tests use `fetch`, `index` and `prove`;
 //! nothing outside this crate uses `entry`.

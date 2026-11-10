@@ -114,8 +114,8 @@ the desired version is answered `nothing` where kbf's coordinator answered `upda
 what follows from that: a convergence that is `in_progress`, a host that holds no slot, a
 status with no `hold` for a host that was ordered. Every step of the sequences below that
 differs for this reason is recorded as this coordinator answers it, with kbf's answer in
-`kbf_status`, `kbf_body` or `kbf_contains`; no step is changed that does not differ: `01`, `02`, `03` to `08`,
-`11` to `16`, `18` to `22` and `28`; the steps of `23` that held the marks of an automatic rollback
+`kbf_status`, `kbf_body` or `kbf_contains`; no step is changed that does not differ: `01` to `08`,
+`11` to `22` and `28`; the steps of `23` that held the marks of an automatic rollback
 (`last_good`, `bad`, the audit of `mark_bad`) hold their absence, as no host is ordered the
 version that fails. The update plans, the slots, the bake,
 the canary, the deferral and the rollback they show are held by the tests of the decision

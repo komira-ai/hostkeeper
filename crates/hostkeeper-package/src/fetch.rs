@@ -91,7 +91,8 @@ pub struct StagedArchive {
 /// everything else are left, and so is every other name. A service with no directory has
 /// nothing to remove.
 ///
-/// [`fetch_package`] calls it before each fetch. The caller holds the service's lock: a sweep while another fetch of the
+/// [`fetch_package`] calls it before each fetch, and the daemon's start for each service, to
+/// remove what an earlier release's fetch left. The caller holds the service's lock: a sweep while another fetch of the
 /// same service runs would remove that fetch's staging file.
 pub fn remove_orphan_fetches(packages_root: &Path, service: &ServiceName) -> io::Result<()> {
     let dir = packages_root.join(service.as_str());

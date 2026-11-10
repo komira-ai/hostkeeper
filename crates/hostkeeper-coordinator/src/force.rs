@@ -137,7 +137,7 @@ pub struct Plan {
     /// The targeted hosts skipped because an operator holds the pair.
     pub held: Vec<String>,
     /// The other targeted hosts not ordered, each with its reason token (`daemon_too_old`,
-    /// `no_package_for_platform`, `unknown_target`).
+    /// `unknown_target`, or the pick's: `no_target`, `no_build_for_host`, `installer_dropped`).
     pub skipped: Vec<(String, &'static str)>,
     /// The versions the ordered hosts run that are newer than the version forced: a downgrade
     /// leaves them, and they are marked bad.

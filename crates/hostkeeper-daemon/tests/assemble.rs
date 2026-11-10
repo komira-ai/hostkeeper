@@ -120,11 +120,37 @@ fn orphans_are_removed_at_start() {
     make_dir(&service.join(".stage-x"), 0o700);
     fs::write(service.join("9.9.9.seal"), "{}").expect("a seal with no version");
     fs::write(rig.packages.join("not-a-dir"), "x").expect("a file among the services");
+    fs::write(service.join(".fetch-123-0"), "half a download").expect("an earlier fetch's file");
     start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
+    assert!(!service.join(".fetch-123-0").exists());
     assert!(!service.join(".stage-x").exists());
     assert!(!service.join("9.9.9.seal").exists());
     assert!(service.join("2.0.0").is_dir() && service.join("2.0.0.seal").is_file());
     assert!(fs::symlink_metadata(service.join("current")).is_ok());
+}
+
+/// Catches a `.fetch-*` file an earlier release left that cannot be removed stopping the start or
+/// passing unsaid: the staging sweep has nothing to do there, the fetch sweep fails, and that is
+/// one alert naming the service.
+#[test]
+fn a_fetch_file_that_cannot_be_removed_is_an_alert() {
+    let rig = Rig::new("assemble-fetch-alert");
+    rig.add("web", "2.0.0");
+    let service = rig.packages.join("web");
+    fs::write(service.join(".fetch-123-0"), "half a download").expect("an earlier fetch's file");
+    fs::set_permissions(&service, fs::Permissions::from_mode(0o555)).expect("read-only");
+    let (daemon, log) = alerting(rig.daemon());
+    let mut report = BootReport::default();
+    before_records(&daemon, &mut report);
+    fs::set_permissions(&service, fs::Permissions::from_mode(0o755)).expect("open again");
+    let seen = lines(&log);
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert!(
+        seen[0].starts_with(&alert_line(ALERT_START, "service=web: ")),
+        "{seen:?}"
+    );
+    assert!(service.join(".fetch-123-0").is_file());
+    assert_eq!(report.stages, [Stage::BeforeRecords]);
 }
 
 /// Catches a sweep that fails silently, or a packages directory that cannot be listed or opened

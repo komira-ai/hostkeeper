@@ -367,7 +367,15 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
         }
     };
     for service in services.into_values() {
-        if let Err(error) = hostkeeper_unpack::remove_orphans(&service, &packages) {
+        // The staging directories a stage left, then the `.fetch-*` files an earlier release's
+        // fetch left: no daemon from this one fetches, so nothing else removes them.
+        let swept = hostkeeper_unpack::remove_orphans(&service, &packages)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                hostkeeper_package::remove_orphan_fetches(&ports.packages_dir, &service)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = swept {
             ctx.alert(ALERT_START, &format!("service={service}: {error}"));
         }
     }
