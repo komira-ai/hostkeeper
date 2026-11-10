@@ -208,32 +208,44 @@ pub fn main() -> ExitCode {
     name = "hostkeeper-coordinator-update",
     version = stamp::version(),
     about = "Roll the coordinator's container forward to the newest published release, on the \
-             machine that runs it: download the release's image tarball and check its sum and \
-             attestation, load it, check what docker loaded, create the new container with the \
-             old one's command line, mounts and volumes, and replace the old one once the new \
-             one is ready; when it is not, the old one is started again and the version is \
-             marked failed. Changes nothing when the running version is at least the target."
+             machine that runs it: download the release's image tarball from GitHub's public \
+             URLs (no token), check its sum and its attestation offline with the pinned gh, \
+             load it, check what docker loaded, create the new container with the old one's \
+             command line, mounts and volumes, and replace the old one once the new one is \
+             ready; when it is not, the old one is started again and the version is marked \
+             failed. Changes nothing when the running version is at least the target, or when \
+             GitHub's limit of requests without a token is used up."
 )]
 struct UpdateCli {
     #[command(flatten)]
     flags: coordinator_update::Flags,
 }
 
-/// One run of `hostkeeper-coordinator-update` with its flags, against GitHub, `gh`, `curl` and
-/// docker.
+/// One run of `hostkeeper-coordinator-update` with its flags, against GitHub's public URLs, the
+/// pinned `gh` offline, `curl` and docker.
 fn run_update(cli: &UpdateCli) -> Result<Vec<String>, coordinator_update::Error> {
-    let adapters = release::real::connect();
-    let ports = release::ports::Adapters::ports(&adapters);
-    let releases = coordinator_update::GitHubReleases {
-        store: ports.store,
-        fetch: ports.download,
+    use coordinator_update::{offline, public};
+    let flags = &cli.flags;
+    let roots = public::roots(&flags.ca_bundle)?;
+    let web = public::UreqWeb::new(&roots);
+    let releases = public::PublicReleases {
+        web: &web,
+        api: &flags.github_api_url,
+        site: &flags.github_url,
+        cache: &flags.download_dir,
     };
-    coordinator_update::run(
-        &cli.flags,
-        &releases,
-        ports.verifier,
-        &release::real::exec(),
-    )
+    let exec = release::real::exec();
+    let trust = offline::OwnedByRootOr {
+        uid: rustix::process::geteuid().as_raw(),
+    };
+    let verifier = offline::OfflineGh {
+        gh: &flags.gh,
+        trusted_root: &flags.trusted_root,
+        home: &flags.download_dir.join(coordinator_update::GH_HOME),
+        exec: &exec,
+        trust: &trust,
+    };
+    coordinator_update::run(flags, &releases, &verifier, &exec)
 }
 
 /// The entry point of the `hostkeeper-coordinator-update` binary: the report lines on stdout and

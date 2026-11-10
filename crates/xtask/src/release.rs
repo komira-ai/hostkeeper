@@ -69,7 +69,7 @@ mod doc_tests;
 pub(crate) mod fakes;
 mod files;
 pub(crate) mod git;
-mod github;
+pub(crate) mod github;
 mod hkctl;
 pub(crate) mod image_index;
 mod image_push;
