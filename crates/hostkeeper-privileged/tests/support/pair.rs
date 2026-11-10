@@ -199,7 +199,7 @@ impl Coordinator {
 
     /// [`Self::start`], with the private listener on `address` (its certificate for that
     /// address) and a LAN listener there too (`--lan-listen`), each on a port the system picks:
-    /// the coordinator of the network-install tests, which `hostkeeper-pxe` reads over the
+    /// the coordinator of the network-install tests, which `pxe` reads over the
     /// farm LAN and a network-installed host dials.
     pub fn start_on_lan(
         scratch: &Path,
@@ -389,13 +389,13 @@ impl Coordinator {
     }
 
     /// The CA of the private listener's certificate, PEM: what `hostkeeper ctl` and
-    /// `hostkeeper-pxe serve` take as `--ca-file`.
+    /// `pxe serve` take as `--ca-file`.
     pub fn private_ca_path(&self) -> PathBuf {
         self.dir.join("private-ca.pem")
     }
 
     /// The operator's token file (root's, mode 0600): what `hostkeeper ctl` and
-    /// `hostkeeper-pxe serve` take as `--token-file`.
+    /// `pxe serve` take as `--token-file`.
     pub fn token_path(&self) -> PathBuf {
         self.dir.join("operator.token")
     }

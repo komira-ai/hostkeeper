@@ -257,7 +257,7 @@ impl ReleaseIndex {
 
 /// The `release index --service S [--fail-ready] --version V --dir D` verb: writes
 /// `D/<index name of the package>`, the index of the packages of `package` at the release
-/// `version` in `dir`, one per platform of [`Platform::RELEASED`]. A directory that lacks the
+/// `version` in `dir`, one per platform of [`Package::platforms`]. A directory that lacks the
 /// package of any of them is refused, naming each missing file, and no index is written: a
 /// release lists every platform it ships.
 pub(crate) fn write_index(
@@ -266,17 +266,18 @@ pub(crate) fn write_index(
     version: &Version,
 ) -> Result<Vec<String>, Error> {
     let service = package.service().name();
-    let missing: Vec<String> = Platform::RELEASED
+    let missing: Vec<String> = package
+        .platforms()
         .iter()
         .map(|&p| package.package_name(version, p))
         .filter(|file| !dir.join(file).is_file())
-        .map(|file| format!("missing {file}: a release has the package of every platform"))
+        .map(|file| format!("missing {file}: a release has the package of every platform it ships"))
         .collect();
     if !missing.is_empty() {
         return Err(Error::Refused(missing));
     }
     let version = package.version_text(version);
-    let index = ReleaseIndex::of_dir(dir, service, &version, &Platform::RELEASED)?;
+    let index = ReleaseIndex::of_dir(dir, service, &version, package.platforms())?;
     let path = dir.join(package.index_name());
     std::fs::write(&path, index.to_json())
         .map_err(Error::io(format!("write {}", path.display())))?;

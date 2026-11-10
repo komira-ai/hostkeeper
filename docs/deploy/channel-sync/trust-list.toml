@@ -8,8 +8,9 @@
 # by the same code: the signing workflow's path in the repository, the refs its run may be on
 # (globs: `*` matches within one path component), and whether it must run on a hosted runner.
 
-# hostkeeper itself, and the example service its releases carry (hello and hello's failing
-# build, whose version ends in -fail-ready).
+# hostkeeper itself, the example service its releases carry (hello and hello's failing build,
+# whose version ends in -fail-ready) and pxe, the boot server of network install, whose index
+# lists the two Linux platforms.
 [[service]]
 name          = "hostkeeper"
 repository    = "komira-ai/hostkeeper"
@@ -19,6 +20,13 @@ hosted_runner = true
 
 [[service]]
 name          = "hello"
+repository    = "komira-ai/hostkeeper"
+workflow      = ".github/workflows/artifacts.yml"
+refs          = ["refs/heads/main"]
+hosted_runner = true
+
+[[service]]
+name          = "pxe"
 repository    = "komira-ai/hostkeeper"
 workflow      = ".github/workflows/artifacts.yml"
 refs          = ["refs/heads/main"]

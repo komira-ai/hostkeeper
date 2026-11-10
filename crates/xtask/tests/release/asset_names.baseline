@@ -4,6 +4,7 @@
 # renamed, since consumers fetch assets by these names. Lines starting with `#` are comments.
 # The `hello-` names are the packages and release indexes of the example service, examples/hello, and
 # of its failing build (`hello-<version>-fail-ready-*`, the same package started with `--fail-ready`).
+# The `pxe-` names are the package and release index of pxe, the boot server of network install (the two Linux platforms).
 SHA256SUMS
 hello-<version>-fail-ready-linux-arm64.tar.zst
 hello-<version>-fail-ready-linux-arm64.tar.zst.sha256
@@ -74,3 +75,10 @@ hostkeeper_<version>_arm64.deb.sigstore.json
 index.json
 netboot.json
 netboot.json.sigstore.json
+pxe-<version>-linux-arm64.tar.zst
+pxe-<version>-linux-arm64.tar.zst.sha256
+pxe-<version>-linux-arm64.tar.zst.sigstore.json
+pxe-<version>-linux-x86_64.tar.zst
+pxe-<version>-linux-x86_64.tar.zst.sha256
+pxe-<version>-linux-x86_64.tar.zst.sigstore.json
+pxe-index.json

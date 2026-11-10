@@ -1,0 +1,13 @@
+[Unit]
+Description=pxe, the boot server of network install
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=notify
+ExecStart=/var/lib/hostkeeper/packages/pxe/current/bin/pxe serve --notify-systemd --settings /etc/pxe/pxe.toml --dir /var/lib/pxe/current
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -33,7 +33,7 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 ```
 
 `--platform linux_x86_64` or `--platform linux_arm64` names the platform the server is installed as
-by network boot ([network-install.md](network-install.md)); `hostkeeper-pxe` in router mode needs it, and
+by network boot ([network-install.md](network-install.md)); `pxe` in router mode needs it, and
 in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
 optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
 has none. `list-records` and the Inventory page show it.
@@ -67,7 +67,7 @@ the store, so the same after a coordinator restart and whether or not the host h
 heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
 `HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or
 `HOST_HELD_RETIRED` (retired, final). A coordinator without enrollment answers
-`HOST_HELD_UNSPECIFIED`. `hostkeeper-pxe` offers a network install only for a record whose
+`HOST_HELD_UNSPECIFIED`. `pxe` offers a network install only for a record whose
 `hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
 retired host's record keeps its machine from being reinstalled by accident. There is no call that
 reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
@@ -153,8 +153,8 @@ enrolled its server.
 **See the state.** `list-records` says for each record `state`: `RECORD_STATE_OPEN` (the
 window is open and the record unused), `RECORD_STATE_CLOSED` (unused, with its window over or
 none) or `RECORD_STATE_USED` (with `used_by_request_id` and `used_unix`), and `approve_until_unix`.
-`hostkeeper-pxe` serves a record's data MAC a network install only while its state is open, unless
-`--reinstall` names its host id ([network-install.md](network-install.md)): a server whose window
+`pxe` serves a record's data MAC a network install only while its state is open, unless
+`reinstall` of its settings names its host id ([network-install.md](network-install.md)): a server whose window
 is over, or whose record is used, is not installed from the network.
 
 ## Bootstrap a Linux node

@@ -15,8 +15,10 @@
 //! The network-install test (`tests/net_install.rs`) serves from the same [`Channel`], bound to
 //! the address of the test's farm LAN ([`Channel::start_at`]): the fixture package with the
 //! bundle of the end-to-end rig's signer ([`Fixture::build_signed`]), which the installed guest's
-//! own `gh` checks against the signer's trusted root, and the release `hostkeeper-pxe fetch`
-//! downloads, its ISO streamed from the file the job downloaded ([`Channel::serve_file`]).
+//! own `gh` checks against the signer's trusted root, and the release `pxe prepare`
+//! downloads, its ISO streamed from the file the job downloaded ([`Channel::serve_file`]). The
+//! package of a real service, with its own manifest, unit and program, is a [`Custom`] (the `pxe`
+//! package of the same test).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -78,7 +80,7 @@ impl Drop for HostTrust {
 }
 
 /// The platform of this host, as the release index names it.
-fn platform() -> &'static str {
+pub fn platform() -> &'static str {
     if cfg!(target_arch = "aarch64") {
         "linux-arm64"
     } else {
@@ -278,26 +280,84 @@ impl Fixture<'_> {
                 )
                 .end(),
         );
-        let digest = sha256_hex(&archive);
-        let file = format!("{service}-{version}-{}.tar.zst", platform());
-        let index = format!(
-            "{{\"packages\":[{{\"bytes\":{},\"file\":\"{file}\",\"platform\":\"{}\",\
-             \"sha256\":\"{digest}\"}}],\"schema\":1,\"service\":\"{service}\",\
-             \"version\":\"{version}\"}}",
-            archive.len(),
-            platform()
+        released(service, version, archive, sign)
+    }
+}
+
+/// A package of a manifest, a unit and a program the caller gives: the archive of a real
+/// service's package (`pxe`), which places no file and whose hook is its own program.
+pub struct Custom<'a> {
+    /// The service, the name in the manifest.
+    pub service: &'a str,
+    /// The version, the one in the manifest.
+    pub version: &'a str,
+    /// The text of `manifest.toml`, complete.
+    pub manifest: &'a str,
+    /// The program, copied into the package as `bin/<service>`.
+    pub program: &'a Path,
+    /// The unit's file name under `units/`, and its text.
+    pub unit: (&'a str, &'a str),
+}
+
+impl Custom<'_> {
+    /// The package, with the attestation bundle `sign` gives for the archive's file name and
+    /// SHA-256 (lowercase hex). Its entries are `manifest.toml`, `bin/<service>` and
+    /// `units/<unit>`.
+    pub fn build_signed(&self, sign: impl FnOnce(&str, &str) -> Vec<u8>) -> Package {
+        let Custom {
+            service,
+            version,
+            manifest,
+            unit: (unit, unit_text),
+            ..
+        } = *self;
+        let program = fs::read(self.program).expect("the package's program");
+        let archive = zstd(
+            &Tar::default()
+                .file("manifest.toml", 0o644, manifest.as_bytes())
+                .dir("bin")
+                .file(&format!("bin/{service}"), 0o755, &program)
+                .dir("units")
+                .file(&format!("units/{unit}"), 0o644, unit_text.as_bytes())
+                .end(),
         );
-        let base = format!("/{service}/{version}");
-        Package {
-            service: service.to_owned(),
-            version: version.to_owned(),
-            files: vec![
-                (format!("{base}/index.json"), index.into_bytes()),
-                (format!("{base}/{file}.sigstore.json"), sign(&file, &digest)),
-                (format!("{base}/{file}"), archive),
-            ],
-            digest,
-        }
+        released(service, version, archive, sign)
+    }
+
+    /// [`Self::build_signed`], with the attestation bundle only the stand-in verifier of
+    /// [`HostTrust`] takes.
+    pub fn build(&self) -> Package {
+        self.build_signed(|_, digest| bundle(digest).into_bytes())
+    }
+}
+
+/// The release layout of `archive`, the package `service` `version` for this host's platform:
+/// its `index.json`, its attestation bundle (`sign`) and the archive itself.
+fn released(
+    service: &str,
+    version: &str,
+    archive: Vec<u8>,
+    sign: impl FnOnce(&str, &str) -> Vec<u8>,
+) -> Package {
+    let digest = sha256_hex(&archive);
+    let file = format!("{service}-{version}-{}.tar.zst", platform());
+    let index = format!(
+        "{{\"packages\":[{{\"bytes\":{},\"file\":\"{file}\",\"platform\":\"{}\",\
+         \"sha256\":\"{digest}\"}}],\"schema\":1,\"service\":\"{service}\",\
+         \"version\":\"{version}\"}}",
+        archive.len(),
+        platform()
+    );
+    let base = format!("/{service}/{version}");
+    Package {
+        service: service.to_owned(),
+        version: version.to_owned(),
+        files: vec![
+            (format!("{base}/index.json"), index.into_bytes()),
+            (format!("{base}/{file}.sigstore.json"), sign(&file, &digest)),
+            (format!("{base}/{file}"), archive),
+        ],
+        digest,
     }
 }
 

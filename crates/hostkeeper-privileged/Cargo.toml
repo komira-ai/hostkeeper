@@ -80,8 +80,9 @@ name = "hostkeeper-selfupdate-daemon"
 path = "tests/bin/selfupdate_daemon.rs"
 
 # The boot server the network-install tests (`tests/net_install.rs`, `tests/net_install_arm64.rs`)
-# run, `fetch` once and `serve` as a child process: `hostkeeper-pxe`, built here so that the
-# tests have its path. It only forwards to `hostkeeper_pxe::cli::main`.
+# run: `pxe`, built here so that the tests have its path. They run its `prepare` step once and
+# `serve` as a child process, and `tests/net_install.rs` puts it in a `pxe` package as `bin/pxe`
+# for the daemon to run. It only forwards to `hostkeeper_pxe::cli::main`.
 [[bin]]
 name = "hostkeeper-privileged-pxe"
 path = "tests/bin/pxe.rs"
@@ -102,7 +103,7 @@ name = "hello-e2e"
 path = "tests/bin/hello_e2e.rs"
 
 # The boot server of the network-install tests' program `hostkeeper-privileged-pxe`, which
-# forwards to its command line as the `hostkeeper-pxe` binary does. It builds on Linux only, as
+# forwards to its command line as the `pxe` binary of `hostkeeper-pxe` does. It builds on Linux only, as
 # `hostkeeper-pxe` does (its sockets and its privilege drop are Linux's).
 [target.'cfg(target_os = "linux")'.dependencies]
 hostkeeper-pxe = { path = "../hostkeeper-pxe" }

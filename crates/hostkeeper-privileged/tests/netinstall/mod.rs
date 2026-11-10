@@ -1,15 +1,15 @@
 //! The rig of the network-install tests (`tests/net_install.rs`, `tests/net_install_arm64.rs`,
 //! docs/design/network-install.md section 11): a farm LAN with no route out ([`lan`]), the
-//! router's DHCP faked by the test ([`router`]), the real `hostkeeper-pxe` with a boot set its
-//! own `fetch` sealed ([`pxe`]), the real coordinator with `--lan-listen` on the LAN
+//! router's DHCP faked by the test ([`router`]), the real `pxe` with a boot set its
+//! own `prepare` step sealed ([`pxe`]), the real coordinator with `--lan-listen` on the LAN
 //! (`support::pair`), a release channel on the LAN (`support::channel`), and a QEMU guest
 //! ([`guest`]). Every wait is on a progress event ([`events`]): a line of the guest's serial
-//! console, of `hostkeeper-pxe`'s log or of the router's DHCP, or an answer of `hostkeeper ctl`;
+//! console, of `pxe`'s log or of the router's DHCP, or an answer of `hostkeeper ctl`;
 //! each ends on its event or on the end of the guest, and the job's `timeout-minutes` is the
 //! only bound.
 //!
 //! What the tests keep, passed or failed, is under `target/privileged-artifacts/<test>/`: the
-//! guest's console, the logs of `hostkeeper-pxe`, of the router's DHCP and of the coordinator,
+//! guest's console, the logs of `pxe`, of the router's DHCP and of the coordinator,
 //! and what a test keeps with [`Rig::keep`].
 //! [`router::Router`] and [`events::Lines`] need no root; `tests/net_install_rig.rs` runs them in
 //! the pull-request set.
@@ -119,15 +119,29 @@ impl Rig {
             0o600,
         );
         let platform = machine.arch.platform();
-        let sealed = pxe::fetch(
+        let serial_console = match machine.arch {
+            guest::Arch::X86_64 => "ttyS0",
+            guest::Arch::Arm64 => "ttyAMA0",
+        };
+        let ssh = Ssh::new(&scratch.join("ssh"), lan.address(GUEST));
+        // The boot set, fetched and sealed by `pxe prepare` against the settings `serve` runs
+        // with (in proxy mode: `prepare` checks the settings, not the mode).
+        let sealed = pxe::prepare(
             &scratch,
             platform,
             &channel,
             &ca.pem(),
             &signer,
-            &daemon_config,
+            &pxe::ServeSettings {
+                mode: Mode::Proxy,
+                address: lan.pxe(),
+                coordinator: &coordinator,
+                daemon_config: &daemon_config,
+                ssh_keys: &ssh.public,
+                serial_console: Some(serial_console),
+                loopback: false,
+            },
         );
-        let ssh = Ssh::new(&scratch.join("ssh"), lan.address(GUEST));
 
         let guest = Guest::new(machine, &scratch.join("guest"), &lan.bridge_ns, &artifacts);
         let rig = Rig {
@@ -144,10 +158,7 @@ impl Rig {
                 sealed,
                 daemon_config,
                 ssh_keys: ssh.public.clone(),
-                serial_console: match guest.machine().arch {
-                    guest::Arch::X86_64 => "ttyS0",
-                    guest::Arch::Arm64 => "ttyAMA0",
-                },
+                serial_console,
                 log_dir: artifacts.clone(),
             },
             ssh,
@@ -192,8 +203,8 @@ impl Rig {
         self.lan.address(GUEST)
     }
 
-    /// The router's DHCP and `hostkeeper-pxe` in `mode`, each started afresh: in proxy mode the
-    /// router names no boot file, in router mode it names `hostkeeper-pxe` and
+    /// The router's DHCP and `pxe` in `mode`, each started afresh: in proxy mode the
+    /// router names no boot file, in router mode it names `pxe` and
     /// `hostkeeper/boot.efi`; `serve` gets `--reinstall` for each of `reinstall`.
     pub fn serve(&mut self, mode: Mode, reinstall: &[&str]) {
         if let Some(pxe) = self.pxe.take() {
@@ -245,12 +256,12 @@ impl Rig {
         ));
     }
 
-    /// The MAC as `hostkeeper-pxe` logs it.
+    /// The MAC as `pxe` logs it.
     pub fn mac(&self) -> &'static str {
         self.guest.machine().mac
     }
 
-    /// Waits for a line of `hostkeeper-pxe` after `from` that holds every one of `parts`.
+    /// Waits for a line of `pxe` after `from` that holds every one of `parts`.
     pub fn pxe_says(&mut self, from: Mark, what: &str, parts: &[&str]) -> (Mark, String) {
         let parts: Vec<String> = parts.iter().map(|p| (*p).to_owned()).collect();
         self.bus.wait(from, Source::Pxe, what, move |line| {

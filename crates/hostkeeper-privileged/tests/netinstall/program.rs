@@ -1,4 +1,4 @@
-//! A program of a network-install test (`hostkeeper-pxe serve`, QEMU), started in a network
+//! A program of a network-install test (`pxe serve`, QEMU), started in a network
 //! namespace with `ip netns exec`, which `exec`s it: its output is read line by line into the
 //! [`Bus`] and kept in a file of the job's artifacts. It is killed when dropped; an end the
 //! test did not ask for is an [`super::events::Event::Ended`], which fails every wait after it.

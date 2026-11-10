@@ -19,7 +19,7 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`], each
+//!   [`PACKAGES`] for every platform it ships for, each binary tarball of [`TARBALLS`], each
 //!   file of [`ATTESTED_FILES`] and each versioned file of [`VERSIONED_FILES`], and copies the
 //!   bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
@@ -108,11 +108,16 @@ pub const ATTEST_RUNS: [&str; 2] = [
 /// them a file name, with no quote, no command separator and no substitution.
 pub const BUNDLE_COPY: (&str, &str) = ("cp \"$BUNDLE\" \"dist/", ".sigstore.json\"");
 
-/// The packages the release carries, each as the part of its file name before the version and the
-/// part between the version and the platform: `<prefix>-<version><middle>-<platform>.tar.zst`.
-/// They are hostkeeper's own, hello's, and hello's failing build.
-pub const PACKAGES: [(&str, &str); 3] =
-    [("hostkeeper", ""), ("hello", ""), ("hello", "-fail-ready")];
+/// The packages the release carries, each as the part of its file name before the version, the
+/// part between the version and the platform (`<prefix>-<version><middle>-<platform>.tar.zst`)
+/// and the platforms it ships for. They are hostkeeper's own, hello's, hello's failing build (all
+/// three on every platform) and pxe's, on the two Linux platforms.
+pub const PACKAGES: [(&str, &str, &[&str]); 4] = [
+    ("hostkeeper", "", &PLATFORMS),
+    ("hello", "", &PLATFORMS),
+    ("hello", "-fail-ready", &PLATFORMS),
+    ("pxe", "", &["linux-x86_64", "linux-arm64"]),
+];
 
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
@@ -129,8 +134,7 @@ pub const TARBALLS: [(&str, &[&str]); 3] = [
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
 /// its name: `netboot.json`, the boot sets of network install, whose attestation is what the
-/// design's `hostkeeper-pxe fetch` (docs/design/network-install.md, item N8) is to trust its
-/// digests by.
+/// design's `pxe prepare` (docs/design/two-programs.md, section 6.1) is to trust its digests by.
 pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
 
 /// The release's other files that the attest job attests alone and whose name carries the
@@ -534,7 +538,7 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per binary tarball of
+/// One line per package of [`PACKAGES`], on each platform it ships for, per binary tarball of
 /// [`TARBALLS`], per file of [`ATTESTED_FILES`] and per file of [`VERSIONED_FILES`], that the
 /// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
@@ -542,8 +546,8 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
 /// SBOM it does not attest ([`sbom_problem`]).
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
-    for (prefix, middle) in PACKAGES {
-        for platform in PLATFORMS {
+    for (prefix, middle, platforms) in PACKAGES {
+        for platform in platforms {
             let subject = format!(
                 "dist/{prefix}-${{{{ needs.version.outputs.version }}}}{middle}-{platform}.tar.zst"
             );

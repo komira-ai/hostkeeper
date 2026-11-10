@@ -1,5 +1,6 @@
-//! `hostkeeper-pxe fetch` (docs/design/network-install.md, section 5, item N8): download the
-//! boot sets and the hostkeeper debs of a release into a new directory, verify them, and seal it.
+//! The fetch of `pxe` (docs/design/network-install.md, section 5, item N8), run by the `prepare`
+//! step of the package's hook ([`crate::hook`]): download the boot sets and the hostkeeper debs
+//! of a release into a new directory, verify them, and seal it.
 //!
 //! The steps, in order; each file is written once, measured in the pass that writes it:
 //!

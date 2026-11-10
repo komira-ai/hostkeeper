@@ -682,6 +682,7 @@ fn the_committed_triggers_are_a_push_to_main_with_the_paths_a_schedule_and_dispa
         "crates/hostkeeper-pxe*/**",
         "packaging/netboot/**",
         "packaging/linux/**",
+        "packaging/pxe/**",
         "crates/hostkeeper-privileged/tests/net_install*.rs",
         "crates/hostkeeper-privileged/tests/netinstall/**",
     ] {

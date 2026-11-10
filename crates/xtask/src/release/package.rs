@@ -1,8 +1,10 @@
 //! `release package`: the package of one service, the archive of design sections 4.7 and 5.5,
-//! built the same bytes every time for one commit and version. There are two services
-//! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`, and `hello`, the
+//! built the same bytes every time for one commit and version. There are three services
+//! ([`Service`]): hostkeeper's own package, from a unit file given with `--unit`, `hello`, the
 //! example service of `examples/hello`, whose manifest and units this module's [`hello`] child
-//! renders from one description for each platform's kind of unit. Hello's package has a failing
+//! renders from one description for each platform's kind of unit, and `pxe`, the boot server of
+//! network install, whose manifest and unit the [`pxe`] child renders for the two Linux
+//! platforms. Hello's package has a failing
 //! build, `--fail-ready`: the same package at the version `<V>-fail-ready`, differing from hello's
 //! only in that version (the manifest's), in the unit's `ExecStart` and in the plists'
 //! `ProgramArguments`, which gain `--fail-ready`.
@@ -15,7 +17,7 @@
 //! it from the root committed at `packaging/sigstore/trusted_root.json`. The daemon checks every
 //! package's attestation against it where the package is unpacked
 //! (`<packages-dir>/hostkeeper/current/files/trusted_root.json`), so the manifest places no file
-//! and each update of hostkeeper brings the root its release was built with. Hello has `bin/hello`, and under `units/` on Linux
+//! and each update of hostkeeper brings the root its release was built with. Pxe has `bin/pxe` and `units/pxe.service`. Hello has `bin/hello`, and under `units/` on Linux
 //! `hello@.service`, on macOS `hello.a.plist` and `hello.b.plist` (a package holds one kind of
 //! unit). Directories are 0555. Hostkeeper's macos-arm64 package has no `units/` and its manifest
 //! no `[units]`: on a Mac the daemon's launchd job is the plist the installer pkg places
@@ -28,9 +30,10 @@
 //!
 //! Hostkeeper's package refuses `--fail-ready`, a missing `--trusted-root`, a missing `--unit` on
 //! Linux and any `--unit` on macOS; hello's refuses `--unit` and `--trusted-root`, and builds for
-//! every platform. Before the archive is built,
+//! every platform; pxe's refuses `--unit`, `--fail-ready`, `--trusted-root` and macos-arm64.
+//! Before the archive is built,
 //! every systemd unit is checked (design section 4.7: a unit names package files only through the
-//! service's own `current`; hello's unit starts its binary through that `current`, and
+//! service's own `current`; hello's and pxe's units start their binary through that `current`, and
 //! hostkeeper's starts [`SELF_UPDATE_CURRENT`], the binary its own update switches) and the entry
 //! list is checked against the rules of section 5.5 that apply to a list this module builds
 //! ([`check_entries`]).
@@ -52,6 +55,7 @@ use super::ports::GitHistory;
 mod hello;
 pub(super) mod linux_check;
 pub(super) mod nfpm_stage;
+mod pxe;
 
 /// Why a Linux package of hostkeeper needs `--unit`.
 const LINUX_NEEDS_UNIT: &str =
@@ -60,14 +64,26 @@ const LINUX_NEEDS_UNIT: &str =
 /// Why a macOS package of hostkeeper takes no `--unit`.
 const MACOS_TAKES_NO_UNIT: &str = "the macos-arm64 package carries no unit: the daemon's launchd job is the plist of the installer pkg (release macos-pkg)";
 
-/// Why hostkeeper's package and index take no `--fail-ready`: only hello has that flag to give
-/// its units.
+/// Why the package and index of hostkeeper and of pxe take no `--fail-ready`: only hello has that
+/// flag to give its units.
 pub(super) const FAIL_READY_ONLY_HELLO: &str =
-    "--fail-ready is an option of the hello package; hostkeeper has no such flag";
+    "--fail-ready is an option of the hello package; hostkeeper and pxe have no such flag";
 
 /// Why hello's package takes no `--unit`.
 const UNIT_REFUSED: &str =
     "the hello package takes no --unit: its units are rendered for each platform";
+
+/// Why pxe's package takes no `--unit`.
+const PXE_UNIT_REFUSED: &str =
+    "the pxe package takes no --unit: its unit is rendered, the same for both platforms";
+
+/// Why pxe's package takes no `--trusted-root`.
+const PXE_TRUSTED_ROOT_REFUSED: &str =
+    "the pxe package takes no --trusted-root: only hostkeeper's package carries the trusted root";
+
+/// Why there is no pxe package for macos-arm64.
+const PXE_LINUX_ONLY: &str =
+    "the pxe package is for the Linux platforms only: it boots machines from a Linux host";
 
 /// Why hostkeeper's package needs `--trusted-root`.
 pub(super) const NEEDS_TRUSTED_ROOT: &str = "the hostkeeper package carries the Sigstore trusted root files/trusted_root.json: pass --trusted-root";
@@ -89,13 +105,13 @@ pub(crate) struct Request {
     /// The service's binary for the platform.
     pub(crate) binary: PathBuf,
     /// The systemd unit of the hostkeeper package, for a Linux platform; none for macos-arm64.
-    /// Hello's units are rendered, so it has none.
+    /// Hello's and pxe's units are rendered, so they have none.
     pub(crate) unit: Option<PathBuf>,
     /// Hello's units start it with `--fail-ready`, so its `/readyz` answers 503 (a build that
     /// fails verify, for the farm's rollback test).
     pub(crate) fail_ready: bool,
     /// The Sigstore trusted root of the hostkeeper package, as `gh attestation trusted-root`
-    /// prints it: `files/trusted_root.json` in the package. Hello's package carries none.
+    /// prints it: `files/trusted_root.json` in the package. Hello's and pxe's carry none.
     pub(crate) trusted_root: Option<PathBuf>,
     /// The directory the package and its digest file are written to.
     pub(crate) out: PathBuf,
@@ -257,6 +273,11 @@ fn source(request: &Request) -> Result<(Package, Source<'_>), Error> {
     let mac = request.platform == Platform::MacosArm64;
     let root = request.trusted_root.is_some();
     match (request.service, request.unit.as_deref()) {
+        (Service::Pxe, _) if mac => refuse(PXE_LINUX_ONLY),
+        (Service::Pxe, Some(_)) => refuse(PXE_UNIT_REFUSED),
+        (Service::Pxe, None) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
+        (Service::Pxe, None) if root => refuse(PXE_TRUSTED_ROOT_REFUSED),
+        (Service::Pxe, None) => Ok((Package::Pxe, Source::Rendered)),
         (Service::Hostkeeper, _) if request.fail_ready => refuse(FAIL_READY_ONLY_HELLO),
         (Service::Hostkeeper, _) if !root => refuse(NEEDS_TRUSTED_ROOT),
         (Service::Hello, _) if root => refuse(TRUSTED_ROOT_REFUSED),
@@ -302,6 +323,9 @@ pub(crate) fn package_dated(
             units: Vec::new(),
             trusted_root,
         },
+        Source::Rendered if kind == Package::Pxe => {
+            pxe::contents(request.platform, &request.version)
+        }
         Source::Rendered => hello::contents(
             request.platform,
             &kind.version_text(&request.version),

@@ -1,6 +1,6 @@
 # The network-install run: in the jobs net-install and net-install-arm64 a QEMU guest is installed
 # by network end to end (docs/design/network-install.md section 11), as root on a GitHub-hosted
-# Ubuntu runner: the real hostkeeper-pxe and the real coordinator's LAN listener, on a bridge with
+# Ubuntu runner: the real pxe and the real coordinator's LAN listener, on a bridge with
 # no route out, each box of the LAN in a network namespace of its own; x86-64 under KVM through
 # enrollment, a service, router mode, a reinstall and a retired host, and arm64 under TCG until its
 # seed fetch; net-install then makes the report of the measurement of the guest's first install
@@ -11,7 +11,8 @@
 #
 # - on a push to main that changes the network-install code: the boot server's crates
 #   (crates/hostkeeper-pxe*), the boot sets' pins (packaging/netboot), the deb's packaging
-#   (packaging/linux), the network-install tests and their rig, the generators the jobs run
+#   (packaging/linux), the pxe package's goldens the tests install (packaging/pxe), the
+#   network-install tests and their rig, the generators the jobs run
 #   (cargo xtask release netboot and netinstall-report), and this file;
 # - nightly, on main, whatever changed, for the code these tests use that the paths above leave
 #   out (the coordinator, the daemon);
@@ -49,6 +50,7 @@ on:
       - crates/hostkeeper-pxe*/**
       - packaging/netboot/**
       - packaging/linux/**
+      - packaging/pxe/**
       - crates/hostkeeper-privileged/tests/net_install*.rs
       - crates/hostkeeper-privileged/tests/netinstall/**
       - crates/hostkeeper-privileged/tests/bin/pxe.rs
@@ -78,7 +80,7 @@ env:
 jobs:
   # Network install end to end, x86-64 (docs/design/network-install.md section 11): a QEMU guest
   # with OVMF UEFI firmware under KVM, on a Linux bridge with no route out, installed by the real
-  # hostkeeper-pxe from a boot set this job fetched by pinned URL (`hostkeeper-pxe fetch` checks
+  # pxe from a boot set this job fetched by pinned URL (`pxe prepare` checks
   # its size and SHA-256 against the pins), with this commit's deb; it enrolls with the real
   # coordinator on its LAN listener, is approved, gets the fixture service, boots its disk in
   # router mode, is reinstalled, and once retired and the coordinator restarted is not installed
@@ -133,13 +135,14 @@ jobs:
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$NFPM_SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
       - name: Download gh (HTTPS only, redirects included)
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_amd64.tar.gz"
-      # The gh the test checks the boot set's attestations with (hostkeeper-pxe fetch --gh).
+      # The gh the test checks the boot set's attestations with (the settings file's `gh` for `pxe prepare`).
       - name: Install gh (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$GH_SHA256" --out target/privileged-tools/gh --extract tar.gz --member "gh_${GH_VERSION}_linux_amd64/bin/gh"
       - name: The Sigstore trusted root
         run: target/privileged-tools/gh attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"
-      - name: Build hostkeeper and hostkeeper-pxe
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+      # Only the deb's program: the test builds its own pxe program.
+      - name: Build hostkeeper
+        run: cargo build --locked --release -p hostkeeper --bin hostkeeper
       - name: Stage gh and the trusted root for the deb
         run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --out target/nfpm
       - run: mkdir -p target/net-install
@@ -150,7 +153,7 @@ jobs:
         run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      # Checked by hostkeeper-pxe fetch, against the pinned size and SHA-256, in the test.
+      # Checked by pxe prepare, against the pinned size and SHA-256, in the test.
       - name: Download the pinned ISO (HTTPS only, redirects included)
         run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-amd64.iso "$ISO_URL"
       - name: Build the network-install test as the runner's user

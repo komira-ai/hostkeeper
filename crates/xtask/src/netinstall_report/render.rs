@@ -77,12 +77,12 @@ pub(crate) fn report(mac: &Mac, host_id: &str, mode: Mode, events: &Events) -> V
         (
             "power-on",
             events.power_on,
-            format!("hostkeeper-pxe: the first {} from the MAC", mode.power_on()),
+            format!("pxe: the first {} from the MAC", mode.power_on()),
         ),
         (
             "install started",
             events.install_started,
-            "hostkeeper-pxe: the seed fetch".to_owned(),
+            "pxe: the seed fetch".to_owned(),
         ),
         (
             "pending",
@@ -165,7 +165,7 @@ pub(crate) fn report(mac: &Mac, host_id: &str, mode: Mode, events: &Events) -> V
             "Power-on to serving: {}.",
             interval(span(events.power_on, serving))
         ),
-        "Power-on and the install's start are stamped by the clock of hostkeeper-pxe's host; \
+        "Power-on and the install's start are stamped by the clock of pxe's host; \
          pending, approved, the first heartbeat and serving by the coordinator's."
             .to_owned(),
     ]);

@@ -286,7 +286,7 @@ fn index_for_hello_writes_hello_index_json_from_the_hello_packages_only() {
         Err(Error::Refused(
             ["linux-arm64", "macos-arm64"]
                 .map(|p| format!(
-                    "missing hostkeeper-0.1.9-{p}.tar.zst: a release has the package of every platform"
+                    "missing hostkeeper-0.1.9-{p}.tar.zst: a release has the package of every platform it ships"
                 ))
                 .to_vec()
         ))

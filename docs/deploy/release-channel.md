@@ -11,7 +11,7 @@ The daemon fetches a package from the daemon config's `release_channel`, under t
 
 A GitHub release does not have that layout: its assets sit side by side in one list, and its
 index has an asset name of its own (`index.json`, `hello-index.json`,
-`hello-fail-ready-index.json`). `cargo xtask release channel-stage` lays one version of one
+`hello-fail-ready-index.json`, `pxe-index.json`). `cargo xtask release channel-stage` lays one version of one
 service out as the daemon reads it, in a plain directory that any static file origin or
 object-store sync can serve:
 
@@ -46,7 +46,8 @@ Nothing is written unless every check passes, and a refusal lists every problem 
 - it lists a package for every platform of `--require-platforms`. A release without its
   `macos-arm64` package would leave every Mac with `no_package_for_platform`, so leaving a
   platform out takes a flag, for example `--require-platforms linux-x86_64,linux-arm64` for a
-  service built for Linux only;
+  service built for Linux only. The sync does this itself for `pxe`, the boot server of network
+  install, whose index lists the two Linux platforms (`pxe-index.json`);
 - each package it lists is in `--from` with the size and SHA-256 the index gives it;
 - each package has its bundle beside it, at most 1 MiB, whose statement lists the package's
   SHA-256. The bundle's signature is not checked here: check a hostkeeper release with
@@ -108,7 +109,7 @@ of v<X.Y.Z>`), until the sync's xtask is built again from that release's commit 
 ### The trust list
 
 The trust list is a TOML file with one `[[service]]` table per service the channel stages. The
-committed [`channel-sync/trust-list.toml`](channel-sync/trust-list.toml) lists hostkeeper, hello,
+committed [`channel-sync/trust-list.toml`](channel-sync/trust-list.toml) lists hostkeeper, hello, pxe,
 tierstore and js-agent:
 
 ```toml

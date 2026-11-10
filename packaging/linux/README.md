@@ -2,10 +2,9 @@
 
 What a Linux host needs before hostkeeper can deliver anything to it: the daemon, its one unit
 and its config (`docs/design/hostkeeper-design.md`, sections 4.1 and 4.6). The files here are
-the sources of a deb, an rpm and a boot-image overlay. The deb and the rpm also carry
-`/usr/bin/hostkeeper-pxe`, the boot server of network install
-(`docs/design/network-install.md`, section 3), with no unit: it runs only when an operator
-starts it, in the foreground. Building the binaries, building a boot image, signing and
+the sources of a deb, an rpm and a boot-image overlay. The boot server of network install,
+`pxe`, is not in the deb or the rpm: it is a service package of its own
+(`packaging/pxe/`, `docs/design/two-programs.md`, section 6.1). Building the binaries, building a boot image, signing and
 publishing the packages are not here.
 
 | file | what |
@@ -22,7 +21,7 @@ command lines, that it starts `current` of the daemon's binary directory and res
 daemon's exit after its own update, that it agrees with the drop-in the daemon writes, that it is
 the one unit file and the one hostkeeper's package is built with, that the directories are the
 design's with the design's modes, that the template is refused until each placeholder is filled
-and loads once they are, that the packages carry exactly the seven files (the daemon and `hostkeeper-pxe` among them) and the console's issue
+and loads once they are, that the packages carry exactly the six files (the daemon among them) and the console's issue
 link and no key, certificate, token or config, that `gh` and the trusted root are installed at the daemon's own paths from
 where `cargo xtask release nfpm-stage` writes them, that the scripts never start the unit, and
 that the overlay equals these sources.

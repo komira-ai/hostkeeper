@@ -15,7 +15,7 @@
 //!   (`docs/operations/pkg-signing-test.md`).
 //! - `netinstall-report`: the measurement of network install (item N11 of
 //!   `docs/design/network-install.md`): one machine's events from power-on to serving and the
-//!   intervals between them, from the times `hostkeeper-pxe` and the coordinator recorded
+//!   intervals between them, from the times `pxe` and the coordinator recorded
 //!   (`netinstall_report`). The end-to-end job `net-install` runs it; an operator
 //!   runs it once on the first real machine (`docs/operations/network-install.md`).
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
@@ -112,7 +112,7 @@ enum Verb {
     },
     /// The measurement of network install: one machine's events from power-on to serving and
     /// the intervals between them, with the person's wait apart from the machine's time, from
-    /// the log of `hostkeeper-pxe serve` and what `hostkeeper ctl` printed of its request and
+    /// the log of `pxe serve` and what `hostkeeper ctl` printed of its request and
     /// host. Reads no clock.
     NetinstallReport(netinstall_report::Flags),
     /// One backup of the coordinator's database: run the dump command after `--` with its

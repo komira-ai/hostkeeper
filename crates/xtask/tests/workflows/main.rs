@@ -20,6 +20,7 @@ mod pr_device;
 mod pr_device_tests;
 mod privileged_tests;
 mod release;
+mod release_pxe_tests;
 mod release_tests;
 mod services_tests;
 mod set_desired;

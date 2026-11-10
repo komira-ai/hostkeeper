@@ -667,19 +667,20 @@ in every host's root process widens every host for the sake of one.
 
 ### 6.1 `pxe`
 
-- **The package** (`pxe`, `linux-x86_64` and `linux-arm64`): `bin/pxe` (today's `hostkeeper-pxe`, renamed with the
-  service), the unit `pxe.service` running `pxe serve` with today's flags, `WantedBy=multi-user.target`, root to bind,
+- **The package** (`pxe`, `linux-x86_64` and `linux-arm64`): `bin/pxe` (`crates/hostkeeper-pxe`, the program renamed `pxe`, `src/cli.rs`, **Built**), the unit
+  `pxe.service` (`packaging/pxe/linux/units/pxe.service`, **Built**) running `pxe serve` with today's flags, `WantedBy=multi-user.target`, root to bind,
   then the drop to the numeric user it already does (`crates/hostkeeper-pxe/src/privilege.rs`, **Built**). Its
-  settings (mode, address, coordinator URL, the token file) come from package parameters and a root-owned file on the
-  host, as today's flags do; the token is a file, never a parameter.
-- **`fetch` becomes the `prepare` step.** It downloads the boot set of the release the package belongs to into the
+  settings (mode, address, coordinator URL, the token file) come from package parameters and the root-owned
+  `/etc/pxe/pxe.toml` on the host (`crates/hostkeeper-pxe/src/settings.rs`, **Built**), as today's flags do; the token is a file, never a parameter.
+- **`fetch` becomes the `prepare` step** (`crates/hostkeeper-pxe/src/hook.rs`, **Built**; the boot set lives in
+  `/var/lib/pxe/<version>`, since the version's own directory is sealed read-only). It downloads the boot set of the release the package belongs to into the
   version's directory and checks it as `fetch` does today (pins, attestation, seal). A failed check fails `prepare`, and
   the old version keeps serving.
 - **Running only when wanted.** network-install.md section 3 runs `hostkeeper-pxe` only in the foreground, while the
   operator installs machines. As a service, that rule is the assignment: the operator assigns `pxe` to the boot host for
   an install and unassigns it after (`hkctl services assign` / `unassign`, **Built**). The boot menu rule of
   network-install.md section 4 (only recorded MACs get the install entry) is unchanged.
-- **The deb and the rpm** stop carrying `/usr/bin/hostkeeper-pxe` in the same pull request that ships the package (P1).
+- **The deb and the rpm** stop carrying `/usr/bin/hostkeeper-pxe` in the same pull request that ships the package (P1; `packaging/linux/nfpm.yaml`, **Built**).
   The binary was never release-checked and has no unit, so no host runs it unattended today.
 
 ### 6.2 `mdm`

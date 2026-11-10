@@ -1,6 +1,6 @@
 //! A minimal fake of the farm router's DHCP: it gives each client an address of its pool and, as
 //! each step of the test sets it, either no boot file (the router of proxy mode) or
-//! `hostkeeper-pxe`'s address and `hostkeeper/boot.efi` (the router of router mode, as the
+//! `pxe`'s address and `hostkeeper/boot.efi` (the router of router mode, as the
 //! UniFi "Network Boot" setting is designed to: the `siaddr` and `file` fields and options 66 and
 //! 67).
 //!
@@ -36,7 +36,7 @@ const STOP_LOOK: Duration = Duration::from_millis(200);
 /// Where the router names the boot server, in router mode.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Boot {
-    /// `hostkeeper-pxe`'s address: `siaddr` and option 66.
+    /// `pxe`'s address: `siaddr` and option 66.
     pub server: Ipv4Addr,
     /// The boot file: the `file` field and option 67.
     pub file: String,

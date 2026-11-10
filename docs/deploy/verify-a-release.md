@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `hostkeeper-pxe X.Y.Z`, with no commit |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `pxe X.Y.Z`, with no commit |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -26,8 +26,8 @@ tag. A `[trusted_signers]` entry in a daemon config must name `artifacts.yml` on
 
 `<version>` is X.Y.Z. `<platform>` is `linux-x86_64`, `linux-arm64` or `macos-arm64`;
 `<linux-platform>` is `linux-x86_64` or `linux-arm64`; `<deb-arch>` is `amd64` or `arm64`;
-`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm, the coordinator and the MDM kit's binary
-are for the two Linux platforms; the installer pkg is for `macos-arm64`.
+`<rpm-arch>` is `x86_64` or `aarch64`. The deb, the rpm, the coordinator, the MDM kit's binary
+and the pxe package are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 
 | Asset | Content |
 |---|---|
@@ -39,7 +39,9 @@ are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `hello-<version>-<platform>.tar.zst.sha256` | the SHA-256 of that package |
 | `hello-<version>-fail-ready-<platform>.tar.zst` | hello's failing build: the same package at the version `<version>-fail-ready`, whose unit (or plists) start `hello` with `--fail-ready`, so that it never reports ready (the build a host is rolled back from); it differs from the hello package only in the manifest's `version` and the command line its unit or plists start it with |
 | `hello-<version>-fail-ready-<platform>.tar.zst.sha256` | the SHA-256 of that package |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
+| `pxe-<version>-<linux-platform>.tar.zst` | the package of `pxe`, the boot server of network install (docs/design/two-programs.md, section 6.1): `manifest.toml`, `bin/pxe` and `units/pxe.service`; its hook's `prepare` step downloads and checks the boot sets of `netboot.json` for this version |
+| `pxe-<version>-<linux-platform>.tar.zst.sha256` | the SHA-256 of that package |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
@@ -50,6 +52,7 @@ are for the two Linux platforms; the installer pkg is for `macos-arm64`.
 | `index.json` | the release index of the hostkeeper packages: for each of the three platforms the package file, its SHA-256 and size |
 | `hello-index.json` | the release index of the hello packages (`service` `hello`, `version` `<version>`) |
 | `hello-fail-ready-index.json` | the release index of hello's failing build (`service` `hello`, `version` `<version>-fail-ready`) |
+| `pxe-index.json` | the release index of the pxe packages (`service` `pxe`, `version` `<version>`): for each of the two Linux platforms the package file, its SHA-256 and size |
 | `hkctl-<version>` | the command line of the coordinator ([docs/cli.md](../cli.md)): one bash script for every platform, generated from the protobuf services, that calls the coordinator's JSON gateway with `curl`; it needs bash 3.2 or later and curl 7.55 or later. No host package carries it |
 | `netboot.json` | the boot sets of network install (docs/design/network-install.md, section 5): for each Linux platform the Ubuntu live-server ISO, the shim, the signed network GRUB, the kernel and the initrd a bare machine boots, each with the name it is served as, its size, its SHA-256 and where it comes from, rendered from `packaging/netboot/pins.toml` (`cargo xtask release netboot`) |
 | `SHA256SUMS` | the SHA-256 of every asset except itself and the bundles |
@@ -60,9 +63,9 @@ own, and a host trusts a package for its own attestation and manifest, never for
 index. (`SHA256SUMS` lists every index, so the provenance of a release covers their bytes too.)
 Every `.tar.zst` is attested, hello's packages included: a host takes no unsigned package.
 `netboot.json` is attested with a bundle of its own, unlike the indexes: it is the trust anchor of
-the boot files it pins, which come from Canonical, not from this release. `hostkeeper-pxe fetch`
-(item N8 of docs/design/network-install.md, `crates/hostkeeper-pxe`) verifies that attestation
-before it reads a pin in it.
+the boot files it pins, which come from Canonical, not from this release. The `prepare` step of
+the pxe package's hook (`pxe prepare`, `crates/hostkeeper-pxe`; before the package, the verb
+`hostkeeper-pxe fetch`) verifies that attestation before it reads a pin in it.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
 distroless `nonroot` user, configured by its flags alone (`packaging/container/Dockerfile`). It
@@ -73,8 +76,9 @@ built twice from clean contexts and released only when the two builds are byte f
 anyone can rebuild it from the commit and compare; before it is released it is also loaded and run
 through its entrypoint with `--version`, which must print the coordinator's stamp.
 
-A release holds the assets of all three platforms; `cargo xtask release check` refuses one that
-lacks any of them, and each index lists the package of each. The pkg carries no installer
+A release holds the assets of all three platforms (pxe's, of the two Linux platforms);
+`cargo xtask release check` refuses one that lacks any of them, and each index lists the package
+of each platform its package ships for. The pkg carries no installer
 signature (that needs an Apple Developer ID Installer identity, which this project does not hold):
 verify it by its attestation, steps 3 and 4, like any other asset. Names are only ever added,
 never renamed or removed, so a consumer ignores assets it does not know.
@@ -92,6 +96,7 @@ SHA256SUMS
 index.json
 hello-index.json
 hello-fail-ready-index.json
+pxe-index.json
 netboot.json
 netboot.json.sigstore.json
 hkctl-<version>
@@ -122,6 +127,9 @@ hello-<version>-<platform>.tar.zst.sha256
 hello-<version>-fail-ready-<platform>.tar.zst
 hello-<version>-fail-ready-<platform>.tar.zst.sigstore.json
 hello-<version>-fail-ready-<platform>.tar.zst.sha256
+pxe-<version>-<linux-platform>.tar.zst
+pxe-<version>-<linux-platform>.tar.zst.sigstore.json
+pxe-<version>-<linux-platform>.tar.zst.sha256
 ```
 
 ## What the deb and the rpm check packages with
@@ -309,7 +317,7 @@ cat release/hostkeeper-<version>-<platform>.tar.zst.sha256
 sha256sum release/hostkeeper-<version>-<platform>.tar.zst
 ```
 
-(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages.)
+(`index.json` for the hostkeeper packages; `<service>` is `hello` for the hello packages and `pxe` for the pxe packages.)
 
 The digest of the index in the first two outputs is equal, and the index lists, for
 `<platform>`, the package file and the digest in the last two outputs, which are equal. These

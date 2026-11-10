@@ -92,7 +92,7 @@ fn hostkeeper_release(version: &Version) -> Assets {
     let dir = scratch("sync-hostkeeper-assets");
     write_assets(&dir, version, "built");
     for package in Package::ALL {
-        for platform in crate::release::contract::Platform::RELEASED {
+        for &platform in package.platforms() {
             let name = package.package_name(version, platform);
             let digest = file_sha256(&dir.join(&name)).expect("hash a package");
             std::fs::write(dir.join(bundle_of(&name)), bundle_listing(&digest))
@@ -141,7 +141,7 @@ fn trust(entries: &[String]) -> ChannelTrust {
 }
 
 /// The trust list of `repos`: each repository's service named for it, and hostkeeper's also
-/// hello, each signed by the repository's `artifacts.yml` on `refs/heads/main`.
+/// hello and pxe, each signed by the repository's `artifacts.yml` on `refs/heads/main`.
 fn trust_of(repos: &[&str]) -> ChannelTrust {
     let mut entries = Vec::new();
     for repo in repos {
@@ -150,6 +150,7 @@ fn trust_of(repos: &[&str]) -> ChannelTrust {
         entries.push(entry(name, repo, artifacts, &["refs/heads/main"]));
         if *repo == REPO {
             entries.push(entry("hello", repo, artifacts, &["refs/heads/main"]));
+            entries.push(entry("pxe", repo, artifacts, &["refs/heads/main"]));
         }
     }
     trust(&entries)
@@ -179,14 +180,18 @@ fn snapshot(dir: &Path) -> BTreeMap<String, Vec<u8>> {
 }
 
 /// What staging `assets` of `s` at `v` puts in the channel: its directories, index, packages and
-/// their bundles, with the release's bytes.
+/// their bundles (those of the platforms the index lists), with the release's bytes.
 fn staged(s: &str, v: &str, assets: &Assets, index_name: &str) -> BTreeMap<String, Vec<u8>> {
     let mut tree = BTreeMap::from([
         (format!("{s}/"), Vec::new()),
         (format!("{s}/{v}/"), Vec::new()),
         (format!("{s}/{v}/index.json"), assets[index_name].clone()),
     ]);
+    let listed = String::from_utf8(assets[index_name].clone()).expect("a UTF-8 index");
     for platform in Platform::ALL {
+        if !listed.contains(&format!("{s}-{v}-{platform}.tar.zst\"")) {
+            continue;
+        }
         for name in [
             format!("{s}-{v}-{platform}.tar.zst"),
             format!("{s}-{v}-{platform}.tar.zst.sigstore.json"),

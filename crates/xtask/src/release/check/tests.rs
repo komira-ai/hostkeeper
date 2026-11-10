@@ -60,12 +60,12 @@ fn a_good_directory_passes_with_two_verifier_calls_per_attested_asset() {
     assert_eq!(
         run(&verifier, &dir, &commit),
         Ok(vec![format!(
-            "release check: the 70 assets of v0.1.5 match SHA256SUMS, and 50 attestations of \
+            "release check: the 77 assets of v0.1.5 match SHA256SUMS, and 54 attestations of \
              commit {commit} verified online and from their bundles"
         )])
     );
     let calls = verifier.calls.borrow();
-    assert_eq!(calls.len(), 50);
+    assert_eq!(calls.len(), 54);
     for name in attested_names(&version()) {
         assert!(calls.contains(&format!("online {name}")), "{name}");
         assert!(
@@ -245,7 +245,7 @@ fn verify_fails_when_the_attested_commit_differs_from_the_pin() {
         ]
     );
     let everything = refused(run(&FakeVerifier::good(&other), &dir, &commit));
-    assert_eq!(everything.len(), 50);
+    assert_eq!(everything.len(), 54);
 }
 
 #[test]
@@ -306,7 +306,7 @@ fn a_verifier_error_is_listed_for_every_file() {
     let lines = refused(run(&fakes.verifier, &dir, &commit));
     let names = attested_names(&version());
     let first = &names[0];
-    assert_eq!(lines.len(), 50);
+    assert_eq!(lines.len(), 54);
     assert_eq!(
         lines[0],
         format!("{first} (online): verify: no attestation")
@@ -340,7 +340,7 @@ fn good_index_of(dir: &Path, package: Package) -> ReleaseIndex {
         dir,
         package.service().name(),
         &package.version_text(&version()),
-        &Platform::RELEASED,
+        package.platforms(),
     )
     .expect("index")
 }
@@ -591,6 +591,67 @@ fn the_failing_build_packages_are_verified_online_and_from_their_bundles() {
                 "{FAIL_READY_PACKAGE} (offline): attests the commit {other}, not the pin {commit}"
             ),
         ]
+    );
+}
+
+#[test]
+fn the_pxe_index_lists_the_two_linux_packages_and_is_checked_like_the_others() {
+    // Catches: a pxe index that wants a macOS package (so a good release is refused), one that
+    // lists fewer or more than the two Linux packages of the directory, one of another service,
+    // or one not written canonically.
+    let pxe = |dir: &Path| good_index_of(dir, Package::Pxe);
+    let (dir, commit) = assets("check-pxe-index-good");
+    let verifier = FakeVerifier::good(&commit);
+    let index = pxe(&dir);
+    assert_eq!(index.service, "pxe");
+    assert_eq!(index.version, "0.1.5");
+    assert_eq!(
+        index
+            .packages
+            .iter()
+            .map(|e| e.file.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "pxe-0.1.5-linux-arm64.tar.zst",
+            "pxe-0.1.5-linux-x86_64.tar.zst"
+        ]
+    );
+    assert!(run(&verifier, &dir, &commit).is_ok());
+
+    let (dir, commit) = assets("check-pxe-index-short");
+    let verifier = FakeVerifier::good(&commit);
+    let mut index = pxe(&dir);
+    index.packages.pop();
+    replace_index_of(&dir, Package::Pxe, &index.to_json());
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![format!(
+            "pxe-index.json does not list exactly the packages of the directory with their \
+             sizes and SHA-256 digests"
+        )]
+    );
+
+    let (dir, commit) = assets("check-pxe-index-other-service");
+    let verifier = FakeVerifier::good(&commit);
+    replace_index_of(
+        &dir,
+        Package::Pxe,
+        &good_index_of(&dir, Package::Hello).to_json(),
+    );
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec![
+            "pxe-index.json: index_invalid: the index is of hello 0.1.5, not pxe 0.1.5".to_owned()
+        ]
+    );
+
+    let (dir, commit) = assets("check-pxe-index-spaced");
+    let verifier = FakeVerifier::good(&commit);
+    let spaced = pxe(&dir).to_json().replace(",\"schema\"", ", \"schema\"");
+    replace_index_of(&dir, Package::Pxe, &spaced);
+    assert_eq!(
+        refused(run(&verifier, &dir, &commit)),
+        vec!["pxe-index.json is not written canonically".to_owned()]
     );
 }
 

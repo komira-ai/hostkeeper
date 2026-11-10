@@ -42,7 +42,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 70);
+    assert_eq!(names.len(), 77);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -218,9 +218,9 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 25);
-    assert_eq!(summed.len(), 44);
-    for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX] {
+    assert_eq!(attested.len(), 27);
+    assert_eq!(summed.len(), 49);
+    for index in [INDEX, HELLO_INDEX, HELLO_FAIL_READY_INDEX, PXE_INDEX] {
         assert!(summed.contains(&index.to_owned()) & !attested.contains(&index.to_owned()));
     }
     // The boot sets of network install are summed and attested, with a bundle of their own, and
@@ -232,7 +232,12 @@ fn the_attested_and_summed_names_partition_the_assets() {
     assert!(!summed.iter().any(|n| is_bundle(n) | (n == SUMS)));
     for package in Package::ALL {
         for platform in Platform::RELEASED {
-            assert!(attested.contains(&package.package_name(&v, platform)));
+            // A package is attested for exactly the platforms it ships for.
+            assert_eq!(
+                attested.contains(&package.package_name(&v, platform)),
+                package.platforms().contains(&platform),
+                "{package:?} {platform:?}"
+            );
         }
     }
     assert!(attested.contains(&installer_name(&v)));
@@ -280,7 +285,7 @@ fn there_are_exactly_three_platforms_and_a_release_ships_all_three() {
 fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux_assets() {
     // Catches: a deb, an rpm, a coordinator, an MDM kit binary or an image named for macOS
     // (the MDM kit is Linux-only), its packages (the
-    // hostkeeper one, the hello one and hello's failing build) without a bundle or digest file,
+    // hostkeeper one, the hello one and hello's failing build; pxe has none, only its index) without a bundle or digest file,
     // or its installer pkg missing or not attested.
     let v = version("0.2.1");
     assert_eq!(
@@ -308,6 +313,7 @@ fn a_macos_platform_has_a_binary_a_package_an_installer_and_an_sbom_but_no_linux
             "index.json",
             "netboot.json",
             "netboot.json.sigstore.json",
+            "pxe-index.json",
         ]
     );
 }
@@ -362,25 +368,32 @@ fn the_services_and_packages_name_their_packages_and_indexes() {
     assert_eq!(Service::default(), Service::Hostkeeper);
     assert_eq!(Service::Hostkeeper.name(), "hostkeeper");
     assert_eq!(Service::Hello.name(), "hello");
+    assert_eq!(Service::Pxe.name(), "pxe");
     assert_eq!(
         Package::ALL,
-        [Package::Hostkeeper, Package::Hello, Package::HelloFailReady]
+        [
+            Package::Hostkeeper,
+            Package::Hello,
+            Package::HelloFailReady,
+            Package::Pxe
+        ]
     );
     assert_eq!(
         Package::ALL.map(Package::index_name),
         [
             "index.json",
             "hello-index.json",
-            "hello-fail-ready-index.json"
+            "hello-fail-ready-index.json",
+            "pxe-index.json"
         ]
     );
     assert_eq!(
         Package::ALL.map(|p| p.service().name()),
-        ["hostkeeper", "hello", "hello"]
+        ["hostkeeper", "hello", "hello", "pxe"]
     );
     assert_eq!(
         Package::ALL.map(|p| p.version_text(&v)),
-        ["1.2.3", "1.2.3", "1.2.3-fail-ready"]
+        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3"]
     );
     assert_eq!(
         Package::Hello.package_name(&v, Platform::MacosArm64),
@@ -394,6 +407,39 @@ fn the_services_and_packages_name_their_packages_and_indexes() {
         Package::Hostkeeper.package_name(&v, Platform::LinuxArm64),
         "hostkeeper-1.2.3-linux-arm64.tar.zst"
     );
+    assert_eq!(
+        Package::Pxe.package_name(&v, Platform::LinuxArm64),
+        "pxe-1.2.3-linux-arm64.tar.zst"
+    );
+}
+
+#[test]
+fn pxe_ships_for_the_two_linux_platforms_and_the_others_for_all_three() {
+    // Catches: a pxe package named for macOS (it boots machines from a Linux host), a Linux
+    // platform left out of its list, or another package that stopped shipping for a platform.
+    assert_eq!(
+        Package::Pxe.platforms(),
+        [Platform::LinuxX86_64, Platform::LinuxArm64]
+    );
+    for package in [Package::Hostkeeper, Package::Hello, Package::HelloFailReady] {
+        assert_eq!(package.platforms(), Platform::RELEASED, "{package:?}");
+    }
+    let v = version("1.2.3");
+    let names = asset_names(&v, &Platform::RELEASED);
+    for (name, present) in [
+        ("pxe-index.json", true),
+        ("pxe-1.2.3-linux-x86_64.tar.zst", true),
+        ("pxe-1.2.3-linux-x86_64.tar.zst.sha256", true),
+        ("pxe-1.2.3-linux-x86_64.tar.zst.sigstore.json", true),
+        ("pxe-1.2.3-linux-arm64.tar.zst", true),
+        ("pxe-1.2.3-linux-arm64.tar.zst.sha256", true),
+        ("pxe-1.2.3-linux-arm64.tar.zst.sigstore.json", true),
+        ("pxe-1.2.3-macos-arm64.tar.zst", false),
+        ("pxe-1.2.3-macos-arm64.tar.zst.sha256", false),
+        ("pxe-1.2.3-macos-arm64.tar.zst.sigstore.json", false),
+    ] {
+        assert_eq!(names.contains(&name.to_owned()), present, "{name}");
+    }
 }
 
 #[test]
@@ -409,6 +455,8 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
         Some(Package::HelloFailReady)
     );
     assert_eq!(Package::of(Service::Hostkeeper, true), None);
+    assert_eq!(Package::of(Service::Pxe, false), Some(Package::Pxe));
+    assert_eq!(Package::of(Service::Pxe, true), None);
 }
 
 #[test]

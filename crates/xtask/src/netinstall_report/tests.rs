@@ -31,10 +31,10 @@ fn inputs(dir: &Path) -> Flags {
         mode: Mode::Proxy,
         pxe_log: write(
             "hostkeeper-pxe.log",
-            "hostkeeper-pxe serve: 1000 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture \
+            "pxe serve: 1000 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture \
              7, PXEClient, on the DHCP port: proxy offer sent, boot file hostkeeper/shimx64.efi \
              (linux-x86_64)\n\
-             hostkeeper-pxe serve: 1040 seed seed/52:54:00:4e:10:01/meta-data: fetched by \
+             pxe serve: 1040 seed seed/52:54:00:4e:10:01/meta-data: fetched by \
              52:54:00:4e:10:01, host net-1: its install started, and it leaves the answer set \
              for the rest of the run\n",
         ),
@@ -59,8 +59,8 @@ fn the_report_reads_each_event_from_its_file() {
     assert_eq!(
         report[4..10],
         [
-            "| power-on | 1000 | hostkeeper-pxe: the first DHCPDISCOVER from the MAC |",
-            "| install started | 1040 | hostkeeper-pxe: the seed fetch |",
+            "| power-on | 1000 | pxe: the first DHCPDISCOVER from the MAC |",
+            "| install started | 1040 | pxe: the seed fetch |",
             "| pending | 1900 | the coordinator: the request's `first_seen_unix` |",
             "| approved | 1960 | the coordinator: the host's `enrolled_unix` |",
             "| first heartbeat | 1975 | the coordinator: the host's `first_heartbeat_unix` |",

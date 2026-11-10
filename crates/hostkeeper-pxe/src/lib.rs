@@ -1,8 +1,9 @@
-//! `hostkeeper-pxe`, the boot server of network install (docs/design/network-install.md,
-//! sections 3 and 5). It has two verbs: `fetch` (item N8) and `serve` (item N9), which serves
-//! only what `fetch` sealed ([`serve`]).
+//! `hostkeeper-pxe`, the library of the `pxe` program, the boot server of network install
+//! (docs/design/network-install.md, sections 3 and 5; docs/design/two-programs.md, section 6.1).
+//! `pxe serve` (item N9) serves what the `prepare` step of the `pxe` package's hook (item N8, the
+//! fetch) sealed ([`serve`]).
 //!
-//! `hostkeeper-pxe fetch` makes a new directory and writes into it, for each Linux platform asked
+//! The fetch ([`fetch`]) makes a new directory and writes into it, for each Linux platform asked
 //! for (both by default):
 //!
 //! - the boot set `netboot.json` pins: the Ubuntu live-server ISO, downloaded from the URL the
@@ -18,8 +19,10 @@
 //!
 //! The modules, in reading order:
 //!
-//! - [`cli`]: the flags, and the real ports (HTTPS, `gh`, the host's clock);
-//! - [`fetch`]: the order of the steps, the ports it runs on, and every refusal;
+//! - [`cli`]: the verbs of `pxe`: `serve` and the steps of the hook;
+//! - `settings`: the settings file, expanded into the flags of `serve` and of the fetch;
+//! - `hook`: the six steps of the package's update hook, over the boot directory and `systemctl`;
+//! - [`fetch`]: the order of the steps of the fetch, the ports it runs on, and every refusal;
 //! - [`netboot`]: `netboot.json`, read for the platforms asked for;
 //! - `download`, `copy`: one HTTPS GET into a file, measured as it is written;
 //! - `attest`: one asset's bundle, read and handed to the verifier within its deadline;
@@ -27,8 +30,8 @@
 //! - `deb`: a deb, read for one file of its `data.tar` (zstd, xz, gzip or none);
 //! - [`seal`]: what the seal holds;
 //! - [`serve`]: the start of `serve` (the files read as root, the sockets, the privilege drop of
-//!   [`privilege`], the seal check), and the run: the answer set read from the coordinator for
-//!   each answer, DHCP in proxy or router mode, TFTP and HTTP.
+//!   [`privilege`], the seal check, the readiness notice), and the run: the answer set read from
+//!   the coordinator for each answer, DHCP in proxy or router mode, TFTP and HTTP.
 
 pub mod cli;
 pub mod fetch;
@@ -42,7 +45,9 @@ mod attest;
 mod copy;
 mod deb;
 mod download;
+mod hook;
 mod iso;
+mod settings;
 
 #[cfg(test)]
 mod testing;

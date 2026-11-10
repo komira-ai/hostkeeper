@@ -150,6 +150,7 @@ pub const LAYERS: [Layer; 31] = [
         &[
             CONFIG,
             ENROLLMENT,
+            HOOK,
             PACKAGE,
             PROTO,
             PXE_PACKETS,

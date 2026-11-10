@@ -275,7 +275,7 @@ fn a_directory_without_a_package_has_no_index() {
 
 /// The line of the index verb's refusal for the package `file` that is not there.
 fn missing(file: &str) -> String {
-    format!("missing {file}: a release has the package of every platform")
+    format!("missing {file}: a release has the package of every platform it ships")
 }
 
 /// Writes the package of hostkeeper 1.5.0 for each of `platforms` into `dir`, each holding its
@@ -382,6 +382,52 @@ fn an_invalid_index_names_the_refusal_token() {
         package_file("tierstore", VERSION, Platform::MacosArm64),
         "tierstore-1.5.0-macos-arm64.tar.zst"
     );
+}
+
+#[test]
+fn the_pxe_index_lists_the_two_linux_packages_and_refuses_a_missing_one() {
+    // Catches: a pxe index that demands or lists a macOS package, one written when a Linux
+    // package is missing, or a refusal that names a platform pxe does not ship for.
+    let dir = scratch("index-pxe");
+    for p in [Platform::LinuxX86_64, Platform::LinuxArm64] {
+        std::fs::write(dir.join(Package::Pxe.package_name(&version(), p)), p.name())
+            .expect("write a package");
+    }
+    let path = dir.join("pxe-index.json");
+    assert_eq!(
+        write_index(&dir, Package::Pxe, &version()),
+        Ok(vec![format!(
+            "{}: the packages of pxe 1.5.0 for linux-arm64, linux-x86_64",
+            path.display()
+        )])
+    );
+    let written = std::fs::read_to_string(&path).expect("read the index");
+    let parsed = ReleaseIndex::parse(&written, "pxe", VERSION).expect("a pxe index");
+    assert_eq!(
+        parsed
+            .packages
+            .iter()
+            .map(|e| e.file.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "pxe-1.5.0-linux-arm64.tar.zst",
+            "pxe-1.5.0-linux-x86_64.tar.zst"
+        ]
+    );
+
+    let one = scratch("index-pxe-one");
+    std::fs::write(
+        one.join(Package::Pxe.package_name(&version(), Platform::LinuxX86_64)),
+        b"x86",
+    )
+    .expect("write a package");
+    assert_eq!(
+        write_index(&one, Package::Pxe, &version()),
+        Err(Error::Refused(vec![missing(
+            "pxe-1.5.0-linux-arm64.tar.zst"
+        )]))
+    );
+    assert!(!one.join("pxe-index.json").exists());
 }
 
 #[test]

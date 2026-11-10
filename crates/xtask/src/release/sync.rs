@@ -12,8 +12,8 @@
 //! are read through the [`ReleaseSource`] port, drafts left out, oldest version first; a release
 //! whose tag is not `v<X.Y.Z>` is skipped, and with `--since v<X.Y.Z>` so is every release older
 //! than that tag. A release carries one release index per service version it ships (`index.json`,
-//! and any `<name>-index.json`: a hostkeeper release carries hostkeeper's, hello's and hello's
-//! failing build's). For each release:
+//! and any `<name>-index.json`: a hostkeeper release carries hostkeeper's, hello's, hello's
+//! failing build's and pxe's, which lists the two Linux platforms only). For each release:
 //!
 //! 1. its asset names must all be plain file names, and its commit a full commit id; a release
 //!    with no index is skipped;
@@ -38,7 +38,8 @@
 //!    A version with a package not so signed is refused, naming the service and the signer it
 //!    wants, and the release's other versions go on;
 //! 5. each `S/V` is staged by `release channel-stage` ([`channel_stage::stage`]), requiring a
-//!    package for every platform. A new version is staged into a work directory inside the
+//!    package for every platform the service ships for (the two Linux ones for `pxe`, all three
+//!    otherwise). A new version is staged into a work directory inside the
 //!    channel directory and then renamed to `S/V` as a whole, so a daemon never sees a version
 //!    that is half there; an unfinished one is completed in place, which never changes a file
 //!    already there.
@@ -71,7 +72,7 @@ use serde_json::Value;
 
 use super::channel_stage::{self, MAX_INDEX_BYTES};
 use super::check::{self, judge, sums_line};
-use super::contract::{Commit, REPO, Repo, SUMS, Signer, Version, bundle_of, is_bundle};
+use super::contract::{Commit, Package, REPO, Repo, SUMS, Signer, Version, bundle_of, is_bundle};
 use super::ports::{Release, ReleaseSource, Verifier};
 use super::{Error, file_sha256};
 
@@ -462,6 +463,23 @@ impl Context<'_> {
         check_sums(dir, names)
     }
 
+    /// The platforms the index of `service` must list a package for: those the release's own
+    /// package of that name ships for ([`Package::platforms`]: pxe's are the two Linux ones),
+    /// and all three for any other service, of this repository or of another.
+    fn required_platforms(&self, service: &ServiceName) -> Vec<Platform> {
+        let own = Package::ALL
+            .into_iter()
+            .find(|p| p.service().name() == service.as_str());
+        match own {
+            Some(package) if self.repo.as_str() == REPO => package
+                .platforms()
+                .iter()
+                .filter_map(|p| p.name().parse().ok())
+                .collect(),
+            _ => Platform::ALL.to_vec(),
+        }
+    }
+
     /// Step 5 for one version.
     fn stage(&self, work: &Work, shipped: &Shipped, state: &InChannel) -> Result<(), Error> {
         let out = match state {
@@ -473,7 +491,7 @@ impl Context<'_> {
             version: shipped.version.clone(),
             from: work.assets.clone(),
             index: Some(work.assets.join(&shipped.index_name)),
-            require: Platform::ALL.to_vec(),
+            require: self.required_platforms(&shipped.service),
             out,
         })?;
         if *state != InChannel::Absent {

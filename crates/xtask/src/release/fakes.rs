@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer,
-    Version, attested_names, bundle_of, hkctl_name, summed_names,
+    Commit, DIGEST_SUFFIX, Package, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version,
+    attested_names, bundle_of, hkctl_name, summed_names,
 };
 use super::file_sha256;
 use super::index::ReleaseIndex;
@@ -51,7 +51,7 @@ pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     );
     for package in Package::ALL {
         let (service, text) = (package.service().name(), package.version_text(version));
-        let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
+        let index = ReleaseIndex::of_dir(dir, service, &text, package.platforms())
             .expect("index the packages");
         write(package.index_name(), index.to_json());
     }

@@ -6,8 +6,9 @@
 //! It reads the times the components record, from three files the operator (or the end-to-end
 //! test) keeps of one machine's install, and reads no clock:
 //!
-//! - `--pxe-log`: the log of `hostkeeper-pxe serve` (its standard error), whose lines are
-//!   `hostkeeper-pxe serve: <unix seconds> <text>`. Power-on is its first `DHCPDISCOVER` from
+//! - `--pxe-log`: the log of `pxe serve` (its standard error), whose lines are
+//!   `pxe serve: <unix seconds> <text>` (a log of the earlier name, `hostkeeper-pxe serve: `, reads
+//!   too). Power-on is its first `DHCPDISCOVER` from
 //!   the MAC in proxy mode, or its first `DHCPREQUEST` in router mode; the install started at
 //!   the seed fetch of the MAC as the record's host.
 //! - `--pending`: what `hostkeeper ctl --output json enrollment list` printed while the
@@ -48,7 +49,7 @@ pub(crate) enum Error {
     Refused(String),
 }
 
-/// A MAC address as `hostkeeper-pxe` logs it: six pairs of lower-case hex digits, separated by
+/// A MAC address as `pxe` logs it: six pairs of lower-case hex digits, separated by
 /// colons. Upper-case digits are read as lower-case.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Mac(String);
@@ -114,7 +115,7 @@ pub(crate) struct Flags {
     /// The mode `serve` installed it in.
     #[arg(long, value_enum)]
     pub(crate) mode: Mode,
-    /// The log of `hostkeeper-pxe serve` (its standard error).
+    /// The log of `pxe serve` (its standard error).
     #[arg(long)]
     pub(crate) pxe_log: PathBuf,
     /// What `hostkeeper ctl --output json enrollment list` printed while the request was

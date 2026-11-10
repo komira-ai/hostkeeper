@@ -40,7 +40,7 @@ fn machine() -> Machine {
 
 /// `GET <path>` over plain HTTP from `server`: the body, failing the test unless it is a 200.
 fn http_get(server: SocketAddr, path: &str) -> String {
-    let mut stream = TcpStream::connect(server).expect("connect to hostkeeper-pxe's HTTP");
+    let mut stream = TcpStream::connect(server).expect("connect to pxe's HTTP");
     write!(
         stream,
         "GET {path} HTTP/1.1\r\nHost: {server}\r\nConnection: close\r\n\r\n"

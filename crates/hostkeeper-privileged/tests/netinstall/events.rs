@@ -1,5 +1,5 @@
 //! The progress events the network-install tests wait on, in the one order they arrived: each line
-//! of the guest's serial console, of `hostkeeper-pxe`'s log and of the router's DHCP, and the end
+//! of the guest's serial console, of `pxe`'s log and of the router's DHCP, and the end
 //! of a program that was not told to stop.
 //!
 //! Every wait ends on its event or fails on the end of the guest (or of a program the test still
@@ -25,7 +25,7 @@ const PAUSE: Duration = Duration::from_millis(500);
 pub enum Source {
     /// The guest's serial console.
     Guest,
-    /// `hostkeeper-pxe`'s standard error and output.
+    /// `pxe`'s standard error and output.
     Pxe,
     /// The router's DHCP.
     Router,
@@ -35,7 +35,7 @@ impl fmt::Display for Source {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(match self {
             Source::Guest => "the guest's console",
-            Source::Pxe => "hostkeeper-pxe",
+            Source::Pxe => "pxe",
             Source::Router => "the router's DHCP",
         })
     }

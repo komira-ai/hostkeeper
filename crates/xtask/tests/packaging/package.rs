@@ -136,7 +136,7 @@ fn nfpm_config_holds_only_the_keys_it_needs() {
     refuses(check_nfpm_keys, &cases);
 }
 
-/// The seven files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
+/// The six files of the package, sorted as [`Config::files`] sorts them: `gh` and the trusted
 /// root at the daemon's own paths, from where `release nfpm-stage` writes them.
 pub fn package_files() -> Vec<nfpm::File> {
     let file = |dst: &str, src: &str, mode: &str| nfpm::File {
@@ -148,11 +148,6 @@ pub fn package_files() -> Vec<nfpm::File> {
     };
     let mut files = vec![
         file("/usr/bin/hostkeeper", "target/release/hostkeeper", "0755"),
-        file(
-            "/usr/bin/hostkeeper-pxe",
-            "target/release/hostkeeper-pxe",
-            "0755",
-        ),
         file(INSTALLED_UNIT, "packaging/linux/hostkeeper.service", "0644"),
         file(
             "/usr/lib/tmpfiles.d/hostkeeper.conf",
@@ -265,8 +260,8 @@ fn with_content(text: &str, src: &str, dst: &str) -> String {
 }
 
 /// Catches a package that carries a key, a certificate, a token or a live `hostkeeper.toml`
-/// (by name, or a private key in a source's text), a file too many or too few (hostkeeper-pxe
-/// left out among them), a file with another mode, owner, source or place, and a console issue link that is missing, is somewhere else
+/// (by name, or a private key in a source's text), a file too many (the boot server pxe, which has a
+/// package of its own, among them) or too few, a file with another mode, owner, source or place, and a console issue link that is missing, is somewhere else
 /// than `/etc/issue.d`, or points at another file than the one the daemon writes.
 #[test]
 fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
@@ -327,26 +322,14 @@ fn deb_manifest_lists_the_unit_the_binary_and_no_key_or_token() {
             "not [",
         ),
         (
-            altered(
-                &text,
-                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n",
-                "    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0750\n",
-            ),
+            with_content(&text, "target/release/pxe", "/usr/bin/hostkeeper-pxe"),
             "not [",
         ),
         (
             altered(
                 &text,
-                "  - src: target/release/hostkeeper-pxe\n    dst: /usr/bin/hostkeeper-pxe\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
+                "  - src: target/release/hostkeeper\n    dst: /usr/bin/hostkeeper\n    file_info:\n      mode: 0755\n      owner: root\n      group: root\n",
                 "",
-            ),
-            "not [",
-        ),
-        (
-            altered(
-                &text,
-                "  - src: target/release/hostkeeper-pxe\n",
-                "  - src: target/release/hostkeeper\n",
             ),
             "not [",
         ),

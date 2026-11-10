@@ -9,8 +9,8 @@
 //! - `stamp` and `check-binary` ([`check_binary`]): the `--version` text of a shipped binary
 //!   ([`contract::stamp_of`]) and the check that a built binary prints exactly it.
 //! - `package` ([`package`]): the deterministic package of a service (`--service`, hostkeeper
-//!   unless it says `hello`; for hello `--fail-ready` builds its failing build), `.tar.zst`, and
-//!   its SHA-256.
+//!   unless it says `hello` or `pxe`; for hello `--fail-ready` builds its failing build),
+//!   `.tar.zst`, and its SHA-256.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, and the Sigstore trusted root, checked
 //!   and staged for the deb and the rpm.
@@ -168,9 +168,10 @@ pub(crate) enum Verb {
     },
     /// Build the package of a service for one platform, and its `.sha256`.
     Package {
-        /// The service: hostkeeper (the default) or hello. Hello's manifest and units are
-        /// rendered for the platform, and it builds for every platform; hostkeeper's package for
-        /// macOS has no unit.
+        /// The service: hostkeeper (the default), hello or pxe. Hello's manifest and units are
+        /// rendered for the platform, and it builds for every platform; pxe's manifest and unit
+        /// are rendered too, for the two Linux platforms only (macos-arm64 is refused);
+        /// hostkeeper's package for macOS has no unit.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
         #[arg(long, value_enum)]
@@ -185,17 +186,17 @@ pub(crate) enum Verb {
         binary: PathBuf,
         /// The systemd unit: `units/hostkeeper.service` in the package. Required for a Linux
         /// platform of hostkeeper; refused for its macos-arm64 package, which carries no unit,
-        /// and for hello, whose units are rendered.
+        /// and for hello and pxe, whose units are rendered.
         #[arg(long)]
         unit: Option<PathBuf>,
         /// Build hello's failing build: version `<version>-fail-ready`, started with
-        /// `--fail-ready`, so it never reports ready. Refused for hostkeeper.
+        /// `--fail-ready`, so it never reports ready. Refused for hostkeeper and pxe.
         #[arg(long)]
         fail_ready: bool,
         /// The Sigstore trusted root, as `gh attestation trusted-root` prints it:
         /// `files/trusted_root.json` in the package, which the daemon checks attestations
         /// against. Required for hostkeeper on every platform (the release passes
-        /// `packaging/sigstore/trusted_root.json`); refused for hello.
+        /// `packaging/sigstore/trusted_root.json`); refused for hello and pxe.
         #[arg(long)]
         trusted_root: Option<PathBuf>,
         /// The directory the package and its `.sha256` are written to.
@@ -237,14 +238,15 @@ pub(crate) enum Verb {
         staged: PathBuf,
     },
     /// Write the release index of a service's packages of a version in a directory, one entry
-    /// per released platform, refused when the package of any is missing: `index.json` for
-    /// hostkeeper, `hello-index.json` for hello and `hello-fail-ready-index.json` for its failing
-    /// build.
+    /// per platform the package ships for, refused when the package of any is missing:
+    /// `index.json` for hostkeeper, `hello-index.json` for hello, `hello-fail-ready-index.json`
+    /// for its failing build and `pxe-index.json` for pxe (linux-x86_64 and linux-arm64).
     Index {
-        /// The service: hostkeeper (the default) or hello.
+        /// The service: hostkeeper (the default), hello or pxe.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
-        /// Index hello's failing build (`hello-fail-ready-index.json`). Refused for hostkeeper.
+        /// Index hello's failing build (`hello-fail-ready-index.json`). Refused for hostkeeper
+        /// and pxe.
         #[arg(long)]
         fail_ready: bool,
         #[arg(long)]

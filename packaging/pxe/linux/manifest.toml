@@ -1,0 +1,26 @@
+schema = 1
+name = "pxe"
+version = "1.2.3"
+platform = "linux-x86_64"
+min_hostkeeper = "0.1.0"
+
+[hook]
+command = ["bin/pxe"]
+verify_deadline_secs = 300
+
+[hook.timeout_secs]
+prepare = 0
+cutover = 120
+verify = 30
+rollback = 120
+cleanup = 60
+uninstall = 60
+
+[units]
+run = ["pxe.service"]
+
+[params]
+release = "https://github.com/komira-ai/hostkeeper/releases/download/v1.2.3"
+settings = "/etc/pxe/pxe.toml"
+boot_dir = "/var/lib/pxe"
+unit = "pxe.service"

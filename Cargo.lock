@@ -1827,6 +1827,7 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-enrollment",
+ "hostkeeper-hook",
  "hostkeeper-package",
  "hostkeeper-proto",
  "hostkeeper-pxe-packets",

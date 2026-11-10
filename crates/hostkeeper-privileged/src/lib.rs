@@ -37,9 +37,10 @@
 //! `#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]`, job
 //! `net-install`, and `tests/net_install_arm64.rs`, job `net-install-arm64`, both in
 //! `.github/workflows/net-install.yml`) install a QEMU guest
-//! by network with the real `hostkeeper-pxe` (the program `hostkeeper-privileged-pxe`, which
+//! by network with the real `pxe` (the program `hostkeeper-privileged-pxe`, which
 //! forwards to `hostkeeper_pxe::cli::main`) and the real coordinator's LAN listener, on a bridge
-//! of the test's with no route out; their rig is `tests/netinstall/`, whose root-free parts
+//! of the test's with no route out, and, in `tests/net_install.rs`, install a `pxe` package under
+//! systemd through the coordinator and the daemon; their rig is `tests/netinstall/`, whose root-free parts
 //! `tests/net_install_rig.rs` runs in the pull-request set.
 //!
 //! - [`fixture`]: the workload fixture, the program `hostkeeper-fixture-hook` that speaks the hook
