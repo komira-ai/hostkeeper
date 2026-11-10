@@ -427,7 +427,8 @@ fn placed() -> Value {
 /// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
 /// coordinator lists hello uninstalling on no host and the daemon dropped hello's tombstone from
 /// `placed.json` (the last write of the uninstall, after the package directory and the records
-/// are removed and after the heartbeat stopped listing hello), both plists are gone from
+/// are removed; the coordinator's list follows the heartbeats, so either may come first and the
+/// wait holds for both), both plists are gone from
 /// `/Library/LaunchDaemons`, launchd holds neither job, hello's package directory is gone with
 /// every version, link and seal in it, `placed.json` (if any is left) holds no path and no
 /// tombstone of hello, the hook's slot
