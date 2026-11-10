@@ -2,13 +2,13 @@
 //! Network install of an x86-64 machine, end to end (docs/design/network-install.md section 11,
 //! net-install.yml's job `net-install`): a QEMU guest with OVMF under KVM, an empty disk, a fixed
 //! UUID and serial, its NIC first in the boot order, on a LAN with no route out, with the
-//! router's DHCP faked by the test, the real `hostkeeper-pxe` and the real coordinator with its
+//! router's DHCP faked by the test, the real `pxe` and the real coordinator with its
 //! LAN listener (`netinstall`). The operator acts only through the operator API, and the guest is
 //! only booted, rebooted (by its operator account) and read.
 //!
 //! In order, it checks:
 //!
-//! 1. Proxy mode: the router's DHCP saw the guest's DISCOVER and `hostkeeper-pxe` sent its proxy
+//! 1. Proxy mode: the router's DHCP saw the guest's DISCOVER and `pxe` sent its proxy
 //!    offer; the guest got the install menu of its MAC and fetched its seed; the reboot after the
 //!    install got no proxy offer (its MAC left the answer set) and booted the disk.
 //! 2. A pending request appears, matched to the record, with claims equal to the guest's UUID and
@@ -16,7 +16,7 @@
 //!    heartbeat arrives; the fixture service assigned to the host's role reports installed.
 //!    The installed system holds exactly the repository files `serve --repositories` was given,
 //!    root's with mode 0644.
-//! 3. Router mode, the enrolled guest rebooted: `hostkeeper-pxe` learns its address from its
+//! 3. Router mode, the enrolled guest rebooted: `pxe` learns its address from its
 //!    REQUEST, serves `hostkeeper/boot.efi` as the x86-64 shim, and its local-disk menu; its
 //!    heartbeat comes back from the same disk.
 //! 4. Reinstall with `--reinstall`, in router mode (the record states its platform): the guest's
@@ -35,20 +35,33 @@
 //! it once the fixture service was installed, its serving time among them. The job's step after
 //! this test makes the report of them with `cargo xtask netinstall-report`; no test asserts a
 //! time.
+//!
+//! A second test, `an_assigned_pxe_package_prepares_serves_and_uninstalls`, needs no guest: the
+//! `pxe` .deb (the program of the tests and the committed unit) assigned to a host by the
+//! operator API is installed by the real daemon through apt, its `update-hook prepare` fetches
+//! and seals a boot set from the channel, its unit serves from it under systemd, and an
+//! uninstall takes it off.
 
 mod e2e;
 mod netinstall;
 mod support;
 
+use std::net::Ipv4Addr;
 use std::path::Path;
 
+use e2e::aptrepo::{self, AptRepo, Deb, File, Service};
+use e2e::signer::FixtureSigner;
+use hostkeeper_proto::hostkeeper::release::v1::StepBounds;
 use netinstall::events::Source;
-use netinstall::guest::{Arch, Machine};
-use netinstall::pxe::Mode;
+use netinstall::guest::{Arch, Machine, Ssh};
+use netinstall::pxe::{self, Mode, ServeSettings, Tools};
 use netinstall::{Rig, SERVICE, VERSION, fixture, heartbeat};
 use serde_json::Value;
+use support::channel::Channel;
 use support::operator_api::{Approval, must};
-use support::pair::{Coordinator, ROLE};
+use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, ROLE, TestCa, put, rollout};
+use support::spawn::poll;
+use support::{Bench, journal, run};
 use tonic::Code;
 
 /// The record's host id, and the guest's host name once installed.
@@ -389,4 +402,264 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
             "{mode:?}: the disk is untouched"
         );
     }
+}
+
+/// The `pxe` service, its package and its unit, and what the .deb and the hook place on the host.
+const PXE_SERVICE: &str = "pxe";
+const PXE_UNIT: &str = "pxe.service";
+const PXE_PROGRAM: &str = "usr/lib/pxe/pxe";
+const PXE_UNIT_FILE: &str = "/usr/lib/systemd/system/pxe.service";
+const PXE_WANTS: &str = "/etc/systemd/system/multi-user.target.wants/pxe.service";
+/// The host's settings of `pxe` (the package param `settings`) and its boot sets (`boot_dir`).
+const PXE_SETTINGS_DIR: &str = "/etc/pxe";
+const PXE_SETTINGS: &str = "/etc/pxe/pxe.toml";
+const PXE_BOOT_DIR: &str = "/var/lib/pxe";
+/// The hook command of the package (the manifest's `hook.command`).
+const PXE_HOOK: [&str; 2] = ["/usr/lib/pxe/pxe", "update-hook"];
+/// The host, and the role of the `pxe` service in the rollout file (no host has it: only the
+/// assignment brings the service).
+const PXE_NODE: &str = "ci-pxe-host";
+const NO_HOST_ROLE: &str = "unused";
+
+/// The entry of `list` whose `key` names the `pxe` service, or `null`.
+fn pxe_entry(list: &Value, key: &str) -> Value {
+    list.as_array()
+        .and_then(|all| all.iter().find(|entry| entry[key] == PXE_SERVICE))
+        .cloned()
+        .unwrap_or(Value::Null)
+}
+
+/// What `systemctl is-active pxe.service` prints.
+fn pxe_active() -> String {
+    let out = run(
+        hostkeeper_steps::systemd::SYSTEMCTL,
+        &["is-active", PXE_UNIT],
+    );
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+/// Whether dpkg holds the package `pxe` installed (`ii`).
+fn pxe_installed() -> bool {
+    let out = run(
+        "/usr/bin/dpkg-query",
+        &["-W", "-f=${db:Status-Abbrev}", PXE_SERVICE],
+    );
+    out.status.success() && String::from_utf8_lossy(&out.stdout).starts_with("ii")
+}
+
+/// The `pxe` .deb, with the program of the tests at `/usr/lib/pxe/pxe` and the committed unit at
+/// `/usr/lib/systemd/system/pxe.service` (its two files, as the release's .deb), assigned to a
+/// host by the operator API, is installed by the real daemon through apt: `prepare` runs as
+/// `/usr/lib/pxe/pxe update-hook prepare <staged> --params <file>`, fetches the netboot release
+/// from the channel (attested by the end-to-end rig's signer, checked by the job's `gh`) and
+/// seals the boot set under `/var/lib/pxe`; `cutover` points `current` at it and starts the unit,
+/// which serves from the host's settings file in router mode with every listener on loopback.
+/// `unassign --uninstall` stops the unit, runs `update-hook uninstall` and purges the package.
+///
+/// Catches a hook command, params or unit the program does not answer, a `prepare` that does
+/// not seal the boot set under `boot_dir`, a `cutover` that does not point `current` at it and
+/// start the unit, and an uninstall that leaves the boot sets, the unit, the package or the
+/// directory of the daemon's packages, or removes the operator's settings file.
+#[test]
+fn an_assigned_pxe_package_prepares_serves_and_uninstalls() {
+    let bench = Bench::new("pxe_package");
+    let _host = HostPaths::claim(
+        &[
+            "/etc/hostkeeper",
+            PXE_SETTINGS_DIR,
+            PXE_BOOT_DIR,
+            "/usr/lib/pxe",
+            PXE_UNIT_FILE,
+            PXE_WANTS,
+        ],
+        &[PXE_UNIT],
+    )
+    .purging(&[PXE_SERVICE]);
+    let scratch = bench.scratch().to_path_buf();
+    let ca = TestCa::new("release channel CA");
+    let channel = Channel::start(&ca);
+    let signer = FixtureSigner::new();
+    let platform = pxe::platform();
+
+    // The release `prepare` fetches, on the channel, and the apt repository holding the .deb of
+    // the same version, which the host's repository entry and the registry name.
+    let version = pxe::release(&channel, &signer, platform);
+    let program = std::fs::read(pxe::PXE).expect("the program of the tests");
+    let repo = AptRepo::new(&scratch, "pxe-ci");
+    repo.install_registered(aptrepo::REGISTRY_NAME);
+    let published = repo.publish(&Deb {
+        package: PXE_SERVICE.to_owned(),
+        version: version.clone(),
+        files: vec![
+            File::new(PXE_PROGRAM, program, 0o755),
+            File::new("usr/lib/systemd/system/pxe.service", pxe::UNIT, 0o644),
+        ],
+    });
+    let service = Service {
+        repository: aptrepo::REPOSITORY.to_owned(),
+        run: vec![PXE_UNIT.to_owned()],
+        health_url: None,
+        params: [
+            ("release", channel.url()),
+            ("settings", PXE_SETTINGS.to_owned()),
+            ("boot_dir", PXE_BOOT_DIR.to_owned()),
+            ("unit", PXE_UNIT.to_owned()),
+        ]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), aptrepo::text(&value)))
+        .collect(),
+        hook_command: PXE_HOOK.map(String::from).to_vec(),
+        steps: StepBounds {
+            prepare: 0,
+            cutover: 120,
+            verify: 30,
+            rollback: 120,
+            cleanup: 60,
+            uninstall: Some(60),
+        },
+        verify_deadline_secs: 300,
+    };
+    let entry = aptrepo::entry(&service, &published);
+
+    // The coordinator and the daemon, and the host's files: the daemon config the seeds carry,
+    // the SSH keys, the settings file.
+    let services = format!(
+        "[[service]]\nname = \"{PXE_SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n\
+         repository = \"{}\"\n",
+        aptrepo::REGISTRY_NAME
+    );
+    let mut coordinator = Coordinator::start(&scratch, &rollout(&services), &[]);
+    must(
+        "repositories put",
+        coordinator
+            .api()
+            .put_repository(repo.registry_entry(aptrepo::REGISTRY_NAME)),
+    );
+    let daemon_config = scratch.join("pxe-daemon.toml");
+    put(
+        &daemon_config,
+        format!(
+            "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
+            coordinator.url(),
+            coordinator.ca_sha256(),
+            channel.url(),
+            signer.trusted_signers_toml()
+        )
+        .as_bytes(),
+        0o600,
+    );
+    let ssh = Ssh::new(&scratch.join("ssh"), Ipv4Addr::LOCALHOST);
+    let tools = Tools::put(&scratch, &ca.pem(), &signer);
+    let serve = ServeSettings {
+        mode: Mode::Router,
+        address: Ipv4Addr::LOCALHOST,
+        coordinator: &coordinator,
+        daemon_config: &daemon_config,
+        ssh_keys: &ssh.public,
+        serial_console: None,
+        repositories: None,
+        loopback: true,
+    };
+    put(
+        Path::new(PXE_SETTINGS),
+        format!("{}\n{}", serve.table(), tools.table(platform)).as_bytes(),
+        0o600,
+    );
+    let mut daemon = Daemon::start(&scratch, &coordinator, &channel.url());
+    coordinator.approve_first(PXE_NODE, &mut daemon);
+    coordinator.wait_heard(PXE_NODE, &mut daemon);
+
+    // The operator sets the desired version and assigns the service to the host.
+    must(
+        "releases set-desired",
+        coordinator
+            .api()
+            .set_desired_targets_alone(PXE_SERVICE, &version, aptrepo::targets(entry)),
+    );
+    must(
+        "services assign",
+        coordinator.api().assign(PXE_NODE, PXE_SERVICE),
+    );
+
+    // The install: the host reports the service at the version, with no order under way.
+    poll(&format!("{PXE_NODE} reporting pxe {version}"), || {
+        coordinator.assert_running();
+        daemon.assert_running();
+        let listed = coordinator
+            .host(PXE_NODE)?
+            .ok_or_else(|| format!("hosts list lists no {PXE_NODE}"))?;
+        let seen = pxe_entry(&listed["services"], "service");
+        let beat = pxe_entry(&listed["heartbeat"]["services"], "name");
+        match seen["installedVersion"].as_str() {
+            Some(v) if v == version && beat["updating"].is_null() => Ok(()),
+            _ => Err(format!(
+                "{seen} (beat {beat}); the daemon's log:\n{}",
+                daemon.log()
+            )),
+        }
+    });
+    let sealed = format!("sealed {PXE_BOOT_DIR}/{version}:");
+    assert!(
+        daemon
+            .log()
+            .lines()
+            .any(|line| line.contains(": updater-pxe-prepare-") && line.contains(&sealed)),
+        "prepare sealed the boot set: {}",
+        daemon.log()
+    );
+    assert_eq!(
+        std::fs::read_link(format!("{PXE_BOOT_DIR}/current")).ok(),
+        Some(version.clone().into()),
+        "current points at the version's boot set"
+    );
+    assert!(
+        Path::new(&format!("{PXE_BOOT_DIR}/{version}/seal.json")).is_file(),
+        "the boot set is sealed"
+    );
+    assert_eq!(
+        pxe_active(),
+        "active",
+        "pxe.service is active\n{}",
+        journal(PXE_UNIT)
+    );
+    assert!(pxe_installed(), "dpkg holds the package pxe");
+    assert!(
+        Path::new(PXE_UNIT_FILE).exists(),
+        "the .deb placed the unit"
+    );
+    assert!(Path::new(PXE_WANTS).exists(), "the unit is enabled");
+
+    // The operator takes the service off the host with an uninstall.
+    must(
+        "services unassign",
+        coordinator.api().unassign(PXE_NODE, PXE_SERVICE, true),
+    );
+    let packages = Path::new(PACKAGES_DIR).join(PXE_SERVICE);
+    poll(&format!("{PXE_NODE} uninstalled pxe"), || {
+        coordinator.assert_running();
+        daemon.assert_running();
+        let entry = coordinator.service(PXE_SERVICE)?;
+        let uninstalling = entry["uninstalling"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if uninstalling.is_empty() && !packages.exists() {
+            Ok(())
+        } else {
+            Err(format!("{entry}; the daemon's log:\n{}", daemon.log()))
+        }
+    });
+    for gone in [PXE_BOOT_DIR, PXE_UNIT_FILE, PXE_WANTS] {
+        assert!(
+            std::fs::symlink_metadata(gone).is_err(),
+            "{gone} is removed\n{}",
+            daemon.log()
+        );
+    }
+    assert!(!pxe_installed(), "dpkg no longer holds the package pxe");
+    assert!(
+        std::fs::symlink_metadata(PXE_SETTINGS).is_ok(),
+        "the settings file is the operator's and stays"
+    );
+    assert_eq!(pxe_active(), "inactive", "pxe.service is stopped");
 }

@@ -115,6 +115,8 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
         "https://192.0.2.5:443",
         "https://[::1]:8444",
         "https://[::1]",
+        "https://[2001:db8::5:1]",
+        "https://[2001:db8::5:1]:8444",
     ] {
         assert_eq!(all(good).as_deref(), Ok(good));
     }

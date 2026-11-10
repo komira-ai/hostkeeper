@@ -347,7 +347,7 @@ fn a_captured_github_bundle_yields_its_commit_ref_and_subjects() {
 }
 
 /// What a bundle lacks is shown as the text that names it, for the log of a caller outside this
-/// crate (`hostkeeper-pxe fetch`).
+/// crate (`pxe update-hook prepare`).
 ///
 /// Catches a refusal shown as its type's name instead of the part the bundle lacks.
 #[test]

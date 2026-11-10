@@ -206,7 +206,7 @@ impl Kit {
         let me = rustix::process::getuid().as_raw().to_string();
         let group = rustix::process::getgid().as_raw().to_string();
         let mut args: Vec<OsString> = [
-            "hostkeeper-pxe",
+            "pxe",
             "serve",
             "--mode",
             mode,
@@ -277,6 +277,7 @@ fn address_in(line: &str, label: &str) -> Option<SocketAddr> {
 /// thread; the log lines go to `lines`.
 fn spawn(
     args: Vec<OsString>,
+    notify_socket: Option<OsString>,
 ) -> (
     mpsc::Receiver<String>,
     tokio::sync::oneshot::Sender<()>,
@@ -301,6 +302,7 @@ fn spawn(
                     let _ = stopped.await;
                 })
             }),
+            notify_socket,
         };
         serve_with(&flags, owner, ports)
     });
@@ -310,7 +312,13 @@ fn spawn(
 impl Running {
     /// Starts `args` and waits for the start line.
     pub fn start(args: Vec<OsString>) -> Running {
-        let (lines, stop, thread) = spawn(args);
+        Running::start_notifying(args, None)
+    }
+
+    /// Starts `args` with `notify_socket` as the socket systemd named, and waits for the start
+    /// line.
+    pub fn start_notifying(args: Vec<OsString>, notify_socket: Option<OsString>) -> Running {
+        let (lines, stop, thread) = spawn(args, notify_socket);
         let mut running = Running {
             lines,
             seen: Vec::new(),
@@ -369,7 +377,16 @@ impl Running {
 
 /// Runs `args` to its end, for a start that is refused: its result and its lines.
 pub fn refused(args: Vec<OsString>) -> (Result<(), String>, Vec<String>) {
-    let (lines, _stop, thread) = spawn(args);
+    refused_notifying(args, None)
+}
+
+/// Runs `args` to its end with `notify_socket` as the socket systemd named: its result and its
+/// lines.
+pub fn refused_notifying(
+    args: Vec<OsString>,
+    notify_socket: Option<OsString>,
+) -> (Result<(), String>, Vec<String>) {
+    let (lines, _stop, thread) = spawn(args, notify_socket);
     let result = thread.join().expect("the run");
     (result, lines.try_iter().collect())
 }

@@ -148,7 +148,7 @@ fn the_host_stop_ends_at_sigterm() {
         .build()
         .expect("a runtime");
     runtime.block_on(async {
-        let mut stop = (ServePorts::host().stop)();
+        let mut stop = (ServePorts::host(None).stop)();
         assert!(futures::poll!(&mut stop).is_pending());
         rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::TERM)
             .expect("a signal to this process");

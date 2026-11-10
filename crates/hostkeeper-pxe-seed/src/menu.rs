@@ -61,7 +61,7 @@ impl<'n> MenuRequest<'n> {
     }
 
     /// The menu of this request. `in_answer_set` gives the record of a MAC that may be
-    /// installed now, and `None` for every other MAC (`hostkeeper-pxe serve` decides the answer
+    /// installed now, and `None` for every other MAC (`pxe serve` decides the answer
     /// set, network-install.md section 3). It is not called for a MAC that is not well-formed
     /// or a CPU this design does not install. It is a `dyn` closure, so `choose` has one
     /// compiled body and each of its arms is measured once.

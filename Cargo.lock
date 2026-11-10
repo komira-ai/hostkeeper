@@ -1949,6 +1949,7 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-enrollment",
+ "hostkeeper-hook",
  "hostkeeper-install",
  "hostkeeper-package",
  "hostkeeper-proto",

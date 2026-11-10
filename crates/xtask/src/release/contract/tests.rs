@@ -204,7 +204,7 @@ fn asset_names_are_the_documented_contract() {
     let v = version("7.8.9");
     let names = asset_names(&v, &Platform::RELEASED);
     assert_eq!(names, baseline_for(&v));
-    assert_eq!(names.len(), 68);
+    assert_eq!(names.len(), 72);
     assert_eq!(documented_names(DOC, &v), Ok(names.clone()));
     // The document changed alone: a name dropped, or one renamed.
     let image = "hostkeeper-coordinator-<version>-<linux-platform>.image.tar\n";
@@ -402,8 +402,8 @@ fn the_attested_and_summed_names_partition_the_assets() {
     let v = version("0.1.3");
     let attested = attested_names(&v);
     let summed = summed_names(&v);
-    assert_eq!(attested.len(), 29);
-    assert_eq!(summed.len(), 38);
+    assert_eq!(attested.len(), 31);
+    assert_eq!(summed.len(), 40);
     // The boot sets of network install are summed and attested, with a bundle of their own, and
     // so is the command line, one script for every platform.
     assert!(summed.contains(&NETBOOT.to_owned()) & attested.contains(&NETBOOT.to_owned()));
@@ -418,6 +418,11 @@ fn the_attested_and_summed_names_partition_the_assets() {
         let name = Package::Mdm.native_name(&v, platform);
         assert_eq!(name, None);
     }
+    // The pxe package is attested for both Linux platforms and is no asset for macOS.
+    for deb in ["pxe_0.1.3_amd64.deb", "pxe_0.1.3_arm64.deb"] {
+        assert!(attested.contains(&deb.to_owned()) & summed.contains(&deb.to_owned()));
+    }
+    assert_eq!(Package::Pxe.native_name(&v, Platform::MacosArm64), None);
     assert!(attested.contains(&installer_name(&v)));
     assert_eq!(bundle_of("a.deb"), "a.deb.sigstore.json");
 }
@@ -493,6 +498,14 @@ fn the_native_packages_are_hostkeepers_and_hellos_on_every_platform_and_mdms_on_
     assert_eq!(
         names(Package::Mdm),
         [Some("mdm_0.2.1_amd64.deb".to_owned()), None, None]
+    );
+    assert_eq!(
+        names(Package::Pxe),
+        [
+            Some("pxe_0.2.1_amd64.deb".to_owned()),
+            Some("pxe_0.2.1_arm64.deb".to_owned()),
+            None
+        ]
     );
     assert_eq!(
         names(Package::Hostkeeper),
@@ -648,22 +661,24 @@ fn the_services_and_packages_name_their_services_and_versions() {
     assert_eq!(Service::Hostkeeper.name(), "hostkeeper");
     assert_eq!(Service::Hello.name(), "hello");
     assert_eq!(Service::Mdm.name(), "mdm");
+    assert_eq!(Service::Pxe.name(), "pxe");
     assert_eq!(
         Package::ALL,
         [
             Package::Hostkeeper,
             Package::Hello,
             Package::HelloFailReady,
-            Package::Mdm
+            Package::Mdm,
+            Package::Pxe
         ]
     );
     assert_eq!(
         Package::ALL.map(|p| p.service().name()),
-        ["hostkeeper", "hello", "hello", "mdm"]
+        ["hostkeeper", "hello", "hello", "mdm", "pxe"]
     );
     assert_eq!(
         Package::ALL.map(|p| p.version_text(&v)),
-        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3"]
+        ["1.2.3", "1.2.3", "1.2.3-fail-ready", "1.2.3", "1.2.3"]
     );
 }
 
@@ -682,6 +697,8 @@ fn a_package_is_chosen_by_service_and_fail_ready_and_hostkeeper_has_no_failing_b
     assert_eq!(Package::of(Service::Hostkeeper, true), None);
     assert_eq!(Package::of(Service::Mdm, false), Some(Package::Mdm));
     assert_eq!(Package::of(Service::Mdm, true), None);
+    assert_eq!(Package::of(Service::Pxe, false), Some(Package::Pxe));
+    assert_eq!(Package::of(Service::Pxe, true), None);
 }
 
 #[test]
@@ -693,6 +710,16 @@ fn the_mdm_package_is_released_for_linux_x86_64_alone_and_the_others_for_every_p
         assert_eq!(package.platforms(), Platform::RELEASED);
     }
     assert_eq!(Package::Mdm.platforms(), [Platform::LinuxX86_64]);
+}
+
+#[test]
+fn the_pxe_package_is_released_for_both_linux_platforms_and_no_mac() {
+    // Catches: a pxe package asked for on macOS, which has no .pkg of it (a release would then
+    // be refused for lacking it), or dropped from linux-arm64.
+    assert_eq!(
+        Package::Pxe.platforms(),
+        [Platform::LinuxX86_64, Platform::LinuxArm64]
+    );
 }
 
 #[test]
@@ -769,6 +796,7 @@ fn the_failing_builds_debian_version_sorts_below_the_release_and_the_others_are_
     assert_eq!(Package::Hostkeeper.deb_version(&v), "0.2.1");
     assert_eq!(Package::Hello.deb_version(&v), "0.2.1");
     assert_eq!(Package::Mdm.deb_version(&v), "0.2.1");
+    assert_eq!(Package::Pxe.deb_version(&v), "0.2.1");
     assert_eq!(Package::HelloFailReady.deb_version(&v), "0.2.1~fail.ready");
     assert_eq!(FAIL_READY_DEB_SUFFIX, "~fail.ready");
     // The service version of the failing build allows no `~`; its asset name does not carry one.
@@ -787,6 +815,7 @@ fn only_the_failing_build_names_the_testing_fail_repository_entry() {
     assert_eq!(Package::Hostkeeper.repository_entry(), "komira-testing");
     assert_eq!(Package::Hello.repository_entry(), "komira-testing");
     assert_eq!(Package::Mdm.repository_entry(), "komira-testing");
+    assert_eq!(Package::Pxe.repository_entry(), "komira-testing");
     assert_eq!(
         Package::HelloFailReady.repository_entry(),
         "komira-testing-fail"

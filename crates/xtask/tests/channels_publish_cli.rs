@@ -30,7 +30,11 @@ const HELLO_INSTALLER: &str = "hello-1.2.3-macos-arm64.pkg";
 /// The packages that are an rpm as well as a deb.
 const PACKAGES: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
 /// The services' native packages, debs alone, and the Debian architectures each is built for.
-const NATIVE: [(&str, &[&str]); 2] = [("hello", &["amd64", "arm64"]), ("mdm", &["amd64"])];
+const NATIVE: [(&str, &[&str]); 3] = [
+    ("hello", &["amd64", "arm64"]),
+    ("mdm", &["amd64"]),
+    ("pxe", &["amd64", "arm64"]),
+];
 /// The Debian and the RPM name of each architecture.
 const ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
 

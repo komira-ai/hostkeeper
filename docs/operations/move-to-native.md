@@ -179,7 +179,7 @@ installed afresh ([network-install.md](network-install.md)).
      takes the set once it runs the release that has it;
    - a host whose last heartbeat came over the JSON route: wait for the next one.
 
-For the hosts installed from the network from now on, `hostkeeper-pxe serve --repositories` is
+For the hosts installed from the network from now on, the boot server's `repositories` setting is
 needed only by a host that must install from the repository before it reaches the coordinator
 ([network-install.md](network-install.md), step 3a); every other host gets the entries at its
 first heartbeat.

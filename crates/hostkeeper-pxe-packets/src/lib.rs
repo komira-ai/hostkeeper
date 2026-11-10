@@ -1,6 +1,6 @@
 //! `hostkeeper-pxe-packets`: the packets of network install (docs/design/network-install.md
 //! section 3, item N7), as pure functions. No socket, no clock, no file and no inventory read:
-//! the caller (`hostkeeper-pxe serve`, item N9) passes in what it read and sends what comes out.
+//! the caller (`pxe serve`, item N9) passes in what it read and sends what comes out.
 //!
 //! - [`dhcp`]: a DHCP packet read off UDP 67 or 4011. In proxy mode it gets a proxy offer or
 //!   ACK (no address, the echoed vendor class, option 43 and the boot file of its

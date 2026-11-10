@@ -154,6 +154,7 @@ pub const LAYERS: [Layer; 32] = [
         &[
             CONFIG,
             ENROLLMENT,
+            HOOK,
             INSTALL,
             PACKAGE,
             PROTO,

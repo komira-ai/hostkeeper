@@ -27,7 +27,8 @@
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
 //!   steps that make it. Its build job makes the mdm package with the steps of [`MDM_STEPS`],
-//!   each under [`MDM_IF`] ([`mdm_problems`]).
+//!   each under [`MDM_IF`] ([`mdm_problems`]), and the pxe package with [`PXE_BUILD`] and
+//!   [`PXE_RUNS`], under no `if:` ([`pxe_problems`]).
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
@@ -159,6 +160,18 @@ pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
     "cargo xtask release check-linux-pkg \"dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb\" --service hello",
 ];
 
+/// The runs of the build job that make pxe's `.deb` into `dist/` on each Linux platform from the
+/// static `pxe` built for the platform's musl target, and read it back there. The build job has
+/// no `if:` on them: both Linux legs run them.
+pub const PXE_RUNS: [&str; 2] = [
+    "cargo xtask release deb --service pxe --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary \"target/$MUSL_TARGET/release/pxe\" --out dist",
+    "cargo xtask release check-linux-pkg \"dist/pxe_${RELEASE_VERSION}_$ARCH.deb\" --service pxe",
+];
+
+/// The command of the build job that builds the static `pxe` the `.deb` carries, with `hostkeeper`
+/// beside it.
+pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TARGET\" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin pxe";
+
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
 /// every platform, the coordinator's, the MDM kit's and the coordinator updater's on the two
@@ -176,16 +189,15 @@ pub const TARBALLS: [(&str, &[&str]); 4] = [
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
 /// its name: `netboot.json`, the boot sets of network install, whose attestation is what the
-/// design's `hostkeeper-pxe fetch` (docs/design/network-install.md, item N8) is to trust its
-/// digests by.
+/// design's `pxe` prepare step (docs/design/network-install.md) is to trust its digests by.
 pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
 
 /// The native packages of the services the release ships (docs/design/packages-native.md, item
 /// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
 /// architecture, its failing build's `.deb` for each (named by the service version,
-/// `<version>-fail-ready`) and its `.pkg`, mdm's `.deb` for amd64, and hostkeeper's installer
-/// `.pkg`. Each has a bundle, which the installer channel publishes beside it.
-pub const NATIVE_FILES: [&str; 7] = [
+/// `<version>-fail-ready`) and its `.pkg`, mdm's `.deb` for amd64, pxe's `.deb` for each Linux
+/// architecture, and hostkeeper's installer `.pkg`. Each has a bundle, which the installer channel publishes beside it.
+pub const NATIVE_FILES: [&str; 9] = [
     "hostkeeper-<version>-macos-arm64.pkg",
     "hello_<version>_amd64.deb",
     "hello_<version>_arm64.deb",
@@ -193,6 +205,8 @@ pub const NATIVE_FILES: [&str; 7] = [
     "hello_<version>-fail-ready_arm64.deb",
     "hello-<version>-macos-arm64.pkg",
     "mdm_<version>_amd64.deb",
+    "pxe_<version>_amd64.deb",
+    "pxe_<version>_arm64.deb",
 ];
 
 /// The release's other files that the attest job attests alone and whose name carries the
@@ -624,6 +638,7 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
     problems.extend(package_problems(attest));
     problems.extend(mdm_problems(doc));
     problems.extend(fail_ready_deb_problems(doc));
+    problems.extend(pxe_problems(doc));
     problems.extend(pkg_signing::problems(doc));
     problems
 }
@@ -637,6 +652,24 @@ fn fail_ready_deb_problems(doc: &Node) -> Vec<String> {
         .filter(|want| !runs.contains(want))
         .map(|want| format!("artifacts.yml: job build does not run `{want}`"))
         .collect()
+}
+
+/// One line per way the build job does not make pxe's `.deb`: a run of [`PXE_RUNS`] missing or
+/// under an `if:` (the package would not be built on both Linux platforms), or the static `pxe`
+/// not built ([`PXE_BUILD`], which a `.deb` of another binary or a gnu build would replace).
+fn pxe_problems(doc: &Node) -> Vec<String> {
+    let build = steps(job(doc, "build"));
+    let mut problems = Vec::new();
+    for want in [PXE_BUILD, PXE_RUNS[0], PXE_RUNS[1]] {
+        match build.iter().find(|s| text_of(Some(s), "run") == Some(want)) {
+            None => problems.push(format!("artifacts.yml: job build does not run `{want}`")),
+            Some(step) if text_of(Some(step), "if").is_some() => problems.push(format!(
+                "artifacts.yml: job build runs `{want}` under an `if:`, so not on both Linux platforms"
+            )),
+            Some(_) => {}
+        }
+    }
+    problems
 }
 
 /// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the

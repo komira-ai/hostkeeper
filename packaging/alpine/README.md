@@ -24,9 +24,9 @@ its attestation check runs on:
 | `/usr/lib/hostkeeper/trusted_root.json` | 0644 |
 
 all owned by root. It needs OpenRC 0.62 or later (Alpine 3.22 or later), the oldest release the
-device tests run the package on. It carries
-neither the systemd unit nor `hostkeeper-pxe`, the boot server of network install, which runs on
-a systemd host.
+device tests run the package on. It does not carry
+the systemd unit. The boot server of network install is the `pxe` package, a deb for systemd
+hosts.
 
 The release pipeline does not publish the apk yet. It is built from the same static musl daemon
 the release stages for the deb and the rpm (A15 of `docs/design/packages.md`,

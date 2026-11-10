@@ -270,7 +270,7 @@ fn gh() -> Gh {
 }
 
 /// The reason one bundle is accepted or refused, and how many times `gh` ran: the digest check
-/// first (`hostkeeper-pxe fetch` makes it before it asks the verifier), then the real verifier
+/// first (`pxe update-hook prepare` makes it before it asks the verifier), then the real verifier
 /// with the fake `gh`.
 fn verdict(archive: &Path, bundle: &Path, facts: &Facts) -> (String, u32) {
     let (reason, runs, _) = verdict_with_args(archive, bundle, facts);

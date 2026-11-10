@@ -7,8 +7,8 @@ use hostkeeper_mdm_core::package as mdm;
 use hostkeeper_proto::hostkeeper::release::v1::{Hook, Manifest, Param, StepBounds, param};
 
 use super::INSTALLER_BOUNDS;
-use crate::release::contract::{Package, Version};
-use crate::release::native::hello;
+use crate::release::contract::{Package, REPO, Version};
+use crate::release::native::{hello, pxe};
 
 /// The oldest daemon that takes hostkeeper's own package: [`hostkeeper_steps::OLDEST_READER`],
 /// the oldest release that reads every file this release writes, the one constant the daemon
@@ -46,6 +46,7 @@ pub(super) fn of(package: Package, version: &Version) -> Manifest {
         Package::Hostkeeper => hostkeeper(version),
         Package::Hello | Package::HelloFailReady => hello_manifest(),
         Package::Mdm => mdm_manifest(version),
+        Package::Pxe => pxe_manifest(version),
     }
 }
 
@@ -56,6 +57,7 @@ pub(super) fn program(package: Package) -> Option<String> {
         Package::Hostkeeper => None,
         Package::Hello | Package::HelloFailReady => Some(hello::DEB_PROGRAM.to_owned()),
         Package::Mdm => Some(format!("{}/{}", mdm::DEB_BIN, mdm::SERVICE)),
+        Package::Pxe => Some(pxe::DEB_PROGRAM.to_owned()),
     }
 }
 
@@ -196,6 +198,47 @@ fn mdm_manifest(version: &Version) -> Manifest {
         params: [
             ("settings".to_owned(), text(mdm::SETTINGS_FILE)),
             ("record_dir".to_owned(), text(mdm::RECORD_DIR)),
+        ]
+        .into_iter()
+        .collect(),
+        min_hostkeeper: (*version).min(OLDEST_READER).to_string(),
+        installer_bounds: Some(INSTALLER_BOUNDS),
+        ..Manifest::default()
+    }
+}
+
+/// Pxe's: the hook bounds (the prepare step is unbounded: it downloads the boot sets), the one
+/// unit a host runs, no health URL, the params its hook reads, and the floor hostkeeper's own
+/// release has, [`OLDEST_READER`], or the release's own version when that is older. The
+/// `release` param is where the release's assets are downloaded from.
+fn pxe_manifest(version: &Version) -> Manifest {
+    Manifest {
+        package: Some(pxe::NAME.to_owned()),
+        hook: Some(Hook {
+            command: command(Package::Pxe),
+            timeout_secs: Some(StepBounds {
+                prepare: 0,
+                cutover: 120,
+                verify: 30,
+                rollback: 120,
+                cleanup: 60,
+                uninstall: Some(60),
+            }),
+            verify_deadline_secs: 300,
+            ..Hook::default()
+        }),
+        run: vec![pxe::UNIT.to_owned()],
+        params: [
+            (
+                "release".to_owned(),
+                text(&format!(
+                    "https://github.com/{REPO}/releases/download/{}",
+                    version.tag()
+                )),
+            ),
+            ("settings".to_owned(), text(pxe::SETTINGS_FILE)),
+            ("boot_dir".to_owned(), text(pxe::BOOT_DIR)),
+            ("unit".to_owned(), text(pxe::UNIT)),
         ]
         .into_iter()
         .collect(),

@@ -13,15 +13,15 @@
 //!   (`crates/hostkeeper-mdm-core/pins.txt`), a mismatch kept as `<archive>.rejected`.
 //! - `nfpm-stage` ([`package::nfpm_stage`]): the pinned `gh` of one architecture, out of its
 //!   release archive checked against its pinned SHA-256, the Sigstore trusted root, and the
-//!   static `hostkeeper` and `hostkeeper-pxe` of `--binaries`, each checked and staged for the
+//!   static `hostkeeper` of `--binaries`, checked and staged for the
 //!   deb and the rpm.
 //! - `check-linux-pkg` ([`package::linux_check`]): a built deb, rpm or tarball,
 //!   read back, holds no ELF program with an interpreter or a needed library and declares no
-//!   dependency; with `--staged` it also installs the staged `gh`, trusted root and programs at
+//!   dependency; with `--staged` it also installs the staged `gh`, trusted root and daemon at
 //!   the daemon's paths, with their modes, root's, and the console's issue link pointing at the
-//!   daemon's issue file; with `--service hello` or `--service mdm` it reads a service's `.deb`
-//!   against what this repository's builder writes instead.
-//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build or of mdm, with the
+//!   daemon's issue file; with `--service hello`, `--service mdm` or `--service pxe` it reads a
+//!   service's `.deb` against what this repository's builder writes instead.
+//! - `deb` ([`native::deb`]): the `.deb` of hello, of its failing build, of mdm or of pxe, with the
 //!   program at `/usr/lib/<service>/`, the units in `/usr/lib/systemd/system/` and no hook
 //!   wrapper (the manifest's `hook.command` names the program).
 //! - `netboot` ([`netboot`]): `netboot.json`, the boot sets of network install for the two Linux
@@ -184,13 +184,13 @@ pub(crate) enum Verb {
         #[arg(long)]
         dir: PathBuf,
     },
-    /// Stage the pinned `gh`, the Sigstore trusted root and the two static programs for the deb
+    /// Stage the pinned `gh`, the Sigstore trusted root and the static daemon for the deb
     /// and the rpm: `gh` out of its release archive, refused unless the archive
     /// has the pinned SHA-256 and `gh` is a program of the architecture; the trusted root
-    /// refused unless each line is one; `hostkeeper` and `hostkeeper-pxe` of `--binaries`,
-    /// refused unless each is a 64-bit little-endian ELF of the architecture with no
-    /// interpreter and no needed library. Writes `<out>/gh`, `<out>/hostkeeper` and
-    /// `<out>/hostkeeper-pxe` (0755) and `<out>/trusted_root.json` (0644) only when all pass.
+    /// refused unless each line is one; `hostkeeper` of `--binaries`,
+    /// refused unless it is a 64-bit little-endian ELF of the architecture with no
+    /// interpreter and no needed library. Writes `<out>/gh`, `<out>/hostkeeper`
+    /// (0755) and `<out>/trusted_root.json` (0644) only when all pass.
     NfpmStage {
         /// The architecture of the packages, as nfpm's `ARCH`.
         #[arg(long, value_enum)]
@@ -207,7 +207,7 @@ pub(crate) enum Verb {
         /// The output of `gh attestation trusted-root`.
         #[arg(long)]
         trusted_root: PathBuf,
-        /// The directory holding the static `hostkeeper` and `hostkeeper-pxe`
+        /// The directory holding the static `hostkeeper`
         /// (`target/<musl target>/release`).
         #[arg(long)]
         binaries: PathBuf,
@@ -218,11 +218,11 @@ pub(crate) enum Verb {
     /// Read a built deb, rpm or tarball and refuse it if it holds an ELF program
     /// with an interpreter or a needed library, or (not a tarball) declares a dependency. With
     /// `--staged` (not for a tarball) also refuse it unless it installs `/usr/lib/hostkeeper/gh`,
-    /// `/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` (regular files, 0755) and
+    /// `/usr/bin/hostkeeper` (a regular file, 0755) and
     /// `/usr/lib/hostkeeper/trusted_root.json` (0644), all root:root, with the bytes of the files
     /// `nfpm-stage` wrote, and the console's issue link.
     ///
-    /// With `--service hello` or `--service mdm` (not with `--staged`), read a service's `.deb`
+    /// With `--service hello`, `mdm` or `pxe` (not with `--staged`), read a service's `.deb`
     /// (`release deb`) instead and refuse it unless its `Package` is the service, every entry is
     /// root's and writable by root alone and its units' programs are files of the package; it
     /// declares no dependency. These are checks of this repository's own build: nothing is
@@ -237,17 +237,18 @@ pub(crate) enum Verb {
         /// staged in.
         #[arg(long, conflicts_with_all = ["staged", "service"])]
         coordinator_staged: Option<PathBuf>,
-        /// The service whose `.deb` this is: hello or mdm.
+        /// The service whose `.deb` this is: hello, mdm or pxe.
         #[arg(long, value_enum, conflicts_with = "coordinator_staged")]
         service: Option<Service>,
     },
-    /// Build the `.deb` of hello (and of its failing build, `--fail-ready`) or of mdm for one
-    /// Linux platform: the program at `/usr/lib/<service>/` and the units in
+    /// Build the `.deb` of hello (and of its failing build, `--fail-ready`), of mdm or of pxe for
+    /// one Linux platform: the program at `/usr/lib/<service>/` and the units in
     /// `/usr/lib/systemd/system/` (docs/design/packages-native.md section 10.2). mdm's is built
-    /// for linux-x86_64 only, with the pinned tools out of `--archives`. Writes
+    /// for linux-x86_64 only, with the pinned tools out of `--archives`; pxe's holds its program and
+    /// unit. Writes
     /// `<service>_<version>_<arch>.deb` (the failing build's control: `X.Y.Z~fail.ready`).
     Deb {
-        /// The service: hello or mdm (hostkeeper's `.deb` is nfpm's).
+        /// The service: hello, mdm or pxe (hostkeeper's `.deb` is nfpm's).
         #[arg(long, value_enum)]
         service: Service,
         #[arg(long, value_enum)]
@@ -261,11 +262,11 @@ pub(crate) enum Verb {
         #[arg(long)]
         binary: PathBuf,
         /// Hello's failing build: version `<version>-fail-ready`, its units start the program
-        /// with `--fail-ready`. Refused for mdm.
+        /// with `--fail-ready`. Refused for mdm and pxe.
         #[arg(long)]
         fail_ready: bool,
         /// The directory of the pinned archives of mdm's tools, as `release mdm-fetch` leaves
-        /// it. Required for mdm; refused for hello.
+        /// it. Required for mdm; refused for hello and pxe.
         #[arg(long)]
         archives: Option<PathBuf>,
         /// The directory the `.deb` is written to.
@@ -474,10 +475,11 @@ pub(crate) enum Verb {
     /// native package and its bundle check out and the entries pass the coordinator's checks.
     /// Prints `targets=<JSON>`.
     Targets {
-        /// The service: hostkeeper (the default), hello or mdm.
+        /// The service: hostkeeper (the default), hello, mdm or pxe.
         #[arg(long, value_enum, default_value_t)]
         service: Service,
-        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper and mdm.
+        /// The entries of hello's failing build, asked for only here. Refused for hostkeeper, mdm
+        /// and pxe.
         #[arg(long)]
         fail_ready: bool,
         /// The release, `X.Y.Z`: the tag `v<X.Y.Z>` holds the assets.

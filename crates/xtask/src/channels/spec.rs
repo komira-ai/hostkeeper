@@ -15,7 +15,7 @@
 //!
 //! A release of this repository publishes the daemon's and the coordinator's packages, and the
 //! native packages of the services it releases (docs/design/packages-native.md, item A21):
-//! hello's `.deb` for both architectures and mdm's for amd64 alone (neither has an rpm), and
+//! hello's and pxe's `.deb` for both architectures and mdm's for amd64 alone (none has an rpm), and
 //! beside hostkeeper's own installer hello's `.pkg`. The index, write and promote verbs take every
 //! package of the product in one pass ([`Product::deb_files`], [`Product::rpm_files`]), so a
 //! release is listed in the repository whole or not at all. Hello's failing build is not one of
@@ -74,7 +74,8 @@ pub(crate) struct Package {
     /// commit>` when [`Package::stamp_commit`] says so.
     pub(crate) binary: &'static str,
     /// Whether the program's `--version` carries the commit: the shipped binaries' does
-    /// (`hostkeeper X.Y.Z+<commit>`), hello's says `hello X.Y.Z` alone.
+    /// (`hostkeeper X.Y.Z+<commit>`), hello's says `hello X.Y.Z` alone, and so does pxe's
+    /// (`pxe X.Y.Z`).
     pub(crate) stamp_commit: bool,
     /// The systemd units of the package, files of `/usr/lib/systemd/system`: the check holds
     /// each enabled or not as [`Package::enabled_after_install`] says.
@@ -241,7 +242,7 @@ impl Product {
     }
 }
 
-/// hostkeeper: the daemon's package and the coordinator's, hello's and mdm's native packages, and
+/// hostkeeper: the daemon's package and the coordinator's, hello's, mdm's and pxe's native packages, and
 /// the installers of hostkeeper and of hello.
 pub(crate) const HOSTKEEPER: Product = Product {
     name: "hostkeeper",
@@ -263,7 +264,6 @@ pub(crate) const HOSTKEEPER: Product = Product {
             prerequisites: &["systemd"],
             files: &[
                 "/usr/bin/hostkeeper",
-                "/usr/bin/hostkeeper-pxe",
                 "/usr/lib/systemd/system/hostkeeper.service",
                 "/usr/lib/tmpfiles.d/hostkeeper.conf",
                 "/usr/share/hostkeeper/hostkeeper.toml.template",
@@ -330,6 +330,19 @@ pub(crate) const HOSTKEEPER: Product = Product {
                 "/usr/lib/systemd/system/mdm-proxy.service",
                 "/usr/lib/systemd/system/mdm-scep.service",
             ],
+        },
+        Package {
+            name: "pxe",
+            arches: &ARCHES,
+            rpm: false,
+            postun_required: false,
+            binary: "/usr/lib/pxe/pxe",
+            stamp_commit: false,
+            units: &["pxe.service"],
+            user: None,
+            enabled_after_install: false,
+            prerequisites: &[],
+            files: &["/usr/lib/pxe/pxe", "/usr/lib/systemd/system/pxe.service"],
         },
     ],
     installers: &["hello", "hostkeeper"],

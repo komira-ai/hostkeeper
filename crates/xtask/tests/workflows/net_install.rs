@@ -24,6 +24,7 @@ pub const PATHS: &[&str] = &[
     "crates/hostkeeper-pxe*/**",
     "packaging/netboot/**",
     "packaging/linux/**",
+    "packaging/pxe/**",
     "crates/hostkeeper-privileged/tests/net_install*.rs",
     "crates/hostkeeper-privileged/tests/netinstall/**",
     "crates/hostkeeper-privileged/tests/bin/pxe.rs",

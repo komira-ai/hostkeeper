@@ -121,12 +121,9 @@ fn entry(path: &'static str, mode: u32, data: Vec<u8>) -> Entry {
     Entry { path, mode, data }
 }
 
-/// The two programs, as given.
-fn programs(hostkeeper: Vec<u8>, pxe: Vec<u8>) -> Vec<Entry> {
-    vec![
-        entry("usr/bin/hostkeeper", 0o755, hostkeeper),
-        entry("usr/bin/hostkeeper-pxe", 0o755, pxe),
-    ]
+/// The daemon, as given.
+fn programs(hostkeeper: Vec<u8>) -> Vec<Entry> {
+    vec![entry("usr/bin/hostkeeper", 0o755, hostkeeper)]
 }
 
 fn gzip(bytes: &[u8]) -> Vec<u8> {
@@ -346,17 +343,15 @@ fn formats(entries: &[Entry]) -> Vec<(&'static str, Vec<u8>)> {
 #[test]
 fn a_static_build_is_accepted_in_a_deb_an_rpm_and_a_tarball() {
     let d = dir("accept");
-    for (name, bytes) in formats(&programs(static_pie(), static_pie())) {
+    for (name, bytes) in formats(&programs(static_pie())) {
         let package = write(&d, name, &bytes);
         let o = run(&d, &["release", "check-linux-pkg", path_str(&package)]);
         assert_eq!(o.status.code(), Some(0), "{name}: {}", stderr(&o));
         let out = stdout(&o);
-        for program in ["/usr/bin/hostkeeper", "/usr/bin/hostkeeper-pxe"] {
-            assert!(
-                out.contains(&format!("{program} is a static ELF program")),
-                "{name}: {out}"
-            );
-        }
+        assert!(
+            out.contains("/usr/bin/hostkeeper is a static ELF program"),
+            "{name}: {out}"
+        );
         assert_eq!(
             out.contains("declares no dependency"),
             name != "hostkeeper.tar.gz",
@@ -369,7 +364,7 @@ fn a_static_build_is_accepted_in_a_deb_an_rpm_and_a_tarball() {
 fn a_program_linked_to_libssl_is_refused_in_each_format() {
     let d = dir("libssl");
     let linked = elf(None, &["libssl.so.3"]);
-    for (name, bytes) in formats(&programs(linked, static_pie())) {
+    for (name, bytes) in formats(&programs(linked)) {
         let package = write(&d, name, &bytes);
         let o = run(&d, &["release", "check-linux-pkg", path_str(&package)]);
         assert_eq!(o.status.code(), Some(1), "{name}: {}", stdout(&o));
@@ -381,7 +376,6 @@ fn a_program_linked_to_libssl_is_refused_in_each_format() {
             )),
             "{name}: {err}"
         );
-        assert!(!err.contains("hostkeeper-pxe"), "{name}: {err}");
     }
 }
 
@@ -389,11 +383,7 @@ fn a_program_linked_to_libssl_is_refused_in_each_format() {
 fn a_tarball_holding_a_glibc_build_is_refused() {
     let d = dir("glibc");
     let glibc = elf(Some(GLIBC_INTERPRETER), &["libc.so.6"]);
-    let package = write(
-        &d,
-        "hostkeeper.tar.gz",
-        &tarball(&programs(glibc, static_pie())),
-    );
+    let package = write(&d, "hostkeeper.tar.gz", &tarball(&programs(glibc)));
     let o = run(&d, &["release", "check-linux-pkg", path_str(&package)]);
     assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
     let err = stderr(&o);
@@ -412,7 +402,7 @@ fn a_tarball_holding_a_glibc_build_is_refused() {
 #[test]
 fn a_package_that_declares_a_dependency_is_refused() {
     let d = dir("depends");
-    let entries = programs(static_pie(), static_pie());
+    let entries = programs(static_pie());
     let cases = [
         (
             "hostkeeper.deb",
@@ -445,11 +435,7 @@ fn a_package_that_declares_a_dependency_is_refused() {
 #[test]
 fn staged_with_a_tarball_is_a_failure_and_without_a_package_a_usage_error() {
     let d = dir("usage");
-    let package = write(
-        &d,
-        "hostkeeper.tar.gz",
-        &tarball(&programs(static_pie(), static_pie())),
-    );
+    let package = write(&d, "hostkeeper.tar.gz", &tarball(&programs(static_pie())));
     let o = run(
         &d,
         &[
@@ -490,7 +476,7 @@ fn gh_archive(gh: &[u8]) -> Vec<u8> {
 const TRUSTED_ROOT: &str =
     "{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json;version=0.1\"}\n";
 
-/// A directory holding gh's archive, a trusted root and the two programs, and the arguments of
+/// A directory holding gh's archive, a trusted root and the daemon, and the arguments of
 /// `release nfpm-stage` for them.
 struct Stage {
     dir: TestDir,
@@ -499,7 +485,7 @@ struct Stage {
 }
 
 impl Stage {
-    fn new(name: &str, hostkeeper: &[u8], pxe: &[u8]) -> Stage {
+    fn new(name: &str, hostkeeper: &[u8]) -> Stage {
         let dir = dir(name);
         let gh = elf(None, &[]);
         let archive_bytes = gh_archive(&gh);
@@ -508,7 +494,6 @@ impl Stage {
         let binaries = dir.join("musl");
         std::fs::create_dir(&binaries).expect("binaries");
         std::fs::write(binaries.join("hostkeeper"), hostkeeper).expect("hostkeeper");
-        std::fs::write(binaries.join("hostkeeper-pxe"), pxe).expect("pxe");
         let args = [
             "release",
             "nfpm-stage",
@@ -548,7 +533,7 @@ impl Stage {
 
 #[test]
 fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carries_them() {
-    let stage = Stage::new("stage", &static_pie(), &static_pie());
+    let stage = Stage::new("stage", &static_pie());
     let o = stage.run();
     assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
     let out = stage.out();
@@ -557,10 +542,7 @@ fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carrie
         .map(|e| e.expect("entry").file_name().to_string_lossy().into_owned())
         .collect();
     names.sort();
-    assert_eq!(
-        names,
-        ["gh", "hostkeeper", "hostkeeper-pxe", "trusted_root.json"]
-    );
+    assert_eq!(names, ["gh", "hostkeeper", "trusted_root.json"]);
     // The package of exactly the staged files passes the check against them.
     let staged = |name: &str| std::fs::read(out.join(name)).expect("staged file");
     let entries = vec![
@@ -571,7 +553,6 @@ fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carrie
             staged("trusted_root.json"),
         ),
         entry("usr/bin/hostkeeper", 0o755, staged("hostkeeper")),
-        entry("usr/bin/hostkeeper-pxe", 0o755, staged("hostkeeper-pxe")),
     ];
     let packages = [
         (
@@ -604,13 +585,13 @@ fn nfpm_stage_takes_the_static_programs_of_binaries_and_a_checked_package_carrie
 #[test]
 fn nfpm_stage_refuses_a_program_that_is_not_static_and_writes_nothing() {
     let glibc = elf(Some(GLIBC_INTERPRETER), &["libc.so.6"]);
-    let stage = Stage::new("stage-glibc", &static_pie(), &glibc);
+    let stage = Stage::new("stage-glibc", &glibc);
     let o = stage.run();
     assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
     assert!(
         stderr(&o).contains(&format!(
             "{} is not a static linux amd64 program: it asks for the interpreter {GLIBC_INTERPRETER}",
-            stage.binaries.join("hostkeeper-pxe").display()
+            stage.binaries.join("hostkeeper").display()
         )),
         "{}",
         stderr(&o)
@@ -620,7 +601,7 @@ fn nfpm_stage_refuses_a_program_that_is_not_static_and_writes_nothing() {
 
 #[test]
 fn nfpm_stage_without_binaries_is_a_usage_error() {
-    let stage = Stage::new("stage-usage", &static_pie(), &static_pie());
+    let stage = Stage::new("stage-usage", &static_pie());
     let position = stage
         .args
         .iter()

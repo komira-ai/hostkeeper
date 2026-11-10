@@ -615,7 +615,7 @@ order is `Failed`, `environment`, `dependency_missing`: nothing is installed, th
 the version it runs. A glibc build on a release older than its baseline is refused there, by its declared baseline,
 instead of installing a program that cannot start. A static build declares nothing and passes on every release.
 
-**Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `hostkeeper-pxe` are built for
+**Built** (A15): hostkeeper's own Linux build qualifies. `hostkeeper` and `pxe` are built for
 `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, static, each on a runner of its architecture
 (`.github/workflows/artifacts.yml`; the C compiler of those targets in `.cargo/config.toml`), and that one build is the
 binary tarball, `bin/hostkeeper` of hostkeeper's own `hostkeeper-archive` package, and the programs of the `.deb` and the
@@ -926,7 +926,7 @@ The tests of every build item, the cases each covers and why that list is comple
 | A14 | Withdrawn, with `arch` | | |
 | A15 | hostkeeper's own Linux build for musl, static; `check-linux-pkg` refuses a `NEEDED` entry and a declared dependency; the `.deb` and `.rpm`, attested, which `docs/deploy/verify-a-release.md` names (the `archlinux` package A15 also built is withdrawn, section 5.4) | none | `release_linux.rs`; the same `.deb` and `.rpm` installed and started on the oldest and newest release of each family in `privileged` |
 | A16 | `Target.repository` and `Target.package_version`; the checks of repository entries; the installer set; the audit of a repository entry (packages-repositories.md section 8) | A2 | `repository.rs`, `additions_repository.rs`; the previous coordinator on a stored repository entry |
-| A17 | Host setup places repository entries and keyrings (`hostkeeper-pxe --repositories`, the runbooks, the MDM kit's channel stores and signers on a Mac, rendered at the daemon's start) | A7, A9 | `hostkeeper-pxe`'s tests of `--repositories` |
+| A17 | Host setup places repository entries and keyrings (`pxe serve --repositories`, the runbooks, the MDM kit's channel stores and signers on a Mac, rendered at the daemon's start) | A7, A9 | `pxe`'s tests of `--repositories` |
 
 A7 and A10 can run beside each other, and A9 after A7, and A15 beside any item. A16 and A17 come from packages-repositories.md
 (section 8): A16 after A2 and before A7, A17 after A7. The docs a behaviour change makes stale move with its item (rule T19):

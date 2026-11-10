@@ -23,9 +23,9 @@ fn file_names_are_the_ones_the_release_assets_have() {
 }
 
 #[test]
-fn a_release_is_seven_debs_and_four_rpms_sorted() {
-    // Catches: mdm's .deb asked for arm64 (it is built for amd64 alone), hello's or mdm's asked
-    // as an rpm (neither is one), and a service's .deb left out of the pass that lists the
+fn a_release_is_nine_debs_and_four_rpms_sorted() {
+    // Catches: mdm's .deb asked for arm64 (it is built for amd64 alone), hello's, pxe's or mdm's
+    // asked as an rpm (none is one), pxe's .deb left for one architecture, and a service's .deb left out of the pass that lists the
     // release whole.
     assert_eq!(
         HOSTKEEPER.deb_files("1.2.3"),
@@ -37,6 +37,8 @@ fn a_release_is_seven_debs_and_four_rpms_sorted() {
             "hostkeeper_1.2.3_amd64.deb",
             "hostkeeper_1.2.3_arm64.deb",
             "mdm_1.2.3_amd64.deb",
+            "pxe_1.2.3_amd64.deb",
+            "pxe_1.2.3_arm64.deb",
         ]
     );
     assert_eq!(
@@ -120,7 +122,7 @@ fn the_daemon_enables_its_unit_installs_systemd_first_and_has_no_user() {
     assert_eq!(daemon.comm(), "hostkeeper");
     assert_eq!(daemon.units, ["hostkeeper.service"]);
     assert!(daemon.stamp_commit);
-    assert_eq!(daemon.files.len(), 7);
+    assert_eq!(daemon.files.len(), 6);
 }
 
 #[test]
@@ -176,6 +178,31 @@ fn hellos_package_is_the_files_of_its_deb_says_its_version_alone_and_enables_not
     assert!(!package.rpm);
     assert_eq!(package.arches, ARCHES);
     assert_eq!(package.units, ["hello@a.service", "hello@b.service"]);
+    assert!(package.prerequisites.is_empty());
+    assert_eq!(package.user, None);
+}
+
+#[test]
+fn pxes_package_is_the_files_of_its_deb_says_its_version_alone_and_enables_nothing() {
+    // Catches: the check holding pxe to a file its .deb does not install (or missing one it
+    // does), to a `--version` with a commit pxe does not print, to an enabled unit (its .deb has
+    // no script), or to one architecture only.
+    use crate::release::native::pxe;
+    let package = HOSTKEEPER.package("pxe").expect("pxe");
+    let built: Vec<String> = pxe::deb_files(Vec::new())
+        .into_iter()
+        .map(|f| f.path)
+        .collect();
+    let mut listed: Vec<&str> = package.files.to_vec();
+    listed.sort_unstable();
+    assert_eq!(listed, built);
+    assert_eq!(package.binary, pxe::DEB_PROGRAM);
+    assert_eq!(package.comm(), "pxe");
+    assert_eq!(package.units, [pxe::UNIT]);
+    assert!(!package.stamp_commit);
+    assert!(!package.enabled_after_install);
+    assert!(!package.rpm);
+    assert_eq!(package.arches, ARCHES);
     assert!(package.prerequisites.is_empty());
     assert_eq!(package.user, None);
 }

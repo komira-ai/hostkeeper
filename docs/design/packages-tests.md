@@ -207,7 +207,7 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   -pkg` of the older version by hand is put back and reported as drift; the job runs the installed program and the
   observer matches it to the tree; after the uninstall `pkgutil --pkgs` lists no `hello` and none of its payload files
   remain.
-- **Host setup (A17; **Built**).** `hostkeeper-pxe serve --repositories` with a directory the daemon's loader accepts
+- **Host setup (A17; **Built**).** `pxe serve --repositories` with a directory the daemon's loader accepts
   serves a seed whose user data writes each file byte for byte, root:root 0644, before `hostkeeper.toml`
   (`crates/hostkeeper-pxe/src/serve/tests/repositories.rs`, the golden `user-data-repositories.yaml` of
   `crates/hostkeeper-pxe-seed/tests/seed.rs`); a directory the loader refuses, a missing or empty one, and a keyring
@@ -348,7 +348,7 @@ only in the device jobs, against a signed fixture repository and signed fixture 
   `no_build_for_host`, and `Converge` not converged; a stored release with archive entries and an index loads, and its
   archive entries are never picked; a daemon from A25 started on a host with an archive version of a service it runs
   natively removes that version's directory and nothing else (the B8 test of the new reader on old data);
-  `hostkeeper.toml` with `release_channel` and `[trusted_signers]` loads, and `hostkeeper-pxe` still checks a seed's
+  `hostkeeper.toml` with `release_channel` and `[trusted_signers]` loads, and `pxe` still checks a seed's
   attestation against them; the coverage gate at 99% on every crate that lost code.
 
 This list is complete in this sense: it holds one case for every refusal, outcome, gate reason, alert and bound named

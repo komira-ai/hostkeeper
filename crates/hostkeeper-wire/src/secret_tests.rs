@@ -91,7 +91,7 @@ fn the_token_is_read_on_every_call() {
 /// refuses is refused at the open, a file that holds no token at the read, and the `Debug` of
 /// an open token shows nothing of it.
 ///
-/// Catches `hostkeeper-pxe serve` reading the token by its path after it dropped to a user that
+/// Catches `pxe serve` reading the token by its path after it dropped to a user that
 /// cannot open it, or a check of the file deferred past the open.
 #[test]
 fn an_open_token_is_checked_at_the_open_and_read_from_its_descriptor() {

@@ -1,5 +1,5 @@
 //! The sealed directory, checked at start (docs/design/network-install.md, section 5, point 1:
-//! "`hostkeeper-pxe serve` checks the seal at start and refuses to start on any difference").
+//! "`pxe serve` checks the seal at start and refuses to start on any difference").
 //!
 //! [`Sealed::open`] reads `seal.json` ([`crate::seal`]), and for each platform it names opens
 //! every file of its boot set and its deb, without following a link, measures its size and
@@ -36,9 +36,7 @@ pub const CHUNK: usize = 1 << 20;
 #[derive(Debug, thiserror::Error)]
 pub enum SealError {
     /// No `seal.json` could be read: the directory was never sealed, or is not there.
-    #[error(
-        "{SEAL_FILE} cannot be read ({0}): the directory was not sealed by hostkeeper-pxe fetch"
-    )]
+    #[error("{SEAL_FILE} cannot be read ({0}): the directory was not sealed by pxe prepare")]
     NoSeal(io::Error),
     /// `seal.json` is not a seal.
     #[error("{SEAL_FILE} is not a seal: {0}")]

@@ -4,7 +4,7 @@
 //! `read_token` reads the file and checks it each time it is called; when to call it is the
 //! caller's choice (the coordinator reads the operator token once, at start, so a rotated
 //! token needs a restart). `open_token` opens and checks the file now and reads it later, from
-//! the descriptor it keeps ([`OpenToken::read`]): `hostkeeper-pxe serve` opens the root-only
+//! the descriptor it keeps ([`OpenToken::read`]): `pxe serve` opens the root-only
 //! token file as root and reads it only once it has dropped to an unprivileged user. The token
 //! never appears in an error text or a `Debug`. An error names the flag of the file, never its
 //! path or its content.

@@ -86,6 +86,6 @@ not `/tmp`. For each platform:
    file's size and `sha256sum` must equal its pin.
 
 `cargo test -p xtask` then renders the changed pins and refuses one of the wrong form. A pin that
-is well formed but wrong is refused later, never served: `hostkeeper-pxe fetch` (item N8 of the
+is well formed but wrong is refused later, never served: `pxe update-hook prepare` (item N8 of the
 design, `crates/hostkeeper-pxe`) checks the size and SHA-256 of every file it takes against
 `netboot.json`.

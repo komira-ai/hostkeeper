@@ -15,7 +15,7 @@
 //!   entry's size and SHA-256, and the stores that gave other bytes. No attestation is read: the
 //!   `macos-pkg` installer checks the package's signature itself.
 //! - [`bundle::read`] reads an attestation bundle for the commit, the ref and the digests the
-//!   verifier is asked to confirm; `hostkeeper-pxe fetch` uses it with the same verifier.
+//!   verifier is asked to confirm; `pxe update-hook prepare` uses it with the same verifier.
 //! - [`stores::load`] reads `/etc/hostkeeper/stores.toml`; a host without the file has no store.
 //!
 //! The network and the verifier are ports ([`ports::Fetcher`], [`ports::Verifier`]); [`net`] and

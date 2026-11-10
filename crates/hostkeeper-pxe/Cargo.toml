@@ -6,17 +6,18 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "hostkeeper-pxe, the boot server of network install: fetch downloads the boot sets and debs of a release, verifies them against its attestation and netboot.json, and seals them; serve checks the seal and serves them by proxyDHCP or behind the router, TFTP and HTTP, to the machines the inventory may install."
+description = "pxe, the boot server of network install: its hook's prepare step downloads the boot sets and debs of a release, verifies them against its attestation and netboot.json, and seals them; serve checks the seal and serves them by proxyDHCP or behind the router, TFTP and HTTP, to the machines the inventory may install."
 
-# docs/design/network-install.md sections 3 and 5, item N8: `hostkeeper-pxe fetch` writes a new
-# directory holding, for each Linux platform asked for, the boot set `netboot.json` pins (the
-# live-server ISO, and the kernel, initrd, shim and network GRUB taken out of it) and the
-# hostkeeper deb, each checked as it is written, `netboot.json` and the debs attested by the
-# daemon config's trusted signer through the daemon's own verifier, and a seal over all of it.
-# Item N9: `hostkeeper-pxe serve` checks that seal and serves the sealed files, the menus and the
-# seeds, answering only the machines the coordinator's inventory says may be installed.
+# docs/design/network-install.md sections 3 and 5, item N8: the fetch, which is the `prepare` step
+# of the `pxe` package's hook (docs/design/two-programs.md section 6.1), writes a new directory
+# holding, for each Linux platform asked for, the boot set `netboot.json` pins (the live-server
+# ISO, and the kernel, initrd, shim and network GRUB taken out of it) and the hostkeeper deb, each
+# checked as it is written, `netboot.json` and the debs attested by the daemon config's trusted
+# signer through the daemon's own verifier, and a seal over all of it. Item N9: `pxe serve` checks
+# that seal and serves the sealed files, the menus and the seeds, answering only the machines the
+# coordinator's inventory says may be installed.
 [[bin]]
-name = "hostkeeper-pxe"
+name = "pxe"
 path = "src/main.rs"
 
 [dependencies]
@@ -43,6 +44,8 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-pxe-packets = { path = "../hostkeeper-pxe-packets" }
 # The fixed grub.cfg, the menu of a MAC and the seed of a machine.
 hostkeeper-pxe-seed = { path = "../hostkeeper-pxe-seed" }
+# The contract of the update hook the `pxe` package ships: `Params`, `Report`, `Outcome`, `Step`.
+hostkeeper-hook = { path = "../hostkeeper-hook" }
 # `Clock` and `Stamp`: the attestation's deadline is a point on the injected clock.
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 # The host id and role grammars, the platform, and the operator token opened before the privilege
@@ -62,7 +65,8 @@ ruzstd.workspace = true
 rustls-pki-types.workspace = true
 # The privilege drop of `serve`: the groups, the gid and the uid of the thread, and the check that
 # root cannot be taken back.
-rustix = { workspace = true, features = ["process", "thread"] }
+# The `flock` a hook step holds on the boot directory.
+rustix = { workspace = true, features = ["fs", "process", "thread"] }
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
@@ -70,6 +74,8 @@ socket2.workspace = true
 # The `data.tar` of a deb.
 tar.workspace = true
 thiserror.workspace = true
+# The settings file (`/etc/pxe/pxe.toml`) is TOML.
+toml.workspace = true
 # The runtime of `serve`: its sockets, the coordinator client and the stop signal.
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 # The client of the coordinator's operator API, over TLS that trusts the coordinator's CA alone.
@@ -82,8 +88,6 @@ hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 rcgen.workspace = true
 # The fake `gh` matches the signer identity as `gh` does, as a regular expression.
 regex.workspace = true
-# The committed pins (`packaging/netboot/pins.toml`), read by a test in the released form.
-toml.workspace = true
 # The fake coordinator of `serve`'s tests: a loopback gRPC server with TLS.
 tokio-stream = { workspace = true, features = ["net"] }
 tonic = { workspace = true, features = ["server", "tls-ring"] }

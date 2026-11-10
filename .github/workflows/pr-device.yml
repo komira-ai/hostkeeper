@@ -429,9 +429,9 @@ jobs:
           key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
       - name: Add the static target
         run: rustup target add x86_64-unknown-linux-musl
-      - name: Build the static programs
-        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
-      - name: Stage the programs, gh and the trusted root
+      - name: Build the static daemon
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl -p hostkeeper --bin hostkeeper
+      - name: Stage the daemon, gh and the trusted root
         run: cargo xtask release nfpm-stage --arch amd64 --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$GH_SHA256" --trusted-root packaging/sigstore/trusted_root.json --binaries target/x86_64-unknown-linux-musl/release --out target/nfpm
       - name: Make the directory of the packages
         run: mkdir -p target/linux-packages

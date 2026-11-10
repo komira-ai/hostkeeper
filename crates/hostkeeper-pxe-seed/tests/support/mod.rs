@@ -138,7 +138,7 @@ impl Build {
     }
 }
 
-/// The install of `record` on `platform`, chosen as `hostkeeper-pxe serve` chooses it: GRUB of
+/// The install of `record` on `platform`, chosen as `pxe serve` chooses it: GRUB of
 /// `platform` asks for the menu of a MAC in the answer set, in proxy mode.
 pub fn install(record: &Record, platform: LinuxPlatform) -> Install {
     let path = format!("grub/hostkeeper/{}/52:54:00:12:34:56", platform.grub_cpu());

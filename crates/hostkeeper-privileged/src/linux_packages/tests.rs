@@ -209,15 +209,11 @@ fn the_script_installs_with_the_formats_tool_and_runs_each_program() {
             lines[3..],
             [
                 "/usr/bin/hostkeeper --version",
-                "/usr/bin/hostkeeper-pxe --version",
                 "/usr/lib/hostkeeper/gh --version"
             ]
         );
     }
-    assert_eq!(
-        PROGRAMS.map(|p| p.1),
-        ["hostkeeper", "hostkeeper-pxe", "gh"]
-    );
+    assert_eq!(PROGRAMS.map(|p| p.1), ["hostkeeper", "gh"]);
 }
 
 /// Catches a container that may pull, reach a network, write the packages, or share its name with

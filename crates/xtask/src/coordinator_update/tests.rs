@@ -440,11 +440,14 @@ fn a_version_route_that_cannot_be_read_refuses_the_run_and_changes_nothing() {
 #[test]
 fn an_older_wanted_version_keeps_its_downloads_when_newer_ones_are_there() {
     // Proves: the version just installed is never pruned, even when two newer download
-    // directories are there (an operator's `--target-version` of an older release).
+    // directories are there (an operator's `--target-version` of an older release); a directory
+    // whose name is no version and a file named as one are not downloads, and stay.
     let mut w = world("cu-prune-installed");
     for newer in ["v0.1.230", "v0.1.231"] {
         std::fs::create_dir(w.download.join(newer)).expect("a newer download");
     }
+    std::fs::create_dir(w.download.join("notes")).expect("a directory of no version");
+    std::fs::write(w.download.join("v0.1.100"), b"").expect("a file named as a version");
     let mut flags = w.flags();
     flags.target_version = Some(v("0.1.218"));
     w.probe = FakeProbe::new(
@@ -462,7 +465,7 @@ fn an_older_wanted_version_keeps_its_downloads_when_newer_ones_are_there() {
     );
     assert_eq!(
         dir_names(&w.download),
-        ["v0.1.218", "v0.1.230", "v0.1.231"].map(str::to_owned)
+        ["notes", "v0.1.100", "v0.1.218", "v0.1.230", "v0.1.231"].map(str::to_owned)
     );
 }
 

@@ -4,7 +4,9 @@
 use super::tests::{connects, empty, parse, text, verb};
 use super::*;
 use crate::release::fakes::scratch;
-use crate::release::native::{HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, MDM_NO_PKG, macos_inputs};
+use crate::release::native::{
+    HELLO_PKG_INPUTS, HOSTKEEPER_PKG_INPUTS, MDM_NO_PKG, PXE_NO_PKG, macos_inputs,
+};
 
 #[test]
 fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
@@ -71,6 +73,59 @@ fn deb_takes_its_flags_and_dates_the_package_by_the_commit_in_git() {
     }
 }
 
+/// `release deb --service pxe` from its command line builds pxe's `.deb` for each Linux
+/// platform out of a static program, dated by the commit's time in git, and
+/// `release check-linux-pkg <deb> --service pxe` from its command line passes what it built.
+///
+/// Catches a `--service pxe` that does not reach the pxe builder or the service check, or a
+/// deb named otherwise than the release's asset name.
+#[test]
+fn pxes_deb_and_its_check_run_from_their_command_lines() {
+    use crate::release::fakes::{FakeHistory, Fakes};
+    use crate::release::package::elf::fixture::{AARCH64, Spec, X86_64};
+    let d = scratch("release-deb-verb-pxe");
+    let mut history = FakeHistory::default();
+    let commit = history.commit(None, &[]).to_string();
+    let fakes = Fakes::over(history);
+    for (platform, machine, arch) in [
+        ("linux-x86_64", X86_64, "amd64"),
+        ("linux-arm64", AARCH64, "arm64"),
+    ] {
+        let binary = d.join(format!("pxe-{arch}"));
+        std::fs::write(&binary, Spec::static_pie(machine).build()).expect("write");
+        let out = d.join(format!("out-{arch}"));
+        let v = verb(&[
+            "deb",
+            "--service",
+            "pxe",
+            "--platform",
+            platform,
+            "--version",
+            "0.1.9",
+            "--commit",
+            &commit,
+            "--binary",
+            text(&binary),
+            "--out",
+            text(&out),
+        ]);
+        assert!(matches!(
+            &v,
+            Verb::Deb {
+                service: Service::Pxe,
+                ..
+            }
+        ));
+        run_with(v, &fakes.ports()).expect("pxe's deb");
+        let deb = out.join(format!("pxe_0.1.9_{arch}.deb"));
+        assert!(deb.is_file(), "{}", deb.display());
+        let (checked, connected) =
+            connects(verb(&["check-linux-pkg", text(&deb), "--service", "pxe"]));
+        assert!(checked.is_ok(), "{arch}: {checked:?}");
+        assert!(!connected);
+    }
+}
+
 #[test]
 fn check_linux_pkg_takes_service_or_staged_but_not_both_and_reads_no_port() {
     // Catches: --service ignored, or given with --staged and one of them silently dropped.
@@ -126,6 +181,10 @@ fn macos_pkg_and_its_check_take_hello_without_gh_and_refuse_every_other_mix() {
     assert_eq!(
         macos_inputs(Service::Mdm, false, None, None),
         refused(MDM_NO_PKG)
+    );
+    assert_eq!(
+        macos_inputs(Service::Pxe, false, None, None),
+        refused(PXE_NO_PKG)
     );
     assert_eq!(
         macos_inputs(Service::Hostkeeper, true, gh.clone(), root.clone()),
