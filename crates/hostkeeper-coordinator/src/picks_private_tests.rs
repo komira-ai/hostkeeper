@@ -10,7 +10,7 @@ use hostkeeper_wire::Platform;
 use hostkeeper_wire::version::Version;
 
 use crate::marks_support::{AGENT, WEB, ask_heard, beat_on, operator, rig, who};
-use crate::picks::{COORDINATOR_STORE, Pick, TARGET_FEATURE, pick};
+use crate::picks::{COORDINATOR_STORE, Pick, Picks, TARGET_FEATURE, pick};
 use crate::releases::Targets;
 use crate::releases_tests::{apt_entry, list};
 use crate::repositories_support::{credential_in, komira, private, repository, repository_entry};
@@ -199,4 +199,36 @@ async fn a_public_repository_entry_is_unaffected() {
     .await;
     beats(&rig, "d2", &["apt"], false);
     assert_eq!(picked(&rig, "d2", "2.0"), "entry");
+}
+
+/// Proves: an artifact entry is private only when it has locations and every one of them is in
+/// the store `coordinator`: with no location at all it is not, with one `coordinator` location
+/// it is, and with one `coordinator` and one `github` location it is not; a repository entry is
+/// private only when its channel is a private repository's.
+/// Catches: an entry with no location (one a stored release may hold) taken as private, which
+/// would pick every daemon without `private-repository-v1` nothing for it.
+#[test]
+fn an_artifact_entry_with_no_location_is_not_private() {
+    let at = |stores: &[&str]| Target {
+        installer: "macos-pkg".to_owned(),
+        locations: stores
+            .iter()
+            .map(|store| Location {
+                store: (*store).to_owned(),
+                locator: "web/2.0/web.pkg".to_owned(),
+            })
+            .collect(),
+        ..Target::default()
+    };
+    let mut picks = Picks::default();
+    picks.keep_private(["priv".to_owned()].into_iter().collect());
+    assert!(!picks.is_private(&at(&[])));
+    assert!(picks.is_private(&at(&[COORDINATOR_STORE])));
+    assert!(!picks.is_private(&at(&[COORDINATOR_STORE, "github"])));
+    let channel = |name: &str| Target {
+        repository: Some(name.to_owned()),
+        ..Target::default()
+    };
+    assert!(picks.is_private(&channel("priv")));
+    assert!(!picks.is_private(&channel("komira-testing")));
 }

@@ -159,8 +159,10 @@ impl Picks {
         self.private = channels;
     }
 
-    /// Whether `entry` needs a daemon that reads private repositories.
-    fn is_private(&self, entry: &Target) -> bool {
+    /// Whether `entry` needs a daemon that reads private repositories: a repository entry of a
+    /// private repository's channel, or an artifact entry that has locations, all in
+    /// [`COORDINATOR_STORE`]. An artifact entry with no location is not.
+    pub(crate) fn is_private(&self, entry: &Target) -> bool {
         match &entry.repository {
             Some(channel) => self.private.contains(channel),
             None => {
