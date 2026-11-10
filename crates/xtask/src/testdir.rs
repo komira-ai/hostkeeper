@@ -1,8 +1,10 @@
 //! A scratch directory a test owns: a directory of its own under a base, removed when it drops.
 //!
-//! The name holds the process id and a number this process gives each directory, so two tests,
-//! or two runs sharing one target directory, never get the same directory and never remove one
-//! another's.
+//! The name holds the process id and a number this process gives each directory. The directory
+//! is created exclusively: when one of that name is already there (a run before this one, with
+//! the same process id, left it in a target directory the next run reuses), the next number is
+//! tried, so two tests, or two runs sharing one target directory, never get the same directory
+//! and never remove one another's.
 
 use std::ops::Deref;
 use std::path::{Path, PathBuf};
@@ -13,15 +15,28 @@ static NEXT: AtomicU64 = AtomicU64::new(0);
 pub struct TestDir(PathBuf);
 
 impl TestDir {
-    /// A new, empty directory `base/<name>-<pid>-<n>`.
+    /// A new, empty directory `base/<name>-<pid>-<n>`, with the first number `n` whose
+    /// directory is not there yet.
     pub fn under(base: &Path, name: &str) -> TestDir {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = base.join(format!("{name}-{}-{n}", std::process::id()));
-        std::fs::create_dir_all(base).expect("create the scratch base");
+        unique(base, &format!("{name}-{}", std::process::id()), &NEXT)
+    }
+}
+
+/// The new directory `base/<stem>-<n>`, `n` taken from `next`: a directory that already exists
+/// is passed over, never shared or emptied; any other error fails the test.
+fn unique(base: &Path, stem: &str, next: &AtomicU64) -> TestDir {
+    std::fs::create_dir_all(base).expect("create the scratch base");
+    loop {
+        let path = base.join(format!("{stem}-{}", next.fetch_add(1, Ordering::Relaxed)));
         // `create_dir`, not `create_dir_all`: a directory that already exists is an error, so
         // no test ever shares one.
-        std::fs::create_dir(&path).expect("create the scratch directory");
-        TestDir(path)
+        match std::fs::create_dir(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            made => {
+                made.expect("create the scratch directory");
+                return TestDir(path);
+            }
+        }
     }
 }
 
@@ -64,5 +79,69 @@ mod tests {
         drop(a);
         assert!(!gone.exists());
         assert_eq!(std::fs::read(b.join("kept")).expect("read"), b"x");
+    }
+
+    /// Catches: a stale directory of the same name (left by a run before this one with the same
+    /// process id) failing the new one, or being shared or emptied.
+    #[test]
+    fn a_stale_directory_of_the_same_name_is_passed_over_and_left_alone() {
+        let exe = std::env::current_exe().expect("test binary");
+        let parent = TestDir::under(&exe.parent().expect("deps").join("testdir-unit"), "stale");
+        for stale in ["left-0", "left-1"] {
+            std::fs::create_dir(parent.join(stale)).expect("a stale directory");
+            std::fs::write(parent.join(stale).join("kept"), stale).expect("write");
+        }
+        let next = AtomicU64::new(0);
+        let fresh = unique(&parent, "left", &next);
+        assert_eq!(fresh.as_ref(), parent.join("left-2"));
+        assert_eq!(next.load(Ordering::Relaxed), 3);
+        for stale in ["left-0", "left-1"] {
+            let kept = std::fs::read(parent.join(stale).join("kept")).expect("read");
+            assert_eq!(kept, stale.as_bytes());
+        }
+    }
+
+    /// Catches: parallel callers of one name sharing a directory, or failing because another
+    /// made the directory first.
+    #[test]
+    fn parallel_callers_of_one_name_each_get_their_own_directory() {
+        const CALLERS: usize = 16;
+        let exe = std::env::current_exe().expect("test binary");
+        let parent = TestDir::under(&exe.parent().expect("deps").join("testdir-unit"), "par");
+        std::fs::create_dir(parent.join("raced-0")).expect("a stale directory");
+        let next = AtomicU64::new(0);
+        let start = std::sync::Barrier::new(CALLERS);
+        let made: Vec<TestDir> = std::thread::scope(|scope| {
+            let callers: Vec<_> = (0..CALLERS)
+                .map(|_| {
+                    let (parent, next, start) = (&*parent, &next, &start);
+                    scope.spawn(move || {
+                        start.wait();
+                        unique(parent, "raced", next)
+                    })
+                })
+                .collect();
+            callers
+                .into_iter()
+                .map(|c| c.join().expect("the caller"))
+                .collect()
+        });
+        let paths: std::collections::BTreeSet<&Path> = made.iter().map(AsRef::as_ref).collect();
+        assert_eq!(paths.len(), CALLERS, "{paths:?}");
+        assert!(!paths.contains(parent.join("raced-0").as_path()));
+        assert!(paths.iter().all(|p| p.is_dir()));
+    }
+
+    /// Catches: an error other than an existing directory being retried with the next number
+    /// (a search that never ends) or reported as made.
+    #[test]
+    fn an_error_other_than_an_existing_directory_fails_at_the_first_number() {
+        let exe = std::env::current_exe().expect("test binary");
+        let parent = TestDir::under(&exe.parent().expect("deps").join("testdir-unit"), "long");
+        let next = AtomicU64::new(0);
+        let name = "n".repeat(300);
+        let failed = std::panic::catch_unwind(|| unique(&parent, &name, &next));
+        assert!(failed.is_err());
+        assert_eq!(next.load(Ordering::Relaxed), 1);
     }
 }
