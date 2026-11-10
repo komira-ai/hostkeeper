@@ -91,14 +91,6 @@ pub const fn index_platform(platform: Platform) -> IndexPlatform {
     }
 }
 
-impl IndexKey {
-    /// The key of `platform`.
-    #[must_use]
-    pub const fn of(platform: IndexPlatform) -> Self {
-        Self(platform)
-    }
-}
-
 impl Serialize for IndexKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.0.as_str())
@@ -137,19 +129,6 @@ pub struct Package {
     pub index_digest: Option<Digest>,
 }
 
-impl IndexRecord {
-    /// The package the index lists for `platform`, with the index's digest.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        self.packages
-            .get(&IndexKey::of(index_platform(platform)))
-            .map(|digest| Package {
-                digest: digest.clone(),
-                index_digest: Some(self.digest.clone()),
-            })
-    }
-}
-
 /// What CI registered for a version: one package digest, or a release index.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -158,21 +137,6 @@ pub enum Release {
     Package(Digest),
     /// A release index: each host is ordered the package of its own platform.
     Index(IndexRecord),
-}
-
-impl Release {
-    /// The package a host of `platform` is ordered of this release; none when the release is an
-    /// index that lists no package for the platform.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        match self {
-            Self::Package(digest) => Some(Package {
-                digest: digest.clone(),
-                index_digest: None,
-            }),
-            Self::Index(record) => record.package_for(platform),
-        }
-    }
 }
 
 /// The versions CI has set for one service, each with its release, by version.

@@ -11,8 +11,7 @@
 //!   enrolled host's certificate names, whether it is denied, retiring or duplicate);
 //! - [`desired`]: the desired state of each service, in `desired.json`, replaced atomically,
 //!   with the [`registry`] of every version CI has set and its release (the digest of its
-//!   package, or the record of its release index, checked by [`release_index`]: each host is
-//!   ordered the package of its own platform);
+//!   package, or the record of its release index; neither orders a host anything);
 //! - [`fleet`]: the last heartbeat of every host, the live and down rule, the quiet start, and
 //!   what each host's last gRPC heartbeat said of its Sigstore trusted root ([`trusted_root`]);
 //! - [`acks`]: the failure reports an override of a bad version acknowledged;
@@ -36,8 +35,9 @@
 //!   entries per role and host on top, the minimum versions per role and host, and the hosts
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
-//! - [`order_terms`]: the order id, try and package digest an update answer of the JSON route
-//!   carries to an agent that announced `order-v1`;
+//! - [`order_terms`]: the order id, try and package digest an update answer carries to an agent
+//!   that announced `order-v1`, over a transport that carries typed orders (the JSON route
+//!   carries no order);
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the update plan,
 //!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`,
 //!   `clear_record`, `install`, `uninstall`), with [`clear_record`], `Hosts.ClearRecord`;
@@ -62,8 +62,6 @@
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
 //!   token or an operator token, the status read by the operator token;
-//! - [`channel`]: with `--release-channel`, the check that the release channel holds a version
-//!   before it is set, over the HTTPS fetch of [`channel_https`];
 //! - `releases`: the release each version was set with by `SetDesired` with targets, kept
 //!   beside the desired state, checked by the rules of `hostkeeper-release`, and read back by
 //!   `Releases.GetRelease`;
@@ -108,8 +106,6 @@ pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
 pub mod canary;
-pub mod channel;
-pub mod channel_https;
 pub mod clear_record;
 pub mod config;
 pub mod converge;
@@ -145,7 +141,6 @@ pub mod orders;
 pub(crate) mod picks;
 pub mod reconcile;
 pub mod registry;
-pub mod release_index;
 pub(crate) mod releases;
 pub mod rollouts;
 mod running;
@@ -197,11 +192,8 @@ mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
 #[cfg(test)]
-mod channel_https_tests;
 #[cfg(test)]
-mod channel_set_tests;
 #[cfg(test)]
-mod channel_tests;
 #[cfg(test)]
 mod clear_record_tests;
 #[cfg(test)]
@@ -251,6 +243,10 @@ mod hosts_tests;
 #[cfg(test)]
 mod http_tests;
 #[cfg(test)]
+mod index_set_support;
+#[cfg(test)]
+mod index_set_tests;
+#[cfg(test)]
 mod install_tests;
 #[cfg(test)]
 mod inventory_platform_tests;
@@ -297,11 +293,8 @@ mod recorded_definition_tests;
 #[cfg(test)]
 mod recorded_review_tests;
 #[cfg(test)]
-mod release_index_orders_tests;
 #[cfg(test)]
-mod release_index_support;
 #[cfg(test)]
-mod release_index_tests;
 #[cfg(test)]
 mod release_set_tests;
 #[cfg(test)]

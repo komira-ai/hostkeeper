@@ -9,10 +9,10 @@ use hostkeeper_wire::wire::Health;
 use crate::fleet::{Fleet, Node};
 use crate::membership::HEARTBEAT_V2;
 use crate::ops::{Exclusion, HostOps, OpsState};
-use crate::reconcile::{Change, plan};
+use crate::reconcile::Change;
 use crate::rollback_tests::{AUTO, farm, good, release, rolled_back, secs};
 use crate::services::{ServiceDef, Services};
-use crate::testutil::{desired, id};
+use crate::testutil::{desired, id, plan};
 
 /// `kbf` as a service of daemons chosen by the label `zone = "a"`, with the definition lines
 /// `extra` in its table.

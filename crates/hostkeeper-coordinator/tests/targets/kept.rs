@@ -877,14 +877,14 @@ async fn hold_of_d1(rig: &Rig) -> Value {
 
 /// Proves: a coordinator that reads only `desired.json` (the previous one, which has no releases
 /// file: here the same state file with `desired.json.releases` left behind) sees a version set
-/// with targets as a version with neither package digest nor index: a host that does not run the
-/// service is held `no_digest` and told nothing. The coordinator with the releases picks the host
-/// from them (section 3.3): its daemon, before `target-v1`, can install only an archive, which
-/// these targets lack, so it is held `no_build_for_host` and told nothing either. Only the
-/// coordinator that reads the releases file answers `GetRelease`. A version set with a
-/// package digest on the previous coordinator's state is ordered to the same host.
-/// Catches: a version set with targets that an older coordinator would order some package, or
-/// that the new one holds differently.
+/// with targets as a version with neither package digest nor index, which has no release kept:
+/// a host that does not run the service is held `no_build_for_host` and told nothing. The
+/// coordinator with the releases picks the host from them (section 3.3): its daemon, before
+/// `target-v1`, lists nothing a pick can name, so it is held `no_build_for_host` and told nothing
+/// either. Only the coordinator that reads the releases file answers `GetRelease`. A version
+/// set with a package digest on the previous coordinator's state orders the same host nothing.
+/// Catches: a version set with targets that a coordinator without its release would order some
+/// package, or that the new one holds differently.
 #[tokio::test]
 async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest() {
     let rig = rig("kept-previous-new");
@@ -899,7 +899,7 @@ async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest(
     old.restart();
 
     assert_eq!(hold_of_d1(&rig).await, json!("no_build_for_host"));
-    assert_eq!(hold_of_d1(&old).await, json!("no_digest"));
+    assert_eq!(hold_of_d1(&old).await, json!("no_build_for_host"));
     assert_eq!(release(&rig, "web", "2.0").await.targets, targets("web"));
     assert_eq!(
         get(&old, Some(OPERATOR), "web", "2.0").await.refusal(),
@@ -914,5 +914,5 @@ async fn the_previous_coordinator_holds_a_version_set_with_targets_as_no_digest(
         )
         .await;
     assert_eq!(code, 200, "{body}");
-    assert_eq!(hold_of_d1(&old).await, Value::Null);
+    assert_eq!(hold_of_d1(&old).await, json!("no_build_for_host"));
 }

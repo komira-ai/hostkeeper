@@ -13,7 +13,7 @@ use hostkeeper_wire::wire::{
     Class, Health, Heartbeat, Outcome, Phase, ServiceBeat, ServiceReply, UpdateResult,
 };
 
-use crate::converge::{State, converge_service};
+use crate::converge::State;
 use crate::decide::{Gate, Why};
 use crate::fleet::{Fleet, Marks, QUIET_START};
 use crate::holds::{HoldMark, HoldScope};
@@ -26,7 +26,7 @@ use crate::ops::{OpsState, ServiceOps};
 use crate::orders::Order;
 use crate::reconcile::{Change, plan};
 use crate::testutil::{
-    Log, OPERATOR, Rig, beat, ci_token, desired, id, ops_of, role, secs, version,
+    Log, OPERATOR, Rig, beat, converge_service, desired, id, ops_of, role, secs, version,
 };
 
 /// A daemon's heartbeat that lists `web` running `running`, healthy.
@@ -317,7 +317,7 @@ async fn a_hold_on_a_role_covers_a_host_that_joins_later() {
 
     let answer = rig
         .coordinator
-        .heartbeat(who("d1", "storage"), web_at("1.0"))
+        .heartbeat_native(who("d1", "storage"), web_at("1.0"))
         .expect("answered");
     assert_eq!(answer.reply, ServiceReply::Nothing);
     assert_eq!(
@@ -544,10 +544,7 @@ async fn set_one_daemon_at_a_time(rig: &Rig, version: &str, n: u8) {
         r#"{{"service":"{WEB}","version":"{version}","release_digest":"{}","max_updating":{{"daemon":1}}}}"#,
         digest(n)
     );
-    rig.coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
-        .await
-        .expect("set");
+    rig.set(&body).await;
 }
 
 /// A held host that is unhealthy after a failed update would hold the one live update if it were

@@ -71,7 +71,7 @@ async fn a_replaced_kbf_converges_over_its_own_roles() {
         ("d1", "daemon", "2.0"),
         ("f1", "frontend", "1.0"),
     ] {
-        c.heartbeat(who(name, role(kind)), beat(running))
+        c.heartbeat_native(who(name, role(kind)), beat(running))
             .expect("answered");
     }
     let read = c
@@ -107,15 +107,12 @@ async fn the_priority_of_a_replaced_kbf_orders_the_offers() {
             r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
             r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
         ] {
-            rig.coordinator
-                .set_desired(Some(&ci_token()), body.as_bytes())
-                .await
-                .expect("set");
+            crate::testutil::set_native(&rig.coordinator, body).await;
         }
         rig.at(2_000);
         let reply = rig
             .coordinator
-            .heartbeat(
+            .heartbeat_native(
                 who("d1", role("daemon")),
                 announcing_other(beat("1.0"), "other", "1.0"),
             )

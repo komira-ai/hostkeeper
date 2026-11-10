@@ -210,11 +210,7 @@ async fn world_with_one_host(test: &str, extra: &str) -> World {
         r#"{{"service":"web","version":"2.0","release_digest":"{}"}}"#,
         "01".repeat(32)
     );
-    world
-        .coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
-        .await
-        .expect("set");
+    crate::testutil::set_native(&world.coordinator, &body).await;
     world
         .coordinator
         .heartbeat(

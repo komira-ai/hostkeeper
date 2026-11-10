@@ -68,6 +68,12 @@
    "call": "status",
    "expect_status": 200,
    "expect_contains": [
+    "\"desired\":{\"version\":\"1.0\""
+   ],
+   "expect_not_contains": [
+    "\"last_good\":\"1.0\""
+   ],
+   "kbf_contains": [
     "\"last_good\":\"1.0\""
    ]
   },
@@ -203,6 +209,14 @@
    "call": "status",
    "expect_status": 200,
    "expect_contains": [
+    "\"desired\":{\"version\":\"2.0\""
+   ],
+   "expect_not_contains": [
+    "\"services\":{\"kbf\":{\"version\":\"1.0\"",
+    "\"bad\":[\"2.0\"]",
+    "\"by\":\"coordinator\",\"action\":\"mark_bad\",\"service\":\"kbf\""
+   ],
+   "kbf_contains": [
     "\"services\":{\"kbf\":{\"version\":\"1.0\"",
     "\"bad\":[\"2.0\"]",
     "\"by\":\"coordinator\",\"action\":\"mark_bad\",\"service\":\"kbf\""
@@ -267,6 +281,13 @@
    "call": "status",
    "expect_status": 200,
    "expect_contains": [
+    "\"desired\":{\"version\":\"2.0\""
+   ],
+   "expect_not_contains": [
+    "\"services\":{\"kbf\":{\"version\":\"1.0\"",
+    "\"bad\":[\"2.0\"]"
+   ],
+   "kbf_contains": [
     "\"services\":{\"kbf\":{\"version\":\"1.0\"",
     "\"bad\":[\"2.0\"]"
    ]

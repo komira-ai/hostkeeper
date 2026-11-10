@@ -8,13 +8,16 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::Reply;
 
-use crate::converge::{State, converge_service};
-use crate::decide::{Decision, Gate, Skip, decide_in, decide_why};
+use crate::converge::State;
+use crate::decide::{Decision, Gate, Skip};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::services::Services;
-use crate::testutil::{LEGACY, Rig, beat, desired, id, last, role, unhealthy, updating, version};
+use crate::testutil::{
+    LEGACY, Rig, beat, converge_service, decide_in, decide_why, desired, id, last, role, unhealthy,
+    updating, version,
+};
 
 pub(crate) fn secs(n: u64) -> Duration {
     Duration::from_secs(n)
@@ -397,12 +400,12 @@ async fn a_restart_mid_bake_starts_the_count_again() {
     for at in [2_000, 2_015] {
         rig.at(at);
         rig.coordinator
-            .heartbeat(who("a"), beat("2.0"))
+            .heartbeat_native(who("a"), beat("2.0"))
             .expect("a heartbeat");
     }
     let asked = |rig: &Rig| {
         rig.coordinator
-            .heartbeat(who("b"), beat("1.0"))
+            .heartbeat_native(who("b"), beat("1.0"))
             .expect("a heartbeat")
     };
     assert_eq!(asked(&rig), Reply::Nothing, "two of three");
@@ -410,7 +413,7 @@ async fn a_restart_mid_bake_starts_the_count_again() {
     rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(s());
     rig.at(3_031);
     rig.coordinator
-        .heartbeat(who("a"), beat("2.0"))
+        .heartbeat_native(who("a"), beat("2.0"))
         .expect("a heartbeat");
     assert_eq!(
         asked(&rig),
@@ -420,7 +423,7 @@ async fn a_restart_mid_bake_starts_the_count_again() {
     for at in [3_046, 3_061] {
         rig.at(at);
         rig.coordinator
-            .heartbeat(who("a"), beat("2.0"))
+            .heartbeat_native(who("a"), beat("2.0"))
             .expect("a heartbeat");
     }
     assert_eq!(

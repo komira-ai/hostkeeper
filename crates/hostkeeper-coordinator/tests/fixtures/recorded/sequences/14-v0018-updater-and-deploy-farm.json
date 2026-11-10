@@ -16,7 +16,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"0.0.18+gabcdefabcdef-2\",\"health\":\"healthy\",\"last_update\":{\"target\":\"0.0.18+gabcdefabcdef-2\",\"outcome\":\"succeeded\"},\"updating\":null}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"0.0.19+g123456abcdef-1\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"version\":\"0.0.19+g123456abcdef-1\"}"
   },
   {
    "at_secs": 2000,

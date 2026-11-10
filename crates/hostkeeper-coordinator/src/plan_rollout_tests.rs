@@ -15,7 +15,7 @@ use crate::marks_support::{
 };
 use crate::orders::Order;
 use crate::services::Services;
-use crate::testutil::{OPERATOR, Rig, ci_token};
+use crate::testutil::{OPERATOR, Rig};
 
 /// A host's copy of one service, as the fake updater runs it.
 #[derive(Clone, Debug)]
@@ -82,11 +82,7 @@ impl Farm {
             "release_digest": digest(1),
             "max_updating": {"daemon": max},
         });
-        self.rig
-            .coordinator
-            .set_desired(Some(&ci_token()), body.to_string().as_bytes())
-            .await
-            .expect("set");
+        self.rig.set(&body.to_string()).await;
     }
 
     fn beat(&self, host: &str) -> Heartbeat {

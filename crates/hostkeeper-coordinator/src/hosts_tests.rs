@@ -32,9 +32,19 @@ fn rig(test: &str) -> Rig {
     rig
 }
 
+/// What the daemon agent 0.4.1 announces: [`NEW_DAEMON`]'s but `target-v1`, so that it lists no
+/// installer and runs every service from archives, as a daemon before it does.
+fn features() -> Vec<&'static str> {
+    NEW_DAEMON
+        .iter()
+        .copied()
+        .filter(|feature| *feature != crate::picks::TARGET_FEATURE)
+        .collect()
+}
+
 /// A heartbeat of the daemon agent 0.4.1 running `web` and `db` 1.0.
 fn daemon() -> Heartbeat {
-    let mut beat = beat_of(NEW_DAEMON, vec![runs(WEB, "1.0"), runs(DB, "1.0")]);
+    let mut beat = beat_of(&features(), vec![runs(WEB, "1.0"), runs(DB, "1.0")]);
     beat.agent = Some(
         serde_json::from_value::<Agent>(json!({"name": "hostkeeper-daemon", "version": "0.4.1"}))
             .expect("an agent"),
@@ -224,7 +234,7 @@ fn a_host_is_what_the_status_holds_of_it() {
                 name: "hostkeeper-daemon".to_owned(),
                 version: "0.4.1".to_owned(),
             }),
-            features: NEW_DAEMON.iter().map(|f| (*f).to_owned()).collect(),
+            features: features().iter().map(|f| (*f).to_owned()).collect(),
             services: vec![agent::ServiceBeat {
                 name: WEB.to_owned(),
                 version: "1.0".to_owned(),

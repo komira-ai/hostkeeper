@@ -56,13 +56,13 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
     let (phase, class) = release();
     let coordinator = &rig.coordinator;
     coordinator
-        .heartbeat(who("d1"), failure(phase, class, "2.0"))
+        .heartbeat_native(who("d1"), failure(phase, class, "2.0"))
         .expect("a heartbeat");
     let token = ci_token();
     std::thread::scope(|scope| {
         let beat = scope.spawn(|| {
             coordinator
-                .heartbeat(who("d2"), failure(phase, class, "2.0"))
+                .heartbeat_native(who("d2"), failure(phase, class, "2.0"))
                 .expect("a heartbeat")
         });
         paused_rx.recv().expect("the rollback paused at its mark");

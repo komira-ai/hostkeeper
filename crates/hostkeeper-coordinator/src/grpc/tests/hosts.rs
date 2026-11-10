@@ -81,7 +81,14 @@ async fn list_and_get_answer_the_host_that_enrolled_and_heartbeated() {
     let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
     let world = world_over("grpc-hosts-list", &enrollment);
     let c = &world.coordinator;
-    let sent = proto_message(&[svc("kbf", "1.0")]);
+    // The UI's fixture is the reply to a daemon that lists no installer and announces no
+    // `target-v1`.
+    let mut sent = proto_message(&[svc("kbf", "1.0")]);
+    sent.installers.clear();
+    sent.features.retain(|feature| feature != "target-v1");
+    for service in &mut sent.services {
+        service.installer = None;
+    }
     assert_eq!(
         beat(c, &peer_of(&certificate), &sent).await.token(),
         (Code::Ok, "")

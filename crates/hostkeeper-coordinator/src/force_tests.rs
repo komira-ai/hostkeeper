@@ -13,17 +13,19 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Heartbeat, ServiceBeat, ServiceReply};
 use serde_json::{Value, json};
 
+use crate::assign_support::why_of;
 use crate::force::SELF_SERVICE;
 use crate::holds::HoldScope;
 use crate::marks_support::{
-    DB, NEW_DAEMON, OLD_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request,
-    hold, hosts_target, operator, ops_bytes, rig, role_target, runs, scope_host, scope_role, set,
-    update, who,
+    DB, NEW_DAEMON, OLD_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_only,
+    force_request, hold, hosts_target, native_target, operator, ops_bytes, rig, role_target, runs,
+    scope_host, scope_role, set, update, who,
 };
 use crate::operator::Caller;
 use crate::ops::{OpsState, ServiceOps};
 use crate::orders::Order;
 use crate::registry::Digest;
+use crate::releases_tests::apt_entry;
 use crate::service::SetError;
 use crate::testutil::{OPERATOR, Rig, ci_token, ops_of, version};
 
@@ -138,7 +140,7 @@ fn order_for(rig: &Rig, host: &str, b: Heartbeat) -> Option<Order> {
 /// one `n` registered and whose halt generation is `halt_generation`.
 fn forced(ver: &str, n: u8, halt_generation: u64, generation: u64) -> Order {
     Order::Force {
-        target: None,
+        target: Some(native_target(WEB, n)),
         service: WEB.to_owned(),
         version: version(ver),
         digest: Digest::parse(&digest(n)).expect("a digest"),
@@ -381,10 +383,10 @@ async fn force_reaches_every_target_in_one_heartbeat_round_and_passes_the_slot()
             "{host}: its failure and its deferral stand, only the force reaches it"
         );
     }
-    let (host, role_name, b) = &hosts[2];
+    let (host, _, _) = &hosts[2];
     assert_eq!(
-        ask(&rig, host, role_name, b.clone()),
-        update(WEB, "2.0"),
+        why_of(&rig, WEB, host),
+        None,
         "{host}: a forced pair is outside the plan, which holds it neither for the rollout of db nor for the canary stage"
     );
 }
@@ -610,7 +612,7 @@ async fn coordinator_force_over_a_standing_halt_sends_a_greater_generation() {
     assert_eq!(persisted.services[WEB].halt_generation, 2);
     let answer = rig
         .coordinator
-        .heartbeat(who("d1", DAEMON), web_only("1.0"))
+        .heartbeat_native(who("d1", DAEMON), web_only("1.0"))
         .expect("answered");
     assert_eq!(answer.halts, BTreeMap::from([(WEB.to_owned(), 2)]));
     assert!(marks(&rig).halt.is_none(), "the halt is cleared");
@@ -749,7 +751,7 @@ async fn force_order_carries_the_registered_digest_and_no_command_field() {
             order_id: "force-1".to_owned(),
             r#try: 1,
             verb: Some(agent::order::Verb::Force(agent::Force {
-                target: None,
+                target: Some(apt_entry(WEB, 7)),
                 service: WEB.to_owned(),
                 version: "2.0".to_owned(),
                 package_digest: digest(7),
@@ -781,7 +783,7 @@ async fn a_daemon_that_did_not_announce_force_gets_no_force_order() {
     assert_eq!(skipped(&response), [("d2", "daemon_too_old")]);
     assert_eq!(marks(&rig).force.expect("a force").hosts, ["d1"]);
     for _ in 0..2 {
-        assert!(order_for(&rig, "d2", old()).is_none());
+        assert!(force_only(order_for(&rig, "d2", old())).is_none());
     }
     assert_eq!(
         order_for(&rig, "d1", web_only("1.0")),
@@ -874,7 +876,7 @@ pub(crate) async fn forced_v1_is_acted_on() {
 
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(
+        .heartbeat_with_orders_native(
             who("d1", DAEMON),
             web_only("1.0"),
             crate::trusted_root::TrustedRootSaid::default(),
@@ -883,7 +885,16 @@ pub(crate) async fn forced_v1_is_acted_on() {
     assert_eq!(order, Some(forced("2.0", 2, 1, 1)));
     assert_eq!(
         answer.features.as_deref(),
-        Some(&["deferred-v1", "halt-v1", "heartbeat-v2", "forced-v1"].map(String::from)[..])
+        Some(
+            &[
+                "deferred-v1",
+                "halt-v1",
+                "heartbeat-v2",
+                "forced-v1",
+                "target-v1"
+            ]
+            .map(String::from)[..]
+        )
     );
 
     let unannounced: Vec<&str> = NEW_DAEMON
@@ -893,7 +904,7 @@ pub(crate) async fn forced_v1_is_acted_on() {
         .collect();
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(
+        .heartbeat_with_orders_native(
             who("d1", DAEMON),
             beat_of(&unannounced, vec![runs(WEB, "1.0")]),
             crate::trusted_root::TrustedRootSaid::default(),
@@ -905,7 +916,7 @@ pub(crate) async fn forced_v1_is_acted_on() {
     );
     assert_eq!(
         answer.features.as_deref(),
-        Some(&["deferred-v1", "halt-v1", "heartbeat-v2"].map(String::from)[..])
+        Some(&["deferred-v1", "halt-v1", "heartbeat-v2", "target-v1"].map(String::from)[..])
     );
 }
 

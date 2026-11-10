@@ -82,7 +82,7 @@ fn offered(rig: &Rig, announced: &[&str]) -> Vec<String> {
         );
         match rig
             .coordinator
-            .heartbeat(who.clone(), heartbeat)
+            .heartbeat_native(who.clone(), heartbeat)
             .expect("a heartbeat")
             .reply
         {

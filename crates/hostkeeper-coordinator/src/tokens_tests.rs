@@ -394,7 +394,7 @@ fn every_action_is_audited_under_the_token_name() {
         host_id: id("s1"),
         role: role("storage"),
     };
-    c.heartbeat(who, halting).expect("a heartbeat");
+    c.heartbeat_native(who, halting).expect("a heartbeat");
 
     let actions = [
         (

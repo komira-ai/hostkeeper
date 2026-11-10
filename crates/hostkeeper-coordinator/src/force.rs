@@ -8,7 +8,7 @@
 //! [`Coordinator::force`] refuses, before anything changes: the service `hostkeeper`, which
 //! updates itself by its own path (`self_service`); a version below the service's `min_version`
 //! (`below_min_version`; the floor itself is accepted); a version CI registered no release
-//! (a package digest or a release index) for (`no_digest`); a fleet-wide force whose `confirm_service` is not the service
+//! (a set with targets, a package digest or a release index) for (`no_digest`); a fleet-wide force whose `confirm_service` is not the service
 //! (`confirm_mismatch`); a role the service does not run on, or a host the coordinator has not
 //! heard from since it started (`unknown_target`).
 //!
@@ -24,11 +24,11 @@
 //! A targeted pair an operator holds is skipped and listed `held`, unless the call sets
 //! `include_held`: then it is ordered, for this call only, and no hold is removed. A target
 //! whose daemon did not announce [`FEATURE`] is listed `skipped` as `daemon_too_old` and gets
-//! nothing from the force; a target of a version registered with a release index that lists no
-//! package for its platform is listed `skipped` as `no_package_for_platform`; a host named in
+//! nothing from the force; a target the pick finds no entry for ([`crate::picks`]: `no_target`,
+//! `no_build_for_host`, `installer_dropped`) is listed `skipped` with that reason, as is every
+//! target of a version with no release kept, which orders nothing; a host named in
 //! the call that does not run the service is listed `skipped` as `unknown_target`. Each host
-//! ordered gets the package of its own platform, and the digest of the index it was taken from
-//! ([`ForceRecord::package_for`]).
+//! ordered gets the entry picked for it.
 //!
 //! The force stands until CI or an operator sets another version ([`end_by_ci`],
 //! [`end_by_setter`]) or another force replaces it. While it stands the automatic rollback of the service is suspended
@@ -45,7 +45,7 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::force_request::Targets;
 use hostkeeper_wire::version::Version;
-use hostkeeper_wire::{HostId, Platform, RoleName};
+use hostkeeper_wire::{HostId, RoleName};
 use serde::{Deserialize, Serialize};
 
 use crate::fleet::Fleet;
@@ -53,7 +53,8 @@ use crate::holds::marks_of;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, HaltAck, OpsError, OpsState, OpsStore, Write};
 use crate::picks::Pick;
-use crate::registry::{Digest, IndexRecord, Package, Release};
+use crate::registry::{Digest, IndexRecord, Release};
+use crate::releases::Release as Stored;
 use crate::service::{Coordinator, kept};
 use crate::services::{ServiceDef, Services};
 
@@ -100,13 +101,14 @@ pub struct ForceRecord {
     pub reason: String,
     /// The name of the operator's token that forced it.
     pub by: String,
-    /// The package digest CI registered for the version, which the order names; for a version
-    /// registered with a release index, the digest of that index (the packages are in
-    /// `release_index`).
+    /// The digest the release of the version is recorded under: the package digest CI
+    /// registered for it, the digest of its release index, or, for a version set with targets,
+    /// the digest of the release index set beside them, else the SHA-256 of the release's stored
+    /// form. No order reads it: each host is ordered the entry picked for it.
     pub digest: Digest,
-    /// The record of the release index CI registered for the version, if it registered one:
-    /// each host is ordered the package it lists for the host's platform. Written only then, so
-    /// the record of a version with one package digest is as it was.
+    /// The record of the release index CI registered for the version, if it registered one. Kept
+    /// as it was read and written back so that the file stays readable by the releases before;
+    /// no order reads it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub release_index: Option<IndexRecord>,
     /// The halt generation the order carries.
@@ -124,20 +126,6 @@ impl ForceRecord {
     #[must_use]
     pub fn order_id(&self) -> String {
         format!("force-{}", self.generation)
-    }
-
-    /// The package a host of `platform` is ordered: the one the index lists for it, or, for a
-    /// version registered with one package digest, that digest. None for a platform the index
-    /// does not list.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        match &self.release_index {
-            Some(record) => record.package_for(platform),
-            None => Some(Package {
-                digest: self.digest.clone(),
-                index_digest: None,
-            }),
-        }
     }
 }
 
@@ -163,26 +151,17 @@ pub struct Plan {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnknownTarget;
 
-/// What a force orders: a version and the release CI registered for it.
-#[derive(Clone, Copy, Debug)]
-pub struct Forced<'a> {
-    /// The version forced.
-    pub version: &'a Version,
-    /// Its package digest, or its release index.
-    pub release: &'a Release,
-}
-
-/// Whom a force of `def` to `forced` with `targets` orders in `fleet` at `now`: the hosts of
+/// Whom a force of `def` to `version` with `targets` orders in `fleet` at `now`: the hosts of
 /// the service the targets name, less the held pairs (unless `include_held`), the hosts whose
-/// daemon did not announce [`FEATURE`] and those whose platform the release lists no package
-/// for. A pure function: it changes nothing.
+/// daemon did not announce [`FEATURE`] and those the pick finds no entry for. A pure function: it
+/// changes nothing.
 ///
 /// # Errors
 /// [`UnknownTarget`]: a role `def` does not run on, or a host the fleet has not heard from.
 pub fn plan(
     def: &ServiceDef,
     services: &Services,
-    forced: Forced<'_>,
+    version: &Version,
     targets: &ForceTargets,
     include_held: bool,
     fleet: &Fleet,
@@ -195,9 +174,9 @@ pub fn plan(
             .hosts_of(service)
             .filter(|(_, host)| def.roles.contains(host.role_name()))
     };
-    let targeted: Vec<(HostId, Version, Platform)> = match targets {
+    let targeted: Vec<(HostId, Version)> = match targets {
         ForceTargets::Fleet => members()
-            .map(|(id, host)| (id.clone(), host.beat.version.clone(), host.beat.platform))
+            .map(|(id, host)| (id.clone(), host.beat.version.clone()))
             .collect(),
         ForceTargets::Role(role) => {
             if !def.roles.contains(role) {
@@ -205,7 +184,7 @@ pub fn plan(
             }
             members()
                 .filter(|(_, host)| host.role_name() == role.as_str())
-                .map(|(id, host)| (id.clone(), host.beat.version.clone(), host.beat.platform))
+                .map(|(id, host)| (id.clone(), host.beat.version.clone()))
                 .collect()
         }
         ForceTargets::Hosts(names) => {
@@ -216,7 +195,7 @@ pub fn plan(
                 }
                 match members().find(|(member, _)| **member == id) {
                     Some((_, host)) => {
-                        found.push((id.clone(), host.beat.version.clone(), host.beat.platform));
+                        found.push((id.clone(), host.beat.version.clone()));
                     }
                     None => plan.skipped.push((id.to_string(), "unknown_target")),
                 }
@@ -224,15 +203,15 @@ pub fn plan(
             found
         }
     };
-    for (id, running, platform) in targeted {
+    for (id, running) in targeted {
         if !include_held && fleet.is_held(service, &id) {
             plan.held.push(id.to_string());
         } else if !fleet.announced(&id, FEATURE) {
             plan.skipped.push((id.to_string(), "daemon_too_old"));
-        } else if let Some(why) = unordered(forced, service, &id, platform, fleet) {
+        } else if let Some(why) = unordered(service, version, &id, fleet) {
             plan.skipped.push((id.to_string(), why));
         } else {
-            if !forced.version.at_least(&running) && !plan.left.contains(&running) {
+            if !version.at_least(&running) && !plan.left.contains(&running) {
                 plan.left.push(running);
             }
             plan.ordered.push(id);
@@ -250,27 +229,15 @@ pub fn plan(
     Ok(plan)
 }
 
-/// Why the force `forced` of `service` orders the host `id`, of `platform`, nothing: the release
-/// index lists no package for the platform, or, for a version set with targets, the pick finds
-/// the host no entry ([`crate::picks`]; a host whose daemon's installers are not read yet is
-/// ordered, and is sent the force once they are and an entry is picked).
-fn unordered(
-    forced: Forced<'_>,
-    service: &str,
-    id: &HostId,
-    platform: Platform,
-    fleet: &Fleet,
-) -> Option<&'static str> {
-    match crate::picks::pick(fleet, service, forced.version, id).map(|(found, _)| found) {
-        Some(Pick::Entry(_) | Pick::Unheard) => None,
-        Some(Pick::NoTarget) => Some("no_target"),
-        Some(Pick::NoBuildForHost) => Some("no_build_for_host"),
-        Some(Pick::InstallerDropped) => Some("installer_dropped"),
-        None => forced
-            .release
-            .package_for(platform)
-            .is_none()
-            .then_some("no_package_for_platform"),
+/// Why the force of `service` to `version` orders the host `id` nothing: the pick finds the host
+/// no entry ([`crate::picks`]; a host whose daemon's installers are not read yet is ordered, and
+/// is sent the force once they are and an entry is picked).
+fn unordered(service: &str, version: &Version, id: &HostId, fleet: &Fleet) -> Option<&'static str> {
+    match crate::picks::pick(fleet, service, version, id) {
+        Pick::Entry(_) | Pick::Unheard => None,
+        Pick::NoTarget => Some("no_target"),
+        Pick::NoBuildForHost => Some("no_build_for_host"),
+        Pick::InstallerDropped => Some("installer_dropped"),
     }
 }
 
@@ -498,13 +465,14 @@ impl Coordinator {
             return Err(proto::ReleasesRefusal::BelowMinVersion);
         }
         // A version set with targets is forced as its release: each host is ordered the entry
-        // picked for it ([`crate::picks`]), and the ops file records the release as one digest
-        // ([`crate::picks::recorded`]); the desired state names neither, as CI's set left it.
+        // picked for it ([`crate::picks`]), and the ops file records the release as one digest;
+        // the desired state names neither, as CI's set left it. A version registered by a digest
+        // or an index alone is forced too, and picks every host nothing.
         let set_with = self.desired.release(&def.name, version.as_str());
         let registered = self.desired.digests(&def.name).get(&version).cloned();
         let release = registered
             .clone()
-            .or_else(|| set_with.as_deref().and_then(crate::picks::recorded))
+            .or_else(|| set_with.as_deref().and_then(recorded))
             .ok_or(proto::ReleasesRefusal::NoDigest)?;
         let now = (self.clock)();
         // The fleet's lock is held to the end: no heartbeat decides or rolls back between the
@@ -516,10 +484,7 @@ impl Coordinator {
         let plan = plan(
             def,
             &self.services,
-            Forced {
-                version: &version,
-                release: &release,
-            },
+            &version,
             &targets,
             request.include_held,
             &fleet,
@@ -573,4 +538,16 @@ impl Coordinator {
                 .collect(),
         })
     }
+}
+
+/// The release a force of a version set with targets records in the ops file, which names one
+/// digest: the digest of the release index set with the targets, else the SHA-256 of the
+/// release's stored form.
+fn recorded(release: &Stored) -> Option<Release> {
+    let stored = crate::ops_file::digest(release.to_json().to_string().as_bytes());
+    release
+        .index_digest()
+        .cloned()
+        .or_else(|| Digest::parse(&stored).ok())
+        .map(Release::Package)
 }

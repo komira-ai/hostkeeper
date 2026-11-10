@@ -5,22 +5,18 @@
 //! its platform's list, by the equality of installer names and nothing else:
 //!
 //! 1. a host that runs the service takes the entry of the installer it runs it with
-//!    (`ServiceBeat.installer`, absent for `hostkeeper-archive`), wherever it stands in the list,
-//!    while its daemon still lists that installer; else it is picked nothing,
-//!    [`Pick::InstallerDropped`]. Two exceptions make the move to native packages
-//!    (packages-native.md section 10.6): a host that runs it from `hostkeeper-archive` takes the
-//!    first native entry ([`is_native_entry`]) whose installer its daemon lists, wherever it
-//!    stands, before the archive entry; and a host that runs it with a native installer, going
-//!    back to a version lower than the one it runs (a rollback, automatic or an operator's set or
-//!    force) whose list has no native entry, takes that list's `hostkeeper-archive` entry while
-//!    its daemon lists it: the move's rollback, which the daemon makes from the archive version
-//!    it keeps. No other change of installer is ever picked;
+//!    (`ServiceBeat.installer`), wherever it stands in the list, while its daemon still lists that
+//!    installer; else it is picked nothing, [`Pick::InstallerDropped`]. A service that runs from
+//!    archives (`ServiceBeat.installer` absent) runs with no installer a list can name, so it is
+//!    picked nothing too. No change of installer is ever picked;
 //! 2. any other host takes the first entry whose installer its daemon lists
 //!    (`HeartbeatRequest.installers`); else it is picked nothing, [`Pick::NoBuildForHost`];
 //! 3. a host of a platform the release has no list for is picked nothing, [`Pick::NoTarget`].
 //!
-//! A daemon that did not announce [`TARGET_FEATURE`] counts as listing `hostkeeper-archive` alone
-//! and running every service from archives. One that did is picked from the installers it said
+//! No pick ever returns an entry of the installer `hostkeeper-archive`, which no daemon from this
+//! coordinator's release installs with; a daemon that still lists it is picked another entry or
+//! none. A daemon that did not announce [`TARGET_FEATURE`] is picked nothing,
+//! [`Pick::NoBuildForHost`]. One that did is picked from the installers it said
 //! in its last heartbeat over gRPC ([`Heard`]), which the fleet keeps in memory, as it keeps
 //! features: a heartbeat over the JSON route, which carries none, leaves the list as it was, and
 //! until the coordinator has read one (after its start, or a daemon's first heartbeat) the host is
@@ -29,7 +25,7 @@
 //! The fleet also keeps, under its lock, the releases its decisions read ([`Picks::keep`]): those
 //! of every service's desired version and of every standing force's version, refreshed each time
 //! the lock is taken. A version with no release kept (one set with a digest or an index, or none)
-//! is ordered as before: every function here answers `None` for it.
+//! picks every host [`Pick::NoBuildForHost`]: nothing is ordered it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -39,7 +35,6 @@ use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
 use hostkeeper_release::grammar::is_installer_name;
-use hostkeeper_release::target::is_native_entry;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, is_drift_version};
@@ -51,9 +46,7 @@ use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::PickedTarget;
-use crate::registry::{
-    Digest, IndexKey, IndexRecord, Package, Release as Registered, index_platform,
-};
+use crate::registry::{Digest, Package, index_platform};
 use crate::releases::Release;
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
@@ -65,7 +58,8 @@ pub const TARGET_FEATURE: &str = "target-v1";
 /// How many installers a daemon may list.
 pub const MAX_INSTALLERS: usize = 16;
 
-/// The installer of today's archives: the one every daemon runs.
+/// The installer of the archives, which no pick returns an entry of: a daemon from before the
+/// archives were taken out may still list it, and a release kept may still name it.
 const ARCHIVE: &str = Installer::HostkeeperArchive.as_str();
 
 /// What a daemon said of its installers in a heartbeat over gRPC.
@@ -74,7 +68,7 @@ pub(crate) struct Heard {
     /// The installers it lists, in its order.
     listed: Vec<String>,
     /// The installer of each service it named one for; a service it names none for runs from
-    /// archives.
+    /// archives ([`ARCHIVE`]).
     running: BTreeMap<String, String>,
     /// The drift each service reported, for the services that reported one in a good grammar.
     drift: BTreeMap<String, agent::DriftReport>,
@@ -200,84 +194,55 @@ fn runs(fleet: &Fleet, service: &str, id: &HostId) -> bool {
         .is_some_and(|host| host.beat.health != Health::Absent)
 }
 
-/// Whether `installer` is native ([`Installer::is_native`]) by its exact spelling.
-fn is_native(installer: &str) -> bool {
-    installer.parse().is_ok_and(Installer::is_native)
-}
-
-/// Whether ordering the host `id` `service` at `version` goes back: the host's last word of the
-/// service names a later version, by [`Version::at_least`].
-fn rolls_back(fleet: &Fleet, service: &str, version: &Version, id: &HostId) -> bool {
-    fleet
-        .get_in(service, id)
-        .is_some_and(|host| !version.at_least(&host.beat.version))
-}
-
-/// The pick for the host `id` of `service` at `version`, with the release it is of; `None` when
-/// the version has no release kept.
+/// The pick for the host `id` of `service` at `version`. A version with no release kept (one set
+/// with a package digest or a release index, or none) picks every host [`Pick::NoBuildForHost`].
 pub(crate) fn pick<'a>(
     fleet: &'a Fleet,
     service: &str,
     version: &Version,
     id: &HostId,
-) -> Option<(Pick<'a>, &'a Release)> {
-    let release = fleet.picks.release(service, version)?;
+) -> Pick<'a> {
+    let Some(release) = fleet.picks.release(service, version) else {
+        return Pick::NoBuildForHost;
+    };
     // A platform with no list is the release's choice, whatever the daemon lists.
     let Some(list) = fleet
         .platform_of(service, id)
         .and_then(|platform| release.targets().get(index_platform(platform).as_str()))
     else {
-        return Some((Pick::NoTarget, release));
+        return Pick::NoTarget;
     };
-    let archive = [ARCHIVE.to_owned()];
-    let (listed, running) = if fleet.announced(id, TARGET_FEATURE) {
-        let Some(listed) = fleet.picks.listed(id) else {
-            return Some((Pick::Unheard, release));
-        };
-        (listed, fleet.picks.running(id, service).unwrap_or(ARCHIVE))
-    } else {
-        (&archive[..], ARCHIVE)
+    // A daemon that did not announce the feature lists nothing a pick can name.
+    if !fleet.announced(id, TARGET_FEATURE) {
+        return Pick::NoBuildForHost;
+    }
+    let Some(listed) = fleet.picks.listed(id) else {
+        return Pick::Unheard;
     };
-    let lists = |installer: &str| listed.iter().any(|name| name == installer);
-    let picked = if runs(fleet, service, id) {
-        let listed_of = |installer: &str| {
-            list.entries
-                .iter()
-                .find(|entry| entry.installer == installer && lists(installer))
-        };
-        let native = || {
-            list.entries
-                .iter()
-                .find(|entry| is_native_entry(entry) && lists(&entry.installer))
-        };
-        let found = if running == ARCHIVE {
-            // The move: a native entry its daemon lists before the archive it runs.
-            native().or_else(|| listed_of(ARCHIVE))
-        } else {
-            listed_of(running).or_else(|| {
-                // The move's rollback: back to a version whose list has no native entry.
-                let back = rolls_back(fleet, service, version, id)
-                    && is_native(running)
-                    && !list.entries.iter().any(is_native_entry);
-                back.then(|| listed_of(ARCHIVE)).flatten()
-            })
-        };
-        found.map_or(Pick::InstallerDropped, Pick::Entry)
+    let installable =
+        |entry: &&Target| entry.installer != ARCHIVE && listed.contains(&entry.installer);
+    if runs(fleet, service, id) {
+        // A service that runs from archives (no installer said) names no installer a list has.
+        let running = fleet.picks.running(id, service).unwrap_or(ARCHIVE);
+        list.entries
+            .iter()
+            .filter(installable)
+            .find(|entry| entry.installer == running)
+            .map_or(Pick::InstallerDropped, Pick::Entry)
     } else {
         list.entries
             .iter()
-            .find(|entry| lists(&entry.installer))
+            .find(installable)
             .map_or(Pick::NoBuildForHost, Pick::Entry)
-    };
-    Some((picked, release))
+    }
 }
 
 /// Why the host `id` is ordered nothing of `service` at `version` though every other rule lets
 /// it be: the gate reason of a pick that found no entry ([`Skip::NotAMember`] for a daemon whose
 /// list is not read yet: the coordinator has no word of what it can install). `None` when an
-/// entry is picked or the version has no release kept.
+/// entry is picked.
 pub(crate) fn skip(fleet: &Fleet, service: &str, version: &Version, id: &HostId) -> Option<Skip> {
-    match pick(fleet, service, version, id)?.0 {
+    match pick(fleet, service, version, id) {
         Pick::Entry(_) => None,
         Pick::NoTarget => Some(Skip::NoTarget),
         Pick::NoBuildForHost => Some(Skip::NoBuildForHost),
@@ -293,10 +258,9 @@ pub(crate) fn unpicked(fleet: &Fleet, service: &str, version: &Version, id: &Hos
     skip(fleet, service, version, id).is_some_and(|why| why != Skip::NotAMember)
 }
 
-/// Whether the host `id` is picked an entry of `service` at `version`; `None` when the version
-/// has no release kept.
-pub(crate) fn picked(fleet: &Fleet, service: &str, version: &Version, id: &HostId) -> Option<bool> {
-    pick(fleet, service, version, id).map(|(found, _)| matches!(found, Pick::Entry(_)))
+/// Whether the host `id` is picked an entry of `service` at `version`.
+pub(crate) fn picked(fleet: &Fleet, service: &str, version: &Version, id: &HostId) -> bool {
+    matches!(pick(fleet, service, version, id), Pick::Entry(_))
 }
 
 /// What an order of `service` at `version` names for the host `id`.
@@ -305,74 +269,35 @@ pub(crate) struct Ordered {
     /// The package the order names: the entry's digest, and the release index set with the
     /// targets, if one was.
     pub(crate) package: Package,
-    /// The entry, for a daemon that announced [`TARGET_FEATURE`].
-    pub(crate) target: Option<PickedTarget>,
-    /// Whether the entry is an archive: the only one an order on the JSON route may name.
-    pub(crate) archive: bool,
+    /// The entry the order carries.
+    pub(crate) target: PickedTarget,
 }
 
-/// What an order of `service` at `version` names for the host `id`: `None` when the version has
-/// no release kept (it is ordered as before), `Some(None)` when no entry is picked for the host.
+/// What an order of `service` at `version` names for the host `id`: `None` when no entry is
+/// picked for the host.
 pub(crate) fn order_of(
     fleet: &Fleet,
     service: &str,
     version: &Version,
     id: &HostId,
-) -> Option<Option<Ordered>> {
-    let (found, release) = pick(fleet, service, version, id)?;
-    let Pick::Entry(entry) = found else {
-        return Some(None);
+) -> Option<Ordered> {
+    let Pick::Entry(entry) = pick(fleet, service, version, id) else {
+        return None;
     };
-    Some(Digest::parse(&entry.digest).ok().map(|digest| {
-        Ordered {
-            package: Package {
-                digest,
-                index_digest: release.index_digest().cloned(),
-            },
-            target: fleet
-                .announced(id, TARGET_FEATURE)
-                .then(|| PickedTarget::new(entry.clone())),
-            archive: entry.installer == ARCHIVE,
-        }
-    }))
-}
-
-/// The package digest an install of `service` at `version` names for the host `id`: the picked
-/// entry's; `None` when the version has no release kept, `Some(None)` when nothing is picked.
-pub(crate) fn package_for(
-    fleet: &Fleet,
-    service: &str,
-    version: &Version,
-    id: &HostId,
-) -> Option<Option<Package>> {
-    order_of(fleet, service, version, id).map(|ordered| ordered.map(|o| o.package))
-}
-
-/// The release a force of a version set with targets records in the ops file, which names one
-/// digest: the digest of the release index set with the targets, else the SHA-256 of the
-/// release's stored form, with the archive entries as the index's packages. Only this
-/// coordinator's pick reads the entries; an older coordinator, which reads the record alone,
-/// orders a daemon an archive entry of its platform under that digest.
-pub(crate) fn recorded(release: &Release) -> Option<Registered> {
-    let stored = || crate::ops_file::digest(release.to_json().to_string().as_bytes());
-    let packages = release
-        .targets()
-        .iter()
-        .filter_map(|(platform, list)| {
-            let entry = list.entries.iter().find(|e| e.installer == ARCHIVE);
-            let key = platform.parse().ok().map(IndexKey::of);
-            key.zip(entry.and_then(|e| Digest::parse(&e.digest).ok()))
-        })
-        .collect();
-    release
-        .index_digest()
-        .cloned()
-        .or_else(|| Digest::parse(&stored()).ok())
-        .map(|digest| Registered::Index(IndexRecord { digest, packages }))
+    let digest = Digest::parse(&entry.digest).ok()?;
+    let release = fleet.picks.release(service, version)?;
+    Some(Ordered {
+        package: Package {
+            digest,
+            index_digest: release.index_digest().cloned(),
+        },
+        target: PickedTarget::new(entry.clone()),
+    })
 }
 
 /// How many hosts of `def` the release of `desired`'s version picks an entry for, and picks none
-/// for by why; `None` when the version has no release kept. The hosts are those the decision asks
+/// for by why; `None` when the version has no release kept, which the status leaves out as it
+/// always has (the convergence of the JSON route is byte for byte what it was). The hosts are those the decision asks
 /// of: assigned the service, not excluded from it, not held, and with a word of the service or
 /// a daemon that lists every service it runs.
 pub(crate) fn counts(def: &ServiceDef, desired: &Desired, fleet: &Fleet) -> Option<PickCounts> {
@@ -389,8 +314,8 @@ pub(crate) fn counts(def: &ServiceDef, desired: &Desired, fleet: &Fleet) -> Opti
             && !fleet.is_excluded(service, id)
             && !fleet.is_held(service, id)
             && (fleet.get_in(service, id).is_some() || fleet.announced(id, HEARTBEAT_V2));
-        let found = pick(fleet, service, &desired.version, id).filter(|_| asked);
-        match found.map(|(found, _)| found) {
+        let found = Some(pick(fleet, service, &desired.version, id)).filter(|_| asked);
+        match found {
             Some(Pick::Entry(_)) => counts.picked += 1,
             Some(Pick::NoTarget) => counts.no_target += 1,
             Some(Pick::NoBuildForHost) => counts.no_build_for_host += 1,

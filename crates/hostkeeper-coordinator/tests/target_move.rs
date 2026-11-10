@@ -1,12 +1,13 @@
-//! The move to native packages (docs/design/packages-native.md section 10.6, build item A18):
-//! the pick that moves a host running a service from `hostkeeper-archive` to a native entry its
-//! daemon lists, wherever that entry stands in the list; the archive entry for a host that lists
-//! no native installer of the list, and for a daemon before `target-v1`; no archive entry ever
-//! for a host running a native installer, but on a rollback to a version whose list has no
-//! native entry; and the releases of the move, accepted over gRPC.
+//! The native installers and the end of the move (docs/design/packages-native.md sections 10.6
+//! and 10.7, build items A18 and A25): the pick of a host that runs a service from a native
+//! installer, never an entry of another installer; the archive a host may still run a service
+//! from is no installer a list is picked by, so such a host is picked nothing
+//! (`installer_dropped`) and no pick ever returns an entry of `hostkeeper-archive`, whatever the
+//! release lists and whatever the daemon lists; and the releases of the move, which a stored
+//! release with archive entries still is, accepted over gRPC.
 //!
 //! `apt` is the native installer here (a repository entry); `deb` and `tarball` are installers
-//! of other formats, which do not move a host.
+//! of other formats, which are picked a host that runs them and no other.
 
 mod support;
 
@@ -100,61 +101,65 @@ async fn ordered(rig: &Rig, daemon: &Daemon) -> Option<(&'static str, String, St
     })
 }
 
-/// Proves: a host running `web` from `hostkeeper-archive` whose daemon lists `apt` is ordered the
-/// `apt` entry, whole, with its pin as the package digest, whether the list names it before or
-/// after the archive entry; and once it runs `web` from `apt` it is ordered the `apt` entry of
-/// the next version.
-/// Catches: the move not made (the host kept on the archive entry it runs), made only when the
-/// native entry stands first, or the native entry sent without its repository fields.
+/// Proves: a host running `web` from `hostkeeper-archive` (its daemon names no installer for it)
+/// is picked nothing though its daemon lists `apt`, whether the list names `apt` before or after
+/// the archive entry: it is held `installer_dropped` and named by `Converge`; a host that runs
+/// `web` from `apt` is ordered the `apt` entry of the next version, and a host that does not run
+/// `web` and lists `apt` is ordered it as its install, none of them the archive entry.
+/// Catches: a host picked the archive entry it runs, or picked another installer's entry than the
+/// one it runs, which only an uninstall changes.
 #[tokio::test]
-async fn a_host_running_from_archives_that_lists_apt_is_picked_the_apt_entry_wherever_it_stands() {
+async fn a_host_running_from_archives_is_picked_nothing_and_one_running_apt_is_picked_the_apt_entry()
+ {
     for (name, entries) in [
-        (
-            "move-native-first",
-            vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')],
-        ),
-        (
-            "move-native-after",
-            vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')],
-        ),
+        ("native-first", vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')]),
+        ("native-after", vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')]),
     ] {
         let rig = rig(name);
         set(&rig, "2.0", x86(entries)).await;
         rig.at(LATER);
         let archived = Daemon::new("m1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", None));
-        let order = said(&grpc_beat(&rig, &archived).await).expect("an update");
+        assert_eq!(said(&grpc_beat(&rig, &archived).await), None, "{name}");
         assert_eq!(
-            (order.0, order.2.as_str(), order.3.as_str(), order.5),
-            (
-                "update",
-                "2.0",
-                digest('a').as_str(),
-                Some(apt("2.0-1", 'a'))
-            ),
+            reason(&rig, "web", "m1").await,
+            proto::GateReason::InstallerDropped,
             "{name}"
         );
-        set(&rig, "3.0", x86(vec![web(ARCHIVE, 'e'), apt("3.0-1", 'b')])).await;
-        let moved =
-            Daemon::new("m1", X86, &[ARCHIVE, "apt"]).running(runs("web", "2.0", Some("apt")));
+        let convergence = converge(&rig, "web").await;
         assert_eq!(
-            ordered(&rig, &moved).await,
-            Some(("update", "3.0".to_owned(), "apt".to_owned(), digest('b'))),
+            convergence.installer_dropped,
+            vec!["m1".to_owned()],
+            "{name}"
+        );
+
+        let running_apt =
+            Daemon::new("m2", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", Some("apt")));
+        assert_eq!(
+            ordered(&rig, &running_apt).await,
+            Some(("update", "2.0".to_owned(), "apt".to_owned(), digest('a'))),
+            "{name}"
+        );
+        let new = Daemon::new("i1", X86, &[ARCHIVE, "apt"]);
+        assert_eq!(
+            ordered(&rig, &new).await,
+            Some(("install", "2.0".to_owned(), "apt".to_owned(), digest('a'))),
             "{name}"
         );
     }
 }
 
-/// Proves: with the list `[apt, hostkeeper-archive]`, a host running `web` from archives whose
-/// daemon lists no native installer of the list (`deb` and `tarball` only, or `macos-pkg`, which
-/// the list has no entry of) is ordered the archive entry, and a daemon before `target-v1` is
-/// ordered it too, with no target; a host that does not run `web` and lists `apt` is ordered the
-/// `apt` entry as its install.
-/// Catches: a host moved to an installer its daemon does not list, an old daemon sent a native
-/// entry, or a host's first install held back by the move's rule.
+/// Proves: no pick returns the archive entry of a stored release, whatever the daemon lists and
+/// the host runs: with the list `[apt, hostkeeper-archive]`, a host whose daemon lists only
+/// `hostkeeper-archive`, one that lists `deb` and `tarball`, one that lists `macos-pkg`, and a
+/// daemon before `target-v1` (which counts as listing the archive alone) are each picked nothing
+/// (`no_build_for_host` for the hosts that do not run `web`, `installer_dropped` for those that
+/// run it from archives), and a host that does not run `web` and lists the archive and `apt` is
+/// ordered the `apt` entry.
+/// Catches: the archive entry of a release set before the archives ended picked for a daemon
+/// that still lists the installer, which no daemon installs with now.
 #[tokio::test]
-async fn a_host_that_lists_no_native_installer_of_the_list_and_an_old_daemon_are_picked_the_archive_entry()
- {
-    let rig = rig("move-not-listed");
+async fn an_archive_entry_is_never_picked_whatever_the_daemon_lists() {
+    let rig = rig("never-archive");
     set(&rig, "2.0", x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')])).await;
     rig.at(LATER);
     for (host, installers) in [
@@ -162,18 +167,27 @@ async fn a_host_that_lists_no_native_installer_of_the_list_and_an_old_daemon_are
         ("n2", vec![ARCHIVE, "macos-pkg"]),
         ("n3", vec![ARCHIVE]),
     ] {
-        let daemon = Daemon::new(host, X86, &installers).running(runs("web", "1.0", None));
+        let running = Daemon::new(host, X86, &installers).running(runs("web", "1.0", None));
+        assert_eq!(said(&grpc_beat(&rig, &running).await), None, "{host} runs");
         assert_eq!(
-            ordered(&rig, &daemon).await,
-            Some(("update", "2.0".to_owned(), ARCHIVE.to_owned(), digest('f'))),
-            "{host}"
+            reason(&rig, "web", host).await,
+            proto::GateReason::InstallerDropped,
+            "{host} runs"
+        );
+        let absent = format!("{host}-absent");
+        let new = Daemon::new(&absent, X86, &installers);
+        assert_eq!(said(&grpc_beat(&rig, &new).await), None, "{host} does not");
+        assert_eq!(
+            reason(&rig, "web", &absent).await,
+            proto::GateReason::NoBuildForHost,
+            "{host} does not"
         );
     }
     let old = Daemon::old("o1", X86).running(runs("web", "1.0", None));
-    let order = said(&grpc_beat(&rig, &old).await).expect("an update");
+    assert_eq!(said(&grpc_beat(&rig, &old).await), None);
     assert_eq!(
-        (order.0, order.3.as_str(), order.5),
-        ("update", digest('f').as_str(), None)
+        reason(&rig, "web", "o1").await,
+        proto::GateReason::NoBuildForHost
     );
     let new = Daemon::new("i1", X86, &[ARCHIVE, "apt"]);
     assert_eq!(
@@ -184,21 +198,21 @@ async fn a_host_that_lists_no_native_installer_of_the_list_and_an_old_daemon_are
 
 /// Proves: with lists that hold no native entry its daemon lists (`[deb, hostkeeper-archive]`
 /// for a daemon listing `deb`, `[tarball, hostkeeper-archive]` for one listing `tarball`), a
-/// host running `web` from archives stays on the archive entry; an installer of another format
-/// never moves it.
-/// Catches: the move's exception taken for any installer other than the one the host runs, which
-/// would change a host's format with no native package to move to.
+/// host running `web` from archives is picked nothing: an installer of another format never moves
+/// it, and the archive entry is never picked.
+/// Catches: a host moved to an installer other than the one it runs, or kept on the archive entry
+/// it can no longer be updated with.
 #[tokio::test]
-async fn a_list_with_no_native_entry_its_daemon_lists_leaves_an_archive_host_on_the_archive_entry()
-{
-    for (name, other) in [("move-other-deb", "deb"), ("move-other-tarball", "tarball")] {
+async fn a_list_with_no_native_entry_its_daemon_lists_picks_an_archive_host_nothing() {
+    for (name, other) in [("other-deb", "deb"), ("other-tarball", "tarball")] {
         let rig = rig(name);
         set(&rig, "2.0", x86(vec![web(other, 'a'), web(ARCHIVE, 'f')])).await;
         rig.at(LATER);
         let daemon = Daemon::new("k1", X86, &[ARCHIVE, other]).running(runs("web", "1.0", None));
+        assert_eq!(said(&grpc_beat(&rig, &daemon).await), None, "{name}");
         assert_eq!(
-            ordered(&rig, &daemon).await,
-            Some(("update", "2.0".to_owned(), ARCHIVE.to_owned(), digest('f'))),
+            reason(&rig, "web", "k1").await,
+            proto::GateReason::InstallerDropped,
             "{name}"
         );
     }
@@ -208,8 +222,7 @@ async fn a_list_with_no_native_entry_its_daemon_lists_leaves_an_archive_host_on_
 /// version: with `[hostkeeper-archive, apt]` it is ordered the `apt` entry, and with
 /// `[hostkeeper-archive]` alone it is ordered nothing, held `installer_dropped` and named by
 /// `Converge`.
-/// Catches: a moved host sent back to archives by an update, which only the move's rollback may
-/// do.
+/// Catches: a moved host sent back to archives by an update.
 #[tokio::test]
 async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version() {
     let rig = rig("move-no-way-back");
@@ -231,18 +244,15 @@ async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version
     assert_eq!(convergence.installer_dropped, vec!["v1".to_owned()]);
 }
 
-/// Proves: the move's rollback. A host running `web` 2.0 from `apt`, when `web` goes back to 1.0
-/// whose list has no native entry (`[hostkeeper-archive]`), is ordered 1.0's archive entry, over
-/// gRPC with the entry and on the JSON route as an archive order is; when it goes back to 1.5,
-/// whose list has an `apt` entry, it is ordered that one; a host whose daemon does not list `hostkeeper-archive` is ordered
-/// nothing and held `installer_dropped`, and so is one whose daemon no longer lists `apt` going
-/// back to 1.5.
-/// Catches: the move made impossible to undo (a rollback held `installer_dropped`), a rollback
-/// that moves a host to archives though its version has a native entry, or the archive entry
-/// sent to a daemon that cannot install it.
+/// Proves: a host running `web` 2.0 from `apt`, when `web` goes back to 1.0 whose list has no
+/// native entry (`[hostkeeper-archive]`), is picked nothing and held `installer_dropped`, over
+/// gRPC and on the JSON route, which carries no order; when it goes back to 1.5, whose list has an
+/// `apt` entry, it is ordered that one; a host whose daemon no longer lists `apt` is held
+/// `installer_dropped` going back to 1.5.
+/// Catches: a rollback that sends a host back to archives, which no version can be activated
+/// from any more.
 #[tokio::test]
-async fn a_rollback_across_the_move_carries_the_archive_entry_unless_the_version_has_a_native_one()
-{
+async fn a_rollback_to_a_version_with_no_native_entry_picks_the_host_nothing() {
     let rig = rig("move-rollback");
     let one = x86(vec![web(ARCHIVE, 'f')]);
     let one_five = x86(vec![apt("1.5-1", 'b'), web(ARCHIVE, 'e')]);
@@ -257,17 +267,14 @@ async fn a_rollback_across_the_move_carries_the_archive_entry_unless_the_version
     let json = Daemon::new("b4", X86, &[ARCHIVE, "apt"]).running(runs("web", "2.0", Some("apt")));
     assert_eq!(said(&grpc_beat(&rig, &json).await), None, "up to date");
 
-    back_to(&rig, "1.0", one.clone()).await;
+    back_to(&rig, "1.0", one).await;
+    assert_eq!(said(&grpc_beat(&rig, &moved).await), None);
     assert_eq!(
-        ordered(&rig, &moved).await,
-        Some(("update", "1.0".to_owned(), ARCHIVE.to_owned(), digest('f')))
-    );
-    let no_archive = Daemon::new("b2", X86, &["apt"]).running(runs("web", "2.0", Some("apt")));
-    assert_eq!(said(&grpc_beat(&rig, &no_archive).await), None);
-    assert_eq!(
-        reason(&rig, "web", "b2").await,
+        reason(&rig, "web", "b1").await,
         proto::GateReason::InstallerDropped
     );
+    let answer = json_beat(&rig, &json).await;
+    assert_eq!(answer["reply"], "nothing", "{answer}");
 
     back_to(&rig, "1.5", one_five).await;
     let moved_again =
@@ -276,27 +283,20 @@ async fn a_rollback_across_the_move_carries_the_archive_entry_unless_the_version
         ordered(&rig, &moved_again).await,
         Some(("update", "1.5".to_owned(), "apt".to_owned(), digest('b')))
     );
-    // A daemon that no longer lists `apt` is not moved back to archives by a version that has a
-    // native entry: only a version with none undoes the move.
     let unlisted = Daemon::new("b5", X86, &[ARCHIVE]).running(runs("web", "2.0", Some("apt")));
     assert_eq!(said(&grpc_beat(&rig, &unlisted).await), None);
     assert_eq!(
         reason(&rig, "web", "b5").await,
         proto::GateReason::InstallerDropped
     );
-
-    // On the JSON route the archive order goes out as an old daemon's order is, with no target.
-    back_to(&rig, "1.0", one).await;
-    let answer = json_beat(&rig, &json).await;
-    assert_eq!(answer["reply"], "update", "{answer}");
-    assert_eq!(answer["package_digest"], digest('f').as_str(), "{answer}");
 }
 
 /// Proves: `Releases.Force` of `web` back to 1.0, whose list has no native entry, orders a host
-/// running 2.0 from `apt` the archive entry of 1.0.
-/// Catches: the operator's way back across the move refused where the gate's is not.
+/// running 2.0 from `apt` nothing: the host is skipped `installer_dropped`, and no order reaches
+/// it.
+/// Catches: the operator's way back to an archive entry, which no daemon installs.
 #[tokio::test]
-async fn a_force_back_across_the_move_carries_the_archive_entry() {
+async fn a_force_back_to_a_version_with_no_native_entry_skips_the_host() {
     let rig = rig("move-force-back");
     let one = x86(vec![web(ARCHIVE, 'f')]);
     set(&rig, "1.0", one).await;
@@ -311,7 +311,7 @@ async fn a_force_back_across_the_move_carries_the_archive_entry() {
         &proto::ForceRequest {
             service: "web".to_owned(),
             version: "1.0".to_owned(),
-            reason: "back across the move".to_owned(),
+            reason: "back to an archive".to_owned(),
             targets: Some(proto::force_request::Targets::Fleet(proto::FleetTarget {
                 confirm_service: "web".to_owned(),
             })),
@@ -320,10 +320,15 @@ async fn a_force_back_across_the_move_carries_the_archive_entry() {
     )
     .await;
     assert_eq!(forced.code, 0, "{forced:?}");
-    assert_eq!(
-        ordered(&rig, &moved).await,
-        Some(("force", "1.0".to_owned(), ARCHIVE.to_owned(), digest('f')))
-    );
+    let response: proto::ForceResponse = forced.decoded();
+    assert_eq!(response.targeted, 0);
+    let skipped: Vec<(&str, &str)> = response
+        .skipped
+        .iter()
+        .map(|s| (s.node_id.as_str(), s.reason.as_str()))
+        .collect();
+    assert_eq!(skipped, [("f1", "installer_dropped")]);
+    assert_eq!(said(&grpc_beat(&rig, &moved).await), None);
 }
 
 /// Proves: over gRPC, CI sets `hostkeeper` with its native entry alone and with the archive entry

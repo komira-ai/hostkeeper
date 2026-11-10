@@ -10,8 +10,9 @@ case derived from kbf's rules at the tag, where a rule this coordinator cut deci
 answer and kbf's beside it, or, in `25` and `27`, where a rule this coordinator holds as kbf did
 decided, with the answer both give; one step of `17`, whose list of nine feature names kbf's
 bound of 8 dropped and this coordinator's bound of 16 reads, keeps kbf's answer beside this
-coordinator's; and steps of `10` and `23`, where this coordinator's update plan decided, keep
-kbf's answers beside this coordinator's.
+coordinator's; steps of `23`, where this coordinator's update plan decided, keep
+kbf's answers beside this coordinator's; and the steps of every sequence in which kbf's
+coordinator ordered a host an update over the JSON route, which carries no order any more (below).
 
 ## Services and flags
 
@@ -100,22 +101,47 @@ Sequences `03` to `07` were transcribed from kbf goldens that asked each host wi
 order; the rules this coordinator cut (the order of roles, the `never_last` floor) showed there.
 A recorded sequence goes through the coordinator, which notes each order, and the host asked
 after the first order is held, in kbf by the one live update (`no_slot`) and here by the first
-stage of the service's update plan, which holds one host, so every answer of `03` to `07` is the
-same in kbf and here; the reason here is the plan's.
+stage of the service's update plan, which holds one host.
+
+### The JSON route carries no order
+
+A version CI sets over `POST /v1/desired` with a package digest, a release index or neither is no
+release kept (docs/design/packages-native.md, section 10.7): the coordinator picks no host an
+entry of it, so it orders nothing, whatever route a heartbeat comes by, and the status says
+`no_build_for_host` of each host. The JSON route never carried a typed order, and an update on it
+was one of the orders of such a version; it carries none now. So a heartbeat of a host behind
+the desired version is answered `nothing` where kbf's coordinator answered `update`, and
+what follows from that: a convergence that is `in_progress`, a host that holds no slot, a
+status with no `hold` for a host that was ordered. Every step of the sequences below that
+differs for this reason is recorded as this coordinator answers it, with kbf's answer in
+`kbf_status`, `kbf_body` or `kbf_contains`; no step is changed that does not differ: `01`, `02`, `03` to `08`,
+`11` to `16`, `18` to `22` and `28`; the steps of `23` that held the marks of an automatic rollback
+(`last_good`, `bad`, the audit of `mark_bad`) hold their absence, as no host is ordered the
+version that fails. The update plans, the slots, the bake,
+the canary, the deferral and the rollback they show are held by the tests of the decision
+(`src/decide_tests.rs`, `src/stages_tests.rs`, `src/bake_canary_tests.rs`, `src/defer_tests.rs`,
+`src/rollback_tests.rs` and the tests that follow them), which have the hosts picked an entry of
+a release set with targets.
 
 | sequence | the cut rule | kbf: answer and reason | here: answer and reason |
 |---|---|---|---|
-| `24-cut-never-last-does-not-delay-an-order` | the `never_last` floor of one | `nothing`, `min_up` (no other frontend up) | `update 2.0`, no reason (nothing holds it) |
-| `26-cut-role-order-does-not-delay-an-order` | a role's `after` (a frontend waits for storage) | `nothing`, `waiting_for_role` (storage host `s1` behind and live) | `update 2.0` |
+| `24-cut-never-last-does-not-delay-an-order` | the `never_last` floor of one | `nothing`, `min_up` (no other frontend up) | `nothing`: the JSON route carries no order, so the cut is not seen here (below) |
+| `26-cut-role-order-does-not-delay-an-order` | a role's `after` (a frontend waits for storage) | `nothing`, `waiting_for_role` (storage host `s1` behind and live) | `nothing`: as `24` |
 | `28-cut-convergence-does-not-need-min-up` | the convergence minimum | `in_progress` (0 of the 1 storage host required up) | `converged` |
-| `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `update` of `second` |
+| `29-cut-service-order-does-not-delay-an-order` | a service's `after` | `nothing`, `waiting_for_service` (a host of `first`, which `second` came after, was behind and live) | `nothing`: as `24` |
 | `30-cut-require-min-up-does-not-refuse-a-body` | `require_min_up` | 400 `bad_request` (`min_up lacks storage`) | 200 and the echo of the state, with `min_up` written `{"storage":0,"frontend":0}` |
 | `17-features-a-bad-announcement-is-dropped`, step 5 | the bound of 8 feature names, raised to 16 | `nothing` with no `features` (the list of nine is dropped) | `nothing` and `features: []` (nine names read, none supported) |
-| `10-halt-generations-of-two-services`, steps 6 and 9 | the update plan, which audits the stage it enters | the clears numbered 5 and 7 | the clears numbered 6 and 8: this coordinator's update plan for kbf enters its second stage at step 4 (`rollout_advance`, by the coordinator), an audit entry kbf never wrote |
 | `23-automatic-rollback-marks-the-version-bad`, step 10 | the update plan: a failed host of a stage holds the next | `update 2.0`, no reason (the one live update was free once `d1` beat healthy) | `nothing`, `stage_failed` (`d1`, the first stage's host, failed below the threshold) |
 
-`kbf_status` and `kbf_body` of a step keep kbf's answer; the replay never compares them.
-`tests/replay.rs` lists these eight in `CHANGED` and `check_changed_list` fails when a sequence
+`24`, `26` and `29` answer `nothing` in kbf and here, so no step keeps kbf's answer and they are not
+in `CHANGED`: the rules they derive from are held by `src/decide_tests.rs` and the tests that follow
+it, with the hosts picked an entry of a release. `10` is kbf's bytes again: the clears are numbered
+as kbf numbered them, since the update plan enters no second stage of a version no host is picked an
+entry of.
+
+`kbf_status`, `kbf_body` and `kbf_contains` (the fragments of a status that kbf's answer held and
+this one does not, which `expect_not_contains` holds as absent) of a step keep kbf's answer; the
+replay never compares them. `tests/replay.rs` lists them in `CHANGED` and `check_changed_list` fails when a sequence
 keeps kbf's answer and is not listed, or is listed and keeps none, or keeps an answer equal to
 this coordinator's.
 

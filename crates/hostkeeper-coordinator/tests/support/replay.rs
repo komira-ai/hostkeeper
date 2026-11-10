@@ -19,7 +19,8 @@
 //! is compared.
 //!
 //! A step may keep what kbf's coordinator answered where a rule this coordinator cut decided the
-//! answer: `kbf_status` and `kbf_body`. They are never compared with an answer; they document
+//! answer: `kbf_status`, `kbf_body` and, for the fragments of a status that this coordinator's
+//! does not hold, `kbf_contains`. They are never compared with an answer; they document
 //! the difference, and `check_changed_list` holds the sequences that keep them to the list in
 //! `tests/replay.rs`.
 
@@ -101,6 +102,10 @@ pub struct Step {
     /// What kbf's coordinator answered (body), where it differs. Documentation: never compared.
     #[serde(default)]
     pub kbf_body: Option<String>,
+    /// The fragments of kbf's answer that this coordinator's answer does not hold (they are in
+    /// `expect_not_contains`). Documentation: never compared.
+    #[serde(default)]
+    pub kbf_contains: Vec<String>,
 }
 
 impl Sequence {
@@ -235,9 +240,9 @@ async fn replay_on(mut rig: Rig, sequence: &Sequence, name: &str) -> Result<(), 
 }
 
 /// Whether the list `changed` agrees with what the sequences keep of kbf's answers: every name is
-/// a recorded sequence; a listed sequence has a step that keeps kbf's answer (`kbf_status` or
-/// `kbf_body`) and each answer kept differs from this coordinator's; an unlisted sequence keeps
-/// none. `Err` says every disagreement, one per line.
+/// a recorded sequence; a listed sequence has a step that keeps kbf's answer (`kbf_status`,
+/// `kbf_body` or `kbf_contains`) and each answer kept differs from this coordinator's; an
+/// unlisted sequence keeps none. `Err` says every disagreement, one per line.
 pub fn check_changed_list(
     changed: &[&str],
     sequences: &[(String, Sequence)],
@@ -255,12 +260,16 @@ pub fn check_changed_list(
             .steps
             .iter()
             .enumerate()
-            .filter(|(_, step)| step.kbf_status.is_some() || step.kbf_body.is_some())
+            .filter(|(_, step)| {
+                step.kbf_status.is_some()
+                    || step.kbf_body.is_some()
+                    || !step.kbf_contains.is_empty()
+            })
             .collect();
         let listed = changed.contains(&stem.as_str());
         if listed && kept.is_empty() {
             problems.push(format!(
-                "{stem} is in CHANGED but no step keeps kbf's answer (kbf_status or kbf_body)"
+                "{stem} is in CHANGED but no step keeps kbf's answer (kbf_status, kbf_body or kbf_contains)"
             ));
         }
         if !listed && !kept.is_empty() {

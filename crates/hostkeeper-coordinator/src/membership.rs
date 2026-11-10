@@ -256,10 +256,8 @@ pub fn members(
             // A host a selector selects is missing whether or not it could be ordered now.
             let installable = def.selector.is_some()
                 || (!fleet.is_held(&def.name, id)
-                    && desired.is_some_and(|d| {
-                        crate::picks::picked(fleet, &def.name, &d.version, id)
-                            .unwrap_or_else(|| d.package_for(node.platform).is_some())
-                    }));
+                    && desired
+                        .is_some_and(|d| crate::picks::picked(fleet, &def.name, &d.version, id)));
             let key = id.to_string();
             let reason = ops
                 .excluded

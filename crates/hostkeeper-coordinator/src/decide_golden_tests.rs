@@ -20,13 +20,12 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{Heartbeat, Outcome, Reply};
 
-use crate::decide::decide_in;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::Services;
 use crate::testutil::{
-    KBF_ENTRY, LEGACY, beat, desired, fleet, id, kbf_services, last, role, secs, unhealthy,
-    updating,
+    KBF_ENTRY, LEGACY, beat, decide_in, desired, fleet, id, kbf_services, last, role, secs,
+    unhealthy, updating,
 };
 
 const NOW: Duration = Duration::from_secs(1_000);

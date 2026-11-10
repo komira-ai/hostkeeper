@@ -7,12 +7,13 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{Outcome, Reply};
 
-use crate::decide::{Decision, Gate, Skip, Why, decide_in, decide_why};
+use crate::decide::{Decision, Gate, Skip, Why};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::services::Services;
 use crate::testutil::{
-    KBF_ENTRY, LEGACY, beat, desired, fleet, id, kbf_services, last, role, secs, updating, version,
+    KBF_ENTRY, LEGACY, beat, decide_in, decide_why, desired, fleet, id, kbf_services, last, role,
+    secs, updating, version,
 };
 
 const NOW: Duration = Duration::from_secs(1_000);

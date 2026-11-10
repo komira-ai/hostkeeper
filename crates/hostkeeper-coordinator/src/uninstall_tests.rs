@@ -20,8 +20,8 @@ use crate::assignment::{Entry, ServiceAssignments};
 use crate::decide::{Gate, Skip, Why};
 use crate::install_tests::{ONE_STAGE, set_one_slot};
 use crate::marks_support::{
-    DB, NEW_DAEMON, WEB, ask_typed, beat_of, hold, operator, restart, rig, runs, scope_host, set,
-    start, unhold, update,
+    DB, INSTALLER, NEW_DAEMON, WEB, ask_json, ask_typed, beat_of, hold, operator, restart, rig,
+    runs, scope_host, set, start, unhold, update,
 };
 use crate::ops::OpsState;
 use crate::orders::Order;
@@ -82,7 +82,8 @@ async fn removing_a_role_assignment_without_uninstall_leaves_the_service_alone()
 
 /// Catches: an uninstall intent computed per role instead of per host: of two daemons that run
 /// `web`, the one assigned it by its own entry keeps it and is told nothing; the other, and only
-/// it, is ordered to uninstall; a daemon that does not run it is ordered nothing.
+/// it, is ordered to uninstall, and over typed orders alone: the JSON route says nothing of it and
+/// leaves the intent; a daemon that does not run it is ordered nothing.
 #[tokio::test]
 async fn unassign_with_uninstall_orders_uninstall_only_on_hosts_that_stop_being_assigned() {
     let rig = rig("uninstall-per-host", "");
@@ -99,6 +100,16 @@ async fn unassign_with_uninstall_orders_uninstall_only_on_hosts_that_stop_being_
     assert_eq!(intents(&rig, WEB), ["d1"]);
     assert_eq!(order_to(&rig, "d2", vec![runs(WEB, "1.0")]), None);
     assert_eq!(order_to(&rig, "d3", vec![]), None);
+    assert_eq!(
+        ask_json(
+            &rig,
+            "d1",
+            "daemon",
+            beat_of(INSTALLER, vec![runs(WEB, "1.0")])
+        ),
+        ServiceReply::Nothing
+    );
+    assert_eq!(intents(&rig, WEB), ["d1"]);
     let order = order_to(&rig, "d1", vec![runs(WEB, "1.0")]);
     assert_eq!(order, Some(uninstall_order(WEB, "uninstall-1", 1)));
     assert_eq!(

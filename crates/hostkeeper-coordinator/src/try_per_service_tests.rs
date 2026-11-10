@@ -11,11 +11,12 @@ use hostkeeper_wire::wire::{
 
 use crate::assign_support::{order_to, unassign, uninstall_order};
 use crate::marks_support::{
-    INSTALLER, WEB, ask_typed, beat_of, digest, fleet_target, force_request, operator, restart,
-    rig, runs, set,
+    INSTALLER, WEB, ask_typed, beat_of, digest, fleet_target, force_request, native_target,
+    operator, restart, rig, runs, set,
 };
 use crate::order_terms::order_id_text;
 use crate::orders::{Order, install_order_id};
+use crate::picks::TARGET_FEATURE;
 use crate::registry::Digest;
 use crate::testutil::{Rig, version};
 
@@ -28,6 +29,7 @@ const DAEMON: &[&str] = &[
     "abort-v1",
     "install-v1",
     ORDER_FEATURE,
+    TARGET_FEATURE,
 ];
 
 /// `web` as a host reports it: it runs `running`, healthy, and the last verdict it reports ended
@@ -49,7 +51,7 @@ fn install_id(n: u8) -> String {
 /// The update of `web` to `to`, whose package is [`digest`] `n`, at try `order_try`.
 fn update_order(to: &str, n: u8, order_try: u64) -> Order {
     Order::Update {
-        target: None,
+        target: Some(native_target(WEB, n)),
         service: WEB.to_owned(),
         version: version(to),
         digest: hostkeeper_wire::wire::PackageDigest::parse(&digest(n)).expect("a digest"),

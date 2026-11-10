@@ -1483,7 +1483,6 @@ dependencies = [
  "prost-types",
  "rcgen",
  "rustls",
- "rustls-native-certs",
  "saphyr-parser",
  "serde",
  "serde_json",

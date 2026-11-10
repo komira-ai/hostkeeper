@@ -32,28 +32,13 @@ pub(crate) enum ReleaseError {
 }
 
 /// The release a set of `service` whose state is `desired` names with `targets`, judged by
-/// [`releases::checked`] with the release index of `body`, when it has one: `desired` holds its
-/// record, checked already, and `body` its text.
-fn release_of(
-    body: &[u8],
-    service: &str,
-    desired: &Desired,
-    targets: Targets,
-) -> Result<Release, SetError> {
-    let text = serde_json::from_slice::<serde_json::Value>(body)
-        .ok()
-        .and_then(|body| body.get("release_index")?.as_str().map(str::to_owned));
-    let index = desired
-        .release_index
-        .as_ref()
-        .zip(text.as_deref())
-        .map(|(record, text)| (text, &record.digest));
+/// [`releases::checked`] with the digest of the release index `desired` holds, if it has one.
+fn release_of(service: &str, desired: &Desired, targets: Targets) -> Result<Release, SetError> {
     releases::checked(
         service,
-        &desired.version,
         targets,
         desired.release_digest.is_some(),
-        index,
+        desired.release_index.as_ref().map(|record| &record.digest),
     )
 }
 
@@ -84,9 +69,8 @@ impl Coordinator {
 
     /// Sets the desired state from `body` for `setter`. CI's set is [`Self::set_desired_verified`];
     /// an operator's is the same with no allow-list (the operator may set any service the
-    /// coordinator manages), with the same refusals in the same order (the release channel's
-    /// among them), and nothing changes when one is made. Parse, admit the service, ask the
-    /// release channel (with `--release-channel`), then under the fleet's lock refuse, audit (an
+    /// coordinator manages), with the same refusals in the same order, and nothing changes when
+    /// one is made. Parse, admit the service, then under the fleet's lock refuse, audit (an
     /// operator's), record, and end a force and lift a halt. Before an operator's state is
     /// recorded, one audit entry `set_desired` by the operator is written (the service, and as its
     /// reason the version, followed by `with package digest <digest>` when the body named one, or
@@ -120,10 +104,9 @@ impl Coordinator {
     /// [`Self::set_desired_by`] with the release `targets` of the version, when the set has
     /// them (docs/design/packages.md, sections 3.4 to 3.6). After the body is read, the targets
     /// are judged ([`releases::checked`]: `index_invalid` beside a package digest,
-    /// `target_invalid`, then `index_invalid` for an index that disagrees with them), and the
-    /// state is stored with neither a package digest nor an index, the release kept beside it
-    /// with the index's digest. With `--release-channel` the channel is asked only for a set
-    /// with an index. Under the fleet's lock, after the refusals of the state, a version set
+    /// `target_invalid`), and the state is stored with neither a package digest nor an index, the
+    /// release kept beside it with the digest of the index set with it, whose text is not read.
+    /// Under the fleet's lock, after the refusals of the state, a version set
     /// before as another release is refused (`release_exists`, [`Self::refuse_release`]); then
     /// the precondition of `ask`; then one audit entry `set_desired` by the setter, CI's as
     /// `ci`, whose reason is [`releases::audit_reason`]; then the state and the release are
@@ -143,13 +126,12 @@ impl Coordinator {
         }
         let (service, mut desired, dropped_roles) =
             Desired::parse_request_noting(body, &self.services, self.legacy.as_deref())?;
-        // The state as the set named its release, which the channel is asked about and which a
-        // set without targets is refused by.
+        // The state as the set named its release, which a set without targets is refused by.
         let named = desired.clone();
         let release = match targets {
             None => None,
             Some(targets) => {
-                let release = Arc::new(release_of(body, &service, &desired, targets)?);
+                let release = Arc::new(release_of(&service, &desired, targets)?);
                 desired.set_release(None);
                 Some(release)
             }
@@ -168,13 +150,6 @@ impl Coordinator {
                 );
                 return Err(SetError::Forbidden);
             }
-        }
-        // The release channel before the fleet's lock, which is never held across a wait on the
-        // network; a refusal here changes nothing.
-        if let Some(channel) = &self.channel
-            && (release.is_none() || named.release_index.is_some())
-        {
-            channel.check(&service, &named).await?;
         }
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),

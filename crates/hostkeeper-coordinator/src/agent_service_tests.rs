@@ -15,17 +15,18 @@ use crate::agent_service::{own_beat, runs_itself};
 use crate::assign_support::why_of;
 use crate::decide::{Skip, Why};
 use crate::fleet::ORDER_AGE;
-use crate::marks_support::{ask_typed, digest, who};
+use crate::marks_support::{ask_typed, digest, native_target, who};
 use crate::orders::{Order, install_order_id};
 use crate::registry::Digest;
 use crate::service::Coordinator;
 use crate::services::Services;
-use crate::testutil::{OPERATOR, Rig, beat, ci_token, id, version};
+use crate::testutil::{OPERATOR, Rig, beat, id, version};
 
 const HK: &str = "hostkeeper";
 const WEB: &str = "web";
 
-/// What a 0.1.83 and a 0.1.92 daemon announce, in their order.
+/// What a 0.1.83 and a 0.1.92 daemon announce, in their order, and `target-v1` of a daemon of this
+/// release.
 const DEPLOYED: &[&str] = &[
     "deferred-v1",
     "halt-v1",
@@ -36,6 +37,7 @@ const DEPLOYED: &[&str] = &[
     "grpc-v1",
     "install-v1",
     "abort-v1",
+    "target-v1",
 ];
 
 /// hostkeeper and web on the role `daemon`, with `selector` lines under hostkeeper's entry.
@@ -68,10 +70,7 @@ async fn set(rig: &Rig, service: &str, to: &str) {
         r#"{{"service":"{service}","version":"{to}","release_digest":"{}"}}"#,
         digest(7)
     );
-    rig.coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
-        .await
-        .expect("set");
+    rig.set(&body).await;
 }
 
 fn agent(running: &str) -> Agent {
@@ -125,7 +124,7 @@ fn counted_at(rig: &Rig, service: &str, host: &str) -> Option<String> {
 fn install(service: &str, to: &str, order_try: u64) -> Order {
     let digest = Digest::parse(&digest(7)).expect("a digest");
     Order::Install {
-        target: None,
+        target: Some(native_target(service, 7)),
         service: service.to_owned(),
         version: version(to),
         order_id: install_order_id(&digest),
@@ -210,7 +209,7 @@ async fn an_agent_that_installed_its_release_without_running_it_waits_for_the_ne
     set(&rig, HK, "0.3.0").await;
     let answer = rig
         .coordinator
-        .heartbeat_with_orders(
+        .heartbeat_with_orders_native(
             who("d1", "daemon"),
             installed(),
             crate::trusted_root::TrustedRootSaid::default(),
@@ -225,6 +224,37 @@ async fn an_agent_that_installed_its_release_without_running_it_waits_for_the_ne
         }
     );
     assert_eq!(answer.order_try, Some(2));
+}
+
+/// Catches an old daemon taken for one that installed its release when its last verdict is of
+/// another release or is no success: a daemon whose agent runs 0.1.83 and lists hostkeeper at
+/// 0.2.0 after a verdict of 0.1.9, succeeded or failed, is still ordered the update to 0.2.0.
+#[tokio::test]
+async fn a_verdict_of_another_release_or_no_success_does_not_hold_an_old_daemon() {
+    for (name, outcome) in [
+        ("agent-verdict-other-succeeded", Outcome::Succeeded),
+        ("agent-verdict-other-failed", Outcome::Failed),
+    ] {
+        let rig = rig(name, "");
+        set(&rig, HK, "0.2.0").await;
+        let (reply, _) = ask_typed(
+            &rig,
+            "d1",
+            "daemon",
+            daemon(
+                "0.1.83",
+                vec![entry(HK, "0.2.0", Some(verdict("0.1.9", outcome, 1)))],
+            ),
+        );
+        assert_eq!(
+            reply,
+            ServiceReply::Update {
+                service: Some(HK.to_owned()),
+                version: version("0.2.0"),
+            },
+            "{name}"
+        );
+    }
 }
 
 /// Catches a host counted at the version of the package its daemon lists instead of the binary

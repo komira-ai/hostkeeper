@@ -449,18 +449,19 @@ async fn a_package_digest_beside_targets_is_refused_index_invalid() {
     .await;
 }
 
-/// Proves that an index that does not list exactly the archive entries of the targets is
-/// refused `index_invalid`: one digest that differs, one size that differs, a platform the
-/// targets lack, and a platform the index lacks; and that an index whose digest is not the
-/// SHA-256 of its text is refused `index_digest_mismatch`, as a set without targets is. Each
-/// refusal changes no file.
+/// Proves that the text of a release index set beside targets is not read: an index that does not
+/// list the archive entries of the targets (one digest that differs, one size that differs, a
+/// platform the targets lack, a platform the index lacks, another service's, and a text that is no
+/// index at all) is accepted and kept as its digest, as an index that lists them is; and an index
+/// whose digest is not the SHA-256 of its text is refused `index_digest_mismatch`, as a set
+/// without targets is, with no file changed.
 ///
-/// Catches: an index compared by platform names only, or by the first entry of a list.
+/// Catches: an index parsed or compared with the targets, which would refuse a set the release
+/// job no longer has an index for, and a digest taken without being held to its text.
 #[tokio::test]
-async fn an_index_that_disagrees_with_the_targets_is_refused() {
-    let rig = rig_with_web("targets-index-refused").await;
+async fn an_index_beside_the_targets_is_kept_as_its_digest_whatever_its_text() {
+    let rig = rig_with_web("targets-index-kept").await;
     let all = self_targets(&SELF_THREE);
-    let base = request("hostkeeper", all.clone());
     let index = |packages: &[(&str, char, u64)]| index_text("hostkeeper", packages);
     let two = [SELF_THREE[0], SELF_THREE[1]];
     let mut other_digest = SELF_THREE;
@@ -475,37 +476,35 @@ async fn an_index_that_disagrees_with_the_targets_is_refused() {
             "an index of another service",
             index_text("web", &SELF_THREE),
         ),
+        ("an index that is no index", "{}".to_owned()),
+        ("the index that agrees", index(&SELF_THREE)),
     ];
-    for (why, text) in rows {
-        let index_invalid = (INVALID_ARGUMENT, "index_invalid");
-        refused(&rig, &with_index(base.clone(), &text), index_invalid, why).await;
+    for (n, (why, text)) in rows.iter().enumerate() {
+        let version = format!("2.{n}");
+        let asked = with_index(set("hostkeeper", &version, all.clone()), text);
+        let answered = grpc(&rig, SET_DESIRED, Some(&ci_token()), &asked).await;
+        assert_eq!(answered.code, 0, "{why}: {answered:?}");
+        let read = get(&rig, "hostkeeper", &version).await;
+        assert_eq!(read.code, 0, "{why}: {read:?}");
+        let kept: proto::GetReleaseResponse = read.decoded();
+        assert_eq!(kept.release_index_digest, Some(sha256_of(text)), "{why}");
     }
-    // A platform the targets lack.
-    let fewer = request("hostkeeper", self_targets(&two));
-    let text = index(&SELF_THREE);
-    refused(
-        &rig,
-        &with_index(fewer, &text),
-        (INVALID_ARGUMENT, "index_invalid"),
-        "a platform the targets lack",
-    )
-    .await;
+    // The targets lack a platform the index lists: kept all the same.
+    let fewer = with_index(
+        set("hostkeeper", "3.0", self_targets(&two)),
+        &index(&SELF_THREE),
+    );
+    let answered = grpc(&rig, SET_DESIRED, Some(&ci_token()), &fewer).await;
+    assert_eq!(answered.code, 0, "{answered:?}");
+
     // The digest of another text.
-    let mut wrong = with_index(base.clone(), &index(&SELF_THREE));
+    let mut wrong = with_index(set("hostkeeper", "4.0", all), &index(&SELF_THREE));
     wrong.release_index_digest = Some(digest('0'));
     refused(
         &rig,
         &wrong,
         (INVALID_ARGUMENT, "index_digest_mismatch"),
         "a wrong digest",
-    )
-    .await;
-    // Not an index at all.
-    refused(
-        &rig,
-        &with_index(base, "{}"),
-        (INVALID_ARGUMENT, "index_invalid"),
-        "an index that is no index",
     )
     .await;
 }

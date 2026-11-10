@@ -1,6 +1,7 @@
 //! A set of the desired state over a release index: what the coordinator refuses and leaves
-//! unchanged, what it keeps of an index that passed, how the state file holds it and reads the
-//! files of the release before, and the conflict of a second release for a version.
+//! unchanged, what it keeps of an index that passed (its digest alone: the text is not read),
+//! how the state file holds it and reads the files of the release before, and the conflict of a
+//! second release for a version.
 
 use std::fs;
 
@@ -9,9 +10,9 @@ use serde_json::{Value, json};
 
 use crate::desired::{Desired, DesiredError, DesiredStore, Recorded, StoreError};
 use crate::http::{DESIRED_PATH, Surface, handle};
-use crate::marks_support::{WEB, digest, ops_bytes, rig, set};
+use crate::index_set_support::{ALL, index_body, index_text, set_index, sha, try_set};
+use crate::marks_support::{WEB, digest, ops_bytes, rig};
 use crate::registry::{IndexKey, IndexRecord, Registry, RegistryError, Release, index_platform};
-use crate::release_index_support::{ALL, index_body, index_text, set_index, sha, try_set};
 use crate::service::SetError;
 use crate::testutil::{LEGACY, Rig, ci_token, version};
 
@@ -65,8 +66,6 @@ fn refused_bodies() -> Vec<(&'static str, Value, &'static str)> {
         body
     };
     let tampered = text.replace(&digest(1), &digest(9));
-    let other_service = index_text("db", "2.0", &ALL);
-    let other_version = index_text(WEB, "3.0", &ALL);
     vec![
         (
             "the index without its digest",
@@ -118,30 +117,6 @@ fn refused_bodies() -> Vec<(&'static str, Value, &'static str)> {
             with(&|b| b["release_index"] = json!(&text[..text.len() - 1])),
             "index_digest_mismatch",
         ),
-        (
-            "the index of another service",
-            with(&|b| {
-                b["release_index"] = json!(other_service);
-                b["release_index_digest"] = json!(sha(&other_service));
-            }),
-            "index_invalid",
-        ),
-        (
-            "the index of another version",
-            with(&|b| {
-                b["release_index"] = json!(other_version);
-                b["release_index_digest"] = json!(sha(&other_version));
-            }),
-            "index_invalid",
-        ),
-        (
-            "text that is no index",
-            with(&|b| {
-                b["release_index"] = json!("not an index");
-                b["release_index_digest"] = json!(sha("not an index"));
-            }),
-            "index_invalid",
-        ),
     ]
 }
 
@@ -150,11 +125,11 @@ fn refused_bodies() -> Vec<(&'static str, Value, &'static str)> {
 /// byte for byte what they were.
 ///
 /// Catches: a tampered index stored, a refusal answered with another token or status, a pair of
-/// keys taken half, an index of another service or version taken, and a refused set that writes.
+/// keys taken half, and a refused set that writes.
 #[tokio::test]
 async fn a_set_over_an_index_it_cannot_take_is_refused_and_changes_nothing() {
     let rig = rig("index-refusals", "");
-    set(&rig, WEB, "1.0", 1).await;
+    set_digest(&rig, WEB, "1.0", 1).await;
     let before = files(&rig);
     for (what, body, token) in refused_bodies() {
         let refused = try_set(&rig, &body).await.expect_err(what);
@@ -170,26 +145,18 @@ async fn a_set_over_an_index_it_cannot_take_is_refused_and_changes_nothing() {
     }
 }
 
-/// An index that passed leaves the coordinator the digest of the index and the package digest of
-/// each platform it lists, in the desired state and in the registry, in the one state file, and
-/// not the index's text; a store opened over the file reads the same, and a version set with one
-/// package digest beside it keeps its row as the string it always was.
+/// An index that passed leaves the coordinator the digest of the index and no package, in the
+/// desired state and in the registry, in the one state file, and not the index's text; a store
+/// opened over the file reads the same, and a version registered before keeps its row as it was.
 ///
-/// Catches: the index's bytes kept, a platform spelled the wire's way (`darwin-arm64`) in the
-/// file, a record that does not survive a restart, and a row of the registry rewritten.
+/// Catches: the index's bytes kept, a package read out of text the coordinator does not parse, a
+/// record that does not survive a restart, and a row of the registry rewritten.
 #[tokio::test]
-async fn an_index_is_kept_as_its_digest_and_the_package_digest_of_each_platform() {
+async fn an_index_is_kept_as_its_digest_alone() {
     let rig = rig("index-kept", "");
-    set(&rig, WEB, "1.0", 1).await;
+    set_digest(&rig, WEB, "1.0", 1).await;
     let index = set_index(&rig, WEB, "2.0", &ALL).await;
-    let record = json!({
-        "digest": index,
-        "packages": {
-            "linux-arm64": digest(2),
-            "linux-x86_64": digest(1),
-            "macos-arm64": digest(3),
-        }
-    });
+    let record = json!({"digest": index, "packages": {}});
     let file = state_file(&rig);
     let entry = &file["services"][WEB];
     assert_eq!(entry["version"], "2.0");
@@ -198,10 +165,7 @@ async fn an_index_is_kept_as_its_digest_and_the_package_digest_of_each_platform(
     assert_eq!(entry["digests"]["2.0"], record);
     assert_eq!(entry["digests"]["1.0"], json!(digest(1)));
     let text = String::from_utf8(files(&rig).0).expect("UTF-8");
-    assert!(
-        !text.contains("schema") && !text.contains("darwin"),
-        "{text}"
-    );
+    assert!(!text.contains("schema"), "{text}");
 
     let store = DesiredStore::open(&rig.dir.path().join("desired.json"), Some(LEGACY))
         .expect("the state file");
@@ -237,8 +201,7 @@ fn the_state_file_of_the_release_before_is_read_and_a_record_beside_it_is_kept()
     let store = DesiredStore::open(&path, Some(LEGACY)).expect("the old file is read");
     let mut next: Desired = store.get(LEGACY).expect("a state");
     next.version = version("2.0");
-    let text = index_text(LEGACY, "2.0", &ALL);
-    let record = record_of(&text);
+    let record = record_of(&index_text(LEGACY, "2.0", &ALL));
     next.set_release(Some(Release::Index(record.clone())));
     assert_eq!(
         store.record(LEGACY, next.clone(), |_| false).ok(),
@@ -279,18 +242,13 @@ fn the_state_file_of_the_release_before_is_read_and_a_record_beside_it_is_kept()
     }
 }
 
-/// The record of the index `text` of `kbf` at 2.0, made the way a set makes it, without a
-/// coordinator.
+/// The record of the index `text`, made the way a set makes it, without a coordinator: its digest
+/// alone.
 fn record_of(text: &str) -> IndexRecord {
-    crate::release_index::checked(
-        Some(&json!(text)),
-        Some(&json!(sha(text))),
-        false,
-        LEGACY,
-        &version("2.0"),
-    )
-    .expect("an index that passes")
-    .expect("a record")
+    IndexRecord {
+        digest: crate::registry::Digest::parse(&sha(text)).expect("a digest"),
+        packages: std::collections::BTreeMap::new(),
+    }
 }
 
 /// A version already set with a release is not set with another: a second index for it, a
@@ -307,7 +265,7 @@ async fn a_second_release_for_a_version_is_a_conflict() {
     set_index(&rig, WEB, "2.0", &ALL).await;
     assert_eq!(files(&rig), set_once, "the same index again writes nothing");
 
-    set(&rig, WEB, "3.0", 5).await;
+    set_digest(&rig, WEB, "3.0", 5).await;
     let before = files(&rig);
     let other = index_text(WEB, "2.0", &ALL[..2]);
     let three = index_text(WEB, "3.0", &ALL);
@@ -370,9 +328,9 @@ fn only_the_refusals_of_an_index_have_a_token() {
     );
 }
 
-/// The mapping of a host's platform to the index's spelling is one function, and the registry's
-/// key and release answer by it: the Mac is `macos-arm64` in the index and `darwin-arm64` on the
-/// wire.
+/// The mapping of a host's platform to the index's spelling is one function: the Mac is
+/// `macos-arm64` in a release's list and `darwin-arm64` on the wire. A record's keys read the
+/// index's spelling alone.
 ///
 /// Catches: the Mac looked up by the wire's spelling, or two platforms mapped to one.
 #[test]
@@ -389,18 +347,7 @@ fn the_wire_platforms_map_to_the_indexs_spelling() {
             ("darwin-arm64", "macos-arm64"),
         ]
     );
-    let record = record_of(&index_text(LEGACY, "2.0", &ALL[..2]));
-    assert!(record.package_for(Platform::DarwinArm64).is_none());
-    assert_eq!(
-        record
-            .package_for(Platform::LinuxArm64)
-            .map(|package| package.digest.to_string()),
-        Some(digest(2))
-    );
-    assert_eq!(
-        IndexKey::of(index_platform(Platform::DarwinArm64)),
-        serde_json::from_value(json!("macos-arm64")).expect("a key")
-    );
+    assert!(serde_json::from_value::<IndexKey>(json!("macos-arm64")).is_ok());
     assert!(serde_json::from_value::<IndexKey>(json!("darwin-arm64")).is_err());
     assert!(matches!(
         Registry::read(
@@ -408,4 +355,15 @@ fn the_wire_platforms_map_to_the_indexs_spelling() {
         ),
         Err(RegistryError::Malformed(_))
     ));
+}
+
+/// Sets `service` at `version` over the package digest [`digest`] `n`, as the JSON route carries
+/// it.
+async fn set_digest(rig: &Rig, service: &str, version: &str, n: u8) {
+    try_set(
+        rig,
+        &json!({"service": service, "version": version, "release_digest": digest(n)}),
+    )
+    .await
+    .expect("the set is accepted");
 }
