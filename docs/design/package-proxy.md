@@ -56,9 +56,18 @@ coordinator obtains and renews itself, coordinator-mdm.md 4.10).
 
 - **Why that listener.** apt, which trusts only public roots (above), and a freshly erased Mac, which trusts only public roots too, can
   both reach it with no new trust. The heartbeat and LAN listeners use the host CA and would need a second trust path on every host.
-- **What it costs.** The proxy does not exist until MDM setup has produced a certificate for the name (the status says *not configured*
-  until then). A deployment with Linux hosts and no Macs sets the name and the certificate up all the same; the cost is one setup step.
+- **What it costs, and what it does not.** The proxy needs a name and a public-CA certificate for it, and nothing else of MDM: no push
+  certificate, no ABM token. The setup's TLS step (coordinator-mdm.md 4.10, an uploaded certificate or the in-process ACME DNS-01 with the
+  GoDaddy credential) is separate from the push and ABM steps, and each route family is served when its own prerequisites are set: `/apt`
+  and `/pkg` when the name and certificate exist, `/enroll`, `/scep`, `/checkin` and `/mdm` when MDM is *configured*. So a Linux-only
+  farm sets the name and the certificate up and never uploads an Apple credential; the status shows the proxy line apart from the MDM line.
   The listener's flag keeps the name `--mdm-listen`, since it ships first for MDM and a name once shipped is a lock-in.
+- **The proxy is a choice per group, not a requirement.** The owner's direction is that hosts and Macs pull over the public internet and
+  the proxy is the LAN pass-through, so a host-group may keep the public URL (`packages.komira.ai`) in its repository entry and never touch
+  the proxy; pointing a group at the proxy is a per-group URL choice made where the repository entry is made. If a group is pointed at the
+  proxy and the coordinator is down, or its certificate has expired, those hosts' `apt update` fails until it is back or the group is
+  repointed. A deb822 stanza that lists two URIs is, as I read apt, two sources and not a fallback, so no second URI is written; the failure
+  mode is accepted and listed in section 5 (not verified, section 11 item 4).
 - **Admission.** No client certificate is asked. The routes serve public bytes (a public repository, a pkg whose digest the operator
   named), a wiped host before its first enrollment and a Mac before its identity are both admitted, and the listener is bound to the LAN
   interface address only. The guard against an open proxy is the route shape, not the caller: the origin is chosen by the repository
@@ -68,8 +77,14 @@ coordinator obtains and renews itself, coordinator-mdm.md 4.10).
 |---|---|---|
 | `GET /apt/<repo>/dists/<suite>/<rest>` | an index (`Release`, `InRelease`, `Packages*`, `Sources*`) | the repository's base URL, the same path |
 | `GET /apt/<repo>/pool/<rest>` | a package file | the same |
-| `GET /pkg/<sha256>.pkg` | the pkg whose digest an `installs` entry names | the entry's `url`, if it has one; else only the file in `--mdm-pkg-dir` |
+| `GET /pkg/<sha256>.pkg` | the pkg whose digest an `installs` entry **of the current manifest** names; any other digest is 404 with no origin request | the entry's `url`, if it has one; else only the file in `--mdm-pkg-dir` |
+| `HEAD` on the routes above | the headers of the same answer, no body, from the cache or one origin `HEAD` | as above |
 | anything else, or any method but `GET` and `HEAD` | 404 or 405 | none |
+
+apt sends conditional and range requests, so both are part of the routes and not left to chance. `If-None-Match` and `If-Modified-Since`
+are answered `304` from the cache's validator when it still matches, with no origin request inside the index TTL; `Range` on a cached file
+is served as `206` from the file, and on a miss a range request is passed through to the origin without being stored (a partial body is
+never committed), after which a full request fills the cache.
 
 `<repo>` must be a name in the registry (**Built**, `hostkeeper-coordinator/src/registry.rs`) marked public, with a base URL; the proxy's
 settings add the origin list (section 4). The path passes the locator grammar `repository_serve.rs` already uses
@@ -92,11 +107,13 @@ settings add the origin list (section 4). The path passes the locator grammar `r
   Leftover `tmp/` files are removed at start.
 - *Eviction* is least recently used when a commit would pass `proxy_cache_max_bytes` (default 20 GiB), deleting only committed objects.
   Every number here is a setting of the setup page with its default from the start (coordinator-mdm.md 4.9): `proxy_index_ttl_s`,
-  `proxy_cache_max_bytes`, `proxy_fetches` (concurrent origin fetches, default 8), `proxy_redirects` (default 3).
+  `proxy_cache_max_bytes`, `proxy_fetches` (concurrent origin fetches, default 8), `proxy_redirects` (default 3), `proxy_wait_s`.
 
 **One origin fetch per key.** A miss starts one fetch. The first asker gets the body streamed while it is written; a second asker for the
-same key (a rack of hosts running the same update) waits for the commit and reads the file, and if the fetch failed the next waiter
-starts its own. This is what turns fifty hosts into one pull over the uplink. Nothing is held whole in memory, and no size cap is put on
+same key (a rack of hosts running the same update) waits at most `proxy_wait_s` (default 10) for the commit and then reads the file; a
+waiter whose wait ends first is given a direct pass-through of its own, uncached, so one slow fill cannot stall fifty hosts for the whole
+fill, and if the fetch failed the next waiter starts its own. A direct pass-through counts against `proxy_fetches`. This is what turns
+fifty hosts into one pull over the uplink in the usual case and bounds the worst one. Nothing is held whole in memory, and no size cap is put on
 a file, the pattern of `repository_serve.rs`.
 
 **Redirects.** GitHub releases answer with a redirect to a storage host, and `repository_origin.rs` follows none, so the proxy's origin
@@ -125,6 +142,10 @@ is task PP5.
 | Case | Mechanism |
 |---|---|
 | A wiped host's first `apt update`, before any enrollment | the routes need no certificate; the name is public-CA, so apt trusts it |
+| The coordinator is down or the proxy's certificate has expired | `apt update` fails for the groups pointed at the proxy; groups on the public URL are unaffected; the operator repoints a group (one entry) or restores the coordinator; the certificate's expiry is alerted by 4.10 |
+| `apt` asks with `Range` or `If-Modified-Since`, or sends `HEAD` | served from the cache as `206`, `304` or headers only (section 3); a partial origin body is never stored |
+| One slow fill and fifty waiters | each waiter waits `proxy_wait_s` at most, then is passed through directly; the fill still commits |
+| An arbitrary digest asked of `/pkg/` | 404, and no origin request is made, since only digests of the current manifest's `installs` are fetched |
 | The origin serves a poisoned or truncated file | apt rejects a bad hash or signature; the daemon rejects a bad digest; the coordinator rejects a pkg whose digest differs from its path; a truncated body (length short) is not committed |
 | A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start |
 | Two coordinators on one cache directory | not supported: the proxy is part of the single-node MDM listener (coordinator-mdm.md 4.9); the directory is the coordinator's |
@@ -139,15 +160,27 @@ is task PP5.
 The repository side is done (section 2). What remains is on the farm, in the komira repository's held scripts, which are the owner's and
 are held scripts under S3 (dry-run default, never forcing):
 
-1. Make sure nothing reads the channel: every host runs a daemon that fetches from apt or the pkg route (stage 9 of packages-native.md has
-   converged on every host; check with `Hosts.List`).
-2. Stop the sync's timer, stop and remove the channel container, remove its tree and its certificate, and remove the held script that wrote
-   its configuration.
-3. Point every Mac's config profile and every group's repository entry at the proxy, and set `release_channel` as in section 4.
-4. Remove the stale statements: packages-native.md 10.5 and 10.7 still read as future, and `hostkeeper-design.md` still draws the release
-   channel in its components diagram (this change owns only the proxy docs; the others are task PP4).
+The order matters, because packages-native.md 10.5 and its stage table say the channel is needed until stage 9 has converged: a daemon
+before `target-v1` fetches its archive through it, an older binary requires `release_channel` after a fallback, and a rollback uses it.
 
-**Status: Designed.** Nothing here is evidenced as done; step 2 is the owner's.
+1. **Confirm stage 9's two counts are zero**, by the two `hkctl` queries of
+   [docs/operations/move-to-native.md](../operations/move-to-native.md) (stage 9): no registered host below the `target-v1` daemon, and no
+   host whose desired release still lists an archive entry. The repository's own reading of the daemon is only part of the evidence (the
+   loader reads `release_channel` and the daemon does not); the farm's configs and any older daemons are what the counts cover.
+2. **Point `release_channel` in every host config at the proxy's name.** This needs no new code (the loader still requires the key, so
+   PP5 is not a blocker) and no host reads it for anything else.
+3. **Repoint repositories and Mac profiles** to the proxy (per group, section 3), then check one `apt update` on a host and one pkg pull
+   by a Mac through the proxy before going on.
+4. **Stop the sync's timer first, and keep the channel container for one release**, then remove the container, its tree and its
+   certificate, and the held script that wrote its configuration.
+5. Remove the stale statements: packages-native.md 10.5 and 10.7 still read as future, and `hostkeeper-design.md` still draws the release
+   channel in its components diagram (task PP4).
+
+**Rollback.** Until step 4 is done: restart the container from its systemd unit, which is left installed (as the MDM design leaves Caddy's),
+and repoint the groups' entries and `release_channel` back. After step 4 the rollback is a redeploy from the held script, which is why the
+container waits one release.
+
+**Status: Designed.** Nothing here is evidenced as done; the steps are the owner's.
 
 ## 7. Compatibility (B8)
 
@@ -162,7 +195,10 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 - Fifty concurrent askers of one file cause one origin fetch; a failed fetch lets the next waiter fetch.
 - A pkg whose bytes differ from its path's digest is not stored and answers 502; an equal one is stored and a second request is a hit.
 - A request outside the route shape, a path with `..`, a repository not in the registry, a non-GET: each refused with its status and no
-  origin request.
+  origin request. An arbitrary digest asked of `/pkg/` is 404 with no origin request; a digest of the current manifest's `installs` is
+  fetched.
+- `Range`, `If-None-Match`, `If-Modified-Since` and `HEAD` are answered as in section 3; a range miss stores nothing.
+- Fifty askers with a fill that never finishes: each is passed through after `proxy_wait_s` on the fake clock.
 - A full cache evicts the least recently used committed object only; a disk write failure still streams the answer.
 - A redirect to http, or one past `proxy_redirects`, is refused.
 - Hermetic: no network, no fixed port, the cache directory is a scratch directory (T12).
@@ -176,7 +212,7 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 | PP3 | `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit | PP1, CM11c | S |
 | PP4 | Docs: the packages-native.md and hostkeeper-design.md statements about the channel | none | S |
 | PP5 | The loader no longer requires `release_channel` (additive read), then configs stop carrying it one release later | PP2 | S |
-| PP6 | Farm: retire the download server and repoint hosts and Macs (held scripts, the owner's) | PP2, PP3 | S |
+| PP6 | Farm: retire the download server and repoint hosts and Macs (held scripts, the owner's), in the order of section 6 | PP2, PP3, and stage 9's counts at zero (packages-native.md A24 converged) | S |
 
 ## 10. Open question
 
@@ -189,3 +225,6 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 2. That apt on the farm's hosts accepts the proxy's certificate with system roots alone (the farm's hosts have the public roots; confirm with
    one host before PP6).
 3. That a GitHub release asset's redirect chain stays within https and three hops.
+4. That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host before PP6.
+5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3); the
+   listener's route-family switch is read in CM11a.

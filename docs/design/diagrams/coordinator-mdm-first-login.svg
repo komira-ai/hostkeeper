@@ -16,7 +16,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="0" y="0" width="1200" height="650" fill="#FFFFFF"/>
 <text x="20" y="28" class="b" font-size="16" text-anchor="start">First login of the admin user</text>
 <rect x="30" y="44" width="270" height="46" rx="5" class="box-b"/>
-<text x="165" y="64" class="b" text-anchor="middle">Deploy script (held, root)</text>
+<text x="165" y="64" class="b" text-anchor="middle">Deploy script (held)</text>
 <text x="165" y="80" class="t-m" text-anchor="middle">coordinator_docker.sh</text>
 <path d="M165,92 L165,630" class="life"/>
 <rect x="320" y="44" width="270" height="46" rx="5" class="box-b"/>
@@ -29,24 +29,24 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <path d="M745,92 L745,630" class="life"/>
 <rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
 <text x="1035" y="64" class="b" text-anchor="middle">Store</text>
-<text x="1035" y="80" class="t-m" text-anchor="middle">users, sessions, api_tokens</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">users, api_tokens</text>
 <path d="M1035,92 L1035,630" class="life"/>
 <path d="M165,136 L455,136" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. write initial-admin (0400); print once</text>
+<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. write initial-admin.toml (0400, 1 h); print once</text>
 <path d="M455,178 L1035,178" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="745" y="172" class="t-m lbl" text-anchor="middle">2. read file at start or reload; hash; admin row, expires = issued + 1 h</text>
+<text x="745" y="172" class="t-m lbl" text-anchor="middle">2. read file at start or tick; hash; admin row, expires = valid_until</text>
 <path d="M745,220 L455,220" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="600" y="214" class="t-m lbl" text-anchor="middle">3. POST /v1/session: admin + password</text>
+<text x="600" y="214" class="t-m lbl" text-anchor="middle">3. POST /v1/login: admin + password</text>
 <path d="M455,262 L1035,262" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="745" y="256" class="t-m lbl" text-anchor="middle">4. row, expiry against the clock, attempt count; verify</text>
+<text x="745" y="256" class="t-m lbl" text-anchor="middle">4. row, valid_until against the clock, attempt count; verify</text>
 <path d="M455,304 L745,304" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
 <text x="600" y="298" class="t-m lbl" text-anchor="middle">5. Set-Cookie + CSRF token; must_change</text>
 <path d="M745,346 L455,346" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="600" y="340" class="t-m lbl" text-anchor="middle">6. ChangePassword (cookie + CSRF header)</text>
+<text x="600" y="340" class="t-m lbl" text-anchor="middle">6. POST /v1/password (cookie + CSRF header)</text>
 <path d="M455,388 L1035,388" class="ln" marker-end="url(#coordinator-mdm-first-login-ak)"/>
 <text x="745" y="382" class="t-m lbl" text-anchor="middle">7. new hash, must_change off, other sessions revoked</text>
 <path d="M455,430 L165,430" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
-<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. delete file; write admin-initialised</text>
+<text x="310" y="424" class="t-m lbl" text-anchor="middle">8. delete the file</text>
 <path d="M455,472 L745,472" class="ln-d" marker-end="url(#coordinator-mdm-first-login-ak)"/>
 <text x="600" y="466" class="t-m lbl" text-anchor="middle">9. fresh session; every call allowed</text>
 <rect x="190" y="516" width="720" height="25" rx="4" class="box-o"/>
