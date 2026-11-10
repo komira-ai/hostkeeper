@@ -87,8 +87,9 @@ through its entrypoint with `--version`, which must print the coordinator's stam
 
 The same two images are also in the registry, as one multi-platform image: the release workflow
 pushes the blobs and manifests of the two tarballs and the image index, byte for byte (`skopeo copy
---all --preserve-digests`), tagged `<version>`. Pull it by digest, the SHA-256 of the image index,
-which the release notes name:
+--all --preserve-digests`, through `cargo xtask release push-image`, which reads the image index
+back by its digest and tries a failed attempt again), tagged `<version>`. Pull it by digest, the
+SHA-256 of the image index, which the release notes name:
 
 ```sh
 docker pull ghcr.io/komira-ai/hostkeeper-coordinator@sha256:<digest>

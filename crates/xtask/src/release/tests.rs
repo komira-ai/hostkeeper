@@ -8,7 +8,7 @@ use super::*;
 use crate::release::fakes::{
     FakeHistory, FakeStore, FakeVerifier, Fakes, nth_commit, scratch, write_assets,
 };
-use crate::release::ports::{Release, Run, Said};
+use crate::release::ports::{Exec, Release, Run, Said};
 use crate::testdir::TestDir;
 
 const REPO: &str = contract::REPO;
@@ -873,6 +873,8 @@ fn a_plan_from_a_tip_whose_ci_is_pending_publishes_the_done_commits_oldest_first
             pkgbuild: &fakes.pkgbuild,
             advisories: &fakes.advisories,
             download: &fakes.download,
+            registry: &fakes.registry,
+            wait: &fakes.wait,
         };
         run_with(publish_verb(&dir, &ver, &commit), &ports).expect("publish");
         assert_eq!(fakes.store.all()[i + 1].commit, commit.to_string());
@@ -943,6 +945,14 @@ fn the_wired_adapters_route_each_port_to_its_program() {
     assert_eq!(
         ports.download.download(url, Path::new("d/a.zip")),
         Err(PortError::new(format!("curl {url}"), why("curl")))
+    );
+    let digest = format!("sha256:{}", "ab".repeat(32));
+    assert_eq!(
+        ports.registry.served("r", &digest),
+        Err(PortError::new(
+            format!("skopeo inspect --raw docker://r@{digest}"),
+            why("skopeo")
+        ))
     );
 }
 
