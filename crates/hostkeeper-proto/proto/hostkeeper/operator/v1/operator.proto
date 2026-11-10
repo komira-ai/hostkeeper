@@ -633,6 +633,15 @@ enum GateReason {
   // group is not installed on the host yet and can be, so the install waits and takes no place in
   // its plan (docs/design/hostgroups.md section 1.4).
   GATE_REASON_INSTALL_ORDER = 34;
+  // From a coordinator that holds host groups: the host was moved into its group and its move has
+  // not started or is not over. Until the new group's plans admit it for every package it must
+  // install or change, it is ordered nothing; once admitted, its installs and updates wait for its
+  // uninstalls (docs/design/hostgroups.md section 5).
+  GATE_REASON_MOVING = 35;
+  // From a coordinator that holds host groups: the uninstall of a package waits while a package
+  // whose uninstall goes before it, because the group listed it after this one, is still on the
+  // host, so a config package goes before its service (docs/design/hostgroups.md section 1.4).
+  GATE_REASON_UNINSTALL_ORDER = 36;
 }
 
 // Whether a service counts a host.

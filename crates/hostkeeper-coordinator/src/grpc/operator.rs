@@ -9,13 +9,13 @@
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
 //! method has a handler. The caller was settled before the request was read ([`super::admit`])
 //! and arrives in the request's extensions; a request without one is an anonymous caller, and is
-//! refused as such. The eight services here are adapters of the calls that do not decide by host
-//! group yet; `HostGroups` is in [`super::operator_host_groups`].
+//! refused as such. `HostGroups` is in [`super::operator_host_groups`].
 //!
-//! These calls place nothing by host group, so a request that names one in `host_group` is
-//! refused by its call's refusal that says so (`not_in_host_group` of `Releases` and `Rollouts`,
-//! `unknown_host_group` of `Enrollment`), never read as naming none, which would act on every
-//! host. `Audit.List` with a `host_group` filter lists no entry.
+//! `Enrollment.Approve` and `Enrollment.AddRecord` place nothing by host group yet, so a request
+//! that names one in `host_group` is refused `unknown_host_group`, never read as naming none. The
+//! other calls that take a `host_group` read it in their handlers: with no host group held a
+//! request that names one is refused (`not_in_host_group` of `Releases` and `Rollouts`) and
+//! `Audit.List` with a `host_group` filter lists no entry ([`crate::operator`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -554,9 +554,6 @@ impl ReleasesApi for ReleasesService {
         request: Request<proto::ForceRequest>,
     ) -> Result<Response<proto::ForceResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup));
-        }
         self.coordinator
             .force(&caller, request.into_inner())
             .map(Response::new)
@@ -827,21 +824,8 @@ impl AuditApi for AuditService {
         request: Request<proto::ListAuditRequest>,
     ) -> Result<Response<proto::ListAuditResponse>, Status> {
         let caller = caller_of(&request);
-        let message = request.into_inner();
-        let since_seq = message.since_seq;
-        let grouped = message.host_group.is_some();
         self.coordinator
-            .audit_list(&caller, message)
-            .map(|listed| {
-                if grouped {
-                    proto::ListAuditResponse {
-                        entries: Vec::new(),
-                        next_seq: since_seq,
-                    }
-                } else {
-                    listed
-                }
-            })
+            .audit_list(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::audit)
     }
@@ -918,9 +902,6 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::AdvanceRequest>,
     ) -> Result<Response<proto::AdvanceResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
-        }
         self.coordinator
             .rollout_advance(&caller, request.into_inner())
             .map(Response::new)
@@ -932,9 +913,6 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::PauseRequest>,
     ) -> Result<Response<proto::PauseResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
-        }
         self.coordinator
             .rollout_pause(&caller, request.into_inner())
             .map(Response::new)
@@ -946,9 +924,6 @@ impl RolloutsApi for RolloutsService {
         request: Request<proto::ResumeRequest>,
     ) -> Result<Response<proto::ResumeResponse>, Status> {
         let caller = caller_of(&request);
-        if names_group(&caller, &request.get_ref().host_group) {
-            return Err(refusal::rollouts(proto::RolloutsRefusal::NotInHostGroup));
-        }
         self.coordinator
             .rollout_resume(&caller, request.into_inner())
             .map(Response::new)

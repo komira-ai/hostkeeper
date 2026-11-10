@@ -595,6 +595,7 @@ impl Backend for Postgres {
             Val::Texts(filter.actions.iter().map(|a| (*a).to_owned()).collect()),
             Val::text_or_null(filter.service),
             Val::text_or_null(filter.node_id),
+            Val::text_or_null(filter.host_group),
             Val::Int(i64::try_from(query.limit.max(1)).unwrap_or(i64::MAX)),
         ];
         let order = if query.newest { "DESC" } else { "ASC" };
@@ -607,7 +608,8 @@ impl Backend for Postgres {
              AND (cardinality($4::text[]) = 0 OR action = ANY($4::text[])) \
              AND ($5::text IS NULL OR service = $5::text) \
              AND ($6::text IS NULL OR node_id = $6::text) \
-             ORDER BY seq {order} LIMIT $7"
+             AND ($7::text IS NULL OR host_group = $7::text) \
+             ORDER BY seq {order} LIMIT $8"
         );
         let newest = query.newest;
         let mut page = self

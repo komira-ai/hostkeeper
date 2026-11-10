@@ -71,8 +71,31 @@ impl Farm {
             .expect("a group put");
     }
 
-    /// The enrolled host `host`, moved into the group `group`.
+    /// The enrolled host `host`, placed in the group `group` with its move over: as a host
+    /// approved into the group is.
     pub(crate) fn host(&self, host: &str, group: &str) {
+        self.moving(host, group);
+        let enrolled = hostkeeper_enrollment::names::HostId::parse(host).expect("a host id");
+        self.world
+            .enrollment
+            .enrollment
+            .store()
+            .set_membership(
+                &enrolled,
+                hostkeeper_enrollment::enroll::Membership {
+                    host_group: group.to_owned(),
+                    moving_from: None,
+                },
+            )
+            .expect("the move ended");
+        self.world
+            .coordinator()
+            .lock_fleet()
+            .sync_move(&id(host), None, false);
+    }
+
+    /// The enrolled host `host`, moved into the group `group` and moving.
+    pub(crate) fn moving(&self, host: &str, group: &str) {
         self.world.enroll(host);
         self.world.move_to(host, group).expect("a host moved");
     }

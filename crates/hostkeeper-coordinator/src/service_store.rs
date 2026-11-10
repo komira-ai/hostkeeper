@@ -70,16 +70,21 @@ impl Coordinator {
 
     /// Refreshes the releases the picks of `fleet` read ([`crate::picks`]): those of every
     /// service's desired version, of every host group's desired versions and of every standing
-    /// force's version.
+    /// force's version, a group's included.
     pub(crate) fn keep_releases(&self, fleet: &mut Fleet) {
         let mut other: Vec<(String, Version)> = self.ops.read(|state| {
-            state
-                .services
-                .iter()
+            let own = state.services.iter().filter_map(|(name, marks)| {
+                Some((name.clone(), marks.force.as_ref()?.version.clone()))
+            });
+            let groups = state
+                .host_groups
+                .0
+                .values()
+                .flatten()
                 .filter_map(|(name, marks)| {
                     Some((name.clone(), marks.force.as_ref()?.version.clone()))
-                })
-                .collect()
+                });
+            own.chain(groups).collect()
         });
         other.extend(self.desired.group_versions());
         fleet.picks.keep(self.desired.releases_of(other));

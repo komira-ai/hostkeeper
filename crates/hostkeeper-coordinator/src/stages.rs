@@ -399,7 +399,13 @@ impl View {
         let mut members: Vec<Member> = eligible(def, want, fleet, now)
             .into_iter()
             .map(|(id, host)| {
-                let state = state_of(def, want, &done, fleet, &id, host, now);
+                let mut state = state_of(def, want, &done, fleet, &id, host, now);
+                // A host admitted to its move at this version holds a place of the plan before it
+                // is ordered ([`crate::moving`]).
+                if state == HostState::Waiting && fleet.admitted_at(def, &id) == Some(&want.version)
+                {
+                    state = HostState::Updating;
+                }
                 let deferring =
                     state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
                 Member {

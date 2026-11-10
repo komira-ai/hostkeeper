@@ -21,7 +21,7 @@ use crate::group_scope::Basis;
 use crate::halt;
 use crate::identity::Identity;
 use crate::membership::{Standing, standing};
-use crate::ops::{self, AuditEntry, OperateError, OpsError, OpsStore};
+use crate::ops::{AuditEntry, OperateError, OpsError, OpsStore};
 use crate::order_terms::{self, Terms};
 use crate::orders::Order;
 use crate::reconcile::reconcile;
@@ -739,14 +739,15 @@ impl Coordinator {
             }
             reconcile(def, &self.ops, &self.desired, &mut fleet, now);
         }
+        self.step_move(&mut fleet, basis, &who.host_id, now);
         // The verdicts are durable before the answer acknowledges them, and before any order.
         let acks = verdict_file::acknowledge(&self.verdicts, &fleet, &who.host_id, &heard, &names);
         // The operator's orders go first, past the gate, to a transport that carries them.
         if orders
             && !fleet.store_lost
-            && let Some(order) = self
-                .ops
-                .read(|state| crate::orders::next(&mut fleet, state, &who.host_id, &names))
+            && let Some(order) = self.ops.read(|state| {
+                crate::orders::next(&mut fleet, state, &who.host_id, &basis.services, &names)
+            })
         {
             return (ServiceReply::Nothing, Some(order), None, acks);
         }
@@ -844,7 +845,8 @@ impl Coordinator {
     /// [`OperateError`].
     pub fn operate(&self, bearer: Option<&str>, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let by = self.operator(bearer)?;
-        let entry = ops::operate(&self.ops, &self.services, by.as_str(), body)?;
+        let groups = self.desired.host_groups();
+        let entry = crate::operate::operate(&self.ops, &self.services, &groups, by.as_str(), body)?;
         self.reconcile();
         Ok(entry)
     }

@@ -325,17 +325,61 @@ pub(crate) fn raise_by_operator<E: From<OpsError>>(
         if marks.halt.is_some() {
             return Err(already);
         }
-        marks.halt = Some(Halt {
-            node_id: String::new(),
-            check: OPERATOR_CHECK.to_owned(),
-            target: target.clone(),
-            report: None,
-            origin: HaltOrigin::Operator,
-        });
+        marks.halt = Some(operator_halt(target));
         let mut entry = AuditEntry::new(by, "halt");
         entry.service = Some(service.to_owned());
         entry.reason = Some(reason.to_owned());
         Ok(entry)
+    })
+}
+
+/// The halt an operator raises of a desired version `target`.
+fn operator_halt(target: &Version) -> Halt {
+    Halt {
+        node_id: String::new(),
+        check: OPERATOR_CHECK.to_owned(),
+        target: target.clone(),
+        report: None,
+        origin: HaltOrigin::Operator,
+    }
+}
+
+/// [`raise_by_operator`] for a package of host groups: halts it in each of `targets`, a group
+/// with the desired version it is halted at, in one change, with one entry for each group that
+/// had no halt standing, naming it. A group already halted is left as it is.
+///
+/// # Errors
+/// `already` when every group is halted already; or `E` from [`OpsError`] when the write failed.
+pub(crate) fn raise_by_operator_in<E: From<OpsError>>(
+    ops: &OpsStore,
+    service: &str,
+    targets: &[(GroupName, Version)],
+    by: &str,
+    reason: &str,
+    already: E,
+) -> Result<Vec<AuditEntry>, E> {
+    ops.decide_changes(Write::Halt, |state| {
+        let mut entries = Vec::new();
+        for (group, target) in targets {
+            let raised = state.edit_marks_in(Some(group), service, |marks| {
+                let free = marks.halt.is_none();
+                if free {
+                    marks.halt = Some(operator_halt(target));
+                }
+                free
+            });
+            if raised {
+                let mut entry = AuditEntry::new(by, "halt");
+                entry.service = Some(service.to_owned());
+                entry.host_group = Some(group.to_string());
+                entry.reason = Some(reason.to_owned());
+                entries.push(entry);
+            }
+        }
+        if entries.is_empty() {
+            return Err(already);
+        }
+        Ok(entries)
     })
 }
 

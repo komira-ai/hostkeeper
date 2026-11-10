@@ -130,6 +130,8 @@ pub mod enrollment;
 pub mod fleet;
 pub mod force;
 pub(crate) mod group_converge;
+mod group_halt;
+pub(crate) mod group_reach;
 pub(crate) mod group_scope;
 pub(crate) mod group_uninstall;
 pub mod grpc;
@@ -151,6 +153,7 @@ mod live;
 pub mod lock;
 pub mod mdm;
 pub mod membership;
+pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
 pub mod operator_enrollment;
@@ -257,11 +260,17 @@ mod force_targets_tests;
 #[cfg(test)]
 mod force_tests;
 #[cfg(test)]
+mod group_calls_tests;
+#[cfg(test)]
 mod group_converge_tests;
 #[cfg(test)]
 mod group_decision_support;
 #[cfg(test)]
 mod group_decision_tests;
+#[cfg(test)]
+mod group_force_tests;
+#[cfg(test)]
+mod group_incident_tests;
 #[cfg(test)]
 mod group_install_order_tests;
 #[cfg(test)]
@@ -320,6 +329,8 @@ mod marks_support;
 mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
+#[cfg(test)]
+mod moving_tests;
 #[cfg(test)]
 mod one_live_update_coordinator_tests;
 #[cfg(test)]

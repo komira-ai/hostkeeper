@@ -52,6 +52,12 @@
 //!    selector, not announcing it) still holds its slot until its beats or its order's age free
 //!    it ([`Fleet::occupants_of`]).
 //!
+//! A host moved into its group ([`crate::moving`]) is told [`Gate::Moving`] for every package, before
+//! every rule above but a halt, until the group's plans admit it. Once admitted, its installs and
+//! updates wait for its uninstalls (`moving`), and the plan's gate (rule 6 from `stages::gate`, and
+//! the `rollout_elsewhere` and `no_slot` of an uninstall) is not asked of the packages and
+//! versions it was admitted to; every other rule holds as for any host.
+//!
 //! A version marked bad ([`crate::reconcile`]) is ordered to nobody, whatever the rules above
 //! say, and is held at [`Gate::Bad`] after the quiet start; so is a desired version below the
 //! minimum version that applies to the host ([`Gate::BelowMinVersion`]: its own, else its
@@ -182,6 +188,10 @@ pub enum Gate {
     /// it after this one, is still on the host ([`crate::install_order::uninstall_waits`]). The
     /// uninstall waits.
     UninstallOrder,
+    /// In a host group: the host was moved into its group and its move has not started or is not
+    /// over. It is ordered nothing until the group's plans admit it, and its installs and updates
+    /// wait for its uninstalls ([`crate::moving`]).
+    Moving,
 }
 
 /// A question that does not apply to this host and service: there is nothing to decide. The
@@ -312,6 +322,9 @@ pub fn decide_marked(
     let Some(def) = services.get(service) else {
         return Decision::Skip(Skip::NotAMember);
     };
+    if def.scope.is_some() && fleet.waits_to_move(id) {
+        return Decision::Gate(Gate::Moving);
+    }
     let member = !fleet.is_excluded(service, id) && fleet.is_assigned(def, id);
     if !member
         && !fleet.is_excluded(service, id)
@@ -348,12 +361,23 @@ fn order_or_hold(
         hold,
         order,
         installed,
+        ..
     } = consider(def, desired, bad, fleet, id, now);
     hold.or_else(|| {
+        (def.scope.is_some() && fleet.is_moving(id) && fleet.uninstalls_pending(services, id))
+            .then_some(Decision::Gate(Gate::Moving))
+    })
+    .or_else(|| {
         (!installed && install_order::waits(services, def, all, fleet, id, now))
             .then_some(Decision::Gate(Gate::InstallOrder))
     })
-    .or_else(|| stages::gate(services, all, def, desired, fleet, id, now).map(Decision::Gate))
+    .or_else(|| {
+        // A host admitted to the plan at this version has its place: it goes past the gate.
+        let admitted = fleet.admitted_at(def, id) == Some(&desired.version);
+        stages::gate(services, all, def, desired, fleet, id, now)
+            .filter(|_| !admitted)
+            .map(Decision::Gate)
+    })
     .or(order)
     .unwrap_or(Decision::Skip(Skip::NoDigest))
 }
@@ -366,6 +390,10 @@ pub(crate) struct Considered {
     order: Option<Decision>,
     /// Whether the host runs the service.
     pub(crate) installed: bool,
+    /// Whether the host cannot be ordered the desired version at all, whatever the gates say: its
+    /// agent cannot take the order, the release lists nothing for it, or the fleet has no word of
+    /// the service from it.
+    pub(crate) unreachable: bool,
 }
 
 /// What the fleet kept of the service `service` on the host `id`, none for a service the host's
@@ -402,6 +430,7 @@ pub(crate) fn consider(
             hold: Some(Decision::Skip(Skip::NotAMember)),
             order: None,
             installed: false,
+            unreachable: true,
         };
     }
     let beat = host.map(|h| &h.beat);
@@ -485,10 +514,16 @@ pub(crate) fn consider(
     let hold = rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why));
+    let unreachable = (!installed && !fleet.announced(id, INSTALL_FEATURE))
+        || installed_not_run
+        || unpicked.is_some()
+        || unlisted
+        || order.is_none();
     Considered {
         hold,
         order,
         installed,
+        unreachable,
     }
 }
 
@@ -546,7 +581,12 @@ fn uninstall(
     rules
         .into_iter()
         .find_map(|(holds, why)| holds.then_some(why))
-        .or_else(|| stages::uninstall_gate(services, all, def, fleet, id, now).map(Decision::Gate))
+        .or_else(|| {
+            // A host admitted to its move has its place in the group: it goes past the gate.
+            stages::uninstall_gate(services, all, def, fleet, id, now)
+                .filter(|_| !fleet.is_admitted(id))
+                .map(Decision::Gate)
+        })
         .unwrap_or(Decision::Uninstall {
             order_id,
             running: host.beat.version.clone(),

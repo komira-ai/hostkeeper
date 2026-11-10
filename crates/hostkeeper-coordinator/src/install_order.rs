@@ -49,7 +49,8 @@ pub(crate) fn waits(
 /// Whether the uninstall of `def` on the host `id` waits for the uninstall of a package that goes
 /// before it: a package a `Put` took out that the host still runs and whose intent has a lower
 /// generation ([`crate::group_scope`]), so that a config package listed after its service goes
-/// first whichever gate holds it. False for a service of the rollout file.
+/// first whichever gate holds it, but for a pair an operator holds on a host that is moving, which
+/// the move goes on around ([`crate::moving`]). False for a service of the rollout file.
 pub(crate) fn uninstall_waits(
     services: &Services,
     def: &ServiceDef,
@@ -61,6 +62,7 @@ pub(crate) fn uninstall_waits(
             earlier.roles.is_empty()
                 && earlier.priority > def.priority
                 && fleet.lists(id, &earlier.name)
+                && !(fleet.is_moving(id) && fleet.is_held(&earlier.name, id))
                 && fleet
                     .occupant(&earlier.name, id)
                     .is_some_and(|host| host.beat.health != Health::Absent)

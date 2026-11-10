@@ -213,6 +213,8 @@ pub struct Fleet {
     pub(crate) store_lost: bool,
     /// The installers daemons said over gRPC and the releases the picks read ([`crate::picks`]).
     pub(crate) picks: crate::picks::Picks,
+    /// The hosts whose move into a host group is under way ([`crate::moving`]).
+    pub(crate) moves: crate::moving::Moves,
 }
 
 impl Fleet {
@@ -240,6 +242,7 @@ impl Fleet {
             sent: BTreeMap::new(),
             store_lost: false,
             picks: crate::picks::Picks::default(),
+            moves: crate::moving::Moves::default(),
         }
     }
 
@@ -717,12 +720,15 @@ impl Fleet {
 
     /// Whether the host `id` is busy with a service other than `service`: one of its other
     /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time.
+    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
+    /// is leaving, which no service counts it for.
     #[must_use]
     pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
+        let leaving = self.outside.iter().filter(|_| self.is_moving(id));
         let updating = self
             .hosts
             .iter()
+            .chain(leaving)
             .filter(|(s, _)| s.as_str() != service)
             .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
         updating

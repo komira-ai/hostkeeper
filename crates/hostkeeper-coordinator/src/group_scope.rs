@@ -196,6 +196,8 @@ pub(crate) struct Basis<'a> {
     in_group_mode: bool,
     /// The host's group, when it is in one.
     group: Option<GroupName>,
+    /// Whether the host's record says it is moving into its group ([`crate::moving`]).
+    moving: bool,
 }
 
 impl Basis<'_> {
@@ -215,25 +217,40 @@ impl Basis<'_> {
     pub(crate) fn group(&self) -> Option<&GroupName> {
         self.group.as_ref()
     }
+
+    /// Whether the host is moving into its group: its record names the group it moves from.
+    pub(crate) fn moving(&self) -> bool {
+        self.moving
+    }
 }
 
 impl Coordinator {
-    /// The group the enrollment store records for the host `host`: none for a host in none, a host
-    /// never enrolled, a coordinator without enrollment and a record that cannot be read (logged).
-    pub(crate) fn group_of(&self, host: &HostId) -> Option<GroupName> {
+    /// The group the enrollment store records for the host `host`, and whether the host is moving
+    /// into it: none for a host in none, a host never enrolled, a coordinator without enrollment
+    /// and a record that cannot be read (logged).
+    pub(crate) fn membership_of(&self, host: &HostId) -> Option<(GroupName, bool)> {
         let enrolled = EnrolledId::parse(host.as_str()).ok();
         let read = self
             .enrollment()
             .zip(enrolled)
             .map(|(enrollment, id)| enrollment.store().membership(&id));
         match read {
-            Some(Ok(Some(membership))) => membership.host_group.parse().ok(),
+            Some(Ok(Some(membership))) => Some((
+                membership.host_group.parse().ok()?,
+                membership.moving_from.is_some(),
+            )),
             Some(Err(why)) => {
                 tracing::error!(%why, node_id = %host, "cannot read an enrolled host's group: it is in none");
                 None
             }
             Some(Ok(None)) | None => None,
         }
+    }
+
+    /// The group the enrollment store records for the host `host` ([`Self::membership_of`]).
+    #[cfg(test)]
+    pub(crate) fn group_of(&self, host: &HostId) -> Option<GroupName> {
+        self.membership_of(host).map(|(group, _)| group)
     }
 
     /// The desired state of `service` for the host `basis` is of: the coordinator's, or in group
@@ -261,14 +278,15 @@ impl Coordinator {
                 services: Cow::Borrowed(&self.services),
                 in_group_mode: false,
                 group: None,
+                moving: false,
             };
         }
         let listed = self
-            .group_of(host)
-            .and_then(|name| Some((self.desired.host_group(&name)?, name)));
+            .membership_of(host)
+            .and_then(|(name, moving)| Some((self.desired.host_group(&name)?, name, moving)));
         let services = listed
             .as_ref()
-            .map_or_else(Services::default, |(listed, name)| {
+            .map_or_else(Services::default, |(listed, name, _)| {
                 self.ops.read(|state| {
                     let leaving: Vec<(String, u64)> = state
                         .assignments
@@ -284,7 +302,8 @@ impl Coordinator {
         Basis {
             services: Cow::Owned(services),
             in_group_mode: true,
-            group: listed.map(|(_, name)| name),
+            moving: listed.as_ref().is_some_and(|(_, _, moving)| *moving),
+            group: listed.map(|(_, name, _)| name),
         }
     }
 }

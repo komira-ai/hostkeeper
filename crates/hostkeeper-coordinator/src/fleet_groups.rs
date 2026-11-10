@@ -85,6 +85,12 @@ impl Fleet {
         self.marks.group_mode = on;
     }
 
+    /// Whether the coordinator holds a host group, as of the last refresh of the marks.
+    #[must_use]
+    pub(crate) fn in_group_mode(&self) -> bool {
+        self.marks.group_mode
+    }
+
     /// Where the update plan of `def` stands: its group's, for a service made for a group.
     #[must_use]
     pub(crate) fn rollout_in(&self, def: &ServiceDef) -> Option<&Rollout> {
@@ -205,5 +211,19 @@ impl Fleet {
                         .is_some_and(|node| node.role == group.as_str())
                 })
             });
+    }
+
+    /// Puts the host `id` in the group `group` in every record of it: its node and what each
+    /// service last heard of it, counted or not, so that no count reads its old group after it
+    /// is moved. The host's other fields are as its last heartbeat left them.
+    pub(crate) fn regroup(&mut self, id: &HostId, group: &str) {
+        if let Some(node) = self.nodes.get_mut(id) {
+            group.clone_into(&mut node.role);
+        }
+        for hosts in self.hosts.values_mut().chain(self.outside.values_mut()) {
+            if let Some(host) = hosts.get_mut(id) {
+                group.clone_into(&mut host.role);
+            }
+        }
     }
 }

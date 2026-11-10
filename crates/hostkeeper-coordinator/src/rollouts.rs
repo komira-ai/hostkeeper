@@ -16,6 +16,9 @@
 //! operator's call is one audit entry under the token's name: `rollout_advance`,
 //! `rollout_pause` (written memory first: a pause raises protection and stands without its
 //! audit line), `rollout_resume`.
+//!
+//! Once the coordinator holds a host group the plans are the groups' (`group_rollouts.rs`): each
+//! call names a group in `host_group`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::PoisonError;
@@ -267,6 +270,12 @@ impl Coordinator {
         request: proto::AdvanceRequest,
     ) -> Result<proto::AdvanceResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.advance_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -323,6 +332,12 @@ impl Coordinator {
         request: proto::PauseRequest,
     ) -> Result<proto::PauseResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.pause_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -361,6 +376,12 @@ impl Coordinator {
         request: proto::ResumeRequest,
     ) -> Result<proto::ResumeResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.resume_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -484,3 +505,6 @@ fn wait_proto(wait: Option<Wait>) -> proto::PlanWait {
         Some(Wait::Baking) => proto::PlanWait::Baking,
     }
 }
+
+#[path = "group_rollouts.rs"]
+mod groups;

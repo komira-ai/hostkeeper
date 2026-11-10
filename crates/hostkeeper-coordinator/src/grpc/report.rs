@@ -573,7 +573,8 @@ fn gate_of(gate: Gate) -> proto::GateReason {
         Gate::BelowMinUp => proto::GateReason::BelowMinUp,
         Gate::RolloutElsewhere => proto::GateReason::RolloutElsewhere,
         Gate::InstallOrder => proto::GateReason::InstallOrder,
-        Gate::UninstallOrder => proto::GateReason::Unspecified,
+        Gate::UninstallOrder => proto::GateReason::UninstallOrder,
+        Gate::Moving => proto::GateReason::Moving,
     }
 }
 

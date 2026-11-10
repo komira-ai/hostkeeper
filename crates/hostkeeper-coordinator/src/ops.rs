@@ -105,7 +105,7 @@ use crate::ops_file;
 use crate::rollouts::Rollout;
 use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
 
-pub use crate::operate::{OperateError, operate};
+pub use crate::operate::OperateError;
 
 pub(crate) use crate::operate::label;
 

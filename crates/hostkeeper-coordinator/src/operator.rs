@@ -25,6 +25,7 @@ use hostkeeper_wire::{HostId, RoleName};
 use crate::audit_file::{Actor, Filter, Logged, Query};
 use crate::halt;
 use crate::holds::{HoldMark, HoldScope, MAX_HOLDS, marks_of};
+use crate::host_groups::GroupName;
 use crate::operate::reason;
 use crate::ops::{AuditEntry, Exclusion, FailureAck, OpsError, Write, label};
 use crate::reconcile::{CI, COORDINATOR, is_release_failure_beat};
@@ -251,8 +252,7 @@ impl Coordinator {
     ) -> Result<proto::MarkBadResponse, proto::ReleasesRefusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::ReleasesRefusal::UnknownService)?;
         let version = Version::parse(&request.version)
             .ok()
@@ -292,8 +292,7 @@ impl Coordinator {
     ) -> Result<proto::UnmarkBadResponse, proto::ReleasesRefusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::ReleasesRefusal::UnknownService)?;
         let version = Version::parse(&request.version)
             .ok()
@@ -347,9 +346,11 @@ impl Coordinator {
         request: proto::HaltRequest,
     ) -> Result<proto::HaltResponse, proto::ReleasesRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.halt_in_groups(by, request);
+        }
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::ReleasesRefusal::UnknownService)?;
         let why = valid_reason(&request.reason).ok_or(proto::ReleasesRefusal::InvalidRequest)?;
         // Raised under the fleet's lock, as a host's halt is: never between another heartbeat's
@@ -394,8 +395,7 @@ impl Coordinator {
             .parse::<HostId>()
             .map_err(|_| proto::HostsRefusal::InvalidRequest)?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::HostsRefusal::UnknownService)?;
         let why = valid_reason(&request.reason).ok_or(proto::HostsRefusal::InvalidRequest)?;
         let mut fleet = self.lock_fleet();
@@ -428,8 +428,7 @@ impl Coordinator {
     ) -> Result<proto::ExcludeResponse, proto::HostsRefusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::HostsRefusal::UnknownService)?;
         let id = request
             .node_id
@@ -468,7 +467,8 @@ impl Coordinator {
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `unknown_service`, `invalid_request` (the scope, the reason,
-    /// or a hold past [`MAX_HOLDS`]), `store_failed`.
+    /// or a hold past [`MAX_HOLDS`]), `unknown_host_group` (a role scope that names no host group,
+    /// where the coordinator holds one: the role is the group), `store_failed`.
     pub fn hold(
         &self,
         caller: &Caller,
@@ -476,12 +476,14 @@ impl Coordinator {
     ) -> Result<proto::HoldResponse, proto::ServicesRefusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::ServicesRefusal::UnknownService)?;
         let scope = scope_of(request.scope).ok_or(proto::ServicesRefusal::InvalidRequest)?;
         let why = valid_reason(&request.reason).ok_or(proto::ServicesRefusal::InvalidRequest)?;
         let mut fleet = self.lock_fleet();
+        if self.names_no_group(&scope) {
+            return Err(proto::ServicesRefusal::UnknownHostGroup);
+        }
         let mark = HoldMark {
             service: def.name.clone(),
             scope,
@@ -529,8 +531,7 @@ impl Coordinator {
     ) -> Result<proto::UnholdResponse, proto::ServicesRefusal> {
         let by = caller.operator()?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::ServicesRefusal::UnknownService)?;
         let scope = scope_of(request.scope).ok_or(proto::ServicesRefusal::InvalidRequest)?;
         let why = valid_reason(&request.reason).ok_or(proto::ServicesRefusal::InvalidRequest)?;
@@ -571,7 +572,8 @@ impl Coordinator {
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a filter that is no actor token, action,
-    /// service name, node id or token name), `store_failed` (the audit file could not be read).
+    /// service name, node id or token name, or a host group name where the coordinator holds a group),
+    /// `store_failed` (the audit file could not be read).
     pub fn audit_list(
         &self,
         caller: &Caller,
@@ -593,8 +595,22 @@ impl Coordinator {
             .as_deref()
             .is_some_and(|n| n.parse::<HostId>().is_err());
         let bad_name = request.by_name.as_deref().is_some_and(|n| !label(n));
-        if bad_action || bad_service || bad_node || bad_name {
+        let grouped = self.desired.in_group_mode();
+        let bad_group = grouped
+            && request
+                .host_group
+                .as_deref()
+                .is_some_and(|group| group.parse::<GroupName>().is_err());
+        if bad_action || bad_service || bad_node || bad_name || bad_group {
             return Err(invalid);
+        }
+        if request.host_group.is_some() && !grouped {
+            // A coordinator that holds no host group lists no entry for a group, whatever the
+            // log keeps of the groups it held.
+            return Ok(proto::ListAuditResponse {
+                entries: Vec::new(),
+                next_seq: request.since_seq,
+            });
         }
         let limit = match request.limit as usize {
             0 => MAX_AUDIT_PAGE,
@@ -619,6 +635,7 @@ impl Coordinator {
                 actions,
                 service: request.service.as_deref(),
                 node_id: request.node_id.as_deref(),
+                host_group: request.host_group.as_deref(),
             },
         })?;
         Ok(proto::ListAuditResponse {

@@ -2,6 +2,9 @@
 
 How a service rolls a new version out, and what an operator can do to it. The design is
 [rollout-update-plans.md](../design/rollout-update-plans.md). `hkctl` is [cli.md](../cli.md).
+Where the coordinator holds host groups ([hostgroups.md](hostgroups.md)), the plan of a package
+is the policy of each group that lists it, and each group rolls it over its own hosts: the section
+Host groups below says what differs, and the rest of this page holds there as it is written.
 Every `hkctl rollouts` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing (one exception: a
 `Pause` stands without its audit line, see Pause and Resume below). Each call names a
@@ -45,6 +48,29 @@ A host is eligible for a plan when it is live, the service is assigned to it, it
 excluded nor held there, no standing force covers it, and the coordinator could order it the
 service. A held, excluded or forced host is in no stage and does not stop one from being done.
 
+## Host groups
+
+Where the coordinator holds at least one host group, a package has one plan for each group that
+lists it, over that group's hosts alone, and the rollout file's plan keys are not read:
+
+- The plan's keys are the group's policy: `stages`, `canary`, `bake_beats`, `rollback`,
+  `rollback_after_failed`, `defer_backoff`, `max_updating`, `min_up` and `live_rollouts`
+  ([hostgroups.md](hostgroups.md#policy)). The same policy applies to every package of the group.
+- The role of a host is the name of its group. `max_updating` (1 if the policy names none; 0
+  holds the group) and `min_up` are the group's, counted over the group's hosts, and so are the
+  hosts a stage's percent is computed over. Two groups never wait on each other.
+- `--live-rollouts` is the default of a group's `live_rollouts`, and counts the group's other
+  packages: `rollout_elsewhere` names those.
+- The position of a plan, its pause and its done hosts, the halt, the last good version and a
+  force are kept for each (group, package), in the ops file under `host_groups`. A version set in
+  one group starts the plan of that group over, and no other.
+- `Releases.Status` answers one plan for each (group, package), with its `host_group`.
+- An install waits, and takes no place in its plan, until every package listed before it in the
+  group is installed (`install_order`,
+  [hostgroups.md](hostgroups.md#installs-and-uninstalls-follow-the-list)). A host moved into a
+  group is admitted to the plans of the packages it must install or change before it is ordered
+  any of them (`moving`, [hostgroups.md](hostgroups.md#moving-a-host)).
+
 ## Reading a plan
 
 `Releases.Status` (`hkctl releases status`) and the Rollout page show, per service, the
@@ -66,7 +92,8 @@ plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `b
 
 Each host's gate reason names its stage. `paused`, `advance_wait`, `stage_failed`, `stage_wait`,
 `below_min_up` and `rollout_elsewhere` are the reasons the plan adds; `no_slot` now means the
-role's `max_updating` is reached, and `baking` that the current stage is baking.
+role's `max_updating` is reached (in a host group, the group's), and `baking` that the current
+stage is baking.
 
 ## Advance
 
@@ -85,12 +112,17 @@ stage 2 of 3 (4 hosts)", then yours) and the plan as it stands. It is refused:
 | `not_waiting` | the plan does not wait for an Advance: the stage before is not done, the next stage enters by itself, every stage is entered, the plan is paused or halted, or the coordinator is in its quiet start |
 | `no_desired` | the service has no desired version |
 | `unknown_service` | the coordinator does not manage the service |
-| `invalid_request` | the reason is missing, too long or has a control character |
+| `ambiguous_host_group` | in host groups: the call names no `host_group` and more than one group lists the service |
+| `not_in_host_group` | in host groups: `host_group` names a group that does not list the service or that no group has the name of, or no group lists the service; without host groups, any `host_group` |
+| `invalid_request` | the reason is missing, too long or has a control character, or `host_group` is no group name |
 | `audit_unavailable` | the audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed, ask again once the disk has room |
 | `store_failed` | the position could not be written (on the database store, also while its session is lost); nothing changed (for `Pause`, which is written memory first, the pause stands) |
 
 An `auto` stage needs no Advance: the coordinator enters it at the heartbeat that finds the stage
 before it done, and writes the same `rollout_advance` entry under the name `coordinator`.
+
+In host groups `Advance` names the plan's group in `host_group`; with none it acts on the one group
+that lists the service. The entry names the group, and the answer is that group's plan.
 
 ## Pause and Resume
 
@@ -115,6 +147,13 @@ shows). An Advance and a Resume need their audit line.
 |---|---|
 | `Pause` | `already_paused`: the plan is paused already |
 | `Resume` | `not_paused`: the plan is not paused |
+
+In host groups both take `host_group`. A `Pause` that names none pauses the service's plan in every
+group that lists it, in one change, with one `rollout_pause` entry for each; a group whose plan is
+paused already is left as it is, and `already_paused` is the answer only when every group was. A
+`Resume` that names none acts on the one group that lists the service, and is refused
+`ambiguous_host_group` when more do. A pause belongs to the plan of one group: it stops the hosts
+of that group alone, and another group goes on.
 
 Both also refuse `unknown_service`, `invalid_request`, `store_failed` and, for `Resume`,
 `audit_unavailable`.
@@ -156,7 +195,8 @@ coordinator did before.
 
 The position of each plan (the desired version it is for, the stages entered, the hosts recorded
 done, a pause) is kept in the halts file, `<ops-file>.halts`, under `rollouts`
-([coordinator-state.md](coordinator-state.md)), and read back at start: the plan goes on at the
+([coordinator-state.md](coordinator-state.md)), and read back at start (the position of a plan in
+a host group is kept in the ops file, under `host_groups`): the plan goes on at the
 stage it had entered, and a host recorded done is neither ordered again nor made to bake again. A
 host of the current stage that had not finished its bake bakes again from zero. A new desired
 version starts the plan over. A plan that never goes past its first stage writes nothing.

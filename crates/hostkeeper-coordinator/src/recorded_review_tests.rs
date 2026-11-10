@@ -227,6 +227,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Gate::RolloutElsewhere => "rollout_elsewhere",
             Gate::InstallOrder => "install_order",
             Gate::UninstallOrder => "uninstall_order",
+            Gate::Moving => "moving",
         }
     };
     let skip = |skip: Skip| -> &'static str {
@@ -263,6 +264,7 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Gate::RolloutElsewhere,
         Gate::InstallOrder,
         Gate::UninstallOrder,
+        Gate::Moving,
     ] {
         assert_eq!(json!(g), json!(gate(g)));
         assert_eq!(json!(Why::Gate(g)), json!(gate(g)));
