@@ -13,7 +13,7 @@ The parts:
 
 - `pxe`, the boot server, a `.deb` of its own (`/usr/lib/pxe/pxe` and the unit `pxe.service`; the
   hostkeeper deb and rpm carry no boot server). The daemon installs it with `apt` on the boot host
-  when you assign the service there, and removes it when you unassign it with an uninstall. `pxe serve`
+  when you move the host into a group that lists the service, and removes it when you move the host out of it. `pxe serve`
   (called `serve` below) serves a release's boot files. `pxe update-hook prepare` is run by the daemon when it
   updates the package, from the staged copy and before `apt` installs anything: it downloads and
   verifies the release's boot files into a new directory of `/var/lib/pxe` and seals it. You type neither: the daemon and the unit run them,
@@ -180,8 +180,8 @@ Put an operator token in a file of root's with mode 0600 or 0400, such as `/etc/
 then reads it. Settings name the file, never hold the token.
 
 The farm LAN must be free of an active attacker while `serve` runs: nothing on the new machine
-checks the initrd, the ISO or the seed (the design, sections 5 and 6, and its Question 2). Assign
-`pxe` only for the install window ([step 8](#8-run-an-install-window)).
+checks the initrd, the ISO or the seed (the design, sections 5 and 6, and its Question 2). Keep
+the boot host in `pxe-boot` only for the install window ([step 8](#8-run-an-install-window)).
 
 ### 5. Write the settings
 
@@ -347,18 +347,20 @@ broadcasts on the farm LAN (in router mode, to learn which address took which MA
 switches pass client broadcasts to the `pxe` host with guarding on is **[V]**: it is
 true when `serve` logs a `dhcp:` line for a booting machine's MAC.
 
-### 7. Roll out `pxe`: the rollout file and the desired version
+### 7. Roll out `pxe`: a host group and the desired version
 
-Once, on the coordinator. Append this entry to the coordinator's rollout file
-(`--rollout-file`) and restart the coordinator. A service needs at least one role; `pxe-boot` is a
-role no host has, so the rollout file assigns `pxe` to no host and only your
-`services assign` of step 8 does ([assignments.md](assignments.md)).
+Once, on the coordinator. `pxe` runs on the hosts of a host group that lists it
+([hostgroups.md](hostgroups.md)). Make a group for the boot host, `pxe-boot`, that lists every
+package the boot host runs now (`hkctl host-groups get` of its group shows them; a move uninstalls
+what the new group does not list) and `pxe` after them, in the order they install:
 
-```toml
-# the coordinator's rollout file: pxe, assigned to hosts one by one
-[[service]]
-name = "pxe"
-roles = ["pxe-boot"]
+```json
+{ "hostGroup": { "name": "pxe-boot", "packages": ["hostkeeper", "pxe"] } }
+```
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    host-groups put --request pxe-boot.json --reason "the boot server's host"
 ```
 
 Each release carries `pxe_<version>_amd64.deb` and `pxe_<version>_arm64.deb` with their
@@ -381,16 +383,17 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 
 The targets name the `.deb` of each Linux platform from the repository entry `komira-testing`; the
 coordinator refuses the set (`repository_unknown`) while its registry lacks `komira`. A new
-release is a new desired version; a host that has `pxe` assigned then updates it, and a host that
-has not is ordered nothing.
+release is a new desired version; a host in a group that lists `pxe` then updates it, and a host
+that is not is ordered nothing.
 
 ### 8. Run an install window
 
-Assign `pxe` to the boot host. The daemon installs the package at its next heartbeat:
+Move the boot host into `pxe-boot`. The daemon installs the package at its next heartbeat
+after the move has admitted it ([hostgroups.md](hostgroups.md#moving-a-host)):
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    services assign --node-id <boot-host> --service pxe
+    host-groups move --node-id <boot-host> --host-group pxe-boot --reason "install window"
 ```
 
 The daemon stages the `.deb` and seals its copy of the files, then runs the hook of the package,
@@ -418,7 +421,7 @@ directory. The reason is in the host's `Last update` on the Host page and in the
 usual ones: `bad_settings` (the settings file or the daemon config does not load, naming why),
 `boot_set_refused` (an attestation, size or digest the fetch refused, with its text), `not_prepared`,
 `not_started` (the restart failed: read the journal of `pxe.service`) and `locked` (another step
-holds `/var/lib/pxe`). Fix the cause, then assign again or wait for the daemon's next try.
+holds `/var/lib/pxe`). Fix the cause, then wait for the daemon's next try, or move the host out of `pxe-boot` and back.
 
 **See it serving.** `journalctl --unit pxe.service` shows each line `serve` logs, as
 `pxe serve: <unix seconds> <text>` (the journal adds its own time and host first; `--output cat`
@@ -441,19 +444,19 @@ starts with nothing learned, and after a settings change it takes the new settin
 measurement of a first machine, keep the journal:
 `journalctl --unit pxe.service --output cat > serve.log`.
 
-**After the window,** when the window's machines are approved, take the service off the host
-with an uninstall:
+**After the window,** when the window's machines are approved, move the host back into its own
+group, which does not list `pxe`: the move orders the uninstall of `pxe` (an uninstall intent,
+[hostgroups.md](hostgroups.md#uninstalls)):
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    services unassign --node-id <boot-host> --service pxe --uninstall true
+    host-groups move --node-id <boot-host> --host-group <its-own-group> --reason "window over"
 ```
 
 The daemon stops and removes `pxe.service`, removes `/var/lib/pxe` (every boot set) and the
 package. `/etc/pxe` stays: it is yours, and the next window reuses it. In router mode, turn the
 router's Network Boot off again if the wait of a network boot with no server matters on the farm's
-boards. Without `--uninstall true` the coordinator stops managing the service and the host keeps
-it running.
+boards. A host left in `pxe-boot` keeps `pxe` installed and updated with every release.
 
 ## Once per board model: the board check
 
@@ -504,7 +507,7 @@ keep the packets with the result. Power the machine on and read `serve`'s log fo
    boot option **[V]**. Record whether the board then boots its disk or stops at its own boot
    menu. A board that stops cannot be used in router mode until the menu generator chainloads the
    disk's boot loader for it (the design, section 4); record it and use proxy mode on it.
-5. **The wait with no server (router mode).** Unassign `pxe` (or `systemctl stop pxe.service`), leave the router's Network Boot on,
+5. **The wait with no server (router mode).** Move the host out of `pxe-boot` (or `systemctl stop pxe.service`), leave the router's Network Boot on,
    and boot: record how long the firmware waits for TFTP before it goes on, and that it does.
 6. **The disks.** List the board's disks, from the firmware's or the BMC's storage inventory, or
    with `lsblk -d -o NAME,SIZE,ROTA,RM,TRAN,MODEL,SERIAL` on a running system of the same model.
@@ -530,8 +533,7 @@ Before the first machine, check `serve`'s start line and the answer set's count 
 **Step 1. Record the machine.** From the chassis label: its data MACs, its BMC MAC and its
 serial, as in [enrollment.md](enrollment.md#record-the-server). Record the MAC of the farm-LAN
 NIC the firmware boots from among the data MACs. Give the record its host id and its host group
-(one the coordinator holds, [hostgroups.md](hostgroups.md); on a coordinator that holds none, its
-role, `--role`): the record is the approval, so the machine that matches it, within its window and once, is enrolled
+(one the coordinator holds, [hostgroups.md](hostgroups.md)): the record is the approval, so the machine that matches it, within its window and once, is enrolled
 with no further step ([enrollment.md](enrollment.md#the-record-is-the-approval)). The window is
 24 hours unless you give `--approve-for-secs` or `--approve-until-unix`; enter the record shortly
 before the machine boots.
@@ -601,8 +603,7 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 A request that matches a record another request also matches is `contested` and cannot be
 approved until the other is rejected ([enrollment.md](enrollment.md#the-pending-request-and-its-match)).
 The coordinator then orders the packages of the host's group, in the group's order, as for every
-host ([hostgroups.md](hostgroups.md)); a coordinator that holds no host group orders the services
-assigned to the host or its role.
+host ([hostgroups.md](hostgroups.md)).
 
 **A further step, on a board that does not try network boot first:** pick its UEFI network boot
 entry once in the firmware's boot menu, over the BMC's remote console, when it powers on.
@@ -610,7 +611,7 @@ entry once in the firmware's boot menu, over the BMC's remote console, when it p
 A machine whose install failed is not installed again in this run: its MAC left the answer set
 at its seed fetch. Its console shows the installer's error. Restart `pxe.service` to try again.
 
-When the window's machines are approved, unassign `pxe` with an uninstall (step 8).
+When the window's machines are approved, move the boot host back out of `pxe-boot` (step 8).
 
 ## Measure the first machine
 
@@ -628,7 +629,7 @@ components record; nothing is timed by hand. Keep three files of that machine:
       enrollment list --limit 50
   ```
 
-- Once the host serves a service assigned to it: its `hosts get`, saved as
+- Once the host serves a package of its group: its `hosts get`, saved as
   `host.json`. Its `firstServingUnix` is there once a heartbeat since the approval reported a
   service the coordinator manages for the host (not hostkeeper itself) healthy, with no update of
   it under way; until then take it again.
@@ -662,7 +663,7 @@ data disks, are not touched by the installer. In router mode the record must hav
 to set one on a record, remove the record and add it again.
 
 1. In `/etc/pxe/pxe.toml`, name the host id in `reinstall` of `[serve]` (an array, one id per
-   host), and restart `pxe.service` (assign `pxe` first if it is not on the boot host). For the
+   host), and restart `pxe.service` (move the boot host into `pxe-boot` first if it is not there). For the
    records of those host ids only, `serve` sets aside the rule that a host or a pending request
    keeps a record out; the rest of the answer set's rule holds, and the MAC leaves the set when
    its install starts. It refuses to start when a `reinstall` names no record, and logs
@@ -690,14 +691,13 @@ to set one on a record, remove the record and add it again.
    with `sudo efibootmgr` to find the network entry and `sudo efibootmgr --bootnext <entry>`
    before `sudo reboot`.
 3. Once the host's new request appears in `enrollment list` (its install is done), take `reinstall` out of the file
-   and restart `pxe.service` (or unassign `pxe`); stopping it earlier, between the seed fetch and the deb's fetch,
+   and restart `pxe.service` (or move the host out of `pxe-boot`); stopping it earlier, between the seed fetch and the deb's fetch,
    breaks the install. Do not leave the host id in `reinstall`: a later run would install the host
    once more at its next network boot.
 4. The new daemon posts a request with a new key. Its MACs are bound to the enrolled host, so the
    request is `duplicate_claim`, pending with an alert, and matches the host's record. Compare the
    console's key hash and approve with `--replace true` and the host's group again (another group
-   is refused `host_group_differs`; on a coordinator that holds no host group, the role and the
-   services again):
+   is refused `host_group_differs`):
 
    ```
    hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -730,8 +730,8 @@ keeps its record out of the answer set by its `hostHeld`; its record need not be
 | `menu ...: local disk: ...` and the machine stops at its firmware's menu | The board does not boot its next option after GRUB's `exit` (board check, item 4): use proxy mode on it. |
 | `the coordinator could not be read (<why>): this answer is made from the empty answer set` | The private listener, the CA or the token: fix it; the next network boot reads again. |
 | `seed ...: refused: <mac> is no longer in the answer set as host <id>: <why>` | The record changed between the menu and the seed (a request, an approval, a removed record): nothing is installed. |
-| `pxe.service` is failed or restarting, and its journal has `pxe serve: <why>` | `serve` refused its start: the settings, a socket, the coordinator or the seal, as the line says. Fix it and `systemctl restart pxe.service`. For a seal that differs, naming a file of `/var/lib/pxe/<version>`, assign `pxe` again after an uninstall so `prepare` fetches anew. |
-| The assignment of `pxe` fails, with `bad_settings` or `boot_set_refused` | `prepare` refused: the settings file or the daemon config, or a boot file that failed its attestation, size or digest (the host's `Last update` and the journal say which). The version that was serving keeps serving. Fix the file and assign again. |
+| `pxe.service` is failed or restarting, and its journal has `pxe serve: <why>` | `serve` refused its start: the settings, a socket, the coordinator or the seal, as the line says. Fix it and `systemctl restart pxe.service`. For a seal that differs, naming a file of `/var/lib/pxe/<version>`, move the host out of `pxe-boot` and back so `prepare` fetches anew. |
+| The install of `pxe` fails, with `bad_settings` or `boot_set_refused` | `prepare` refused: the settings file or the daemon config, or a boot file that failed its attestation, size or digest (the host's `Last update` and the journal say which). The version that was serving keeps serving. Fix the file and wait for the next try. |
 | The install stops with an error on the console | It is not installed again in this run: restart `serve` to try again. |
 | The installed host posts no request | Its daemon cannot reach the LAN listener, or the coordinator's CA is not its `ca_sha256`; its console's issue line says which. See [enrollment.md](enrollment.md#bootstrap-a-linux-node). |
 

@@ -86,6 +86,8 @@ import public "hostkeeper/operator/v1/entry.proto";
 import public "hostkeeper/operator/v1/rollouts.proto";
 // `HostRepositories`, which `Host` carries.
 import "hostkeeper/operator/v1/repositories.proto";
+// `SetRepositoryRequest` and `SetRepositoryResponse`.
+import "hostkeeper/operator/v1/services_repository.proto";
 
 // The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 service Hosts {
@@ -178,9 +180,13 @@ service Services {
   // is.
   rpc Unassign(UnassignRequest) returns (UnassignResponse);
   // Set the version below which the rollout gate orders the service to no host of a role, or to
-  // one host: no update, install or automatic rollback. A host's own minimum stands before its
-  // role's, and neither goes below the rollout file's.
+  // one host: no update, install or automatic rollback. A role names a host group: the minimum of
+  // the package in that group. A host's own minimum stands before its group's.
   rpc SetMinVersion(SetMinVersionRequest) returns (SetMinVersionResponse);
+  // Set the repository of the registry the service's package comes from; empty goes back to the
+  // default, `komira`. The coordinator sends each host the repositories of its packages, and a
+  // release names channels of the package's repository. The registry must hold the repository.
+  rpc SetRepository(SetRepositoryRequest) returns (SetRepositoryResponse);
   // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
   // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
   // released. A hold carries no version, takes no slot, survives a coordinator restart, covers
@@ -345,8 +351,8 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_NOT_HELD = 7;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   SERVICES_REFUSAL_STORE_FAILED = 8;
-  // NOT_FOUND: no service of the rollout file runs on the role, no host heard from has it, and
-  // no assignment names it.
+  // NOT_FOUND: no service runs on the role, no host heard from has it, and no assignment names
+  // it. A coordinator that places by host group answers `unknown_host_group` instead.
   SERVICES_REFUSAL_UNKNOWN_ROLE = 9;
   // FAILED_PRECONDITION: `SetMinVersion` above the service's desired version, which would hold
   // every host of the scope below its minimum.
@@ -362,6 +368,8 @@ enum ServicesRefusal {
   // FAILED_PRECONDITION: `SetMinVersion` of a role scope whose host group does not list the
   // service.
   SERVICES_REFUSAL_NOT_IN_HOST_GROUP = 14;
+  // NOT_FOUND: `SetRepository` of a repository the registry does not hold.
+  SERVICES_REFUSAL_REPOSITORY_UNKNOWN = 15;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
@@ -1231,8 +1239,8 @@ message ServiceEntry {
   repeated HoldMark holds = 4;
   // The desired version; absent when CI has set none.
   optional string desired_version = 5;
-  // The roles it is assigned to: the rollout file's, with the operator's role assignments on top.
-  // Deprecated: empty from a coordinator that holds host groups (see `host_groups`).
+  // The roles it is assigned to, with the operator's role assignments on top. Deprecated: empty
+  // from a coordinator that places by host group (see `host_groups`).
   repeated string roles = 6;
   // The operator's assignments of the service, by role and by host. Deprecated: empty from a
   // coordinator that holds host groups.
@@ -1242,8 +1250,8 @@ message ServiceEntry {
   repeated AssignedHost assigned = 8;
   // The hosts ordered to uninstall the service, until each reports it gone.
   repeated string uninstalling = 9;
-  // The package repository of the registry (`Repositories`) its hosts install it from: the
-  // rollout file's `repository`, `komira` when it names none.
+  // The package repository of the registry (`Repositories`) its hosts install it from, as
+  // `SetRepository` set it: `komira` when none is set.
   string repository = 10;
   // The host groups that list the service, by name; empty from a coordinator that does not hold
   // host groups.
@@ -1256,8 +1264,7 @@ message Assignment {
     string role = 1;
     string host = 2;
   }
-  // The service is taken off the scope (that the rollout file or a role assigns it) rather than
-  // assigned to it.
+  // The service is taken off the scope (that a role assigns it) rather than assigned to it.
   bool removed = 3;
 }
 
@@ -1267,8 +1274,8 @@ message AssignedHost {
   string role = 2;
   // The version installed, as the host last reported it; absent when it does not run the service.
   optional string installed_version = 3;
-  // The minimum version that applies to the host: its own, else its role's, and never below the
-  // rollout file's; absent when there is none.
+  // The minimum version that applies to the host: its own, else its group's (its role's on a
+  // coordinator that does not place by host group); absent when there is none.
   optional string min_version = 4;
   // The operator's holds that hold the pair.
   repeated HoldMark holds = 5;

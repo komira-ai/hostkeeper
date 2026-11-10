@@ -69,7 +69,7 @@ pub mod pkg_build;
 pub const SERVICE: &str = "hostkeeper-ci-tierstore";
 /// The channel of the fixture packages' repository, `<registry name>-<suite>`: the name of the
 /// host's repository entry and the `repository` of the entries an order carries. The registry
-/// name is [`aptrepo::REGISTRY_NAME`], which the coordinator's rollout file names for the service.
+/// name is [`aptrepo::REGISTRY_NAME`], which the rigs set as the repository of the service.
 pub const REPOSITORY_NAME: &str = aptrepo::REPOSITORY;
 /// The fixture program, at `usr/bin/tierstore-like` in the package.
 pub const BINARY_NAME: &str = "tierstore-like";
@@ -92,7 +92,7 @@ pub const SOURCE_REF: &str = "refs/heads/main";
 /// The commit the fixture's attestation names.
 pub const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
 
-/// The role the test's host is approved with, the rollout file's `roles`.
+/// The role the test's host is approved with, read as the name of the host group it goes into.
 pub const ROLE: &str = "daemon";
 /// The host id the test approves its daemon as.
 pub const HOST_ID: &str = "e2e-host";

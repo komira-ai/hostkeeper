@@ -5,8 +5,9 @@
 // button, one of Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt,
 // Releases.Converge, Releases.Force, Releases.SetDesired, Rollouts.Advance, Rollouts.Pause,
 // Rollouts.Resume, Services.Assign, Services.Unassign and Services.SetMinVersion, and Hosts.List
-// to count a force's hosts. The desired version is set here or by CI.
+// to count a force's hosts. The page ends with the host groups section (pages/hostgroups.js). The desired version is set here or by CI.
 
+import { section as hostGroupsSection } from "./hostgroups.js";
 import {
   h, action, allPages, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select,
   table, trimmed, words,
@@ -614,11 +615,13 @@ export async function render(ctx) {
     prepared: null,
     typed: "",
   };
+  const groups = await hostGroupsSection(ctx, () => ctx.show(page()));
   const page = () => h("section", { class: "page" },
     h("h2", {}, "Rollout"),
     h("p", { class: "note" }, "CI or an operator sets the desired version: an operator sets it here."),
     status.quiet === true ? h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.") : null,
     services.map((svc) => serviceSection(ctx, svc, listing)),
-    forceSection(ctx, services, state, () => ctx.show(page())));
+    forceSection(ctx, services, state, () => ctx.show(page())),
+    groups.view());
   return page();
 }

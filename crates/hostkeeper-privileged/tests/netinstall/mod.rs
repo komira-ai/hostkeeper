@@ -41,7 +41,7 @@ use crate::e2e::aptrepo::{self, AptRepo, Deb, File, Service};
 use crate::e2e::signer::FixtureSigner;
 use crate::support::channel::Channel;
 use crate::support::operator_api::must;
-use crate::support::pair::{Coordinator, ROLE, TestCa, put, rollout};
+use crate::support::pair::{BEACON, Coordinator, ROLE, TestCa, put};
 use crate::support::{Bench, FIXTURE};
 use events::{Bus, LineSink, Mark, Source};
 use guest::{Guest, Machine, Ssh};
@@ -51,7 +51,7 @@ use program::Program;
 use pxe::{Mode, ServeInputs};
 use router::{Boot, Router, RouterDhcp, SERVER_PORT, Segment};
 
-/// The fixture service the guest is assigned, by its role.
+/// The fixture service the guest is placed by its group, the group its record names by its role.
 pub const SERVICE: &str = "hostkeeper-ci-fixture";
 /// The version of the fixture service the guest is ordered.
 pub const VERSION: &str = "1.0.0";
@@ -107,11 +107,10 @@ impl Rig {
         let bus = Bus::default();
         let sink = Arc::new(LineSink::new(&bus, &artifacts.join("router-dhcp.log")));
 
-        let services = format!(
-            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{ROLE}\"]\nrepository = \"{}\"\n",
-            repositories::NAME
-        );
-        let coordinator = Coordinator::start_on_lan(&scratch, &rollout(&services), &[], lan.host());
+        let coordinator = Coordinator::start_on_lan(&scratch, &[], lan.host());
+        // The group the guest's record names by its role lists the fixture service, which comes
+        // from the registry's repository `komira`: the default repository of a package.
+        coordinator.put_group(ROLE, &[BEACON, SERVICE]);
         let ca = TestCa::new("release channel CA");
         let channel = Channel::start_at(&ca, lan.host());
         let signer = FixtureSigner::new();

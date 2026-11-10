@@ -16,17 +16,19 @@ use std::path::Path;
 use hostkeeper_proto::FILE_DESCRIPTOR_SET;
 use hostkeeper_proto::hostkeeper::agent::v1::Platform;
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AddRecordRequest, ApproveRequest, AssignRequest, ConvergeRequest, DesiredState, ForceRequest,
-    GetHostRequest, HostList, ListHostsRequest, ListPendingRequest, ListRecordsRequest,
-    ListServicesRequest, PutRepositoryRequest, RetireRequest, SetDesiredRequest, StatusRequest,
-    UnassignRequest, enrollment_client::EnrollmentClient, force_request::Targets,
-    hosts_client::HostsClient, releases_client::ReleasesClient,
-    repositories_client::RepositoriesClient, services_client::ServicesClient,
+    AddRecordRequest, ApproveRequest, ConvergeRequest, DesiredState, ForceRequest,
+    GetHostGroupRequest, GetHostRequest, HostGroup, HostList, ListHostsRequest, ListPendingRequest,
+    ListRecordsRequest, ListServicesRequest, PutHostGroupRequest, PutRepositoryRequest,
+    RetireRequest, SetDesiredRequest, SetRepositoryRequest, StatusRequest,
+    enrollment_client::EnrollmentClient, force_request::Targets,
+    host_groups_client::HostGroupsClient, hosts_client::HostsClient,
+    releases_client::ReleasesClient, repositories_client::RepositoriesClient,
+    services_client::ServicesClient,
 };
 use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use hostkeeper_testkit::operator::{Operator, canonical_json};
 use serde_json::Value;
-use tonic::Status;
+use tonic::{Code, Status};
 
 /// One call: the generated client `$client`'s `$method` with `$request`, its reply as the JSON of
 /// the message `$reply` of `hostkeeper.operator.v1`.
@@ -213,36 +215,6 @@ impl OperatorApi {
         )
     }
 
-    /// `Services.Assign` of `service` to the host `node_id`.
-    pub fn assign(&self, node_id: &str, service: &str) -> Result<Value, Status> {
-        rpc!(
-            self,
-            ServicesClient.assign,
-            AssignRequest {
-                node_id: node_id.to_owned(),
-                service: service.to_owned(),
-                ..AssignRequest::default()
-            },
-            "AssignResponse"
-        )
-    }
-
-    /// `Services.Unassign` of `service` from the host `node_id`, ordering the host to uninstall
-    /// it when `uninstall`.
-    pub fn unassign(&self, node_id: &str, service: &str, uninstall: bool) -> Result<Value, Status> {
-        rpc!(
-            self,
-            ServicesClient.unassign,
-            UnassignRequest {
-                node_id: node_id.to_owned(),
-                service: service.to_owned(),
-                uninstall,
-                ..UnassignRequest::default()
-            },
-            "UnassignResponse"
-        )
-    }
-
     /// `Releases.SetDesired` of `service` at `version` by targets alone: `targets` by platform and
     /// no release index and no index digest, as CI's set of a release whose entries are all native
     /// gives them.
@@ -280,6 +252,67 @@ impl OperatorApi {
                 reason: "privileged test".to_owned(),
             },
             "PutRepositoryResponse"
+        )
+    }
+
+    /// `HostGroups.Put` of `group`, whole: creates the group, or replaces the one of its name
+    /// (read first with `HostGroups.Get`, to name the generation the replacement is made from).
+    /// The reply is the call's, as `entry` and `generation`.
+    pub fn put_host_group(&self, group: HostGroup) -> Result<Value, Status> {
+        let held = rpc!(
+            self,
+            HostGroupsClient.get,
+            GetHostGroupRequest {
+                host_group: group.name.clone(),
+                ..GetHostGroupRequest::default()
+            },
+            "GetHostGroupResponse"
+        );
+        let if_generation = match held {
+            Ok(held) => held["hostGroup"]["generation"]
+                .as_str()
+                .and_then(|generation| generation.parse::<u64>().ok()),
+            Err(status) if status.code() == Code::NotFound => None,
+            Err(status) => return Err(status),
+        };
+        rpc!(
+            self,
+            HostGroupsClient.put,
+            PutHostGroupRequest {
+                host_group: Some(group),
+                if_generation,
+                reason: "privileged test".to_owned(),
+            },
+            "PutHostGroupResponse"
+        )
+    }
+
+    /// `HostGroups.Get` of the group `name`: the group, as `hostGroup` (its `group` body, its
+    /// `generation` and its `packages` with each one's desired version), and its hosts.
+    pub fn get_host_group(&self, name: &str) -> Result<Value, Status> {
+        rpc!(
+            self,
+            HostGroupsClient.get,
+            GetHostGroupRequest {
+                host_group: name.to_owned(),
+                ..GetHostGroupRequest::default()
+            },
+            "GetHostGroupResponse"
+        )
+    }
+
+    /// `Services.SetRepository`: the package `service` comes from the registry's repository
+    /// `repository`.
+    pub fn set_repository(&self, service: &str, repository: &str) -> Result<Value, Status> {
+        rpc!(
+            self,
+            ServicesClient.set_repository,
+            SetRepositoryRequest {
+                service: service.to_owned(),
+                repository: repository.to_owned(),
+                reason: "privileged test".to_owned(),
+            },
+            "SetRepositoryResponse"
         )
     }
 

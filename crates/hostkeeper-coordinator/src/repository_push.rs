@@ -169,7 +169,7 @@ fn needed(coordinator: &Coordinator, fleet: &Fleet, id: &HostId) -> BTreeSet<Str
     });
     of_group
         .chain(of_file)
-        .map(|def| def.repository.clone())
+        .map(|def| coordinator.repository_of(&def.name))
         .collect()
 }
 

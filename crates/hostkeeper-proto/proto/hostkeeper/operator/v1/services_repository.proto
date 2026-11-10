@@ -1,0 +1,41 @@
+// hostkeeper.operator.v1: the messages of `Services.SetRepository`, the call that sets which
+// repository of the coordinator's registry a package comes from (docs/design/hostgroups.md
+// section 9). The `Services` service, its refusals (`ServicesRefusal`) and the rest of the
+// package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal`
+// among it, are operator.proto; this file is the same package and API, kept apart so that each
+// file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Services` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: as operator.proto says for `ServicesRefusal`: a gRPC status whose message is exactly
+// one token of it, in lower case. A refused request changes nothing.
+//
+// Units: as operator.proto says. A repository is a name of the coordinator's registry
+// (`Repositories`): 1 to 32 bytes of `[a-z0-9-]`. A reason is 1 to 256 bytes of
+// UTF-8 with no control character.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/entry.proto";
+
+message SetRepositoryRequest {
+  // The package.
+  string service = 1;
+  // The registry's name of the repository the package comes from. Empty clears the setting: the
+  // package goes back to the default repository, `komira`.
+  string repository = 2;
+  // Why, 1 to 256 bytes; recorded in the audit entry.
+  string reason = 3;
+}
+
+message SetRepositoryResponse {
+  // The audit entry the call wrote.
+  AuditEntry entry = 1;
+}
