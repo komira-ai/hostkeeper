@@ -145,12 +145,42 @@ message RolloutPlan {
   // Every eligible host has rolled: it runs the desired version and has baked.
   bool finished = 9;
   // When `waiting` is ROLLOUT_ELSEWHERE, the services whose live rollouts hold this one, by
-  // name: each has a host updating, under an order or baking, or a plan under way. Empty
-  // otherwise. A failed host or a halt never makes a service's rollout live.
+  // name: each has a host updating or with its promotion pending, a host under an order, a host
+  // of its plan baking after an update, or a plan under way. Empty otherwise. A failed host or a
+  // halt never makes a service's rollout live, and a bake counts only for a host of the plan
+  // that the coordinator saw update.
   repeated string waiting_on = 10;
   // The host group whose plan this is: a plan is per (group, service) from a coordinator that
   // holds host groups; empty from one that does not.
   string host_group = 11;
+  // Why each service of `waiting_on` is live, one per service in the same order: what makes it
+  // so and the host that does. Empty when `waiting_on` is, and from a coordinator before it.
+  repeated LiveRollout waiting_on_why = 12;
+}
+
+// Why one service's rollout is live, and so holds another's.
+message LiveRollout {
+  // The service, by name.
+  string service = 1;
+  // What makes it live: the first found, in the order of `LiveReason`.
+  LiveReason reason = 2;
+  // The host that does, by node id; empty for PLAN_UNDER_WAY.
+  string node_id = 3;
+}
+
+// What makes a service's rollout live. A value is never removed.
+enum LiveReason {
+  LIVE_REASON_UNSPECIFIED = 0;
+  // A host's last word is an update of the service running.
+  LIVE_REASON_UPDATING = 1;
+  // A host's last word is that it waits for the promotion of its update.
+  LIVE_REASON_PROMOTION_PENDING = 2;
+  // An order the coordinator sent the host is outstanding; it ages out if the host never reports it.
+  LIVE_REASON_ORDERED = 3;
+  // A host of the plan runs the desired version after an update and has not finished its bake.
+  LIVE_REASON_BAKING = 4;
+  // The plan has started a host and has one left to order.
+  LIVE_REASON_PLAN_UNDER_WAY = 5;
 }
 
 // One stage of a plan.
