@@ -806,10 +806,14 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
     let parts = build(&flags_of(side_args(&files, &hub.url)), roots).expect("started");
     let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
 
-    gate.webhook(&authenticate_event()).await.expect("taken");
-    gate.webhook(&token_update()).await.expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &authenticate_event())
+        .await
+        .expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &token_update())
+        .await
+        .expect("taken");
     let uuid = hub.uuid_of("DeviceInformation");
-    gate.webhook(&device_information(&uuid))
+    hostkeeper_mdm_gate::webhook::take(&gate, &device_information(&uuid))
         .await
         .expect("taken");
 
