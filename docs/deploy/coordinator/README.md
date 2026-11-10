@@ -74,7 +74,7 @@ chown 65532:65532 secrets/db-dsn && chmod 0400 secrets/db-dsn
 ## The configuration and the local volume
 
 `etc/` holds what the coordinator's flags in `compose.yaml` name under `/etc/hostkeeper-coordinator`:
-`tls.pem`, `tls.key`, `client-ca.pem`, `oidc.toml`, `tokens.toml` and `rollout.toml`. The key and
+`tls.pem`, `tls.key`, `client-ca.pem`, `oidc.toml` and `tokens.toml` (there is no rollout file: `serve` refuses `--rollout-file`). The key and
 the tokens file are read by the coordinator's user only: owned by 65532, mode 0600. Edit the
 command for the farm: the listen addresses (one interface's address each, never a wildcard),
 `--server-name`, and any other flag the coordinator runs with today
@@ -195,6 +195,15 @@ attested image and replaces the container with the old one's command line, mount
 rolling back to the old container when the new one is not ready. The runbook (install, turn on,
 refusals, a failed version, the compose deployment's `image:` line) is
 [../coordinator-update.md](../coordinator-update.md).
+
+**The release that retires the rollout file (HG8)** is not rolled in by that timer alone: a
+container whose command line still has `--rollout-file` refuses to start (the update then rolls
+back to the old container), and a store that places by
+roles must be converted first. Turn the update timer off, stop the coordinator, take the backup
+(see Backups below), run `hostkeeper-coordinator host-groups migrate` of the new release over the
+store without `--apply` and then with it, drop `--rollout-file` from the command (and add
+`host_group` to the Mac allowlist's entries, dropping their `services`), and start the new release
+([MIGRATION.md](../../../MIGRATION.md#from-roles-to-host-groups)). To go back, restore the backup.
 
 ## Backups
 

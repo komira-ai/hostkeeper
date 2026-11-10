@@ -312,6 +312,13 @@ impl MacAllowlist {
             .map(|(serial, _)| serial.as_str())
     }
 
+    /// Every entry with its serial, in the order of the serials.
+    pub fn entries(&self) -> impl Iterator<Item = (&str, &MacAllowEntry)> {
+        self.0
+            .iter()
+            .map(|(serial, entry)| (serial.as_str(), entry))
+    }
+
     /// The host group each entry names, in the order of the serials.
     pub fn groups(&self) -> impl Iterator<Item = &str> {
         self.0.values().map(|entry| entry.role.as_str())

@@ -3,7 +3,7 @@
 The MDM server stack that enrolls the farm's Macs (NanoHUB, the SCEP server, NanoDEP and Caddy,
 with lego for the TLS certificate) is a service package, `mdm`, that hostkeeper installs on one
 Linux host like any other service ([design: two programs, section 6.2](../design/two-programs.md)).
-Assigning `mdm` to a host installs it there; unassigning it uninstalls it. The package is a `.deb`,
+Putting a host in a host group that lists `mdm` installs it there; taking it out of the group's list, or moving the host to a group that does not list it, uninstalls it. The package is a `.deb`,
 `mdm_<version>_amd64.deb` (`cargo xtask release deb --service mdm`), which hostkeeper installs with `apt`
 ([design: native packages only](../design/packages-native.md), sections 10.2 and 10.6). It carries
 the pinned servers, its own program `mdm` and its units; the release builder fetched the
@@ -72,8 +72,14 @@ Write two root-owned files on the MDM host.
    be written after the install: until it is there the certificate jobs do not run and the
    proxy waits.
 
-Then assign `mdm` to the host (`hkctl services assign --service mdm --node-id <id>`; see
-[assignments.md](assignments.md)).
+Then put `mdm` in a group that holds the MDM host: a group that lists the host's packages and `mdm`
+(`hkctl host-groups put --request mdm-host.json`, [hostgroups.md](hostgroups.md)), and move the host
+into it:
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    host-groups move --node-id <id> --host-group mdm-host --reason "the MDM server's host"
+```
 
 ## What each step of the hook does
 
@@ -106,7 +112,7 @@ file the contract's reader refuses, or one whose `settings` is not `/etc/mdm/set
   profile are printed in the step's log, not judged.
 - **`rollback`** puts back the files `prepare` changed and restarts what runs on the version the
   daemon linked back; on a first install it stops the units and removes the links it made.
-- **`uninstall`** (on unassign) stops every unit of the package, removes the links the hook and
+- **`uninstall`** (when the package leaves the host's group) stops every unit of the package, removes the links the hook and
   `dep define-profile` made, and moves the Caddyfile and the drop-ins to
   `/var/lib/mdm/removed/<unix seconds>/`. The state (database, SCEP CA, DEP token, TLS key and
   certificate), the secrets, the pkg directory and the user stay.

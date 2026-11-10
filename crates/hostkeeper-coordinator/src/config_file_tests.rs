@@ -49,7 +49,6 @@ tls-key = "/etc/hostkeeper-coordinator/tls.key"
 client-ca = "/etc/hostkeeper-coordinator/client-ca.pem"
 oidc-config = "/etc/hostkeeper-coordinator/oidc.toml"
 tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
-rollout-file = "/etc/hostkeeper-coordinator/rollout.toml"
 state-file = "/var/lib/hostkeeper-coordinator/state.json"
 live-rollouts = 2
 server-name = ["coordinator.example.com", "192.0.2.10"]
@@ -337,10 +336,7 @@ fn the_packaged_template_parses_as_the_flags_of_serve_the_unit_starts_with() {
         panic!("serve");
     };
     assert_eq!(flags.heartbeat_listen.to_string(), "192.0.2.10:8443");
-    assert_eq!(
-        flags.rollout_file,
-        PathBuf::from("/etc/hostkeeper-coordinator/rollout.toml")
-    );
+    assert_eq!(flags.rollout_file, None);
     assert_eq!(
         flags.state_file,
         Some(PathBuf::from("/var/lib/hostkeeper-coordinator/state.json"))

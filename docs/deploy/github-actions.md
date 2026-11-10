@@ -186,9 +186,8 @@ other packages; the policy is the one each group's `hkctl host-groups put` carri
 ```
 
 `bakeBeats` is the healthy heartbeats at the new version before the next stage, and `canary` one
-host that goes first, alone, and bakes. On a coordinator that holds no group, a `[[service]]`
-table of the rollout file (`--rollout-file`) with `name = "hostkeeper"`, `roles`, `bake_beats`
-and `canary` does this instead.
+host that goes first, alone, and bakes. These are keys of the group's `policy`, put with
+`hkctl host-groups put`.
 
 **The allow-list entry.** `release.yml` calls the CI client as `hello-desired.yml` does, at the
 same revision ([Pinning the client](#pinning-the-client)), so the entry for this repository
@@ -279,7 +278,7 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
 - It does not wait for the fleet to converge: a roll by stages, each baked before the next, takes
   longer than a release run should hold the release group, and a slow roll is not a failed
   release.
-- It never changes the coordinator, not its version, allow-list, rollout file, holds or marks:
+- It never changes the coordinator, not its version, allow-list, host groups, holds or marks:
   the coordinator's own machine updates it ([coordinator-update.md](coordinator-update.md)), and
   CI only waits until it runs the release.
 - It sets only `hostkeeper`. The hello proof run stays a dispatch by hand
