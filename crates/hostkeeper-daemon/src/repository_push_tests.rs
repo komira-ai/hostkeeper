@@ -41,6 +41,7 @@ fn entry(name: &str, suites: &[&str], seed: u8) -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 
@@ -171,6 +172,7 @@ fn files_already_in_place_are_adopted_without_a_write() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        registry::MIRROR_DIR,
     ));
     let before: Vec<(u64, i64, i64)> = KOMIRA_FILES
         .iter()
@@ -203,6 +205,7 @@ fn the_sink_reports_a_set_it_adopted() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        registry::MIRROR_DIR,
     ));
     rig.push.apply(&set);
     assert_eq!(
@@ -226,7 +229,7 @@ fn the_held_scripts_files_are_what_a_set_for_komira_renders() {
     let rig = Rig::new("push-script");
     let set = komira(1, 2);
     let live = rig.live.to_str().expect("utf-8");
-    let files = registry::render(&set.entries, live);
+    let files = registry::render(&set.entries, live, registry::MIRROR_DIR);
     let stanza = |suite: &str| {
         format!(
             "Types: deb\nURIs: https://repo.example.com/debian\nSuites: {suite}\nComponents: main\nSigned-By: {live}/komira.gpg\n"
@@ -262,6 +265,7 @@ fn a_differing_directory_is_replaced_whole() {
     rig.place(&registry::render(
         &old.entries,
         rig.live.to_str().expect("utf-8"),
+        registry::MIRROR_DIR,
     ));
     fs::write(rig.live.join("stray.sources"), b"x").expect("a stray file");
     let set = komira(2, 2);
@@ -322,6 +326,7 @@ fn files_the_loader_refuses_are_not_adopted() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        registry::MIRROR_DIR,
     ));
     fs::set_permissions(rig.live.join("komira.gpg"), Permissions::from_mode(0o664)).expect("chmod");
     assert_eq!(rig.push.apply_set(&set), Applied::Written);
@@ -345,6 +350,7 @@ fn a_directory_with_a_file_missing_or_changed_is_replaced() {
         rig.place(&registry::render(
             &set.entries,
             rig.live.to_str().expect("utf-8"),
+            registry::MIRROR_DIR,
         ));
         match change {
             0 => fs::remove_file(rig.live.join("komira-testing.sources")).expect("remove"),
@@ -745,7 +751,11 @@ fn the_shared_entries_are_replaced_whole_and_snapshots_keep_their_value() {
 #[test]
 fn the_digest_of_a_set_is_the_registrys() {
     let set = komira(1, 1);
-    let files = registry::render(&set.entries, registry::REPOSITORIES_DIR);
+    let files = registry::render(
+        &set.entries,
+        registry::REPOSITORIES_DIR,
+        registry::MIRROR_DIR,
+    );
     let mut hasher = Sha256::new();
     let mut sorted: Vec<&HostFile> = files.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

@@ -46,6 +46,7 @@ pub(crate) fn repository(name: &str, uri: &str, suites: &[&str], seed: u8) -> Re
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint(&keyring)],
         keyring,
+        ..Repository::default()
     }
 }
 

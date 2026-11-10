@@ -45,6 +45,7 @@ fn komira(seed: u8) -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 

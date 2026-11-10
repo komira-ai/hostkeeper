@@ -4,9 +4,16 @@
 //! host agree on ([`digest`]), and the fingerprints of an OpenPGP keyring ([`keys`]).
 //!
 //! The coordinator runs [`check`] on a repository an operator puts and [`conflict`] against the
-//! others; the daemon runs [`check_set`] on a pushed set and recomputes [`digest`], so a set the
-//! coordinator sends is judged by the same rules on the host. Nothing here reads a file, a clock
-//! or a socket, and no collection is hashed.
+//! others, and sends a host each entry as [`for_host`] makes it; the daemon runs [`check_set`] on
+//! a pushed set and recomputes [`digest`], so a set the coordinator sends is judged by the same
+//! rules on the host. Nothing here reads a file, a clock or a socket, and no collection is
+//! hashed.
+//!
+//! A private repository (`access` [`ACCESS_HOSTS`], docs/design/hostgroups.md section 6.6) is
+//! read by the coordinator alone, from its `uri` with the credential of its `credential_file`.
+//! Each of its suites is a host group's. A host is sent it with its own group as the one suite
+//! and no `credential_file`, and holds it as an entry whose `URIs` is its local mirror,
+//! `file:<mirror>/<name>` ([`mirror_uri`]), which the daemon fills from the coordinator.
 
 use hostkeeper_proto::hostkeeper::release::v1::Repository;
 use sha1::Sha1;
@@ -19,6 +26,14 @@ use crate::grammar::is_repository_name;
 pub const KIND_APT: &str = "apt";
 /// Where a host keeps its repository entries.
 pub const REPOSITORIES_DIR: &str = "/etc/hostkeeper/repositories";
+/// Where a host keeps the local mirror of each private repository, one directory per name.
+pub const MIRROR_DIR: &str = "/var/lib/hostkeeper/mirror";
+/// The `access` of a repository hosts read from its `uri` themselves (the empty `access` too).
+pub const ACCESS_PUBLIC: &str = "public";
+/// The `access` of a private repository: read by the coordinator, and by hosts through it.
+pub const ACCESS_HOSTS: &str = "hosts";
+/// The most bytes of a private repository's `credential_file`.
+pub const MAX_CREDENTIAL_PATH: usize = 4096;
 /// The most repositories of the coordinator's registry.
 pub const MAX_REPOSITORIES: usize = 16;
 /// The most repositories of the set one host is sent.
@@ -57,6 +72,16 @@ pub fn channels(entry: &Repository) -> Vec<String> {
         .iter()
         .map(|suite| channel(&entry.name, suite))
         .collect()
+}
+
+/// Whether `entry` is a private repository: its `access` is [`ACCESS_HOSTS`].
+pub fn is_private(entry: &Repository) -> bool {
+    entry.access == ACCESS_HOSTS
+}
+
+/// The `URIs` of a private repository `name`'s host entry: its local mirror under `mirror`.
+pub fn mirror_uri(mirror: &str, name: &str) -> String {
+    format!("file:{mirror}/{name}")
 }
 
 /// The name of `name`'s keyring file: `<name>.gpg`.
@@ -121,6 +146,28 @@ pub enum EntryError {
     /// A key of the keyring has neither its own fingerprint nor a subkey's listed.
     #[error("the key {0} of the keyring has neither its own fingerprint nor a subkey's listed")]
     KeyUnlisted(String),
+    /// The access is not `public`, `hosts` or empty.
+    #[error("the access {0:?} is not \"public\" or \"hosts\"")]
+    Access(String),
+    /// A private repository names no credential file.
+    #[error("a private repository (access \"hosts\") names no credential_file")]
+    CredentialAbsent,
+    /// A public repository names a credential file.
+    #[error("a public repository names a credential_file: only access \"hosts\" takes one")]
+    CredentialPublic,
+    /// The credential file is not an absolute path of at most [`MAX_CREDENTIAL_PATH`] bytes with
+    /// no control character and no empty, `.` or `..` component.
+    #[error(
+        "the credential_file {0:?} is not an absolute path of at most {MAX_CREDENTIAL_PATH} bytes \
+         with no control character and no empty, . or .. component"
+    )]
+    CredentialPath(String),
+    /// An entry a host was sent names a credential file: the coordinator never sends one.
+    #[error("an entry a host is sent names a credential_file")]
+    CredentialSent,
+    /// A private entry a host was sent has other than one suite: its host group's.
+    #[error("a private entry a host is sent has {0} suites, not 1")]
+    PrivateSuites(usize),
 }
 
 impl EntryError {
@@ -348,8 +395,55 @@ fn is_uri(uri: &str) -> bool {
     host_ok & port_ok & path_ok
 }
 
-/// Whether `entry` is valid: the first rule it breaks, in the order of the fields.
+/// Which rules an entry is judged by: the registry's, or those of an entry a host is sent.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Form {
+    /// An entry of the coordinator's registry: a private one names its credential file.
+    Registry,
+    /// An entry of a host's set: none names a credential file, and a private one has one suite.
+    Host,
+}
+
+/// Whether `path` is an absolute path of at most [`MAX_CREDENTIAL_PATH`] bytes, with no control
+/// character and no empty, `.` or `..` component.
+fn is_credential_path(path: &str) -> bool {
+    let Some(rest) = path.strip_prefix('/') else {
+        return false;
+    };
+    path.len() <= MAX_CREDENTIAL_PATH
+        && !path.chars().any(char::is_control)
+        && rest.split('/').all(|part| !matches!(part, "" | "." | ".."))
+}
+
+/// Whether `entry`'s access and credential file keep the rules of `form`.
+fn check_access(entry: &Repository, form: Form) -> Result<(), EntryError> {
+    let private = match entry.access.as_str() {
+        "" | ACCESS_PUBLIC => false,
+        ACCESS_HOSTS => true,
+        other => return Err(EntryError::Access(other.to_owned())),
+    };
+    let named = !entry.credential_file.is_empty();
+    match (form, private, named) {
+        (Form::Host, _, true) => Err(EntryError::CredentialSent),
+        (Form::Host, true, false) if entry.suites.len() != 1 => {
+            Err(EntryError::PrivateSuites(entry.suites.len()))
+        }
+        (Form::Registry, true, false) => Err(EntryError::CredentialAbsent),
+        (Form::Registry, false, true) => Err(EntryError::CredentialPublic),
+        (Form::Registry, true, true) if !is_credential_path(&entry.credential_file) => {
+            Err(EntryError::CredentialPath(entry.credential_file.clone()))
+        }
+        _ => Ok(()),
+    }
+}
+
+/// Whether `entry` is valid as an entry of the coordinator's registry: the first rule it breaks,
+/// in the order of the fields. A private repository names its credential file.
 pub fn check(entry: &Repository) -> Result<(), EntryError> {
+    check_form(entry, Form::Registry)
+}
+
+fn check_form(entry: &Repository, form: Form) -> Result<(), EntryError> {
     if !is_repository_name(&entry.name) {
         return Err(EntryError::Name(entry.name.clone()));
     }
@@ -365,7 +459,8 @@ pub fn check(entry: &Repository) -> Result<(), EntryError> {
     check_suites(entry)?;
     check_components(&entry.components)?;
     check_fingerprints(&entry.fingerprints)?;
-    check_keyring(entry)
+    check_keyring(entry)?;
+    check_access(entry, form)
 }
 
 fn check_suites(entry: &Repository) -> Result<(), EntryError> {
@@ -456,8 +551,9 @@ fn check_keyring(entry: &Repository) -> Result<(), EntryError> {
     }
 }
 
-/// Whether `entries` are valid as one host's set: at most [`MAX_SET`], each valid by [`check`],
-/// no name twice and no channel twice.
+/// Whether `entries` are valid as one host's set: at most [`MAX_SET`], each valid by [`check`]
+/// but that none names a credential file and a private one has one suite (as [`for_host`] makes
+/// it), no name twice and no channel twice.
 pub fn check_set(entries: &[Repository]) -> Result<(), SetError> {
     if entries.len() > MAX_SET {
         return Err(SetError::TooMany(entries.len()));
@@ -465,7 +561,7 @@ pub fn check_set(entries: &[Repository]) -> Result<(), SetError> {
     let mut names = BTreeSet::new();
     let mut taken = BTreeSet::new();
     for entry in entries {
-        check(entry).map_err(|source| SetError::Entry {
+        check_form(entry, Form::Host).map_err(|source| SetError::Entry {
             name: entry.name.clone(),
             source,
         })?;
@@ -495,6 +591,21 @@ pub fn conflict(entry: &Repository, others: &[Repository]) -> Option<String> {
         .find(|channel| taken.contains(channel))
 }
 
+/// The entry `entry` of the registry as a host of the host group `group` is sent it: a public
+/// one as it is; a private one with `group` as its one suite, and only when its suites list
+/// `group` (else `None`: the host is sent nothing of it). Neither names a credential file.
+pub fn for_host(entry: &Repository, group: &str) -> Option<Repository> {
+    let mut sent = entry.clone();
+    sent.credential_file.clear();
+    if is_private(entry) {
+        if !entry.suites.iter().any(|suite| suite == group) {
+            return None;
+        }
+        sent.suites = vec![group.to_owned()];
+    }
+    Some(sent)
+}
+
 /// A file of a host's repositories directory.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HostFile {
@@ -506,18 +617,23 @@ pub struct HostFile {
 
 /// The files a host holds for `entries`, sorted by name: per entry its keyring as
 /// `<name>.gpg`, and per suite `<name>-<suite>.sources` naming `dir/<name>.gpg` as its
-/// `Signed-By`. `entries` are taken as valid ([`check_set`]).
-pub fn render(entries: &[Repository], dir: &str) -> Vec<HostFile> {
+/// `Signed-By`; its `URIs` is the entry's `uri`, or for a private entry its local mirror under
+/// `mirror` ([`mirror_uri`]). `entries` are taken as valid ([`check_set`]).
+pub fn render(entries: &[Repository], dir: &str, mirror: &str) -> Vec<HostFile> {
     let mut files = Vec::new();
     for entry in entries {
         files.push(HostFile {
             name: keyring_file(&entry.name),
             bytes: entry.keyring.to_vec(),
         });
+        let uri = if is_private(entry) {
+            mirror_uri(mirror, &entry.name)
+        } else {
+            entry.uri.clone()
+        };
         for suite in &entry.suites {
             let text = format!(
-                "Types: deb\nURIs: {}\nSuites: {suite}\nComponents: {}\nSigned-By: {dir}/{}\n",
-                entry.uri,
+                "Types: deb\nURIs: {uri}\nSuites: {suite}\nComponents: {}\nSigned-By: {dir}/{}\n",
                 entry.components.join(" "),
                 keyring_file(&entry.name),
             );
@@ -532,11 +648,11 @@ pub fn render(entries: &[Repository], dir: &str) -> Vec<HostFile> {
 }
 
 /// The digest of `entries` as a host holds them: the SHA-256, in lower-case hex, over the files
-/// of [`render`] at [`REPOSITORIES_DIR`] in the order of their names, each as its name, a zero
+/// of [`render`] at [`REPOSITORIES_DIR`] and [`MIRROR_DIR`] in the order of their names, each as its name, a zero
 /// byte, its length as eight big-endian bytes and its bytes.
 pub fn digest(entries: &[Repository]) -> String {
     let mut hash = Sha256::new();
-    for file in render(entries, REPOSITORIES_DIR) {
+    for file in render(entries, REPOSITORIES_DIR, MIRROR_DIR) {
         hash.update(file.name.as_bytes());
         hash.update([0]);
         hash.update(

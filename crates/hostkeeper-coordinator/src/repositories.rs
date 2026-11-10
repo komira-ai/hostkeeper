@@ -44,11 +44,12 @@ impl Eq for Kept {}
 
 impl Kept {
     /// The record as it is stored: `{"generation": n, "repository": {...}}`, the keyring as
-    /// standard base64.
+    /// standard base64. `access` and `credential_file` are written only when set, so the record of
+    /// a public repository is the one the release before wrote.
     #[must_use]
     pub(crate) fn to_json(&self) -> Value {
         let repository = &self.repository;
-        json!({
+        let mut record = json!({
             "generation": self.generation,
             "repository": {
                 "name": repository.name,
@@ -59,10 +60,21 @@ impl Kept {
                 "fingerprints": repository.fingerprints,
                 "keyring": base64::engine::general_purpose::STANDARD.encode(&repository.keyring),
             },
-        })
+        });
+        for (key, value) in [
+            ("access", &repository.access),
+            ("credential_file", &repository.credential_file),
+        ] {
+            if !value.is_empty() {
+                record["repository"][key] = json!(value);
+            }
+        }
+        record
     }
 
-    /// The record stored as `value`, judged by [`registry::check`].
+    /// The record stored as `value`, judged by [`registry::check`]. `access` and
+    /// `credential_file` are optional: absent, they are empty (a public repository, as every
+    /// record the release before wrote).
     ///
     /// # Errors
     /// Why `value` is no record: a field missing or of the wrong type, a keyring that is not
@@ -79,6 +91,13 @@ impl Kept {
                 .and_then(Value::as_str)
                 .map(str::to_owned)
                 .ok_or_else(|| format!("no {key}"))
+        };
+        let optional = |key: &str| match stored.get(key) {
+            None => Ok(String::new()),
+            Some(value) => value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| format!("{key} is not text")),
         };
         let texts = |key: &str| -> Result<Vec<String>, String> {
             stored
@@ -103,6 +122,8 @@ impl Kept {
             keyring: base64::engine::general_purpose::STANDARD
                 .decode(text("keyring")?)
                 .map_err(|_| "a keyring that is not base64".to_owned())?,
+            access: optional("access")?,
+            credential_file: optional("credential_file")?,
         };
         registry::check(&repository).map_err(|why| why.to_string())?;
         Ok(Self {

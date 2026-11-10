@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use hostkeeper_install::repository::config::load_with_keyrings;
 use hostkeeper_proto::hostkeeper::release::v1::Repository;
-use hostkeeper_release::registry::render;
+use hostkeeper_release::registry::{MIRROR_DIR, render};
 use hostkeeper_testkit::Scratch;
 
 fn me() -> u32 {
@@ -24,6 +24,7 @@ fn entry(name: &str, suites: &[&str], keyring: &[u8]) -> Repository {
         components: vec!["main".into(), "contrib".into()],
         fingerprints: Vec::new(),
         keyring: keyring.to_vec(),
+        ..Repository::default()
     }
 }
 
@@ -45,7 +46,7 @@ fn rendered_files_load_as_one_entry_per_channel_with_the_entrys_keyring() {
     let other = entry("other", &["main"], &[0x98, 0x0a, 0xff, 0x01]);
     let entries = [komira.clone(), other.clone()];
     let placed = dir.to_str().expect("a utf-8 path");
-    for file in render(&entries, placed) {
+    for file in render(&entries, placed, MIRROR_DIR) {
         let path = dir.join(&file.name);
         fs::write(&path, &file.bytes).expect("the file");
         fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("the mode");

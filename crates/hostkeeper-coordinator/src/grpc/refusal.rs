@@ -189,7 +189,9 @@ pub(crate) fn repositories(refusal: RepositoriesRefusal) -> Status {
             Code::InvalidArgument
         }
         RepositoriesRefusal::UnknownRepository => Code::NotFound,
-        RepositoriesRefusal::InUse | RepositoriesRefusal::Conflict => Code::FailedPrecondition,
+        RepositoriesRefusal::InUse
+        | RepositoriesRefusal::Conflict
+        | RepositoriesRefusal::CredentialUnusable => Code::FailedPrecondition,
         RepositoriesRefusal::Capacity => Code::ResourceExhausted,
         RepositoriesRefusal::AuditUnavailable => Code::Unavailable,
     };

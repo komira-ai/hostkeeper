@@ -22,6 +22,7 @@ fn set(generation: u64) -> PushedSet {
             components: vec!["main".to_owned()],
             fingerprints: vec!["AB".repeat(20)],
             keyring: vec![0x99, 0, 1, 4],
+            ..Default::default()
         }],
     }
 }

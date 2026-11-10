@@ -326,7 +326,7 @@ fn judge(set: &PushedSet, live: &str) -> Result<Vec<HostFile>, String> {
             set.digest
         ));
     }
-    Ok(registry::render(&set.entries, live))
+    Ok(registry::render(&set.entries, live, registry::MIRROR_DIR))
 }
 
 /// What the loader takes of `live` when it holds exactly `files`, byte for byte; none when it

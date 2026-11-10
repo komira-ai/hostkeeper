@@ -92,6 +92,7 @@ fn komira_real() -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![PRIMARY.to_owned(), SUBKEY.to_owned()],
         keyring,
+        ..Default::default()
     }
 }
 
@@ -311,10 +312,14 @@ fn held(dir: &Path) -> Vec<(String, Vec<u8>)> {
 
 /// The files `registry::render` makes of `entries` for `dir`, as [`held`] lists them.
 fn rendered(entries: &[Repository], dir: &Path) -> Vec<(String, Vec<u8>)> {
-    registry::render(entries, dir.to_str().expect("a UTF-8 path"))
-        .into_iter()
-        .map(|file| (file.name, file.bytes))
-        .collect()
+    registry::render(
+        entries,
+        dir.to_str().expect("a UTF-8 path"),
+        registry::MIRROR_DIR,
+    )
+    .into_iter()
+    .map(|file| (file.name, file.bytes))
+    .collect()
 }
 
 /// Beats three times: the first over JSON (the reply advertises gRPC), the second over gRPC (its
