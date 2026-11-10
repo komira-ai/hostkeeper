@@ -9,7 +9,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 ## Route
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
-`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`):
+`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `HostGroups`; the last has no handler yet, see [What is never served](#what-is-never-served)):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -133,6 +133,9 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
-- A method the coordinator has no handler for yet would answer `UNIMPLEMENTED` (501) with an
-  empty reason after its caller is checked. Every method of `hostkeeper.operator.v1` has one
-  today.
+- A method the coordinator has no handler for. The five methods of `HostGroups`
+  (`hostgroups.proto`: `List`, `Get`, `Put`, `Remove`, `Move`) have no handler in this release.
+  The gateway does not serve their service: it answers each `UNIMPLEMENTED` (501) with an empty
+  reason before it checks the token and before it reads the body, so the answer is the same
+  with any token, or none, and with any body. Every method of the other services of
+  `hostkeeper.operator.v1` has a handler.

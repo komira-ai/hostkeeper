@@ -184,6 +184,7 @@ fn a_wait_round_trips_and_its_convergence_is_the_one_the_release_before_reads() 
         service: "kbf".to_owned(),
         version: "2.0".to_owned(),
         wait_secs: 1800,
+        host_group: String::new(),
     };
     assert_eq!(
         op::WaitConvergedRequest::decode(request.encode_to_vec().as_slice()).expect("decodes"),

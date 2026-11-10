@@ -156,7 +156,8 @@ message HeartbeatRequest {
   // `install-v1`, which announces that it takes the `Install` and `Uninstall` verbs, `abort-v1`,
   // which announces that it takes the `Abort` verb, `clear-record-v1`, which announces that it
   // takes the `ClearRecord` verb, `verdict-acks-v1`, which asks for `HeartbeatResponse.acks`,
-  // and `target-v1`, which announces that it takes `target` in orders and lists `installers`):
+  // `target-v1`, which announces that it takes `target` in orders and lists `installers`, and
+  // `facts-v1`, which asks for `HeartbeatResponse.facts` and reports `facts_generation`):
   // at most 16, each 1 to 32 bytes of `[a-z0-9-]`, none twice. An agent
   // that lists every service it runs in `services` announces `heartbeat-v2`; without it the
   // coordinator counts the host as unmanaged for every service but the legacy one, rather than
@@ -190,6 +191,10 @@ message HeartbeatRequest {
   // only from a daemon that announced `target-v1`; one that did not counts as listing
   // `hostkeeper-archive` alone.
   repeated string installers = 10;
+  // The generation of the host's facts the daemon last wrote to its facts file
+  // (`HeartbeatResponse.facts`). Absent when it wrote none, and from an agent that does not
+  // announce `facts-v1`.
+  optional uint64 facts_generation = 11;
 }
 
 // Why the Sigstore trusted root a host checks packages with needs attention, as its daemon
@@ -417,6 +422,23 @@ message HeartbeatResponse {
   // not resends each verdict until it reports another, as before. At most one per service
   // listed.
   repeated VerdictAck acks = 4;
+  // The host's facts, for its facts file: sent in every answer until a heartbeat reports their
+  // generation (`HeartbeatRequest.facts_generation`). The daemon writes them before it acts on
+  // this answer's order. Only for an agent that announced `facts-v1`; absent otherwise.
+  HostFacts facts = 5;
+}
+
+// A host's own values, as the coordinator holds them, for the daemon's facts file. The daemon
+// adds its platform; nothing is run when a fact changes.
+message HostFacts {
+  // Raised by a move of the host, a change of its labels and an approval of it.
+  uint64 generation = 1;
+  // The host id it was enrolled as.
+  string host_id = 2;
+  // The host group it is in.
+  string host_group = 3;
+  // The labels an operator set on it, at most 8.
+  map<string, string> labels = 4;
 }
 
 // A verdict the coordinator acknowledges, by the service it is about and the order id and try it

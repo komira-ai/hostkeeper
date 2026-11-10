@@ -1,5 +1,6 @@
-//! Every RPC of the command table is served: none answers `UNIMPLEMENTED`, and [`PENDING`]
-//! lists nothing. A method added to a proto without a handler cannot pass unnoticed.
+//! Every RPC of the command table is served but those [`PENDING`] lists, the five of
+//! `HostGroups`, which answer `UNIMPLEMENTED`. A method added to a proto without a handler
+//! cannot pass unnoticed.
 
 use hostkeeper_proto::ctl::{COMMANDS, Command};
 use tonic::Code;
@@ -43,16 +44,33 @@ async fn unserved(served: &Served, commands: &[Command], pending: &[&str]) -> Ve
     found
 }
 
-/// Proves: [`PENDING`] lists no method: every method of the operator API has a handler.
+/// The gRPC path of each method of `HostGroups`.
+const HOST_GROUPS: [&str; 5] = [
+    "/hostkeeper.operator.v1.HostGroups/List",
+    "/hostkeeper.operator.v1.HostGroups/Get",
+    "/hostkeeper.operator.v1.HostGroups/Put",
+    "/hostkeeper.operator.v1.HostGroups/Remove",
+    "/hostkeeper.operator.v1.HostGroups/Move",
+];
+
+/// Proves: [`PENDING`] lists exactly the five methods of `HostGroups`, and each is a method of
+/// the compiled descriptor set (the command table lists it), so a path misspelt here or a method
+/// the proto drops cannot hide behind the excuse.
 #[test]
-fn no_method_is_pending() {
-    assert_eq!(PENDING, &[] as &[&str]);
+fn only_the_host_groups_methods_are_pending_and_each_is_in_the_descriptor_set() {
+    assert_eq!(PENDING, &HOST_GROUPS[..]);
+    for path in PENDING {
+        assert!(
+            COMMANDS.iter().any(|command| command.path == *path),
+            "{path} is a method of the descriptor set"
+        );
+    }
 }
 
 /// Proves: no RPC of the command table (the agent's service and the operator API) answers
 /// `UNIMPLEMENTED` to an empty request, each called with the credentials it takes on the
-/// listener that serves it, with nothing excused; and the table is not empty, so the check
-/// called something.
+/// listener that serves it, but those [`PENDING`] lists; and the table is not empty, so the
+/// check called something.
 #[tokio::test]
 async fn every_rpc_answers_something_other_than_unimplemented() {
     let served = served_with_enrollment("grpc-pending-all");
@@ -60,8 +78,33 @@ async fn every_rpc_answers_something_other_than_unimplemented() {
         !COMMANDS.is_empty(),
         "the table lists the agent's and the operator's RPCs"
     );
-    let found = unserved(&served, COMMANDS, &[]).await;
+    let found = unserved(&served, COMMANDS, PENDING).await;
     assert_eq!(found, Vec::<&str>::new(), "RPCs with no handler");
+}
+
+/// Proves: each method [`PENDING`] lists answers `UNIMPLEMENTED` with an empty message and no
+/// response message on the private listener, with the operator token and with no token at all
+/// (the refusal comes before any caller check and changes nothing), and the heartbeat listener
+/// does not serve it either.
+#[tokio::test]
+async fn each_pending_method_answers_unimplemented_with_nothing_else() {
+    let served = served("grpc-pending-host-groups");
+    for path in PENDING {
+        for (surface, bearer) in [
+            (Surface::Control, Some(OPERATOR)),
+            (Surface::Control, None),
+            (Surface::Heartbeat, Some(OPERATOR)),
+            (Surface::Heartbeat, None),
+        ] {
+            let request = grpc_request(path, (), bearer);
+            let (code, message, body) = call(&served.coordinator, surface, &None, request).await;
+            assert_eq!(
+                (code, message.as_str(), body),
+                (Code::Unimplemented, "", None),
+                "{path} on {surface:?} with {bearer:?}"
+            );
+        }
+    }
 }
 
 /// Proves: the check above is not blind to an RPC with no handler: of `Hosts.List`, which is

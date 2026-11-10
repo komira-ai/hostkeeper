@@ -449,6 +449,7 @@ pub(super) fn proto_message(services: &[Svc]) -> proto::HeartbeatRequest {
         last_renew_error: None,
         trusted_root_age_secs: None,
         trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 

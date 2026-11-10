@@ -469,6 +469,7 @@ impl Coordinator {
                 .into_iter()
                 .flat_map(|e| e.uninstall.keys().cloned())
                 .collect(),
+            host_groups: Vec::new(),
         }
     }
 }

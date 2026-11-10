@@ -83,6 +83,7 @@ async fn get(rig: &Rig, bearer: Option<&str>, service: &str, version: &str) -> A
     let request = proto::GetReleaseRequest {
         service: service.to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     };
     call(rig, GET_RELEASE, bearer, &request).await
 }

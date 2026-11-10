@@ -111,6 +111,7 @@ fn wait_for(service: &str, version: &str, wait_secs: u32) -> proto::WaitConverge
         service: service.to_owned(),
         version: version.to_owned(),
         wait_secs,
+        host_group: String::new(),
     }
 }
 

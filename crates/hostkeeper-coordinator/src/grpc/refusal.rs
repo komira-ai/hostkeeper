@@ -52,7 +52,8 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::IndexDigestMismatch
         | ReleasesRefusal::IndexInvalid
         | ReleasesRefusal::InvalidWait
-        | ReleasesRefusal::TargetInvalid => Code::InvalidArgument,
+        | ReleasesRefusal::TargetInvalid
+        | ReleasesRefusal::LimitsInHostGroup => Code::InvalidArgument,
         ReleasesRefusal::UnknownService | ReleasesRefusal::ReleaseUnknown => Code::NotFound,
         ReleasesRefusal::GenerationConflict => Code::Aborted,
         ReleasesRefusal::HeldBad
@@ -66,7 +67,9 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::NotInChannel
         | ReleasesRefusal::ChannelDigestMismatch
         | ReleasesRefusal::TooManyWaits
-        | ReleasesRefusal::ReleaseExists => Code::FailedPrecondition,
+        | ReleasesRefusal::ReleaseExists
+        | ReleasesRefusal::NotInHostGroup
+        | ReleasesRefusal::AmbiguousHostGroup => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "RELEASES_REFUSAL_")
 }
@@ -80,10 +83,13 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::InvalidRequest => Code::InvalidArgument,
         ServicesRefusal::UnknownService
         | ServicesRefusal::UnknownHost
-        | ServicesRefusal::UnknownRole => Code::NotFound,
+        | ServicesRefusal::UnknownRole
+        | ServicesRefusal::UnknownHostGroup => Code::NotFound,
         ServicesRefusal::NotAssigned
         | ServicesRefusal::NotHeld
-        | ServicesRefusal::BelowMinVersion => Code::FailedPrecondition,
+        | ServicesRefusal::BelowMinVersion
+        | ServicesRefusal::PlacedByHostGroup
+        | ServicesRefusal::NotInHostGroup => Code::FailedPrecondition,
         ServicesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
@@ -95,14 +101,17 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::Unspecified | EnrollmentRefusal::StoreFailed => Code::Internal,
         EnrollmentRefusal::Unauthorized => Code::Unauthenticated,
         EnrollmentRefusal::Forbidden => Code::PermissionDenied,
-        EnrollmentRefusal::UnknownRequest | EnrollmentRefusal::NoRecord => Code::NotFound,
+        EnrollmentRefusal::UnknownRequest
+        | EnrollmentRefusal::NoRecord
+        | EnrollmentRefusal::UnknownHostGroup => Code::NotFound,
         EnrollmentRefusal::KeyMismatch
         | EnrollmentRefusal::DuplicateClaim
         | EnrollmentRefusal::NotPending
         | EnrollmentRefusal::Denied
         | EnrollmentRefusal::RecordMismatch
         | EnrollmentRefusal::RecordContested
-        | EnrollmentRefusal::RecordUsed => Code::FailedPrecondition,
+        | EnrollmentRefusal::RecordUsed
+        | EnrollmentRefusal::HostGroupDiffers => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
@@ -112,7 +121,8 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService
         | EnrollmentRefusal::InvalidWindow
-        | EnrollmentRefusal::InvalidRequest => Code::InvalidArgument,
+        | EnrollmentRefusal::InvalidRequest
+        | EnrollmentRefusal::ServicesRetired => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "ENROLLMENT_REFUSAL_")
 }
@@ -149,7 +159,9 @@ pub(crate) fn rollouts(refusal: RolloutsRefusal) -> Status {
         RolloutsRefusal::NoDesired
         | RolloutsRefusal::NotWaiting
         | RolloutsRefusal::AlreadyPaused
-        | RolloutsRefusal::NotPaused => Code::FailedPrecondition,
+        | RolloutsRefusal::NotPaused
+        | RolloutsRefusal::AmbiguousHostGroup
+        | RolloutsRefusal::NotInHostGroup => Code::FailedPrecondition,
         RolloutsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "ROLLOUTS_REFUSAL_")

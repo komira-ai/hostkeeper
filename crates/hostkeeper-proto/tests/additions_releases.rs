@@ -123,6 +123,7 @@ fn get_release_messages_have_the_fields_the_design_gives() {
         vec![
             ("service".to_owned(), 1, Kind::String),
             ("version".to_owned(), 2, Kind::String),
+            ("host_group".to_owned(), 3, Kind::String),
         ]
     );
 
@@ -229,7 +230,15 @@ fn the_release_refusals_are_new_values_unknown_to_the_release_before() {
     let now = current_pool()
         .get_enum_by_name("hostkeeper.operator.v1.ReleasesRefusal")
         .expect("enum");
-    assert_eq!(now.values().map(|v| v.number()).max(), Some(27));
+    // Values 25..=27 are the ones above; 28..=30 are the host-group refusals, proven against the
+    // baseline in additions_host_groups.rs. Nothing else was added after 27 but those three.
+    let numbers: Vec<i32> = now
+        .values()
+        .map(|v| v.number())
+        .filter(|n| *n > 27)
+        .collect();
+    assert_eq!(numbers, vec![28, 29, 30]);
+    assert_eq!(now.values().map(|v| v.number()).max(), Some(30));
 }
 
 /// Proves: a set with targets reads back as written with the generated types, and a

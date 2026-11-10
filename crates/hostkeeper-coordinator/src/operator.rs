@@ -169,6 +169,7 @@ pub(crate) fn entry_proto(entry: &AuditEntry) -> proto::AuditEntry {
         reason: entry.reason.clone(),
         at_unix: None,
         by_name: Some(entry.by.clone()),
+        host_group: None,
     }
 }
 

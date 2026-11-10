@@ -7,7 +7,8 @@
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
-//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
+//! method has a handler but the five of `HostGroups`, which [`super::PENDING`] lists and the
+//! router answers `UNIMPLEMENTED` before any adapter runs. The caller was settled before the request
 //! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
 //! an anonymous caller, and is refused as such.
 

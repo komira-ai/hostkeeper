@@ -41,6 +41,7 @@ fn response_of(answer: Answer, order: Option<Order>) -> proto::HeartbeatResponse
         features: answer.features.unwrap_or_default(),
         halt_generations: answer.halts.into_iter().collect(),
         acks: crate::verdict_file::to_proto(&answer.acks),
+        facts: None,
     }
 }
 

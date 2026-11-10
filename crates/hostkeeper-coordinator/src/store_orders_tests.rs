@@ -49,6 +49,7 @@ fn pause() -> proto::PauseRequest {
     proto::PauseRequest {
         service: WEB.to_owned(),
         reason: "look first".to_owned(),
+        host_group: String::new(),
     }
 }
 

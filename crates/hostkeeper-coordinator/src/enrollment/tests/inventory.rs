@@ -186,6 +186,7 @@ fn a_matched_request_still_refuses_another_key() {
         services: Vec::new(),
         replace: false,
         reason: "built today".to_owned(),
+        host_group: String::new(),
     };
     let other = HostKey::new();
     let refused = rig

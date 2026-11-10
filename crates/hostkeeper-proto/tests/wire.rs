@@ -356,7 +356,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 }
 
 /// The RPCs of the coordinator's services, pinned.
-const RPCS: [(&str, &[&str]); 6] = [
+const RPCS: [(&str, &[&str]); 7] = [
     (
         "hostkeeper.agent.v1.Coordinator",
         &[
@@ -413,6 +413,16 @@ const RPCS: [(&str, &[&str]); 6] = [
         "hostkeeper.operator.v1.Alerts",
         &["List(ListAlertsRequest) ListAlertsResponse"],
     ),
+    (
+        "hostkeeper.operator.v1.HostGroups",
+        &[
+            "List(ListHostGroupsRequest) ListHostGroupsResponse",
+            "Get(GetHostGroupRequest) GetHostGroupResponse",
+            "Put(PutHostGroupRequest) PutHostGroupResponse",
+            "Remove(RemoveHostGroupRequest) RemoveHostGroupResponse",
+            "Move(MoveHostRequest) MoveHostResponse",
+        ],
+    ),
 ];
 
 /// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
@@ -431,6 +441,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("trusted_root_age_secs", 8),
             ("trusted_root_reason", 9),
             ("installers", 10),
+            ("facts_generation", 11),
         ],
     ),
     (
@@ -440,6 +451,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("features", 2),
             ("halt_generations", 3),
             ("acks", 4),
+            ("facts", 5),
         ],
     ),
     (
@@ -553,6 +565,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("node_id", 6),
             ("by_name", 7),
             ("newest", 8),
+            ("host_group", 9),
         ],
     ),
     (
@@ -566,6 +579,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("reason", 6),
             ("at_unix", 7),
             ("by_name", 8),
+            ("host_group", 9),
         ],
     ),
     (
@@ -610,6 +624,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("installers", 21),
             ("running", 22),
             ("running_unix", 23),
+            ("host_group", 24),
         ],
     ),
     (
@@ -652,6 +667,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
             ("services", 5),
             ("replace", 6),
             ("reason", 7),
+            ("host_group", 8),
         ],
     ),
     (
@@ -685,6 +701,7 @@ fn wire_names_are_pinned() {
             "abort-v1",
             "clear-record-v1",
             "deferred-v1",
+            "facts-v1",
             "forced-v1",
             "halt-v1",
             "heartbeat-v2",
@@ -815,6 +832,9 @@ fn wire_names_are_pinned() {
                 "target_invalid",
                 "release_exists",
                 "release_unknown",
+                "not_in_host_group",
+                "ambiguous_host_group",
+                "limits_in_host_group",
             ],
         ),
         (
@@ -832,6 +852,9 @@ fn wire_names_are_pinned() {
                 "unknown_role",
                 "below_min_version",
                 "audit_unavailable",
+                "placed_by_host_group",
+                "unknown_host_group",
+                "not_in_host_group",
             ],
         ),
         (

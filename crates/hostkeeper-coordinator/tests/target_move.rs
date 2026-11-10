@@ -321,6 +321,7 @@ async fn a_force_back_across_the_move_carries_the_archive_entry() {
                 confirm_service: "web".to_owned(),
             })),
             include_held: false,
+            host_group: String::new(),
         },
     )
     .await;

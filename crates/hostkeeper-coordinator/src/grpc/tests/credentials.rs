@@ -18,7 +18,7 @@ use super::support::{
     grpc_request, peer, served, served_built, served_unreachable, served_with_operator_token,
     updater,
 };
-use crate::grpc::{Admitted, admit};
+use crate::grpc::{Admitted, PENDING, admit};
 use crate::http::Surface;
 use crate::operator::Caller;
 use crate::service::MAX_BEARER_BYTES;
@@ -30,12 +30,14 @@ const STATUS: &str = "/hostkeeper.operator.v1.Releases/Status";
 /// A second service the coordinator manages and CI's allow-list does not name.
 const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
-/// The path of each method of the operator API.
+/// The path of each method of the operator API that has a handler: every one but those of
+/// [`PENDING`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
 fn operator_paths() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .filter(|command| command.package == "hostkeeper.operator.v1")
         .map(|command| command.path)
+        .filter(|path| !PENDING.contains(path))
         .collect()
 }
 
@@ -93,8 +95,7 @@ fn set_kbf() -> SetDesiredRequest {
 }
 
 /// Proves: an operator method refuses a caller that has only a host certificate, only a bad
-/// token, or nothing: `UNAUTHENTICATED` with the message `unauthorized`, before the method runs
-/// (so for a method with no handler too).
+/// token, or nothing: `UNAUTHENTICATED` with the message `unauthorized`, before the method runs.
 #[tokio::test]
 async fn operator_methods_refuse_a_host_certificate_and_no_token() {
     let served = served("grpc-cred-no-token");
@@ -260,7 +261,7 @@ async fn set_desired_of_a_service_off_the_allow_list_is_forbidden() {
     );
 }
 
-/// Proves: for every method of the operator API the credentials that are admitted are exactly
+/// Proves: for every method of the operator API with a handler the credentials admitted are exactly
 /// these: the operator token for every method, CI's token for `SetDesired`, `Converge`,
 /// `WaitConverged` and `GetRelease` only, and no credential for any. The others are refused with `unauthorized` (nothing) or
 /// `forbidden` (a CI token at a method that takes the operator's only).
@@ -279,6 +280,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Alerts",
             "Audit",
             "Enrollment",
+            "HostGroups",
             "Hosts",
             "Mdm",
             "Releases",

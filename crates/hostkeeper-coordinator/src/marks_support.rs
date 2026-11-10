@@ -276,6 +276,7 @@ pub(crate) fn force_request(
         reason: "fix the farm".to_owned(),
         targets: Some(targets),
         include_held,
+        host_group: String::new(),
     }
 }
 

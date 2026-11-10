@@ -50,6 +50,7 @@ async fn release(rig: &super::Rig, version: &str) -> proto::GetReleaseResponse {
     let ask = proto::GetReleaseRequest {
         service: "web".to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     };
     grpc(rig, GET_RELEASE, Some(OPERATOR), &ask).await.decoded()
 }

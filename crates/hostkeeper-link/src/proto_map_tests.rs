@@ -268,6 +268,7 @@ fn a_heartbeat_with_every_fact_maps_to_the_request_field_for_field() {
             last_renew_error: None,
             trusted_root_age_secs: None,
             trusted_root_reason: pb::TrustedRootReason::Unspecified as i32,
+            facts_generation: None,
         }
     );
 }

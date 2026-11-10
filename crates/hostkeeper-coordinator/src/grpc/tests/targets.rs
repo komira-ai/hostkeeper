@@ -121,6 +121,7 @@ fn get(service: &str, version: &str) -> proto::GetReleaseRequest {
     proto::GetReleaseRequest {
         service: service.to_owned(),
         version: version.to_owned(),
+        host_group: String::new(),
     }
 }
 
