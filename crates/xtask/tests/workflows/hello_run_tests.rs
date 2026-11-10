@@ -12,8 +12,8 @@
 //! `cargo` it runs this crate's real `xtask` binary, so the step that writes the targets runs the
 //! real `release targets --service hello`. `sha256sum` and `cut` are the runner's own.
 //!
-//! Each release published here carries hello's build and its failing build (archives, indexes and
-//! `.deb`s), so a job that read the other variant's index, archives or `.deb`s would set the
+//! Each release published here carries hello's build and its failing build (their `.deb`s and
+//! bundles, and hello's `.pkg`), so a job that read the other variant's `.deb`s would set the
 //! wrong one.
 
 use std::collections::BTreeMap;
@@ -23,7 +23,7 @@ use std::process::Command;
 use super::callers::{HELLO_FILE, HELLO_JOB, HELLO_RELEASE_JOB};
 use super::lint::{entries, entry};
 use super::release_files::{
-    REPO, fail_ready_files, fail_ready_targets, native_files, package_files, sorted, targets,
+    REPO, fail_ready_files, fail_ready_targets, native_files, sorted, targets,
 };
 use super::testdir::TestDir;
 use super::{workflows, yaml};
@@ -34,16 +34,10 @@ const XTASK: &str = env!("CARGO_BIN_EXE_xtask");
 /// The release the dispatches name.
 const RELEASE: &str = "1.2.3";
 
-/// The files of hello's release `release` and of its failing build: their archives, bundles and
-/// indexes, hello's native packages and the failing build's `.deb`s.
+/// The files of hello's release `release` and of its failing build: hello's native packages
+/// and their bundles, and the failing build's `.deb`s and theirs.
 fn release_files(release: &str) -> BTreeMap<String, Vec<u8>> {
-    let mut files = package_files("hello", release, "hello-index.json");
-    files.extend(package_files(
-        "hello",
-        &format!("{release}-fail-ready"),
-        "hello-fail-ready-index.json",
-    ));
-    files.extend(native_files("hello", release));
+    let mut files = native_files("hello", release);
     files.extend(fail_ready_files(release));
     files
 }
@@ -297,7 +291,7 @@ fn set_fail_ready() -> Ended {
 }
 
 /// What `set-desired` must be given for the release [`RELEASE`]: its version and the targets of
-/// hello's own `.deb`s and `.pkg` alone.
+/// hello's own `.deb`s alone.
 fn set_with() -> Ended {
     Ended::Set(BTreeMap::from([
         (
@@ -310,10 +304,9 @@ fn set_with() -> Ended {
 
 #[test]
 fn a_dispatch_sets_hellos_version_with_its_native_targets_alone() {
-    // Catches: the job reading the failing build's index or archives, targets not hello's own
-    // native package alone per platform (an archive entry still in a list, no list for macOS,
-    // the `.deb`s or the `.pkg` not downloaded or not read), an index or its digest still given to `set-desired`,
-    // and the job's outputs not the ones set-desired is given.
+    // Catches: targets not hello's own `.deb` alone per Linux platform (a list for macOS, the
+    // `.deb`s not downloaded or not read), an index or its digest given to `set-desired`, and the
+    // job's outputs not the ones set-desired is given.
     let site = Site::new("hello");
     assert_eq!(dispatch(&site, RELEASE, "hello"), set_with());
 }
@@ -322,7 +315,7 @@ fn a_dispatch_sets_hellos_version_with_its_native_targets_alone() {
 fn a_dispatch_of_fail_ready_sets_the_failing_builds_version_with_its_testing_fail_targets() {
     // Catches: `--fail-ready` not given to the verb (it would write hello's targets for the
     // failing build's version), the release's own version set instead of
-    // `<version>-fail-ready`, hello's `.debs` or archives read for the failing build, and
+    // `<version>-fail-ready`, hello's `.debs` read for the failing build, and
     // entries not naming the repository `komira-testing-fail` at `<version>~fail.ready` with
     // the digest of the failing build's own `.deb`.
     let site = Site::new("fail-ready");
@@ -333,7 +326,7 @@ fn a_dispatch_of_fail_ready_sets_the_failing_builds_version_with_its_testing_fai
 
 #[test]
 fn a_dispatch_of_hello_never_sets_the_failing_build_though_its_assets_are_there() {
-    // Catches: the failing build's `.deb`s or archives read for a normal set: with the
+    // Catches: the failing build's `.deb`s read for a normal set: with the
     // release's own `.deb`s gone, hello's dispatch stops at the download (it does not fall back
     // to the failing build's), and with them there the entries are not the failing build's.
     let site = Site::new("hello-not-fail");
@@ -345,7 +338,7 @@ fn a_dispatch_of_hello_never_sets_the_failing_build_though_its_assets_are_there(
     std::fs::remove_file(site.asset("hello_1.2.3_arm64.deb")).expect("remove an asset");
     assert_eq!(
         dispatch(&site, RELEASE, "hello"),
-        Ended::Failed("Download the variant's index, Linux archives and .debs".to_owned())
+        Ended::Failed("Download the variant's .debs and their bundles".to_owned())
     );
 }
 
@@ -368,15 +361,11 @@ fn a_version_that_is_not_a_release_stops_the_job_before_any_download() {
 }
 
 #[test]
-fn a_release_without_its_index_an_archive_a_deb_or_its_pkg_stops_at_the_download() {
+fn a_release_without_a_deb_its_pkg_or_a_bundle_stops_at_the_download() {
     // Catches: a download that goes on past a missing file (curl without `--fail-early` ends
-    // with the last transfer's status), and so a set made without the index, an archive whose
-    // manifest the entry takes, or a platform's `.deb` or `.pkg` or its bundle (its hosts would
-    // never be ordered).
+    // with the last transfer's status), and so a set made without a platform's `.deb`, the
+    // macOS `.pkg`, or a bundle (its hosts would never be ordered).
     for (n, missing) in [
-        "hello-index.json",
-        "hello-1.2.3-linux-arm64.tar.zst",
-        "hello-1.2.3-macos-arm64.tar.zst",
         "hello_1.2.3_arm64.deb",
         "hello_1.2.3_amd64.deb.sigstore.json",
         "hello-1.2.3-macos-arm64.pkg",
@@ -389,25 +378,28 @@ fn a_release_without_its_index_an_archive_a_deb_or_its_pkg_stops_at_the_download
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
         assert_eq!(
             dispatch(&site, RELEASE, "hello"),
-            Ended::Failed("Download the variant's index, Linux archives and .debs".to_owned()),
+            Ended::Failed("Download the variant's .debs and their bundles".to_owned()),
             "{missing}"
         );
     }
 }
 
 #[test]
-fn a_release_without_what_no_list_carries_is_still_set() {
-    // Catches: the job downloading or reading files no entry is made of: the archives' bundles
-    // (no archive entry is written).
-    let site = Site::new("unread");
+fn a_dispatch_of_the_failing_build_needs_no_pkg() {
+    // Catches: the failing build's job downloading or reading hello's `.pkg` (the failing build
+    // has none, and its set has no macOS list): with the release's `.pkg` and its bundle gone, it
+    // is still set.
+    let site = Site::new("fail-ready-no-pkg");
     for missing in [
-        "hello-1.2.3-macos-arm64.tar.zst.sigstore.json",
-        "hello-1.2.3-linux-arm64.tar.zst.sigstore.json",
-        "hello-1.2.3-linux-x86_64.tar.zst.sigstore.json",
+        "hello-1.2.3-macos-arm64.pkg",
+        "hello-1.2.3-macos-arm64.pkg.sigstore.json",
     ] {
         std::fs::remove_file(site.asset(missing)).expect("remove an asset");
     }
-    assert_eq!(dispatch(&site, RELEASE, "hello"), set_with());
+    let Ended::Set(outputs) = dispatch(&site, RELEASE, "fail-ready") else {
+        panic!("the failing build is set");
+    };
+    assert_eq!(outputs["version"], format!("{RELEASE}-fail-ready"));
 }
 
 #[test]
@@ -416,22 +408,6 @@ fn a_native_package_its_bundle_does_not_list_stops_at_the_targets() {
     // release asset replaced after its attestation), which the host would install.
     let site = Site::new("native-replaced");
     std::fs::write(site.asset("hello_1.2.3_amd64.deb"), b"other bytes").expect("replace");
-    assert_eq!(
-        dispatch(&site, RELEASE, "hello"),
-        Ended::Failed("The targets of the variant's package".to_owned())
-    );
-}
-
-#[test]
-fn an_archive_that_is_not_the_one_its_index_lists_stops_at_the_targets() {
-    // Catches: a native entry made from the manifest of an archive whose bytes the index does
-    // not list (a release asset replaced after its index was written).
-    let site = Site::new("replaced");
-    std::fs::write(
-        site.asset("hello-1.2.3-linux-x86_64.tar.zst"),
-        b"other bytes",
-    )
-    .expect("replace an archive");
     assert_eq!(
         dispatch(&site, RELEASE, "hello"),
         Ended::Failed("The targets of the variant's package".to_owned())

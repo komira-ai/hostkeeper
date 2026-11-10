@@ -655,7 +655,7 @@ daemon-config key of option (a) would be additions to public interfaces, flagged
 
 ## 9. Deployment: compose
 
-`docs/deploy/coordinator/compose.yaml` (build item C5, **Built**), beside the channel-sync compose file. As built,
+`docs/deploy/coordinator/compose.yaml` (build item C5, **Built**). As built,
 both images are pinned by version and digest, the `postgres` service is optional behind the compose profile
 `postgres` (a machine with a Postgres server already names that server in the connection-string file, by loopback
 or by its socket directory mounted into the coordinator), and the coordinator waits for it only when it runs
@@ -760,8 +760,7 @@ volumes:
 
 ## 10. Backups and the restore drill
 
-- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), like the
-  channel-sync timer beside them, the unit running the installed xtask binary's `db-backup` (which numbers each dump past the highest
+- **Schedule.** `docs/deploy/coordinator/hostkeeper-db-backup.service` and `.timer` (C5, **Built**), the unit running the installed xtask binary's `db-backup` (which numbers each dump past the highest
   there, keeps only a dump whose command succeeded and wrote something, and only then removes the oldest): every six hours, `docker compose exec -T postgres pg_dump --format=custom --username=hostkeeper
   --dbname=hostkeeper` (over the container's own socket) into a backup directory on the host, owner-only, keeping the
   last 28 dumps (one week). The coordinator keeps running: a dump is one consistent snapshot. Copy the directory off the

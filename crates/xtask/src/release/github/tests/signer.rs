@@ -1,16 +1,23 @@
-//! `gh attestation verify` for the signer of a trust list entry: its own repository and
-//! workflow, its ref only when it is one ref and no glob, and the hosted-runner flag only when the
-//! entry asks for it.
+//! `gh attestation verify` for another repository's signer: its own repository and workflow, its
+//! ref only when it is one ref and no glob, and the hosted-runner flag only when the signer asks
+//! for it.
+
+use hostkeeper_config::daemon::TrustedSigners;
 
 use super::*;
 
-/// The signer of the trust list entry `keys` (one `[[service]]` table's keys).
-fn signer_of(keys: &str) -> Signer {
-    let trust = hostkeeper_config::channel_trust::ChannelTrust::parse(&format!(
-        "[[service]]\nname = \"js-agent\"\n{keys}\n"
-    ))
-    .expect("a trust list");
-    Signer::of(&trust.services()[0])
+/// The signer of `workflow` (a path in `repository`) on `refs`, on a hosted runner or not.
+fn signer_of(repository: &str, workflow: &str, refs: &[&str], hosted_runner: bool) -> Signer {
+    Signer {
+        repo: repository.to_owned(),
+        workflow: format!("{repository}/{workflow}"),
+        signers: TrustedSigners {
+            organisation: repository.split('/').next().unwrap_or_default().to_owned(),
+            workflow: workflow.to_owned(),
+            refs: refs.iter().map(|r| (*r).to_owned()).collect(),
+            hosted_runner,
+        },
+    }
 }
 
 #[test]
@@ -18,8 +25,10 @@ fn verify_for_another_repository_pins_its_own_signer() {
     // Catches: another repository's asset verified against hostkeeper's signer, so that no
     // release of it ever verifies (or one signed by hostkeeper's workflow does).
     let signer = signer_of(
-        "repository = \"komira-ai/jobscheduler\"\nworkflow = \".github/workflows/release.yml\"\n\
-         refs = [\"refs/heads/main\"]\nhosted_runner = true",
+        "komira-ai/jobscheduler",
+        ".github/workflows/release.yml",
+        &["refs/heads/main"],
+        true,
     );
     let line = words(&[
         "gh",
@@ -56,8 +65,10 @@ fn verify_for_a_signer_of_glob_refs_and_any_runner_passes_neither_flag() {
     // Catches: a glob passed as `--source-ref` (gh matches it literally, so nothing verifies), or
     // `--deny-self-hosted-runners` passed for a signer that allows a self-hosted runner.
     let signer = signer_of(
-        "repository = \"komira-ai/jobscheduler\"\nworkflow = \".github/workflows/release.yml\"\n\
-         refs = [\"refs/tags/v*\"]\nhosted_runner = false",
+        "komira-ai/jobscheduler",
+        ".github/workflows/release.yml",
+        &["refs/tags/v*"],
+        false,
     );
     let line = words(&[
         "gh",

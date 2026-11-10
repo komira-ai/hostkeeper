@@ -71,7 +71,7 @@ fn a_call_that_leaves_out_a_required_argument_is_refused() {
 fn a_flag_or_verb_the_binary_does_not_have_is_refused() {
     // Catches: a misspelt or removed flag, a flag given twice, a verb that does not exist, a
     // call that names no verb: each would fail only when the step ran; and the help passes.
-    let cases: [(&str, &str); 6] = [
+    let cases: [(&str, &str); 10] = [
         (
             "cargo xtask release version --commit \"$GITHUB_SHA\" --version-file VERSION --output \"$GITHUB_OUTPUT\" --dry-run",
             "line 16: `cargo xtask release version`: unexpected argument found: `--dry-run`",
@@ -88,6 +88,24 @@ fn a_flag_or_verb_the_binary_does_not_have_is_refused() {
             "cargo xtask relase version",
             "line 16: `cargo xtask`: unrecognized subcommand: `relase`",
         ),
+        // The verbs that built hostkeeper's archives, the release indexes and the release channel
+        // are gone: a workflow that still ran one would fail only when the step ran.
+        (
+            "cargo xtask release package --platform linux-x86_64 --version 1.0.0 --out dist",
+            "line 16: `cargo xtask release`: unrecognized subcommand: `package`",
+        ),
+        (
+            "cargo xtask release index --version 1.0.0 --dir dist",
+            "line 16: `cargo xtask release`: unrecognized subcommand: `index`",
+        ),
+        (
+            "cargo xtask release channel-stage --version 1.0.0 --dir dist",
+            "line 16: `cargo xtask release`: unrecognized subcommand: `channel-stage`",
+        ),
+        (
+            "cargo xtask release channel-sync --version 1.0.0 --dir dist",
+            "line 16: `cargo xtask release`: unrecognized subcommand: `channel-sync`",
+        ),
         ("cargo xtask", "line 16: `cargo xtask` names no verb"),
         (
             "cargo xtask release",
@@ -98,7 +116,7 @@ fn a_flag_or_verb_the_binary_does_not_have_is_refused() {
         assert_problems(&run(call), &[want]);
     }
     // The help, which compiles xtask and runs no verb, at the top and of a verb.
-    for call in ["cargo xtask --help", "cargo xtask release index --help"] {
+    for call in ["cargo xtask --help", "cargo xtask release version --help"] {
         assert_problems(&run(call), &[]);
     }
 }
@@ -162,8 +180,8 @@ fn an_alternate_value_expansion_is_checked_both_unset_and_set() {
         &[],
     );
     assert_problems(
-        &run("cargo xtask release index ${1+x}"),
-        &["line 16: `cargo xtask release index`: unexpected argument found: `${1+x}`"],
+        &run("cargo xtask release version ${1+x}"),
+        &["line 16: `cargo xtask release version`: unexpected argument found: `${1+x}`"],
     );
 }
 

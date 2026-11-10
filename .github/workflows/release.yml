@@ -338,10 +338,9 @@ jobs:
   # targets and set-desired: hostkeeper's own deploy (docs/deploy/github-actions.md). They run
   # only once every release of this run is published, and only while the repository variable
   # RELEASE_SETS_DESIRED is `true`: unset, or anything else, they are skipped and the release
-  # is all this workflow does. Nothing here uploads, and nothing waits for the release channel:
-  # a release is set with native entries alone (docs/design/packages-native.md section 10.5,
-  # A24), which a host installs from the project's package repository, so no host fetches it
-  # from the channel. The workflow lint (crates/xtask/tests/workflows, `desired.rs`) holds both
+  # is all this workflow does. Nothing here uploads: a release is set with native entries alone
+  # (docs/design/packages-native.md section 10.5, A24), which a host installs from the project's
+  # package repository. The workflow lint (crates/xtask/tests/workflows, `desired.rs`) holds both
   # jobs to this shape.
   #
   # targets  reads the repository (`contents: read`) and nothing else. Takes the newest release
@@ -350,8 +349,8 @@ jobs:
   #          release targets`, compiled from the release's own commit (the workflow lint,
   #          `release_ref.rs`, holds its command line to that of a published release), writes
   #          the targets from those files: per Linux platform, hostkeeper's .deb in `testing`
-  #          alone, pinned by its SHA-256; for macOS, its signed .pkg alone (a Mac whose daemon
-  #          announces `macos-pkg` takes it; any other is ordered nothing). Last, it checks
+  #          alone, pinned by its SHA-256, and for macOS its signed .pkg alone (a Mac whose
+  #          daemon announces `macos-pkg` takes it; any other is ordered nothing). Last, it checks
   #          that no newer release is published already (a late run of an older commit): then
   #          set-desired is skipped, since setting this version would move the fleet back.
   targets:
@@ -384,9 +383,9 @@ jobs:
         with:
           name: release-${{ steps.newest.outputs.tag }}
           path: dist
-      # Per Linux platform, from the checked files: hostkeeper's .deb alone, pinned by its
-      # SHA-256, and for macOS its signed .pkg alone, pinned by its SHA-256 and size, its
-      # manifest the archive's own.
+      # Per platform, from the checked files: hostkeeper's .deb alone, pinned by its SHA-256, and
+      # for macOS its signed .pkg alone, pinned by its SHA-256 and size; the manifests the ones
+      # compiled into xtask.
       - name: The targets of the release
         id: targets
         env:

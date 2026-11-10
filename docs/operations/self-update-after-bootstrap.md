@@ -77,23 +77,17 @@ upgrade does: stage that release's binary in the binary directory, switch `curre
 `hostkeeper.service`. From that release on, the coordinator's install, and every update after it,
 runs as the self-update. Until then, hold or exclude the host for the service `hostkeeper`.
 
-The release's manifest keeps a `[hook]` table that names `bin/hostkeeper update-hook`, because
-the loader requires a bounded one, but no daemon runs it and the binary has no such verb. Its
-floor is above `LEGACY_FLOOR` (0.1.53), so every daemon that can take the release runs the
-daemon's built-in steps, each of which succeeds at once; a daemon older than the floor reads the
-table and defers the release `daemon_too_old`.
-
 ## Through the host's own package
 
-From the release that lists hostkeeper's native entry (docs/design/packages-native.md, item A23),
-each platform's list of the service `hostkeeper` holds first the package the host was set up from,
-then the archive: on Linux the daemon's `.deb`, an `apt` entry of the repository's `testing` suite;
-on a Mac the installer pkg, a `macos-pkg` entry of the `testing` store. A host whose daemon
-announces that installer (host setup placed its repository entry or store) is picked the package:
-the daemon stages the new version, restarts into its binary, and only once that binary has
-confirmed itself installs the package (`apt-get install` and the hold, or `installer`), so the unit
-always starts a binary that ran (section 10.4 of that design). Any other host is picked the archive
-and updates as above.
+Each platform's list of the service `hostkeeper` holds the package the host was set up from: on
+Linux the daemon's `.deb`, an `apt` entry of the repository's `testing` suite; on a Mac the
+installer pkg, a `macos-pkg` entry of the `testing` store (docs/design/packages-native.md). A host
+whose daemon announces that installer (host setup placed its repository entry or store) is picked
+the package: the daemon stages the new version, restarts into its binary, and only once that binary
+has confirmed itself installs the package (`apt-get install` and the hold, or `installer`), so the
+unit always starts a binary that ran (section 10.4 of that design). A host whose daemon announces
+no such installer is ordered nothing (`installer_dropped`): set it up with the package's repository
+entry or store first ([move-to-native.md](move-to-native.md)).
 
 ## Daemons before this change
 

@@ -81,7 +81,7 @@ already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design r
 **Before.**
 
 - A service is shipped as one `tar.zst` archive per platform, in hostkeeper's layout, with `manifest.toml` inside.
-- CI publishes a GitHub release. On the channel's host, `cargo xtask release channel-sync` pulls it into
+- CI publishes a GitHub release. On the channel's host, `cargo xtask release channel-sync` (retired, packages-native.md section 10.5) pulls it into
   `<channel>/<service>/<version>/`, and CI sets the version desired with the release index inline
   (`hostkeeper ci set-desired --release-index-file`).
 - Every daemon fetches from the one `release_channel` of its config, over HTTPS, without credentials.
@@ -139,7 +139,7 @@ Every item is **Built** at the path given.
 
 - **The package.** One `tar.zst` per service, version and platform, read by `crates/hostkeeper-unpack`: one zstd
   frame, ustar, regular files and directories only, top level `manifest.toml`, `bin/`, `units/`, `files/`, bounded by
-  `max_unpacked_bytes` and `max_entries` (`docs/package-format.md`). Its `manifest.toml` (`Manifest::load`,
+  `max_unpacked_bytes` and `max_entries` (`docs/package-format.md`, retired with the archive by packages-native.md section 10.7; the tree digest and the seal are in `docs/tree-digest.md`). Its `manifest.toml` (`Manifest::load`,
   `crates/hostkeeper-config/src/manifest.rs`) holds `schema = 1`, `name`, `version`, `platform`, `min_hostkeeper`,
   `[hook]`, `[units] run`, `[health] url`, `[[files]]` and `[params]`; every table but `[params]` refuses an unknown key.
 - **The fetch and the proof.** `crates/hostkeeper-package/src/fetch.rs` takes its platform's entry of
@@ -928,7 +928,7 @@ The tests of every build item, the cases each covers and why that list is comple
 
 A7 and A10 can run beside each other, and A9 after A7, and A15 beside any item. A16 and A17 come from packages-repositories.md
 (section 8): A16 after A2 and before A7, A17 after A7. The docs a behaviour change makes stale move with its item (rule T19):
-`docs/package-format.md` with A6 (it becomes the `hostkeeper-archive` installer's page), `docs/hello.md` with A7,
+`docs/package-format.md` with A6 (since retired with the archive, packages-native.md section 10.7; its tree digest and seal are `docs/tree-digest.md`), `docs/hello.md` with A7,
 `docs/deploy/ci-client.md` with A5, `docs/gateway.md` with A2, and hostkeeper-design.md's section 5.5 and the platform
 line of its section 4.7 with A4. That file is already over 1000 lines, so each edit adds no line to it (rule R12).
 

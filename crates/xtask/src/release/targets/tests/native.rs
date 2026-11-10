@@ -1,210 +1,27 @@
 //! The native entry's failure and boundary cases: the native package, its bundle and its
-//! `control`, and the native manifest made of the archive's.
+//! `control`.
 
 use super::*;
 
-/// `text` as the archive's manifest table [`native_manifest`] reads.
-fn table(text: &str) -> toml::Table {
-    toml::from_str(text).expect("TOML")
-}
-
-/// A hook every case below starts from: what an archive's manifest holds.
-const HOOK: &str = "[hook]\ncommand = [\"bin/hello\", \"update-hook\"]\nverify_deadline_secs = 120\n\n\
-                    [hook.timeout_secs]\ncutover = 60\nverify = 30\nrollback = 60\ncleanup = 30\n";
-
-#[test]
-fn a_manifest_the_native_entry_cannot_carry_whole_is_refused_by_its_key() {
-    // Catches: an archive's manifest turned into a native one with a field dropped on the way
-    // (the paths it places, a key of the hook or its bounds the entry has no field for), or with
-    // a value of the wrong kind sent on as zero or empty instead of named.
-    let cases = [
-        (
-            format!("{HOOK}[[files]]\nsource = \"a\"\npath = \"/b\"\n"),
-            "files has no counterpart in a native entry, whose package installs its own files",
-        ),
-        ("name = \"hello\"\n".to_owned(), "there is no [hook]"),
-        ("hook = 7\n".to_owned(), "hook is not a table"),
-        (
-            "[hook]\nverify_deadline_secs = 120\n".to_owned(),
-            "there is no [hook.timeout_secs]",
-        ),
-        (
-            format!("{HOOK}[units]\nrun = [\"hello@a.service\"]\nfiles = []\n"),
-            "units.files is not a key a native entry carries",
-        ),
-        (
-            HOOK.replace("[hook.timeout_secs]", "retries = 1\n[hook.timeout_secs]"),
-            "hook.retries is not a key a native entry carries",
-        ),
-        (
-            format!("{HOOK}stop = 1\n"),
-            "hook.timeout_secs.stop is not a key a native entry carries",
-        ),
-        (
-            HOOK.replace("cutover = 60\n", ""),
-            "hook.timeout_secs.cutover is missing",
-        ),
-        (
-            HOOK.replace("cutover = 60", "cutover = -1"),
-            "hook.timeout_secs.cutover is not a whole number of 0 or more",
-        ),
-        (
-            HOOK.replace("cutover = 60", "cutover = \"60\""),
-            "hook.timeout_secs.cutover is not a whole number of 0 or more",
-        ),
-        (
-            HOOK.replace("verify_deadline_secs = 120\n", ""),
-            "hook.verify_deadline_secs is missing",
-        ),
-        (
-            HOOK.replace("[hook.timeout_secs]", "boot = 7\n[hook.timeout_secs]"),
-            "hook.boot is not a string",
-        ),
-        (
-            HOOK.replace(
-                "[hook.timeout_secs]",
-                "cleanup_retries = 4294967296\n[hook.timeout_secs]",
-            ),
-            "hook.cleanup_retries is larger than 4294967295",
-        ),
-        (
-            format!("{HOOK}[units]\nrun = \"hello@a.service\"\n"),
-            "run of [units] is not a list of strings",
-        ),
-        (
-            format!("{HOOK}[units]\nrun = [7]\n"),
-            "run of [units] is not a list of strings",
-        ),
-        (
-            format!("{HOOK}[health]\nurl = \"http://127.0.0.1:9310/readyz\"\npath = \"/\"\n"),
-            "health.path is not a key a native entry carries",
-        ),
-        (
-            format!("{HOOK}[health]\nurl = 9310\n"),
-            "health.url is not a string",
-        ),
-        (
-            format!("{HOOK}[params]\nports = [9310]\n"),
-            "params.ports is not a string, an integer, a float or a boolean",
-        ),
-        (format!("units = 1\n{HOOK}"), "units is not a table"),
-    ];
-    for (text, why) in cases {
-        assert_eq!(
-            native_manifest(&table(&text), "hello", "0.1.0", None),
-            Err(why.to_owned()),
-            "{text}"
-        );
-    }
-}
-
-#[test]
-fn a_program_given_is_the_command_with_the_archives_arguments_after_its_program() {
-    // Catches: an entry whose command is the archive's relative one (the daemon refuses it for a
-    // native package), one that loses `update-hook`, and an archive command that is not a
-    // non-empty list of strings sent on as an empty command.
-    let program = "/usr/lib/hello/hello";
-    let got = native_manifest(&table(HOOK), "hello", "0.1.2", Some(program)).expect("a manifest");
-    assert_eq!(
-        got.hook.expect("a hook").command,
-        [program, "update-hook"].map(str::to_owned)
-    );
-    let none = native_manifest(&table(HOOK), "hello", "0.1.2", None).expect("a manifest");
-    assert_eq!(none.hook.expect("a hook").command, Vec::<String>::new());
-    for bad in [
-        "command = 7",
-        "command = []",
-        "command = [\"bin/hello\", 3]",
-    ] {
-        let text = HOOK.replace("command = [\"bin/hello\", \"update-hook\"]", bad);
-        assert_eq!(
-            native_manifest(&table(&text), "hello", "0.1.2", Some(program)),
-            Err("hook.command is not a non-empty list of strings".to_owned()),
-            "{bad}"
-        );
-    }
-    let text = HOOK.replace("command = [\"bin/hello\", \"update-hook\"]\n", "");
-    assert_eq!(
-        native_manifest(&table(&text), "hello", "0.1.2", Some(program)),
-        Err("hook.command is not a non-empty list of strings".to_owned())
-    );
-}
-
 #[test]
 fn the_program_a_package_installs_is_where_its_builder_writes_it() {
-    // Catches: a command naming a path the package does not install: hello's `.deb` and `.pkg`
-    // and mdm's `.deb` each hold a file at the program path, and hostkeeper has none.
+    // Catches: a hook command naming a path the `.deb` does not install: hello's and mdm's each
+    // hold an executable file at the program path, and hostkeeper names none.
     let installed = |files: Vec<native_hello::File>, program: &str| {
         files.iter().any(|f| f.path == program && f.mode == 0o755)
     };
-    let hello = native_program(Package::Hello, Installer::Apt).expect("a program");
+    let hello = manifest::program(Package::Hello).expect("a program");
     assert!(installed(
         native_hello::deb_files(b"p".to_vec(), false),
         &hello
     ));
-    let pkg = native_program(Package::Hello, Installer::MacosPkg).expect("a program");
-    assert!(installed(
-        native_hello::pkg_files(b"p".to_vec(), false).expect("the .pkg's files"),
-        &pkg
-    ));
-    let mdm = native_program(Package::Mdm, Installer::Apt).expect("a program");
+    assert_eq!(manifest::program(Package::HelloFailReady), Some(hello));
+    let mdm = manifest::program(Package::Mdm).expect("a program");
     assert!(installed(
         crate::release::native::mdm::deb_files(b"p".to_vec(), Vec::new()),
         &mdm
     ));
-    for installer in [Installer::Apt, Installer::MacosPkg] {
-        assert_eq!(native_program(Package::Hostkeeper, installer), None);
-    }
-}
-
-#[test]
-fn every_optional_field_of_the_archives_hook_and_every_kind_of_param_is_carried() {
-    // Catches: a boot step, a promotion ceiling, a cleanup retry count, an uninstall bound or a
-    // float or boolean param of the archive's manifest lost from the native entry (the host would
-    // run the native version with the hook's defaults), a missing `prepare` bound sent as
-    // anything but 0, or an archive with no units or health URL given some.
-    let text = HOOK.replace(
-        "[hook.timeout_secs]",
-        "boot = \"seed\"\npromotion_ceiling_secs = 900\ncleanup_retries = 2\n[hook.timeout_secs]\nuninstall = 45",
-    ) + "[params]\nratio = 0.5\nquiet = true\nname = \"a\"\ncount = -3\n";
-    let got = native_manifest(&table(&text), "hello", "0.1.2", None).expect("a manifest");
-    let mut params = BTreeMap::new();
-    for (key, value) in [
-        ("count", param::Value::Integer(-3)),
-        ("name", param::Value::Text("a".to_owned())),
-        ("quiet", param::Value::Flag(true)),
-        ("ratio", param::Value::Float(0.5)),
-    ] {
-        params.insert(key.to_owned(), Param { value: Some(value) });
-    }
-    assert_eq!(
-        got,
-        Manifest {
-            package: Some("hello".to_owned()),
-            hook: Some(Hook {
-                command: Vec::new(),
-                boot: Some("seed".to_owned()),
-                timeout_secs: Some(StepBounds {
-                    prepare: 0,
-                    cutover: 60,
-                    verify: 30,
-                    rollback: 60,
-                    cleanup: 30,
-                    uninstall: Some(45),
-                }),
-                verify_deadline_secs: 120,
-                promotion_ceiling_secs: Some(900),
-                cleanup_retries: Some(2),
-            }),
-            run: Vec::new(),
-            health_url: None,
-            place: Vec::new(),
-            params: params.into_iter().collect(),
-            min_hostkeeper: "0.1.2".to_owned(),
-            containers: Vec::new(),
-            installer_bounds: Some(INSTALLER_BOUNDS),
-        }
-    );
+    assert_eq!(manifest::program(Package::Hostkeeper), None);
 }
 
 #[test]
@@ -294,7 +111,7 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
     // Catches: a native package missing (its hosts would be ordered a pin no repository holds),
     // its bundle missing or listing other bytes (the published package would not be the one
     // attested), a `.deb` of another version under the release's name, or the verb stopping at
-    // the first of these; and a `.pkg` whose bundle lists other bytes passed over.
+    // the first of these; a `.pkg` whose bundle lists other bytes among them.
     let (root, dist) = dist("targets-native-problems");
     built(&dist, Package::Hello);
     let output = root.join("github_output");
@@ -349,10 +166,9 @@ fn every_problem_of_the_native_packages_is_named_at_once_and_nothing_is_written(
 
 #[test]
 fn hostkeepers_release_without_its_installer_or_with_another_packages_deb_is_refused() {
-    // Catches: hostkeeper's list written with a pin no store holds (its installer missing), or
-    // with the coordinator's `.deb` under the daemon's name (both are built by nfpm into one
-    // directory), which a host's apt would install as another package; and the verb stopping at
-    // the first of the two.
+    // Catches: hostkeeper's list written with the coordinator's `.deb` under the daemon's name
+    // (both are built by nfpm into one directory), which a host's apt would install as another
+    // package; and a release missing its installer `.pkg` given a macOS list without it.
     let (root, dist) = dist("targets-hostkeeper-native-problems");
     built(&dist, Package::Hostkeeper);
     let output = root.join("github_output");
@@ -393,62 +209,12 @@ fn a_bundle_without_its_native_package_is_not_read() {
     let (_root, dist) = dist("targets-native-bundle-alone");
     built(&dist, Package::Hello);
     std::fs::remove_file(dist.join("hello_0.1.5_amd64.deb")).expect("remove");
-    std::fs::remove_file(dist.join("hello-0.1.5-macos-arm64.pkg")).expect("remove");
     assert_eq!(
         targets(&request(&dist, Package::Hello, None)),
         Err(Error::Refused(vec![
             "hello_0.1.5_amd64.deb: missing: the release ships the native package of every \
              platform it lists"
-                .to_owned(),
-            "hello-0.1.5-macos-arm64.pkg: missing: the release ships the native package of \
-             every platform it lists"
-                .to_owned(),
-        ]))
-    );
-}
-
-#[test]
-fn an_archive_manifest_with_files_gives_no_native_entry_and_is_named() {
-    // Catches: the paths an archive places dropped from the native entry without a word (the
-    // native version would lack them), the refusal naming the native package instead of the
-    // archive whose manifest it is.
-    let manifest = format!(
-        "{}\n[[files]]\nsource = \"files/a\"\npath = \"/etc/mdm/a\"\n",
-        mdm_manifest("mdm", "0.1.5", "linux-x86_64", "0.1.3")
-    );
-    let archive = archive_of(&[(
-        "manifest.toml",
-        tar::EntryType::Regular,
-        manifest.as_bytes(),
-    )]);
-    assert_eq!(
-        mdm_with("targets-native-files", &archive),
-        refused(
-            "manifest.toml: files has no counterpart in a native entry, whose package installs \
-             its own files"
-        )
-    );
-}
-
-#[test]
-fn a_native_manifest_the_coordinator_would_refuse_is_never_written() {
-    // Catches: a native entry sent on whose manifest the coordinator refuses (a run unit not of
-    // the service, `target_invalid`, failing the whole set), which an archive entry, carrying
-    // the floor alone, never shows: entry 0, the native one, is named.
-    let manifest = mdm_manifest("mdm", "0.1.5", "linux-x86_64", "0.1.3")
-        .replace("\"mdm-scep.service\"", "\"other.service\"");
-    let archive = archive_of(&[(
-        "manifest.toml",
-        tar::EntryType::Regular,
-        manifest.as_bytes(),
-    )]);
-    let got = mdm_with("targets-native-run", &archive);
-    assert_eq!(
-        got,
-        Err(Error::Failed(
-            "target_invalid: entry 0 of linux-x86_64: the run entry \"other.service\" does not \
-             begin with the service name, alone or followed by `-`"
                 .to_owned()
-        ))
+        ]))
     );
 }

@@ -479,10 +479,10 @@ fn the_outputs_step_reads_exactly_the_files_the_calls_leave() {
 }
 
 #[test]
-fn no_script_holds_an_expression_and_the_release_inputs_are_optional() {
+fn no_script_holds_an_expression_and_the_inputs_of_the_removed_release_forms_are_gone() {
     // Catches: an input written into a script (where the runner would interpolate it as code)
-    // rather than read through `env`, and the package digest or the index inputs required,
-    // which would refuse a caller that uses the other way.
+    // rather than read through `env`, and the package digest or the release index inputs back in
+    // the client: a release is set with its targets alone.
     let doc = yaml::load(&real()).expect("parses");
     for step in steps(&doc) {
         let script = entry(&step, "run")
@@ -495,12 +495,7 @@ fn no_script_holds_an_expression_and_the_release_inputs_are_optional() {
         .and_then(|c| entry(c, "inputs"))
         .expect("inputs");
     for name in ["package_digest", "release_index", "release_index_digest"] {
-        let input = entry(inputs, name).expect(name);
-        assert_eq!(
-            entry(input, "required").and_then(Node::as_str),
-            Some("false"),
-            "{name}"
-        );
+        assert!(entry(inputs, name).is_none(), "{name}");
     }
 }
 

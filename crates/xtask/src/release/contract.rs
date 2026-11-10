@@ -13,23 +13,20 @@
 //!   committed baseline `crates/xtask/tests/release/asset_names.baseline` holds them).
 //!
 //! There are exactly three platforms, linux-x86_64, linux-arm64 and macos-arm64
-//! ([`Platform::ALL`]): one package per OS and CPU family, listed in the release index of its
-//! package (see `index`). A release ships every one of them ([`Platform::RELEASED`]), and a
-//! release missing one is refused. macos-arm64 also ships the installer pkg of a Mac's first
-//! install ([`installer_name`]); the two Linux platforms also ship the coordinator
-//! ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries four kinds of package ([`Package`]):
-//! hostkeeper's own (`index.json`), `hello`, the example service of `examples/hello`
-//! (`hello-index.json`), hello's failing build (`hello-fail-ready-index.json`), and `mdm`, the
-//! MDM server stack as a service package (`mdm-index.json`), for linux-x86_64 only
-//! ([`Package::platforms`]). It also
-//! carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
+//! ([`Platform::RELEASED`]): one package per OS and CPU family. A release ships every one of them,
+//! and a release missing one is refused. macos-arm64 also ships the
+//! installer pkg of a Mac's first install ([`installer_name`]); the two Linux platforms also ship
+//! the coordinator ([`COORDINATOR`]) and the MDM kit's binary ([`MDM`]). A release carries four
+//! kinds of package ([`Package`]): hostkeeper's own, `hello`, the example service of
+//! `examples/hello`, hello's failing build, and `mdm`, the MDM server stack, for linux-x86_64
+//! only ([`Package::platforms`]); each is a native package ([`Package::native_name`]) and the
+//! failing build has none. It also carries `netboot.json` ([`NETBOOT`]), the boot sets of network install for the two Linux
 //! platforms, and `hkctl-<version>` ([`hkctl_name`]), the command line, one script for every
 //! platform.
 
 use std::fmt;
 use std::str::FromStr;
 
-use hostkeeper_config::channel_trust::{Repository, TrustedService};
 use hostkeeper_config::daemon::TrustedSigners;
 
 /// The repository a release is cut from and attested by.
@@ -68,8 +65,7 @@ pub(crate) const RELEASE_COMMIT: &str = "RELEASE_COMMIT";
 /// The program name a shipped binary prints first for `--version`.
 pub(crate) const PROGRAM: &str = "hostkeeper";
 
-/// The name of the example service, `examples/hello`: its package name, binary and release index
-/// stem.
+/// The name of the example service, `examples/hello`: its package name and binary.
 pub(crate) const HELLO: &str = "hello";
 
 /// The coordinator's asset stem, and the name of its binary.
@@ -81,7 +77,7 @@ pub(crate) const COORDINATOR: &str = "hostkeeper-coordinator";
 pub(crate) const MDM: &str = "hostkeeper-mdm";
 
 /// The name of the MDM server stack's service package (docs/design/two-programs.md section 6.2):
-/// its package name, the service of its release index and its program `bin/mdm`, which prints
+/// its package name and its program `mdm`, which prints
 /// `mdm X.Y.Z+<12 hex>` for `--version`. Built for linux-x86_64 only: the pinned tools it carries
 /// are linux-amd64 builds.
 pub(crate) const MDM_SERVICE: &str = "mdm";
@@ -107,20 +103,6 @@ pub(crate) const STAMPED: [&str; 4] = [PROGRAMS[0], PROGRAMS[1], PROGRAMS[2], MD
 /// The file listing the SHA-256 of every asset but itself and the bundles.
 pub(crate) const SUMS: &str = "SHA256SUMS";
 
-/// The release index: which package file serves each platform (see `index`).
-pub(crate) const INDEX: &str = "index.json";
-
-/// The release index of the hello packages: the same schema as [`INDEX`], `service` `hello`.
-pub(crate) const HELLO_INDEX: &str = "hello-index.json";
-
-/// The release index of the failing build of hello: the same schema as [`INDEX`], `service`
-/// `hello`, its version the release's followed by [`FAIL_READY_SUFFIX`].
-pub(crate) const HELLO_FAIL_READY_INDEX: &str = "hello-fail-ready-index.json";
-
-/// The release index of the mdm package: the same schema as [`INDEX`], `service` `mdm`, its one
-/// platform linux-x86_64.
-pub(crate) const MDM_INDEX: &str = "mdm-index.json";
-
 /// The boot sets of network install: for each Linux platform the Ubuntu ISO, shim, network
 /// GRUB, kernel and initrd a bare machine boots, each with its size and SHA-256 (see `netboot`).
 /// Attested, with a bundle of its own.
@@ -128,13 +110,6 @@ pub(crate) const NETBOOT: &str = "netboot.json";
 
 /// What a provenance bundle's file name adds to its asset's.
 pub(crate) const BUNDLE_SUFFIX: &str = ".sigstore.json";
-
-/// What the hostkeeper package's file name ends in: the archive and its compression. The
-/// compression itself is chosen in `package::compress`; the two change together.
-pub(crate) const PACKAGE_SUFFIX: &str = ".tar.zst";
-
-/// What the file holding the package's SHA-256 adds to the package's name.
-pub(crate) const DIGEST_SUFFIX: &str = ".sha256";
 
 /// What the file name of the macOS installer ends in: a flat installer package.
 pub(crate) const INSTALLER_SUFFIX: &str = ".pkg";
@@ -287,17 +262,17 @@ impl Repo {
 impl FromStr for Repo {
     type Err = BadValue;
 
-    /// The grammar of the trust list's [`Repository`], so the two cannot differ.
+    /// `<owner>/<name>`, each part 1 or more of A-Z, a-z, 0-9, `-`, `_`, `.`.
     fn from_str(text: &str) -> Result<Repo, BadValue> {
-        Repository::new(text)
-            .map(|r| Repo::from(&r))
+        let part = |p: &str| {
+            !p.is_empty()
+                & p.bytes()
+                    .all(|b| b.is_ascii_alphanumeric() | matches!(b, b'-' | b'_' | b'.'))
+        };
+        text.split_once('/')
+            .filter(|(owner, name)| part(owner) & part(name))
+            .map(|_| Repo(text.to_owned()))
             .ok_or_else(|| BadValue::Repo(text.to_owned()))
-    }
-}
-
-impl From<&Repository> for Repo {
-    fn from(repository: &Repository) -> Repo {
-        Repo(repository.as_str().to_owned())
     }
 }
 
@@ -310,8 +285,7 @@ impl fmt::Display for Repo {
 /// The identity whose attestations a repository's release is checked against: a workflow of the
 /// repository, on the refs and runners of a [`TrustedSigners`], the daemon config's type.
 /// Hostkeeper's own is [`Signer::hostkeeper`], the [`SIGNER_WORKFLOW`] of [`REPO`] on
-/// [`SIGNER_REF`]; `release channel-sync` holds each service it stages to the signer of its
-/// entry in the trust list ([`Signer::of`]).
+/// [`SIGNER_REF`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Signer {
     /// The repository whose attestations count.
@@ -324,15 +298,6 @@ pub(crate) struct Signer {
 }
 
 impl Signer {
-    /// The signer of the trust list's entry `trusted`: its workflow in its repository.
-    pub(crate) fn of(trusted: &TrustedService) -> Signer {
-        Signer {
-            repo: trusted.repository.to_string(),
-            workflow: format!("{}/{}", trusted.repository, trusted.signers.workflow),
-            signers: trusted.signers.clone(),
-        }
-    }
-
     /// The signer of hostkeeper's own releases: [`SIGNER_WORKFLOW`] of [`REPO`] on
     /// [`SIGNER_REF`], on a hosted runner.
     pub(crate) fn hostkeeper() -> Signer {
@@ -391,33 +356,21 @@ pub(crate) enum Platform {
 }
 
 impl Platform {
-    /// Every platform, in the order of their names.
-    pub(crate) const ALL: [Platform; 3] = [
-        Platform::LinuxArm64,
-        Platform::LinuxX86_64,
-        Platform::MacosArm64,
-    ];
-
     /// The platforms a release ships: all three. A release that lacks the assets of one of them
-    /// is refused (`check`), and so is an index without its package (`index`).
+    /// is refused (`check`).
     pub(crate) const RELEASED: [Platform; 3] = [
         Platform::LinuxX86_64,
         Platform::LinuxArm64,
         Platform::MacosArm64,
     ];
 
-    /// The platform's name, in asset names, the release index and a manifest.
+    /// The platform's name, in asset names and a manifest.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Platform::LinuxX86_64 => "linux-x86_64",
             Platform::LinuxArm64 => "linux-arm64",
             Platform::MacosArm64 => "macos-arm64",
         }
-    }
-
-    /// The platform a name names, none for any other text.
-    pub(crate) fn of_name(name: &str) -> Option<Platform> {
-        Platform::ALL.into_iter().find(|p| p.name() == name)
     }
 
     /// The architecture as a deb and as an rpm name it, for a Linux platform; none for macOS,
@@ -431,7 +384,7 @@ impl Platform {
     }
 }
 
-/// A service whose package `release package` and `release index` build. Hostkeeper is the
+/// A service whose package a release builds. Hostkeeper is the
 /// default of every verb that takes one, so a verb given no service does what it did before there
 /// were two.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, clap::ValueEnum)]
@@ -449,7 +402,7 @@ pub(crate) enum Service {
 }
 
 impl Service {
-    /// The service's name: its package name, its binary and the `service` of its release index.
+    /// The service's name: its package name and its binary.
     pub(crate) fn name(self) -> &'static str {
         match self {
             Service::Hostkeeper => PROGRAM,
@@ -478,11 +431,9 @@ pub(crate) const TESTING_ENTRY: &str = "komira-testing";
 /// 10.10).
 pub(crate) const TESTING_FAIL_ENTRY: &str = "komira-testing-fail";
 
-/// One kind of package a release carries: each has a package per platform it is built for
-/// ([`Package::platforms`]) and a release index of its own. The release carries hostkeeper's
-/// package, hello's and hello's failing build, the same package started with `--fail-ready`,
-/// which a host can be rolled back from (a host trusts only packages this repository's workflow
-/// attested, so the failing build is released and attested like the others), and mdm's.
+/// One kind of package a release carries: each has a native package per platform it is built for
+/// ([`Package::platforms`]). The release carries hostkeeper's package, hello's and hello's failing
+/// build, the same package started with `--fail-ready`, whose `.deb` alone is released, and mdm's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Package {
     Hostkeeper,
@@ -524,7 +475,7 @@ impl Package {
         }
     }
 
-    /// The service the package is of: its name is the package's, binary's and index's `service`.
+    /// The service the package is of: its name is the package's and binary's.
     pub(crate) fn service(self) -> Service {
         match self {
             Package::Hostkeeper => Service::Hostkeeper,
@@ -533,7 +484,7 @@ impl Package {
         }
     }
 
-    /// The version the package, its manifest and its index carry for the release `version`: the
+    /// The version the package and its manifest carry for the release `version`: the
     /// release's own, or for the failing build the release's followed by [`FAIL_READY_SUFFIX`].
     pub(crate) fn version_text(self, version: &Version) -> String {
         match self {
@@ -559,26 +510,6 @@ impl Package {
             Package::Hostkeeper | Package::Hello | Package::Mdm => TESTING_ENTRY,
             Package::HelloFailReady => TESTING_FAIL_ENTRY,
         }
-    }
-
-    /// The file name of the package's release index.
-    pub(crate) fn index_name(self) -> &'static str {
-        match self {
-            Package::Hostkeeper => INDEX,
-            Package::Hello => HELLO_INDEX,
-            Package::HelloFailReady => HELLO_FAIL_READY_INDEX,
-            Package::Mdm => MDM_INDEX,
-        }
-    }
-
-    /// The file name of the package of the release `version` for `platform`.
-    pub(crate) fn package_name(self, version: &Version, platform: Platform) -> String {
-        format!(
-            "{}-{}-{}{PACKAGE_SUFFIX}",
-            self.service().name(),
-            self.version_text(version),
-            platform.name()
-        )
     }
 
     /// The file name of the native package of the release `version` for `platform` that the
@@ -637,11 +568,6 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// asset with a bundle (`<asset>.sigstore.json`) is attested. Per platform `<p>`:
 ///
 /// - `hostkeeper-<v>-<p>.tar.gz`, the binary;
-/// - `hostkeeper-<v>-<p>.tar.zst`, the hostkeeper package, and its `.sha256`;
-/// - `hello-<v>-<p>.tar.zst`, the hello package, and its `.sha256`;
-/// - `hello-<v>-fail-ready-<p>.tar.zst`, the failing build of hello, and its `.sha256`;
-/// - `mdm-<v>-<p>.tar.zst`, the mdm package, and its `.sha256`, for the platforms of
-///   [`Package::platforms`] only (linux-x86_64);
 /// - `hostkeeper-<v>-<p>.cdx.json`, the SBOM;
 ///
 /// and on Linux, with the deb and rpm architecture `<deb>` and `<rpm>`:
@@ -649,7 +575,7 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 /// - `hostkeeper-coordinator-<v>-<p>.tar.gz`, the coordinator's binary;
 /// - `hostkeeper_<v>_<deb>.deb` and `hostkeeper-<v>-1.<rpm>.rpm`, the daemon's Linux packages, and
 ///   `hostkeeper-coordinator_<v>_<deb>.deb` and `hostkeeper-coordinator-<v>-1.<rpm>.rpm`, the
-///   coordinator's (attested, and no service package: no `.sha256` and no release index);
+///   coordinator's (attested);
 /// - `hostkeeper-coordinator-<v>-<p>.image.tar`, the coordinator's OCI image;
 /// - `hostkeeper-coordinator-<v>-<p>.cdx.json`, its SBOM;
 /// - `hostkeeper-mdm-<v>-<p>.tar.gz`, the MDM kit's binary, and `hostkeeper-mdm-<v>-<p>.cdx.json`,
@@ -659,16 +585,14 @@ pub(crate) fn is_bundle(name: &str) -> bool {
 ///
 /// and the native packages of the services ([`Package::native_name`]): `hello_<v>_<deb>.deb` and
 /// the failing build's `hello_<v>-fail-ready_<deb>.deb` on each Linux platform,
-/// `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on linux-x86_64 (attested, no
-/// `.sha256`); hostkeeper's own are its `.deb` and its installer above, each listed once;
+/// `hello-<v>-macos-arm64.pkg` on macOS, and `mdm_<v>_amd64.deb` on linux-x86_64 (attested);
+/// hostkeeper's own are its `.deb` and its installer above, each listed once;
 ///
-/// the bundle of each binary tarball (the three programs'), Linux package, installer, hostkeeper package, hello package,
-/// hello's failing build, mdm package, native package and image; when both Linux platforms are given, once, the
-/// coordinator's image index `hostkeeper-coordinator-<v>.image.json`
-/// ([`super::image_index`]) and its bundle; and once, [`INDEX`] (the release index of the
-/// hostkeeper packages), [`HELLO_INDEX`] (that of the hello packages), [`HELLO_FAIL_READY_INDEX`]
-/// (that of the failing build), [`MDM_INDEX`] (that of the mdm package), [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>`
-/// (the command line, [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
+/// the bundle of each binary tarball (the three programs'), Linux package, installer, native
+/// package and image; when both Linux platforms are given, once, the coordinator's image index
+/// `hostkeeper-coordinator-<v>.image.json` ([`super::image_index`]) and its bundle; and once,
+/// [`NETBOOT`] (the boot sets of network install) and its bundle, `hkctl-<v>` (the command line,
+/// [`hkctl_name`]) and its bundle, and `SHA256SUMS`.
 pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<String> {
     let hkctl = hkctl_name(version);
     let mut names = vec![
@@ -678,7 +602,6 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
         bundle_of(&hkctl),
         hkctl,
     ];
-    names.extend(Package::ALL.map(|p| p.index_name().to_owned()));
     let linux = [Platform::LinuxX86_64, Platform::LinuxArm64];
     if linux.iter().all(|p| platforms.contains(p)) {
         let index = super::image_index::index_name(version);
@@ -688,17 +611,9 @@ pub(crate) fn asset_names(version: &Version, platforms: &[Platform]) -> Vec<Stri
     for &platform in platforms {
         let p = platform.name();
         let mut attested = vec![format!("{PROGRAM}-{version}-{p}.tar.gz")];
-        for kind in Package::ALL
-            .iter()
-            .filter(|k| k.platforms().contains(&platform))
-        {
-            let package = kind.package_name(version, platform);
-            names.push(format!("{package}{DIGEST_SUFFIX}"));
-            attested.push(package);
-            // hostkeeper's native packages are its `.deb` and its installer, listed below.
-            if *kind != Package::Hostkeeper {
-                attested.extend(kind.native_name(version, platform));
-            }
+        // hostkeeper's native packages are its `.deb` and its installer, listed below.
+        for kind in Package::ALL.iter().filter(|k| **k != Package::Hostkeeper) {
+            attested.extend(kind.native_name(version, platform));
         }
         names.push(format!("{PROGRAM}-{version}-{p}.cdx.json"));
         if let Some((deb, rpm)) = platform.linux_arches() {

@@ -39,7 +39,7 @@
 //! ```
 //!
 //! A package directory, `/var/lib/hostkeeper/packages/<service>` ([`Layout::package`]; the
-//! format is public, docs/package-format.md):
+//! format is public, docs/tree-digest.md):
 //!
 //! ```text
 //! <dir>/<version>/        the unpacked tree of a version, root-owned, read-only

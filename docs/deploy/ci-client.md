@@ -1,9 +1,8 @@
 # The CI client: setting a service's desired version from its release job
 
 A service ships through hostkeeper by one step at the end of its own release job: it tells the
-coordinator the new version and its release (the release index, which lists a package for each
-platform, and the index's digest; or its targets, which list for each platform the artifacts a
-host may install, beside the index or alone), then waits for the fleet to reach it.
+coordinator the new version and its targets (the list, for each platform, of the artifacts a host
+may install), then waits for the fleet to reach it.
 That step is the reusable workflow `.github/workflows/set-desired.yml` of this repository. A
 service calls it; it does not write the step itself.
 
@@ -36,10 +35,8 @@ the one step that reads it.
    coordinator's private listener ([Reaching the coordinator](#reaching-the-coordinator)). This is
    the first step that uses an action, and it runs after every check above.
 8. Write the coordinator's CA to a file, the one root hkctl trusts for the call.
-9. Write the request of the set: the version, and the one package digest, or the release index
-   with its digest, or the targets, alone or with the index and its digest
-   ([Targets](#targets)). A caller that gives no way, the package digest with another, half of
-   the index, or targets that are not one JSON object, stops here, before any token exists.
+9. Write the request of the set: the version and the targets ([Targets](#targets)). A caller
+   whose targets are empty or are not one JSON object stops here, before any token exists.
 10. Set the desired version: `hkctl releases set-desired`, as one command
     ([The calls](#the-calls)). hkctl asks the runner for a fresh OIDC token for `audience` and
     sends it to the coordinator through a pipe: no file holds it, no argument list and no
@@ -60,26 +57,24 @@ The coordinator must answer `Releases.WaitConverged` for step 11: a coordinator 
 before that method refuses the wait (`unimplemented`, read as `no_answer`) after the version is
 set. Pin a `hostkeeper_version` your coordinator is at least as new as.
 
-## Before it runs: the release must be in the channel
+## Before it runs: the release must be installable
 
-A host fetches the version from the release channel (`{release_channel}/S/V/`), not from GitHub.
-The order is:
+A host installs the version from the package repository its entry names, not from GitHub. The
+order is:
 
-1. the service's release workflow publishes the signed GitHub release;
-2. `cargo xtask release channel-sync` on the channel's host stages it into the channel
-   ([release-channel.md](release-channel.md#sync-new-releases-into-the-channel)), within one
-   period of its timer;
+1. the service's release workflow publishes the signed GitHub release and its packages;
+2. the packages reach the repository the entries name
+   ([package-repositories.md](package-repositories.md));
 3. then this workflow sets the desired version.
 
-A version set before the channel holds it is not refused by the coordinator: every host ordered
-to it fails its fetch (`fetch_failed`) and retries until the channel has it. Call this workflow
-once the version is in the channel: from a job that runs after the sync (by hand, or after a
-check that `S/V/index.json` is served), not straight after the release is published.
+A version set before the repository holds its package is not refused by the coordinator: the hosts
+ordered to it fail to install it and retry until the repository has it. Call this workflow once
+the packages are in the repository, not straight after the release is published.
 
 ## Calling it
 
-A service calls it from a workflow of its own, once the release channel holds the release. The
-whole workflow, for a service that sets each release with its targets and its index, is the
+A service calls it from a workflow of its own, once the repository holds the release's packages.
+The whole workflow, for a service that sets each release with its targets, is the
 template of [A service's caller](service-caller.md), with the checklist of what must be set up
 before its first run. The workflow lint of this repository holds that template to the rules of
 `hello-desired.yml`, so it always pins the CI client's current revision. Its calling job:
@@ -88,20 +83,16 @@ before its first run. The workflow lint of this repository holds that template t
 - calls `komira-ai/hostkeeper/.github/workflows/set-desired.yml` pinned to a full commit, with
   its release as the comment, and passes that release and commit as `hostkeeper_version` and
   `hostkeeper_commit` ([Pinning hostkeeper](#pinning-hostkeeper));
-- passes `service`, `version`, `targets`, `release_index` and `release_index_digest`, the
-  coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
+- passes `service`, `version` and `targets`, the coordinator's address, CA and audience, `tailnet_tag`, and the join inputs `join_tailnet`
   (true when `HOSTKEEPER_TAILNET_CLIENT_ID` is set), `tailnet_client_id`, `tailnet_audience` and
   `tailnet_coordinator`, from the job that read the release and from repository variables.
 
-`release_index` is the text of the `index.json` the publish job wrote (design, section 5.5), and
-`release_index_digest` its SHA-256, taken from the file the publish job uploaded: the two must be
-the same bytes, so pass the text unchanged (no newline added or dropped). A service whose hosts
-are all of one platform may pass `package_digest` instead, never with another way; a release with
-targets passes `targets` beside the index ([Targets](#targets)).
-Each host then fetches the package its platform has in the index, and checks the index it fetches
-against `release_index_digest` before it reads it. A host of a platform the index does not list is
+`targets` is what the service's own command wrote from the release's files ([Targets](#targets)).
+A host is ordered the entry of its own platform; a host of a platform the targets do not list is
 ordered nothing, and shows the hold `no_package_for_platform`
-([Holds and force](../operations/holds-and-force.md)): that is not a failed update.
+([Holds and force](../operations/holds-and-force.md)): that is not a failed update. The package
+digest and the release index are no longer inputs; a caller pinned to an older revision of the
+client may still pass them ([Pinning hostkeeper](#pinning-hostkeeper)).
 
 The calling job grants `id-token: write` and `contents: read`, and nothing else. The workflow
 takes no secrets: the OIDC token is its only credential, and GitHub issues it to the job.
@@ -109,23 +100,6 @@ takes no secrets: the OIDC token is its only credential, and GitHub issues it to
 The coordinator must hold an allow-list entry for the calling repository and workflow that names
 the service and the audience you pass (design, section 5.1: a CI token sets the desired version
 only of the services its entry names).
-
-## The release channel check
-
-A coordinator started with `--release-channel <base-url>` (an `https://` URL such as
-`https://channel.example/releases`, the same channel the daemon config's `release_channel`
-names) checks every set against it before anything changes: it fetches
-`<base-url>/<service>/<version>/index.json` and refuses the set unless the channel holds that
-version with the package the set names. Without the flag it fetches nothing and refuses nothing
-for the channel. Only `https://` is taken; any other scheme stops the coordinator's start.
-
-| token | when | retry? |
-|---|---|---|
-| `not_in_channel` | The channel has no index for the version (404), or it could not be read: no connection, no answer within the coordinator's deadlines (`--release-channel-connect-secs`, default 10, and `--release-channel-timeout-secs`, default 30), a redirect or another status, an answer over 64 KiB, or an answer that is not an index or lists no package. | Yes. Nothing changed and no host was ordered. Make this job `needs:` the job that publishes the package and syncs the channel, or run the job again once the channel sync has finished. |
-| `channel_digest_mismatch` | The channel's index for the version names another service or version, or lists no package whose SHA-256 is `package_digest`. | No. The channel holds another artifact for this version than the one you are setting; fix the channel or the digest. |
-
-Both are refusals like the others (gRPC `FAILED_PRECONDITION`, the token as the message), so the
-job ends with the token as `reason` and the version is not set.
 
 ## The allow-list entry
 
@@ -193,10 +167,7 @@ the coordinator reads the file when it starts, so restart it afterwards. Nothing
 |---|---|---|---|---|
 | `service` | string | yes |  | The service whose desired version is set, as the coordinator names it. |
 | `version` | string | yes |  | The version of the service to set. |
-| `package_digest` | string | no |  | The SHA-256 of the one package of this version that every host is ordered, 64 lower-case hex digits. For a fleet of one platform: a host of another platform would refuse the package. Give this, or `release_index` with `release_index_digest`, or `targets`; never this with another. |
-| `release_index` | string | no |  | The text of the version's release index (`index.json`), byte for byte, at most 3 KiB (a coordinator before `SetDesired` took targets takes a request of at most 4 KiB, the index included; a three-platform index is under 1 KiB). Each host is ordered the package its own platform has in it. Comes with `release_index_digest`; not with `package_digest`. |
-| `release_index_digest` | string | no |  | The SHA-256 of `release_index`, 64 lower-case hex digits, as the release job that published the index wrote it down. The coordinator checks the index against it, and every host checks the index it fetches against it. |
-| `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Alone, or with `release_index` and `release_index_digest`; not with `package_digest`. Needs a coordinator that takes `SetDesired` with targets. |
+| `targets` | string | no |  | The targets of the version: one JSON object keyed by platform (`linux-x86_64`, `linux-arm64`, `macos-arm64`), each value `{"entries": [...]}` in the order the service prefers, under 128 KiB, the most the runner passes in one environment value or argument ([Targets](#targets)). Needs a coordinator that takes `SetDesired` with targets. |
 | `hostkeeper_version` | string | yes |  | The hostkeeper release whose command line, `hkctl`, makes the calls. |
 | `hostkeeper_commit` | string | yes |  | The commit of `komira-ai/hostkeeper` that release was built from, 40 lower-case hex digits. |
 | `coordinator_url` | string | yes |  | The coordinator's private listener, as `https://<host>[:<port>]`. |
@@ -216,7 +187,7 @@ the coordinator reads the file when it starts, so restart it afterwards. Nothing
 |---|---|
 | `desired_version` | The desired version the coordinator stored; empty when it stored none. |
 | `converged` | `true` when the fleet converged on the version, `false` otherwise. |
-| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`, `not_in_channel`, `channel_digest_mismatch`, `invalid_wait` or `too_many_waits`). Empty when a step before the set failed (a verification, the install, the CA or the request), so the set never ran. |
+| `reason` | Why the job ended where it did, one token: `converged`, `not_waited`, `halted`, `superseded`, `not_converged`, `not_stored`, `no_answer`, or the refusal token the coordinator gave (for example `held_bad`, `target_invalid`, `invalid_wait` or `too_many_waits`). Empty when a step before the set failed (a verification, the install, the CA or the request), so the set never ran. |
 
 The last step writes them with one jq program, held in the workflow beside the step that runs it,
 from the outcome of each call, the answer each wrote (`--response-file`) and the diagnostics each
@@ -349,7 +320,7 @@ grants those jobs need, and the join runs with all of them: the stanza, with `ta
 `tag:hk-ci`, adds the coordinator's listener to them and takes nothing away.
 
 This repository's own deploy ([Deploying hostkeeper from GitHub Actions](github-actions.md))
-reads no release channel: its one join is the CI client's.
+joins the tailnet in the CI client alone.
 
 ### The federation, set up once by a tailnet admin
 
@@ -411,16 +382,9 @@ hkctl --endpoint https://<coordinator> --ca-file "$RUNNER_TEMP/hkctl-coordinator
   releases set-desired --service "$SERVICE" --request "$RUNNER_TEMP/hkctl-request.json"
 ```
 
-where the request file is `{"desired":{"version":"<version>"},"packageDigest":"<hex>"}`, or, with
-a release index, `{"desired":{"version":"<version>"},"releaseIndex":"<text of
-index.json>","releaseIndexDigest":"<hex>"}`: the canonical JSON names of the request, the index
-one JSON string of its exact text. The request step builds it with `jq --arg` from the step's
-environment, and does not hash or parse the index: the coordinator does, and refuses a digest
-that is not the index's (`index_digest_mismatch`) or an index that is not this service's at this
-version (`index_invalid`). A coordinator before `SetDesired` took targets takes a request of at
-most 4 KiB, the index included, so the index stays within 3 KiB. With targets, the request file
-also holds `"targets":{...}`, the object of the input as an object, not a string
-([Targets](#targets)).
+where the request file is `{"desired":{"version":"<version>"},"targets":{...}}`: the canonical
+JSON names of the request, the targets the object of the input as an object, not a string
+([Targets](#targets)). The request step builds it with `jq --arg` from the step's environment.
 
 Then the wait, with `--wait-secs` ten times `max_polls`:
 
@@ -443,48 +407,36 @@ host is ordered the entry of the installer it runs, else the first whose install
 announces; a platform left out is ordered nothing. An entry, in the request's canonical JSON:
 
 ```json
-{"installer": "hostkeeper-archive",
- "locations": [{"store": "channel", "locator": "hello/0.1.5/hello-0.1.5-linux-x86_64.tar.zst"},
-               {"store": "github", "locator": "komira-ai/hostkeeper/releases/download/v0.1.5/hello-0.1.5-linux-x86_64.tar.zst"}],
- "digest": "<64 hex>", "bytes": "48812",
- "attestation": {"digest": "<64 hex>", "bytes": "7311", "locations": [...]},
- "manifest": {"minHostkeeper": "0.1.0"}}
+{"installer": "apt", "digest": "<64 hex>",
+ "repository": "komira-testing", "packageVersion": "0.1.5",
+ "manifest": {"package": "hello", "run": ["hello@a.service", "hello@b.service"],
+              "hook": {...}, "minHostkeeper": "0.1.0", "installerBounds": {...}}}
 ```
 
-A location names a store of the host's own configuration and a path below it: `channel` is the
-release channel, the one store a daemon without `/etc/hostkeeper/stores.toml` has, and `github`
-the GitHub release asset, for a host whose stores define it. A daemon tries them in order and
-skips a store it does not define. A `hostkeeper-archive` manifest holds `minHostkeeper` alone:
-the hook, units and files are in the attested `manifest.toml` inside the archive.
+An `apt` entry names the repository the host installs from (an entry of the host's own
+repository configuration), the version of the package there, and the SHA-256 of the `.deb` the
+host must find ([package-repositories.md](package-repositories.md), "The native packages and
+their entries"). The manifest holds what the host needs to run the release: the units, the hook's
+bounds, the readiness URL, the params and the oldest hostkeeper that takes it.
 
 This repository builds the targets of its own releases with `cargo xtask release targets
 --service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
 komira-ai/hostkeeper`,
-from the release's assets, and sets them with no index: its releases list native entries alone
-([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform the
-package's index lists, the one native entry of the package's `.deb`: an `apt` entry of the
-repository entry `komira-testing` pinned by the `.deb`'s SHA-256, its manifest the archive's own
-`manifest.toml` with no hook command ([package-repositories.md](package-repositories.md), "The
-native packages and their entries"); no `hostkeeper-archive` entry. The `macos-arm64` list carries
-the signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose daemon announces `macos-pkg`
-(signers file loaded, `installer` and `pkgutil` present) takes. A host whose daemon does not
-announce the installer of its list is ordered nothing (`installer_dropped`, or `no_build_for_host`
-as the coordinator's pick gives). `--repo` is read and not used. It refuses a release whose index,
-archives and their manifests, `.deb`s, `.pkg`s or their bundles do not check out, and entries the
-coordinator or the daemon would refuse, and prints `targets=<JSON>` (appended to `--output`).
-`--fail-ready` (hello only, explicit only) writes hello's failing build instead: per Linux
-platform one `apt` entry of the repository entry `komira-testing-fail` (the suite
-`testing-fail`) at the Debian version `<X.Y.Z>~fail.ready`, pinned by the SHA-256 of the release's
-`hello_<X.Y.Z>-fail-ready_<arch>.deb`, its manifest the failing build's archive's; it refuses a
-`.deb` whose control is not hello at that version for the architecture, or whose bundle does
-not list it. `hello-desired.yml` passes it for its `fail-ready` variant.
-
-**Give the index too while daemons before targets run.** A daemon that does not announce
-`target-v1` is never sent a target: it is ordered the archive through the release channel, by
-the index. So a set whose lists hold `hostkeeper-archive` entries also gives `release_index` and
-`release_index_digest`, and the coordinator refuses the set (`index_invalid`) unless the index
-lists exactly the platforms with an archive entry, each with that entry's size and SHA-256. A
-set of native entries alone gives no index.
+from the release's assets: its releases list native entries alone
+([packages-native.md](../design/packages-native.md), section 10.5). For each Linux platform, the
+one native entry of the package's `.deb`, an `apt` entry of the repository entry `komira-testing`
+pinned by the `.deb`'s SHA-256, its manifest compiled into xtask; for macOS (hostkeeper and
+hello) the one `macos-pkg` entry of the signed `.pkg`, in the store `komira-testing` at
+`hostkeeper/<version>/<file>`, pinned by its SHA-256 and size. A host whose daemon announces
+neither `apt` nor, on a Mac, `macos-pkg` (its signers file loaded, `/usr/sbin/installer` and
+`/usr/sbin/pkgutil` present) is ordered nothing (`installer_dropped`, or `no_build_for_host`). `--repo` is read and not used. It refuses a release whose `.deb`s or their
+bundles do not check out, and entries the coordinator or the daemon would refuse, and prints
+`targets=<JSON>` (appended to `--output`). `--fail-ready` (hello only, explicit only) writes
+hello's failing build instead: per Linux platform one `apt` entry of the repository entry
+`komira-testing-fail` (the suite `testing-fail`) at the Debian version `<X.Y.Z>~fail.ready`,
+pinned by the SHA-256 of the release's `hello_<X.Y.Z>-fail-ready_<arch>.deb`, its manifest
+hello's; it refuses a `.deb` whose control is not hello at that version for the architecture, or
+whose bundle does not list it. `hello-desired.yml` passes it for its `fail-ready` variant.
 
 **What the coordinator checks.** It refuses targets that break the rules of a release
 (`target_invalid`: an unknown platform, a list of no entry or more than 8, an installer twice, a
@@ -492,7 +444,7 @@ digest, size, location or manifest out of its bounds, or for the service `hostke
 one native entry with at most one `hostkeeper-archive` entry after it, or one `hostkeeper-archive`
 entry alone), and the same version set before with other targets
 (`release_exists`, do not retry: a release never changes; set a new version). A set with targets
-is at most 256 KiB, the index included. `hkctl releases get-release --service <service>
+is at most 256 KiB. `hkctl releases get-release --service <service>
 --version <version>` reads back what was set. A coordinator before targets refuses the set for
 its size or the unknown field, and nothing is set: send targets only once your coordinator takes
 them.
@@ -509,15 +461,15 @@ them.
 | Install the verified hkctl | The runner could not write the file. The version is not set. | Run the job again. |
 | Check the version of the verified hkctl | hkctl does not say `hkctl <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
-| Write the request of the set | No way of naming the release, `package_digest` with `release_index`, `release_index_digest` or `targets`, one of the index pair alone, or `targets` that are not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give one way of naming the release: `package_digest`, the index pair, or `targets` alone or with the index pair. |
-| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service, version or digest the coordinator does not take), `index_digest_mismatch` (the digest is not the SHA-256 of the index text), `index_invalid` (the index is not this service's at this version, is given with a package digest, or does not list exactly the `hostkeeper-archive` entries of the targets), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `not_in_channel` (the coordinator's release channel does not hold the version yet; retry once the channel sync has finished), `channel_digest_mismatch` (the channel's index of the version is not the index the set names, or does not list `package_digest`; do not retry), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
+| Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
+| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
 | Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hkctl releases status`. |
 
 ## What it does not do
 
 - It does not change the coordinator's allow-list, the service's definition, holds or marks.
-- It does not build, sign or publish the service's package, its release index or its targets;
-  they and their digests come from the service's own release job. It does not hash or parse the
-  index, and does not check the targets beyond their being one JSON object.
-- It does not retry a refused call, `not_in_channel` included: run the job again once the
-  release channel holds the version. It does not call again after a cut wait.
+- It does not build, sign or publish the service's package or its targets; they and their digests
+  come from the service's own release job. It does not check the targets beyond their being one
+  JSON object.
+- It does not retry a refused call: fix what the token names and run the job again. It does not
+  call again after a cut wait.

@@ -14,19 +14,17 @@
 # (`~`): a host takes it only with that entry placed (docs/hello.md, "Before you start"), and
 # apt never takes it for the release.
 #
-# `release` reads the variant's release index (`hello-index.json` or
-# `hello-fail-ready-index.json`), its Linux archives and its .deb for each Linux architecture
-# with their bundles, and for `hello` its macOS archive and its signed .pkg with the .pkg's
-# bundle (`MACOS`; the failing build has no .pkg), from the release, and `cargo xtask release
-# targets` writes the targets: per platform, the variant's native entry alone
-# (docs/design/packages-native.md section 10.5, A24), its manifest the archive's own. The Linux
-# lists hold the .deb's entry, so a host installs the package of the repository's testing suite
+# `release` reads the variant's .deb for each Linux architecture with its bundle, and for `hello`
+# its signed .pkg with the .pkg's bundle (`MACOS`; the failing build has no .pkg), from the
+# release, and `cargo xtask release targets` writes the targets: per platform, the variant's
+# native entry alone (docs/design/packages-native.md section 10.5, A24), its manifest the one
+# compiled into xtask. A Linux host installs the package of the repository's testing suite
 # (`hello`) or of its testing-fail suite (`fail-ready`); for `hello`, the macOS list holds the
 # .pkg's `macos-pkg` entry alone, which a Mac whose daemon announces `macos-pkg` (its signers
 # file loaded, `/usr/sbin/installer` and `/usr/sbin/pkgutil` present) takes, and a Mac that does
 # not announce it is ordered nothing. It holds no token right but `contents: read`, and runs
-# nothing of the release. `set-desired` calls the CI client with the targets alone, so each host
-# is ordered its own platform's native package. It is pinned
+# nothing of the release. `set-desired` calls the CI client with the targets alone, so each host is ordered its
+# own platform's native package. It is pinned
 # like any caller's: the `uses:` commit with its release as the comment, and `hostkeeper_version`
 # and `hostkeeper_commit` of that same release. The pin is the CI client's revision the workflow
 # lint names (`callers.rs`, `CLIENT_COMMIT`), the one release.yml pins too: the client that takes
@@ -76,7 +74,6 @@ jobs:
     env:
       RELEASE: ${{ inputs.version }}
       VERSION: ${{ inputs.variant == 'fail-ready' && format('{0}-fail-ready', inputs.version) || inputs.version }}
-      INDEX: ${{ inputs.variant == 'fail-ready' && 'hello-fail-ready-index.json' || 'hello-index.json' }}
       FAIL_READY: ${{ inputs.variant == 'fail-ready' && 'true' || '' }}
       MACOS: ${{ inputs.variant == 'hello' && 'true' || '' }}
     steps:
@@ -89,18 +86,16 @@ jobs:
       - run: rustup toolchain install
       - name: Compile xtask
         run: cargo xtask --help
-      # The variant's index, for each Linux platform its archive (whose manifest the native
-      # entry takes) and its .deb with the .deb's bundle, and for `hello` the macOS archive and
-      # .pkg with its bundle (`MACOS`, unset for the failing build), from the release's assets.
-      # One curl, its URL globs expanded by curl itself (the text is quoted). A transient failure
-      # of a transfer is retried, as every download of a workflow is (`downloads.rs` of the
-      # workflow lint); one that still fails ends it at once (`--fail-early`), so nothing is set.
-      - name: Download the variant's index, Linux archives and .debs
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/$INDEX" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$VERSION-{linux-arm64,linux-x86_64}.tar.zst" "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${VERSION}_{amd64,arm64}.deb{,.sigstore.json}" ${MACOS:+"https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$RELEASE-macos-arm64.{tar.zst,pkg,pkg.sigstore.json}"}
-      # Refused, every problem named, unless the index is the variant's at the version and lists
-      # every platform, each archive it reads and its manifest check out against it, and each
-      # native package is there, its bundle lists it and a .deb's control is hello's at the
-      # Debian version for its architecture.
+      # For each Linux architecture the variant's .deb with the .deb's bundle, and for `hello` the
+      # macOS .pkg with its bundle (`MACOS`, unset for the failing build), from the release's
+      # assets. One curl, its URL globs expanded by curl itself (the text is quoted). A transient
+      # failure of a transfer is retried, as every download of a workflow is (`downloads.rs` of
+      # the workflow lint); one that still fails ends it at once (`--fail-early`), so nothing is
+      # set.
+      - name: Download the variant's .debs and their bundles
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --fail-early --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --create-dirs --output-dir "$RUNNER_TEMP/release" --remote-name-all "https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello_${VERSION}_{amd64,arm64}.deb{,.sigstore.json}" ${MACOS:+"https://github.com/$GITHUB_REPOSITORY/releases/download/v$RELEASE/hello-$RELEASE-macos-arm64.pkg{,.sigstore.json}"}
+      # Refused, every problem named, unless each native package is there and its bundle lists
+      # it, and a .deb's control is hello's at the Debian version for its architecture.
       - name: The targets of the variant's package
         id: targets
         run: cargo xtask release targets --service hello ${FAIL_READY:+--fail-ready} --version "$RELEASE" --dir "$RUNNER_TEMP/release" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"

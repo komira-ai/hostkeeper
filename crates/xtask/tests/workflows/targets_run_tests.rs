@@ -9,8 +9,8 @@
 //! release that commit can be ([`super::release_ref::FLOOR`]) accepts it, and the step fails as
 //! that binary would otherwise; and the download of the run's own `release-<tag>` artifact, whose
 //! files it copies into the step's `path`. Each artifact holds what `release targets` reads of a
-//! release: hostkeeper's index, an archive per platform holding its `manifest.toml`, each
-//! archive's bundle, and its native packages with theirs.
+//! release: its native packages (a `.deb` per Linux architecture and the installer pkg), each with
+//! its bundle; no index and no archive.
 //!
 //! `gh`, `cargo` and `rustup` on the `PATH` are the test program `tests/bin/gh_fixture.rs`,
 //! which answers from scratch files, so no test reaches GitHub; as `cargo` it runs this crate's
@@ -30,7 +30,7 @@ use serde_json::json;
 
 use super::desired::{SET_IF, TARGETS_JOB};
 use super::lint::{entries, entry};
-use super::release_files::{self, REPO, package_files, sorted};
+use super::release_files::{self, REPO, sorted};
 use super::release_ref::{self, SURFACE_FILE, floor_problem};
 use super::testdir::TestDir;
 use super::{workflows, yaml};
@@ -44,17 +44,14 @@ fn commit_of(version: &str) -> String {
     format!("{:0>40}", version.replace('.', ""))
 }
 
-/// The files of hostkeeper's release `version` that the job reads, by name: its archives, their
-/// bundles and its index, and its native packages (its `.deb`s and its installer) with theirs.
+/// The files of hostkeeper's release `version` that the job reads, by name: its native packages
+/// (its `.deb`s and its installer) with their bundles.
 fn hostkeeper_files(version: &str) -> BTreeMap<String, Vec<u8>> {
-    let mut files = package_files("hostkeeper", version, "index.json");
-    files.extend(release_files::native_files("hostkeeper", version));
-    files
+    release_files::native_files("hostkeeper", version)
 }
 
-/// The targets the job must give for hostkeeper's release `version`: each platform's native
-/// entry alone, a `.deb`'s for Linux and the signed `.pkg`'s for macOS (docs/design/
-/// packages-native.md section 10.5, A24).
+/// The targets the job must give for hostkeeper's release `version`: each Linux platform's
+/// native entry alone (docs/design/packages-native.md section 10.5, A24).
 fn targets(version: &str) -> String {
     release_files::targets("hostkeeper", version, &hostkeeper_files(version))
 }
@@ -75,7 +72,7 @@ impl Site {
         for dir in ["bin/releases", "work", "temp", "artifacts"] {
             std::fs::create_dir_all(root.join(dir)).expect("make a scratch directory");
         }
-        // Hard links, not copies (as in tests/channel_sync.rs): the fake finds its data beside
+        // Hard links, not copies (as in hello_run_tests.rs): the fake finds its data beside
         // the name it was started by, and acts as cargo or rustup when started by that name. As
         // cargo it runs the real xtask linked beside it.
         for name in ["gh", "cargo", "rustup"] {
@@ -329,9 +326,8 @@ fn the_set_desired_job_runs_only_when_the_targets_job_says_newest() {
 
 #[test]
 fn a_release_is_set_with_its_native_targets_alone_and_no_channel_is_read() {
-    // Catches: targets that are not, per platform of the release's own files, hostkeeper's
-    // `.deb` from the testing suite or its `.pkg` from the installers' testing directory alone
-    // (an archive entry still in a list, no list for macOS, another digest); an index or its digest still given to `set-desired`; and a
+    // Catches: targets that are not, per Linux platform of the release's own files,
+    // hostkeeper's `.deb` from the testing suite alone (a list for macOS, another digest); an index or its digest still given to `set-desired`; and a
     // step that reads the release channel (no `curl` is on the runner's `PATH` here, so it
     // would fail).
     let site = Site::new("native", &["1.2.10"], &["v1.2.9", "v1.2.10"]);
@@ -386,14 +382,12 @@ fn of_several_releases_the_targets_are_the_newest_ones() {
 }
 
 #[test]
-fn a_release_missing_an_archive_a_deb_or_its_pkg_stops_the_job_before_the_set() {
-    // Catches: targets written for a release whose files do not all check out (an archive, whose
-    // manifest the entry takes, one of hostkeeper's `.deb`s or its installer pkg, or a bundle of
-    // any of them, whose entry would pin bytes no store holds), or a failure of the targets step
-    // that the job goes on after: the set must not run with no targets.
+fn a_release_missing_a_deb_its_pkg_or_a_bundle_stops_the_job_before_the_set() {
+    // Catches: targets written for a release whose files do not all check out (one of
+    // hostkeeper's `.deb`s, its installer `.pkg`, or a bundle, whose entry would pin bytes no
+    // store holds), or a failure of the targets step that the job goes on after: the set must
+    // not run with no targets.
     for (n, withheld) in [
-        "hostkeeper-1.2.10-linux-arm64.tar.zst",
-        "hostkeeper-1.2.10-macos-arm64.tar.zst",
         "hostkeeper_1.2.10_amd64.deb",
         "hostkeeper_1.2.10_arm64.deb.sigstore.json",
         "hostkeeper-1.2.10-macos-arm64.pkg",
@@ -415,7 +409,7 @@ fn a_release_missing_an_archive_a_deb_or_its_pkg_stops_the_job_before_the_set() 
 }
 
 #[test]
-fn the_job_as_it_was_before_a24_fails_without_a_channel() {
+fn a_wait_for_the_release_channel_put_back_into_the_job_fails() {
     // Catches: the wait for the release channel back in the job (here the runner has no `curl`
     // and the run is given no channel), which would hold every release on a channel no host
     // reads any more; `run_text` refuses its `if:` steps and unknown expressions, so the test

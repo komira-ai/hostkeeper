@@ -9,7 +9,7 @@ token. The coordinator's
 rollout gate does the rest: the service's update plan rolls the release out stage by stage, the
 canary or first stage of hosts first, then more hosts once each stage has baked.
 
-CI holds no secret for the deploy, and the deploy waits for no release channel: a release is set
+CI holds no secret for the deploy: a release is set
 with native entries alone ([packages-native.md](../design/packages-native.md), section 10.5), which
 a host installs from the project's package repository, where the release's own package-channel
 jobs put its `.deb` ([package-repositories.md](package-repositories.md)). The coordinator call's
@@ -23,22 +23,18 @@ one credential is the OIDC token GitHub issues to the job.
    (`plan`), checks every file and attestation again (`verify`), and publishes the GitHub
    release `v<X.Y.Z>` (`publish`). Nothing is rebuilt.
 3. **Into the repository.** The release's package-channel jobs (`testing-apt-*`) put the
-   daemon's `.deb` into the repository's `testing` suite. The release channel's sync
-   (`cargo xtask release channel-sync`) may still stage the release's archives until the
-   operator stops it once stage 9's release has converged
-   ([move-to-native.md](../operations/move-to-native.md)), but no host fetches a release from the
-   channel any more, and the deploy does not wait for it. The deploy does not wait for the
-   repository either: a host ordered before the `.deb` is in the suite defers its `stage`
+   daemon's `.deb` into the repository's `testing` suite. The deploy does not wait for the
+   repository: a host ordered before the `.deb` is in the suite defers its `stage`
    (`not_in_repository`, an environment deferral) and tries again on the deferral's schedule.
 4. **Write the targets** (job `targets` of `release.yml`). The job takes the newest release the
    run published, and its files `verify` checked, from the run's own artifact. Then
    `cargo xtask release targets`, compiled from the release's own commit, writes the release's
    targets from those files: per Linux platform, hostkeeper's native entry alone, an `apt` entry
    of the daemon's `.deb` in the repository's `testing` suite pinned by its SHA-256, its
-   manifest the archive's own (its hook bounds, run unit and `min_hostkeeper`); no
-   `hostkeeper-archive` entry; and for macOS the signed installer `.pkg`'s `macos-pkg` entry
-   alone, which a Mac whose daemon announces `macos-pkg` takes (a Mac that does not is ordered
-   nothing) ([packages design](../design/packages.md), section 3.7). A file of the release that does not check out fails the job, and nothing is set. Last,
+   manifest made by `release targets` itself (its hook bounds, run unit and `min_hostkeeper`); for
+   macOS its signed `.pkg`'s `macos-pkg` entry alone, which a Mac whose daemon announces
+   `macos-pkg` takes (any other Mac is ordered nothing) ([packages design](../design/packages.md),
+   section 3.7). A file of the release that does not check out fails the job, and nothing is set. Last,
    it lists the published releases: when a higher version than the run's is published already
    (a late run of an older commit, released after a newer one), the next step is skipped, so
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds
@@ -48,7 +44,7 @@ one credential is the OIDC token GitHub issues to the job.
    joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
    call through a pipe, never a file or an argument. The call names the release by its targets
-   alone, with no release index, so each host is ordered its own platform's native package; a
+   alone, so each host is ordered its own platform's native package; a
    daemon before `target-v1`, or one that announces no `apt`, is ordered nothing
    (`installer_dropped`): stage 9's counts are zero before this release is set.
    `hkctl releases get-release --service hostkeeper --version <X.Y.Z>` answers the targets the
@@ -56,8 +52,7 @@ one credential is the OIDC token GitHub issues to the job.
    The job does not wait for the fleet (`wait: false`); it ends when the coordinator has stored
    the version, with `reason` `not_waited`.
 6. **The coordinator checks the call.** The allow-list entry must admit the token and name the
-   service `hostkeeper` ([below](#the-allow-list-entry)). A set of targets with no index is not
-   checked against the release channel, even with `--release-channel`. A version below the
+   service `hostkeeper` ([below](#the-allow-list-entry)). A version below the
    service's `min_version`, or marked bad, is refused. Nothing changes on a refusal.
 7. **The update plan orders the hosts.** The `[[service]]` table of hostkeeper in the rollout file
    may set `stages` (by default `[1, 10, 50, 100]`: the cumulative percent of the eligible hosts
@@ -116,8 +111,7 @@ repository, the federation's subject is
 `repo:komira-ai/hostkeeper:ref:refs/heads/main`, its trust credential issues `tag:ci`, and the
 ACL's stanza names `tag:ci` in place of `tag:hk-ci`. `tag:ci` is shared with other CI jobs, so
 the join keeps the grants they need; the stanza adds the coordinator's private listener to them
-and takes nothing away. No job of this deploy reads the release channel, so the ACL needs no
-grant of the channel's host for it. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
+and takes nothing away. The callers name no fallback tag: the CI client's default, `tag:hk-ci`,
 is not a tag this repository's credential issues, so an unset variable fails at the client's
 first step rather than at the join.
 
@@ -127,9 +121,9 @@ Each of these is a change an operator makes; nothing in CI writes them.
 
 **The project's package repository** holds the release's `.deb` in its `testing` suite, and each
 host has its repository entry and key ([package-repositories.md](package-repositories.md),
-[move-to-native.md](../operations/move-to-native.md)). The release channel's sync and the
-coordinator's `--release-channel` are no longer read by this deploy; the operator stops the one
-and drops the other once stage 9's release has converged on every host.
+[move-to-native.md](../operations/move-to-native.md)). The coordinator's
+`--release-channel` is not read by this deploy; the operator drops it once stage 9's release has
+converged on every host.
 
 **hostkeeper's rollout** is a `[[service]]` table of the rollout file (`--rollout-file`), with
 its canary and bake:
@@ -199,7 +193,7 @@ cause is fixed, use **Re-run failed jobs** on the release run: it runs `targets`
 
 | job and step | what it means | what to do |
 |---|---|---|
-| `targets`: The targets of the release | A file of the release does not check out: its index, a Linux archive or its manifest, or one of hostkeeper's `.deb`s or its bundle. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
+| `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |
 
@@ -210,7 +204,7 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
 
 ## What it does not do
 
-- The deploy jobs upload nothing, and read no release channel.
+- The deploy jobs upload nothing.
 - It does not wait for the fleet to converge: a roll by stages, each baked before the next, takes
   longer than a release run should hold the release group, and a slow roll is not a failed
   release.
