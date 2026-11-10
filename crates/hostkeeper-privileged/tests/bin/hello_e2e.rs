@@ -1,13 +1,14 @@
-//! `hello-e2e`: the `bin/hello` of the hello packages `tests/device_mac_e2e.rs` builds. It is
-//! hello: the update hook (`update-hook <step>`, or a step as the first word) and every other
-//! command line are `hello::main`, unchanged. Only the server differs, in the version it
-//! answers `/version` with: hello answers the version it was compiled as (or that followed by
-//! `-fail-ready` when started with `--fail-ready`), which is one version for every good package
-//! a test builds from one binary, so its own `verify` would refuse every update
-//! but one as `wrong_version`. This program answers with the version of the manifest of the
-//! version directory it was started from (`<exe>/../../manifest.toml`, after the `current` link
-//! is resolved), the version the daemon installed, which is what a release build of hello
-//! answers too. A program of the tests, not shipped.
+//! `hello-e2e`: the program the hello `.pkg` of `tests/device_mac_e2e.rs` installs at
+//! `/Library/Application Support/hello/bin/hello`. It is hello: the update hook (`update-hook
+//! <step>`, or a step as the first word) and every other command line are `hello::main`,
+//! unchanged. Only the server differs, in the version it answers `/version` with: hello answers
+//! the version it was compiled as (or that followed by `-fail-ready` when started with
+//! `--fail-ready`), which is one version for every good package a test builds from one binary,
+//! so its own `verify` would refuse every update but one as `wrong_version`. This program answers
+//! with the version the package says, the file `version` of the service's directory
+//! (`<exe>/../../version`, which the package installs beside `bin/`), the version the daemon
+//! installed, which is what a release build of hello answers too. A program of the tests, not
+//! shipped.
 
 use std::ffi::OsString;
 use std::fs;
@@ -52,8 +53,8 @@ fn serve(port: u16, fail_ready: bool) -> ExitCode {
     ExitCode::from(1)
 }
 
-/// The `version = "<v>"` line of the manifest two directories above the executable, the links
-/// on the way resolved.
+/// The text of the file `version` two directories above the executable, the links on the way
+/// resolved, without its line end.
 fn packaged_version() -> Result<String, String> {
     let exe = std::env::current_exe()
         .and_then(|path| path.canonicalize())
@@ -61,16 +62,12 @@ fn packaged_version() -> Result<String, String> {
     let dir = exe
         .parent()
         .and_then(Path::parent)
-        .ok_or_else(|| format!("{} is not in a version directory", exe.display()))?;
-    let manifest = dir.join("manifest.toml");
-    let text = fs::read_to_string(&manifest)
-        .map_err(|e| format!("cannot read {}: {e}", manifest.display()))?;
-    text.lines()
-        .find_map(|line| {
-            line.trim()
-                .strip_prefix("version = \"")?
-                .strip_suffix('"')
-                .map(str::to_owned)
-        })
-        .ok_or_else(|| format!("{} has no version line", manifest.display()))
+        .ok_or_else(|| format!("{} is not in a package's bin directory", exe.display()))?;
+    let file = dir.join("version");
+    let text =
+        fs::read_to_string(&file).map_err(|e| format!("cannot read {}: {e}", file.display()))?;
+    match text.trim() {
+        "" => Err(format!("{} is empty", file.display())),
+        version => Ok(version.to_owned()),
+    }
 }

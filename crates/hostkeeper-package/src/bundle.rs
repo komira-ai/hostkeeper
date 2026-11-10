@@ -11,7 +11,7 @@
 //! of them fails verification. The bundle is at most [`MAX_BUNDLE_BYTES`] and is parsed only with
 //! `serde_json` and the DER reader of `der`.
 //!
-//! [`crate::prove`] reads the bundle of a package with it; `hostkeeper-pxe fetch` reads the
+//! `hostkeeper-pxe fetch` reads the
 //! bundles of `netboot.json` and of the hostkeeper deb with it before it asks the same
 //! [`crate::ports::Verifier`].
 

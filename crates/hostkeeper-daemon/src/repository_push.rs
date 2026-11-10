@@ -51,6 +51,7 @@ use hostkeeper_proto::hostkeeper::release::v1::Repository;
 use hostkeeper_release::Installer;
 use hostkeeper_release::registry::{self, HostFile};
 
+use crate::mirror::prune;
 use crate::repository::RepositoryPorts;
 
 /// The directory a set is staged in, beside the live directory.
@@ -189,7 +190,8 @@ impl RepositoryPush {
     /// written and before the loader judges it.
     fn apply_with(&self, set: &PushedSet, staged: &dyn Fn(&Path)) -> Applied {
         let live = self.managed.dir.to_string_lossy();
-        let files = match judge(set, &live) {
+        let mirror = self.ports.dirs.mirror.to_string_lossy();
+        let files = match judge(set, &live, &mirror) {
             Ok(files) => files,
             Err(reason) => return Applied::Refused(reason),
         };
@@ -202,6 +204,11 @@ impl RepositoryPush {
         match self.put(set, &files, staged) {
             Ok((repositories, written)) => {
                 self.ports.repositories.replace(repositories);
+                if let Err(error) = prune(&self.ports.dirs.mirror, &set.entries) {
+                    self.log.line(&format!(
+                        "error: a mirror the set does not keep is not removed: {error}"
+                    ));
+                }
                 match written {
                     true => Applied::Written,
                     false => Applied::Adopted,
@@ -314,7 +321,7 @@ fn clip(reason: &str) -> String {
 
 /// The files of `set` as written for the directory `live`, when the set passes the coordinator's
 /// rules and its digest is the one of its entries; else why not.
-fn judge(set: &PushedSet, live: &str) -> Result<Vec<HostFile>, String> {
+fn judge(set: &PushedSet, live: &str, mirror: &str) -> Result<Vec<HostFile>, String> {
     if set.entries.is_empty() {
         return Err("the set holds no repository".to_owned());
     }
@@ -326,7 +333,7 @@ fn judge(set: &PushedSet, live: &str) -> Result<Vec<HostFile>, String> {
             set.digest
         ));
     }
-    Ok(registry::render(&set.entries, live))
+    Ok(registry::render(&set.entries, live, mirror))
 }
 
 /// What the loader takes of `live` when it holds exactly `files`, byte for byte; none when it
@@ -358,7 +365,7 @@ fn verify(entries: &[Repository], loaded: &Loaded, live: &Path) -> Result<(), Fa
             keyring,
             ..entry.clone()
         };
-        registry::check(&read).map_err(|error| {
+        registry::check_set(std::slice::from_ref(&read)).map_err(|error| {
             Fault::Refused(format!(
                 "the keyring of {:?} as written is refused: {error}",
                 entry.name
@@ -370,7 +377,7 @@ fn verify(entries: &[Repository], loaded: &Loaded, live: &Path) -> Result<(), Fa
 
 /// Removes what is at `path`, a directory with what it holds or any other file. Nothing there is
 /// an error, which a caller that does not care ignores.
-fn remove_path(path: &Path) -> io::Result<()> {
+pub(crate) fn remove_path(path: &Path) -> io::Result<()> {
     match fs::symlink_metadata(path) {
         Ok(meta) if meta.is_dir() => fs::remove_dir_all(path),
         Ok(_) => fs::remove_file(path),
@@ -399,7 +406,7 @@ fn sync_dir(path: &Path) -> io::Result<()> {
 /// which the old directory is at the staging path and is removed. The swap is done by then, so
 /// the removal and the sync of the parent that makes it durable are not errors of it: a
 /// leftover is removed by the next set.
-fn swap(staged: &Path, live: &Path) -> io::Result<()> {
+pub(crate) fn swap(staged: &Path, live: &Path) -> io::Result<()> {
     // A live path that cannot be looked at is taken for absent: the rename says why when it is
     // not.
     if fs::symlink_metadata(live).is_err() {

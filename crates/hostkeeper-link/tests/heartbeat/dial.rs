@@ -50,3 +50,29 @@ fn the_tcp_transport_carries_a_call_and_ends_it_at_its_bound() {
 
     assert!(transport.connect("127.0.0.1", 0).is_err());
 }
+
+/// Catches a bound that cannot be given: a connection made with a call's own bound carries the
+/// call past [`CALL_SECS`] and ends a blocked write at the bound it was given.
+#[test]
+fn a_connection_within_the_callers_bound_ends_the_call_at_that_bound() {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).expect("a loopback listener");
+    let port = listener.local_addr().expect("its address").port();
+    let server = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().expect("a connection");
+        stream
+    });
+    let clock = Arc::new(FakeClock::new(0, 500));
+    let transport = TcpTransport::new(clock.clone());
+    let mut conn = transport
+        .connect_within("127.0.0.1", port, 3600)
+        .expect("connected");
+    let held = server.join().expect("the server");
+    clock.advance(CALL_SECS + 1);
+    conn.write_all(b"x").expect("still inside the bound");
+    clock.advance(3600 - CALL_SECS - 1);
+    assert_eq!(
+        conn.write(b"x").expect_err("past the bound").kind(),
+        ErrorKind::TimedOut
+    );
+    drop(held);
+}

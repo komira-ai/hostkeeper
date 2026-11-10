@@ -39,8 +39,10 @@ entry is refused `repository_unknown` (`FAILED_PRECONDITION`, HTTP 400) when the
 (`Repositories`) does not hold the repository the service names, or the entry's `repository` is not
 `<name>-<suite>` of that repository's name and one of its suites. `Repositories` takes an operator
 token only; `Put` and `Remove` are audited as `repository_put` and `repository_remove`, with the
-operator's reason and then the repository's name, URI, suites and fingerprints (for `Remove`, its
-name).
+operator's reason and then the repository's name, URI, suites and fingerprints, and for a private
+repository (`access` `hosts`) `access hosts credential <path>`, the credential file's path, never
+its bytes (for `Remove`, its name). `Put` of a private repository whose credential file the
+coordinator cannot use is refused `credential_unusable` (`FAILED_PRECONDITION`, HTTP 400).
 The JSON routes `POST /v1/desired` and `GET /v1/convergence` stay CI's only. The body of
 `POST /v1/desired` takes a release index as `release_index` (its text) and
 `release_index_digest`, and a refused index is a 400 with the reason `index_digest_mismatch` or

@@ -5,24 +5,23 @@ use hostkeeper_config::manifest::REFUSED_PREFIXES;
 use hostkeeper_config::names::{PathError, UnitError};
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Manifest, Place};
-use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 
-use crate::support::{LINUX, manifest, place, web};
+use crate::support::{LINUX, place, placed_manifest, web};
 
 fn with_run(run: &[&str]) -> Manifest {
     Manifest {
         run: run.iter().map(|unit| (*unit).to_owned()).collect(),
         health_url: None,
         place: Vec::new(),
-        ..manifest(Installer::Tarball)
+        ..placed_manifest()
     }
 }
 
 fn with_place(places: Vec<Place>) -> Manifest {
     Manifest {
         place: places,
-        ..manifest(Installer::Tarball)
+        ..placed_manifest()
     }
 }
 

@@ -21,6 +21,7 @@ use hostkeeper_wire::version::Version;
 
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::repositories::Registry;
 use crate::store::Health;
 
 impl Coordinator {
@@ -70,7 +71,8 @@ impl Coordinator {
 
     /// Refreshes the releases the picks of `fleet` read ([`crate::picks`]): those of every
     /// service's desired version, of every host group's desired versions and of every standing
-    /// force's version, a group's included.
+    /// force's version, a group's included, and the channels of the registry's private
+    /// repositories.
     pub(crate) fn keep_releases(&self, fleet: &mut Fleet) {
         let mut other: Vec<(String, Version)> = self.ops.read(|state| {
             let own = state.services.iter().filter_map(|(name, marks)| {
@@ -88,6 +90,9 @@ impl Coordinator {
         });
         other.extend(self.desired.group_versions());
         fleet.picks.keep(self.desired.releases_of(other));
+        fleet
+            .picks
+            .keep_private(self.desired.with_repositories(Registry::private_channels));
     }
 
     /// Tends the store's link at a heartbeat at the coordinator's time `now`: asks a lost link to

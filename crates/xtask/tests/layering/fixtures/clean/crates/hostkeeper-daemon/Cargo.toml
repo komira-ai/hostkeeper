@@ -17,7 +17,6 @@ hostkeeper-placed = { path = "../hostkeeper-placed" }
 hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-hostkeeper-unpack = { path = "../hostkeeper-unpack" }
 
 [dev-dependencies]
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }

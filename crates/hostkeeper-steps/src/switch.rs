@@ -16,9 +16,9 @@ pub enum Toward {
     Target,
     /// Back, immediately before `rollback`.
     Back,
-    /// After a `cleanup` that succeeded, before the verdict is written: the daemon commits the
-    /// placed paths and unlinks what the version no longer lists. It is called again by a run
-    /// that finds the `cleanup` done, so it must be idempotent.
+    /// After a `cleanup` that succeeded, before the verdict is written: the daemon's switch does
+    /// nothing here, as no installer places anything for it to commit. It is called again by a
+    /// run that finds the `cleanup` done, so a switch that does something must be idempotent.
     Confirmed,
 }
 
@@ -42,7 +42,7 @@ impl From<String> for SwitchError {
     }
 }
 
-/// The daemon's switch of `current` and the placed links around the hook's steps
+/// The daemon's switch of `current` and `previous` around the hook's steps
 /// ([`crate::StepRunner::with_switch`]): called with [`Toward::Target`] before each run of
 /// `cutover`, [`Toward::Back`] before each run of `rollback` and [`Toward::Confirmed`] after a
 /// `cleanup` that succeeded, with the order. [`SwitchError::Failed`] says why it could not

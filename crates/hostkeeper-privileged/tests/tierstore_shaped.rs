@@ -1,22 +1,23 @@
 #![cfg(feature = "privileged")]
 //! A tierstore-shaped package updated end to end, as root, under the real systemd of the host:
 //! the real coordinator (in process) and the real daemon (the `hostkeeper` program under a
-//! `Type=notify` unit) fetch it from a release channel the test serves on loopback, check its
-//! attestation with the pinned `gh` against a test trust root, unpack and seal it, switch
-//! `current`, and run its hook in step units; the fixture's hook drains in `prepare` and starts
-//! the new release beside the old in `cutover` (`tests/bin/tierstore_like.rs`).
+//! `Type=notify` unit) take the package's `apt` entry from a signed apt repository the test builds
+//! on disk, stage it (the repository's signature, the pin, the simulation, the extracted tree
+//! sealed), install it with apt, switch `current`, and run its hook in step units; the fixture's
+//! hook drains in `prepare` and starts the new release beside the old in `cutover`
+//! (`tests/bin/tierstore_like.rs`).
 //!
 //! Each test builds its own state with the shared helpers of `e2e::scenario`, so none depends on
 //! another or on their order; each starts by checking it is root on a host whose service manager
 //! is systemd, and fails with that reason otherwise. Every wait is a bounded count of tries of an
 //! explicit condition; nothing is asserted about time.
 //!
-//! What each assertion reads is produced only by the real stage it witnesses: the channel's
-//! request log (the fetch), the version directory, its mode and its seal (the unpacker), the
-//! `current` and `previous` links (the switch), the version string an instance serves, read from
-//! the manifest inside the unpacked package it runs from (the switch and the hook), `systemctl
-//! is-active` (the units), the step record and the hook's record files (the step launcher), and
-//! the operator API of the coordinator (the heartbeat's report).
+//! What each assertion reads is produced only by the real stage it witnesses: the version
+//! directory, its mode, its tree and its seal (the stage), dpkg's database and hold (the
+//! installer), the `current` and `previous` links (the switch), the version string an instance
+//! serves, read from the release file of the package it runs from (the installer and the hook),
+//! `systemctl is-active` (the units), the step record and the hook's record files (the step
+//! launcher), and the operator API of the coordinator (the heartbeat's report).
 
 mod e2e;
 
@@ -24,26 +25,45 @@ use std::collections::BTreeSet;
 use std::fs;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::process::Command;
 
-use e2e::channel::{ReleaseChannel, archive_path};
-use e2e::host_root::{HostRoot, is_active};
-use e2e::package::{FixtureVersion, PackageBuilder};
-use e2e::scenario::{COORDINATED, LOCAL, Scenario, V1, V2, V3, pinned_gh};
-use e2e::signer::FixtureSigner;
-use e2e::{FIXTURE_BINARY, SERVICE, UNIT_TEMPLATE, instance, served_version, wait_for};
-use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_package::fetch::{FetchEnv, PackageOrder, fetch_package};
-use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
-use hostkeeper_package::net::{NetFetcher, UreqTransport};
-use hostkeeper_package::prove::{ProveEnv, prove};
-use hostkeeper_steps::Clock;
+use e2e::host_root::is_active;
+use e2e::scenario::{COORDINATED, LOCAL, Scenario, V1, V2, V3};
+use e2e::{FIXTURE_BINARY, SERVICE, instance, served_version, wait_for};
 use hostkeeper_steps::selfupdate::Layout;
 use serde_json::Value;
 
-/// The unit directory of the host, where the daemon links the package's units.
-const UNIT_DIR: &str = "/etc/systemd/system";
+/// The unit directory of the host the package installs its units in, and the directory the
+/// installer links the units it enables from.
+const UNIT_DIR: &str = "/usr/lib/systemd/system";
+const WANTS_DIR: &str = "/etc/systemd/system/multi-user.target.wants";
+
+/// The version of the fixture package dpkg has fully installed; `None` when it has none.
+fn dpkg_version() -> Option<String> {
+    let shown = Command::new("dpkg-query")
+        .args(["-W", "-f=${Version}\t${db:Status-Abbrev}\n", SERVICE])
+        .output()
+        .expect("run dpkg-query");
+    if !shown.status.success() {
+        return None;
+    }
+    let text = String::from_utf8_lossy(&shown.stdout).into_owned();
+    let (version, status) = text.trim_end().split_once('\t')?;
+    // The abbreviation is the wanted state, the state and the error: `hi ` is installed and held.
+    (status.as_bytes().get(1) == Some(&b'i')).then(|| version.to_owned())
+}
+
+/// The packages `apt-mark showhold` lists.
+fn held() -> Vec<String> {
+    let shown = Command::new("apt-mark")
+        .arg("showhold")
+        .output()
+        .expect("run apt-mark");
+    String::from_utf8_lossy(&shown.stdout)
+        .lines()
+        .map(str::to_owned)
+        .collect()
+}
 
 /// Whether systemd reports `unit` active.
 fn active(port: u16) -> bool {
@@ -85,37 +105,44 @@ fn tree(dir: &Path) -> Vec<(PathBuf, u32, Vec<u8>)> {
 
 /// The whole path from a desired version to a running new release, with the drain holding the
 /// old release up until it is released: `1.0.0` installed and serving, the drain gate busy, the
-/// coordinator told `1.1.0`. The daemon fetches `1.1.0` once, unpacks it root-owned and mode 0555
-/// with a seal naming the digest set, and runs `prepare`, which waits while the old instances
-/// keep serving `1.0.0`; once the gate is idle, `current` is `1.1.0` and `previous` `1.0.0`, the
-/// new instances serve `1.1.0` and are active, the old ones are stopped, the coordinator reports
-/// the host converged on `1.1.0`, and exactly `1.0.0` and `1.1.0` are on disk with their seals.
+/// coordinator told `1.1.0`. The daemon stages `1.1.0` from the repository once, extracts it
+/// root-owned and mode 0555 with a seal naming the package's pin and a `target.json` that is the
+/// entry it was ordered through, and runs `prepare`, which waits while the old instances keep
+/// serving `1.0.0`; once the gate is idle, `current` is `1.1.0` and `previous` `1.0.0`, dpkg has
+/// `1.1.0` held, the new instances serve `1.1.0` and are active, the old ones are stopped, the
+/// coordinator reports the host converged on `1.1.0`, and exactly `1.0.0` and `1.1.0` are on disk
+/// with their seals.
 #[test]
 fn a_tierstore_shaped_package_updates_end_to_end() {
     let s = Scenario::installed("upd");
     let old = s.package(V1).clone();
     let new = s.package(V2).clone();
-    let fetched = archive_path(SERVICE, V2, &new.file_name);
-    assert_eq!(
-        s.channel.count(&fetched),
-        0,
-        "1.1.0 is not fetched before it is ordered"
-    );
+    let dir = s.host.service_dir().join(V2);
+    assert!(!dir.exists(), "1.1.0 is not staged before it is ordered");
+    assert_eq!(dpkg_version().as_deref(), Some(V1));
 
     s.host.set_gate(true);
     s.order(V2);
 
-    wait_for("the daemon fetches 1.1.0", LOCAL, || {
-        s.channel.count(&fetched) > 0
-    });
-    let dir = s.host.service_dir().join(V2);
-    wait_for("1.1.0 is unpacked and sealed", LOCAL, || {
+    wait_for("1.1.0 is staged and sealed", LOCAL, || {
         dir.is_dir() && s.host.service_dir().join(format!("{V2}.seal")).is_file()
     });
     let meta = fs::metadata(&dir).expect("the version directory");
     assert_eq!(meta.uid(), 0, "the version directory is root's");
     assert_eq!(meta.permissions().mode() & 0o7777, 0o555);
     assert_eq!(s.seal(V2)["package_digest"], new.sha256.as_str());
+    assert_eq!(
+        hostkeeper_daemon::target::read(&dir)
+            .expect("target.json")
+            .as_ref(),
+        Some(&new.entry),
+        "the version directory holds the entry it was ordered through"
+    );
+    assert_eq!(
+        fs::read(dir.join("tree/usr/bin/tierstore-like")).expect("the staged program"),
+        fs::read(FIXTURE_BINARY).expect("the built fixture program"),
+        "the staged tree holds the package's program"
+    );
 
     wait_for("prepare waits on the busy drain gate", LOCAL, || {
         s.host.record(&format!("prepare-{V2}.waiting")).is_some()
@@ -139,6 +166,11 @@ fn a_tierstore_shaped_package_updates_end_to_end() {
     });
     assert_eq!(s.link("previous").as_deref(), Some(V1));
     s.wait_converged(V2);
+    assert_eq!(dpkg_version().as_deref(), Some(V2));
+    assert!(
+        held().iter().any(|package| package == SERVICE),
+        "the installed package is held"
+    );
     for port in new.ports {
         assert_eq!(
             served_version(port).as_deref(),
@@ -152,11 +184,6 @@ fn a_tierstore_shaped_package_updates_end_to_end() {
         assert_eq!(served_version(port), None, "nothing answers on {port}");
     }
     assert_eq!(
-        s.channel.count(&fetched),
-        1,
-        "1.1.0 was fetched exactly once"
-    );
-    assert_eq!(
         s.version_dirs(),
         BTreeSet::from([V1.to_owned(), V2.to_owned()])
     );
@@ -169,19 +196,19 @@ fn a_tierstore_shaped_package_updates_end_to_end() {
 }
 
 /// A release that starts but fails its verification leaves the host serving the old release
-/// under real systemd: from `1.1.0` converged, `1.2.0` (whose `verify` exits 1) is fetched once,
-/// unpacked and sealed; its `cutover` starts its instances; `verify` fails; the daemon runs
-/// `rollback` from the new release's hook, switches `current` back to `1.1.0` (`previous` is the
-/// version rolled back from), the old instances serve `1.1.0` and the new ones are stopped; the
-/// update ends `Failed`, phase `gate_release`, class `release`, and `cleanup` never runs; the
-/// coordinator marks `1.2.0` bad and puts the desired version back to `1.1.0`, which the host is
-/// converged on. The end-to-end witness of `a_failed_verify_rolls_back_and_cleanup_never_runs`.
+/// under real systemd: from `1.1.0` converged, `1.2.0` (whose `verify` exits 1) is staged once
+/// and sealed; its `cutover` starts its instances; `verify` fails; the daemon runs `rollback` from
+/// the new release's hook, switches `current` back to `1.1.0` (`previous` is the version rolled
+/// back from) and installs `1.1.0` again from the copy it kept, so dpkg has `1.1.0`, the old
+/// instances serve `1.1.0` and the new ones are stopped; the update ends `Failed`, phase
+/// `gate_release`, class `release`, and `cleanup` never runs; the coordinator marks `1.2.0` bad and
+/// puts the desired version back to `1.1.0`, which the host is converged on, with no second try of
+/// `1.2.0`. The end-to-end witness of `a_failed_verify_rolls_back_and_cleanup_never_runs`.
 #[test]
 fn a_failed_verify_rolls_back_and_the_old_release_serves() {
     let s = Scenario::updated("rbk");
     let old = s.package(V2).clone();
     let bad = s.package(V3).clone();
-    let fetched = archive_path(SERVICE, V3, &bad.file_name);
 
     s.order(V3);
 
@@ -194,8 +221,7 @@ fn a_failed_verify_rolls_back_and_the_old_release_serves() {
     assert_eq!(update["class"], "FAILURE_CLASS_RELEASE", "{update}");
     assert_eq!(update["reason"], "fixture_verify_failed", "{update}");
 
-    assert_eq!(s.channel.count(&fetched), 1, "1.2.0 was fetched once");
-    assert!(s.host.service_dir().join(V3).is_dir(), "1.2.0 was unpacked");
+    assert!(s.host.service_dir().join(V3).is_dir(), "1.2.0 was staged");
     assert_eq!(s.seal(V3)["package_digest"], bad.sha256.as_str());
     assert_eq!(
         s.host.record(&format!("cutover-{V3}")).as_deref(),
@@ -217,6 +243,7 @@ fn a_failed_verify_rolls_back_and_the_old_release_serves() {
 
     assert_eq!(s.link("current").as_deref(), Some(V2));
     assert_eq!(s.link("previous").as_deref(), Some(V3));
+    assert_eq!(dpkg_version().as_deref(), Some(V2));
     // The rollback hook starts the old units and returns at once (`Type=exec` is active when the
     // program is executed, before it has bound its port), so the answer is waited for.
     s.wait_serving(V2);
@@ -238,9 +265,10 @@ fn a_failed_verify_rolls_back_and_the_old_release_serves() {
     let failed = &record["state"]["verdict"]["Failed"];
     assert_eq!(failed["phase"], "gate_release", "{record}");
     assert_eq!(failed["class"], "release", "{record}");
+    let tries = record["order_try"].clone();
 
     // The coordinator holds 1.2.0 bad and wants 1.1.0 again: no order of 1.2.0 can follow
-    // (a bad version is never ordered), and the single fetch above is the host's only try.
+    // (a bad version is never ordered), and the one try above is the host's only one.
     wait_for(
         "the coordinator marks 1.2.0 bad and wants 1.1.0",
         COORDINATED,
@@ -254,23 +282,28 @@ fn a_failed_verify_rolls_back_and_the_old_release_serves() {
     );
     s.wait_converged(V2);
     assert_ne!(s.convergence()["desired"], V3);
+    let record = s.host.step_record().expect("the step record");
     assert_eq!(
-        s.channel.count(&fetched),
-        1,
+        (
+            record["target_version"].clone(),
+            record["order_try"].clone()
+        ),
+        (Value::from(V3), tries),
         "the host did not try 1.2.0 again"
     );
 }
 
-/// The previous version kept on disk is enough to repair a host while the release channel is
-/// down, and the pruning rule keeps exactly the two versions: from `1.1.0` converged (`previous`
-/// `1.0.0`, both sealed), the channel stopped and unreachable, a force to `1.0.0` through the
-/// coordinator. The channel's log gains nothing; `1.0.0`'s tree and seal are byte-identical
-/// after and its tree still matches its seal; `current` is `1.0.0` and `previous` `1.1.0`; the
+/// The previous version kept on disk is enough to repair a host while the repository is gone, and
+/// the pruning rule keeps exactly the two versions: from `1.1.0` converged (`previous` `1.0.0`,
+/// both sealed), the repository removed from the disk, a force to `1.0.0` through the
+/// coordinator. The force installs `1.0.0` from the copy of the index and the package it kept, so
+/// it needs nothing the repository held: `1.0.0`'s tree and seal are byte-identical after and its
+/// tree still matches its seal; `current` is `1.0.0` and `previous` `1.1.0`; dpkg has `1.0.0`; the
 /// instances of `1.0.0` are active and serve it, those of `1.1.0` are stopped; exactly `1.0.0`
 /// and `1.1.0` are on disk with their seals; the host reports the forced order succeeded.
 #[test]
 fn force_back_to_previous_needs_no_fetch() {
-    let mut s = Scenario::updated("frc");
+    let s = Scenario::updated("frc");
     let target = s.package(V1).clone();
     let left = s.package(V2).clone();
     assert_eq!(s.link("current").as_deref(), Some(V2));
@@ -287,12 +320,8 @@ fn force_back_to_previous_needs_no_fetch() {
     let seal_before = fs::read(&seal_path).expect("1.0.0's seal");
     let tree_before = tree(&s.host.service_dir().join(V1));
 
-    let requests = s.channel.total();
-    s.channel.stop();
-    assert!(
-        !s.channel.reachable(),
-        "the stopped channel is not reachable"
-    );
+    fs::remove_dir_all(s.repo.dir()).expect("remove the repository from the disk");
+    assert!(!s.repo.dir().exists(), "the repository is gone");
 
     s.coordinator.force(SERVICE, V1, e2e::HOST_ID);
 
@@ -315,10 +344,11 @@ fn force_back_to_previous_needs_no_fetch() {
         V1,
         "the force stands"
     );
-    assert_eq!(s.channel.total(), requests, "the force fetched nothing");
+    assert!(!s.repo.dir().exists(), "the force needed no repository");
 
     assert_eq!(s.link("current").as_deref(), Some(V1));
     assert_eq!(s.link("previous").as_deref(), Some(V2));
+    assert_eq!(dpkg_version().as_deref(), Some(V1));
     // A unit is active once its program is executed, a moment before it answers: wait for it.
     s.wait_serving(V1);
     for port in target.ports {
@@ -359,144 +389,45 @@ fn sockets_under(dir: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The daemon is ready under a `Type=notify` unit only after its boot pass: with `1.0.0`
-/// installed, the daemon stopped and one of the wants links it placed removed, `systemctl start`
-/// returns (which, for `Type=notify`, is after the daemon sent `READY=1`) with the link back in
-/// place (the boot pass's reconcile of the placed paths ran before the notice), the unit active
-/// and of type notify, the boot id recorded, no socket bound
-/// (none anywhere in the test's tree), and the fixture's instances still serving.
+/// The daemon is ready under a `Type=notify` unit only once its start is done: with `1.0.0`
+/// installed, the daemon stopped and the boot id it recorded removed, `systemctl start` returns
+/// (which, for `Type=notify`, is after the daemon sent `READY=1`) with the boot id recorded again
+/// (the start pass ran before the notice), the unit active and of type notify, no socket bound
+/// (none anywhere in the test's tree), the installer's enablement link of the run unit as it was,
+/// and the fixture's instances still serving.
 #[test]
-fn the_daemon_is_ready_under_a_notify_unit_only_after_its_boot_pass() {
+fn the_daemon_is_ready_under_a_notify_unit_once_its_start_is_done() {
     let s = Scenario::installed("boot");
     let installed = s.package(V1).clone();
-    let wants = Path::new(UNIT_DIR)
-        .join("multi-user.target.wants")
-        .join(instance(installed.ports[0]));
-    let template = Path::new(UNIT_DIR).join(UNIT_TEMPLATE);
+    let unit = instance(installed.ports[0]);
+    let wants = Path::new(WANTS_DIR).join(&unit);
+    let unit_file = Path::new(UNIT_DIR).join(&unit);
     assert_eq!(
-        fs::read_link(&wants).expect("the placed wants link"),
-        template
+        fs::read_link(&wants).expect("the enablement link the installer made"),
+        unit_file
     );
 
     s.daemon.stop();
     assert!(!s.daemon.is_active(), "the daemon is stopped");
-    fs::remove_file(&wants).expect("remove the wants link");
+    let recorded_at = s.host.state().join(".boot-id");
+    fs::remove_file(&recorded_at).expect("remove the recorded boot id");
     s.daemon.start();
 
+    let unit_state = s.daemon.show(&["Type", "ActiveState"]);
+    assert_eq!(unit_state.get("Type").map(String::as_str), Some("notify"));
     assert_eq!(
-        fs::read_link(&wants).expect("the wants link is back when the start returns"),
-        template
+        unit_state.get("ActiveState").map(String::as_str),
+        Some("active")
     );
-    let unit = s.daemon.show(&["Type", "ActiveState"]);
-    assert_eq!(unit.get("Type").map(String::as_str), Some("notify"));
-    assert_eq!(unit.get("ActiveState").map(String::as_str), Some("active"));
     let boot_id = fs::read_to_string("/proc/sys/kernel/random/boot_id").expect("the boot id");
-    let recorded = fs::read_to_string(s.host.state().join(".boot-id")).expect("the recorded id");
+    let recorded = fs::read_to_string(&recorded_at).expect("the boot id is recorded again");
     assert_eq!(recorded.trim(), boot_id.trim());
+    assert_eq!(
+        fs::read_link(&wants).expect("the enablement link"),
+        unit_file
+    );
     assert_eq!(sockets_under(s.host.base()), Vec::<PathBuf>::new());
     for port in installed.ports {
         assert_eq!(served_version(port).as_deref(), Some(V1), "instance {port}");
     }
-}
-
-/// The fixture signer's attestation is checked by the production verifier, unchanged: the
-/// package of `1.0.0`, fetched from the loopback channel by the production fetcher and proven by
-/// `prove` with the pinned `gh` against the fixture signer's trusted root, is accepted; the same
-/// package with a bundle for another digest is refused `not_attested`, and with a bundle of a
-/// signer the trust root does not hold is refused by `gh`. Fails if the signer's bundle or trust
-/// root is one the verifier would not take, or if anything but the verifier passes it.
-#[test]
-fn fixture_attestation_is_checked_by_the_production_verifier() {
-    let host = HostRoot::new("att");
-    host.install_gh(&pinned_gh());
-    let signer = FixtureSigner::new();
-    host.install_trusted_root(&signer.trusted_root_jsonl());
-    let other_signer = FixtureSigner::new();
-    let mut channel = ReleaseChannel::start();
-
-    let built = host.base().join("built");
-    fs::create_dir_all(&built).expect("the directory of the built packages");
-    let builder = PackageBuilder::new(&host.packages(), &host.records(), Path::new(FIXTURE_BINARY));
-    let ports = [e2e::free_port(), e2e::free_port()];
-    let versions = [
-        ("1.0.0", "good"),
-        ("1.0.1", "other digest"),
-        ("1.0.2", "other signer"),
-    ];
-    for (version, case) in versions {
-        let package = builder.build(
-            &FixtureVersion {
-                version,
-                ports,
-                fail_verify: false,
-            },
-            &built,
-        );
-        let bundle = match case {
-            "good" => signer.bundle(&package.file_name, &package.sha256),
-            "other digest" => signer.bundle(&package.file_name, &"0".repeat(64)),
-            _ => other_signer.bundle(&package.file_name, &package.sha256),
-        };
-        channel.publish(
-            SERVICE,
-            version,
-            &package.file_name,
-            package.bytes.clone(),
-            bundle,
-        );
-    }
-
-    let config = DaemonConfig::parse(&format!(
-        "coordinator = \"https://localhost\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
-        "0".repeat(64),
-        channel.base_url(),
-        signer.trusted_signers_toml()
-    ))
-    .expect("a daemon config");
-    let clock: Arc<dyn Clock> = Arc::new(hostkeeper_daemon::adapters::host_clock());
-    let fetcher = NetFetcher::new(UreqTransport::new(&[channel.ca_der()]), Arc::clone(&clock));
-    let home = host.state().join("gh-home");
-    fs::create_dir_all(&home).expect("gh's home");
-    fs::set_permissions(&home, fs::Permissions::from_mode(0o700)).expect("gh's home is private");
-    let verifier = GhVerifier::new(
-        PathBuf::from(e2e::host_root::GH_PATH),
-        PathBuf::from(e2e::host_root::TRUSTED_ROOT_PATH),
-        home,
-        Box::new(SystemRunner::new(Arc::clone(&clock))),
-        Box::new(OwnedBy { uid: 0 }),
-    );
-    let fetch = FetchEnv {
-        fetcher: &fetcher,
-        clock: clock.as_ref(),
-        bounds: &config.bounds,
-        release_channel: &config.release_channel,
-        packages_root: &host.packages(),
-        platform: hostkeeper_package::Platform::current(),
-    };
-    let proof = ProveEnv {
-        fetcher: &fetcher,
-        verifier: &verifier,
-        clock: clock.as_ref(),
-        bounds: &config.bounds,
-        signers: &config.trusted_signers,
-    };
-    fs::create_dir_all(host.packages().join(SERVICE)).expect("the service's package directory");
-    let proven = |version: &str| {
-        let order = PackageOrder {
-            service: ServiceName::new(SERVICE).expect("a service name"),
-            version: Version::new(version).expect("a version"),
-            // An order naming the package by its digest alone, as the scenarios set it.
-            index_digest: None,
-        };
-        let staged = fetch_package(&fetch, &order).expect("the package is fetched");
-        prove(&proof, staged).map(|verified| verified.sha256().as_str().to_owned())
-    };
-
-    let good = proven("1.0.0").expect("the fixture attestation is accepted");
-    assert_eq!(good.len(), 64);
-    let refused = proven("1.0.1").expect_err("a bundle for another digest is refused");
-    assert_eq!(refused.reason, "not_attested", "{refused}");
-    let refused = proven("1.0.2").expect_err("a signer outside the trust root is refused");
-    assert_eq!(refused.reason, "not_attested", "{refused}");
-    channel.stop();
 }

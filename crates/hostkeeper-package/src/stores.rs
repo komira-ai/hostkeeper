@@ -1,5 +1,5 @@
 //! The stores of a host: `/etc/hostkeeper/stores.toml` (docs/design/packages.md, sections 7.2 and
-//! 7.3), read and checked once, at the daemon's start.
+//! 7.3), read and checked by [`load`] (and by [`parse`], for the text of a Mac's managed preferences).
 //!
 //! ```toml
 //! [[store]]
@@ -18,10 +18,17 @@
 //! # or bearer_file = "/etc/hostkeeper/stores/lan.token"  # one line, the token
 //! ```
 //!
-//! A host with no file has the one store [`CHANNEL_STORE`]: kind `https`, the daemon config's
-//! release channel as its base, no redirect, anonymous ([`Stores::channel`]). A file that is
-//! there defines every store of the host, and any defect refuses it ([`StoresError`] names the
-//! store and the rule): the daemon does not start on a half-read file.
+//! A host with no file has no store. A file that is there defines every store of the host, and
+//! any defect refuses it ([`StoresError`] names the store and the rule).
+//!
+//! Every host also has the implicit store [`COORDINATOR_STORE`], of kind `coordinator`: it is
+//! never read from the file, is found by [`Stores::get`] with or without one, and is not among
+//! [`Stores::all`] (which lists what the file defines). A file that gives a store the kind
+//! `coordinator` is refused ([`Rule::Kind`]); a store the file itself names `coordinator`, which
+//! a file of the release before could hold, is kept as it was and is the one [`Stores::get`]
+//! finds under that name, so such a host fetches from it as before. Its blob URL is `/` and the locator: a path of the coordinator, which only
+//! a fetcher that talks to the coordinator over the host's own connection can ask
+//! ([`crate::entry::EntryEnv::coordinator`]).
 //!
 //! | what the file holds | refused as |
 //! |---|---|
@@ -42,7 +49,8 @@
 //!
 //! The URL of a blob: an `https` store gives `<base><locator>`; an `oci` store gives
 //! `<base>v2/<locator>/blobs/sha256:<hex>`, the locator being a repository name; an `oci`
-//! mirror gives `<base>v2/<repository>/blobs/sha256:<hex>`.
+//! mirror gives `<base>v2/<repository>/blobs/sha256:<hex>`; the `coordinator` store gives
+//! `/<locator>`.
 
 use std::fmt;
 use std::fs::OpenOptions;
@@ -52,14 +60,13 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use hostkeeper_config::daemon::HttpsUrl;
 use hostkeeper_release::grammar::{check_locator, is_store_name};
 use serde::Deserialize;
 
 use crate::ports::{Url, origin_of};
 
-/// The name of the store a host without a `stores.toml` has.
-pub const CHANNEL_STORE: &str = "channel";
+/// The name of the implicit store of the coordinator, which no file defines.
+pub const COORDINATOR_STORE: &str = "coordinator";
 /// The most bytes of `stores.toml`.
 pub const MAX_STORES_BYTES: u64 = 64 * 1024;
 /// The most bytes of a credential file.
@@ -77,6 +84,8 @@ pub enum Kind {
     Https,
     /// `<base>v2/<repository>/blobs/sha256:<hex>`.
     Oci,
+    /// `/<locator>`: a path of the coordinator.
+    Coordinator,
 }
 
 /// A credential's `Authorization` header value. Its `Debug` shows nothing of it.
@@ -152,6 +161,7 @@ impl Store {
         Url::new(match self.kind {
             Kind::Https => format!("{}{locator}", self.base),
             Kind::Oci => format!("{}v2/{locator}/blobs/sha256:{hex}", self.base),
+            Kind::Coordinator => format!("/{locator}"),
         })
     }
 
@@ -163,44 +173,50 @@ impl Store {
     }
 }
 
-/// The stores of a host, in file order.
+/// The stores of a host, in file order; a host with no `stores.toml` has none.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Stores {
     stores: Vec<Store>,
+    coordinator: Store,
+}
+
+/// The implicit store [`COORDINATOR_STORE`]: no base, no credential, no redirect.
+fn coordinator_store() -> Store {
+    Store {
+        name: COORDINATOR_STORE.to_owned(),
+        kind: Kind::Coordinator,
+        base: String::new(),
+        origin: String::new(),
+        redirects: 0,
+        mirror: false,
+        repository: None,
+        authorization: None,
+    }
+}
+
+impl Default for Stores {
+    fn default() -> Self {
+        Stores {
+            stores: Vec::new(),
+            coordinator: coordinator_store(),
+        }
+    }
 }
 
 impl Stores {
-    /// The stores of a host with no `stores.toml`: [`CHANNEL_STORE`], of kind `https`, whose
-    /// base is `release_channel` (with a `/` added if it has none), with no redirect, no mirror
-    /// and no credential.
-    pub fn channel(release_channel: &HttpsUrl) -> Stores {
-        let mut base = release_channel.as_str().to_owned();
-        if !base.ends_with('/') {
-            base.push('/');
-        }
-        let origin = origin_of(&base).unwrap_or_default();
-        Stores {
-            stores: vec![Store {
-                name: CHANNEL_STORE.to_owned(),
-                kind: Kind::Https,
-                base,
-                origin,
-                redirects: 0,
-                mirror: false,
-                repository: None,
-                authorization: None,
-            }],
-        }
-    }
-
-    /// Every store, in file order.
+    /// Every store the file defines, in file order; the implicit [`COORDINATOR_STORE`] is not
+    /// among them.
     pub fn all(&self) -> &[Store] {
         &self.stores
     }
 
-    /// The store called `name`.
+    /// The store called `name`: one the file defines, else the implicit [`COORDINATOR_STORE`]
+    /// for its name.
     pub fn get(&self, name: &str) -> Option<&Store> {
-        self.stores.iter().find(|store| store.name == name)
+        self.stores
+            .iter()
+            .find(|store| store.name == name)
+            .or_else(|| (name == COORDINATOR_STORE).then_some(&self.coordinator))
     }
 
     /// The mirrors, in file order.
@@ -393,12 +409,19 @@ fn credential(text: &StoreText, owner: u32) -> Result<Option<Secret>, Rule> {
     }
 }
 
+/// The kinds a file may name.
+#[derive(Clone, Copy)]
+enum Wire {
+    Https,
+    Oci,
+}
+
 /// The store `text` says, or the rule it breaks. Rules are checked in the order of the table of
 /// the module.
 fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     let kind = match text.kind.as_str() {
-        "https" => Kind::Https,
-        "oci" => Kind::Oci,
+        "https" => Wire::Https,
+        "oci" => Wire::Oci,
         other => return Err(Rule::Kind(other.to_owned())),
     };
     if !base_is_valid(&text.base) {
@@ -406,18 +429,18 @@ fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     }
     let mirror = text.mirror.unwrap_or(false);
     let redirects = match (kind, text.redirects) {
-        (Kind::Oci, Some(_)) => return Err(Rule::RedirectsOnOci),
-        (Kind::Oci, None) => OCI_REDIRECTS,
-        (Kind::Https, Some(count)) if count > MAX_REDIRECTS => {
+        (Wire::Oci, Some(_)) => return Err(Rule::RedirectsOnOci),
+        (Wire::Oci, None) => OCI_REDIRECTS,
+        (Wire::Https, Some(count)) if count > MAX_REDIRECTS => {
             return Err(Rule::RedirectsOver(count));
         }
-        (Kind::Https, count) => count.unwrap_or(0),
+        (Wire::Https, count) => count.unwrap_or(0),
     };
     match (kind, mirror, &text.repository) {
-        (Kind::Https, true, _) => return Err(Rule::MirrorOnHttps),
-        (Kind::Https, false, Some(_)) => return Err(Rule::RepositoryOnHttps),
-        (Kind::Oci, true, None) => return Err(Rule::MirrorWithoutRepository),
-        (Kind::Oci, _, Some(repository)) if check_locator(repository).is_err() => {
+        (Wire::Https, true, _) => return Err(Rule::MirrorOnHttps),
+        (Wire::Https, false, Some(_)) => return Err(Rule::RepositoryOnHttps),
+        (Wire::Oci, true, None) => return Err(Rule::MirrorWithoutRepository),
+        (Wire::Oci, _, Some(repository)) if check_locator(repository).is_err() => {
             return Err(Rule::Repository);
         }
         _ => {}
@@ -426,7 +449,10 @@ fn store_of(text: StoreText, owner: u32) -> Result<Store, Rule> {
     let origin = origin_of(&text.base).unwrap_or_default();
     Ok(Store {
         name: text.name,
-        kind,
+        kind: match kind {
+            Wire::Https => Kind::Https,
+            Wire::Oci => Kind::Oci,
+        },
         base: text.base,
         origin,
         redirects,
@@ -460,22 +486,21 @@ pub fn parse(text: &[u8], owner: u32) -> Result<Stores, StoresError> {
         }
         stores.push(store_of(text, owner).map_err(refuse)?);
     }
-    Ok(Stores { stores })
+    Ok(Stores {
+        stores,
+        coordinator: coordinator_store(),
+    })
 }
 
-/// The stores of the host from the file at `path`: [`Stores::channel`] when there is no file,
-/// and otherwise the stores the file defines, or the first defect in it. The file must be a
+/// The stores of the host from the file at `path`: none when there is no file, and otherwise
+/// the stores the file defines, or the first defect in it. The file must be a
 /// regular file (not a link) owned by `owner_uid`, not writable by group or others, and at most
 /// [`MAX_STORES_BYTES`]; each credential file must be a regular file (not a link) owned by
 /// `owner_uid` with mode 0600. The daemon passes `0`.
-pub fn load(
-    path: &Path,
-    release_channel: &HttpsUrl,
-    owner_uid: u32,
-) -> Result<Stores, StoresError> {
+pub fn load(path: &Path, owner_uid: u32) -> Result<Stores, StoresError> {
     match read_checked(path, owner_uid, Mode::Guarded, MAX_STORES_BYTES) {
         Ok(bytes) => parse(&bytes, owner_uid),
-        Err(FileFault::Missing) => Ok(Stores::channel(release_channel)),
+        Err(FileFault::Missing) => Ok(Stores::default()),
         Err(fault) => Err(StoresError::File {
             path: path.to_owned(),
             fault,

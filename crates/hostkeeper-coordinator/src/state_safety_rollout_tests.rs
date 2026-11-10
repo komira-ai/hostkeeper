@@ -10,15 +10,17 @@ use hostkeeper_wire::wire::{
     Class, DeferredReport, Heartbeat, OrderId, Phase, ServiceReply, Token,
 };
 
-use crate::decide::{Decision, Gate, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::fleet::{Fleet, QUIET_START};
 use crate::ops::OpsState;
-use crate::reconcile::{Change, plan};
+use crate::reconcile::Change;
 use crate::rollback_tests::{
     AUTO, HOSTS, ONE, TWO, def, failure, good, marks, release, restart, rig, round, services_of,
     status, wanted, who,
 };
-use crate::testutil::{LEGACY, Log, Rig, beat, desired, id, role, secs, updating, version};
+use crate::testutil::{
+    LEGACY, Log, Rig, beat, decide_why, desired, id, plan, role, secs, updating, version,
+};
 
 /// The service in one stage (`stages = [100]`): every host is in the stage from the start.
 const ONE_STAGE: &str = "stages = [100]";
@@ -211,7 +213,7 @@ async fn a_longer_quiet_orders_nothing_until_it_ends() {
         rig.at(at);
         let reply = rig
             .coordinator
-            .heartbeat(who("d1"), beat("1.0"))
+            .heartbeat_native(who("d1"), beat("1.0"))
             .expect("a heartbeat")
             .reply;
         assert_eq!(reply, ServiceReply::Nothing, "at {at}");
@@ -222,7 +224,7 @@ async fn a_longer_quiet_orders_nothing_until_it_ends() {
     rig.at(1_090);
     let reply = rig
         .coordinator
-        .heartbeat(who("d1"), beat("1.0"))
+        .heartbeat_native(who("d1"), beat("1.0"))
         .expect("a heartbeat")
         .reply;
     assert!(
@@ -281,7 +283,7 @@ async fn an_order_below_min_version_is_never_issued() {
 fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> ServiceReply {
     rig.at(at);
     rig.coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat")
         .reply
 }

@@ -32,8 +32,7 @@ name = "hostkeeper-coordinator"
 path = "src/main.rs"
 
 [dependencies]
-# The release index (`index.json`) a desired state may carry: parsed once when it is set, to learn
-# the package digest of each platform.
+# The platform and the service name grammars it shares with the daemon.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
@@ -57,7 +56,7 @@ futures.workspace = true
 # The poll nonces.
 getrandom.workspace = true
 http-body-util.workspace = true
-# The server of the listeners; the client of the release channel's fetch (`src/channel_https.rs`).
+# The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # `O_NOFOLLOW`, for reading the files of a snapshot without following a link (`src/backup.rs`).
@@ -69,8 +68,7 @@ prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
-# The TLS client of the release channel's fetch (`--release-channel`), and the host's roots it
-# trusts.
+# The TLS of the listeners.
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true

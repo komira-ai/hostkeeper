@@ -6,24 +6,22 @@
 //! record and the try rules ([`checks::try_rule`]); where the service is in its life
 //! ([`checks::installed_rule`]: nothing while it is being uninstalled, `install` only with no
 //! release installed, `update` and `force_rollback` only with one); an `update` below the
-//! running version is refused; the order's entry, when it carries one, judged by
-//! [`crate::entry::check`] (nothing is fetched for an entry that fails); the package from the
-//! [`crate::packages::Packages`] port, outside the step lock (the move's rollback from the sealed
-//! copy the host keeps, asking the port for nothing); its manifest, read by the manifest's
-//! loader for the order's service and version and this daemon's version; the release it
-//! replaces, none for an `install`; the paths it places checked against `placed.json` and the
-//! disk (`path_conflict`); then the step lock and [`hostkeeper_steps::StepRunner::run`], whose
-//! verdict is the reply. Every refusal before the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
+//! running version is refused; the order's entry, which it must carry (`order_invalid`
+//! otherwise), judged by [`crate::entry::check`] (nothing is fetched for an entry that fails);
+//! the version staged by the entry's installer ([`crate::repository::Repository::stage`]),
+//! outside the step lock; its manifest, read from its `target.json` for the order's service and
+//! version and this daemon's version; the release it replaces, none for an `install`; then the
+//! step lock and [`hostkeeper_steps::StepRunner::run`], whose verdict is the reply. Every
+//! refusal before the runner writes nothing. An order that ends `Succeeded`, `promotion_pending` or not,
 //! confirms its switch: under its locks, before a pending promotion is watched, the service's
 //! package directory is pruned to `current` and `previous` ([`crate::prune::confirmed_switch`]),
 //! keeping the order's target. A resend answered from the record prunes nothing.
 //!
 //! An `install` is the update path with no previous release: no `updater.previous_*` key in the
 //! params file and no `previous_digest` in the step record. The runner's switch
-//! ([`crate::place::hooked_switch`]) places the package and points `current` at it immediately
+//! ([`crate::place::hooked_switch`]) installs the package and points `current` at it immediately
 //! before `cutover`; before `rollback` it takes an install off the host, and puts an update back
-//! on the release it replaced. After `cleanup` it commits the placed paths and removes those the
-//! release no longer lists.
+//! on the release it replaced.
 
 use std::num::NonZeroU64;
 use std::path::PathBuf;
@@ -34,7 +32,7 @@ use hostkeeper_config::platform::Platform;
 use hostkeeper_hook::{Class, Phase};
 use hostkeeper_hook::{Params, Verdict};
 use hostkeeper_install::repository::DRIFT_REPAIRED;
-use hostkeeper_release::Installer;
+use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
 use hostkeeper_steps::record::{Loaded, Record, RecordError};
 use hostkeeper_steps::{Bounds, Finished, RunError, Staged, UpdateOrder};
 
@@ -44,7 +42,6 @@ use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT, PREVIOUS};
 use crate::locks::{Held, Holder, Package, ServiceGuard};
-use crate::packages::{Entry, VersionDir};
 use crate::prune;
 use crate::refusal::Refusal;
 use crate::repository;
@@ -219,7 +216,9 @@ pub(crate) fn answer(
 /// An order checked and ready for the step runner: its package's version directory and the
 /// runner's order.
 pub(crate) struct Prepared {
-    pub dir: VersionDir,
+    pub dir: Staged,
+    /// The entry the version directory was staged for, as its `target.json` holds it.
+    pub entry: Entry,
     pub update: UpdateOrder,
 }
 
@@ -264,44 +263,35 @@ pub(crate) fn prepare(
         let running = running.as_ref().map_or("", Version::as_str);
         Reply::refused(refusal, format!("{} is below {running}", order.version))
     })?;
-    if let Some(entry) = &order.entry {
-        entry::check(
-            ctx.own_version,
-            &ctx.installers(),
-            service,
-            &order.digest,
-            entry,
-        )?;
-    }
-    let native = order
-        .entry
-        .as_ref()
-        .and_then(|entry| repository::native_of_entry(entry).map(|native| (native, entry)));
-    let moved_back = same_installer(
-        ctx,
-        service,
-        running.as_ref(),
-        &order.version,
-        order.entry.as_ref(),
-    )?;
-    let dir = match (moved_back, native) {
-        // The move's rollback: the archive version the host keeps, from its sealed copy.
-        (true, _) => VersionDir::new(sealed(ctx, service, &order.version)?),
-        (false, Some((native, entry))) => {
-            ctx.repository()
-                .stage(native, service, &order.version, entry)?
-        }
-        (false, None) => ctx
-            .packages
-            .version_dir(
-                service,
-                &order.version,
-                &order.digest,
-                order.index_digest.as_ref(),
-                order.entry.as_ref(),
-            )
-            .map_err(|e| Reply::refused(checks::package_refusal(&e), e))?,
+    let Some(entry) = &order.entry else {
+        return Err(Reply::refused(
+            Refusal::OrderInvalid,
+            format!(
+                "{} of {service} carries no entry to stage the version from",
+                verb.name()
+            ),
+        ));
     };
+    entry::check(
+        ctx.own_version,
+        &ctx.installers(),
+        service,
+        &order.digest,
+        entry,
+    )?;
+    let Some(native) = repository::native_of_entry(entry) else {
+        return Err(Reply::refused(
+            Refusal::OrderInvalid,
+            format!(
+                "the installer {:?} of the entry has no steps in this daemon",
+                entry.installer
+            ),
+        ));
+    };
+    same_installer(ctx, service, running.as_ref(), entry)?;
+    let dir = ctx
+        .repository()
+        .stage(native, service, &order.version, entry)?;
     let expected = Expected {
         name: service.clone(),
         version: order.version.clone(),
@@ -315,65 +305,50 @@ pub(crate) fn prepare(
             previous(ctx, service, &order.version, running)?
         }
     };
-    // The runner's switch places this package, whether or not it replaces a release: its paths
-    // are checked now, before anything changes. A native package places nothing: its installer
-    // installs its files.
-    if native.is_none() {
-        claims_check(ctx, &manifest)?;
-    }
     let declared = declared_params(&manifest.params)?;
     let update = update_order(order, &dir, &manifest, previous, declared, &ctx.own_version);
-    Ok(Prepared { dir, update })
+    Ok(Prepared {
+        dir,
+        entry: entry.clone(),
+        update,
+    })
 }
 
-/// The installer of the release `running` of `service`, as its sealed `target.json` names it
-/// (`hostkeeper-archive` for a version without one), against the order's (`entry`'s, or
-/// `hostkeeper-archive` for an order of the release channel): a service keeps the installer it
-/// was installed with until it is uninstalled (packages.md section 5.1), so another is
-/// `Failed`, `release`, `installer_changed`, with nothing fetched. A version whose `target.json`
-/// does not read is `release_unreadable`.
-///
-/// Two changes are the move of docs/design/packages-native.md, section 10.6, and are accepted:
-/// from `hostkeeper-archive` to a native installer (the move), and from a native installer back
-/// to `hostkeeper-archive` when the order's version `target` is the archive version `previous`
-/// names, still on the host (the move's rollback; once the next update retired it, the move
-/// cannot be undone). Back to another native installer, or between two, stays
-/// `installer_changed`. `true` for the move's rollback, which [`prepare`] takes from the sealed
-/// copy the host keeps, asking the package port for nothing.
+/// The installer of the release `running` of `service`, as its sealed `target.json` names it,
+/// against the order's (`entry`'s): a service keeps the installer it was installed with until it
+/// is uninstalled (packages.md section 5.1), so another is `Failed`, `release`,
+/// `installer_changed`, with nothing fetched. A version whose `target.json` does not read, or
+/// that holds none (a version this daemon did not stage), is `release_unreadable`. A service
+/// with no release running has no installer to keep.
 fn same_installer(
     ctx: &Ctx,
     service: &ServiceName,
     running: Option<&Version>,
-    target: &Version,
-    entry: Option<&Entry>,
-) -> Result<bool, Reply> {
+    entry: &Entry,
+) -> Result<(), Reply> {
     let Some(running) = running else {
-        return Ok(false);
+        return Ok(());
     };
     let dir = ctx
         .dirs
         .packages
         .join(service.as_str())
         .join(running.as_str());
-    let archive = Installer::HostkeeperArchive.as_str();
     let installed = target::read(&dir)
         .map_err(|e| Reply::refused(Refusal::ReleaseUnreadable, e))?
-        .map_or_else(|| archive.to_owned(), |sealed| sealed.installer);
-    let ordered = entry.map_or(archive, |entry| entry.installer.as_str());
-    let native = |name: &str| name.parse::<Installer>().is_ok_and(Installer::is_native);
-    let kept = || {
-        let dir = ctx
-            .dirs
-            .packages
-            .join(service.as_str())
-            .join(target.as_str());
-        let previous = installed::linked_version(&ctx.dirs.packages, service, PREVIOUS);
-        (previous.as_ref() == Some(target)) & dir.is_dir() & matches!(target::read(&dir), Ok(None))
-    };
-    let moved = (installed == archive) & native(ordered);
-    let moved_back = native(&installed) & (ordered == archive) && kept();
-    match (installed == ordered) | moved | moved_back {
-        true => Ok(moved_back),
+        .ok_or_else(|| {
+            Reply::refused(
+                Refusal::ReleaseUnreadable,
+                format!(
+                    "{} holds no {}: it was not staged by an installer of this daemon",
+                    dir.display(),
+                    target::TARGET_FILE
+                ),
+            )
+        })?
+        .installer;
+    match installed == entry.installer {
+        true => Ok(()),
         false => Err(Reply::Finished {
             verdict: Verdict::Failed {
                 phase: Phase::BeforeCommit,
@@ -387,18 +362,6 @@ fn same_installer(
 
 /// The reason of an order whose installer is not the one the service runs.
 pub const REASON_INSTALLER_CHANGED: &str = "installer_changed";
-
-/// The paths `manifest` places, checked against `placed.json` and what is on disk: a path
-/// another service owns, or one occupied by anything the record does not list, is
-/// `path_conflict`; a unit or `[[files]]` entry that breaks a rule of linking is
-/// `manifest_mismatch`. Reads only.
-fn claims_check(ctx: &Ctx, manifest: &Manifest) -> Result<(), Reply> {
-    let placer = ctx.placer();
-    placer
-        .desired(manifest)
-        .and_then(|claims| placer.check(&claims))
-        .map_err(|e| Reply::refused(Refusal::from(&e), e))
-}
 
 /// A manifest's `[params]` as the hook's declared params. The manifest's loader already refuses
 /// what [`Params::parse_declared`] refuses (a non-scalar, an `updater.*` key); a table it let
@@ -440,7 +403,7 @@ fn sealed(ctx: &Ctx, service: &ServiceName, version: &Version) -> Result<Staged,
 /// params of its manifest, the release it replaces and the order's digest and try.
 fn update_order(
     order: &Hooked,
-    dir: &VersionDir,
+    dir: &Staged,
     manifest: &Manifest,
     previous: Option<(Version, Staged)>,
     declared_params: Params,
@@ -457,7 +420,7 @@ fn update_order(
         target_version: order.version.to_string(),
         previous_version,
         artifact_digest: order.digest.to_string(),
-        staged: dir.staged().clone(),
+        staged: dir.clone(),
         previous,
         hook_binary: hook.command.first().map(PathBuf::from).unwrap_or_default(),
         hook_args: hook.command.iter().skip(1).cloned().collect(),

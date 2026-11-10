@@ -6,15 +6,20 @@
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Blob, Target, TargetList};
-use hostkeeper_release::Installer;
 use hostkeeper_release::grammar::{is_package_name, is_package_version, is_repository_name};
 use hostkeeper_release::manifest::ManifestError;
-use hostkeeper_release::target::{self, EntryError, TargetError, is_repository_entry};
+use hostkeeper_release::target::{
+    self, EntryError, TargetError, is_native_entry, is_repository_entry,
+};
+use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DynamicMessage};
 use prost_types::FileDescriptorSet;
 
-use crate::support::{LINUX, digest, entry, location, manifest, repository_entry, targets, web};
+use crate::support::{
+    LINUX, attested_artifact, bare_manifest, digest, entry, location, manifest, repository_entry,
+    targets, unlisted, web,
+};
 
 fn check_entry(entry: &Target) -> Result<(), EntryError> {
     target::check_entry(&web(), LINUX, entry)
@@ -72,9 +77,7 @@ fn a_repository_entry_is_one_whose_repository_is_set_whatever_its_installer() {
         "checked as an artifact entry"
     );
     assert!(is_repository_entry(&from("")));
-    assert!(!is_repository_entry(&crate::support::entry(
-        Installer::Tarball
-    )));
+    assert!(!is_repository_entry(&unlisted("tarball")));
 }
 
 /// Catches: a repository name outside `[a-z0-9-]` or over 32 bytes taken, one of 1 or 32 bytes
@@ -177,7 +180,7 @@ fn a_package_version_on_an_entry_without_repository_is_refused() {
             let half = Target {
                 installer: installer.to_owned(),
                 package_version: Some(version.to_owned()),
-                ..entry(Installer::Tarball)
+                ..unlisted("tarball")
             };
             assert!(!is_repository_entry(&half));
             assert_eq!(
@@ -366,12 +369,11 @@ fn every_entrys_size_and_installer_name_are_checked_first() {
 }
 
 /// Catches: an entry that breaks several of the repository rules refused for another rule from
-/// run to run: the repository, the version, the artifact fields, the installer, the pin, the
-/// manifest's package and then its other rules, in that order.
+/// run to run: the repository, the version, the artifact fields, the pin, the manifest's package
+/// and then its other rules, in that order.
 #[test]
 fn of_several_broken_rules_the_first_in_the_sections_order_is_the_answer() {
     let mut entry = Target {
-        installer: Installer::HostkeeperArchive.as_str().to_owned(),
         repository: Some("Bad".to_owned()),
         package_version: None,
         bytes: 1,
@@ -389,7 +391,6 @@ fn of_several_broken_rules_the_first_in_the_sections_order_is_the_answer() {
                     EntryError::Repository(_) => entry.repository = Some("komira-stable".into()),
                     EntryError::NoPackageVersion => entry.package_version = Some("1.0-1".into()),
                     EntryError::ArtifactField(_) => entry.bytes = 0,
-                    EntryError::ArchiveFromRepository => entry.installer = "apt".into(),
                     EntryError::Digest { .. } => entry.digest = digest('e'),
                     EntryError::NoPackage => {
                         entry.manifest.as_mut().expect("a manifest").package = Some("web".into());
@@ -405,7 +406,6 @@ fn of_several_broken_rules_the_first_in_the_sections_order_is_the_answer() {
             EntryError::Repository("Bad".to_owned()),
             EntryError::NoPackageVersion,
             EntryError::ArtifactField("bytes"),
-            EntryError::ArchiveFromRepository,
             EntryError::Digest {
                 of: "package",
                 digest: String::new()
@@ -415,34 +415,29 @@ fn of_several_broken_rules_the_first_in_the_sections_order_is_the_answer() {
     );
 }
 
-/// Catches: a repository entry of the installer `hostkeeper-archive` taken, which the
-/// coordinator would index, record and order to the oldest daemons as an archive; or the
-/// service `hostkeeper` set with a repository entry of any installer, since its release is one
-/// `hostkeeper-archive` artifact entry per platform.
+/// Catches: the service `hostkeeper` set with a repository entry refused, or with an archive
+/// entry after it or alone passing, since its release is one native entry per platform; or a
+/// repository entry that names `hostkeeper-archive` refused, which is an unknown installer's
+/// name as any other is.
 #[test]
-fn hostkeeper_archive_and_the_service_hostkeeper_take_no_repository_entry() {
-    let archive = Target {
-        installer: Installer::HostkeeperArchive.as_str().to_owned(),
+fn the_service_hostkeeper_takes_a_repository_entry_alone() {
+    let named_archive = Target {
+        installer: ARCHIVE_INSTALLER.to_owned(),
         ..repository_entry()
     };
-    assert_eq!(
-        check_entry(&archive),
-        Err(EntryError::ArchiveFromRepository)
-    );
-    assert_eq!(
-        EntryError::ArchiveFromRepository.to_string(),
-        "the repository entry has the installer hostkeeper-archive, which installs archives only"
-    );
+    assert_eq!(check_entry(&named_archive), Ok(()));
+    assert!(is_native_entry(&named_archive));
 
     let hostkeeper = ServiceName::new("hostkeeper").expect("a name");
+    // An archive entry as an earlier release's CI sent it: the manifest holds `min_hostkeeper`.
+    let archive_entry = || attested_artifact(ARCHIVE_INSTALLER, bare_manifest());
     let mut own = repository_entry();
     let manifest = own.manifest.as_mut().expect("a manifest");
     manifest.run = vec!["hostkeeper.service".to_owned()];
     manifest.health_url = None;
     manifest.package = Some("hostkeeper".to_owned());
     assert_eq!(target::check_entry(&hostkeeper, LINUX, &own), Ok(()));
-    // Its repository entry is its native one: alone, or with the archive entry after it, and
-    // never after the archive entry (`native.rs` holds every shape).
+    // Its repository entry is its native one, alone (`native.rs` holds every shape).
     let alone = TargetList {
         entries: vec![own.clone()],
     };
@@ -451,7 +446,7 @@ fn hostkeeper_archive_and_the_service_hostkeeper_take_no_repository_entry() {
         Ok(())
     );
     let after = TargetList {
-        entries: vec![entry(Installer::HostkeeperArchive), own],
+        entries: vec![archive_entry(), own],
     };
     assert_eq!(
         target::check(&hostkeeper, &targets(&[("linux-arm64", after)])),
@@ -460,20 +455,22 @@ fn hostkeeper_archive_and_the_service_hostkeeper_take_no_repository_entry() {
         })
     );
     let archive_list = TargetList {
-        entries: vec![entry(Installer::HostkeeperArchive)],
+        entries: vec![archive_entry()],
     };
     assert_eq!(
         target::check(&hostkeeper, &targets(&[("linux-arm64", archive_list)])),
-        Ok(())
+        Err(TargetError::SelfList {
+            platform: Platform::LinuxArm64
+        })
     );
 }
 
-/// Catches: the list CI sends for a Linux platform (`apt` from a repository, then a `tarball`)
+/// Catches: a list of `apt` from a repository, then an artifact entry of a name no daemon lists,
 /// refused, or two `apt` entries passing because one is a repository entry and one is not.
 #[test]
-fn a_list_of_a_repository_entry_and_a_tarball_passes_and_no_installer_is_named_twice() {
+fn a_list_of_a_repository_entry_and_an_unlisted_artifact_passes_and_no_installer_is_named_twice() {
     let sent = TargetList {
-        entries: vec![repository_entry(), entry(Installer::Tarball)],
+        entries: vec![repository_entry(), unlisted("tarball")],
     };
     assert_eq!(
         target::check(&web(), &targets(&[("linux-x86_64", sent)])),
@@ -482,7 +479,7 @@ fn a_list_of_a_repository_entry_and_a_tarball_passes_and_no_installer_is_named_t
     let artifact_apt = Target {
         installer: "apt".to_owned(),
         manifest: Some(manifest(Installer::Apt)),
-        ..entry(Installer::Tarball)
+        ..unlisted("tarball")
     };
     let twice = TargetList {
         entries: vec![repository_entry(), artifact_apt],
@@ -521,19 +518,19 @@ fn target_before() -> prost_reflect::MessageDescriptor {
 /// passes as it did.
 #[test]
 fn an_entry_written_by_the_release_before_is_an_artifact_entry_and_passes_as_before() {
-    for installer in [
-        Installer::Tarball,
-        Installer::MacosPkg,
-        Installer::HostkeeperArchive,
+    for (written, platform) in [
+        (unlisted("tarball"), LINUX),
+        (entry(Installer::MacosPkg), Platform::MacosArm64),
+        (attested_artifact(ARCHIVE_INSTALLER, bare_manifest()), LINUX),
     ] {
-        let mut written = DynamicMessage::new(target_before());
-        written
-            .transcode_from(&entry(installer))
+        let installer = written.installer.clone();
+        let mut before = DynamicMessage::new(target_before());
+        before
+            .transcode_from(&written)
             .expect("the release before writes it");
-        let read = Target::decode(written.encode_to_vec().as_slice()).expect("decodes");
+        let read = Target::decode(before.encode_to_vec().as_slice()).expect("decodes");
         assert!(!is_repository_entry(&read), "{installer}");
         assert_eq!(read.package_version, None, "{installer}");
-        let platform = crate::support::platform_of(installer);
         assert_eq!(
             target::check_entry(&web(), platform, &read),
             Ok(()),

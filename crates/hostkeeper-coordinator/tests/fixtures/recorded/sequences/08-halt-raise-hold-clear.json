@@ -15,7 +15,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   },
   {
    "at_secs": 1100,
@@ -57,11 +58,12 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
    "expect_contains": [
     "\"state\":\"halted\"",
     "\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"}"
-   ]
+   ],
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}"
   },
   {
    "at_secs": 1100,
@@ -91,10 +93,11 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}",
    "expect_contains": [
     "\"state\":\"halted\""
-   ]
+   ],
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"halted\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"halt\":{\"node_id\":\"s1\",\"check\":\"disk_tainted\",\"target\":\"2.0\"},\"commit\":\"{COMMIT}\"}"
   },
   {
    "at_secs": 1100,
@@ -110,11 +113,12 @@
    "at_secs": 1100,
    "call": "convergence",
    "expect_status": 200,
-   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"blocked\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"commit\":\"{COMMIT}\"}",
+   "expect_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"in_progress\",\"roles\":[],\"commit\":\"{COMMIT}\"}",
    "expect_not_contains": [
     "\"state\":\"halted\"",
     "\"halt\":"
-   ]
+   ],
+   "kbf_body": "{\"desired\":\"2.0\",\"quiet\":false,\"state\":\"blocked\",\"roles\":[{\"role\":\"storage\",\"at_desired\":0,\"updating\":0,\"failed\":1,\"down\":0}],\"commit\":\"{COMMIT}\"}"
   }
  ]
 }

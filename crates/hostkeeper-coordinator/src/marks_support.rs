@@ -1,7 +1,9 @@
 //! Builders for the tests of the operator's marks, holds and force: a coordinator that runs two
 //! services, `web` and `db`, on the roles `daemon` and `storage`, with no legacy service and a
 //! CI token that may set both; the heartbeats of daemons that list both; the operator as a
-//! caller; and the requests of the calls.
+//! caller; and the requests of the calls. A service is set as a release with one `apt` entry per
+//! platform ([`set`]), and a daemon that announces `target-v1` is heard to list `apt` and to run
+//! each service it names with it ([`hear_apt`]), which is what picks a host an entry.
 
 use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
@@ -10,7 +12,8 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::force_request::Targets;
 use hostkeeper_proto::hostkeeper::operator::v1::hold_scope::Scope;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_wire::wire::{Heartbeat, ServiceBeat, ServiceReply};
+use hostkeeper_wire::Platform;
+use hostkeeper_wire::wire::{Heartbeat, ORDER_FEATURE, ServiceBeat, ServiceReply};
 use serde_json::json;
 
 use crate::desired::DesiredStore;
@@ -18,7 +21,11 @@ use crate::identity::Identity;
 use crate::operator::Caller;
 use crate::ops::OpsStore;
 use crate::orders::Order;
+use crate::picks::TARGET_FEATURE;
+use crate::releases::Targets as ReleaseTargets;
+use crate::releases_tests::{apt_entry, list};
 use crate::service::Coordinator;
+use crate::service::ci_calls::Setter;
 use crate::services::Services;
 use crate::store::{Backend, Fake};
 use crate::testutil::{Rig, beat, ci_token, id, role, version};
@@ -35,6 +42,7 @@ pub(crate) const NEW_DAEMON: &[&str] = &[
     "deferred-v1",
     "forced-v1",
     "abort-v1",
+    TARGET_FEATURE,
 ];
 /// The features of a daemon that also takes the `install` and `uninstall` verbs.
 pub(crate) const INSTALLER: &[&str] = &[
@@ -44,9 +52,21 @@ pub(crate) const INSTALLER: &[&str] = &[
     "forced-v1",
     "abort-v1",
     "install-v1",
+    TARGET_FEATURE,
 ];
-/// The features of a daemon that predates the force and the abort.
-pub(crate) const OLD_DAEMON: &[&str] = &["heartbeat-v2", "halt-v1", "deferred-v1"];
+/// The features of a daemon that reads order terms and takes installs and forces.
+pub(crate) const AGENT: &[&str] = &[
+    "heartbeat-v2",
+    "halt-v1",
+    "deferred-v1",
+    "forced-v1",
+    "abort-v1",
+    "install-v1",
+    ORDER_FEATURE,
+];
+/// The features of a daemon that predates the force and the abort, and announces `target-v1` as
+/// every daemon of a release that picks entries does.
+pub(crate) const OLD_DAEMON: &[&str] = &["heartbeat-v2", "halt-v1", "deferred-v1", TARGET_FEATURE];
 
 /// A package digest: 64 lower-case hex characters, `n` repeated.
 pub(crate) fn digest(n: u8) -> String {
@@ -117,16 +137,80 @@ pub(crate) fn restart(rig: &mut Rig, extra: &str) {
     rig.coordinator = start(&rig.dir, &rig.clock, extra);
 }
 
-/// Sets `service` to `version` as CI does, registering the digest [`digest`] `n` for it.
-pub(crate) async fn set(rig: &Rig, service: &str, version: &str, n: u8) {
-    let body = format!(
-        r#"{{"service":"{service}","version":"{version}","release_digest":"{}"}}"#,
-        digest(n)
-    );
+/// The release of `service` whose every platform lists one `apt` entry, pinned by the digest
+/// [`digest`] `n`: what a daemon that lists `apt` is picked.
+pub(crate) fn native_targets(service: &str, n: u8) -> ReleaseTargets {
+    ["linux-x86_64", "linux-arm64", "macos-arm64"]
+        .into_iter()
+        .map(|platform| (platform.to_owned(), list(vec![apt_entry(service, n)])))
+        .collect()
+}
+
+/// The entry [`native_targets`] lists for `service` pinned by [`digest`] `n`, as an order carries
+/// it.
+pub(crate) fn native_target(service: &str, n: u8) -> crate::orders::PickedTarget {
+    crate::orders::PickedTarget::new(apt_entry(service, n))
+}
+
+/// CI's set of `service` to `version` with the release `targets`, as it is answered.
+pub(crate) async fn try_set_targets(
+    rig: &Rig,
+    service: &str,
+    version: &str,
+    targets: ReleaseTargets,
+) -> Result<
+    (
+        crate::service::Set,
+        Option<crate::write_record::WriteRecord>,
+    ),
+    crate::service::SetError,
+> {
+    let verified = rig
+        .coordinator
+        .ci(Some(&ci_token()))
+        .await
+        .expect("a token");
+    let body = format!(r#"{{"service":"{service}","version":"{version}"}}"#);
+    rig.coordinator.keep_komira();
     rig.coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
+        .set_desired_with(
+            &Setter::Ci(&verified),
+            body.as_bytes(),
+            &crate::write_record::WriteAsk::default(),
+            Some(targets),
+        )
+        .await
+}
+
+/// Sets `service` to `version` as CI does, with the release `targets`.
+pub(crate) async fn set_targets(rig: &Rig, service: &str, version: &str, targets: ReleaseTargets) {
+    try_set_targets(rig, service, version, targets)
         .await
         .expect("set");
+}
+
+/// Sets `service` to `version` as CI does, with the release [`native_targets`] `n`.
+pub(crate) async fn set(rig: &Rig, service: &str, version: &str, n: u8) {
+    set_targets(rig, service, version, native_targets(service, n)).await;
+}
+
+/// A heartbeat of a daemon of `platform` that runs `services`, with the features of [`AGENT`] and
+/// `target-v1`.
+pub(crate) fn beat_on(platform: Platform, services: Vec<ServiceBeat>) -> Heartbeat {
+    let mut beat = beat_of(AGENT, services);
+    beat.agent_features.push(TARGET_FEATURE.to_owned());
+    beat.platform = platform;
+    beat
+}
+
+/// Notes what a daemon of `who` that announces `target-v1` says over gRPC in `beat`: it lists
+/// `apt` and runs each service with it ([`Coordinator::hear_apt`]). A beat that does not announce
+/// the feature says nothing.
+pub(crate) fn hear_apt(rig: &Rig, who: &Identity, beat: &Heartbeat) {
+    if !beat.agent_features.iter().any(|f| f == TARGET_FEATURE) {
+        return;
+    }
+    rig.coordinator.hear_apt(who);
 }
 
 /// What a host reports of `service`: it runs `running`, healthy.
@@ -156,8 +240,14 @@ pub(crate) fn operator() -> Caller {
     Caller::Operator("operator".parse().expect("a token name"))
 }
 
-/// The reply to a heartbeat of `host` (role `role`) on the JSON route.
+/// The reply to a heartbeat of `host` (role `role`) over a transport that carries typed orders,
+/// as the daemon's gRPC heartbeat would be answered ([`hear_apt`] says what it lists).
 pub(crate) fn ask(rig: &Rig, host: &str, role_name: &str, b: Heartbeat) -> ServiceReply {
+    ask_typed(rig, host, role_name, b).0
+}
+
+/// The reply to a heartbeat of `host` (role `role`) on the JSON route, which carries no order.
+pub(crate) fn ask_json(rig: &Rig, host: &str, role_name: &str, b: Heartbeat) -> ServiceReply {
     rig.coordinator
         .heartbeat(who(host, role_name), b)
         .expect("answered")
@@ -172,15 +262,43 @@ pub(crate) fn ask_typed(
     role_name: &str,
     b: Heartbeat,
 ) -> (ServiceReply, Option<Order>) {
+    let identity = who(host, role_name);
+    hear_apt(rig, &identity, &b);
+    ask_heard(rig, identity, b)
+}
+
+/// [`ask_typed`] for a daemon whose installers the test has said already (the coordinator's
+/// `hear_installers`): nothing is heard from `b`.
+pub(crate) fn ask_heard(
+    rig: &Rig,
+    identity: Identity,
+    b: Heartbeat,
+) -> (ServiceReply, Option<Order>) {
     let (answer, order) = rig
         .coordinator
-        .heartbeat_with_orders(
-            who(host, role_name),
-            b,
-            crate::trusted_root::TrustedRootSaid::default(),
-        )
+        .heartbeat_with_orders(identity, b, crate::trusted_root::TrustedRootSaid::default())
         .expect("answered");
     (answer.reply, order)
+}
+
+/// `order` if it is a force, else `None`: the gate's update of a host that runs another version is
+/// no force.
+pub(crate) fn force_only(order: Option<Order>) -> Option<Order> {
+    order.filter(|order| matches!(order, Order::Force { .. }))
+}
+
+/// The typed update of `service` to `to` at the try `order_try`, from the entry [`native_target`]
+/// of the number `n` names.
+pub(crate) fn update_order(service: &str, to: &str, n: u8, order_try: u64) -> Order {
+    Order::Update {
+        service: service.to_owned(),
+        version: version(to),
+        digest: hostkeeper_wire::wire::PackageDigest::parse(&digest(n)).expect("a digest"),
+        index_digest: None,
+        order_id: crate::order_terms::order_id_text(service, &version(to)),
+        order_try,
+        target: Some(native_target(service, n)),
+    }
 }
 
 /// The reply that orders `service` to `to`.

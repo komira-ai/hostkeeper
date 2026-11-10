@@ -4,16 +4,18 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::identity::SanPrefixes;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Health, Heartbeat, Outcome, Reply, UpdateResult};
 use hostkeeper_wire::{HostId, Platform, RoleName};
 
-use crate::converge::{Convergence, converge_service};
-use crate::decide::decide_in;
+use crate::converge::Convergence;
 use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Fleet;
+use crate::marks_support::native_targets;
+use crate::picks::{Heard, TARGET_FEATURE};
 use crate::services::{ServiceDef, Services};
 
 /// The legacy service of the unit tests: the one kbf's coordinator had built in, now plain data
@@ -52,15 +54,166 @@ pub fn kbf_def() -> ServiceDef {
 }
 
 /// What to tell the legacy-service host `id` at `now`, when the recorded kbf definition is the
-/// only service.
+/// only service. The hosts are daemons of [`native`].
 pub fn decide(desired: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> Reply {
     let all = BTreeMap::from([(LEGACY.to_owned(), desired.clone())]);
     decide_in(&kbf_services(), &all, LEGACY, fleet, id, now)
 }
 
-/// Where the hosts of the recorded kbf definition stand at `now` against `desired`.
+/// Where the hosts of the recorded kbf definition stand at `now` against `desired`. The hosts are
+/// daemons of [`native`].
 pub fn converge(desired: Option<&Desired>, fleet: &Fleet, now: Duration) -> Convergence {
     converge_service(&kbf_def(), desired, fleet, now)
+}
+
+/// [`crate::decide::decide_in`] over the hosts of [`native`] for `desired`.
+pub fn decide_in(
+    services: &Services,
+    desired: &BTreeMap<String, Desired>,
+    service: &str,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> Reply {
+    crate::decide::decide_in(services, desired, service, &native(fleet, desired), id, now)
+}
+
+/// [`crate::decide::decide_why`] over the hosts of [`native`] for `desired`.
+pub fn decide_why(
+    services: &Services,
+    desired: &BTreeMap<String, Desired>,
+    service: &str,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> crate::decide::Decision {
+    crate::decide::decide_why(services, desired, service, &native(fleet, desired), id, now)
+}
+
+/// [`crate::decide::decide_marked`] over the hosts of [`native`] for `desired`.
+pub fn decide_marked(
+    services: &Services,
+    desired: &BTreeMap<String, Desired>,
+    bad: &[Version],
+    service: &str,
+    fleet: &Fleet,
+    id: &HostId,
+    now: Duration,
+) -> crate::decide::Decision {
+    let fleet = native(fleet, desired);
+    crate::decide::decide_marked(services, desired, bad, service, &fleet, id, now)
+}
+
+/// [`crate::reconcile::plan`] over the hosts of [`native`] for `want`.
+pub fn plan(
+    def: &ServiceDef,
+    want: &Desired,
+    marks: &crate::ops::ServiceOps,
+    fleet: &Fleet,
+    state: &crate::ops::OpsState,
+    now: Duration,
+) -> Vec<crate::reconcile::Change> {
+    let wants = BTreeMap::from([(def.name.clone(), want.clone())]);
+    crate::reconcile::plan(def, want, marks, &native(fleet, &wants), state, now)
+}
+
+/// [`crate::converge::converge_service`] over the hosts of [`native`] for `desired`.
+pub fn converge_service(
+    def: &ServiceDef,
+    desired: Option<&Desired>,
+    fleet: &Fleet,
+    now: Duration,
+) -> Convergence {
+    let wants: BTreeMap<String, Desired> = desired
+        .map(|desired| (def.name.clone(), desired.clone()))
+        .into_iter()
+        .collect();
+    crate::converge::converge_service(def, desired, &native(fleet, &wants), now)
+}
+
+/// [`crate::converge::role_counts`] over the hosts of [`native`] for `desired`.
+pub fn role_counts(
+    def: &ServiceDef,
+    desired: Option<&Desired>,
+    fleet: &Fleet,
+    now: Duration,
+) -> Vec<crate::converge::RoleCounts> {
+    let wants: BTreeMap<String, Desired> = desired
+        .map(|desired| (def.name.clone(), desired.clone()))
+        .into_iter()
+        .collect();
+    crate::converge::role_counts(def, desired, &native(fleet, &wants), now)
+}
+
+/// A copy of `fleet` that is picked by native releases: each host it holds a word of, for the
+/// services of `wants` and the legacy service, is a node whose daemon announces `target-v1`, lists
+/// `apt` and runs each of those services with it, and each desired version of `wants` has a
+/// release that lists one `apt` entry per platform. What the unit tests of the decision use to
+/// have a version ordered at all: a version with no release kept orders nothing
+/// ([`crate::picks`]).
+pub fn native(fleet: &Fleet, wants: &BTreeMap<String, Desired>) -> Fleet {
+    let mut fleet = fleet.clone();
+    let mut services: Vec<&str> = wants.keys().map(String::as_str).collect();
+    if !services.contains(&LEGACY) {
+        services.push(LEGACY);
+    }
+    let mut heard: BTreeMap<HostId, (String, Platform, Duration, Vec<String>)> = BTreeMap::new();
+    for service in &services {
+        for (host, record) in fleet.hosts_of(service) {
+            let entry = heard.entry(host.clone()).or_insert_with(|| {
+                (
+                    record.role_name().to_owned(),
+                    record.beat.platform,
+                    record.seen,
+                    Vec::new(),
+                )
+            });
+            entry.3.push((*service).to_owned());
+        }
+    }
+    for (service, want) in wants {
+        let release = crate::releases::Release::new(native_targets(service, 1), None);
+        fleet
+            .picks
+            .keep_one(service, &want.version, Arc::new(release));
+    }
+    for (host, (role, platform, seen, names)) in heard {
+        let mut node = fleet.node(&host).cloned().unwrap_or(crate::fleet::Node {
+            role,
+            features: Vec::new(),
+            agent: None,
+            platform,
+            seen,
+            announced: names
+                .iter()
+                .map(|name| (name.clone(), Health::Healthy))
+                .collect(),
+            sent_unix: None,
+            cert_not_after_unix: None,
+            last_renew_error: None,
+            trusted_root: crate::trusted_root::TrustedRootSaid::default(),
+            skewed_beats: 0,
+        });
+        node.features.retain(|f| f != TARGET_FEATURE);
+        node.features.push(TARGET_FEATURE.to_owned());
+        let request = agent::HeartbeatRequest {
+            features: vec![TARGET_FEATURE.to_owned()],
+            installers: vec!["apt".to_owned()],
+            services: names
+                .iter()
+                .map(|name| agent::ServiceBeat {
+                    name: name.clone(),
+                    installer: Some("apt".to_owned()),
+                    ..agent::ServiceBeat::default()
+                })
+                .collect(),
+            ..agent::HeartbeatRequest::default()
+        };
+        let heard = Heard::of(&request).expect("the request lists apt");
+        fleet.picks.hear(host.clone(), heard);
+        fleet.note_node(host, node, 0);
+    }
+    fleet
 }
 
 /// A new scratch directory for a unit test, under the test binary's own directory.
@@ -316,13 +469,157 @@ impl Rig {
         self.clock.store(seconds, Ordering::SeqCst);
     }
 
-    /// Sets the desired state as CI would, with a token no one has used.
+    /// Sets the desired state as CI would, with a token no one has used, and with the release
+    /// [`native_targets`] for the service the body names (the legacy service when it names none):
+    /// its `release_digest`, if the body has one, only says which number
+    /// [`crate::marks_support::digest`] pins the release's entry, and is not set.
     pub async fn set(&self, body: &str) {
-        let token = ci_token();
+        set_native(&self.coordinator, body).await;
+    }
+
+    /// Sets the desired state as CI would from `body` alone, with no release: a version no host
+    /// is picked an entry of.
+    pub async fn set_plain(&self, body: &str) {
         self.coordinator
-            .set_desired(Some(&token), body.as_bytes())
+            .set_desired(Some(&ci_token()), body.as_bytes())
             .await
             .expect("set");
+    }
+}
+
+/// CI's set of `body` to `coordinator` with a token no one has used, with the release
+/// [`native_targets`] for the service the body names (the legacy service when it names none): its
+/// `release_digest`, if the body has one, only says which number
+/// [`crate::marks_support::digest`] pins the release's entry, and is not set.
+pub async fn set_native(coordinator: &Coordinator, body: &str) {
+    let mut body: serde_json::Value = serde_json::from_str(body).expect("a JSON body");
+    let service = body
+        .get("service")
+        .and_then(|service| service.as_str())
+        .unwrap_or(LEGACY)
+        .to_owned();
+    let n = body
+        .as_object_mut()
+        .and_then(|fields| fields.remove("release_digest"))
+        .and_then(|digest| u8::from_str_radix(digest.as_str()?.get(..2)?, 16).ok())
+        .unwrap_or(1);
+    let verified = coordinator.ci(Some(&ci_token())).await.expect("a token");
+    coordinator.keep_komira();
+    coordinator
+        .set_desired_with(
+            &crate::service::ci_calls::Setter::Ci(&verified),
+            body.to_string().as_bytes(),
+            &crate::write_record::WriteAsk::default(),
+            Some(native_targets(&service, n)),
+        )
+        .await
+        .expect("set");
+}
+
+impl Coordinator {
+    /// Puts the repository `komira` (the one the rollout file's services name by default) in the
+    /// registry when it is not there, without an audit entry: a set with the `apt` entries of
+    /// [`crate::marks_support::native_targets`] is refused until the registry holds it.
+    pub(crate) fn keep_komira(&self) {
+        let komira = crate::repositories_support::komira(1);
+        let missing = self
+            .desired
+            .with_repositories(|registry| registry.get(&komira.name).is_none());
+        if missing {
+            let staged = self
+                .desired
+                .stage_repositories(|held| held.put(komira))
+                .expect("the registry takes komira");
+            self.ops
+                .decide_changes_with(staged, |_| Vec::new())
+                .expect("the registry is stored");
+        }
+    }
+
+    /// Notes that the daemon of `who` announces `target-v1`, lists `apt` and runs each service the
+    /// coordinator manages, and each package a host group lists, with it, as its heartbeat over
+    /// gRPC says it.
+    pub(crate) fn hear_apt(&self, who: &crate::identity::Identity) {
+        let listed: std::collections::BTreeSet<String> = self
+            .services
+            .names()
+            .map(str::to_owned)
+            .chain(
+                self.desired
+                    .host_groups()
+                    .0
+                    .values()
+                    .flat_map(|group| group.packages.clone()),
+            )
+            .collect();
+        let request = agent::HeartbeatRequest {
+            features: vec![TARGET_FEATURE.to_owned()],
+            installers: vec!["apt".to_owned()],
+            services: listed
+                .into_iter()
+                .map(|name| agent::ServiceBeat {
+                    name,
+                    installer: Some("apt".to_owned()),
+                    ..agent::ServiceBeat::default()
+                })
+                .collect(),
+            ..agent::HeartbeatRequest::default()
+        };
+        self.hear_installers(who, &request);
+    }
+
+    /// [`Coordinator::heartbeat_with_orders`] for a daemon that lists `apt` ([`Self::hear_apt`]).
+    pub(crate) fn heartbeat_with_orders_native(
+        &self,
+        who: crate::identity::Identity,
+        beat: Heartbeat,
+        root: crate::trusted_root::TrustedRootSaid,
+    ) -> Result<
+        (hostkeeper_wire::wire::Answer, Option<crate::orders::Order>),
+        crate::service::HeartbeatRefused,
+    > {
+        self.hear_apt(&who);
+        self.heartbeat_with_orders(who, beat, root)
+    }
+
+    /// [`Coordinator::heartbeat_from`] as a daemon that announces `target-v1` and lists `apt` makes
+    /// it over a transport that carries typed orders, from the machine `machine_id`.
+    pub(crate) fn heartbeat_from_native(
+        &self,
+        who: crate::identity::Identity,
+        mut beat: Heartbeat,
+        machine_id: Option<&str>,
+    ) -> Result<hostkeeper_wire::wire::Answer, crate::service::HeartbeatRefused> {
+        beat.agent_features.retain(|f| f != TARGET_FEATURE);
+        beat.agent_features.push(TARGET_FEATURE.to_owned());
+        self.hear_apt(&who);
+        self.answer(
+            who,
+            beat,
+            true,
+            machine_id,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .map(|(answer, _)| answer)
+    }
+
+    /// [`Coordinator::heartbeat`] as a daemon that announces `target-v1` and lists `apt` makes it
+    /// over a transport that carries typed orders: the JSON route carries no order. The answer
+    /// has the update the gate orders, as the reply; the typed order is dropped.
+    pub(crate) fn heartbeat_native(
+        &self,
+        who: crate::identity::Identity,
+        mut beat: Heartbeat,
+    ) -> Result<hostkeeper_wire::wire::Answer, crate::service::HeartbeatRefused> {
+        if !beat.agent_features.iter().any(|f| f == TARGET_FEATURE) {
+            beat.agent_features.push(TARGET_FEATURE.to_owned());
+        }
+        self.heartbeat_with_orders_native(
+            who,
+            beat,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .map(|(answer, _)| answer)
     }
 }
 

@@ -101,18 +101,17 @@ fn target_of(target: Option<&PickedTarget>) -> Option<Target> {
 /// update with its terms, install or uninstall.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Order {
-    /// The rollout gate's update, with the terms the JSON answer of an `order-v1` agent carries
-    /// too ([`crate::order_terms`]): the same order id, try and package digest on both
-    /// transports.
+    /// The rollout gate's update, with the terms the answer of an `order-v1` agent carries too
+    /// ([`crate::order_terms`]): the same order id, try and package digest. The JSON route
+    /// carries no order.
     Update {
         /// The service.
         service: String,
         /// The version to run.
         version: Version,
-        /// The package digest CI registered for the version, for the host's platform.
+        /// The package digest of the entry picked for the host.
         digest: PackageDigest,
-        /// The digest of the release index it was taken from; none for a version registered
-        /// with one package digest.
+        /// The digest of the release index set beside the targets; none for a set with none.
         index_digest: Option<Digest>,
         /// The order's id ([`crate::order_terms::order_id_text`]).
         order_id: String,
@@ -143,10 +142,9 @@ pub enum Order {
         service: String,
         /// The version forced.
         version: Version,
-        /// The package digest CI registered for the version, for the host's platform.
+        /// The package digest of the entry picked for the host.
         digest: Digest,
-        /// The digest of the release index it was taken from; none for a version registered
-        /// with one package digest.
+        /// The digest of the release index set beside the targets; none for a set with none.
         index_digest: Option<Digest>,
         /// Greater than the halt generation the host holds the service under.
         halt_generation: u64,
@@ -165,10 +163,9 @@ pub enum Order {
         service: String,
         /// Its desired version.
         version: Version,
-        /// The package digest CI set for the version, for the host's platform.
+        /// The package digest of the entry picked for the host.
         digest: Digest,
-        /// The digest of the release index it was taken from; none for a version set with one
-        /// package digest.
+        /// The digest of the release index set beside the targets; none for a set with none.
         index_digest: Option<Digest>,
         /// The order's id ([`install_order_id`]).
         order_id: String,
@@ -352,14 +349,10 @@ fn force_for(fleet: &Fleet, service: &str, force: &ForceRecord, id: &HostId) -> 
         || reported;
     let ordered = force.hosts.iter().any(|host| host == id.as_str());
     let held = !force.include_held && fleet.is_held(service, id);
-    // The package of the host's own platform; a platform the force's index does not list is
-    // ordered nothing (the plan left such a host out when it was made). Of a version set with
-    // targets, the entry picked for the host ([`crate::picks`]), as the rollout gate picks it;
-    // a host picked nothing, or whose installers are not read yet, is not sent the force.
-    let (package, target) = match crate::picks::order_of(fleet, service, &force.version, id) {
-        Some(picked) => picked.map(|o| (o.package, o.target))?,
-        None => (force.package_for(host.beat.platform)?, None),
-    };
+    // The entry picked for the host ([`crate::picks`]), as the rollout gate picks it; a host
+    // picked nothing, or whose installers are not read yet, is not sent the force.
+    let picked = crate::picks::order_of(fleet, service, &force.version, id)?;
+    let (package, target) = (picked.package, Some(picked.target));
     (ordered && !done && !held).then(|| Order::Force {
         service: service.to_owned(),
         version: force.version.clone(),

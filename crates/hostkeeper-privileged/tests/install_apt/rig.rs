@@ -231,8 +231,8 @@ impl Rig {
         }
         let (repo, trees, config_dir, work, world) =
             (&dirs[0], &dirs[1], &dirs[2], &dirs[3], &dirs[5]);
-        let entry_key = Key::new(&base.join("gpg-entry"), "entry");
-        let other_key = Key::new(&base.join("gpg-other"), "other");
+        let entry_key = Key::new("entry");
+        let other_key = Key::new("other");
         let keyring = config_dir.join("hkaptfix.gpg");
         entry_key.export(&keyring);
         fs::write(
@@ -263,6 +263,7 @@ impl Rig {
             dirs: HostDirs {
                 root: PathBuf::from("/"),
                 work: work.clone(),
+                mirror: base.join("mirror"),
             },
             world: world.clone(),
             scratch_path: base,
@@ -311,6 +312,7 @@ impl Rig {
             repositories: &self.repositories,
             dirs: &self.dirs,
             pause: &Sleep,
+            mirror: None,
         }
     }
 

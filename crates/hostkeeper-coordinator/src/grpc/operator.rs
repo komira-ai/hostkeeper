@@ -34,7 +34,6 @@ use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
 
 use super::{Admitted, refusal, report};
-use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
@@ -128,10 +127,6 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
         SetError::AmbiguousHostGroup => proto::ReleasesRefusal::AmbiguousHostGroup,
         SetError::LimitsInHostGroup => proto::ReleasesRefusal::LimitsInHostGroup,
-        SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
-        SetError::Channel(ChannelRefusal::DigestMismatch) => {
-            proto::ReleasesRefusal::ChannelDigestMismatch
-        }
         SetError::Ops(why) => why.into(),
         SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");

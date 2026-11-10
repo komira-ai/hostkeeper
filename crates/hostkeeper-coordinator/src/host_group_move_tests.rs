@@ -294,7 +294,7 @@ fn a_commit_that_fails_puts_the_hosts_record_back() {
     world.put("beta", &[SELF], None).expect("put");
     world.move_to("d1", "alpha").expect("moved");
     // The host is behind alpha's version of `svc`, so its move is not over at its heartbeat.
-    world.seed_desired("alpha", "svc", "2.0");
+    world.seed_ordered("alpha", "svc", "2.0");
     world.beat("d1", &[SELF, "svc"]);
     let before = world.state();
     for (failure, refusal) in [

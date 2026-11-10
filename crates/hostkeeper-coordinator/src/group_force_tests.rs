@@ -10,7 +10,8 @@ use crate::force::ForceTargets;
 use crate::group_decision_support::Farm;
 use crate::host_groups::GroupName;
 use crate::marks_support::{
-    digest, fleet_target, hold, hosts_target, operator, role_target, scope_role,
+    digest, fleet_target, force_only, hold, hosts_target, native_target, operator, role_target,
+    scope_role,
 };
 use crate::ops::OpsState;
 use crate::orders::Order;
@@ -79,7 +80,7 @@ fn forced_hosts(ops: &OpsState, group_name: &str) -> Option<Vec<String>> {
 
 fn force_order(version_text: &str, n: u8, order_id: &str, halt_generation: u64) -> Order {
     Order::Force {
-        target: None,
+        target: Some(native_target("web", n)),
         service: "web".to_owned(),
         version: version(version_text),
         digest: Digest::parse(&digest(n)).expect("a digest"),
@@ -368,7 +369,7 @@ async fn a_set_in_a_group_ends_the_force_of_that_group_only() {
         .map(|entry| entry.host_group)
         .collect();
     assert_eq!(ended, [Some("alpha".to_owned())]);
-    assert_eq!(farm.order("a1", &[("web", "1.0")]), None);
+    assert_eq!(force_only(farm.order("a1", &[("web", "1.0")])), None);
     assert!(farm.order("b1", &[("web", "2.0")]).is_some());
 }
 

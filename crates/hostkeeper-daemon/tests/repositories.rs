@@ -37,9 +37,6 @@ fn files(root: &Path, repositories: Option<PathBuf>) -> HostFiles {
         repositories,
         macos_pkg_signers: None,
         os_root: root.join("os"),
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
         stores: root.join("no-stores.toml"),
         pki: root.join("pki"),
         console: None,
@@ -121,8 +118,7 @@ fn an_unsound_repositories_directory_refuses_the_start_naming_it() {
     }
 }
 
-/// Proves a host with no repositories directory starts, and announces `hostkeeper-archive`
-/// alone: a missing directory is no repository.
+/// Proves a host with no repositories directory starts, and announces no installer: a missing directory is no repository.
 ///
 /// Catches: a missing directory being a defect that keeps a host from starting.
 #[test]
@@ -134,7 +130,7 @@ fn a_missing_repositories_directory_starts() {
         Some(rig.scratch.path().join("no-repositories")),
     );
     let ports = start(&rig, &host).expect("the ports");
-    assert_eq!(ports.announcement.names(), ["hostkeeper-archive"]);
+    assert!(ports.announcement.names().is_empty());
 }
 
 /// Proves only a Linux host has a repositories path: systemd and OpenRC hosts name
@@ -144,7 +140,7 @@ fn a_missing_repositories_directory_starts() {
 /// Catches: a Mac reading a directory it has no use for.
 #[test]
 fn only_a_linux_host_has_a_repositories_path() {
-    let path = |kind| HostFiles::for_platform(kind, |_| false).repositories;
+    let path = |kind| HostFiles::for_platform(kind).repositories;
     let linux = Some(PathBuf::from(REPOSITORIES_DIR));
     assert_eq!(path(PlatformKind::Linux), linux);
     assert_eq!(path(PlatformKind::Openrc), linux);
@@ -160,8 +156,8 @@ fn only_a_linux_host_has_a_repositories_path() {
 
 /// Proves a Debian host announces `apt` exactly when packages-repositories.md section 4.1 says:
 /// with its tools, an installed apt 2.6 and one valid repository entry, the list is
-/// `hostkeeper-archive` then `apt`; with no repository entry, or with apt below 2.2, it is
-/// `hostkeeper-archive` alone; the family is kept either way.
+/// `apt`; with no repository entry, or with apt below 2.2, it is empty; the family is kept
+/// either way.
 ///
 /// Catches: a host announcing `apt` with nothing to install from, or not announcing it when it
 /// could run it.
@@ -177,14 +173,14 @@ fn a_debian_host_announces_apt_with_a_repository_entry_and_not_without() {
     assert_eq!(base.family, Some(Family::Deb));
     let entries = one_repository(&rig.scratch.path().join("repositories"));
     let announced = repositories::announced(base.clone(), &root, &entries);
-    assert_eq!(announced.names(), ["hostkeeper-archive", "apt"]);
+    assert_eq!(announced.names(), ["apt"]);
     assert_eq!(announced.family, Some(Family::Deb));
 
     let none = repositories::announced(base.clone(), &root, &Repositories::default());
-    assert_eq!(none.names(), ["hostkeeper-archive"]);
+    assert!(none.names().is_empty());
     debian_with_apt(&root, "2.1.9");
     let old = repositories::announced(base.clone(), &root, &entries);
-    assert_eq!(old.names(), ["hostkeeper-archive"]);
+    assert!(old.names().is_empty());
 }
 
 /// Proves the start hands the repository installer the entries it loaded and the host's
@@ -205,7 +201,7 @@ fn the_start_gives_the_repository_installer_its_entries_and_directories() {
     let repository = &ports.repository;
     assert!(repository.repositories.snapshot().is_empty());
     assert_eq!(repository.packages_dir, rig.packages);
-    assert_eq!(repository.owner, hostkeeper_unpack::Owner::ROOT);
+    assert_eq!(repository.owner, hostkeeper_install::version::Owner::ROOT);
     let state = rig.packages.parent().expect("a parent");
     assert_eq!(repository.dirs.work, state.join("apt"));
     assert_eq!(repository.dirs.root, Path::new("/"));
@@ -271,9 +267,8 @@ fn daemon_announcing(rig: &Rig, installers: Vec<Installer>) -> Daemon {
     Daemon::new(daemon_config(), rig.dirs(), ports, OWN)
 }
 
-/// Nothing was asked of the package port, no step ran and nothing was written for the service.
+/// No tool of the package manager ran, no step ran and nothing was written for the service.
 fn untouched(rig: &Rig) {
-    assert!(rig.store.asked().is_empty(), "nothing is fetched");
     assert_eq!(rig.launcher.steps(SERVICE), Vec::<Step>::new());
     assert!(rig.record(SERVICE).is_none(), "no step record");
     assert!(!rig.packages.join(SERVICE).exists());
@@ -282,14 +277,13 @@ fn untouched(rig: &Rig) {
 /// Proves the entry's kind is judged on receipt, after the installer is known to be listed:
 /// with a daemon that lists `apt`, an apt entry that names no repository is deferred
 /// `coordinator_too_old` for 300 seconds, an apt entry that names a location, bytes or an
-/// attestation is refused `order_invalid`, and a `hostkeeper-archive` entry that names a
-/// repository or a package version is refused `order_invalid`; none fetches or writes anything.
+/// attestation is refused `order_invalid`; none stages or writes anything.
 ///
 /// Catches: an entry of the wrong kind reaching the package port.
 #[test]
 fn an_entry_of_the_wrong_kind_is_judged_on_receipt() {
     let rig = Rig::new("repositories-kind");
-    let daemon = daemon_announcing(&rig, vec![Installer::HostkeeperArchive, Installer::Apt]);
+    let daemon = daemon_announcing(&rig, vec![Installer::Apt]);
     let order = |entry: &Target| with_entry(install(SERVICE, VERSION, &d(), 1), entry);
 
     let no_repository = Target {
@@ -317,29 +311,15 @@ fn an_entry_of_the_wrong_kind_is_judged_on_receipt() {
         bytes: 5,
         ..apt_entry()
     };
-    let archive = Target {
-        installer: "hostkeeper-archive".to_owned(),
-        manifest: Some(Manifest {
-            min_hostkeeper: "0.1.0".to_owned(),
-            ..Manifest::default()
-        }),
-        package_version: None,
-        ..apt_entry()
-    };
-    let versioned = Target {
-        repository: None,
-        package_version: Some("1.0.0-1".to_owned()),
-        ..archive.clone()
-    };
-    for entry in [located, sized, archive, versioned] {
+    for entry in [located, sized] {
         let reply = daemon.order(&order(&entry));
         assert_eq!(reply.refusal(), Some(Refusal::OrderInvalid), "{reply:?}");
     }
     untouched(&rig);
 }
 
-/// Proves the listing is judged before the kind: with a daemon that lists `hostkeeper-archive`
-/// alone, an apt entry (whatever its kind defects) is `installer_not_listed`, deferred for one
+/// Proves the listing is judged before the kind: with a daemon that lists no installer, an apt
+/// entry (whatever its kind defects) is `installer_not_listed`, deferred for one
 /// second, not `coordinator_too_old` or `order_invalid`; a sound apt entry reaches no step
 /// either.
 ///
@@ -347,7 +327,7 @@ fn an_entry_of_the_wrong_kind_is_judged_on_receipt() {
 #[test]
 fn an_apt_entry_not_listed_is_still_installer_not_listed() {
     let rig = Rig::new("repositories-not-listed");
-    let daemon = daemon_announcing(&rig, vec![Installer::HostkeeperArchive]);
+    let daemon = daemon_announcing(&rig, vec![]);
     let not_listed = Reply::Finished {
         verdict: Verdict::Deferred {
             retry_after_secs: Some(1),

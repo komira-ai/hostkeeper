@@ -232,36 +232,34 @@ fn the_manifest_of_a_version_with_target_json_is_the_entrys() {
     assert_eq!(manifest.hook.timeout_secs.cutover.get(), 61);
 }
 
-/// Proves a directory with only `manifest.toml` is read by the manifest loader, as an archive
-/// version always was.
+/// Proves a directory with no `target.json` has no manifest this daemon reads, even with a
+/// `manifest.toml` beside it: it is `Unreadable`, naming the directory.
 #[test]
-fn the_manifest_of_a_version_without_target_json_is_manifest_toml() {
-    let dir = scratch("target-toml");
+fn a_version_without_target_json_has_no_manifest() {
+    let dir = scratch("target-none-manifest");
     fs::write(
         dir.path().join("manifest.toml"),
         crate::testing::manifest("web", "1.0.0"),
     )
     .expect("write");
-    fs::set_permissions(
-        dir.path().join("manifest.toml"),
-        fs::Permissions::from_mode(0o644),
-    )
-    .expect("mode");
-    let manifest = manifest(dir.path(), &expected(), &OWN).expect("a manifest");
-    assert_eq!(manifest.hook.command, vec!["bin/hook", "update-hook"]);
+    let refusal = manifest(dir.path(), &expected(), &OWN).expect_err("no manifest");
+    let ManifestRefusal::Unreadable { why } = refusal else {
+        panic!("not unreadable: {refusal:?}");
+    };
+    assert_eq!(
+        why,
+        format!(
+            "target.json is not an entry: {} holds no target.json",
+            dir.path().display()
+        )
+    );
 }
 
-/// Proves a `target.json` that does not read is `Unreadable` with its text, and is not replaced
-/// by a `manifest.toml` beside it.
+/// Proves a `target.json` that does not read is `Unreadable` with its text.
 #[test]
 fn an_unreadable_target_json_is_an_unreadable_manifest() {
     let dir = scratch("target-unreadable");
     fs::write(dir.path().join(TARGET_FILE), b"{").expect("write");
-    fs::write(
-        dir.path().join("manifest.toml"),
-        crate::testing::manifest("web", "1.0.0"),
-    )
-    .expect("write");
     let refusal = manifest(dir.path(), &expected(), &OWN).expect_err("unreadable");
     let ManifestRefusal::Unreadable { why } = refusal else {
         panic!("not unreadable: {refusal:?}");

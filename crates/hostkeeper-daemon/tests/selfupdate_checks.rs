@@ -11,17 +11,19 @@ use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::checks;
 use hostkeeper_daemon::executor::RecordState;
 use hostkeeper_daemon::selfupdate::{
-    REASON_PROTOCOL_UNSUPPORTED, REASON_SELF_BINARY_MISSING, RELEASE_BINARY, Restart, binary_dir,
+    APT_RELEASE_BINARY, REASON_PROTOCOL_UNSUPPORTED, REASON_SELF_BINARY_MISSING, Restart,
+    binary_dir,
 };
 use hostkeeper_daemon::verb::HookedVerb;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Step, Verdict};
 use hostkeeper_steps::record::{AwaitingRestart, RECORD_FILE, State};
 use hostkeeper_steps::{BAD_VERSIONS_FILE, BootId, RecordStore, Settled};
+use support::apt::open_up;
 use support::selfupdate::{
-    HK, NEW, OLD, SelfRig, awaiting, put_record, record_of, refused_before_commit,
+    HK, NEW, OLD, SelfRig, awaiting, binary_text, put_record, record_of, refused_before_commit,
 };
-use support::{alerting, d, force, force_rollback, lines, name, snapshot};
+use support::{alerting, lines, name, snapshot};
 
 /// An order of hostkeeper on `s`'s daemon of [`OLD`], after a record of service `a` in `state`.
 fn with_a(name: &str, state: Option<State>) -> (SelfRig, Reply) {
@@ -63,6 +65,7 @@ fn a_pending_record_of_another_service_blocks_the_self_update() {
         assert!(detail.contains("step record of a"), "{detail}");
         assert!(s.rig.record(HK).is_none(), "{state:?}");
         assert!(s.hk_steps().is_empty(), "{state:?}");
+        assert_eq!(s.tool_runs(), 0, "{state:?}: nothing was staged");
     }
     let s = SelfRig::new("su-blocked-newer");
     fs::create_dir_all(s.rig.state.join("a")).expect("a's state dir");
@@ -144,7 +147,7 @@ fn a_release_older_than_the_oldest_reader_is_refused_before_anything_is_staged()
 #[test]
 fn a_release_without_the_binary_is_refused_before_anything_is_staged() {
     let s = SelfRig::new("su-no-binary");
-    fs::remove_file(s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY)).expect("remove");
+    s.release_without_binary(NEW);
     assert_eq!(
         s.daemon().order(&s.order(NEW, 1)),
         refused_before_commit(Class::Release, REASON_SELF_BINARY_MISSING)
@@ -170,6 +173,7 @@ fn a_garbage_bad_versions_file_refuses_self_update_naming_the_file() {
     assert!(detail.contains(&path.display().to_string()), "{detail}");
     assert!(s.rig.record(HK).is_none());
     assert!(s.hk_steps().is_empty());
+    assert_eq!(s.tool_runs(), 0, "nothing was staged");
 }
 
 /// Catches a `force` reaching hostkeeper's own update, and a `force_rollback` of it that does
@@ -182,14 +186,11 @@ fn a_force_of_the_service_hostkeeper_is_refused_and_a_force_rollback_takes_its_o
     let s = SelfRig::new("su-forced");
     let daemon = s.daemon();
     let before = snapshot(s.rig.scratch.path());
-    let reply = daemon.order(&force(HK, NEW, &d(), 1, 0));
+    let reply = daemon.order(&s.force_order(NEW, 1, 0));
     assert_eq!(reply.refusal(), Some(Refusal::SelfService), "{reply:?}");
     assert_eq!(snapshot(s.rig.scratch.path()), before);
     assert!(s.hk_steps().is_empty());
-    assert_eq!(
-        daemon.order(&force_rollback(HK, NEW, &d(), 1)),
-        awaiting(false)
-    );
+    assert_eq!(daemon.order(&s.rollback_order(NEW, 1)), awaiting(false));
     assert_eq!(s.layout().next().unwrap().as_deref(), Some(NEW));
     let verbs = [
         HookedVerb::Update,
@@ -389,15 +390,18 @@ fn a_self_update_whose_state_cannot_be_used_is_refused() {
 fn a_release_that_changed_before_the_hand_over_is_refused_unreadable() {
     let s = SelfRig::new("su-changed-release");
     fs::create_dir_all(s.rig.state.join("a")).expect("a's state dir");
-    let binary = s.rig.packages.join(HK).join(NEW).join(RELEASE_BINARY);
+    let version = s.rig.packages.join(HK).join(NEW);
+    let binary = version.join(APT_RELEASE_BINARY);
     let looks = Arc::new(std::sync::atomic::AtomicU64::new(0));
     let seam: hostkeeper_daemon::StoreSeam = {
-        let (binary, looks) = (binary.clone(), Arc::clone(&looks));
+        let (version, binary, looks) = (version.clone(), binary.clone(), Arc::clone(&looks));
         Arc::new(move |service: &ServiceName, store: RecordStore| {
-            // The second look at `a` is the one under the step lock, after the package was sealed.
+            // The second look at `a` is the one under the step lock, after the package was staged
+            // and sealed.
             let looked = (service.as_str() == "a")
                 .then(|| looks.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1);
             if looked == Some(2) {
+                open_up(&version);
                 fs::write(&binary, "#!changed\n").expect("change the release");
             }
             store
@@ -411,5 +415,7 @@ fn a_release_that_changed_before_the_hand_over_is_refused_unreadable() {
     );
     assert!(s.hk_steps().is_empty());
     assert!(s.rig.record(HK).is_none());
+    // The release as it was sealed, put back: the resend runs again.
+    fs::write(&binary, binary_text(NEW)).expect("restore the release");
     assert_eq!(s.daemon().order(&s.order(NEW, 1)), awaiting(false));
 }

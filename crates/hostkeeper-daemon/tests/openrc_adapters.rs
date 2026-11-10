@@ -74,7 +74,6 @@ fn the_openrc_unit_control_runs_rc_service_for_each_call() {
     let adapters = openrc(&Platform::openrc(), &rc, &status, scratch.path());
     assert_eq!(adapters.kind, PlatformKind::Openrc);
     assert_eq!(adapters.unit_dir, Path::new("/etc/init.d"));
-    assert!(adapters.package_check.is_none());
     assert_eq!(adapters.own_unit, "hostkeeper");
     assert_eq!(OPENRC_SERVICE, "hostkeeper");
     let units = &adapters.units;
@@ -198,15 +197,11 @@ fn an_openrc_host_keeps_its_files_as_linux_with_no_console() {
     let managed = ManagedFile::new(&scratch.path().join("managed.plist"), 0);
     assert!(host_managed(PlatformKind::Openrc, managed).is_none());
 
-    for present in [false, true] {
-        let linux = HostFiles::for_platform(PlatformKind::Linux, |_| present);
-        let rc = HostFiles::for_platform(PlatformKind::Openrc, |_| present);
-        assert_eq!(rc.console, None);
-        assert_eq!(rc.managed_config, None);
-        assert_eq!(
-            (&rc.ca_bundle, &rc.gh, &rc.trusted_root, &rc.pki),
-            (&linux.ca_bundle, &linux.gh, &linux.trusted_root, &linux.pki)
-        );
-        assert_eq!(rc.pki, Path::new(PKI_DIR));
-    }
+    let linux = HostFiles::for_platform(PlatformKind::Linux);
+    let rc = HostFiles::for_platform(PlatformKind::Openrc);
+    assert_eq!(rc.console, None);
+    assert_eq!(rc.managed_config, None);
+    assert_eq!(rc.pki, linux.pki);
+    assert_eq!(rc.repositories, linux.repositories);
+    assert_eq!(rc.pki, Path::new(PKI_DIR));
 }

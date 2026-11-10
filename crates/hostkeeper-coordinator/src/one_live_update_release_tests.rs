@@ -13,11 +13,11 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{DeferredReport, Health, Heartbeat, Outcome, Token};
 
-use crate::decide::{Decision, Gate, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
 use crate::services::Services;
-use crate::testutil::{beat, id, last, role, secs, unhealthy, updating, version};
+use crate::testutil::{beat, decide_why, id, last, role, secs, unhealthy, updating, version};
 
 /// `a` bakes for two beats and wants 2.0; `b` bakes for three and wants 5.0; `c` does not bake
 /// and wants 2.0; `third` has no desired state; `broken` wants 2.0 and is the service of hosts

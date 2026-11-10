@@ -10,10 +10,6 @@ pub(crate) enum Shape {
     Value,
     /// A table with exactly these keys.
     Table(&'static [(&'static str, Shape)]),
-    /// An array of tables with exactly these keys (`[[files]]`).
-    Tables(&'static [(&'static str, Shape)]),
-    /// A table of any keys (`[params]`), judged when it is read.
-    Open,
 }
 
 /// What is wrong with a document, before it becomes the error of one file.
@@ -50,12 +46,6 @@ pub(crate) fn unknown_key(
         let below = dotted(name, key);
         match (shape, value) {
             (Shape::Table(keys), toml::Value::Table(inner)) => unknown_key(&below, inner, keys),
-            (Shape::Tables(keys), toml::Value::Array(items)) => {
-                items.iter().enumerate().find_map(|(at, item)| {
-                    item.as_table()
-                        .and_then(|inner| unknown_key(&format!("{below}[{at}]"), inner, keys))
-                })
-            }
             _ => None,
         }
     })
@@ -107,21 +97,6 @@ impl<'a> Fields<'a> {
         self.typed(key, self.required(key)?, toml::Value::as_str, "a string")
     }
 
-    pub fn opt_string(&self, key: &str) -> Result<Option<&'a str>, Problem> {
-        self.get(key)
-            .map(|value| self.typed(key, value, toml::Value::as_str, "a string"))
-            .transpose()
-    }
-
-    pub fn integer(&self, key: &str) -> Result<i64, Problem> {
-        self.typed(
-            key,
-            self.required(key)?,
-            toml::Value::as_integer,
-            "an integer",
-        )
-    }
-
     /// A whole number from 0 up.
     pub fn number(&self, key: &str) -> Result<u64, Problem> {
         let value = self.required(key)?;
@@ -161,18 +136,6 @@ impl<'a> Fields<'a> {
         self.get(key)
             .map(|value| self.typed(key, value, toml::Value::as_table, "a table"))
             .transpose()
-    }
-
-    /// The tables of an array of tables (`[[files]]`), none when it is absent.
-    pub fn tables(&self, key: &str) -> Result<Vec<&'a toml::Table>, Problem> {
-        let Some(value) = self.get(key) else {
-            return Ok(Vec::new());
-        };
-        let items = self.typed(key, value, toml::Value::as_array, "an array of tables")?;
-        items
-            .iter()
-            .map(|item| self.typed(key, item, toml::Value::as_table, "an array of tables"))
-            .collect()
     }
 }
 

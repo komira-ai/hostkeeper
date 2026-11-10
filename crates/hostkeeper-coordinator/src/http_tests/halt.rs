@@ -18,15 +18,20 @@ fn beat(version: &str, extra: &str) -> String {
     format!(r#"{{"platform":"linux-x86_64","version":"{version}","health":"healthy"{extra}}}"#)
 }
 
+/// The reply a daemon that announces `target-v1` and lists `apt` is answered over a transport that
+/// carries typed orders, as the JSON the route would answer an updater: the JSON route carries no
+/// order, so the orders of the halt tests go by the typed one, and the `features` it adds for the
+/// announced one are left out.
 async fn send(rig: &Rig, host: &str, role: &str, body: &str) -> Value {
-    let (code, reply) = call(
-        rig,
-        Surface::Heartbeat,
-        &updater(host, role),
-        request("POST", HEARTBEAT_PATH, None, body),
-    )
-    .await;
-    assert_eq!(code, StatusCode::OK);
+    let beat: hostkeeper_wire::wire::Heartbeat = serde_json::from_str(body).expect("a heartbeat");
+    let answer = rig
+        .coordinator
+        .heartbeat_native(crate::marks_support::who(host, role), beat)
+        .expect("answered");
+    let mut reply = serde_json::to_value(&answer).expect("JSON");
+    if let Some(fields) = reply.as_object_mut() {
+        fields.remove("features");
+    }
     reply
 }
 
@@ -108,9 +113,9 @@ async fn farm_of_two(name: &str, fail: &Arc<AtomicBool>) -> Rig {
         "{}services = [\"kbf\", \"other\"]\n",
         hostkeeper_oidc::testkit::config_text(hostkeeper_oidc::testkit::STATIC_ISSUER)
     );
-    let fail = Arc::clone(fail);
+    let writer_fail = Arc::clone(fail);
     let writer = Box::new(move |_: &OpsState| {
-        if fail.load(Ordering::SeqCst) {
+        if writer_fail.load(Ordering::SeqCst) {
             return Err(OpsError::Io(crate::desired::StoreError::Io {
                 path: "ops.json".into(),
                 source: std::io::Error::other("disk full"),
@@ -121,19 +126,15 @@ async fn farm_of_two(name: &str, fail: &Arc<AtomicBool>) -> Rig {
     rig.coordinator = Rig::start_with_allow_list(&rig.dir, &rig.clock, &list)
         .with_services(crate::testutil::with_kbf(SERVICES_TEXT))
         .with_ops(OpsStore::refusing(OpsState::default(), writer));
+    // A set with a release is audited, so the writes work while CI sets the versions.
+    let failing = fail.swap(false, Ordering::SeqCst);
     for body in [
         r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        let (code, _) = raw(
-            &rig,
-            Surface::Control,
-            &None,
-            request("POST", DESIRED_PATH, Some(&ci_token()), body),
-        )
-        .await;
-        assert_eq!(code, 200);
+        rig.set(body).await;
     }
+    fail.store(failing, Ordering::SeqCst);
     rig.at(1_100);
     rig
 }
@@ -318,7 +319,8 @@ async fn a_cleared_halt_is_not_raised_again_by_the_same_report() {
         .iter()
         .map(|e| e["action"].as_str().expect("action"))
         .collect();
-    assert_eq!(actions, ["halt", "clear_halt"]);
+    // CI's set of the version, with its release, is audited first.
+    assert_eq!(actions, ["set_desired", "halt", "clear_halt"]);
 }
 
 /// Catches: the acknowledgement covering more than the report it cleared: after the clear, the
@@ -438,7 +440,7 @@ async fn a_second_halt_report_does_not_replace_the_standing_one() {
         .iter()
         .map(|e| e["action"].as_str().expect("action"))
         .collect();
-    assert_eq!(actions, ["halt", "halt_report"]);
+    assert_eq!(actions, ["set_desired", "halt", "halt_report"]);
 }
 
 /// Catches: a halt from a host an operator took out of the service, or from one whose role the
@@ -666,7 +668,8 @@ async fn a_clear_acks_every_halt_report_received_while_halted() {
     send(&rig, "s2", "storage", &beat("1.0", HALT)).await;
     assert_eq!(convergence(&rig, "kbf").await["halt"]["node_id"], "s2");
     let audit = status(&rig).await["ops"]["audit"].clone();
-    assert_eq!(audit.as_array().expect("audit").len(), 2);
+    // CI's set of the version, with its release, is audited first.
+    assert_eq!(audit.as_array().expect("audit").len(), 3);
 
     clear(&rig, "kbf").await;
     send(&rig, "s1", "storage", &beat("1.0", HALT)).await;

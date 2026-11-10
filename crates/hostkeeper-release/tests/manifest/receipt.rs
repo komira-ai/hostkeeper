@@ -4,17 +4,13 @@
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::platform::Platform;
 use hostkeeper_proto::hostkeeper::release::v1::{Manifest, Target};
-use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::ManifestError;
 use hostkeeper_release::receipt::{self, Daemon, ReceiptError};
+use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 
 use crate::support::{LINUX, entry, pad_manifest_to, text, version, web};
 
-const LISTED: [Installer; 3] = [
-    Installer::HostkeeperArchive,
-    Installer::Tarball,
-    Installer::Apt,
-];
+const LISTED: [Installer; 1] = [Installer::Apt];
 
 fn daemon(running: &str) -> Daemon<'static> {
     Daemon {
@@ -84,7 +80,16 @@ fn a_manifest_above_the_daemon_is_daemon_too_old_whatever_else_it_holds() {
 /// (`manifest_invalid`), or failing the order instead of deferring it.
 #[test]
 fn an_installer_the_daemon_does_not_list_is_installer_not_listed() {
-    for name in ["rpm", "deb", "oci-image", "flatpak", "Apt", ""] {
+    for name in [
+        "rpm",
+        "deb",
+        "oci-image",
+        "tarball",
+        ARCHIVE_INSTALLER,
+        "flatpak",
+        "Apt",
+        "",
+    ] {
         let mut target = entry(Installer::Apt);
         target.installer = name.to_owned();
         // The manifest is wrong for any of them too; the installer is the answer.
@@ -151,10 +156,8 @@ fn a_daemon_that_lists_no_installer_takes_no_entry() {
         installers: &[],
     };
     assert_eq!(
-        receipt::check(&web(), &entry(Installer::HostkeeperArchive), daemon),
-        Err(ReceiptError::InstallerNotListed(
-            "hostkeeper-archive".to_owned()
-        ))
+        receipt::check(&web(), &entry(Installer::Apt), daemon),
+        Err(ReceiptError::InstallerNotListed("apt".to_owned()))
     );
 }
 
@@ -206,21 +209,6 @@ fn on_receipt_the_daemon_applies_every_rule_every_manifest_keeps_before_its_inst
         };
         assert!(is(why), "case {at}: {why:?}");
     }
-    // The archive's own branch too: a field it refuses, broken by a shared rule, is that rule.
-    let mut archive = entry(Installer::HostkeeperArchive);
-    archive.manifest.as_mut().expect("a manifest").run = vec!["api.service".to_owned()];
-    assert!(matches!(
-        check(&archive, "0.4.0"),
-        Err(ReceiptError::Invalid(ManifestError::RunUnit { .. }))
-    ));
-    archive.manifest.as_mut().expect("a manifest").run = vec!["web.service".to_owned()];
-    assert_eq!(
-        check(&archive, "0.4.0"),
-        Err(ReceiptError::Invalid(ManifestError::Refused {
-            installer: Installer::HostkeeperArchive,
-            field: "run"
-        }))
-    );
 }
 
 /// Catches: the daemon judging unit names by another platform than its own.

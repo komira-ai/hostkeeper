@@ -17,7 +17,7 @@ use crate::assignment::{Entry, MAX_ENTRIES, ServiceAssignments};
 use crate::decide::{Gate, Skip, Why};
 use crate::marks_support::{
     DB, INSTALLER, NEW_DAEMON, WEB, ask_typed, beat_of, hold, operator, rig, runs, scope_role, set,
-    start, update,
+    start, update, update_order,
 };
 use crate::operator::Caller;
 use crate::ops::{OpsState, OpsStore};
@@ -135,7 +135,10 @@ async fn a_host_assigned_a_service_its_role_does_not_run_is_installed_and_update
     assign(&rig, WEB, "f1", "").expect("assigned");
     assert_eq!(f1(vec![]), (ServiceReply::Nothing, Some(install("2.0", 1))));
     rig.at(2_200);
-    assert_eq!(f1(vec![runs(WEB, "1.0")]), (update(WEB, "2.0"), None));
+    assert_eq!(
+        f1(vec![runs(WEB, "1.0")]),
+        (update(WEB, "2.0"), Some(update_order(WEB, "2.0", 1, 2)))
+    );
 }
 
 /// The token a refusal is spelled with on the wire: its name without the prefix, lower case.

@@ -135,7 +135,7 @@ impl Coordinator {
         let release = match targets {
             None => None,
             Some(targets) => {
-                let release = Arc::new(release_of(body, &service, &desired, targets)?);
+                let release = Arc::new(release_of(&service, &desired, targets)?);
                 desired.set_release(None);
                 Some(release)
             }
@@ -143,8 +143,6 @@ impl Coordinator {
         if let Setter::Ci(verified) = setter {
             self.ci_admits(verified, &service)?;
         }
-        self.check_channel(&service, &named, release.as_deref())
-            .await?;
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
             Setter::Operator(name) => (*name, format!("operator token {name}")),

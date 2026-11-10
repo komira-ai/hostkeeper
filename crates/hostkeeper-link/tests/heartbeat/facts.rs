@@ -89,6 +89,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -360,6 +361,7 @@ fn every_heartbeat_lists_the_installers_the_loop_was_given() {
             state_dir: rig.state().to_path_buf(),
             period_secs: DEFAULT_HEARTBEAT_SECS,
             installers: vec!["hostkeeper-archive".to_owned()],
+            private_repository: false,
         },
         rig.world.ports(),
     );

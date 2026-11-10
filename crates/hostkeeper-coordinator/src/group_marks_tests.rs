@@ -11,7 +11,9 @@ use crate::force::{ForceRecord, ForceTargets};
 use crate::group_decision_support::{Farm, failed, policy, stages};
 use crate::group_scope::higher;
 use crate::host_groups::GroupName;
-use crate::marks_support::{INSTALLER, NEW_DAEMON, ask, ask_typed, beat_of, digest, runs, update};
+use crate::marks_support::{
+    INSTALLER, NEW_DAEMON, ask, ask_typed, beat_of, digest, force_only, runs, update,
+};
 use crate::ops::{AuditEntry, Write};
 use crate::orders::Order;
 use crate::registry::Digest;
@@ -304,8 +306,16 @@ fn a_hosts_a_groups_force_orders_are_no_hosts_of_its_plan() {
         });
     });
 
-    assert_eq!(farm.tell("a1", &[("web", "1.0")]), update("web", "2.0"));
-    assert_eq!(farm.tell("a2", &[("web", "1.0")]), NOTHING);
+    let forced = farm.order("a1", &[("web", "1.0")]);
+    assert!(
+        matches!(
+            forced,
+            Some(Order::Force { ref service, version: ref to, .. })
+                if service == "web" && *to == version("2.0")
+        ),
+        "{forced:?}"
+    );
+    assert_eq!(force_only(farm.order("a2", &[("web", "1.0")])), None);
 }
 
 /// Proves: the packages a group no longer lists are uninstalled from its hosts by the intents
@@ -374,22 +384,7 @@ async fn an_install_holds_a_slot_of_its_group_alone() {
         farm.host(host, "alpha");
     }
     farm.host("b1", "beta");
-    let setter = crate::service::ci_calls::Setter::Operator("operator");
-    let body = format!(
-        r#"{{"service":"db","version":"2.0","release_digest":"{}"}}"#,
-        digest(7)
-    );
-    farm.world
-        .coordinator()
-        .set_desired_in(
-            &setter,
-            body.as_bytes(),
-            &crate::write_record::WriteAsk::default(),
-            None,
-            "",
-        )
-        .await
-        .expect("set");
+    farm.deploy("", "db", "2.0", 7).await;
     let beat = || beat_of(INSTALLER, vec![runs("hostkeeper", "1.0")]);
 
     let (_, order) = ask_typed(&farm.world.rig, "a1", "storage", beat());
@@ -534,8 +529,8 @@ fn a_verdict_is_superseded_by_the_version_the_hosts_group_wants() {
 }
 
 /// Proves: a package a group lists and a host does not run is installed from the release a set
-/// with targets kept for the group's version: the host that runs from archives is ordered the
-/// install of the archive entry its platform lists.
+/// with targets kept for the group's version: a host that lists `apt` is ordered the install of
+/// the `apt` entry its platform lists.
 ///
 /// Catches: the releases a group's versions were set with missing from the picks, which would
 /// leave a version set with targets with no package to install.
@@ -544,14 +539,15 @@ async fn a_version_set_with_targets_is_installed_from_the_release_kept() {
     let farm = Farm::new("gm-install-targets");
     farm.group("alpha", &["db"], None);
     farm.host("a1", "alpha");
-    let archive = crate::releases_tests::archive_targets("db");
+    farm.world.coordinator().keep_komira();
+    let native = crate::marks_support::native_targets("db", 1);
     farm.world
         .coordinator()
         .set_desired_in(
             &crate::service::ci_calls::Setter::Operator("operator"),
             br#"{"service":"db","version":"2.0"}"#,
             &crate::write_record::WriteAsk::default(),
-            Some(archive),
+            Some(native),
             "alpha",
         )
         .await
@@ -571,7 +567,7 @@ async fn a_version_set_with_targets_is_installed_from_the_release_kept() {
         panic!("an install is ordered");
     };
     assert_eq!(service, "db");
-    assert_eq!(digest.to_string(), crate::releases_tests::hex('1'));
+    assert_eq!(digest.to_string(), crate::marks_support::digest(1));
 }
 
 /// Proves: a rollback whose write of the group's desired version fails is logged and left for the

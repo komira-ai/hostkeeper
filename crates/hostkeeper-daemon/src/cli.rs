@@ -48,16 +48,14 @@ use hostkeeper_enroll::{
     Enroller, GrpcEnroll, LinuxClaims, ManagedFile, OsEntropy, PkiDir, RenewalState,
     Settings as EnrollSettings, SystemWallClock,
 };
+use hostkeeper_install::version::Owner;
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_link::{ClockSleeper, LoopFlags, PkiCertSource, StopFlag, ThreadDispatch};
 use hostkeeper_observe::ProcessRunner;
-use hostkeeper_package::gh::{GhVerifier, OwnedBy, SystemRunner};
 use hostkeeper_package::net::{NetFetcher, UreqTransport};
-use hostkeeper_package::ports::{Attest, Attested, Verifier, VerifyError};
 use hostkeeper_placed::roots::STATE_DIR;
 use hostkeeper_placed::{RealFs, Roots, UnitControl, UnitControlError};
 use hostkeeper_steps::{Clock, LaunchError, StepCall, StepExit, StepLauncher};
-use hostkeeper_unpack::Owner;
 
 use crate::repository::RepositoryPorts;
 use rustls_pki_types::CertificateDer;
@@ -65,8 +63,8 @@ use rustls_pki_types::pem::PemObject;
 
 use crate::adapters::{Adapters, RunnerLauncher, host_claims, host_clock, host_managed};
 use crate::console::{AGETTY, ConsoleIssue, ENROLLMENT_ISSUE};
+use crate::coordinator_store::CoordinatorFetcher;
 use crate::executor::{Daemon, Placement, Ports};
-use crate::files;
 use crate::handover::ProcessExec;
 use crate::ipmi::DevIpmi;
 use crate::links::{DaemonLog, HostLink, Links};
@@ -81,7 +79,6 @@ use crate::repositories;
 use crate::repository_push::Managed;
 use crate::selfupdate::binary_dir;
 use crate::start::{self, Settings, StartError};
-use crate::trusted_root::{PACKAGED_TRUSTED_ROOT, TrustedRoot};
 use crate::unix_clock::SystemUnixClock;
 use hostkeeper_install::announce::OsHost;
 use hostkeeper_install::host::{Host, Ids};
@@ -92,41 +89,30 @@ pub use crate::start::{EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED};
 
 /// The default of `--config`.
 pub const DEFAULT_CONFIG: &str = "/etc/hostkeeper/hostkeeper.toml";
-/// The host's stores, beside the daemon config ([`DEFAULT_CONFIG`]) on both platforms; a host
-/// without the file has the one store `channel`, the release channel.
+/// The host's stores, beside the daemon config ([`DEFAULT_CONFIG`]) on both platforms: the file a
+/// Mac's start renders from its managed preferences ([`crate::mac_files::stores`]).
 pub const STORES_FILE: &str = "/etc/hostkeeper/stores.toml";
 pub use hostkeeper_install::macos_pkg::signers::SIGNERS_FILE;
 /// The default of `--state-dir`.
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
+/// The default of `--facts-file`, on Linux and on a Mac.
+pub const DEFAULT_FACTS_FILE: &str = "/var/lib/hostkeeper/facts.json";
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
 /// microseconds. The daemon reads only whether it is set.
 pub const WATCHDOG_USEC: &str = "WATCHDOG_USEC";
-/// The CA bundle (PEM) of a Debian-family Linux host: the roots the package fetch's HTTPS client
-/// trusts. A Linux host whose bundle is neither this nor [`CA_BUNDLE_RHEL`] is given this path.
-pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The CA bundle of a RHEL-family Linux host.
-pub const CA_BUNDLE_RHEL: &str = "/etc/pki/tls/certs/ca-bundle.crt";
-/// The CA bundle of a Mac, the system roots macOS keeps as PEM.
+/// The CA bundle of a Mac, the system roots macOS keeps as PEM: the roots the fetch of a
+/// `macos-pkg` entry's `.pkg` trusts.
 pub const CA_BUNDLE_MACOS: &str = "/etc/ssl/cert.pem";
-/// The pinned `gh` that checks a package's attestation, on a Linux host.
+/// The pinned `gh` that checks an attestation, on a Linux host: a file hostkeeper's own package
+/// installs for `hostkeeper-pxe`; the daemon runs none.
 pub const GH_BINARY: &str = "/usr/lib/hostkeeper/gh";
-/// The pinned `gh` on a Mac, where the installer pkg puts it (`/usr` itself is read-only there).
-pub const GH_BINARY_MACOS: &str = "/usr/local/lib/hostkeeper/gh";
-/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host: the
-/// host's copy, which an installer or an operator places. Hostkeeper's own package carries
-/// another ([`crate::trusted_root::PACKAGED_TRUSTED_ROOT`]); the daemon uses the one written last.
+/// The Sigstore trusted root, as `gh attestation trusted-root` prints it, on a Linux host: a file
+/// hostkeeper's own package installs for `hostkeeper-pxe`; the daemon reads none.
 pub const SIGSTORE_TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
-/// The Sigstore trusted root on a Mac, where the installer pkg puts it.
-pub const SIGSTORE_TRUSTED_ROOT_MACOS: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
-/// The default of `--trusted-root-max-age-days`: a trusted root older than this is reported
-/// `trusted_root_stale`.
-pub const DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS: NonZeroU64 = NonZeroU64::MIN.saturating_add(89);
-/// The directory `gh` runs in, under the state directory.
-pub const GH_HOME: &str = ".gh";
 /// How often each service's dead-man looks at its running step on a host, in seconds.
 pub const DEADMAN_POLL_SECS: u64 = 1;
 /// The pki directory: the host's key and its certificate generations, `current` the one in use
@@ -169,6 +155,10 @@ pub struct DaemonFlags {
     /// The packages, a directory per service with its versions and `current` and `previous`.
     #[arg(long, default_value = DEFAULT_PACKAGES_DIR)]
     pub packages_dir: PathBuf,
+    /// The host's facts file, which the daemon writes from the facts the coordinator sends: the
+    /// host id, host group, platform and labels, for the services that read them.
+    #[arg(long, default_value = DEFAULT_FACTS_FILE)]
+    pub facts_file: PathBuf,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
     #[arg(long, conflicts_with = "ready_file")]
@@ -178,10 +168,6 @@ pub struct DaemonFlags {
     /// for it after.
     #[arg(long)]
     pub ready_file: Option<PathBuf>,
-    /// Days after which the Sigstore trusted root is reported `trusted_root_stale`, at least 1.
-    /// A signal only: package checks go on with the root there is.
-    #[arg(long, default_value_t = DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS)]
-    pub trusted_root_max_age_days: NonZeroU64,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -195,9 +181,9 @@ impl DaemonFlags {
             config: self.config.clone(),
             state_dir: self.state_dir.clone(),
             packages_dir: self.packages_dir.clone(),
+            facts_file: self.facts_file.clone(),
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
-            trusted_root_max_age_days: self.trusted_root_max_age_days,
         }
     }
 }
@@ -527,14 +513,9 @@ pub fn start_with(
 /// The files outside the daemon's own directories that the host's ports and loops read.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct HostFiles {
-    /// The CA bundle, PEM: the roots the package fetch trusts.
-    pub ca_bundle: PathBuf,
-    /// The pinned `gh`.
-    pub gh: PathBuf,
-    /// The Sigstore trusted root.
-    pub trusted_root: PathBuf,
-    /// The stores file ([`hostkeeper_package::stores`]); a start refuses a file that is not sound,
-    /// and takes the one store `channel` when it is not there.
+    /// The stores file ([`hostkeeper_package::stores`]), which a Mac's start renders from
+    /// `managed_stores` ([`crate::mac_files::stores`]); a start refuses a file that is not sound,
+    /// and has no store when it is not there.
     pub stores: PathBuf,
     /// The signers file of the macos-pkg installer
     /// ([`hostkeeper_install::macos_pkg::signers`]); a start refuses a file that is not sound and
@@ -575,48 +556,26 @@ pub struct ConsoleFiles {
 
 impl HostFiles {
     /// Where this host keeps them: [`HostFiles::for_platform`] for the platform this binary was
-    /// built for, asking the filesystem which CA bundle exists.
+    /// built for.
     pub fn host() -> HostFiles {
-        HostFiles::for_platform(Platform::host().kind, Path::exists)
+        HostFiles::for_platform(Platform::host().kind)
     }
 
-    /// Where a host of `kind` keeps them, `exists` saying whether a path is there; the pki
-    /// directory is [`PKI_DIR`] on both.
+    /// Where a host of `kind` keeps them; the pki directory is [`PKI_DIR`] on both.
     ///
-    /// - A Mac: [`CA_BUNDLE_MACOS`], [`GH_BINARY_MACOS`] and [`SIGSTORE_TRUSTED_ROOT_MACOS`],
-    ///   whatever `exists` says, no console, the managed preferences of
+    /// - A Mac: no console, the managed preferences of
     ///   `hostkeeper_launchd::postinstall::MANAGED_CONFIG`, `MANAGED_STORES` and
     ///   `MANAGED_MACOS_PKG`, and the signers file [`SIGNERS_FILE`] beside `stores.toml`.
-    /// - Linux: [`GH_BINARY`] and [`SIGSTORE_TRUSTED_ROOT`], and the first of [`CA_BUNDLE`]
-    ///   (Debian family) and [`CA_BUNDLE_RHEL`] (RHEL family) that exists; [`CA_BUNDLE`] when
-    ///   neither does, so the fetch reads a bundle that is not there and has no root to trust.
-    ///   The console's issue file is [`ENROLLMENT_ISSUE`], redrawn by [`AGETTY`], under systemd;
-    ///   an OpenRC host (Alpine) has the same files and no console: its getty is busybox's, which
-    ///   reads no issue directory and has no `--reload`.
-    pub fn for_platform(kind: PlatformKind, exists: impl Fn(&Path) -> bool) -> HostFiles {
+    /// - Linux: the repository entries' directory. The console's issue file is
+    ///   [`ENROLLMENT_ISSUE`], redrawn by [`AGETTY`], under systemd; an OpenRC host (Alpine) has
+    ///   the same files and no console: its getty is busybox's, which reads no issue directory
+    ///   and has no `--reload`.
+    pub fn for_platform(kind: PlatformKind) -> HostFiles {
         let console = (kind == PlatformKind::Linux).then(|| ConsoleFiles {
             issue: PathBuf::from(ENROLLMENT_ISSUE),
             agetty: PathBuf::from(AGETTY),
         });
-        let (ca_bundle, gh, trusted_root) = match kind {
-            PlatformKind::Macos => (
-                CA_BUNDLE_MACOS,
-                GH_BINARY_MACOS,
-                SIGSTORE_TRUSTED_ROOT_MACOS,
-            ),
-            PlatformKind::Linux | PlatformKind::Openrc => (
-                [CA_BUNDLE, CA_BUNDLE_RHEL]
-                    .into_iter()
-                    .find(|bundle| exists(Path::new(bundle)))
-                    .unwrap_or(CA_BUNDLE),
-                GH_BINARY,
-                SIGSTORE_TRUSTED_ROOT,
-            ),
-        };
         HostFiles {
-            ca_bundle: PathBuf::from(ca_bundle),
-            gh: PathBuf::from(gh),
-            trusted_root: PathBuf::from(trusted_root),
             stores: PathBuf::from(STORES_FILE),
             macos_pkg_signers: (kind == PlatformKind::Macos).then(|| PathBuf::from(SIGNERS_FILE)),
             pki: PathBuf::from(PKI_DIR),
@@ -649,47 +608,6 @@ pub fn tls_roots(path: &Path) -> Vec<Vec<u8>> {
     )
 }
 
-/// The [`Verifier`] of a host: `gh` checking the attestation offline, made for each package
-/// checked (the verifier of the package library is not shareable between threads).
-pub struct HostVerifier {
-    gh: PathBuf,
-    trusted_root: Arc<TrustedRoot>,
-    home: PathBuf,
-    clock: Arc<dyn Clock>,
-}
-
-impl HostVerifier {
-    /// A verifier that runs `gh` with the file of `trusted_root` chosen at each check
-    /// ([`TrustedRoot::path`]), in `home`, deadlines read on `clock`. `gh` and the root must be
-    /// owned by root and not writable by group or others.
-    pub fn new(
-        gh: PathBuf,
-        trusted_root: Arc<TrustedRoot>,
-        home: PathBuf,
-        clock: Arc<dyn Clock>,
-    ) -> HostVerifier {
-        HostVerifier {
-            gh,
-            trusted_root,
-            home,
-            clock,
-        }
-    }
-}
-
-impl Verifier for HostVerifier {
-    fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
-        GhVerifier::new(
-            self.gh.clone(),
-            self.trusted_root.path(),
-            self.home.clone(),
-            Box::new(SystemRunner::new(Arc::clone(&self.clock))),
-            Box::new(OwnedBy { uid: 0 }),
-        )
-        .verify(request)
-    }
-}
-
 /// The signers file of `files`, which `owner_uid` must own: `Ok(None)` on a host with no such
 /// file configured (Linux) or none there; `Err` ([`StartError::MacosPkg`]) on every refusal of
 /// [`hostkeeper_install::macos_pkg::signers::load`].
@@ -706,24 +624,19 @@ pub fn load_signers(files: &HostFiles, owner_uid: u32) -> Result<Option<Signers>
 }
 
 /// The ports of this build over the platform's `adapters` ([`Adapters`]: the step launcher, the
-/// service manager, the unit directory, the observer's service manager and process probe, and
-/// the package check). The package store is the real one ([`RealPackages`]: HTTPS over the CA
-/// bundle of `files`, `gh` for the attestation with the trusted root written last of the
-/// packaged one under `--packages-dir` and the one of `files` ([`TrustedRoot`], whose age and
-/// reason the store reports, on the wall clock, against `--trusted-root-max-age-days`), unpacked
-/// into `--packages-dir` as root, each staged tree judged by the adapters' package check); the
-/// observer looks through the adapters and TCP ([`observer_with`]); the unit control is the
-/// adapters' (`systemctl` on Linux, `launchctl` on macOS). Placed paths are linked under the
-/// host's own directories and the adapters' unit directory, `--packages-dir` being the packages
-/// directory; the prune of step 18 of a force deletes nothing yet. The installers the daemon
-/// announces are decided here, once, from the host's `os-release` under the `os_root` of
-/// `files` ([`hostkeeper_install::announce`]), its repository entries
-/// ([`crate::repositories::announced`]) and, on a Mac, its signers file and tools
-/// ([`crate::macos_pkg::ports`]: `macos-pkg`, whose installer's ports the daemon then holds). The directory `gh` runs in
-/// (`<state-dir>/.gh`) is made mode 0700 here. `Err` when the stores file of `files` is not sound
-/// ([`StartError::Stores`]; one that is not there gives the store `channel`) or the signers file is
-/// not ([`StartError::MacosPkg`]), when that directory
-/// cannot be made or the packages directory cannot be opened.
+/// service manager, the unit directory and the observer's service manager and process probe).
+/// The package store is the real one ([`RealPackages`]: HTTPS over the CA bundle of `files`, the
+/// stores file of `files`, the bounds of `config`; it fetches the `.pkg` of a `macos-pkg` entry
+/// into `--packages-dir`); the observer looks through the adapters and TCP ([`observer_with`]);
+/// the unit control is the adapters' (`systemctl` on Linux, `launchctl` on macOS). The daemon's
+/// links and `placed.json` are under the host's own directories and the adapters' unit
+/// directory, `--packages-dir` being the packages directory; the prune of step 18 of a force
+/// deletes nothing yet. The installers the daemon announces are decided here, once, from the
+/// host's `os-release` under the `os_root` of `files` ([`hostkeeper_install::announce`]), its
+/// repository entries ([`crate::repositories::announced`]) and, on a Mac, its signers file and
+/// tools ([`crate::macos_pkg::ports`]: `macos-pkg`, whose installer's ports the daemon then
+/// holds). `Err` when the stores file of `files` is not sound ([`StartError::Stores`]; one that
+/// is not there gives no store) or the signers file is not ([`StartError::MacosPkg`]).
 pub fn host_ports(
     config: &DaemonConfig,
     settings: &Settings,
@@ -732,11 +645,12 @@ pub fn host_ports(
     adapters: Adapters,
 ) -> Result<Ports, StartError> {
     let announcement = announced(&files.os_root);
-    let stores = hostkeeper_package::stores::load(&files.stores, &config.release_channel, 0)
-        .map_err(|source| StartError::Stores {
+    let stores = hostkeeper_package::stores::load(&files.stores, 0).map_err(|source| {
+        StartError::Stores {
             path: files.stores.clone(),
             source,
-        })?;
+        }
+    })?;
     let signers = load_signers(files, 0)?;
     let macos_pkg = crate::macos_pkg::ports(
         adapters.kind == PlatformKind::Macos,
@@ -763,42 +677,33 @@ pub fn host_ports(
         });
     }
     let clock: Arc<dyn Clock> = Arc::new(host_clock());
-    let fetcher = NetFetcher::new(
-        UreqTransport::new(&tls_roots(&files.ca_bundle)),
-        Arc::clone(&clock),
-    );
-    let home = settings.state_dir.join(GH_HOME);
-    files::make_private(&home).map_err(|source| StartError::Io {
-        path: home.clone(),
-        source,
-    })?;
-    let trusted_root = Arc::new(TrustedRoot::new(
-        settings.packages_dir.join(PACKAGED_TRUSTED_ROOT),
-        files.trusted_root.clone(),
-        settings.trusted_root_max_age_days.get(),
-        Arc::new(SystemUnixClock),
-    ));
-    let verifier = HostVerifier::new(
-        files.gh.clone(),
-        Arc::clone(&trusted_root),
-        home,
-        Arc::clone(&clock),
-    );
-    let packages = RealPackages::open(
+    let coordinator = crate::mirror::over_coordinator(config, &files.pki, Arc::clone(&clock));
+    if files.repositories.is_some()
+        && let Some(fetch) = &coordinator
+    {
+        repository = repository.with_mirror(Arc::clone(fetch));
+    }
+    // Only a Mac fetches a `.pkg`: no other host reads a CA bundle.
+    let roots = match adapters.kind {
+        PlatformKind::Macos => tls_roots(Path::new(CA_BUNDLE_MACOS)),
+        PlatformKind::Linux | PlatformKind::Openrc => Vec::new(),
+    };
+    let fetcher = NetFetcher::new(UreqTransport::new(&roots), Arc::clone(&clock));
+    let packages = RealPackages::new(
         Box::new(fetcher),
-        Box::new(verifier),
         Arc::clone(&clock),
-        config,
+        config.bounds.clone(),
+        stores,
         &settings.packages_dir,
-        Owner::ROOT,
-    )
-    .map_err(|source| StartError::Io {
-        path: settings.packages_dir.clone(),
-        source,
-    })?
-    .with_stores(stores)
-    .with_package_check(adapters.package_check)
-    .with_trusted_root(trusted_root);
+    );
+    let packages = match coordinator {
+        Some(fetch) => packages.with_coordinator(Box::new(CoordinatorFetcher::new(
+            fetch,
+            Arc::clone(&clock),
+            config.bounds.max_package_bytes,
+        ))),
+        None => packages,
+    };
     Ok(Ports {
         launcher: adapters.launcher,
         packages: Arc::new(packages),

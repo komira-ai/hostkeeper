@@ -11,10 +11,10 @@ use serde_json::json;
 
 use crate::decide::{Gate, Skip, Why};
 use crate::group_decision_support::{Farm, policy, stages};
+use crate::index_set_support::{index_text, sha};
 use crate::marks_support::update;
 use crate::ops::{AuditEntry, Exclusion, Halt, HaltOrigin, Write};
 use crate::orders::Order;
-use crate::release_index_support::{index_text, sha};
 use crate::releases_tests::targets;
 use crate::testutil::version;
 
@@ -116,9 +116,9 @@ async fn a_later_package_waits_while_an_earlier_one_is_not_installed_even_at_a_l
 }
 
 /// Proves: a package that cannot be installed on the host does not hold the later ones back: one
-/// with no desired version, one whose release index lists no package for the host's platform and
-/// one whose targets list none for it each say so for the host (`no_desired`,
-/// `no_package_for_platform`, `no_target`) and the package listed after them is ordered, as
+/// with no desired version, one registered by a release index alone (no release kept, so no entry
+/// is picked for any host) and one whose targets list none for it each say so for the host
+/// (`no_desired`, `no_build_for_host`, `no_target`) and the package listed after them is ordered, as
 /// the first host of the group is, and told only that the group's slot is taken to the second.
 ///
 /// Catches: a package with nothing to install holding every package after it back for good.
@@ -132,11 +132,7 @@ async fn a_package_with_nothing_to_install_does_not_block_the_later_ones() {
     );
     farm.host("a1", "alpha");
     farm.host("a2", "alpha");
-    let text = index_text(
-        "plat",
-        "2.0",
-        &[(hostkeeper_config::platform::Platform::LinuxX86_64, 1)],
-    );
+    let text = index_text("plat", "2.0", &[("linux-x86_64", 1)]);
     let body = json!({
         "service": "plat",
         "version": "2.0",
@@ -163,7 +159,7 @@ async fn a_package_with_nothing_to_install_does_not_block_the_later_ones() {
     assert_eq!(farm.why("a2", "ghost"), Some(Why::Skip(Skip::NoDesired)));
     assert_eq!(
         farm.why("a2", "plat"),
-        Some(Why::Skip(Skip::NoPackageForPlatform))
+        Some(Why::Skip(Skip::NoBuildForHost))
     );
     assert_eq!(farm.why("a2", "tgt"), Some(Why::Skip(Skip::NoTarget)));
     assert_eq!(farm.why("a2", "app"), Some(Why::Gate(Gate::NoSlot)));

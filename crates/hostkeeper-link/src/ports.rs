@@ -12,6 +12,7 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_steps::Clock;
 
 use crate::beat::{Health, Heartbeat, Liveness, Oversize, Renewal, TrustedRootFacts};
+use crate::host_facts::PushedFacts;
 use crate::names::Reason;
 use crate::order::{Order, OrderRef, OrderResult, Reply};
 use crate::repositories::{PushedSet, RepositoriesReport};
@@ -254,6 +255,19 @@ pub trait RepositorySink: Send + Sync {
     /// The installers the host can run now, by name: what the heartbeat lists in place of the
     /// list given at start, since a set applied may add one.
     fn installers(&self) -> Vec<String>;
+}
+
+/// The host's facts file, which the coordinator's facts replace (`facts-v1`). A daemon that has
+/// one announces the feature and reports the generation the file holds.
+pub trait FactsSink: Send + Sync {
+    /// The generation of the facts the file holds, as the sink last wrote them or found them
+    /// already written; none until then. Sent in every heartbeat.
+    fn generation(&self) -> Option<u64>;
+
+    /// Makes the file hold `facts`, writing it only when its content changes. True when the
+    /// file holds them now; false when it could not be written (the sink says why in its log),
+    /// and the generation it reports is the one before.
+    fn apply(&self, facts: &PushedFacts) -> bool;
 }
 
 /// One job for a worker.

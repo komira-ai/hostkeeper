@@ -6,19 +6,19 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "Fetch a package from the release channel within bounds, check its digest, and check offline that a trusted signer attested it."
+description = "Fetch an entry's artifact from the host's stores by its pin within bounds, the stores file, and the offline check of an attestation."
 
-# Steps 1 (download) and 2 (prove it is ours) of docs/design/hostkeeper-design.md, section 5.5,
-# under the release layout of one package per platform: the release index is read strictly, the
-# host platform's package is downloaded into a root-only staging file with byte counting and
-# deadlines on the injected clock, and refused when its size or SHA-256 is not the index entry's;
-# then it is checked offline against the daemon config's trusted signer. The network and the
-# verifier sit behind the ports `Fetcher` and `Verifier`; `net` and `gh` are their one real adapter
-# each. Nothing here opens, decompresses or unpacks the archive.
+# Step 1 (download) of docs/design/hostkeeper-design.md, section 5.5, for an entry pinned by its
+# digest: the artifact is downloaded from the host's stores into a root-only staging file with byte
+# counting and deadlines on the injected clock, and refused when its size or SHA-256 is not the
+# entry's. The network and the verifier sit behind the ports `Fetcher` and `Verifier`; `net` and
+# `gh` are their one real adapter each. Nothing here opens, decompresses or unpacks the archive.
+# The daemon uses `stores`, `entry::fetch_pinned` and `remove_orphan_fetches`; `bundle`, `net`, `gh`
+# and `ports` serve `hostkeeper-pxe`.
 [dependencies]
 base64.workspace = true
-# The daemon config's `TrustedSigners`, `Bounds`, `HttpsUrl` and `Sha256Hex`, the trust error, and
-# the service and version grammar.
+# The daemon config's `TrustedSigners`, `Bounds` and `Sha256Hex`, the trust error, and
+# the service name grammar.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # `Outcome` and `Class`, the vocabulary a refusal is reported in.
 hostkeeper-hook = { path = "../hostkeeper-hook" }
@@ -31,7 +31,7 @@ hostkeeper-steps = { path = "../hostkeeper-steps" }
 hex.workspace = true
 # `O_NOFOLLOW` and `O_NONBLOCK`, to open a file without following a link or waiting on a pipe.
 libc.workspace = true
-# Duplicate keys in the release index are refused while it is parsed.
+# The stores file's strict tables.
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

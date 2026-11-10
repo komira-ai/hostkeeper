@@ -2,6 +2,8 @@
 //! state directory and the lock, and the command line.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -11,15 +13,15 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED,
-    Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGES_DIR,
+    DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
 use hostkeeper_steps::{LaunchError, StepLauncher};
 use support::{CONFIG, OWN, Rig, snapshot};
+use support_host::NativeHost;
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
@@ -27,6 +29,31 @@ fn mode(path: &Path) -> u32 {
         .permissions()
         .mode()
         & 0o7777
+}
+
+/// The unwired launcher for everything but the tools of the repository installer, which the
+/// rig's launcher answers: the version is staged from the repository, and each step of it
+/// meets the unwired launcher.
+struct ToolsOnly(Arc<hostkeeper_daemon::testing::ScriptedLauncher>);
+
+impl StepLauncher for ToolsOnly {
+    fn run(
+        &self,
+        call: &hostkeeper_steps::StepCall<'_>,
+    ) -> Result<hostkeeper_steps::StepExit, LaunchError> {
+        Unwired.run(call)
+    }
+
+    fn stop(&self, unit: &str) -> Result<(), LaunchError> {
+        Unwired.stop(unit)
+    }
+
+    fn run_tool(
+        &self,
+        call: &hostkeeper_steps::ToolCall<'_>,
+    ) -> Result<hostkeeper_steps::ToolExit, LaunchError> {
+        self.0.run_tool(call)
+    }
 }
 
 fn start(rig: &Rig) -> Result<Started, StartError> {
@@ -151,28 +178,24 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             config: DEFAULT_CONFIG.into(),
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
+            facts_file: DEFAULT_FACTS_FILE.into(),
             notify_systemd: false,
             ready_file: None,
-            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
-    assert_eq!(
-        flags.settings().trusted_root_max_age_days,
-        DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS
-    );
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
         format!("`--config` | `{DEFAULT_CONFIG}`"),
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
+        format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
-        format!("`--trusted-root-max-age-days` | `{DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),
@@ -181,6 +204,22 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
+}
+
+/// Proves `--facts-file` reaches the settings, and from them the daemon's directories, as given.
+#[test]
+fn the_facts_file_flag_reaches_the_settings() {
+    let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--facts-file", "/srv/facts.json"]);
+    let Ok(Cli {
+        command: Command::Daemon(flags),
+    }) = parsed
+    else {
+        panic!("the flag parses: {parsed:?}");
+    };
+    assert_eq!(
+        flags.settings().facts_file,
+        std::path::PathBuf::from("/srv/facts.json")
+    );
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage
@@ -220,12 +259,13 @@ fn the_unwired_ports_refuse_everything() {
     assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
     assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
     assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
-    let rig = Rig::new("unwired");
-    rig.add("web", "2.0.0");
+    let rig = NativeHost::new("unwired");
+    rig.add_staged("web", "2.0.0");
+    let order = rig.update("web", "2.0.0", 1);
     let mut ports = rig.ports();
-    ports.launcher = Arc::new(Unwired);
+    ports.launcher = Arc::new(ToolsOnly(Arc::clone(&rig.launcher)));
     let daemon = hostkeeper_daemon::Daemon::new(support::config(), rig.dirs(), ports, OWN);
-    let reply = daemon.order(&support::update("web", "2.0.0", &support::d(), 1));
+    let reply = daemon.order(&order);
     assert!(
         matches!(reply, hostkeeper_daemon::Reply::Finished { .. }),
         "{reply:?}"
@@ -233,22 +273,13 @@ fn the_unwired_ports_refuse_everything() {
     assert!(rig.launcher.runs().is_empty());
 }
 
-/// Catches `--trusted-root-max-age-days` not reaching the daemon's settings, or a limit of 0
-/// accepted (every root would be reported stale the second after it is written): 30 is the
-/// settings' limit, and 0 is a usage error.
+/// Catches the flag of the trusted root's report still being taken: the daemon checks no
+/// attestation, so `--trusted-root-max-age-days` is a flag it does not have, a usage error.
 #[test]
-fn the_trusted_root_age_limit_flag_reaches_the_settings_and_is_at_least_one() {
+fn the_trusted_root_age_limit_flag_is_a_usage_error() {
     let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "30"]);
-    let Ok(Cli {
-        command: Command::Daemon(flags),
-    }) = parsed
-    else {
-        panic!("the flag parses: {parsed:?}");
-    };
-    assert_eq!(flags.settings().trusted_root_max_age_days.get(), 30);
-    let zero = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "0"]);
     assert_eq!(
-        zero.map(|_| ()).map_err(|error| error.kind()),
-        Err(clap::error::ErrorKind::ValueValidation)
+        parsed.map(|_| ()).map_err(|error| error.kind()),
+        Err(clap::error::ErrorKind::UnknownArgument)
     );
 }

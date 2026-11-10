@@ -334,21 +334,13 @@ fn the_pkg_installs_the_daemon_binary_and_its_launchd_plist_as_hostkeeper_launch
 }
 
 #[test]
-fn gh_and_the_trusted_root_are_where_the_daemon_reads_them_on_a_mac() {
-    // Catches: the pkg installing `gh` or the trusted root at another path than the one the
-    // daemon reads on a Mac, so the daemon's fetch or verify finds nothing; and the daemon
-    // reading a CA bundle other than macOS's own, which the pkg does not install.
-    let mac = hostkeeper_daemon::cli::HostFiles::for_platform(
-        hostkeeper_launchd::PlatformKind::Macos,
-        |_| false,
-    );
-    assert_eq!(Path::new("/").join(gh_path()), mac.gh);
-    assert_eq!(Path::new("/").join(trusted_root_path()), mac.trusted_root);
+fn gh_and_the_trusted_root_are_installed_where_the_pkg_names_them() {
+    // Catches: the pkg installing `gh` or the trusted root at another path than the one it
+    // names, under `/usr/local/lib/hostkeeper` (the daemon reads neither; `hostkeeper-pxe` does).
     assert_eq!(
         (gh_path().as_str(), trusted_root_path().as_str()),
         (GH, ROOT)
     );
-    assert_eq!(mac.ca_bundle, Path::new("/etc/ssl/cert.pem"));
 }
 
 #[test]

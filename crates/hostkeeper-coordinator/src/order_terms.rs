@@ -1,6 +1,7 @@
-//! The terms of an update order on the JSON heartbeat route: the `order_id`, `order_try` and
-//! `package_digest` that the gRPC `Order` of `hostkeeper.agent.v1` carries and an update answer
-//! carries too, for an agent that announced [`hostkeeper_wire::wire::ORDER_FEATURE`].
+//! The terms of an update order: the `order_id`, `order_try` and `package_digest` that the gRPC
+//! `Order` of `hostkeeper.agent.v1` carries and the answer of a transport that carries typed
+//! orders carries too, for an agent that announced [`hostkeeper_wire::wire::ORDER_FEATURE`]. The
+//! JSON heartbeat route carries no order, so none of them.
 //!
 //! The order id names the update, not the answer: it is `update-` and the first 32 lowercase
 //! hex characters of the SHA-256 of the service, a newline and the version, so the same update
@@ -13,19 +14,17 @@
 //! the tries from the heartbeats and the verdicts file, never issues a try lower than the host
 //! reported.
 //!
-//! The package digest is the one CI registered with the version ([`crate::registry`]), or, for a
-//! version registered with a release index, the one the index lists for the host's platform, with
-//! the digest of the index (typed orders carry it; the JSON answer has no field for it). A
-//! version with none registered, or whose index lists no package for the host's platform, has no
-//! terms, and an agent that reads terms is not ordered it.
+//! The package digest is the one of the entry picked for the host ([`crate::picks`]), with the
+//! digest of the release index set beside the targets, if one was (typed orders carry it; the
+//! answer has no field for it). A version with no release kept picks no entry, so it has no
+//! terms and nothing is ordered it.
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{OrderId, PackageDigest, ServiceReply};
-use hostkeeper_wire::{HostId, Platform};
 
 use crate::ops_file;
 use crate::orders::{Order, PickedTarget};
-use crate::registry::{Digest, Package, Registry};
+use crate::registry::{Digest, Package};
 
 /// What an update answer carries for an agent that announced `order-v1`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,8 +35,8 @@ pub struct Terms {
     pub order_try: u64,
     /// The digest of the package of the version for the host's platform.
     pub package_digest: PackageDigest,
-    /// The digest of the release index the package digest was taken from, if the version was
-    /// registered with one. Only a typed order carries it.
+    /// The digest of the release index set beside the targets, if the set had one. Only a typed
+    /// order carries it.
     pub index_digest: Option<Digest>,
 }
 
@@ -49,8 +48,8 @@ pub fn order_id_text(service: &str, version: &Version) -> String {
     format!("update-{}", &hash[..32])
 }
 
-/// The terms of the order that updates `service` to `version`, whose package for the host CI
-/// registered as `package`, at the try `order_try`. `None` only
+/// The terms of the order that updates `service` to `version`, whose package for the host is
+/// `package`, at the try `order_try`. `None` only
 /// if the id or the digest were no such thing, which their grammars rule out for a version and a
 /// digest that were read.
 #[must_use]
@@ -63,35 +62,6 @@ pub fn terms(service: &str, version: &Version, package: &Package, order_try: u64
             package_digest,
             index_digest: package.index_digest.clone(),
         })
-}
-
-/// The terms of the update of `service` to `version` for the host `id`, of `platform`, at the try
-/// `order_try` ([`crate::fleet::Fleet::next_try`]), with the release `digests` registers for the
-/// version. With none
-/// registered, or an index that lists no package for the platform, none, and a warning naming
-/// the service, the version and the host: such a host is not ordered the version.
-pub(crate) fn of_beat(
-    digests: &Registry,
-    service: &str,
-    version: &Version,
-    order_try: u64,
-    id: &HostId,
-    platform: Platform,
-) -> Option<Terms> {
-    let made = digests
-        .get(version)
-        .and_then(|release| release.package_for(platform))
-        .and_then(|package| terms(service, version, &package, order_try));
-    if made.is_none() {
-        tracing::warn!(
-            service,
-            version = %version,
-            node_id = %id,
-            %platform,
-            "not ordering an agent that reads order terms: no package digest is registered for the version and the host's platform"
-        );
-    }
-    made
 }
 
 /// The update `reply` with its `terms` as a typed order: what a transport that carries typed

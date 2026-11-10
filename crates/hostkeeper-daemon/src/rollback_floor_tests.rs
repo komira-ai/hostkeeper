@@ -2,7 +2,7 @@
 
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_placed::{InstalledEntry, PlacedRecord};
-use hostkeeper_release::Installer;
+use hostkeeper_release::{ARCHIVE_INSTALLER, Installer};
 
 use super::{INSTALLER_FLOORS, SELF_NATIVE_FLOOR, below, floor_of};
 
@@ -21,17 +21,13 @@ fn holding(entries: &[(&str, &str)]) -> PlacedRecord {
     record
 }
 
-/// Each installer's row: `hostkeeper-archive` has every release, `apt` and `macos-pkg` the
-/// release their steps came in, and an installer this release has no steps of has no row.
+/// Each installer's row: `apt` and `macos-pkg` have the release their steps came in, and an
+/// installer this release has no steps of has no row.
 #[test]
 fn each_installer_has_the_release_it_arrived_in() {
-    assert_eq!(floor_of(Installer::HostkeeperArchive), Some(v("0.0.0")));
     assert_eq!(floor_of(Installer::Apt), Some(INSTALLER_FLOORS[0].1));
     assert_eq!(floor_of(Installer::MacosPkg), Some(v("0.1.223")));
     assert!(INSTALLER_FLOORS[1].1 > INSTALLER_FLOORS[0].1);
-    for none in [Installer::Tarball, Installer::OciImage] {
-        assert_eq!(floor_of(none), None, "{none:?}");
-    }
     assert!(SELF_NATIVE_FLOOR > INSTALLER_FLOORS[0].1);
 }
 
@@ -99,4 +95,19 @@ fn a_rollback_below_an_installer_of_a_service_is_refused() {
                 .to_owned()
         )
     );
+}
+
+/// An old record that names the archive installer holds no version this binary runs: no rollback
+/// is judged below it, as before the installer was deleted, while any other name this release
+/// has no steps of still refuses every rollback.
+#[test]
+fn an_old_record_naming_the_archive_installer_refuses_no_rollback() {
+    let running = v("1.0.0");
+    let archive = holding(&[
+        ("web", ARCHIVE_INSTALLER),
+        ("hostkeeper", ARCHIVE_INSTALLER),
+    ]);
+    assert_eq!(below(&archive, running, "0.0.1"), None);
+    let mixed = holding(&[("web", ARCHIVE_INSTALLER), ("db", "later-format")]);
+    assert!(below(&mixed, running, "0.0.1").is_some());
 }

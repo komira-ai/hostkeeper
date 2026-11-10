@@ -5,9 +5,9 @@ use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
+use hostkeeper_install::version::Owner;
 use hostkeeper_link::testing::RecordingLog;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 use sha2::{Digest, Sha256};
 
 use super::*;
@@ -41,6 +41,7 @@ fn entry(name: &str, suites: &[&str], seed: u8) -> Repository {
         components: vec!["main".to_owned()],
         fingerprints: vec![fingerprint],
         keyring,
+        ..Default::default()
     }
 }
 
@@ -115,6 +116,11 @@ impl Rig {
         }
     }
 
+    /// The mirrors' parent of the host, as the sets are rendered for it.
+    fn mirror(&self) -> &str {
+        self.ports.dirs.mirror.to_str().expect("utf-8")
+    }
+
     fn staging(&self) -> PathBuf {
         self.live.with_file_name(STAGING)
     }
@@ -171,6 +177,7 @@ fn files_already_in_place_are_adopted_without_a_write() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        rig.mirror(),
     ));
     let before: Vec<(u64, i64, i64)> = KOMIRA_FILES
         .iter()
@@ -203,6 +210,7 @@ fn the_sink_reports_a_set_it_adopted() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        rig.mirror(),
     ));
     rig.push.apply(&set);
     assert_eq!(
@@ -226,7 +234,7 @@ fn the_held_scripts_files_are_what_a_set_for_komira_renders() {
     let rig = Rig::new("push-script");
     let set = komira(1, 2);
     let live = rig.live.to_str().expect("utf-8");
-    let files = registry::render(&set.entries, live);
+    let files = registry::render(&set.entries, live, rig.mirror());
     let stanza = |suite: &str| {
         format!(
             "Types: deb\nURIs: https://repo.example.com/debian\nSuites: {suite}\nComponents: main\nSigned-By: {live}/komira.gpg\n"
@@ -262,6 +270,7 @@ fn a_differing_directory_is_replaced_whole() {
     rig.place(&registry::render(
         &old.entries,
         rig.live.to_str().expect("utf-8"),
+        rig.mirror(),
     ));
     fs::write(rig.live.join("stray.sources"), b"x").expect("a stray file");
     let set = komira(2, 2);
@@ -322,6 +331,7 @@ fn files_the_loader_refuses_are_not_adopted() {
     rig.place(&registry::render(
         &set.entries,
         rig.live.to_str().expect("utf-8"),
+        rig.mirror(),
     ));
     fs::set_permissions(rig.live.join("komira.gpg"), Permissions::from_mode(0o664)).expect("chmod");
     assert_eq!(rig.push.apply_set(&set), Applied::Written);
@@ -345,6 +355,7 @@ fn a_directory_with_a_file_missing_or_changed_is_replaced() {
         rig.place(&registry::render(
             &set.entries,
             rig.live.to_str().expect("utf-8"),
+            rig.mirror(),
         ));
         match change {
             0 => fs::remove_file(rig.live.join("komira-testing.sources")).expect("remove"),
@@ -639,10 +650,10 @@ fn an_installer_lock_that_cannot_be_opened_is_a_failure() {
 #[test]
 fn the_installers_and_the_installer_follow_the_set_applied() {
     let rig = Rig::new("push-installers");
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive"]);
+    assert!(rig.push.installers().is_empty());
     let snapshot = rig.ports.repositories.snapshot();
     rig.push.apply(&komira(1, 1));
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive", "apt"]);
+    assert_eq!(rig.push.installers(), ["apt"]);
     assert!(
         snapshot.is_empty(),
         "a snapshot taken before is not changed"
@@ -652,7 +663,7 @@ fn the_installers_and_the_installer_follow_the_set_applied() {
     assert_eq!(stable.suite, "stable");
     assert_eq!(stable.keyring, rig.live.join("komira.gpg"));
     rig.push.apply(&komira(2, 2));
-    assert_eq!(rig.push.installers(), ["hostkeeper-archive", "apt"]);
+    assert_eq!(rig.push.installers(), ["apt"]);
 }
 
 /// Proves apt is listed once when the daemon announced it at its start, and not added for a host
@@ -661,14 +672,11 @@ fn the_installers_and_the_installer_follow_the_set_applied() {
 fn the_native_installer_is_added_only_once_and_only_when_the_host_can_run_it() {
     let rig = Rig::new("push-native");
     let started = Announcement {
-        installers: vec![Installer::HostkeeperArchive, Installer::Apt],
+        installers: vec![Installer::Apt],
         family: None,
     };
     rig.push.apply(&komira(1, 1));
-    assert_eq!(
-        installers(&started, &rig.ports),
-        [Installer::HostkeeperArchive, Installer::Apt]
-    );
+    assert_eq!(installers(&started, &rig.ports), [Installer::Apt]);
     let mut ports = (*rig.ports).clone();
     ports.managed = Some(Managed {
         native: None,
@@ -676,12 +684,12 @@ fn the_native_installer_is_added_only_once_and_only_when_the_host_can_run_it() {
     });
     assert_eq!(
         installers(&Announcement::default(), &ports),
-        [Installer::HostkeeperArchive]
+        Vec::<Installer>::new()
     );
     ports.managed = None;
     assert_eq!(
         installers(&Announcement::default(), &ports),
-        [Installer::HostkeeperArchive]
+        Vec::<Installer>::new()
     );
     assert!(
         RepositoryPush::new(
@@ -745,7 +753,11 @@ fn the_shared_entries_are_replaced_whole_and_snapshots_keep_their_value() {
 #[test]
 fn the_digest_of_a_set_is_the_registrys() {
     let set = komira(1, 1);
-    let files = registry::render(&set.entries, registry::REPOSITORIES_DIR);
+    let files = registry::render(
+        &set.entries,
+        registry::REPOSITORIES_DIR,
+        registry::MIRROR_DIR,
+    );
     let mut hasher = Sha256::new();
     let mut sorted: Vec<&HostFile> = files.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -756,4 +768,97 @@ fn the_digest_of_a_set_is_the_registrys() {
         hasher.update(&file.bytes);
     }
     assert_eq!(set.digest, hex::encode(hasher.finalize()));
+}
+
+/// A private entry of the host's group `suite`: the origin's URI, no credential (the host is
+/// never sent one).
+fn private(name: &str, suite: &str, seed: u8) -> Repository {
+    Repository {
+        access: "hosts".to_owned(),
+        ..entry(name, &[suite], seed)
+    }
+}
+
+/// Makes the file `path` below the host's mirror root, with its directories.
+fn mirrored(rig: &Rig, path: &str) {
+    let full = rig.ports.dirs.mirror.join(path);
+    fs::create_dir_all(full.parent().expect("a parent")).expect("directories");
+    fs::write(full, b"x").expect("a file");
+}
+
+/// Proves a private entry is written for the host's own mirror: its sources file names
+/// `file:<mirror root>/<name>` with the host's group as the suite, the loader takes it as the
+/// entry's URI, the set's digest (computed at the production directories) still matches, and the
+/// same set is adopted as it is the next time.
+#[test]
+fn a_private_entry_is_written_with_the_uri_of_the_hosts_mirror() {
+    let rig = Rig::new("push-private");
+    let set = set_of(1, vec![private("acme", "web", 1)]);
+    assert_eq!(rig.push.apply_set(&set), Applied::Written);
+    let uri = format!("file:{}/acme", rig.mirror());
+    let text = fs::read_to_string(rig.live.join("acme-web.sources")).expect("the sources");
+    assert!(
+        text.contains(&format!("URIs: {uri}\nSuites: web\n")),
+        "{text}"
+    );
+    let held = rig.ports.repositories.snapshot();
+    let loaded = held.get("acme-web").expect("the channel");
+    assert_eq!(
+        (loaded.uri.as_str(), loaded.suite.as_str()),
+        (uri.as_str(), "web")
+    );
+    assert_eq!(rig.push.apply_set(&set), Applied::Adopted);
+}
+
+/// Proves an applied set removes the mirrors it does not keep, whether it was written or its files
+/// were already in place: a mirror of a repository the set does not name, and one of the entry's
+/// repository holding another group's suite (the host moved), go; the mirror of the entry's own
+/// suite stays.
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "replacing a live directory is renameat2 with RENAME_EXCHANGE, which only Linux has; a Mac is never sent a set"
+)]
+#[test]
+fn an_applied_set_removes_the_mirrors_it_does_not_keep() {
+    let rig = Rig::new("push-prune");
+    let web = set_of(1, vec![private("acme", "web", 1)]);
+    mirrored(&rig, "acme/dists/web/InRelease");
+    mirrored(&rig, "old/dists/web/InRelease");
+    assert_eq!(rig.push.apply_set(&web), Applied::Written);
+    assert!(!rig.ports.dirs.mirror.join("old").exists());
+    assert!(
+        rig.ports
+            .dirs
+            .mirror
+            .join("acme/dists/web/InRelease")
+            .is_file()
+    );
+
+    mirrored(&rig, "old/dists/web/InRelease");
+    assert_eq!(rig.push.apply_set(&web), Applied::Adopted);
+    assert!(!rig.ports.dirs.mirror.join("old").exists());
+
+    let dev = set_of(2, vec![private("acme", "dev", 1)]);
+    assert_eq!(rig.push.apply_set(&dev), Applied::Written);
+    assert!(!rig.ports.dirs.mirror.join("acme").exists());
+}
+
+/// Proves a mirror that cannot be removed does not undo the set: it is in force, and the log says
+/// what was not removed.
+#[test]
+fn a_mirror_that_cannot_be_removed_is_logged_and_the_set_stays_in_force() {
+    let rig = Rig::new("push-prune-fails");
+    fs::create_dir_all(rig.ports.dirs.mirror.parent().expect("a parent")).expect("state");
+    fs::write(&rig.ports.dirs.mirror, b"a file where the mirrors belong").expect("a file");
+    let set = set_of(1, vec![private("acme", "web", 1)]);
+    rig.push.apply(&set);
+    assert_eq!(rig.in_use(), ["acme-web"]);
+    assert_eq!(rig.push.report().generation, 1);
+    let lines = rig.log.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("error: a mirror the set does not keep is not removed: ")),
+        "{lines:?}"
+    );
 }

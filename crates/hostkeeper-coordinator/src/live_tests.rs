@@ -11,14 +11,16 @@ use std::time::Duration;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{Heartbeat, Outcome};
 
-use crate::decide::{Decision, Gate, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
 use crate::holds::{HoldMark, HoldScope};
 use crate::rollouts::plan_proto;
 use crate::services::Services;
 use crate::stages::{HostState, View, is_live};
-use crate::testutil::{beat, id, last, role, secs, unhealthy, updating, version};
+use crate::testutil::{
+    beat, decide_why, id, last, native, role, secs, unhealthy, updating, version,
+};
 
 /// `a` and `b` run on daemons; `a` bakes for two beats, `b` for none. `c` runs on daemons too.
 /// All have the default plan.
@@ -75,7 +77,12 @@ fn elsewhere() -> Decision {
 /// Whether `a`'s rollout is live at 100 s.
 fn a_live(f: &Fleet) -> bool {
     let s = services();
-    is_live(s.get("a").expect("a"), all().get("a"), f, secs(100))
+    is_live(
+        s.get("a").expect("a"),
+        all().get("a"),
+        &native(f, &all()),
+        secs(100),
+    )
 }
 
 /// The plan `Releases.Status` answers for `service`, halted or not.
@@ -83,7 +90,15 @@ fn plan(f: &Fleet, service: &str, halted: bool) -> proto::RolloutPlan {
     let s = services();
     let all = all();
     let def = s.get(service).expect("the service");
-    plan_proto(&s, &all, def, &all[service], halted, f, secs(100))
+    plan_proto(
+        &s,
+        &all,
+        def,
+        &all[service],
+        halted,
+        &native(f, &all),
+        secs(100),
+    )
 }
 
 /// A heartbeat of a host whose update or install of `a` to 2.0 failed and that is unhealthy,
@@ -205,7 +220,7 @@ fn a_host_left_unhealthy_at_the_version_it_failed_is_failed_and_bakes_nothing() 
     f.record_in("a", id("a2"), role("daemon"), beat("1.0"), secs(100));
     let s = services();
     let def = s.get("a").expect("a");
-    let view = View::effective(def, &all()["a"], None, &f, secs(100));
+    let view = View::effective(def, &all()["a"], None, &native(&f, &all()), secs(100));
     let a1 = view.members.iter().find(|m| m.id == id("a1")).expect("a1");
     assert_eq!(a1.state, HostState::Failed);
     assert_eq!(why(&f, "a", "a2"), Decision::Gate(Gate::StageFailed));
@@ -219,7 +234,7 @@ fn a_host_left_unhealthy_at_the_version_it_failed_is_failed_and_bakes_nothing() 
     let mut healthy = failed("2.0");
     healthy.health = hostkeeper_wire::wire::Health::Healthy;
     let f = farm(healthy);
-    let view = View::effective(def, &all()["a"], None, &f, secs(100));
+    let view = View::effective(def, &all()["a"], None, &native(&f, &all()), secs(100));
     assert_ne!(view.members[0].state, HostState::Failed, "healthy again");
 }
 
@@ -235,7 +250,7 @@ fn a_host_left_at_the_version_it_failed_updates_again_under_a_new_order() {
     ordered.order("a", id("a1"), version("2.0"), secs(100));
     let again = farm(updating(failed("2.0"), "2.0"));
     for (case, f) in [("ordered", ordered), ("updating", again)] {
-        let view = View::effective(def, &all()["a"], None, &f, secs(100));
+        let view = View::effective(def, &all()["a"], None, &native(&f, &all()), secs(100));
         assert_eq!(view.members[0].state, HostState::Updating, "{case}");
         assert!(a_live(&f), "{case}");
         assert_eq!(why(&f, "b", "b1"), elsewhere(), "{case}");

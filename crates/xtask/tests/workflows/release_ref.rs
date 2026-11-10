@@ -49,7 +49,7 @@ pub const FLOOR: (&str, &str) = ("0.1.208", "22880ebf409a35539d7ebe66abb80a42771
 pub const SURFACE_FILE: &str = include_str!("release_ref_surface.txt");
 
 /// A `ref` of a checkout that is the workflow's own commit.
-const OWN_REFS: [&str; 1] = ["${{ github.sha }}"];
+pub const OWN_REFS: [&str; 1] = ["${{ github.sha }}"];
 
 /// One argument of a verb in [`SURFACE_FILE`].
 #[derive(Debug, Clone, PartialEq, Eq)]

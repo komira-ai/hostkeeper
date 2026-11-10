@@ -89,12 +89,17 @@ impl Ca {
     /// The certificate of the updater [`HOST`] on a host of role `daemon`, as the coordinator
     /// reads one by default.
     pub fn host(&self) -> Leaf {
+        self.host_in("daemon")
+    }
+
+    /// The certificate of the updater [`HOST`] on a host of role `role`.
+    pub fn host_in(&self, role: &str) -> Leaf {
         let uri = |text: &str| SanType::URI(text.to_owned().try_into().expect("a URI"));
         self.leaf(
             HOST,
             vec![
                 uri("urn:hostkeeper:role:updater"),
-                uri("urn:hostkeeper:host-role:daemon"),
+                uri(&format!("urn:hostkeeper:host-role:{role}")),
                 SanType::DnsName(HOST.to_owned().try_into().expect("a DNS name")),
             ],
             ExtendedKeyUsagePurpose::ClientAuth,
@@ -127,9 +132,6 @@ pub fn files_under(root: &Path) -> HostFiles {
     HostFiles {
         repositories: None,
         os_root: root.join("os"),
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
         stores: root.join("stores.toml"),
         macos_pkg_signers: None,
         pki: root.join("pki"),
@@ -149,4 +151,16 @@ pub fn enroll(pki: &Path, leaf: &Leaf, ca: &Ca) {
     std::fs::write(generation.join("key"), &leaf.key_der).expect("the key");
     std::fs::write(generation.join("ca.pem"), &ca.pem).expect("the CA bundle");
     std::os::unix::fs::symlink("gen-1", pki.join("current")).expect("current");
+}
+
+/// Replaces the pair of the pki directory `pki` with `leaf`'s, as a renewal does: the next
+/// generation is written and `current` is switched to it by rename.
+pub fn renew(pki: &Path, leaf: &Leaf, ca: &Ca) {
+    let generation = pki.join("gen-2");
+    std::fs::create_dir_all(&generation).expect("a generation");
+    std::fs::write(generation.join("cert.pem"), &leaf.cert_pem).expect("the certificate");
+    std::fs::write(generation.join("key"), &leaf.key_der).expect("the key");
+    std::fs::write(generation.join("ca.pem"), &ca.pem).expect("the CA bundle");
+    std::os::unix::fs::symlink("gen-2", pki.join("current.tmp")).expect("a staged link");
+    std::fs::rename(pki.join("current.tmp"), pki.join("current")).expect("current switched");
 }

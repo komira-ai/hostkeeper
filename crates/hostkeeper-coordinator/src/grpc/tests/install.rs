@@ -6,17 +6,18 @@ use hostkeeper_proto::hostkeeper::agent::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1 as operator;
 
 use super::heartbeat::{beat, farm, updater};
+use crate::releases_tests::apt_entry;
 use crate::testutil::OPERATOR;
 
 /// The features of a daemon that lists every service it runs and takes `install` and
 /// `uninstall`.
-const INSTALLER: [&str; 2] = ["heartbeat-v2", "install-v1"];
+const INSTALLER: [&str; 3] = ["heartbeat-v2", "install-v1", "target-v1"];
 
 /// A heartbeat of a daemon that announced [`INSTALLER`] and runs `services`, each at its
 /// version and healthy.
 fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
-        installers: Vec::new(),
+        installers: vec!["apt".to_owned()],
         repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent: Some(proto::AgentInfo {
@@ -30,6 +31,7 @@ fn installer_beat(services: &[(&str, &str)]) -> proto::HeartbeatRequest {
                 name: (*name).to_owned(),
                 version: (*version).to_owned(),
                 health: proto::Health::Healthy as i32,
+                installer: Some("apt".to_owned()),
                 ..proto::ServiceBeat::default()
             })
             .collect(),
@@ -64,7 +66,7 @@ async fn the_grpc_heartbeat_answers_the_gates_install_and_uninstall() {
     assert_eq!(
         order.verb,
         Some(proto::order::Verb::Install(proto::Install {
-            target: None,
+            target: Some(apt_entry("other", 0x11)),
             service: "other".to_owned(),
             version: "3.0".to_owned(),
             package_digest: "1".repeat(64),

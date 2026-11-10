@@ -282,15 +282,15 @@ async fn a_host_of_a_platform_with_no_list_is_no_target_and_holds_no_convergence
     assert_eq!((counts.picked, counts.no_target, counts.missing), (1, 1, 0));
 }
 
-/// Proves: a daemon before `target-v1` that runs `web` is ordered the list's archive entry
-/// though it stands second, as today: an update naming the archive's digest and the digest of
-/// the release index set with the targets, with no target, on both routes; one that does not run
-/// it is ordered the archive as an install; and with no archive entry in the list one that does
-/// not run it is `no_build_for_host`.
-/// Catches: an old daemon sent a target, ordered the list's first entry, or ordered without the
-/// index digest it checks.
+/// Proves: a daemon before `target-v1` is picked nothing, whatever the release lists: with the
+/// list `[deb, hostkeeper-archive]` and a release index set beside it, a daemon that runs `web`
+/// and one that does not are each held `no_build_for_host` and ordered nothing, over gRPC and on
+/// the JSON route; and with a list that has no archive entry the same.
+/// Catches: an old daemon ordered the archive entry of a release set before the archives ended,
+/// which it can no longer be installed from, or an index digest made up for a set that carried
+/// none.
 #[tokio::test]
-async fn an_old_daemon_is_ordered_the_archive_entry_wherever_it_stands() {
+async fn an_old_daemon_is_picked_nothing_whatever_the_release_lists() {
     let rig = rig("pick-old-index");
     let text = index_text("2.0", 'f');
     let targets = x86(vec![web("deb", 'a'), web(ARCHIVE, 'f')]);
@@ -298,61 +298,42 @@ async fn an_old_daemon_is_ordered_the_archive_entry_wherever_it_stands() {
     rig.at(LATER);
     let running = Daemon::old("o1", X86).running(runs("web", "1.0", None));
     let answer = grpc_beat(&rig, &running).await;
-    let order = said(&answer).expect("an update");
-    assert_eq!(
-        order,
-        (
-            "update",
-            "web".to_owned(),
-            "2.0".to_owned(),
-            digest('f'),
-            sha256_of(&text),
-            None
-        )
-    );
+    assert_eq!(said(&answer), None);
     assert!(!answer.features.iter().any(|f| f == "target-v1"));
+    assert_eq!(
+        reason(&rig, "web", "o1").await,
+        proto::GateReason::NoBuildForHost
+    );
     let answered = json_beat(&rig, &running).await;
-    assert_eq!(answered["reply"], json!("update"), "{answered}");
-    assert_eq!(answered["package_digest"], json!(digest('f')));
+    assert_eq!(answered["reply"], json!("nothing"), "{answered}");
 
     let new = Daemon::old("o2", X86);
-    let order = said(&grpc_beat(&rig, &new).await).expect("an install");
-    assert_eq!(
-        (order.0, order.3, order.4, order.5),
-        ("install", digest('f'), sha256_of(&text), None)
-    );
-}
-
-/// Proves: with targets set and no index, an old daemon is ordered the archive entry with an
-/// empty index digest, as a set with one package digest orders it today; and given a list with no
-/// archive entry, one that does not run the service is `no_build_for_host`, and one that runs it
-/// from archives is `installer_dropped`.
-/// Catches: an index digest made up for a set that carried none, or an old daemon ordered a
-/// format it cannot install.
-#[tokio::test]
-async fn an_old_daemon_without_an_index_or_an_archive_entry() {
-    let plain = rig("pick-old-no-index");
-    set(&plain, "2.0", x86(vec![web(ARCHIVE, 'f')])).await;
-    plain.at(LATER);
-    let running = Daemon::old("o1", X86).running(runs("web", "1.0", None));
-    let order = said(&grpc_beat(&plain, &running).await).expect("an update");
-    assert_eq!(
-        (order.3, order.4, order.5),
-        (digest('f'), String::new(), None)
-    );
-
-    let rig = rig("pick-old-no-archive");
-    set(&rig, "2.0", x86(vec![web("deb", 'a'), web("tarball", 'c')])).await;
-    rig.at(LATER);
-    assert_eq!(said(&grpc_beat(&rig, &Daemon::old("o2", X86)).await), None);
+    assert_eq!(said(&grpc_beat(&rig, &new).await), None);
     assert_eq!(
         reason(&rig, "web", "o2").await,
         proto::GateReason::NoBuildForHost
     );
-    assert_eq!(said(&grpc_beat(&rig, &running).await), None);
+
+    let plain = self::rig("pick-old-no-archive");
+    set(
+        &plain,
+        "2.0",
+        x86(vec![web("deb", 'a'), web("tarball", 'c')]),
+    )
+    .await;
+    plain.at(LATER);
     assert_eq!(
-        reason(&rig, "web", "o1").await,
-        proto::GateReason::InstallerDropped
+        said(&grpc_beat(&plain, &Daemon::old("o3", X86)).await),
+        None
+    );
+    assert_eq!(
+        reason(&plain, "web", "o3").await,
+        proto::GateReason::NoBuildForHost
+    );
+    assert_eq!(said(&grpc_beat(&plain, &running).await), None);
+    assert_eq!(
+        reason(&plain, "web", "o1").await,
+        proto::GateReason::NoBuildForHost
     );
 }
 
@@ -415,7 +396,7 @@ async fn a_host_whose_installer_the_release_dropped_is_named_by_converge() {
 
 /// Proves: a list whose one entry names an installer no daemon lists (`debb`) is picked for no
 /// host, and the version is not converged though no host is behind it, with counts of no host
-/// picked and the others by why.
+/// picked and the others by why: the daemon before `target-v1` is `no_build_for_host` too.
 /// Catches: a release no host can take reported converged, as an empty count would make it.
 #[tokio::test]
 async fn a_misspelt_installer_no_host_is_picked_for_leaves_the_version_not_converged() {
@@ -436,7 +417,7 @@ async fn a_misspelt_installer_no_host_is_picked_for_leaves_the_version_not_conve
             counts.no_build_for_host,
             counts.installer_dropped
         ),
-        (0, 1, 1)
+        (0, 2, 0)
     );
 }
 
@@ -493,11 +474,10 @@ async fn a_target_v1_host_is_picked_nothing_until_its_installers_are_read() {
 /// Proves: one host beating over gRPC, then JSON, then gRPC keeps the installers its first
 /// heartbeat listed (`Hosts.Get` shows them after the JSON one); over JSON it is sent no order of
 /// its `deb` and its next gRPC reply orders it; and a host that runs `web` from archives is sent
-/// the archive over JSON in today's form, the order terms naming the archive's digest.
-/// Catches: a JSON heartbeat that clears the list read over gRPC, a target-bearing entry sent on
-/// the JSON route, or an archive order held back there.
+/// no order over JSON either, being picked nothing.
+/// Catches: a JSON heartbeat that clears the list read over gRPC, or an order on the JSON route.
 #[tokio::test]
-async fn the_json_route_keeps_the_list_and_carries_only_an_archive_order() {
+async fn the_json_route_keeps_the_list_and_carries_no_order() {
     let rig = rig("pick-json-route");
     let deb = Daemon::new("d1", X86, &[ARCHIVE, "deb"]).running(runs("web", "1.0", Some("deb")));
     let archive = Daemon::new("d2", X86, &[ARCHIVE]).running(runs("web", "1.0", None));
@@ -521,9 +501,12 @@ async fn the_json_route_keeps_the_list_and_carries_only_an_archive_order() {
     );
 
     let answered = json_beat(&rig, &archive).await;
-    assert_eq!(answered["reply"], json!("update"), "{answered}");
-    assert_eq!(answered["package_digest"], json!(digest('f')));
-    assert_eq!(answered["order_try"], json!(1));
+    assert_eq!(answered["reply"], json!("nothing"), "{answered}");
+    assert_eq!(answered.get("package_digest"), None, "{answered}");
+    assert_eq!(
+        reason(&rig, "web", "d2").await,
+        proto::GateReason::InstallerDropped
+    );
 }
 
 /// Proves: a host picked nothing (`no_build_for_host`) whose next gRPC heartbeat lists another
@@ -591,10 +574,10 @@ async fn an_order_answered_installer_not_listed_is_picked_again_at_the_next_hear
 
 /// Proves: going back to a version set with targets that has no entry of the installer a host
 /// runs (an operator setting the earlier version again) orders the host nothing and holds it
-/// `installer_dropped`; going back to a version set with a release index orders it as today: the
-/// index's package and digest, and no target, though its daemon announced `target-v1`.
-/// Catches: a rollback that orders a host another format, or that sends a target for a version
-/// set without targets.
+/// `installer_dropped`; going back to a version set with a release index and no targets orders it
+/// nothing either, and holds it `no_build_for_host`: a version with no release kept orders
+/// nothing.
+/// Catches: a rollback that orders a host another format, or an order made of a release index.
 #[tokio::test]
 async fn a_rollback_follows_the_pick_of_the_version_it_goes_to() {
     let rig = rig("pick-rollback");
@@ -636,27 +619,19 @@ async fn a_rollback_follows_the_pick_of_the_version_it_goes_to() {
         .max_updating = [("daemon".to_owned(), 16)].into_iter().collect();
     let back = grpc(&rig, SET_DESIRED, Some(OPERATOR), &index).await;
     assert_eq!(back.code, 0, "{back:?}");
-    let order = said(&grpc_beat(&rig, &daemon).await).expect("an update");
+    assert_eq!(said(&grpc_beat(&rig, &daemon).await), None);
     assert_eq!(
-        order,
-        (
-            "update",
-            "web".to_owned(),
-            "0.9".to_owned(),
-            digest('f'),
-            sha256_of(&text),
-            None
-        )
+        reason(&rig, "web", "d1").await,
+        proto::GateReason::NoBuildForHost
     );
 }
 
 /// Proves: `Releases.Force` to a version set with targets orders each targeted host the entry
-/// the rollout gate would pick (the `deb` of a host running from its `deb`, the archive of an old
-/// daemon, with no target), and skips the others by the same reasons: `installer_dropped` for a
-/// host running from a tarball the list dropped, `no_target` for a host of a platform with no
-/// list, `no_build_for_host` for a Mac that has the service staged and never run and lists no
-/// installer of its list (a tarball) (and the status says so); the force's order carries the entry over
-/// gRPC.
+/// the rollout gate would pick (the `deb` of a host running from its `deb`), and skips the others
+/// by the same reasons: `installer_dropped` for a host running from a tarball the list dropped,
+/// `no_target` for a host of a platform with no list, `no_build_for_host` for a daemon before
+/// `target-v1` and for a Mac that has the service staged and never run and lists no installer of
+/// its list (a tarball) (and the status says so); the force's order carries the entry over gRPC.
 /// Catches: a force that orders every host one digest, or that ignores the pick.
 #[tokio::test]
 async fn a_force_to_a_version_set_with_targets_follows_the_pick() {
@@ -704,9 +679,10 @@ async fn a_force_to_a_version_set_with_targets_follows_the_pick() {
             ("a1".to_owned(), "no_target".to_owned()),
             ("d2".to_owned(), "installer_dropped".to_owned()),
             ("n1".to_owned(), "no_build_for_host".to_owned()),
+            ("o1".to_owned(), "no_build_for_host".to_owned()),
         ]
     );
-    assert_eq!(response.targeted, 2);
+    assert_eq!(response.targeted, 1);
     assert_eq!(
         reason(&rig, "web", "n1").await,
         proto::GateReason::NoBuildForHost
@@ -715,8 +691,7 @@ async fn a_force_to_a_version_set_with_targets_follows_the_pick() {
         picked(said(&grpc_beat(&rig, &deb).await)),
         Some(("force", "deb".to_owned(), digest('a')))
     );
-    let order = said(&grpc_beat(&rig, &old).await).expect("a force");
-    assert_eq!((order.0, order.3, order.5), ("force", digest('f'), None));
+    assert_eq!(said(&grpc_beat(&rig, &old).await), None);
     assert_eq!(said(&grpc_beat(&rig, &dropped).await), None);
 }
 
@@ -891,9 +866,9 @@ async fn the_counts_leave_out_the_hosts_the_decision_does_not_ask() {
 }
 
 /// Proves: a daemon of `target-v1` that does not read order terms (`order-v1`) is still sent the
-/// entry over gRPC, the order naming it; and a daemon before both is told the version over the
-/// JSON route with no terms, as today.
-/// Catches: the entry sent only to a daemon that reads terms, or terms sent to one that does not.
+/// entry over gRPC, the order naming it; and a daemon before both is told nothing over the JSON
+/// route, which carries no order.
+/// Catches: the entry sent only to a daemon that reads terms, or an order on the JSON route.
 #[tokio::test]
 async fn the_entry_goes_to_a_target_v1_daemon_that_reads_no_terms() {
     let rig = rig("pick-no-terms");
@@ -914,7 +889,6 @@ async fn the_entry_goes_to_a_target_v1_daemon_that_reads_no_terms() {
     let mut old = Daemon::old("o1", X86).running(runs("web", "1.0", None));
     old.features.retain(|f| f != "order-v1");
     let answered = json_beat(&rig, &old).await;
-    assert_eq!(answered["reply"], json!("update"), "{answered}");
-    assert_eq!(answered["version"], json!("2.0"));
+    assert_eq!(answered["reply"], json!("nothing"), "{answered}");
     assert_eq!(answered.get("package_digest"), None, "{answered}");
 }

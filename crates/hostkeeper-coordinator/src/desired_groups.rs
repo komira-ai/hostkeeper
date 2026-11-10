@@ -245,3 +245,19 @@ impl DesiredStore {
         Ok((staged, made))
     }
 }
+
+impl Staged<'_> {
+    /// The staged change with `release` kept as the release of `package` at `version`: what a
+    /// test that seeds a group's desired version without a set gives the version to be picked.
+    #[cfg(test)]
+    pub(crate) fn with_release(
+        mut self,
+        package: &str,
+        version: &Version,
+        release: Arc<Kept>,
+    ) -> Self {
+        let book = self.after.releases.entry(package.to_owned()).or_default();
+        book.insert(version.as_str().to_owned(), release);
+        self
+    }
+}

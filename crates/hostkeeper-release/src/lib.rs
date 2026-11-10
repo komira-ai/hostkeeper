@@ -33,7 +33,7 @@ pub mod registry;
 pub mod staged;
 pub mod target;
 
-pub use installer::Installer;
+pub use installer::{ARCHIVE_INSTALLER, Installer};
 pub use manifest::ManifestError;
 pub use receipt::{Daemon, ReceiptError};
 pub use target::{EntryError, TargetError};

@@ -3,6 +3,7 @@
 //! step record, and reports each service as the daemon's observer saw it.
 
 mod support;
+mod support_apt;
 
 use std::fs;
 use std::sync::Arc;
@@ -18,8 +19,10 @@ use hostkeeper_observe::{
     HealthView, ServiceState, UnhealthyReason, UnobservedReason, VersionView,
 };
 use hostkeeper_steps::record::RECORD_FILE;
-use support::force::succeeded;
-use support::{Rig, d, install, name, update};
+use support::{Rig, name};
+use support_apt::AptRig;
+use support_apt::seen::succeeded;
+use support_apt::services;
 
 fn version(text: &str) -> Version {
     Version::new(text).expect("a version")
@@ -44,6 +47,19 @@ fn tried(
         last_result: None,
         record_try,
         installer: None,
+    }
+}
+
+/// `listed` for a service installed with `apt`: its heartbeat names that installer.
+fn apt_listed(
+    service: &str,
+    at: &str,
+    updating: Option<&str>,
+    record_try: Option<u64>,
+) -> RecordedService {
+    RecordedService {
+        installer: Some("apt".to_owned()),
+        ..tried(service, at, updating, record_try)
     }
 }
 
@@ -102,29 +118,27 @@ fn each_service_is_listed_with_the_installer_placed_json_records() {
 /// listed at 2.0.0 updating nothing. Both times the listing carries the record's try, 1.
 #[test]
 fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
-    let rig = Rig::new("records-updating");
-    rig.add("web", "2.0.0");
-    let daemon = Arc::new(rig.daemon());
+    let apt = AptRig::new("records-updating");
+    let order = services::update_of(&apt, "web", "2.0.0", 1);
+    let daemon = Arc::new(apt.daemon());
     let records = DaemonRecords::new(Arc::clone(&daemon));
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "0.0.0", None)]
+        [apt_listed("web", "0.0.0", None, None)]
     );
-    let gate = rig.launcher.hold("web", Step::Verify);
+    let gate = apt.rig.launcher.hold("web", Step::Verify);
     let running = Arc::clone(&daemon);
-    let order = spawn("the order", move || {
-        running.order(&update("web", "2.0.0", &d(), 1))
-    });
+    let order = spawn("the order", move || running.order(&order));
     gate.entered(&order).expect("the held step is entered");
     assert_eq!(
         records.installed().expect("read"),
-        [tried("web", "2.0.0", Some("2.0.0"), Some(1))]
+        [apt_listed("web", "2.0.0", Some("2.0.0"), Some(1))]
     );
     gate.release();
     order.join().expect("the order's thread");
     assert_eq!(
         records.installed().expect("read"),
-        [tried("web", "2.0.0", None, Some(1))]
+        [apt_listed("web", "2.0.0", None, Some(1))]
     );
 }
 
@@ -134,15 +148,17 @@ fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
 /// the daemon, `web` is listed at 1.0.0, updating nothing, with the record's try 1.
 #[test]
 fn the_try_of_a_finished_step_record_is_listed_after_a_restart() {
-    let rig = Rig::new("records-try");
-    rig.stage("web", "1.0.0");
-    let first = rig.daemon();
-    assert_eq!(first.order(&install("web", "1.0.0", &d(), 1)), succeeded());
+    let apt = AptRig::new("records-try");
+    let first = apt.daemon();
+    assert_eq!(
+        first.order(&services::install_of(&apt, "web", "1.0.0", 1)),
+        succeeded()
+    );
     drop(first);
-    let records = DaemonRecords::new(Arc::new(rig.daemon()));
+    let records = DaemonRecords::new(Arc::new(apt.daemon()));
     assert_eq!(
         records.installed().expect("read"),
-        [tried("web", "1.0.0", None, Some(1))]
+        [apt_listed("web", "1.0.0", None, Some(1))]
     );
 }
 

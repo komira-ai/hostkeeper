@@ -13,8 +13,8 @@
 //!
 //! An assigned service the host runs is told to update, and one it does not run (it does not
 //! list it, or lists it `absent`: staged, never run) is told to install
-//! ([`Decision::Install`], with the package digest of the desired version for the host's
-//! platform), under the same rules,
+//! ([`Decision::Install`], with the digest of the entry picked for the host, [`crate::picks`]),
+//! under the same rules,
 //! checked in this order (an install has no version to be up to date at, and is ordered only to
 //! a daemon that announced [`crate::orders::INSTALL_FEATURE`] and lists every service it runs):
 //!
@@ -85,15 +85,16 @@
 //! that asks again while its own order is outstanding is told the same again: its own order
 //! never counts against it, and the others' slots have not changed.
 //!
-//! The JSON reply carries the desired version of an update and nothing else; an install and an
-//! uninstall go only as typed orders ([`crate::orders`]). [`decide_why`] is the same decision
+//! An update, an install and an uninstall go only as typed orders ([`crate::orders`]): the JSON
+//! reply carries no order. A version with no release kept (one set with a package digest, with a
+//! release index, or with neither) picks every host no entry ([`crate::picks`]), so it is ordered
+//! to nobody. [`decide_why`] is the same decision
 //! that also says why it holds. A [`Gate`] is a rule that is closed at this moment and opens by
 //! itself or when something changes (the quiet start, the update plan, a slot, a bake, a
 //! version marked bad, a halt); a [`Skip`] is a question that does not apply (no desired state,
 //! not a member of the service, a host at the desired version, one that failed it, one that
-//! declined it, an install the host's agent cannot take or that has no package digest, a release
-//! index that lists no package for the host's platform, a release set with targets that picks the
-//! host no entry, [`crate::picks`]). [`Why`]
+//! declined it, an install the host's agent cannot take or that has no package digest, a version
+//! the pick finds no entry of for the host, [`crate::picks`]). [`Why`]
 //! is either, spelled in snake case for the status. [`decide_in`] drops the reason.
 
 use std::collections::BTreeMap;
@@ -223,7 +224,8 @@ pub enum Skip {
     NoDigest,
     /// The desired version's release index lists no package for the host's platform: the host
     /// is not ordered the version, an update or an install. It is no failed update: it counts
-    /// as none, halts nothing and rolls nothing back.
+    /// as none, halts nothing and rolls nothing back. Nothing decides it now (a release index
+    /// is not read); the variant keeps the reason `no_package_for_platform` the status spells.
     NoPackageForPlatform,
     /// The desired version was set with targets and none for the host's platform
     /// ([`crate::picks`]): the host is not ordered the version, as for
@@ -435,15 +437,11 @@ pub(crate) fn consider(
     }
     let beat = host.map(|h| &h.beat);
     let installed = beat.is_some_and(|b| b.health != Health::Absent);
-    // The host's platform picks its package of a release index. Every host reaching here has
-    // one: it has a word of the service, or it announced that it lists every service it runs,
-    // which only a node says.
-    let platform = fleet.platform_of(service, id);
-    // Of a version set with targets, the entry picked for the host ([`crate::picks`]).
-    let package = crate::picks::package_for(fleet, service, &desired.version, id)
-        .unwrap_or_else(|| platform.and_then(|platform| desired.package_for(platform)));
+    // The entry picked for the host ([`crate::picks`]); a version with no release kept picks
+    // none.
+    let package =
+        crate::picks::order_of(fleet, service, &desired.version, id).map(|ordered| ordered.package);
     let unpicked = crate::picks::skip(fleet, service, &desired.version, id);
-    let unlisted = desired.release_index.is_some() && package.is_none();
     let order = if installed {
         Some(Decision::Update {
             version: desired.version.clone(),
@@ -501,7 +499,6 @@ pub(crate) fn consider(
         unpicked.map_or((false, Decision::Skip(Skip::NoDigest)), |why| {
             (true, Decision::Skip(why))
         }),
-        (unlisted, Decision::Skip(Skip::NoPackageForPlatform)),
         (order.is_none(), Decision::Skip(Skip::NoDigest)),
         (failed_here, Decision::Skip(Skip::FailedHere)),
         (
@@ -517,7 +514,6 @@ pub(crate) fn consider(
     let unreachable = (!installed && !fleet.announced(id, INSTALL_FEATURE))
         || installed_not_run
         || unpicked.is_some()
-        || unlisted
         || order.is_none();
     Considered {
         hold,

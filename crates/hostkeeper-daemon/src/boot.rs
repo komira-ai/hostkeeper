@@ -2,11 +2,9 @@
 //! unfinished update run to its verdict, the post-success watchers restarted, the manifest's
 //! `[hook] boot` step run from `current`, and then the readiness notice.
 //!
-//! The placed links are not part of [`Daemon::boot_pass`]: before it ([`crate::start::startup`])
-//! the daemon sweeps the leftovers of
-//! crashed package fetches and unpacks ([`crate::packages::Packages::remove_orphans`]) and
-//! reconciles the placed paths ([`hostkeeper_placed::Placer::reconcile`]), each switch a step
-//! record says was begun finished or undone by [`switch_intent`]. It reads the records without
+//! The sweep of leftovers is not part of [`Daemon::boot_pass`]: before it
+//! ([`crate::start::startup`]) the daemon removes what crashed stages left in each service's
+//! package directory ([`hostkeeper_install::version::remove_orphans`]). It reads the records without
 //! writing any, and does not write the boot id.
 //!
 //! [`Daemon::boot_pass`] does, in this order:
@@ -55,15 +53,15 @@ use std::path::{Component, Path, PathBuf};
 
 use hostkeeper_config::manifest::{Expected, Hook, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_hook::{Params, STAGED_RELEASE_KEY, Scalar, Step, TARGET_VERSION_KEY, Verdict};
-use hostkeeper_placed::{ReconcileReport, Side, SwitchIntent};
+use hostkeeper_hook::{Params, STAGED_RELEASE_KEY, Scalar, TARGET_VERSION_KEY, Verdict};
 use hostkeeper_steps::record::{Loaded, Record, RecordError, State};
 use hostkeeper_steps::runner::REASON_ARTIFACT_CHANGED;
 use hostkeeper_steps::{
-    AdditiveCall, ArtifactError, Bounds, Clock, Finished, ForcePhase, LaunchError, Layout,
-    ResumeAction, RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume, resume_action,
+    AdditiveCall, ArtifactError, Bounds, Clock, Finished, LaunchError, Layout, ResumeAction,
+    RunError, Seal, Staged, StepExit, UpdateOrder, read_seal, resume,
 };
 
+use crate::archive_versions::ArchiveVersion;
 use crate::executor::{Ctx, Daemon, Reply};
 use crate::files::{self, WriteStep};
 use crate::installed::{self, CURRENT};
@@ -95,8 +93,8 @@ pub const ALERT_WATCHER: &str = "watcher_interrupted";
 /// The alert of a `boot` step that failed or could not be run.
 pub const ALERT_BOOT_STEP: &str = "boot_step_failed";
 /// The alert of a readiness notice that could not be sent, a package directory that could not be
-/// listed (for the sweep of leftovers or for the boot steps), a sweep that failed, or placed paths
-/// that could not be reconciled.
+/// listed (for the sweep of leftovers or for the boot steps), a sweep that failed, or an archive
+/// version that could not be deleted.
 pub const ALERT_START: &str = "start_incomplete";
 
 /// The log line of an alert: error level, with its `alert=` field. The daemon logs it through
@@ -163,10 +161,8 @@ pub enum Stage {
     /// A `policy-rc.d` file hostkeeper wrote and a killed run left is removed, before any
     /// package-manager call ([`hostkeeper_install::repository::policy::clear_stale`]).
     ClearPolicyRcD,
-    /// The leftovers of crashed package fetches and unpacks are removed.
+    /// The leftovers of crashed stages are removed.
     BeforeRecords,
-    /// The placed links are finished or undone, and compared with `current`.
-    Reconcile,
     /// Every step record is read and rewritten for the resume table.
     ReadRecords,
     /// The boot id is written.
@@ -272,58 +268,6 @@ pub fn journal_unavailable() -> Finished {
     }
 }
 
-/// The switch of `current` the step record `rec` of `service` says was begun, for the
-/// reconciliation of the placed paths to finish (`Forward`) or undo (`Back`); `None` when no
-/// switch is begun, and `current` alone decides. `previous` is the version the update replaces,
-/// from its params file (`None` for a first install); `rebooted` is whether the host booted since
-/// the start pass last ended, as the resume table reads the record.
-///
-/// - A record that ended (a verdict) has none. A `prepare` has none: nothing was switched.
-/// - A `rollback` is `Back`: the switch back comes before it. A `cutover`, `verify`, `cleanup` or
-///   `uninstall` is `Forward`, as is a record in the post-success watcher, except where the
-///   resume table rolls the update back after a reboot (nothing committed), which is `Back`. A
-///   `cutover` counts whether it is pending or running, since the switch comes before it runs.
-/// - A force that began on another version and passed the switch of `current`
-///   ([`ForcePhase::Switched`]) is `Forward`; a force before it, or one that began on its target,
-///   or one that has a verdict, has none, and a force is run again from its top.
-pub fn switch_intent(
-    service: &ServiceName,
-    rec: &Record,
-    rebooted: bool,
-    previous: Option<&str>,
-) -> Option<SwitchIntent> {
-    if let Some(force) = &rec.force {
-        let from = force
-            .from_version
-            .as_deref()
-            .and_then(|version| Version::new(version).ok());
-        let begun = force.verdict.is_none() & force.moves_current();
-        let switched = begun & (force.phase >= ForcePhase::Switched);
-        let target = Version::new(&force.target_version).ok()?;
-        return switched.then(|| SwitchIntent {
-            service: service.clone(),
-            from,
-            target,
-            side: Side::Forward,
-        });
-    }
-    let side = match (rec.step, resume_action(rec, rebooted)) {
-        (_, ResumeAction::NothingFinished) | (Step::Prepare, _) => return None,
-        (
-            _,
-            ResumeAction::RollbackThenDeferred { .. } | ResumeAction::RollbackThenFailed { .. },
-        )
-        | (Step::Rollback, _) => Side::Back,
-        _ => Side::Forward,
-    };
-    Some(SwitchIntent {
-        service: service.clone(),
-        from: previous.and_then(|version| Version::new(version).ok()),
-        target: Version::new(&rec.target_version).ok()?,
-        side,
-    })
-}
-
 /// What the start did.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BootReport {
@@ -335,8 +279,9 @@ pub struct BootReport {
     pub services: BTreeMap<String, ServiceBoot>,
     /// The parts of the start, in the order they ran.
     pub stages: Vec<Stage>,
-    /// What reconciling the placed paths did, or why it could not run: `None` before it ran.
-    pub reconciled: Option<Result<ReconcileReport, String>>,
+    /// The archive versions the start deleted, or could not, after the boot pass
+    /// ([`crate::archive_versions`]).
+    pub archive_versions: Vec<ArchiveVersion>,
     /// How the readiness notice went: `None` before it was sent.
     pub ready: Option<Result<(), String>>,
     /// What the start settled of the update of hostkeeper itself that waited for the restart
@@ -557,35 +502,6 @@ pub(crate) fn boot_params(
 }
 
 impl Daemon {
-    /// The switches the step records of the state directory say were begun ([`switch_intent`]),
-    /// for the reconciliation that runs before [`Daemon::boot_pass`]. `rebooted` is
-    /// [`boot_changed`]. A record that cannot be read gives none, and one whose params file
-    /// cannot be read gives none either: without it a first install cannot be told from an
-    /// update, and an intent that guessed would undo the wrong one. Nothing is written.
-    pub fn switch_intents(&self, rebooted: bool) -> Result<Vec<SwitchIntent>, BootError> {
-        let ctx = self.ctx();
-        let names = installed::service_dirs(&ctx.dirs.state).map_err(|source| BootError {
-            dir: ctx.dirs.state.clone(),
-            source,
-        })?;
-        let mut intents = Vec::new();
-        for service in names.into_values() {
-            let Ok(Loaded::Current(rec)) = ctx.store(&service).load() else {
-                continue;
-            };
-            let previous = match rec.force {
-                Some(_) => Ok(None),
-                None => Params::read(&rec.params)
-                    .map(|params| params.previous_version().map(str::to_owned)),
-            };
-            let intent = previous
-                .ok()
-                .and_then(|previous| switch_intent(&service, &rec, rebooted, previous.as_deref()));
-            intents.extend(intent.filter(|_| rec.service == service.as_str()));
-        }
-        Ok(intents)
-    }
-
     /// The start pass: steps 1 to 7 of the module's list. `Err` only when the state directory
     /// cannot be listed; everything that goes wrong for one service is in its entry of the
     /// report, and the other services go on.

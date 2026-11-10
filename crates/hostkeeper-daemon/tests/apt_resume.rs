@@ -32,7 +32,7 @@ const LEGACY_HOOK: &str = "usr/lib/web/hostkeeper-hook";
 /// to resume, and the order sent again runs it.
 ///
 /// Catches: an `apt` update that the start pass cannot rebuild (a version directory with no
-/// `manifest.toml`), that it resumes with the hook path instead of the built-in steps, or that
+/// `target.json`), that it resumes with the hook path instead of the built-in steps, or that
 /// it ends with the package and `current` disagreeing.
 #[test]
 fn an_apt_update_killed_after_any_write_of_its_record_is_finished_by_the_next_start() {

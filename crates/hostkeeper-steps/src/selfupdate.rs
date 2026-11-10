@@ -491,7 +491,7 @@ fn link_version(link: &Path) -> io::Result<Option<String>> {
 }
 
 /// What the longest name a package directory derives from a version adds to it:
-/// `.<version>.seal.tmp`, the seal `hostkeeper-unpack` writes beside a package version before
+/// `.<version>.seal.tmp`, the seal `hostkeeper-install` writes beside a package version before
 /// renaming it into place (`<version>.seal` is shorter).
 const PACKAGE_AFFIX: usize = ".".len() + ".seal.tmp".len();
 /// What the longest name the binary directory derives from a version adds to it:

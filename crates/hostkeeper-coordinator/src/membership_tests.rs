@@ -98,7 +98,7 @@ fn beat_of(v2: bool, services: &[(&str, &str, &str)]) -> Heartbeat {
 
 fn send(rig: &Rig, name: &str, v2: bool, services: &[(&str, &str, &str)]) -> ServiceReply {
     rig.coordinator
-        .heartbeat(who(name), beat_of(v2, services))
+        .heartbeat_native(who(name), beat_of(v2, services))
         .expect("a heartbeat")
         .reply
 }
@@ -325,7 +325,7 @@ async fn a_host_that_declined_the_version_is_counted_deferred_until_its_wait_end
     b.services = Some(serde_json::from_value(json!([declined])).expect("beats"));
     let reply = rig
         .coordinator
-        .heartbeat(who("d1"), b)
+        .heartbeat_native(who("d1"), b)
         .expect("a heartbeat")
         .reply;
     assert_eq!(reply, ServiceReply::Nothing);
@@ -345,7 +345,7 @@ async fn a_selector_leaves_out_the_roles_it_does_not_name() {
     let behind = beat_of(true, &[("other", "1.0", "healthy")]);
     let reply = rig
         .coordinator
-        .heartbeat(storage("s1"), behind)
+        .heartbeat_native(storage("s1"), behind)
         .expect("a heartbeat")
         .reply;
     assert_eq!(reply, ServiceReply::Nothing);

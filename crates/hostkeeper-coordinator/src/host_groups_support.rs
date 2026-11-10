@@ -18,8 +18,11 @@ use crate::desired::{DesiredStore, Held};
 use crate::enrollment::Enrollment;
 use crate::enrollment::tests::support::{HostKey, Rig as EnrollmentRig, approve, enroll_request};
 use crate::host_groups::{GroupDesired, GroupMarks, GroupName};
-use crate::marks_support::{NEW_DAEMON, ask, beat_of, operator, runs, services_with};
+use crate::marks_support::{
+    NEW_DAEMON, ask, beat_of, native_targets, operator, runs, services_with,
+};
 use crate::ops::{AuditEntry, OpsState, OpsStore, Write};
+use crate::releases::Release;
 use crate::service::Coordinator;
 use crate::store::{Backend, Fake, Shared};
 use crate::testutil::Rig;
@@ -155,9 +158,22 @@ impl World {
             .host_groups_move(&operator(), move_of(host, group))
     }
 
-    /// Sets the group's desired version of a package, as the calls of a later release do.
+    /// Sets the group's desired version of a package, as the calls of a later release do. The
+    /// version has no release kept: no host is picked an entry of it.
     pub(crate) fn seed_desired(&self, group: &str, package: &str, version: &str) {
+        self.seed(group, package, version, None);
+    }
+
+    /// [`Self::seed_desired`] with the release [`native_targets`] 1 kept for the version, which
+    /// is what picks a host an entry of it.
+    pub(crate) fn seed_ordered(&self, group: &str, package: &str, version: &str) {
+        let release = Arc::new(Release::new(native_targets(package, 1), None));
+        self.seed(group, package, version, Some(release));
+    }
+
+    fn seed(&self, group: &str, package: &str, version: &str, release: Option<Arc<Release>>) {
         let name: GroupName = group.parse().expect("a group name");
+        let at = Version::parse(version).expect("a version");
         let (staged, ()) = self
             .coordinator()
             .desired
@@ -166,7 +182,7 @@ impl World {
                 groups.0.get_mut(&name).expect("the group").desired.insert(
                     package.to_owned(),
                     GroupDesired {
-                        version: Version::parse(version).expect("a version"),
+                        version: at.clone(),
                         generation: 1,
                         write_id: None,
                         replaced_version: None,
@@ -175,6 +191,10 @@ impl World {
                 Ok::<_, Infallible>((groups, ()))
             })
             .expect("staged");
+        let staged = match release {
+            Some(release) => staged.with_release(package, &at, release),
+            None => staged,
+        };
         self.coordinator()
             .ops()
             .decide_changes_with(staged, |_| vec![AuditEntry::new("test", "seed")])

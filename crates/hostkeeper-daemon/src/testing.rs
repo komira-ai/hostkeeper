@@ -1,7 +1,6 @@
 //! Test doubles of the daemon's ports, for this crate's tests and the tests of the crates that
 //! build on it (behind the feature `testing`): a clock that moves only when told to, a launcher
-//! that plays a script and can hold a step until released, a package store that builds version
-//! directories in a test's directory, a readiness notifier that counts its notices, a
+//! that plays a script and can hold a step until released, a readiness notifier that counts its notices, a
 //! connection that counts the bytes read from it, and prunes that delete nothing or record
 //! their calls. The launcher and the notifier can write what
 //! they are asked to one shared [`Log`], so that a test sees the order across both.
@@ -20,19 +19,18 @@ use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::Step;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::{
     AdditiveCall, BootId, BootIdError, Clock, LaunchError, Layout, Protected, PruneReport,
-    PruneStep, Seal, Staged, StepCall, StepExit, StepLauncher, ToolCall, ToolExit, tree_digest,
+    PruneStep, StepCall, StepExit, StepLauncher, ToolCall, ToolExit,
 };
 
 use crate::locks::{ServiceGuard, ServiceLocks};
 use crate::notify::ReadyNotifier;
-use crate::packages::{PackageError, Packages, Pinned, VersionDir};
+use crate::packages::{PackageError, Packages, Pinned};
 use crate::prune::Prune;
-use crate::verb::PackageDigest;
 use crate::watchers::Watchers;
 
 pub use signal::{Ending, Missed, Notice, Party, Signal, Spawned, Tell, spawn};
@@ -561,18 +559,15 @@ cleanup = 1300
     )
 }
 
-/// A package store that serves version directories a test made under the packages directory:
-/// `<packages-dir>/<service>/<version>/`, with its `manifest.toml` and a hook at `bin/hook`. It
-/// does not compare digests; a test makes a package fail with [`FakePackages::fail`].
+/// A package store that serves the artifacts a test gave it by their pin ([`Packages::pinned`]):
+/// the `.pkg` of a `macos-pkg` entry. It compares no digest beyond the one the artifact was
+/// added under; a test makes a fetch fail with [`FakePackages::fail`].
 pub struct FakePackages {
     root: PathBuf,
     failures: Mutex<BTreeMap<(String, String), PackageError>>,
     asked: Mutex<Vec<(String, String)>>,
-    index_digests: Mutex<Vec<Option<String>>>,
     entries: Mutex<Vec<Option<Target>>>,
     pinned: Mutex<BTreeMap<(String, String), Vec<u8>>>,
-    swept: Mutex<Vec<String>>,
-    notify: Mutex<Vec<Notice<String>>>,
 }
 
 fn dir_0755(dir: &Path) {
@@ -581,75 +576,28 @@ fn dir_0755(dir: &Path) {
 }
 
 impl FakePackages {
-    /// Serves version directories under `packages_dir`.
+    /// Serves artifacts into staging files under `packages_dir`.
     pub fn new(packages_dir: &Path) -> Arc<FakePackages> {
         Arc::new(FakePackages {
             root: packages_dir.to_path_buf(),
             failures: Mutex::default(),
             asked: Mutex::default(),
-            index_digests: Mutex::default(),
             entries: Mutex::default(),
             pinned: Mutex::default(),
-            swept: Mutex::default(),
-            notify: Mutex::default(),
         })
     }
 
-    /// Makes the version directory of `service` at `version` with `manifest` as its manifest.
-    pub fn add(&self, service: &str, version: &str, manifest: &str) -> PathBuf {
-        let dir = self.root.join(service).join(version);
-        for made in [&self.root, &self.root.join(service), &dir, &dir.join("bin")] {
-            dir_0755(made);
-        }
-        let files = [
-            (dir.join("manifest.toml"), manifest, 0o644),
-            (dir.join("bin/hook"), "#!hook\n", 0o755),
-        ];
-        for (path, text, mode) in files {
-            fs::write(&path, text).unwrap_or_default();
-            fs::set_permissions(&path, fs::Permissions::from_mode(mode)).unwrap_or_default();
-        }
-        dir
+    /// Makes the fetch of the artifact of `service` whose digest is `digest` fail with `error`.
+    pub fn fail(&self, service: &str, digest: &str, error: PackageError) {
+        lock(&self.failures).insert((service.to_owned(), digest.to_owned()), error);
     }
 
-    /// Writes the seal of `service` at `version` (`<version>.seal` beside it): the tree digest
-    /// of its directory as it is now, and `package_digest`.
-    pub fn seal(&self, service: &str, version: &str, package_digest: &str) {
-        let dir = self.root.join(service);
-        let tree = tree_digest(&dir.join(version)).unwrap_or_default();
-        let seal = Seal::new(&tree, package_digest).map(|seal| seal.to_json());
-        fs::write(
-            dir.join(format!("{version}.seal")),
-            seal.unwrap_or_default(),
-        )
-        .unwrap_or_default();
-    }
-
-    /// Points the link `link` (`current`, `previous`) of `service` at `version`.
-    pub fn link(&self, service: &str, link: &str, version: &str) {
-        let path = self.root.join(service).join(link);
-        fs::remove_file(&path).unwrap_or_default();
-        std::os::unix::fs::symlink(version, &path).unwrap_or_default();
-    }
-
-    /// Makes the package of `service` at `version` fail with `error`.
-    pub fn fail(&self, service: &str, version: &str, error: PackageError) {
-        lock(&self.failures).insert((service.to_owned(), version.to_owned()), error);
-    }
-
-    /// Every package asked for, as (service, version), in order.
+    /// Every artifact asked for, as (service, digest), in order.
     pub fn asked(&self) -> Vec<(String, String)> {
         lock(&self.asked).clone()
     }
 
-    /// The index digest of every package asked for, in the order of [`FakePackages::asked`]:
-    /// `None` for an order that named none.
-    pub fn index_digests(&self) -> Vec<Option<String>> {
-        lock(&self.index_digests).clone()
-    }
-
-    /// The entry of every package asked for, in the order of [`FakePackages::asked`]: `None` for
-    /// an order that carried none.
+    /// The entry of every artifact asked for, in the order of [`FakePackages::asked`].
     pub fn entries(&self) -> Vec<Option<Target>> {
         lock(&self.entries).clone()
     }
@@ -660,46 +608,9 @@ impl FakePackages {
     pub fn add_pinned(&self, service: &str, digest: &str, bytes: &[u8]) {
         lock(&self.pinned).insert((service.to_owned(), digest.to_owned()), bytes.to_vec());
     }
-
-    /// Every service whose orphans were asked to be removed, in order.
-    pub fn swept(&self) -> Vec<String> {
-        lock(&self.swept).clone()
-    }
-
-    /// A signal of `<service> <version>` of every package asked for from now on.
-    pub fn notified(&self) -> Signal<String> {
-        let (notice, signal) = Signal::new();
-        lock(&self.notify).push(notice);
-        signal
-    }
 }
 
 impl Packages for FakePackages {
-    fn version_dir(
-        &self,
-        service: &ServiceName,
-        version: &Version,
-        _digest: &PackageDigest,
-        index_digest: Option<&PackageDigest>,
-        entry: Option<&Target>,
-    ) -> Result<VersionDir, PackageError> {
-        let key = (service.to_string(), version.to_string());
-        lock(&self.entries).push(entry.cloned());
-        lock(&self.asked).push(key.clone());
-        lock(&self.index_digests).push(index_digest.map(|d| d.as_str().to_owned()));
-        for notice in lock(&self.notify).iter() {
-            notice.send(format!("{service} {version}"));
-        }
-        let failure = lock(&self.failures).get(&key).cloned();
-        let dir = self.root.join(&key.0).join(&key.1);
-        let seal = || {
-            Staged::seal(&dir)
-                .map(VersionDir::new)
-                .map_err(|e| PackageError::Other(e.to_string()))
-        };
-        failure.map_or_else(seal, Err)
-    }
-
     /// The bytes [`FakePackages::add_pinned`] gave for the entry's digest, written to a file
     /// under the service's package directory that is removed when the answer is dropped; the
     /// failure [`FakePackages::fail`] set for the service at the entry's digest wins. Each ask is
@@ -722,11 +633,6 @@ impl Packages for FakePackages {
         fs::write(&file.0, bytes).map_err(|e| PackageError::Other(e.to_string()))?;
         let path = file.0.clone();
         Ok(Pinned::new(&path, Box::new(file)))
-    }
-
-    fn remove_orphans(&self, service: &ServiceName) -> Result<(), PackageError> {
-        lock(&self.swept).push(service.to_string());
-        Ok(())
     }
 }
 
@@ -911,8 +817,8 @@ pub fn repository_ports(
     repositories: hostkeeper_install::repository::Repositories,
 ) -> Arc<crate::repository::RepositoryPorts> {
     use std::os::unix::fs::MetadataExt;
-    let owner = fs::metadata(root).map_or(hostkeeper_unpack::Owner::ROOT, |made| {
-        hostkeeper_unpack::Owner {
+    let owner = fs::metadata(root).map_or(hostkeeper_install::version::Owner::ROOT, |made| {
+        hostkeeper_install::version::Owner {
             uid: made.uid(),
             gid: made.gid(),
         }

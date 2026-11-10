@@ -41,7 +41,6 @@ use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
 use crate::repository::{Repository, RepositoryPorts};
 use crate::selfupdate::{self, Restart};
-use crate::trusted_root::RootReport;
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
@@ -62,7 +61,7 @@ pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct Ports {
     /// Runs one step of a hook.
     pub launcher: Arc<dyn StepLauncher>,
-    /// Fetches, verifies, unpacks and seals packages.
+    /// Fetches the artifact of a `macos-pkg` entry by its pin.
     pub packages: Arc<dyn Packages>,
     /// Monotonic seconds and the boot id; nothing the daemon decides reads the wall clock.
     pub clock: Arc<dyn Clock>,
@@ -72,7 +71,7 @@ pub struct Ports {
     /// The service manager: the units a `force` stops, starts and asks after, and
     /// `daemon-reload`.
     pub units: Arc<dyn UnitControl + Send + Sync>,
-    /// Where placed-path linking works, and the filesystem it goes through.
+    /// Where the daemon's links and `placed.json` are, and the filesystem they go through.
     pub placement: Placement,
     /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
     /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
@@ -92,7 +91,7 @@ pub struct Ports {
     pub repository: Arc<RepositoryPorts>,
 }
 
-/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// Where the daemon's links and `placed.json` are (design section 4.7): the directories as the
 /// host names them, and the filesystem every path is read and written through. The packages
 /// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
 pub struct Placement {
@@ -109,6 +108,8 @@ pub struct Dirs {
     /// A directory per service with its version directories and the `current` and `previous`
     /// links.
     pub packages: PathBuf,
+    /// The host's facts file, which the heartbeat loop writes ([`crate::facts_file`]).
+    pub facts: PathBuf,
 }
 
 /// What every verb works with.
@@ -254,7 +255,6 @@ impl Ctx {
         }
     }
 
-    /// The placed-path linker of this host.
     /// The repository installer with this daemon's ports ([`crate::repository`]).
     pub fn repository(&self) -> Repository {
         Repository {
@@ -290,6 +290,7 @@ impl Ctx {
         crate::repository_push::installers(&self.announcement, &self.repository_ports)
     }
 
+    /// The placer of this host: its `current` and `previous` links and `placed.json`.
     pub fn placer(&self) -> Placer<'_> {
         Placer::new(
             self.placement.roots.clone(),
@@ -330,7 +331,6 @@ impl Ctx {
                     self.placement.roots.clone(),
                     Arc::clone(&self.placement.fs),
                     Arc::clone(&self.units),
-                    self.own_version,
                     self.repository(),
                 ),
                 Arc::clone(&self.clock),
@@ -589,10 +589,6 @@ pub struct DaemonStatus {
     pub version: HostkeeperVersion,
     /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
-    /// The Sigstore trusted root the package store checks attestations with: its age and the
-    /// reason it needs attention ([`Packages::trusted_root`]); `None` from a store that reports
-    /// none.
-    pub trusted_root: Option<RootReport>,
 }
 
 /// Why [`Daemon::status`] could not list the services.
@@ -874,7 +870,6 @@ impl Daemon {
         Ok(DaemonStatus {
             version: ctx.own_version,
             services,
-            trusted_root: ctx.packages.trusted_root(),
         })
     }
 }

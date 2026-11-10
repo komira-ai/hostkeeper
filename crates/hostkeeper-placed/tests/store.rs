@@ -4,9 +4,7 @@
 
 mod support;
 
-use std::ffi::OsStr;
 use std::fs;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -15,32 +13,32 @@ use hostkeeper_placed::roots::{LOCK_FILE, PACKAGES_DIR, PLACED_FILE, STATE_DIR, 
 use hostkeeper_placed::store::{SCHEMA, TEMPORARY_FILE};
 use hostkeeper_placed::testing::FsWrite;
 use hostkeeper_placed::{
-    Claims, Entry, PackageDirs, PathKind, PathState, PlacedError, PlacedRecord, Roots, Store,
-    Tombstone,
+    InstalledEntry, PackageDirs, PlacedError, PlacedRecord, Roots, Store, Tombstone,
 };
 use rustix::fs::{Mode, RawMode};
 use rustix::process::umask;
 use serde_json::{Value, json};
-use support::{Spec, World};
+use support::World;
 
 const PLACED: &str = "/var/lib/hostkeeper/placed.json";
 const TMP: &str = "/var/lib/hostkeeper/.hk~placed.json~tmp";
 const STATE: &str = "/var/lib/hostkeeper";
 
-fn entry(service: &str, version: &str) -> Entry {
-    Entry::new(
-        service,
-        version,
-        PathKind::File,
-        PathState::Placed,
-        Path::new("/var/lib/hostkeeper/packages/x/current/files/x.conf"),
-    )
+/// The entry of a service `web` installed from the repository package `web` at `version`.
+fn entry(version: &str) -> InstalledEntry {
+    let mut entry = InstalledEntry::new("apt");
+    entry.package = Some("web".to_owned());
+    entry.version = Some(version.to_owned());
+    entry.repository = Some("main".to_owned());
+    entry
 }
 
-fn record_of(paths: &[(&str, Entry)]) -> PlacedRecord {
+fn record_of(installed: &[(&str, InstalledEntry)]) -> PlacedRecord {
     let mut record = PlacedRecord::default();
-    for (path, entry) in paths {
-        record.paths.insert(PathBuf::from(path), entry.clone());
+    for (service, entry) in installed {
+        record
+            .installed
+            .insert((*service).to_owned(), entry.clone());
     }
     record
 }
@@ -79,7 +77,7 @@ fn placed_json_write_is_temp_fsync_rename() {
     let old = world.placed_bytes().expect("placed.json exists");
     world.log.clear();
 
-    let new = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
+    let new = record_of(&[("web", entry("1.0.0-1"))]);
     save_in(&world, &world.fs, state, &new).expect("save");
     assert_eq!(
         world.writes(),
@@ -115,7 +113,7 @@ fn placed_json_write_is_temp_fsync_rename() {
 #[test]
 fn a_failed_write_of_a_save_names_its_step_and_path() {
     let state = Path::new(STATE);
-    let new = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
+    let new = record_of(&[("web", entry("1.0.0-1"))]);
     let expected = [
         (1, "write", TMP),
         (2, "fsync", TMP),
@@ -147,28 +145,10 @@ fn a_save_into_a_missing_directory_is_an_io_error() {
     assert_eq!(io_parts(error), ("write", PathBuf::from(TMP)));
 }
 
-/// Catches a record that holds a path which is not UTF-8 being written as a lossy or empty file
-/// instead of refused before anything is written.
-#[test]
-fn a_record_that_cannot_be_serialised_is_refused_before_any_write() {
-    let world = World::new("store-not-utf8");
-    let bad = Path::new(OsStr::from_bytes(b"/etc/\xff.conf"));
-    let mut record = PlacedRecord::default();
-    record.paths.insert(bad.to_path_buf(), entry("x", "1.0.0"));
-    let error = save_in(&world, &world.fs, Path::new(STATE), &record).expect_err("refused");
-    match error {
-        PlacedError::Corrupt { path, why } => {
-            assert_eq!(path, PathBuf::from(PLACED));
-            assert!(why.starts_with("the path /etc/"), "{why}");
-        }
-        other => panic!("expected Corrupt, got {other:?}"),
-    }
-    assert!(world.writes().is_empty());
-    assert_eq!(world.placed_bytes(), None);
-}
-
-/// Catches a record type that drops the keys of a newer writer at the top level, in an entry or in
-/// a tombstone when the record is written again.
+/// Catches a record type that drops the keys of a newer writer at the top level, in an installed
+/// entry or in a tombstone when the record is written again, and the `paths` and `reload_pending`
+/// keys of the placed-path linking an earlier release wrote, which this release does not read
+/// and a rollback to that release still needs (AGENTS.md B8).
 #[test]
 fn placed_json_preserves_keys_it_does_not_know() {
     let world = World::new("store-unknown");
@@ -185,7 +165,9 @@ fn placed_json_preserves_keys_it_does_not_know() {
                 "future_entry": "kept"
             }
         },
-        "uninstalling": {"y": {"future_tombstone": 7}}
+        "reload_pending": true,
+        "uninstalling": {"y": {"future_tombstone": 7}},
+        "installed": {"web": {"installer": "apt", "future_installed": [1]}}
     });
     write_placed(&world, &original.to_string());
     let store = Store::new(&world.fs, Path::new(STATE));
@@ -196,32 +178,41 @@ fn placed_json_preserves_keys_it_does_not_know() {
     assert_eq!(again, original);
 }
 
+/// Catches a record that reads the `paths` of an earlier release as something it must be able to
+/// parse: whatever shape the key has, even one the earlier release would refuse, the record loads
+/// and the key is written back as it was.
+#[test]
+fn the_placed_paths_of_an_earlier_release_are_never_read() {
+    let world = World::new("store-old-paths");
+    for paths in [json!([]), json!({"/a": {"service": "x"}}), json!("text")] {
+        let original = json!({"schema": 1, "paths": paths, "uninstalling": {}});
+        write_placed(&world, &original.to_string());
+        let record = Store::new(&world.fs, Path::new(STATE))
+            .load()
+            .expect("loads");
+        assert!(record.installed.is_empty() && record.uninstalling.is_empty());
+        save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
+        let again: Value =
+            serde_json::from_slice(&fs::read(world.host(PLACED)).expect("read")).expect("json");
+        assert_eq!(again, original);
+    }
+}
+
 /// Catches a saved file whose JSON shape, key names or trailing newline differ from the schema 1
 /// record that the design shows.
 #[test]
 fn a_saved_record_has_the_schema_one_shape() {
     let world = World::new("store-shape");
-    let mut record = PlacedRecord::default();
-    record.paths.insert(
-        PathBuf::from("/etc/systemd/system/x.service"),
-        Entry::new(
-            "x",
-            "1.0.0",
-            PathKind::Unit,
-            PathState::Pending,
-            Path::new("/t/u"),
-        ),
-    );
-    record.paths.insert(
-        PathBuf::from("/etc/systemd/system/w/x.service"),
-        Entry::new(
-            "x",
-            "1.0.0",
-            PathKind::WantsLink,
-            PathState::Placed,
-            Path::new("/t/w"),
-        ),
-    );
+    let mut record = record_of(&[("web", entry("1.0.0-1"))]);
+    record
+        .installed
+        .get_mut("web")
+        .expect("web")
+        .links
+        .insert("/etc/systemd/system/multi-user.target.wants/web.service".to_owned());
+    record
+        .installed
+        .insert("lib".to_owned(), InstalledEntry::new("apt"));
     save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
     let bytes = world.placed_bytes().expect("written");
     assert_eq!(bytes.last(), Some(&b'\n'));
@@ -230,27 +221,25 @@ fn a_saved_record_has_the_schema_one_shape() {
         value,
         json!({
             "schema": 1,
-            "paths": {
-                "/etc/systemd/system/x.service": {
-                    "service": "x", "version": "1.0.0", "kind": "unit",
-                    "state": "pending", "link_target": "/t/u"
+            "uninstalling": {},
+            "installed": {
+                "web": {
+                    "installer": "apt", "package": "web", "version": "1.0.0-1",
+                    "repository": "main",
+                    "links": ["/etc/systemd/system/multi-user.target.wants/web.service"]
                 },
-                "/etc/systemd/system/w/x.service": {
-                    "service": "x", "version": "1.0.0", "kind": "wants_link",
-                    "state": "placed", "link_target": "/t/w"
-                }
-            },
-            "uninstalling": {}
+                "lib": {"installer": "apt"}
+            }
         })
     );
 }
 
 /// Catches a truncated `placed.json` that loads as an empty record, is rewritten, or names the
-/// wrong file, whether read directly or through `Placer::begin`.
+/// wrong file.
 #[test]
 fn a_corrupt_placed_json_is_an_error_and_is_not_rewritten() {
     let world = World::new("store-corrupt");
-    let truncated = "{\"schema\": 1, \"paths\": {\"/etc/x.conf\": {\"service\": ";
+    let truncated = "{\"schema\": 1, \"installed\": {\"web\": {\"installer\": ";
     write_placed(&world, truncated);
     let store = Store::new(&world.fs, Path::new(STATE));
     match store.load() {
@@ -262,29 +251,21 @@ fn a_corrupt_placed_json_is_an_error_and_is_not_rewritten() {
     }
     assert_eq!(world.placed_bytes(), Some(truncated.as_bytes().to_vec()));
 
-    let manifest = world.package("tierstore", "1.5.0", &Spec::tierstore());
-    let placer = world.placer();
-    let claims = Claims::of(placer.roots(), &manifest).expect("claims");
-    match placer.begin(&claims) {
-        Err(PlacedError::Corrupt { path, .. }) => assert_eq!(path, PathBuf::from(PLACED)),
-        Err(other) => panic!("expected Corrupt, got {other:?}"),
-        Ok(_) => panic!("begin must fail on a corrupt record"),
-    }
     assert!(world.writes().is_empty());
-    assert_eq!(world.placed_bytes(), Some(truncated.as_bytes().to_vec()));
 }
 
 /// Catches a record of the right syntax but the wrong shape (no schema, a schema that is not a
-/// number, paths that are not a map) being accepted or defaulted.
+/// number, tombstones that are not a map, an installed entry with no installer or with one that
+/// is not text) being accepted or defaulted.
 #[test]
 fn a_record_of_the_wrong_shape_is_corrupt() {
     for text in [
         "{}",
         "[]",
         "{\"schema\": \"1\"}",
-        "{\"schema\": 1, \"paths\": []}",
-        "{\"schema\": 1, \"paths\": {\"/a\": {\"service\": \"x\"}}}",
-        "{\"schema\": 1, \"paths\": {\"/a\": {\"service\": \"x\", \"version\": \"1\", \"kind\": \"socket\", \"state\": \"placed\", \"link_target\": \"/t\"}}}",
+        "{\"schema\": 1, \"uninstalling\": []}",
+        "{\"schema\": 1, \"installed\": {\"x\": {}}}",
+        "{\"schema\": 1, \"installed\": {\"x\": {\"installer\": 1}}}",
     ] {
         let world = World::new("store-shape-bad");
         write_placed(&world, text);
@@ -298,11 +279,11 @@ fn a_record_of_the_wrong_shape_is_corrupt() {
 }
 
 /// Catches a record of a newer schema being read as schema 1, downgraded on write, or refused
-/// with another error, whether read directly or through `Placer::begin`.
+/// with another error.
 #[test]
 fn a_placed_json_of_a_newer_schema_is_refused_and_left_as_it_is() {
     let world = World::new("store-newer");
-    let text = "{\"schema\": 2, \"paths\": {}, \"from_the_future\": true}";
+    let text = "{\"schema\": 2, \"uninstalling\": {}, \"from_the_future\": true}";
     write_placed(&world, text);
     let store = Store::new(&world.fs, Path::new(STATE));
     let error = store.load().expect_err("refused");
@@ -316,14 +297,6 @@ fn a_placed_json_of_a_newer_schema_is_refused_and_left_as_it_is() {
     );
     assert_eq!(error.reason(), "link_failed");
 
-    let manifest = world.package("tierstore", "1.5.0", &Spec::tierstore());
-    let placer = world.placer();
-    let claims = Claims::of(placer.roots(), &manifest).expect("claims");
-    match placer.begin(&claims) {
-        Err(PlacedError::NewerSchema { schema, .. }) => assert_eq!(schema, 2),
-        Err(other) => panic!("expected NewerSchema, got {other:?}"),
-        Ok(_) => panic!("begin must refuse a newer schema"),
-    }
     assert!(world.writes().is_empty());
     assert_eq!(world.placed_bytes(), Some(text.as_bytes().to_vec()));
 }
@@ -339,7 +312,7 @@ fn a_missing_placed_json_loads_as_the_empty_record() {
     assert_eq!(record, PlacedRecord::default());
     assert_eq!(record.schema, SCHEMA);
     assert_eq!(record.schema, 1);
-    assert!(record.paths.is_empty() && record.uninstalling.is_empty());
+    assert!(record.installed.is_empty() && record.uninstalling.is_empty());
     assert_eq!(world.placed_bytes(), None);
 
     let record = Store::new(&world.fs, Path::new("/no/such/dir"))
@@ -348,7 +321,7 @@ fn a_missing_placed_json_loads_as_the_empty_record() {
     assert_eq!(record, PlacedRecord::default());
 }
 
-/// Catches a `paths` or `uninstalling` key that is required: a record of only a schema loads.
+/// Catches an `installed` or `uninstalling` key that is required: a record of only a schema loads.
 #[test]
 fn a_record_with_only_a_schema_loads_with_empty_maps() {
     let world = World::new("store-minimal");
@@ -375,7 +348,7 @@ fn a_placed_json_that_is_a_directory_is_an_io_error() {
 #[test]
 fn the_tombstone_round_trip() {
     let world = World::new("store-tombstone");
-    let mut record = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
+    let mut record = record_of(&[("web", entry("1.0.0-1"))]);
     record
         .uninstalling
         .insert("x".to_owned(), Tombstone::default());
@@ -387,50 +360,17 @@ fn the_tombstone_round_trip() {
     assert_eq!(value["uninstalling"], json!({"x": {}}));
 }
 
-/// Catches `Store::path` and `of_service` / `same_link` comparing too little or too much: a link
-/// is the same only when service, version, kind and target all agree, whatever the state.
+/// Catches `Store::path` and `installer_of` naming the wrong file or entry: the record is
+/// `placed.json` in the state directory, and a service has the installer its entry spells, or none.
 #[test]
-fn store_path_service_filter_and_link_identity() {
+fn the_store_names_its_file_and_a_record_its_installers() {
     let world = World::new("store-queries");
     let store = Store::new(&world.fs, Path::new(STATE));
     assert_eq!(store.path(), PathBuf::from(PLACED));
 
-    let record = record_of(&[
-        ("/etc/a.conf", entry("a", "1.0.0")),
-        ("/etc/b.conf", entry("b", "1.0.0")),
-        ("/etc/c.conf", entry("a", "2.0.0")),
-    ]);
-    let of_a: Vec<&Path> = record.of_service("a").map(|(p, _)| p.as_path()).collect();
-    assert_eq!(of_a, [Path::new("/etc/a.conf"), Path::new("/etc/c.conf")]);
-    assert_eq!(record.of_service("nobody").count(), 0);
-
-    let base = entry("a", "1.0.0");
-    let pending = Entry::new(
-        "a",
-        "1.0.0",
-        PathKind::File,
-        PathState::Pending,
-        Path::new("/var/lib/hostkeeper/packages/x/current/files/x.conf"),
-    );
-    assert!(base.same_link(&pending));
-    assert!(!base.same_link(&entry("b", "1.0.0")));
-    assert!(!base.same_link(&entry("a", "1.0.1")));
-    let other_kind = Entry::new(
-        "a",
-        "1.0.0",
-        PathKind::Unit,
-        PathState::Placed,
-        Path::new("/var/lib/hostkeeper/packages/x/current/files/x.conf"),
-    );
-    assert!(!base.same_link(&other_kind));
-    let other_target = Entry::new(
-        "a",
-        "1.0.0",
-        PathKind::File,
-        PathState::Placed,
-        Path::new("/elsewhere"),
-    );
-    assert!(!base.same_link(&other_target));
+    let record = record_of(&[("web", entry("1.0.0-1"))]);
+    assert_eq!(record.installer_of("web"), Some("apt"));
+    assert_eq!(record.installer_of("nobody"), None);
 }
 
 /// Catches `RealFs::kind` naming a link by what it points at, or a missing path as an error, or a
@@ -651,73 +591,20 @@ fn mode_of(world: &World, path: &str) -> u32 {
         & 0o777
 }
 
-/// The text of a schema 1 record with one path entry built from the given parts.
-fn one_entry(path: &str, service: &str, version: &str, link_target: &str) -> String {
-    json!({
-        "schema": 1,
-        "paths": {
-            path: {
-                "service": service,
-                "version": version,
-                "kind": "file",
-                "state": "placed",
-                "link_target": link_target
-            }
-        }
-    })
-    .to_string()
-}
-
-/// Catches a load that trusts the known fields of a record that parsed: a wrong schema, a path or
-/// link target that is relative or has a dot component, a service or version outside its grammar
-/// or a tombstone for a non-service is `Corrupt` naming `placed.json`, and the file is not touched.
+/// Catches a load that trusts the known fields of a record that parsed: a wrong schema, an
+/// installed service or a tombstone that is not a service name is `Corrupt` naming `placed.json`,
+/// and the file is not touched.
 #[test]
 fn a_record_that_breaks_the_rules_of_its_fields_is_corrupt_and_left_as_it_is() {
-    const TARGET: &str = "/var/lib/hostkeeper/packages/x/current/files/x.conf";
     let cases = [
+        (json!({"schema": 0}).to_string(), "its schema is 0"),
         (
-            "{\"schema\": 0, \"paths\": {}}".to_owned(),
-            "its schema is 0",
+            json!({"schema": 1, "installed": {"a/b": {"installer": "apt"}}}).to_string(),
+            "the installed service \"a/b\" is not a service name",
         ),
         (
-            one_entry("etc/x.conf", "x", "1.0.0", TARGET),
-            "the path etc/x.conf",
-        ),
-        (
-            one_entry("/etc/./x.conf", "x", "1.0.0", TARGET),
-            "the path /etc/./x.conf",
-        ),
-        (
-            one_entry("/etc/../x.conf", "x", "1.0.0", TARGET),
-            "the path /etc/../x.conf",
-        ),
-        (
-            one_entry("/etc/x.conf", "x", "1.0.0", "current/files/x"),
-            "the link target current/files/x",
-        ),
-        (
-            one_entry("/etc/x.conf", "x", "1.0.0", "/a/../b"),
-            "the link target /a/../b",
-        ),
-        (
-            one_entry("/etc/x.conf", "/etc/x", "1.0.0", TARGET),
-            "\"/etc/x\" is not a service name",
-        ),
-        (
-            one_entry("/etc/x.conf", "a/b", "1.0.0", TARGET),
-            "\"a/b\" is not a service name",
-        ),
-        (
-            one_entry("/etc/x.conf", "", "1.0.0", TARGET),
-            "\"\" is not a service name",
-        ),
-        (
-            one_entry("/etc/x.conf", "x", "1/0", TARGET),
-            "\"1/0\" is not a version",
-        ),
-        (
-            one_entry("/etc/x.conf", "x", ".hidden", TARGET),
-            "\".hidden\" is not a version",
+            json!({"schema": 1, "installed": {"": {"installer": "apt"}}}).to_string(),
+            "the installed service \"\" is not a service name",
         ),
         (
             json!({"schema": 1, "uninstalling": {"a/b": {}}}).to_string(),
@@ -740,75 +627,22 @@ fn a_record_that_breaks_the_rules_of_its_fields_is_corrupt_and_left_as_it_is() {
     }
 }
 
-/// Catches a validation that refuses a good record: a path and link target in the grammar, a
-/// service with `_` and `-`, a version with `+` and a tombstone for such a service all load.
+/// Catches a validation that refuses a good record: a service with `_` and `-` installed, and a
+/// tombstone for another, load.
 #[test]
 fn a_record_whose_fields_are_in_their_grammars_loads() {
     let world = World::new("store-semantic-ok");
     let text = json!({
         "schema": 1,
-        "paths": {
-            "/etc/my_svc-2/x.conf": {
-                "service": "my_svc-2",
-                "version": "1.0.0-rc.1+build_5",
-                "kind": "file",
-                "state": "pending",
-                "link_target": "/var/lib/hostkeeper/packages/my_svc-2/current/files/x.conf"
-            }
-        },
+        "installed": {"my_svc-2": {"installer": "apt", "version": "1.0.0-rc.1+build_5"}},
         "uninstalling": {"old-one": {}}
     });
     write_placed(&world, &text.to_string());
     let record = Store::new(&world.fs, Path::new(STATE))
         .load()
         .expect("loads");
-    assert_eq!(record.paths.len(), 1);
+    assert_eq!(record.installer_of("my_svc-2"), Some("apt"));
     assert!(record.uninstalling.contains_key("old-one"));
-}
-
-/// Catches a `reload_pending` that is lost on a save and load round trip, written when it is not
-/// set, or required when it is absent.
-#[test]
-fn reload_pending_round_trips_and_is_written_only_when_set() {
-    let world = World::new("store-reload-pending");
-    let store = Store::new(&world.fs, Path::new(STATE));
-    let mut record = record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]);
-    assert!(!record.reload_pending, "the default owes nothing");
-
-    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
-    let value: Value =
-        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
-    assert!(
-        !value
-            .as_object()
-            .expect("an object")
-            .contains_key("reload_pending"),
-        "{value}"
-    );
-    assert!(!store.load().expect("loads").reload_pending);
-
-    record.reload_pending = true;
-    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
-    let value: Value =
-        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
-    assert_eq!(value["reload_pending"], json!(true));
-    let loaded = store.load().expect("loads");
-    assert!(loaded.reload_pending);
-    assert_eq!(loaded, record);
-
-    record.reload_pending = false;
-    save_in(&world, &world.fs, Path::new(STATE), &record).expect("saves");
-    let value: Value =
-        serde_json::from_slice(&world.placed_bytes().expect("written")).expect("json");
-    assert!(
-        !value
-            .as_object()
-            .expect("an object")
-            .contains_key("reload_pending")
-    );
-
-    write_placed(&world, "{\"schema\": 1, \"reload_pending\": false}");
-    assert!(!store.load().expect("loads").reload_pending);
 }
 
 /// Catches a `Store::save` that needs no lock: the lock `Placer::lock` returns is the token a
@@ -820,10 +654,33 @@ fn a_save_is_made_under_the_lock_of_placer_lock() {
     let lock = placer.lock().expect("the lock is free");
     placer
         .store()
-        .save(&record_of(&[("/etc/x.conf", entry("x", "1.0.0"))]), &lock)
+        .save(&record_of(&[("web", entry("1.0.0-1"))]), &lock)
         .expect("saves under the lock");
     assert!(matches!(placer.lock(), Err(PlacedError::Locked { .. })));
-    assert_eq!(world.record().paths.len(), 1);
+    assert_eq!(world.record().installer_of("web"), Some("apt"));
+}
+
+/// Catches a save under the lock of another record: the lock of the world's state directory does
+/// not let a record be written into another state directory, which is `ForeignLock` naming both,
+/// with nothing written.
+#[test]
+fn a_save_under_the_lock_of_another_state_directory_is_refused() {
+    let world = World::new("store-foreign-lock");
+    let lock = world.placer().lock().expect("the lock is free");
+    let other = Path::new("/var/lib/other");
+    fs::create_dir_all(world.host(other)).expect("another state directory");
+    world.log.clear();
+    let error = Store::new(&world.fs, other)
+        .save(&PlacedRecord::default(), &lock)
+        .expect_err("the lock is another record's");
+    match &error {
+        PlacedError::ForeignLock { lock, record } => {
+            assert_eq!(lock, &world.host("/var/lib/hostkeeper/placed.lock"));
+            assert_eq!(record, Path::new("/var/lib/other/placed.json"));
+        }
+        other => panic!("expected ForeignLock, got {other:?}"),
+    }
+    assert!(world.writes().is_empty());
 }
 
 /// Catches a `host_path` that lets `..` climb out of the root: a write to `/../outside/file` lands

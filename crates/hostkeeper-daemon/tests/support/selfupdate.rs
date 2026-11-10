@@ -1,24 +1,37 @@
 //! What the tests of hostkeeper's own update share: a rig whose host runs hostkeeper at [`OLD`]
-//! with the release of [`NEW`] in the package store, and the replies and records of a
-//! self-update.
+//! (its version of the packages directory, staged for `apt` as the repository installer leaves
+//! it) with the `.deb` of [`NEW`] published in the host's repository, the fake of apt and dpkg
+//! answering the daemon's tool runs ([`super::apt`]), and the replies and records of a
+//! self-update. An order carries the entry of the release it names, pinned to the digest the
+//! repository answered for its package.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
+use super::versions::hook_path;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_daemon::observer::{OwnService, observer_with};
-use hostkeeper_daemon::selfupdate::{REASON_AWAITING_RESTART, RELEASE_BINARY, binary_dir};
+use hostkeeper_daemon::selfupdate::{APT_RELEASE_BINARY, REASON_AWAITING_RESTART, binary_dir};
 use hostkeeper_daemon::{Daemon, Ports, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_install::{Announcement, Family};
 use hostkeeper_observe::proc::digest_open_file;
 use hostkeeper_observe::{ActiveState, ExeStat};
+use hostkeeper_placed::InstalledEntry;
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
+use hostkeeper_proto::hostkeeper::release::v1::{
+    Hook, InstallerBounds, Manifest, StepBounds, Target,
+};
+use hostkeeper_release::Installer;
 use hostkeeper_steps::record::{HookSel, Loaded, Progress, SCHEMA, State};
 use hostkeeper_steps::{Layout, Record, RecordStore};
 
-use super::{Rig, config, d, update};
+use super::apt::{Deb, FakeHost, REPO, URI, bridge, repositories, with_entry};
+use super::versions::entry_of;
+use super::{Rig, config, d, force, force_rollback, install, update};
 
 /// The service of hostkeeper itself.
 pub const HK: &str = "hostkeeper";
@@ -35,39 +48,171 @@ pub const SHIPPED_UNIT: &str = include_str!("../../../../packaging/linux/units/h
 pub const DEB_UNIT: &str = "/usr/lib/systemd/system/hostkeeper.service";
 /// The `WantedBy=` link of the deb's `systemctl enable`, in the rig's unit directory.
 pub const DEB_WANTS: &str = "/units/multi-user.target.wants/hostkeeper.service";
+/// The unit hostkeeper's package runs.
+pub const DEB_UNIT_NAME: &str = "hostkeeper.service";
+/// Where the unit is in hostkeeper's package.
+const DEB_UNIT_PATH: &str = "usr/lib/systemd/system/hostkeeper.service";
 
 /// `text`, a `major.minor.patch`, as a daemon's own version.
 pub fn own(text: &str) -> HostkeeperVersion {
     HostkeeperVersion::parse(text).expect("a hostkeeper version")
 }
 
+/// The package version of the release `version` in the repository.
+pub fn pv(version: &str) -> String {
+    format!("{version}-1")
+}
+
+/// The text of hostkeeper's binary of `version` in the tests.
+pub fn binary_text(version: &str) -> String {
+    format!("#!hostkeeper {version}\n")
+}
+
+/// hostkeeper's `.deb` of `version`: its binary and the unit `unit`, with the maintainer scripts
+/// its own package keeps.
+pub fn hk_deb(version: &str, unit: &str) -> Deb {
+    Deb::new(HK, &pv(version), "amd64")
+        .file("usr/bin/hostkeeper", 0o755, &binary_text(version))
+        .file(DEB_UNIT_PATH, 0o644, unit)
+        .member("postinst")
+        .member("prerm")
+}
+
+/// The unit a test `.deb` of hostkeeper carries: it starts the daemon and is wanted by the
+/// multi-user target.
+const TEST_UNIT: &str = "[Unit]\nDescription=hostkeeper\n[Service]\nExecStart=/usr/bin/hostkeeper daemon\n[Install]\nWantedBy=multi-user.target\n";
+
+/// The manifest of hostkeeper's entry: its unit, no hook program (its steps are built in), the
+/// floor `floor`, the installer's bounds.
+pub fn hk_manifest(floor: &str) -> Manifest {
+    Manifest {
+        min_hostkeeper: floor.to_owned(),
+        package: Some(HK.to_owned()),
+        run: vec![DEB_UNIT_NAME.to_owned()],
+        hook: Some(Hook {
+            timeout_secs: Some(StepBounds {
+                prepare: 60,
+                cutover: 60,
+                verify: 60,
+                rollback: 60,
+                cleanup: 60,
+                ..StepBounds::default()
+            }),
+            verify_deadline_secs: 300,
+            ..Hook::default()
+        }),
+        installer_bounds: Some(InstallerBounds {
+            stage_secs: 60,
+            activate_secs: 60,
+            remove_secs: 60,
+        }),
+        ..Manifest::default()
+    }
+}
+
+/// The apt entry of `manifest`, at the package version of `version`, pinned to `pin`, from the
+/// repository `main`.
+fn apt_entry(manifest: Manifest, version: &str, pin: &str) -> Target {
+    Target {
+        installer: Installer::Apt.as_str().to_owned(),
+        digest: pin.to_owned(),
+        manifest: Some(manifest),
+        repository: Some(REPO.to_owned()),
+        package_version: Some(pv(version)),
+        ..Target::default()
+    }
+}
+
+/// The manifest of a service the rig publishes: the daemon's test double ([`manifest`]) with its
+/// one run unit, which the repository installer's entries require.
+///
+/// [`manifest`]: hostkeeper_daemon::testing::manifest
+fn service_manifest(service: &str, version: &str) -> String {
+    format!(
+        "{}\n[units]\nrun = [\"{service}.service\"]\n",
+        hostkeeper_daemon::testing::manifest(service, version)
+    )
+}
+
+/// The unit file of a service the rig publishes: it starts the program under the service's
+/// package and is wanted by the multi-user target.
+fn service_unit(service: &str) -> String {
+    format!(
+        "[Unit]\nDescription={service}\n[Service]\nExecStart=/usr/bin/{service}\n[Install]\nWantedBy=multi-user.target\n"
+    )
+}
+
 /// A rig whose host runs hostkeeper at [`OLD`]: its package installed (`current` names it), its
 /// binary directory with [`OLD`] staged and `current`, and the release of [`NEW`], with its
-/// binary, in the package store ([`SelfRig::new`]); or the same with no package of hostkeeper
-/// installed ([`SelfRig::bootstrapped`]).
+/// binary, published in the repository ([`SelfRig::new`]); or the same with no package of
+/// hostkeeper installed ([`SelfRig::bootstrapped`]).
 pub struct SelfRig {
     pub rig: Rig,
+    /// The fake of apt, dpkg and dpkg-deb the daemon's tool runs go to.
+    pub host: Arc<FakeHost>,
+    /// The entry of each release published, by service and version.
+    entries: Mutex<BTreeMap<(String, String), Target>>,
 }
 
 impl SelfRig {
     pub fn new(name: &str) -> SelfRig {
         let s = SelfRig::bootstrapped(name);
-        s.rig.running(HK, OLD);
+        s.installed_hk(OLD);
+        s
+    }
+
+    /// The version `version` of hostkeeper in the packages directory as the repository installer
+    /// leaves one, `current` naming it.
+    fn installed_hk(&self, version: &str) {
+        let entry = apt_entry(hk_manifest("0.1.0"), version, &d());
+        let dir = self.rig.store.add_entry(HK, version, &entry, false);
+        let binary = dir.join(APT_RELEASE_BINARY);
+        fs::create_dir_all(binary.parent().expect("the bin directory")).expect("the bin directory");
+        fs::write(&binary, binary_text(version)).expect("the binary");
+        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
+        self.rig.store.seal(HK, version, &d());
+        self.rig.store.link(HK, "current", version);
+    }
+
+    /// [`SelfRig::new`] on a host whose `placed.json` also records hostkeeper's package, as the
+    /// installer wrote it when it installed [`OLD`] (and the package manager holds it at that
+    /// version): the host reports `apt` as the installer hostkeeper runs with, so that the
+    /// coordinator orders it an update.
+    pub fn recorded(name: &str) -> SelfRig {
+        let s = SelfRig::new(name);
+        s.host.set_installed(HK, &pv(OLD), 'i', true);
+        let mut record = s.rig.placed_record();
+        let mut entry = InstalledEntry::new(Installer::Apt.as_str());
+        entry.package = Some(HK.to_owned());
+        entry.version = Some(pv(OLD));
+        entry.repository = Some(REPO.to_owned());
+        record.installed.insert(HK.to_owned(), entry);
+        s.rig.save_placed(&record);
         s
     }
 
     /// A rig whose host runs hostkeeper at [`OLD`] as the deb or the pkg installs it: its binary
     /// directory with [`OLD`] staged and `current`, as the packaged start's seed leaves it at the
     /// first start, and no package of hostkeeper installed (nothing under the packages directory names
-    /// it `current`). The release of [`NEW`], with its binary, is in the package store.
+    /// it `current`). The release of [`NEW`], with its binary, is published in the repository.
     pub fn bootstrapped(name: &str) -> SelfRig {
         let rig = Rig::new(name);
+        // The packages directory, as the daemon's start makes it.
+        fs::create_dir_all(&rig.packages).expect("the packages directory");
+        let events = super::apt::Events::default();
+        let lock = rig.scratch.path().join("installer.lock");
+        let host = Arc::new(FakeHost::new(&lock, events));
+        rig.launcher.answer_tools(bridge(Arc::clone(&host)));
         let layout = Layout::new(&binary_dir(&rig.state));
         let old = rig.scratch.path().join("old-binary");
-        fs::write(&old, format!("#!hostkeeper {OLD}\n")).expect("the old binary");
+        fs::write(&old, binary_text(OLD)).expect("the old binary");
         layout.stage(OLD, &old).expect("stage the old binary");
         layout.switch(OLD).expect("switch to it");
-        let s = SelfRig { rig };
+        let s = SelfRig {
+            rig,
+            host,
+            entries: Mutex::default(),
+        };
         s.release(NEW);
         s
     }
@@ -86,35 +231,168 @@ impl SelfRig {
         s
     }
 
-    /// The release of hostkeeper at `version` as CI packages it: its binary, its hook
-    /// `bin/hostkeeper update-hook` (which no daemon runs), and the unit hostkeeper's package
-    /// carries, `units/hostkeeper.service`, which its manifest runs.
-    pub fn shipped_release(&self, version: &str) -> PathBuf {
-        let manifest = super::manifest(HK, version).replace(
-            r#"command = ["bin/hook", "update-hook"]"#,
-            r#"command = ["bin/hostkeeper", "update-hook"]"#,
-        ) + "\n[units]\nrun = [\"hostkeeper.service\"]\n";
-        let dir = self.rig.store.add(HK, version, &manifest);
-        fs::create_dir_all(dir.join("units")).expect("the units directory");
-        fs::write(dir.join("units/hostkeeper.service"), SHIPPED_UNIT).expect("the unit");
-        let binary = dir.join(RELEASE_BINARY);
-        fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
-        dir
+    /// The ports of the daemon on the rig: apt announced, the repository entry `main` configured.
+    pub fn ports(&self) -> Ports {
+        let keys = self.rig.scratch.path().join("keys");
+        Ports {
+            announcement: Announcement {
+                installers: vec![Installer::Apt],
+                family: Some(Family::Deb),
+            },
+            repository: self.rig.repository_ports(repositories(&keys)),
+            ..self.rig.ports()
+        }
     }
 
-    /// The release of hostkeeper at `version`, with its binary, in the package store.
-    pub fn release(&self, version: &str) -> PathBuf {
-        let dir = self.rig.stage(HK, version);
-        let binary = dir.join(RELEASE_BINARY);
-        fs::write(&binary, format!("#!hostkeeper {version}\n")).expect("the binary");
-        fs::set_permissions(&binary, fs::Permissions::from_mode(0o755)).expect("its mode");
-        dir
+    /// Publishes `deb` in the repository in place of the package of its name and version that was
+    /// published before, if any (a repository lists a version once); answers its pin.
+    fn publish_replacing(&self, deb: Deb) -> String {
+        let same = |package: &str, version: &str| package == deb.package && version == deb.version;
+        self.host.edit(|state| {
+            state.debs.retain(|old| !same(&old.package, &old.version));
+            for repo in state.repos.values_mut() {
+                repo.entries.retain(|old| !same(&old.package, &old.version));
+            }
+        });
+        self.host.publish(URI, deb)
+    }
+
+    /// Publishes `deb` of `service` at `version` in the repository, with the manifest `manifest`:
+    /// the entry the orders of that release carry.
+    fn publish_as(&self, service: &str, version: &str, deb: Deb, manifest: Manifest) -> Target {
+        let pin = self.publish_replacing(deb);
+        let entry = apt_entry(manifest, version, &pin);
+        self.entries
+            .lock()
+            .expect("the entries")
+            .insert((service.to_owned(), version.to_owned()), entry.clone());
+        entry
+    }
+
+    /// The release of hostkeeper at `version`, with its binary, published in the repository.
+    pub fn release(&self, version: &str) -> Target {
+        self.release_with_floor(version, "0.1.0")
+    }
+
+    /// The release of hostkeeper at `version` whose package declares the floor `floor`, with its
+    /// binary, published in the repository.
+    pub fn release_with_floor(&self, version: &str, floor: &str) -> Target {
+        self.publish_as(HK, version, hk_deb(version, TEST_UNIT), hk_manifest(floor))
+    }
+
+    /// The release of hostkeeper at `version` published with no hostkeeper binary.
+    pub fn release_without_binary(&self, version: &str) -> Target {
+        self.publish_as(
+            HK,
+            version,
+            hk_deb(version, TEST_UNIT).without("usr/bin/hostkeeper"),
+            hk_manifest("0.1.0"),
+        )
+    }
+
+    /// The release of hostkeeper at `version` as CI packages it: its binary and the unit
+    /// hostkeeper's package carries, `usr/lib/systemd/system/hostkeeper.service`, which its
+    /// manifest runs.
+    pub fn shipped_release(&self, version: &str) -> Target {
+        self.publish_as(
+            HK,
+            version,
+            hk_deb(version, SHIPPED_UNIT),
+            hk_manifest("0.1.0"),
+        )
+    }
+
+    /// The package of `service` at `version`, published in the repository, with the manifest the
+    /// daemon's test doubles write ([`hostkeeper_daemon::testing::manifest`]): a hook program in
+    /// its tree, which the rig's launcher answers for.
+    pub fn publish_service(&self, service: &str, version: &str) -> Target {
+        let (entry, hook) = entry_of(service, version, &service_manifest(service, version));
+        let mut deb = Deb::new(service, &pv(version), "amd64").file(
+            &format!("usr/lib/systemd/system/{service}.service"),
+            0o644,
+            &service_unit(service),
+        );
+        if hook {
+            deb = deb.file(&hook_path(service), 0o755, "#!hook\n");
+        }
+        let pin = self.publish_replacing(deb);
+        let entry = Target {
+            digest: pin,
+            ..entry
+        };
+        self.entries
+            .lock()
+            .expect("the entries")
+            .insert((service.to_owned(), version.to_owned()), entry.clone());
+        entry
+    }
+
+    /// `service` runs at [`super::BASE`] with a package the installer staged, `current` naming it.
+    pub fn installed_service(&self, service: &str) {
+        let (entry, hook) = entry_of(
+            service,
+            super::BASE,
+            &service_manifest(service, super::BASE),
+        );
+        self.rig.store.add_entry(service, super::BASE, &entry, hook);
+        self.rig.store.seal(service, super::BASE, &d());
+        self.rig.store.link(service, "current", super::BASE);
+    }
+
+    /// The entry of the release of `service` at `version` published on the rig.
+    pub fn entry_of(&self, service: &str, version: &str) -> Target {
+        self.entries
+            .lock()
+            .expect("the entries")
+            .get(&(service.to_owned(), version.to_owned()))
+            .cloned()
+            .unwrap_or_else(|| panic!("no release of {service} {version} was published"))
+    }
+
+    /// The pin of the release of hostkeeper at `version` the repository answered.
+    pub fn pin(&self, version: &str) -> String {
+        self.entry_of(HK, version).digest
+    }
+
+    /// An `update` of `service` to `version`, try `order_try`, carrying the entry of its release.
+    pub fn update_of(&self, service: &str, version: &str, order_try: u64) -> Order {
+        let entry = self.entry_of(service, version);
+        with_entry(update(service, version, &entry.digest, order_try), &entry)
+    }
+
+    /// An `install` of hostkeeper at `version`, try `order_try`.
+    pub fn install_order(&self, version: &str, order_try: u64) -> Order {
+        let entry = self.entry_of(HK, version);
+        with_entry(install(HK, version, &entry.digest, order_try), &entry)
+    }
+
+    /// A `force_rollback` of hostkeeper to `version`, try `order_try`.
+    pub fn rollback_order(&self, version: &str, order_try: u64) -> Order {
+        let entry = self.entry_of(HK, version);
+        with_entry(
+            force_rollback(HK, version, &entry.digest, order_try),
+            &entry,
+        )
+    }
+
+    /// A `force` of hostkeeper at `version`, try `order_try`, halt generation `generation`.
+    pub fn force_order(&self, version: &str, order_try: u64, generation: u64) -> Order {
+        let entry = self.entry_of(HK, version);
+        with_entry(
+            force(HK, version, &entry.digest, order_try, generation),
+            &entry,
+        )
+    }
+
+    /// The tool runs of the fake of apt and dpkg so far: what staging and activating a version
+    /// cost, none for an order that stopped before them.
+    pub fn tool_runs(&self) -> usize {
+        self.host.calls().len()
     }
 
     /// A daemon of version `version` on the rig.
     pub fn daemon_at(&self, version: &str) -> Daemon {
-        Daemon::new(config(), self.rig.dirs(), self.rig.ports(), own(version))
+        Daemon::new(config(), self.rig.dirs(), self.ports(), own(version))
     }
 
     /// A daemon of version `version` on the rig, observed as the host
@@ -134,7 +412,7 @@ impl SelfRig {
         );
         let ports = Ports {
             observer: Arc::new(observer),
-            ..self.rig.ports()
+            ..self.ports()
         };
         Daemon::new(config(), self.rig.dirs(), ports, own(version))
     }
@@ -195,10 +473,11 @@ impl SelfRig {
 
     /// An `update` of hostkeeper to `version`, try `order_try`.
     pub fn order(&self, version: &str, order_try: u64) -> Order {
-        update(HK, version, &d(), order_try)
+        self.update_of(HK, version, order_try)
     }
 
-    /// Every step of hostkeeper the launcher ran, in order.
+    /// Every step of hostkeeper the launcher ran, in order. The steps of hostkeeper's own package
+    /// are built in (it has no hook program), so the launcher runs none of them.
     pub fn hk_steps(&self) -> Vec<Step> {
         self.rig.launcher.steps(HK)
     }

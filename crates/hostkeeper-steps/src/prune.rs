@@ -26,7 +26,7 @@
 //!
 //! A crash leaves only a `.stage-*` directory, a seal with no tree beside it, or (a crash between
 //! the opening and the rename) a surplus version still whole, its top directory 0700. The unpack's
-//! own orphan pass removes the first two (`hostkeeper_unpack::remove_orphans`), and so does the
+//! own orphan pass removes the first two (`hostkeeper_install::version::remove_orphans`), and so does the
 //! next prune, which deletes all three.
 //! Every step is idempotent.
 
@@ -185,7 +185,7 @@ impl Layout {
             }
         }
         for version in plan.delete {
-            match self.delete_version(&version, at) {
+            match self.delete_version_with(&version, at) {
                 Ok(()) => {
                     report.deleted.insert(version);
                 }
@@ -233,9 +233,22 @@ impl Layout {
         Ok(inputs)
     }
 
+    /// Deletes version `version` of this package directory, whoever names it: its directory
+    /// renamed out of the way, its seal removed, the renamed tree removed, each durable before
+    /// the next ([`Layout::prune`] does the same for every surplus version). Idempotent: a version
+    /// already gone, or gone but its seal, is finished. The caller holds the service's lock and
+    /// has made sure no link names `version`. For a package directory only
+    /// ([`io::ErrorKind::InvalidInput`] otherwise); a `version` that is not a name of one is
+    /// refused before anything is touched.
+    pub fn delete_version(&self, version: &str) -> io::Result<()> {
+        self.expect_package()?;
+        self.check_name(version)?;
+        self.delete_version_with(version, &mut |_| Ok(()))
+    }
+
     /// The three steps of deleting `version`: its directory renamed out of the way, its seal
     /// removed, the renamed tree removed; each durable before the next.
-    fn delete_version(
+    fn delete_version_with(
         &self,
         version: &str,
         at: &mut dyn FnMut(PruneStep<'_>) -> io::Result<()>,

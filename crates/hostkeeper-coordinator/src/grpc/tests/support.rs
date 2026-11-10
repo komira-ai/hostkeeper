@@ -122,7 +122,7 @@ impl UnixClock for FixedClock {
 }
 
 /// Enrollment over files in `dir`, its CA made now.
-fn enrollment_in(dir: &Scratch) -> Arc<Enrollment> {
+pub fn enrollment_in(dir: &Scratch) -> Arc<Enrollment> {
     let store = dir.path().join("enrollment");
     let ca_key = dir.path().join("ca.key");
     let server_cert = dir.path().join("server.pem");

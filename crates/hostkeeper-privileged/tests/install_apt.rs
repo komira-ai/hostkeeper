@@ -35,11 +35,16 @@ mod rig;
 use std::collections::BTreeSet;
 use std::fs;
 use std::path::Path;
+use std::process::Command;
 
 use containers::{Case, Repos, failed_with, simulate, simulate_args, update};
 use hostkeeper_install::repository::{Class, Drift, Outcome, PackageRecord, Reason};
 use hostkeeper_privileged::linux_packages::{Format, RELEASES_TEXT, parse_releases};
-use repo::{DEFAULT, Flavour, PACKAGE, Spec};
+use hostkeeper_testkit::Scratch;
+use repo::{
+    DEFAULT, Flavour, Key, LONGEST_SOCKET, PACKAGE, SUN_PATH, Signing, Spec, architecture, run,
+    write_index,
+};
 use rig::{FILES, LINK, REPOSITORY, Rig, Trust, UNIT, dpkg_version, held, print, program_says};
 
 /// The record of the package at `version` that `activate` leaves: done, with the one link of the
@@ -160,7 +165,7 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
 fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     let rig = Rig::new("apt-daemon", Trust::Entry);
     let (daemon, announced, scratch) = daemon::daemon(&rig);
-    assert_eq!(announced, ["hostkeeper-archive", "apt"]);
+    assert_eq!(announced, ["apt"]);
     let finished = |reply: hostkeeper_daemon::Reply| match reply {
         hostkeeper_daemon::Reply::Finished {
             verdict, reason, ..
@@ -316,6 +321,45 @@ fn a_package_moved_by_hand_is_reported_as_drift_and_put_back() {
         installer.drift(&rig.service, PACKAGE, 60).expect("drift"),
         None
     );
+}
+
+/// Proves: a test whose scratch directory is so deep that gpg's longest socket below it would not
+/// fit in `sun_path` still makes a key there: the key's home is elsewhere, short enough for every
+/// socket, and the suite it clear-signs into that deep directory verifies with `gpgv` against the
+/// keyring it exports there; dropping the key removes its home.
+///
+/// Catches: a key's gpg home placed below the test's scratch directory, where gpg-agent, as root
+/// with no `/run/user/0`, cannot bind its sockets and exits 2.
+#[test]
+fn a_key_made_for_a_deep_scratch_directory_signs_a_suite_its_keyring_verifies() {
+    let deep = Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), &"d".repeat(120))
+        .expect("the deep scratch directory");
+    let below = deep.path().join("apt-gpg").join(LONGEST_SOCKET);
+    assert!(
+        below.as_os_str().len() >= SUN_PATH,
+        "{below:?} fits in sun_path: the scratch directory is not deep enough to test anything"
+    );
+    let key = Key::new("deep");
+    let socket = key.home().join(LONGEST_SOCKET);
+    assert!(
+        socket.as_os_str().len() < SUN_PATH,
+        "{socket:?} does not fit in sun_path"
+    );
+    let repo = deep.path().join("repo");
+    write_index(&repo, &architecture(), "", Signing::Signed(&key));
+    let keyring = deep.path().join("keyring.gpg");
+    key.export(&keyring);
+    let gpgv_home = deep.path().join("gpgv");
+    fs::create_dir(&gpgv_home).expect("make gpgv's home");
+    run(Command::new("gpgv")
+        .arg("--homedir")
+        .arg(&gpgv_home)
+        .arg("--keyring")
+        .arg(&keyring)
+        .arg(repo.join("dists").join(repo::SUITE).join("InRelease")));
+    let home = key.home().to_path_buf();
+    drop(key);
+    assert!(!home.exists(), "{home:?} is left after the key is dropped");
 }
 
 /// Proves: a suite signed by another key than the entry's keyring is refused at `stage` with the

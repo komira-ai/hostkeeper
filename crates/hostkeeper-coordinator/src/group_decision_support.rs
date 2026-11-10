@@ -10,7 +10,7 @@ use serde_json::{Value, json};
 
 use crate::decide::Why;
 use crate::host_groups_support::{SELF, World};
-use crate::marks_support::{INSTALLER, NEW_DAEMON, ask, ask_typed, beat_of, digest, runs};
+use crate::marks_support::{INSTALLER, NEW_DAEMON, ask, ask_typed, beat_of, native_targets, runs};
 use crate::orders::Order;
 use crate::releases::Targets;
 use crate::service::ci_calls::Setter;
@@ -105,9 +105,9 @@ impl Farm {
         self.world.enroll(host);
     }
 
-    /// Sets the desired version of `package` in `group`.
+    /// Sets the desired version of `package` in `group`, with a release kept for it.
     pub(crate) fn want(&self, group: &str, package: &str, at: &str) {
-        self.world.seed_desired(group, package, at);
+        self.world.seed_ordered(group, package, at);
     }
 
     /// The reply to a heartbeat of `host` that lists `services`, each as it is given.
@@ -146,11 +146,13 @@ impl Farm {
             .expect("a set");
     }
 
-    /// The operator's set of `package` at `at` with the package digest of number `n`, in the
+    /// The operator's set of `package` at `at` with the release [`native_targets`] `n`, in the
     /// group `named` (empty: each group that lists the package).
     pub(crate) async fn deploy(&self, named: &str, package: &str, at: &str, n: u8) {
-        let body = json!({"service": package, "version": at, "release_digest": digest(n)});
-        self.set(named, &body, None).await;
+        self.world.coordinator().keep_komira();
+        let body = json!({"service": package, "version": at});
+        self.set(named, &body, Some(native_targets(package, n)))
+            .await;
     }
 
     /// The beat of a daemon that takes installs and lists hostkeeper and `services`, each healthy

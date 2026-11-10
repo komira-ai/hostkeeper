@@ -46,10 +46,13 @@ const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789"
 /// guard is dropped, failed or not: the pki directory's parent `/etc/updater`, the self-update
 /// units it installs (`hostkeeper-fallback.service`, `hostkeeper.service.d/`), and the placement
 /// state `/var/lib/hostkeeper`; and, given to [`HostPaths::claim`], those an install test adds
-/// and the units it may leave running, which are stopped first.
+/// and the units it may leave running, which are stopped first; the packages the daemon installs
+/// ([`HostPaths::purging`]) are unheld and purged after the units are stopped and before the paths
+/// are removed.
 pub struct HostPaths {
     paths: Vec<PathBuf>,
     units: Vec<String>,
+    packages: Vec<String>,
 }
 
 /// The directory of the daemon's placement state, which it does not make itself.
@@ -86,7 +89,15 @@ impl HostPaths {
         HostPaths {
             paths,
             units: units.iter().map(|u| (*u).to_owned()).collect(),
+            packages: Vec::new(),
         }
+    }
+
+    /// The same, and the packages `packages` the daemon installs of the host's dpkg database,
+    /// which are purged when the guard is dropped.
+    pub fn purging(mut self, packages: &[&str]) -> HostPaths {
+        self.packages = packages.iter().map(|p| (*p).to_owned()).collect();
+        self
     }
 }
 
@@ -97,6 +108,10 @@ impl Drop for HostPaths {
                 hostkeeper_steps::systemd::SYSTEMCTL,
                 &["stop", "--system", unit.as_str()],
             );
+        }
+        for package in &self.packages {
+            let _ = super::run("/usr/bin/apt-mark", &["unhold", package.as_str()]);
+            let _ = super::run("/usr/bin/dpkg", &["--purge", package.as_str()]);
         }
         for path in &self.paths {
             // A path the test never made is not there; anything else is the test's own.
@@ -121,7 +136,7 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// A test certificate authority: of the coordinator's private listener (which the operator dials) and
-/// of the release channel.
+/// of the test's HTTPS server.
 pub struct TestCa {
     issuer: CertifiedIssuer<'static, KeyPair>,
 }
@@ -538,8 +553,9 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    /// Writes the daemon's config (the coordinator's URL and CA pin, the release channel
-    /// `channel`) and starts it, beating every second.
+    /// Writes the daemon's config (the coordinator's URL and CA pin, and the release channel
+    /// `channel`, which the loader requires and the daemon reads no more) and starts it, beating
+    /// every second.
     pub fn start(scratch: &Path, coordinator: &Coordinator, channel: &str) -> Daemon {
         let dir = scratch.join("daemon");
         let config = format!(
@@ -568,6 +584,8 @@ impl Daemon {
             &path("state"),
             "--packages-dir",
             PACKAGES_DIR,
+            "--facts-file",
+            &path("facts.json"),
             "--heartbeat-secs",
             "1",
         ]

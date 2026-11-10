@@ -3,17 +3,23 @@
 //! 3.0.0 that is not ready and is rolled back).
 //!
 //! The orders are the ones the coordinator sends, given to the daemon as they are. The daemon
-//! places a package built from hello's own files (its manifest and its unit template are the
-//! goldens of the package), writes the params file of each step and decides from the exit status
-//! and the last line of the report `hello::hook::run` printed. The host is a fake world: which
+//! stages and installs, through apt, a package built from hello's own files (its manifest and its
+//! unit template are the goldens of the package), writes the params file of each step and decides
+//! from the exit status and the last line of the report `hello::hook::run` printed. The host is a fake world: which
 //! slot serves which version, as `systemctl` would leave it.
+//!
+//! Linux only: this is hello's Linux package, whose run entries are systemd units
+//! (`hello@a.service`) and whose hook drives `systemctl`; a Mac's daemon refuses a run entry
+//! that is no launchd label before any step runs.
+#![cfg(target_os = "linux")]
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard};
 
@@ -21,9 +27,12 @@ use hello::hook;
 use hello::ports::{Host, Probe, Runner};
 use hello::server::{self, Answer};
 use hostkeeper_daemon::Reply;
+use hostkeeper_daemon::testing::ToolAnswer;
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
-use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher};
-use support::{OWN, Rig, config, d, install, ok, update};
+use hostkeeper_steps::{LaunchError, StepCall, StepExit, StepLauncher, ToolCall, ToolExit};
+use support::{OWN, Rig, config, ok};
+use support_apt::bridge;
+use support_host::NativeHost;
 
 /// The service and the port its package names: only a value the fake probe receives, no socket
 /// is opened.
@@ -163,14 +172,22 @@ struct Ran {
 /// The args are `Invocation::to_args` of the call, the ones the real launcher puts after
 /// `<executable> update-hook`; the hook gets the fake host; the exit status and the last
 /// non-blank line of what the hook printed are the step's exit.
+///
+/// The tool runs of the installer (apt and dpkg) are answered by `tools`, the apt host's fake.
 struct HelloLauncher {
     fake: Fake,
     packages: PathBuf,
+    tools: ToolAnswer,
     ran: Mutex<Vec<Ran>>,
 }
 
 impl HelloLauncher {
-    fn new(packages: &Path, world: Arc<Mutex<World>>, fail_ready: &[&str]) -> Arc<HelloLauncher> {
+    fn new(
+        packages: &Path,
+        world: Arc<Mutex<World>>,
+        fail_ready: &[&str],
+        tools: ToolAnswer,
+    ) -> Arc<HelloLauncher> {
         Arc::new(HelloLauncher {
             fake: Fake {
                 world,
@@ -178,6 +195,7 @@ impl HelloLauncher {
                 fail_ready: fail_ready.iter().map(|v| (*v).to_owned()).collect(),
             },
             packages: packages.to_path_buf(),
+            tools,
             ran: Mutex::default(),
         })
     }
@@ -221,11 +239,17 @@ impl StepLauncher for HelloLauncher {
     fn stop(&self, _unit: &str) -> Result<(), LaunchError> {
         Ok(())
     }
+
+    fn run_tool(&self, call: &ToolCall<'_>) -> Result<ToolExit, LaunchError> {
+        (self.tools)(call)
+    }
 }
 
-/// The package of hello at `version`: the golden manifest for that version, keeping its record
-/// in `record_dir`, the unit template, and a program the hook finds at `bin/hello`; sealed.
-fn add_hello(rig: &Rig, version: &str, record_dir: &Path) {
+/// The package of hello at `version` published: the golden manifest for that version, keeping
+/// its record in `record_dir`, the program of a `.deb` of hello and the unit template with the
+/// two slots it runs; its hook is the
+/// program at the fixed path of the package, which the launcher of this test never starts.
+fn publish_hello(farm: &NativeHost, version: &str, record_dir: &Path) {
     let platform = hostkeeper_config::platform::Platform::current();
     let manifest = MANIFEST
         .replace(
@@ -249,17 +273,15 @@ fn add_hello(rig: &Rig, version: &str, record_dir: &Path) {
         manifest.contains(&record_dir.display().to_string()),
         "{manifest}"
     );
-    let dir = rig.store.add(SERVICE, version, &manifest);
-    let program = dir.join("bin").join("hello");
-    fs::write(&program, "#!hello\n").expect("the program");
-    fs::set_permissions(&program, fs::Permissions::from_mode(0o755)).expect("its mode");
-    let units = dir.join("units");
-    fs::create_dir_all(&units).expect("the units directory");
-    fs::set_permissions(&units, fs::Permissions::from_mode(0o755)).expect("its mode");
-    let unit = units.join("hello@.service");
-    fs::write(&unit, UNIT).expect("the unit template");
-    fs::set_permissions(&unit, fs::Permissions::from_mode(0o644)).expect("its mode");
-    rig.store.seal(SERVICE, version, &d());
+    farm.publish_tuned(SERVICE, version, &manifest, |deb| {
+        // The program a `.deb` of hello installs, which the hook's `prepare` finds in the tree.
+        let deb = deb.file("usr/lib/hello/hello", 0o755, "#!hello\n");
+        ["hello@.service", "hello@a.service", "hello@b.service"]
+            .into_iter()
+            .fold(deb, |deb, unit| {
+                deb.file(&format!("usr/lib/systemd/system/{unit}"), 0o644, UNIT)
+            })
+    });
 }
 
 /// The version `link` (`current`, `previous`) of hello names, `None` when there is no link.
@@ -295,18 +317,19 @@ fn executables(ran: &[Ran]) -> Vec<PathBuf> {
     ran.iter().map(|ran| ran.executable.clone()).collect()
 }
 
-/// `count` times the hook of the release `version`.
+/// `count` times the hook of the release `version`: the program at the fixed path of the package
+/// in the sealed tree.
 fn hook_of(version: &str, count: usize) -> Vec<PathBuf> {
-    vec![Path::new(SERVICE).join(version).join("bin").join("hello"); count]
+    vec![
+        Path::new(SERVICE)
+            .join(version)
+            .join("tree/usr/lib/hello/hostkeeper-hook");
+        count
+    ]
 }
 
 fn steps(ran: &[Ran]) -> Vec<Step> {
     ran.iter().map(|ran| ran.step).collect()
-}
-
-/// The order of the test: the update of hello to `version`.
-fn order(version: &str, order_try: u64) -> hostkeeper_proto::hostkeeper::agent::v1::Order {
-    update(SERVICE, version, &d(), order_try)
 }
 
 /// Catches a hello release that the daemon cannot drive through its life: an install of 1.0.0
@@ -316,23 +339,25 @@ fn order(version: &str, order_try: u64) -> hostkeeper_proto::hostkeeper::agent::
 /// links as the design says.
 #[test]
 fn hello_installs_updates_and_rolls_a_failing_release_back() {
-    let rig = Rig::new("hello-farm");
+    let farm = NativeHost::new("hello-farm");
+    let rig = farm.rig();
     let record_dir = rig.scratch.path().join("hello-record");
     // Absent: the hook makes its own record directory on its first step, as on a host.
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
-        add_hello(&rig, version, &record_dir);
+        publish_hello(&farm, version, &record_dir);
     }
     let world = Arc::new(Mutex::new(World::default()));
-    let launcher = HelloLauncher::new(&rig.packages, Arc::clone(&world), &["3.0.0"]);
+    let tools = bridge(Arc::clone(&farm.apt.host));
+    let launcher = HelloLauncher::new(&rig.packages, Arc::clone(&world), &["3.0.0"], tools);
     let ports = hostkeeper_daemon::Ports {
         launcher: launcher.clone(),
-        ..rig.ports()
+        ..farm.ports()
     };
     let daemon = hostkeeper_daemon::Daemon::new(config(), rig.dirs(), ports, OWN);
     let every_step = [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup];
 
     // 1.0.0: a first install starts slot a.
-    let reply = daemon.order(&install(SERVICE, "1.0.0", &d(), 1));
+    let reply = daemon.order(&farm.install(SERVICE, "1.0.0", 1));
     let ran = launcher.take();
     assert_eq!(
         reply,
@@ -350,12 +375,12 @@ fn hello_installs_updates_and_rolls_a_failing_release_back() {
     assert!(ran.iter().all(|ran| ran.code == 0), "{ran:#?}");
     assert_eq!(rig.verdict(SERVICE), Some(ok()));
     assert_eq!(serving(&world), [pair("a", "1.0.0")]);
-    assert_eq!(link(&rig, "current").as_deref(), Some("1.0.0"));
-    assert_eq!(link(&rig, "previous"), None);
+    assert_eq!(link(rig, "current").as_deref(), Some("1.0.0"));
+    assert_eq!(link(rig, "previous"), None);
     assert_eq!(active(&record_dir), "a");
 
     // 2.0.0: an update starts slot b and stops slot a.
-    let reply = daemon.order(&order("2.0.0", 2));
+    let reply = daemon.order(&farm.update(SERVICE, "2.0.0", 2));
     let ran = launcher.take();
     assert_eq!(
         reply,
@@ -372,12 +397,12 @@ fn hello_installs_updates_and_rolls_a_failing_release_back() {
     assert_eq!(executables(&ran), hook_of("2.0.0", 4), "{ran:#?}");
     assert_eq!(rig.verdict(SERVICE), Some(ok()));
     assert_eq!(serving(&world), [pair("b", "2.0.0")]);
-    assert_eq!(link(&rig, "current").as_deref(), Some("2.0.0"));
-    assert_eq!(link(&rig, "previous").as_deref(), Some("1.0.0"));
+    assert_eq!(link(rig, "current").as_deref(), Some("2.0.0"));
+    assert_eq!(link(rig, "previous").as_deref(), Some("1.0.0"));
     assert_eq!(active(&record_dir), "b");
 
     // 3.0.0 is not ready: its slot a starts, answers 503, and slot b serves 2.0.0 again.
-    let reply = daemon.order(&order("3.0.0", 3));
+    let reply = daemon.order(&farm.update(SERVICE, "3.0.0", 3));
     let ran = launcher.take();
     // No hello step reports `reversible: false`: its rollback can always start the old slot
     // again, so the update is never committed before `cleanup`, and a `verify` that fails is the
@@ -407,7 +432,7 @@ fn hello_installs_updates_and_rolls_a_failing_release_back() {
         Some(r#"{"class":"release","reason":"not_ready","detail":"GET /readyz answered 503"}"#),
         "{ran:#?}"
     );
-    assert_eq!(link(&rig, "current").as_deref(), Some("2.0.0"));
+    assert_eq!(link(rig, "current").as_deref(), Some("2.0.0"));
     assert_eq!(serving(&world), [pair("b", "2.0.0")]);
     assert_eq!(active(&record_dir), "b");
     let (status, body) = Fake::get(&launcher.fake, PORT, "/readyz").expect("a slot answers");

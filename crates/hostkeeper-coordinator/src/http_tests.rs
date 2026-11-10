@@ -181,8 +181,9 @@ async fn a_forged_or_unknown_certificate_role_is_refused() {
 }
 
 /// Catches: a reply that carries anything but a version: over HTTP, for a host to be told
-/// nothing and for one to be told to update, the body has only the keys `reply` and
-/// `version`, and the version is the desired one.
+/// nothing, the body has only the key `reply`, and a host behind the desired version is told
+/// nothing as well, since the JSON route carries no order; the update a transport that carries
+/// typed orders answers has only the keys `reply` and `version`.
 #[tokio::test]
 async fn the_reply_never_carries_anything_but_a_version() {
     let rig = Rig::new("http-reply");
@@ -205,8 +206,13 @@ async fn the_reply_never_carries_anything_but_a_version() {
     )
     .await;
     assert_eq!(code, StatusCode::OK);
-    assert_eq!(update, json!({"reply": "update", "version": "2.0"}));
-    let keys: Vec<&String> = update.as_object().expect("object").keys().collect();
+    assert_eq!(update, json!({"reply": "nothing"}));
+    let ordered = serde_json::to_value(hostkeeper_wire::wire::Reply::Update {
+        version: crate::testutil::version("2.0"),
+    })
+    .expect("JSON");
+    assert_eq!(ordered, json!({"reply": "update", "version": "2.0"}));
+    let keys: Vec<&String> = ordered.as_object().expect("object").keys().collect();
     assert_eq!(keys, ["reply", "version"]);
 }
 
@@ -539,6 +545,23 @@ async fn an_unreachable_issuer_is_503_and_an_unreadable_header_is_no_bearer() {
     assert_eq!(code, StatusCode::UNAUTHORIZED);
 }
 
+/// The reply the heartbeat `body` of `host` (of `role`) is answered with over a transport that
+/// carries typed orders, as the JSON of the answer, by a coordinator that lists `apt` for a daemon
+/// that announces `target-v1`: the JSON route carries no order, so the orders of the tests go by
+/// the typed one. The `features` the answer adds for the announced one are left out.
+async fn native_beat(rig: &Rig, host: &str, role: &str, body: &str) -> Value {
+    let beat: hostkeeper_wire::wire::Heartbeat = serde_json::from_str(body).expect("a heartbeat");
+    let answer = rig
+        .coordinator
+        .heartbeat_native(crate::marks_support::who(host, role), beat)
+        .expect("answered");
+    let mut reply = serde_json::to_value(&answer).expect("JSON");
+    if let Some(fields) = reply.as_object_mut() {
+        fields.remove("features");
+    }
+    reply
+}
+
 async fn convergence(rig: &Rig, bearer: Option<&str>) -> (StatusCode, Value) {
     call(
         rig,
@@ -580,10 +603,15 @@ async fn the_convergence_reports_in_progress_converged_and_blocked() {
     let rig = Rig::new("http-converge");
     rig.set(STATE).await;
     rig.at(2_000);
+    // The daemons announce `target-v1` and list `apt`, which the release of the state is picked by.
     let beat_of = |name: &str, role: &str, body: &str| {
+        let mut fields: Value = serde_json::from_str(body).expect("a heartbeat");
+        fields["agent_features"] = json!([crate::picks::TARGET_FEATURE]);
+        rig.coordinator
+            .hear_apt(&crate::marks_support::who(name, role));
         (
             updater(name, role),
-            request("POST", HEARTBEAT_PATH, None, body),
+            request("POST", HEARTBEAT_PATH, None, &fields.to_string()),
         )
     };
     let at =
@@ -668,8 +696,9 @@ async fn raw(
 /// Pins: the wire of the update path stays as it is. A heartbeat of a v0.0.18 updater is
 /// read to the same Heartbeat it was written from, deploy-farm's `POST /v1/desired` body
 /// (no `service`) is accepted and echoed as the state without a `service` key, and the
-/// updater behind gets exactly the bytes `{"reply":"update","version":...}` while a current
-/// one gets exactly `{"reply":"nothing"}`, with the same status line of 200.
+/// updater behind gets exactly the bytes `{"reply":"nothing"}` as a current one does, the JSON
+/// route carrying no order, with the same status line of 200; the update a transport that carries
+/// typed orders answers keeps the bytes `{"reply":"update","version":...}`.
 #[tokio::test]
 async fn a_v0_0_18_updater_and_deploy_farm_get_the_bytes_they_always_got() {
     let rig = Rig::new("http-golden");
@@ -697,6 +726,13 @@ async fn a_v0_0_18_updater_and_deploy_farm_get_the_bytes_they_always_got() {
     assert_eq!(code, 200);
     assert_eq!(
         String::from_utf8(behind).expect("text"),
+        r#"{"reply":"nothing"}"#
+    );
+    assert_eq!(
+        serde_json::to_string(&hostkeeper_wire::wire::Reply::Update {
+            version: crate::testutil::version("0.0.19+g123456abcdef-1"),
+        })
+        .expect("JSON"),
         r#"{"reply":"update","version":"0.0.19+g123456abcdef-1"}"#
     );
     let current = GOLDEN_BEAT.replace("0.0.18+gabcdefabcdef-2", "0.0.19+g123456abcdef-1");
@@ -753,7 +789,7 @@ async fn the_desired_call_takes_a_service_and_refuses_an_unknown_one() {
         request("POST", HEARTBEAT_PATH, None, BEAT),
     )
     .await;
-    assert_eq!(reply, json!({"reply": "update", "version": "2.0"}));
+    assert_eq!(reply, json!({"reply": "nothing"}));
 }
 
 /// Pins: a token whose entry may not set the service is a 403 `forbidden` that changes

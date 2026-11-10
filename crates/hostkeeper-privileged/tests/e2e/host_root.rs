@@ -1,43 +1,51 @@
 //! The host the end-to-end tests run against: a directory tree under `/run`, the fixed host
 //! paths the real daemon uses, and the systemd units it and the fixture service run in.
 //!
-//! The daemon binary reads some paths from no flag (the CA bundle its package fetch trusts, the
-//! `gh` program and Sigstore trusted root, the placed-unit state and the systemd unit
-//! directory), so a test that drives it for real has to put files at those places. That is only
-//! safe on a throwaway machine, which is what the hosted runner of `privileged.yml` is. [`HostRoot`]
-//! therefore refuses to start when any of those places is already in use, puts what the test
-//! needs there, and takes all of it away again when it is dropped, whether the test passed or
-//! failed. When the test is panicking it first copies the hook records, the journal of every
-//! unit it saw and the step record to a directory the workflow uploads.
+//! The daemon binary reads some paths from no flag (the repository entries it installs from, the
+//! placed-unit state and the systemd unit directory), and the package it installs is the host's
+//! own in dpkg's database, so a test that drives it for real has to put files at those places and
+//! leaves a package there. That is only safe on a throwaway machine, which is what the hosted
+//! runner of `privileged.yml` is. [`HostRoot`] therefore moves aside what is already at those
+//! places, puts what the test needs there, and takes all of it away again when it is dropped (the
+//! fixture package purged), whether the test passed or failed. When the test is panicking it
+//! first copies the hook records, the journal of every unit it saw and the step record to a
+//! directory the workflow uploads.
+//!
+//! The cross-release rig (`tests/across/`) also has the host put the pinned `gh` and a Sigstore
+//! trusted root at their fixed paths ([`HostRoot::install_gh`],
+//! [`HostRoot::install_trusted_root`]), where the published release it runs as the host's daemon
+//! looks for them.
 //!
 //! Nothing here asserts how long anything takes; a wait polls for a state ([`super::wait_for`]).
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::io::Write;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::{Mutex, PoisonError};
 
+use hostkeeper_daemon::cli::DEFAULT_FACTS_FILE;
 use hostkeeper_privileged::{SYSTEMD_RUNTIME_DIR, check_host};
 use hostkeeper_steps::record::RECORD_FILE;
 use hostkeeper_steps::systemd::SYSTEMCTL;
 
 use super::SERVICE;
+use super::aptrepo::AptRepo;
+use super::aptrepo::REGISTRY_NAME;
 
 /// The daemon program: `hostkeeper`, built with these tests (it holds `daemon`).
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 /// Where `journalctl` is.
 const JOURNALCTL: &str = "/usr/bin/journalctl";
-/// The CA bundle the daemon's package fetch trusts (a fixed path of the daemon).
-const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The directory of the programs the daemon trusts: `gh` and the Sigstore trusted root.
+/// The directory of the programs a released daemon trusts: `gh` and the Sigstore trusted root.
 const LIBRARY_DIR: &str = "/usr/lib/hostkeeper";
-/// The `gh` the daemon checks attestations with (a fixed path of the daemon).
+/// The `gh` a released daemon checks attestations with (a fixed path of the daemon).
 pub const GH_PATH: &str = "/usr/lib/hostkeeper/gh";
-/// The Sigstore trusted root the daemon hands `gh` (a fixed path of the daemon).
+/// The Sigstore trusted root a released daemon hands `gh` (a fixed path of the daemon).
 pub const TRUSTED_ROOT_PATH: &str = "/usr/lib/hostkeeper/trusted_root.json";
+/// The directory of the daemon's configuration, which holds the repository entries.
+const CONFIG_DIR: &str = "/etc/hostkeeper";
 /// The directory the enrollment loop keeps its key and certificate in.
 const PKI_DIR: &str = "/etc/updater";
 /// The daemon's placed-unit state directory.
@@ -109,21 +117,22 @@ pub struct HostRoot {
     /// Every daemon unit started through [`HostRoot::start_daemon`], for the journal copy and
     /// the teardown.
     units: Mutex<Vec<String>>,
-    /// The bytes of the CA bundle before [`HostRoot::trust_ca`] first appended to it.
-    ca_bundle: Mutex<Option<Vec<u8>>>,
     /// The fixed places of the host this rig takes over that were there already (another test
     /// of this crate may leave them), each with where it was moved aside; put back at the drop.
     saved: Vec<(PathBuf, PathBuf)>,
 }
 
-/// The fixed places of the host the rig takes over: the daemon's programs, its pki and placed
-/// state, and the fixture's template link.
-fn taken_places() -> [PathBuf; 4] {
+/// The fixed places of the host the rig takes over: the daemon's configuration (its repository
+/// entries), the programs a released daemon trusts, the daemon's pki and placed state, and its
+/// default facts file (a daemon a released unit starts, with no `--facts-file`, writes it once
+/// it runs this build).
+fn taken_places() -> [PathBuf; 5] {
     [
+        PathBuf::from(CONFIG_DIR),
         PathBuf::from(LIBRARY_DIR),
         PathBuf::from(PKI_DIR),
         PathBuf::from(PLACED_DIR),
-        Path::new(UNIT_DIR).join(format!("{SERVICE}@.service")),
+        PathBuf::from(DEFAULT_FACTS_FILE),
     ]
 }
 
@@ -172,7 +181,6 @@ impl HostRoot {
             tag: tag.to_owned(),
             base,
             units: Mutex::new(Vec::new()),
-            ca_bundle: Mutex::new(None),
             saved,
         };
         // The package check wants the packages directory and every ancestor root-owned and
@@ -183,6 +191,8 @@ impl HostRoot {
         make_dir(&host.records(), 0o755);
         make_dir(Path::new(PLACED_DIR), 0o755);
         make_dir(Path::new(LIBRARY_DIR), 0o755);
+        // The fixture package may be left by a test that failed before: the host starts without it.
+        purge_fixture_package();
         host
     }
 
@@ -239,30 +249,13 @@ impl HostRoot {
         put(Path::new(TRUSTED_ROOT_PATH), jsonl.as_bytes(), 0o644);
     }
 
-    /// Makes the daemon's package fetch trust the CA `pem` by appending it to the host's CA
-    /// bundle. The first call keeps the bundle's original bytes, which the drop puts back.
-    ///
-    /// # Panics
-    /// The bundle cannot be read or written.
-    pub fn trust_ca(&self, pem: &str) {
-        let mut original = self
-            .ca_bundle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if original.is_none() {
-            let bytes = fs::read(CA_BUNDLE).unwrap_or_else(|e| panic!("read {CA_BUNDLE}: {e}"));
-            *original = Some(bytes);
-        }
-        let mut bundle = fs::OpenOptions::new()
-            .append(true)
-            .open(CA_BUNDLE)
-            .unwrap_or_else(|e| panic!("open {CA_BUNDLE}: {e}"));
-        // A bundle that does not end in a newline would swallow the first line of the PEM.
-        let ends_in_newline = original.as_deref().is_none_or(|b| b.last() == Some(&b'\n'));
-        let separator = if ends_in_newline { "" } else { "\n" };
-        bundle
-            .write_all(format!("{separator}{pem}\n").as_bytes())
-            .unwrap_or_else(|e| panic!("append to {CA_BUNDLE}: {e}"));
+    /// Puts the entry of `repo`, the repository of the packages the test orders, where the
+    /// daemon reads its repository entries (`/etc/hostkeeper/repositories`), as the
+    /// coordinator's registry renders it under the name [`REGISTRY_NAME`] (so that the daemon
+    /// adopts the registry's set), and makes the host's apt trust the repository's https server.
+    /// Call it before the daemon starts: it reads the directory at its start.
+    pub fn install_repository(&self, repo: &AptRepo) {
+        repo.install_registered(REGISTRY_NAME);
     }
 
     /// Writes the daemon config at [`HostRoot::config_path`], mode 0600, owned by root.
@@ -383,10 +376,25 @@ fn journal_of(unit: &str) -> String {
     }
 }
 
-/// Removes the links of the fixture service in the unit directory: the placed template and the
-/// instances `multi-user.target` wants.
+/// Puts the host as it was before the fixture package: its units stopped, its package unheld and
+/// purged, the enablement links of its run units removed (the package's purge removes the links
+/// the installer made, and the instances of a failed test are left to this).
+fn purge_fixture_package() {
+    systemctl_quiet(&["stop", INSTANCES]);
+    let _ = Command::new("/usr/bin/apt-mark")
+        .args(["unhold", SERVICE])
+        .stdin(Stdio::null())
+        .output();
+    let _ = Command::new("/usr/bin/dpkg")
+        .args(["--purge", SERVICE])
+        .stdin(Stdio::null())
+        .output();
+    remove_placed_links();
+}
+
+/// Removes the links of the fixture service in the unit directory: the instances
+/// `multi-user.target` wants.
 fn remove_placed_links() {
-    let _ = fs::remove_file(Path::new(UNIT_DIR).join(format!("{SERVICE}@.service")));
     let prefix = format!("{SERVICE}@");
     if let Ok(entries) = fs::read_dir(WANTS_DIR) {
         for entry in entries.flatten() {
@@ -414,22 +422,14 @@ impl Drop for HostRoot {
             systemctl_quiet(&["stop", unit]);
         }
         systemctl_quiet(&["stop", STEP_UNITS]);
-        systemctl_quiet(&["stop", INSTANCES]);
         for unit in &units {
             let _ = fs::remove_file(Path::new(UNIT_DIR).join(unit));
         }
-        remove_placed_links();
-        for dir in [LIBRARY_DIR, PKI_DIR, PLACED_DIR] {
+        purge_fixture_package();
+        for dir in [CONFIG_DIR, LIBRARY_DIR, PKI_DIR, PLACED_DIR] {
             let _ = fs::remove_dir_all(dir);
         }
-        let original = self
-            .ca_bundle
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(bytes) = original {
-            let _ = fs::write(CA_BUNDLE, bytes);
-        }
+        let _ = fs::remove_file(DEFAULT_FACTS_FILE);
         for (place, aside) in &self.saved {
             let _ = fs::rename(aside, place);
         }

@@ -3,55 +3,52 @@
 //! what the heartbeat reads, and a switch of `current` is followed by the prune.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::{BootReport, Outcome};
-use hostkeeper_daemon::testing::{NoPrune, RecordingPrune};
+use hostkeeper_daemon::testing::RecordingPrune;
 use hostkeeper_daemon::{Daemon, ForcedResult, Ports, Refusal, Reply, WriteStep};
 use hostkeeper_hook::{Class, Phase, Verdict};
-use hostkeeper_placed::testing::{FakeUnitControl, FaultFs, Log as PlacedLog};
+use hostkeeper_placed::testing::{FakeUnitControl, Log as PlacedLog};
 use hostkeeper_steps::record::{RECORD_FILE, State};
-use hostkeeper_steps::{
-    CrashGate, CrashPoint, Finished, ForceFailure, ForcePhase, ForceVerdict, RecordStore,
-};
-use support::force::{
-    HostState, UNIT, WEB, daemon_on, failed, forced, host_state, succeeded, web, writes_of_step_12,
-};
-use support::{Rig, crash_at, d, force, lines, update};
+use hostkeeper_steps::{CrashPoint, Finished, ForceFailure, ForcePhase, ForceVerdict};
+use support::force::{HostState, UNIT, WEB, failed, host_state};
+use support::{crash_at, lines};
+use support_host::{NativeHost, runs, succeeded, unit};
 
-/// `web` at 1.0.0, forced there, with 2.0.0 beside it: a target that drops a unit and a file of
-/// 1.0.0 and adds one of each.
-fn installed(name: &str) -> Rig {
-    let rig = Rig::new(name);
-    let old = [UNIT, "web-gone.service"];
-    let new = [UNIT, "web-new.service"];
-    rig.add_units(
+/// `version` of `web`, with the manifest every rule accepts, published in the host's repository.
+fn web(rig: &NativeHost, version: &str) {
+    rig.pin(WEB, version);
+}
+
+/// `web` at 1.0.0, forced there, with 2.0.0 beside it: a target that drops a `run` unit of 1.0.0
+/// and adds one.
+fn installed(name: &str) -> NativeHost {
+    let rig = NativeHost::new(name);
+    rig.manifest(
         WEB,
         "1.0.0",
-        &old,
-        &old,
-        &[("gone.conf", "/etc/web/gone.conf")],
+        &runs(WEB, "1.0.0", &[UNIT, &unit(WEB, "gone")]),
     );
-    rig.add_units(
+    rig.manifest(
         WEB,
         "2.0.0",
-        &new,
-        &new,
-        &[("new.conf", "/etc/web/new.conf")],
+        &runs(WEB, "2.0.0", &[UNIT, &unit(WEB, "new")]),
     );
-    forced(&rig, &rig.daemon(), "1.0.0", 1);
+    rig.forced(&rig.daemon(), "1.0.0", 1);
     rig
 }
 
 /// The daemon restarted on the rig's state: its start pass, then the coordinator's resend of the
 /// force of 2.0.0, whose answer is returned.
-fn restarted(rig: &Rig) -> Reply {
+fn restarted(rig: &NativeHost) -> Reply {
     let (daemon, _) = rig.booted();
-    daemon.order(&force(WEB, "2.0.0", &d(), 2, 0))
+    daemon.order(&rig.force(WEB, "2.0.0", 2, 0))
 }
 
 fn succeeded_now_or_before(reply: &Reply) -> bool {
@@ -74,15 +71,15 @@ fn baseline() -> (HostState, u64) {
     let daemon = rig
         .daemon()
         .with_stores(crash_at(None, Arc::clone(&writes)));
-    assert_eq!(daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)), succeeded());
+    assert_eq!(daemon.order(&rig.force(WEB, "2.0.0", 2, 0)), succeeded());
     (host_state(&rig), writes.load(Ordering::SeqCst))
 }
 
 /// Catches a part of a force that is not safe to run twice, or a record that does not let the
 /// force resume: a crash before and after each of the eight writes of the force record (one per
-/// phase), and one between two links of step 12, each followed by a restart and the resend of
-/// the order, end `Succeeded` with `current`, `previous`, every placed link, `placed.json` and
-/// the active units as an uninterrupted force leaves them.
+/// phase), each followed by a restart and the resend of the order, end `Succeeded` with
+/// `current`, `previous`, every link of the service manager, `placed.json` and the active units
+/// as an uninterrupted force leaves them.
 #[test]
 fn a_forced_host_that_crashes_resumes_the_force() {
     let (expected, writes) = baseline();
@@ -94,7 +91,7 @@ fn a_forced_host_that_crashes_resumes_the_force() {
             let first = rig
                 .daemon()
                 .with_stores(seam)
-                .order(&force(WEB, "2.0.0", &d(), 2, 0));
+                .order(&rig.force(WEB, "2.0.0", 2, 0));
             assert_eq!(
                 first.refusal(),
                 Some(Refusal::StoreFailed),
@@ -105,33 +102,6 @@ fn a_forced_host_that_crashes_resumes_the_force() {
             assert_eq!(host_state(&rig), expected, "{point:?}");
         }
     }
-
-    // A crash between two links: the write after the first link of step 12 fails, and the
-    // daemon dies before it can record anything more.
-    let (_, link) = writes_of_step_12(installed, "new.conf");
-    let rig = installed("force-crash-link");
-    let fs = Arc::new(FaultFs::failing_at(
-        rig.scratch.path(),
-        link + 1,
-        PlacedLog::new(),
-    ));
-    let dead = Arc::clone(&fs);
-    let gate: CrashGate = Arc::new(move |point: CrashPoint| {
-        matches!(point, CrashPoint::BeforeWrite(_)) & (dead.writes() > link)
-    });
-    let daemon = daemon_on(&rig, fs, Arc::new(NoPrune)).with_stores(Arc::new(
-        move |_: &ServiceName, store: RecordStore| store.with_crash_gate(Arc::clone(&gate)),
-    ));
-    let first = daemon.order(&force(WEB, "2.0.0", &d(), 2, 0));
-    assert_eq!(first.refusal(), Some(Refusal::StoreFailed), "{first:?}");
-    let new_conf = rig.scratch.path().join("etc/web/new.conf");
-    assert!(
-        fs::symlink_metadata(new_conf).is_ok(),
-        "the first link is made"
-    );
-    let reply = restarted(&rig);
-    assert!(succeeded_now_or_before(&reply), "{reply:?}");
-    assert_eq!(host_state(&rig), expected);
 }
 
 /// Catches a resend that runs a finished force again, or try rules a force does not keep: the
@@ -140,13 +110,13 @@ fn a_forced_host_that_crashes_resumes_the_force() {
 /// with the force's try and package is `try_conflict` too.
 #[test]
 fn a_resend_of_a_finished_force_is_answered_from_the_record() {
-    let rig = Rig::new("force-resend");
+    let rig = NativeHost::new("force-resend");
     let daemon = rig.daemon();
     web(&rig, "2.0.0");
     web(&rig, "2.1.0");
-    forced(&rig, &daemon, "2.0.0", 3);
+    rig.forced(&daemon, "2.0.0", 3);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 3, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 3, 0)),
         Reply::Finished {
             verdict: Verdict::Succeeded {
                 promotion_pending: false
@@ -156,18 +126,17 @@ fn a_resend_of_a_finished_force_is_answered_from_the_record() {
         }
     );
     assert_eq!(
-        daemon.order(&force(WEB, "2.1.0", &d(), 3, 0)),
+        daemon.order(&rig.force(WEB, "2.1.0", 3, 0)),
         Reply::Refused {
             refusal: Refusal::TryConflict,
             detail: "force 2.1.0 try 3 of web; the step record holds try 3".to_owned(),
         }
     );
-    let stale = daemon.order(&force(WEB, "2.1.0", &d(), 2, 0));
+    let stale = daemon.order(&rig.force(WEB, "2.1.0", 2, 0));
     assert_eq!(stale.refusal(), Some(Refusal::StaleTry), "{stale:?}");
-    let hooked = daemon.order(&update(WEB, "2.0.0", &d(), 3));
+    let hooked = daemon.order(&rig.update(WEB, "2.0.0", 3));
     assert_eq!(hooked.refusal(), Some(Refusal::TryConflict), "{hooked:?}");
     assert!(rig.placed_log.events().is_empty());
-    assert!(rig.store.asked().is_empty());
     assert!(rig.launcher.runs().is_empty());
 }
 
@@ -188,22 +157,17 @@ fn forced_of(daemon: &Daemon) -> Option<ForcedResult> {
 /// the step record says `forced` with the order's id.
 #[test]
 fn force_reports_its_verdict_in_the_next_heartbeat_read() {
-    let rig = Rig::new("force-report");
+    let rig = NativeHost::new("force-report");
     rig.add(WEB, "0.9.0");
     web(&rig, "1.0.0");
-    rig.add_units(
-        WEB,
-        "2.0.0",
-        &["web-two.service"],
-        &["web-two.service"],
-        &[],
-    );
-    rig.units.fail_start("web-two.service");
+    let two = unit(WEB, "two");
+    rig.manifest(WEB, "2.0.0", &runs(WEB, "2.0.0", &[&two]));
+    rig.units.fail_start(&two);
     let (daemon, _) = rig.booted();
     assert_eq!(forced_of(&daemon), None);
-    assert_eq!(daemon.order(&update(WEB, "0.9.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update(WEB, "0.9.0", 1)), succeeded());
     assert_eq!(forced_of(&daemon), None);
-    forced(&rig, &daemon, "1.0.0", 2);
+    rig.forced(&daemon, "1.0.0", 2);
     let first = ForcedResult {
         order_id: Some("force-web-1.0.0".to_owned()),
         order_try: 2,
@@ -214,7 +178,7 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     assert_eq!(forced_of(&daemon), Some(first.clone()));
     assert_eq!(forced_of(&rig.daemon()), Some(first));
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 3, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 3, 0)),
         failed(Phase::AfterCommit, Class::Release, "start_failed")
     );
     let second = ForcedResult {
@@ -259,7 +223,7 @@ fn force_reports_its_verdict_in_the_next_heartbeat_read() {
     );
 }
 
-fn versions(rig: &Rig) -> Vec<String> {
+fn versions(rig: &NativeHost) -> Vec<String> {
     let mut versions: Vec<String> = fs::read_dir(rig.packages.join(WEB))
         .expect("web's packages")
         .map(|entry| entry.expect("an entry").path())
@@ -280,27 +244,27 @@ fn versions(rig: &Rig) -> Vec<String> {
 /// `Succeeded`, with an alert.
 #[test]
 fn force_prunes_to_current_and_previous_only_when_current_moved() {
-    let rig = Rig::new("force-prune");
+    let rig = NativeHost::new("force-prune");
     for version in ["1.0.0", "2.0.0", "3.0.0"] {
         web(&rig, version);
     }
     let daemon = rig.daemon();
-    forced(&rig, &daemon, "1.0.0", 1);
-    forced(&rig, &daemon, "2.0.0", 2);
-    assert_eq!(versions(&rig), ["1.0.0", "2.0.0", "3.0.0"]);
+    rig.forced(&daemon, "1.0.0", 1);
+    rig.forced(&daemon, "2.0.0", 2);
+    assert_eq!(versions(&rig), ["1.0.0", "2.0.0"]);
     let pruner = RecordingPrune::new();
-    let pruning = daemon_on(&rig, rig.placed_fs.clone(), pruner.clone());
-    assert_eq!(pruning.order(&force(WEB, "3.0.0", &d(), 3, 0)), succeeded());
+    let pruning = rig.daemon_on(rig.placed_fs.clone(), pruner.clone());
+    assert_eq!(pruning.order(&rig.force(WEB, "3.0.0", 3, 0)), succeeded());
     assert_eq!(versions(&rig), ["2.0.0", "3.0.0"]);
     assert!(!rig.packages.join(WEB).join("1.0.0.seal").exists());
-    assert_eq!(pruning.order(&force(WEB, "3.0.0", &d(), 4, 0)), succeeded());
+    assert_eq!(pruning.order(&rig.force(WEB, "3.0.0", 4, 0)), succeeded());
     assert_eq!(pruner.calls(), [WEB]);
 
     let failing = RecordingPrune::new();
     failing.fail_next("the disk refused");
     let (pruning, alerts) =
-        support::alerting(daemon_on(&rig, rig.placed_fs.clone(), failing.clone()));
-    assert_eq!(pruning.order(&force(WEB, "2.0.0", &d(), 5, 0)), succeeded());
+        support::alerting(rig.daemon_on(rig.placed_fs.clone(), failing.clone()));
+    assert_eq!(pruning.order(&rig.force(WEB, "2.0.0", 5, 0)), succeeded());
     assert_eq!(
         lines(&alerts),
         [
@@ -310,13 +274,13 @@ fn force_prunes_to_current_and_previous_only_when_current_moved() {
 }
 
 /// The unfinished force record of `web` a crash after its first write leaves.
-fn crashed_after_started(name: &str) -> Rig {
+fn crashed_after_started(name: &str) -> NativeHost {
     let rig = installed(name);
     let seam = crash_at(Some(CrashPoint::AfterWrite(1)), Arc::new(AtomicU64::new(0)));
     let first = rig
         .daemon()
         .with_stores(seam)
-        .order(&force(WEB, "2.0.0", &d(), 2, 0));
+        .order(&rig.force(WEB, "2.0.0", 2, 0));
     assert_eq!(first.refusal(), Some(Refusal::StoreFailed), "{first:?}");
     rig
 }
@@ -395,7 +359,7 @@ fn a_resumed_force_keeps_the_furthest_phase_it_reached() {
     let first = rig
         .daemon()
         .with_stores(seam)
-        .order(&force(WEB, "2.0.0", &d(), 2, 0));
+        .order(&rig.force(WEB, "2.0.0", 2, 0));
     assert_eq!(first.refusal(), Some(Refusal::StoreFailed), "{first:?}");
     let pruner = RecordingPrune::new();
     let ports = Ports {
@@ -405,7 +369,7 @@ fn a_resumed_force_keeps_the_furthest_phase_it_reached() {
     };
     let daemon = Daemon::new(support::config(), rig.dirs(), ports, support::OWN);
     assert_eq!(
-        daemon.order(&force(WEB, "2.0.0", &d(), 2, 0)),
+        daemon.order(&rig.force(WEB, "2.0.0", 2, 0)),
         failed(Phase::AfterCommit, Class::Environment, "link_failed")
     );
     let phase = rig

@@ -86,6 +86,13 @@ async fn a_convergence_with_no_group_is_every_groups_that_lists_the_package() {
                 {"role": "alpha", "at_desired": 1, "updating": 0, "failed": 0, "down": 0},
                 {"role": "beta", "at_desired": 1, "updating": 0, "failed": 0, "down": 0},
             ],
+            "picks": {
+                "picked": 2,
+                "no_target": 0,
+                "no_build_for_host": 0,
+                "installer_dropped": 0,
+                "dropped": [],
+            },
             "commit": crate::BUILD_COMMIT,
         })
     );

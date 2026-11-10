@@ -7,15 +7,16 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{DeferredReport, Heartbeat, Outcome, ServiceReply, Token};
 
-use crate::converge::{State, converge_service};
-use crate::decide::{Decision, Gate, Skip, decide_why};
+use crate::converge::State;
+use crate::decide::{Decision, Gate, Skip};
 use crate::defer::DeferBackoff;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::services::{Services, ServicesError};
 use crate::testutil::{
-    Rig, beat, desired, id, kbf_def, last, role, secs, unhealthy, updating, version,
+    Rig, beat, converge_service, decide_why, desired, id, kbf_def, last, role, secs, unhealthy,
+    updating, version,
 };
 
 /// One service on daemons with `extra` lines in its table, rolled in one stage (`stages =
@@ -306,7 +307,7 @@ async fn a_restart_forgets_the_backoff() {
     let say = |rig: &Rig, at: u64, b: Heartbeat| {
         rig.at(at);
         rig.coordinator
-            .heartbeat(who.clone(), b)
+            .heartbeat_native(who.clone(), b)
             .expect("a heartbeat")
             .reply
     };

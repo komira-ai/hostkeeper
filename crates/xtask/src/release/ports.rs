@@ -64,6 +64,15 @@ pub(crate) struct Run {
     pub(crate) conclusion: Option<String>,
 }
 
+/// One job of a workflow run, as GitHub lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Job {
+    /// The job's name; a job of a matrix is named `<job> (<value>, ...)`.
+    pub(crate) name: String,
+    /// Set once the job is completed: `success`, `failure`, `cancelled`, `skipped`, ...
+    pub(crate) conclusion: Option<String>,
+}
+
 /// One open issue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Issue {
@@ -77,9 +86,9 @@ pub(crate) trait GitHubRuns {
     /// The runs of the workflow file `workflow` for the head commit `commit`, of any event and
     /// branch: the caller picks the ones that count.
     fn runs(&self, repo: &Repo, workflow: &str, commit: &Commit) -> Result<Vec<Run>, PortError>;
-    /// The names of the jobs of the run `run`, as its latest attempt lists them (a re-run of
-    /// failed jobs lists every job of the run, the ones it did not run again too).
-    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError>;
+    /// The jobs of the run `run`, as its latest attempt lists them (a re-run of failed jobs
+    /// lists every job of the run, the ones it did not run again too).
+    fn jobs(&self, repo: &Repo, run: u64) -> Result<Vec<Job>, PortError>;
     /// Whether `commit` is on `main`: `main` is the commit or a descendant of it.
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError>;
     /// The open issues.

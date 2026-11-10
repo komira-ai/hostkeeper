@@ -6,23 +6,20 @@
 //! CA's SHA-256, as enrollment and the operator leave them on a host.
 
 mod support;
+mod support_apt;
 
 use std::net::SocketAddr;
 use std::num::NonZeroU64;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::http::{Surface, handle};
 use hostkeeper_coordinator::listen::{Listener, MAX_CONNECTIONS, serve};
-use hostkeeper_coordinator::ops::OpsStore;
-use hostkeeper_coordinator::service::{Clock, Coordinator};
-use hostkeeper_coordinator::services::Services;
+use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_daemon::Daemon;
 use hostkeeper_daemon::cli::host_links;
 use hostkeeper_daemon::links::{HostLink, coordinator_link};
@@ -32,15 +29,19 @@ use hostkeeper_link::{
     ANNOUNCED, BeatOutcome, ClientIdentity, CoordinatorLink, Dispatch, Feature, Heartbeat, Job,
     LinkError, Platform, Renewal, TrustFault,
 };
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::TlsSource;
 use http_body_util::{BodyExt, Full};
 use serde_json::Value;
+use support::coordinated::coordinator_over;
 use support::pki::{Ca, HOST, Leaf, config, enroll, files_under, scratch};
+use support::typed::set_release;
 use support::{OWN, Rig, alerting, lines};
+use support_apt::{AptRig, services};
 
 /// The operator token of the coordinator, for its status.
-const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
+const OPERATOR: &str = support::coordinated::OPERATOR;
 
 /// How long the coordinator waits for a client, as its own default.
 const PATIENCE: Duration = Duration::from_secs(10);
@@ -48,29 +49,10 @@ const PATIENCE: Duration = Duration::from_secs(10);
 /// The heartbeat period the tests give `host_links`; nothing waits for it.
 const PERIOD: NonZeroU64 = NonZeroU64::new(60).expect("not zero");
 
-/// A coordinator that runs `web` on the role `daemon` and wants it at 2.0, over the files of
-/// `dir`; its clock is past its quiet start, so it orders at once.
+/// A coordinator that runs `web` on the role `daemon`, over the files of `dir`, ordering at
+/// once (no quiet period). Nothing is desired until CI sets a version ([`Listening::set_web`]).
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
-    std::fs::write(
-        dir.join("desired.json"),
-        format!(
-            r#"{{"services":{{"web":{{"version":"2.0","min_up":{{}},"digests":{{"2.0":"{}"}}}}}}}}"#,
-            "0a".repeat(32)
-        ),
-    )
-    .expect("the desired state");
-    let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
-    let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    let seconds = Arc::new(AtomicU64::new(1_000));
-    let reading = Arc::clone(&seconds);
-    let clock: Clock = Arc::new(move || Duration::from_secs(reading.load(Ordering::SeqCst)));
-    let (verifier, _) = hostkeeper_oidc::testkit::static_verifier();
-    let rollout = "[[service]]\nname = \"web\"\nroles = [\"daemon\"]\n";
-    let coordinator = Coordinator::new(desired, verifier, OPERATOR.to_owned(), clock)
-        .with_services(Services::parse(rollout).expect("the rollout file"))
-        .with_ops(ops);
-    seconds.store(1_100, Ordering::SeqCst);
-    Arc::new(coordinator)
+    coordinator_over(dir, "web", "")
 }
 
 /// The coordinator's heartbeat listener on a loopback socket of port 0, served on a runtime of
@@ -138,6 +120,11 @@ impl Listening {
             runtime,
             _dir: dir,
         }
+    }
+
+    /// CI sets `web` to 2.0 with the release that lists `entry` for every platform.
+    fn set_web(&self, entry: &Target) {
+        set_release(&self.coordinator, "web", "2.0", entry);
     }
 
     /// The connections the listener took so far: for each, the protocols its client offered.
@@ -279,6 +266,7 @@ fn bare_beat() -> Heartbeat {
         trusted_root: None,
         installers: Vec::new(),
         repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -303,15 +291,16 @@ fn identity_of(leaf: &Leaf) -> ClientIdentity {
 fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemon() {
     let ca = Ca::new("hostkeeper test ca");
     let listening = Listening::new("shipped-link-coordinator", &ca);
-    let rig = Rig::new("shipped-link-daemon");
-    rig.add("web", "1.0");
+    let apt = AptRig::new("shipped-link-daemon");
+    services::based(&apt, "web");
+    listening.set_web(&services::publish(&apt, "web", "2.0"));
     let daemon = Arc::new(Daemon::new(
         listening.config(&ca),
-        rig.dirs(),
-        rig.ports(),
+        apt.rig.dirs(),
+        apt.ports(),
         OWN,
     ));
-    let files = files_under(rig.scratch.path());
+    let files = files_under(apt.rig.scratch.path());
     enroll(&files.pki, &ca.host(), &ca);
     let (dispatch, jobs) = kept();
     let links = hostkeeper_daemon::links::Links {
@@ -346,12 +335,11 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
     assert_eq!(host["platform"], platform);
     assert_eq!(host["agent"]["name"], "hostkeeper");
     assert_eq!(host["agent"]["version"], OWN.to_string());
-    assert_eq!(host["holds_slot"], true, "the update of web is ordered");
-    assert!(
-        jobs.try_recv().is_ok(),
-        "the coordinator's order, which it sends with its terms only to a daemon that \
-         announced order-v1, is handed to the executor"
+    assert_eq!(
+        host["holds_slot"], false,
+        "the JSON route carries no order: it holds no slot"
     );
+    assert!(jobs.try_recv().is_err(), "the JSON reply orders nothing");
 
     assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
     assert_eq!(
@@ -359,7 +347,17 @@ fn the_shipped_heartbeat_reaches_the_coordinator_and_its_order_reaches_the_daemo
         [json(), grpc()],
         "the next one over gRPC, answered there"
     );
-    assert_eq!(listening.hosts_of_web().len(), 1, "still the one host");
+    let hosts = listening.hosts_of_web();
+    assert_eq!(hosts.len(), 1, "still the one host");
+    assert_eq!(
+        hosts[0]["holds_slot"], true,
+        "the update of web is ordered, from the release's apt entry, to a daemon that announced apt"
+    );
+    assert!(
+        jobs.try_recv().is_ok(),
+        "the coordinator's order, which it sends with its terms only to a daemon that \
+         announced order-v1, is handed to the executor"
+    );
 }
 
 /// Catches a link of the shipped daemon that answers without asking the coordinator (as the

@@ -1,55 +1,28 @@
-//! What the tests of `fetch.rs` share: the fake clock, network and verifier, a host with a real
-//! `stores.toml`, and the entries and bundles of the rows.
+//! What the tests of `fetch.rs` share: the fake clock and network, a host with a real
+//! `stores.toml`, and the entries of the rows.
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use base64::Engine as _;
-use base64::engine::general_purpose::STANDARD;
-use hostkeeper_config::daemon::{Bounds, TrustedSigners};
+use hostkeeper_config::daemon::Bounds;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Outcome};
-use hostkeeper_package::entry::{EntryEnv, Proven, fetch_entry};
-use hostkeeper_package::ports::{
-    Attest, Attested, Fetcher, Got, Limit, NetError, Sink, Url, Verifier, VerifyError,
-};
+use hostkeeper_package::PackageFailure;
+use hostkeeper_package::entry::{Pinned, PinnedEnv, fetch_pinned};
+use hostkeeper_package::ports::{Fetcher, Got, Limit, NetError, Sink, Url};
 use hostkeeper_package::stores::{self, Stores};
-use hostkeeper_package::{PackageFailure, Platform};
-use hostkeeper_proto::hostkeeper::release::v1::{Blob, Location, Target};
+use hostkeeper_proto::hostkeeper::release::v1::{Location, Target};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 use sha2::{Digest, Sha256};
 
 pub const ARCHIVE: &[u8] = b"the archive of svc 1.0.0 bytes";
-pub const WRONG: &[u8] = b"the archive of svc 6.6.6 bytes";
-pub const GOOD_BUNDLE: &[u8] = include_bytes!("../fixtures/good.sigstore.json");
-
 pub fn sha256(bytes: &[u8]) -> String {
     hex::encode(&*Sha256::digest(bytes))
-}
-
-/// The good fixture bundle with its statement's subjects replaced by `digests`: nothing here is
-/// signed, and the verifier is a fake, so only what the crate reads of it matters.
-pub fn bundle_listing(digests: &[&str]) -> Vec<u8> {
-    let mut bundle: serde_json::Value = serde_json::from_slice(GOOD_BUNDLE).expect("a bundle");
-    let payload = bundle
-        .pointer("/dsseEnvelope/payload")
-        .and_then(|v| v.as_str())
-        .expect("a payload");
-    let mut statement: serde_json::Value =
-        serde_json::from_slice(&STANDARD.decode(payload).expect("base64")).expect("a statement");
-    let subjects: Vec<serde_json::Value> = digests
-        .iter()
-        .map(|d| serde_json::json!({"name": "svc", "digest": {"sha256": d}}))
-        .collect();
-    statement["subject"] = subjects.into();
-    let encoded = STANDARD.encode(serde_json::to_vec(&statement).expect("a statement"));
-    bundle["dsseEnvelope"]["payload"] = encoded.into();
-    serde_json::to_vec(&bundle).expect("a bundle")
 }
 
 /// A clock that moves only when a test moves it.
@@ -167,51 +140,13 @@ impl Fetcher for FakeFetcher {
     }
 }
 
-/// A verifier that records the digests it was asked about and gives one answer.
-pub struct FakeVerifier {
-    pub answer: Result<(), VerifyError>,
-    pub asked: RefCell<Vec<(String, PathBuf, PathBuf)>>,
-    pub files_existed: Cell<bool>,
-}
-
-impl FakeVerifier {
-    pub fn accepting() -> FakeVerifier {
-        FakeVerifier::answering(Ok(()))
-    }
-
-    pub fn answering(answer: Result<(), VerifyError>) -> FakeVerifier {
-        FakeVerifier {
-            answer,
-            asked: RefCell::new(Vec::new()),
-            files_existed: Cell::new(false),
-        }
-    }
-}
-
-impl Verifier for FakeVerifier {
-    fn verify(&self, request: &Attest<'_>) -> Result<Attested, VerifyError> {
-        self.asked.borrow_mut().push((
-            request.sha256.as_str().to_owned(),
-            request.archive.to_owned(),
-            request.bundle.to_owned(),
-        ));
-        self.files_existed
-            .set(request.archive.is_file() & request.bundle.is_file());
-        self.answer.clone().map(|()| Attested {
-            commit: request.commit.clone(),
-            source_ref: request.source_ref.clone(),
-        })
-    }
-}
-
 /// A host: a scratch directory with the packages root, the stores file read from it, the bounds
-/// (a package of at most 64 bytes, 50 s per artifact source, 20 s per bundle source and proof).
+/// (a package of at most 64 bytes, 50 s per source).
 pub struct Host {
     pub dir: Scratch,
     pub clock: Arc<FakeClock>,
     pub stores: Stores,
     pub bounds: Bounds,
-    pub signers: TrustedSigners,
 }
 
 pub fn me(dir: &Path) -> u32 {
@@ -238,11 +173,7 @@ impl Host {
         )
         .expect("the stores file");
         fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).expect("its mode");
-        let channel = hostkeeper_config::daemon::DaemonConfig::parse(
-            "coordinator = \"https://c.example:8443\"\nca_sha256 = \"0000000000000000000000000000000000000000000000000000000000000000\"\nrelease_channel = \"https://channel.example\"\n[trusted_signers]\norganisation = \"example-org\"\nworkflow = \".github/workflows/artifacts.yml\"\nrefs = [\"refs/heads/main\"]\nhosted_runner = true\n",
-        )
-        .expect("a config");
-        let stores = stores::load(&file, &channel.release_channel, me(dir.path())).expect("stores");
+        let stores = stores::load(&file, me(dir.path())).expect("stores");
         Host {
             dir,
             clock: Arc::new(FakeClock(Mutex::new(1))),
@@ -250,14 +181,7 @@ impl Host {
             bounds: Bounds {
                 max_package_bytes: 64,
                 fetch_timeout_secs: 50,
-                attestation_timeout_secs: 20,
                 ..Bounds::default()
-            },
-            signers: TrustedSigners {
-                organisation: "example-org".to_owned(),
-                workflow: ".github/workflows/artifacts.yml".to_owned(),
-                refs: vec!["refs/heads/main".to_owned()],
-                hosted_runner: true,
             },
         }
     }
@@ -289,6 +213,18 @@ impl Host {
         ServiceName::new("svc").expect("a service name")
     }
 
+    pub fn run(&self, fetcher: &dyn Fetcher, entry: &Target) -> Result<Pinned, PackageFailure> {
+        let env = PinnedEnv {
+            fetcher,
+            coordinator: None,
+            clock: &*self.clock,
+            bounds: &self.bounds,
+            stores: &self.stores,
+            packages_root: &self.root(),
+        };
+        fetch_pinned(&env, &self.service(), entry)
+    }
+
     /// The staging files in the service's directory.
     pub fn staged(&self) -> Vec<String> {
         let dir = self.root().join("svc");
@@ -306,25 +242,6 @@ impl Host {
             .unwrap_or_default();
         names.sort();
         names
-    }
-
-    pub fn run(
-        &self,
-        fetcher: &dyn Fetcher,
-        verifier: &FakeVerifier,
-        entry: &Target,
-    ) -> Result<Proven, PackageFailure> {
-        let env = EntryEnv {
-            fetcher,
-            verifier,
-            clock: &*self.clock,
-            bounds: &self.bounds,
-            stores: &self.stores,
-            packages_root: &self.root(),
-            signers: &self.signers,
-            platform: Platform::LinuxX86_64,
-        };
-        fetch_entry(&env, &self.service(), entry)
     }
 }
 
@@ -353,142 +270,44 @@ pub fn locations(list: &[(&str, &str)]) -> Vec<Location> {
         .collect()
 }
 
-pub const ARTIFACT_AT: &str = "svc/1.0.0/svc.tar.zst";
-pub const BUNDLE_AT: &str = "svc/1.0.0/svc.tar.zst.sigstore.json";
+pub const ARTIFACT_AT: &str = "svc/1.0.0/svc.pkg";
 
-/// An entry for `archive` attested by `bundle`, each with its locations.
-pub fn entry_of(
-    archive: &[u8],
-    artifact_at: &[(&str, &str)],
-    bundle: &[u8],
-    bundle_at: &[(&str, &str)],
-) -> Target {
+/// An entry for `archive` with its locations.
+pub fn entry_of(archive: &[u8], artifact_at: &[(&str, &str)]) -> Target {
     Target {
-        installer: "hostkeeper-archive".to_owned(),
+        installer: "macos-pkg".to_owned(),
         locations: locations(artifact_at),
         digest: sha256(archive),
         bytes: u64::try_from(archive.len()).expect("a length"),
-        attestation: Some(Blob {
-            digest: sha256(bundle),
-            bytes: u64::try_from(bundle.len()).expect("a length"),
-            locations: locations(bundle_at),
-        }),
         ..Target::default()
     }
 }
 
-/// The bundle that lists [`ARCHIVE`]'s digest.
-pub fn bundle() -> Vec<u8> {
-    bundle_listing(&[&sha256(ARCHIVE)])
-}
-
-/// The usual entry: both blobs at store `a`.
+/// The usual entry: the artifact at store `a`.
 pub fn entry() -> Target {
-    entry_of(
-        ARCHIVE,
-        &[("a", ARTIFACT_AT)],
-        &bundle(),
-        &[("a", BUNDLE_AT)],
-    )
+    entry_of(ARCHIVE, &[("a", ARTIFACT_AT)])
 }
 
 pub fn artifact_url() -> String {
     format!("https://a.example/{ARTIFACT_AT}")
 }
 
-pub fn bundle_url() -> String {
-    format!("https://a.example/{BUNDLE_AT}")
-}
-
-/// A mirror's URL for the blob whose bytes are `bytes`.
-pub fn mirror_url(mirror: &str, bytes: &[u8]) -> String {
+/// A mirror's URL for the artifact.
+pub fn mirror_url(mirror: &str) -> String {
     format!(
         "https://{mirror}.example/v2/rel/blobs/sha256:{}",
-        sha256(bytes)
+        sha256(ARCHIVE)
     )
 }
 
-/// The fetcher of a good host: both blobs at store `a`.
+/// The fetcher of a good host: the artifact at store `a`.
 pub fn published(host: &Host) -> FakeFetcher {
-    FakeFetcher::new(&host.clock)
-        .route(&artifact_url(), Serve::Bytes(ARCHIVE.to_vec()))
-        .route(&bundle_url(), Serve::Bytes(bundle()))
+    FakeFetcher::new(&host.clock).route(&artifact_url(), Serve::Bytes(ARCHIVE.to_vec()))
 }
 
-/// The two blobs of an entry, which a row is run for.
-#[derive(Clone, Copy, Debug)]
-pub enum Which {
-    Artifact,
-    Bundle,
-}
-
-impl Which {
-    pub const BOTH: [Which; 2] = [Which::Artifact, Which::Bundle];
-
-    /// The bytes of the blob.
-    pub fn bytes(self) -> Vec<u8> {
-        match self {
-            Which::Artifact => ARCHIVE.to_vec(),
-            Which::Bundle => bundle(),
-        }
-    }
-
-    pub fn url(self) -> String {
-        match self {
-            Which::Artifact => artifact_url(),
-            Which::Bundle => bundle_url(),
-        }
-    }
-
-    pub fn mirror_url(self, mirror: &str) -> String {
-        mirror_url(mirror, &self.bytes())
-    }
-
-    /// The reason a location that gave other bytes is refused with.
-    pub fn wrong(self) -> PackageFailure {
-        release(match self {
-            Which::Artifact => "package_digest_mismatch",
-            Which::Bundle => "not_attested",
-        })
-    }
-
-    /// The reason a blob nobody answered for is deferred with.
-    pub fn down(self) -> PackageFailure {
-        deferred(match self {
-            Which::Artifact => "fetch_failed",
-            Which::Bundle => "attestation_unavailable",
-        })
-    }
-
-    /// The URLs asked for this blob (the fetcher's log holds both blobs').
-    pub fn asked(self, fetcher: &FakeFetcher, urls: &[String]) -> Vec<String> {
-        let _ = self;
-        fetcher
-            .urls()
-            .into_iter()
-            .filter(|u| urls.contains(u))
-            .collect()
-    }
-}
-
-/// Wrong bytes of the same size as the blob's.
-pub fn wrong_for(which: Which) -> Vec<u8> {
-    let mut bytes = which.bytes();
+/// Wrong bytes of the same size as the artifact.
+pub fn wrong() -> Vec<u8> {
+    let mut bytes = ARCHIVE.to_vec();
     bytes[0] ^= 0xff;
     bytes
-}
-
-/// The fetcher of a host where every URL in `serving` answers with its bytes, and the other
-/// blob is served right from its location `a`.
-pub fn with(host: &Host, which: Which, serving: &[(String, Serve)]) -> FakeFetcher {
-    let mut fetcher = FakeFetcher::new(&host.clock);
-    let other = match which {
-        Which::Artifact => (Which::Bundle.url(), Serve::Bytes(Which::Bundle.bytes())),
-        Which::Bundle => (Which::Artifact.url(), Serve::Bytes(Which::Artifact.bytes())),
-    };
-    fetcher = fetcher.route(&other.0, other.1);
-    for (url, serve) in serving {
-        fetcher = fetcher.route(url, serve.clone());
-    }
-    fetcher
 }

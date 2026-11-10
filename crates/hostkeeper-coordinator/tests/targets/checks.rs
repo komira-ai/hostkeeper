@@ -18,7 +18,7 @@ use super::{
     targets,
 };
 use crate::support::targets::{
-    Answered, digest, entry, grpc_bytes, list, location, repository_entry,
+    Answered, digest, entry, grpc_bytes, list, location, put_komira, repository_entry,
 };
 
 /// `INVALID_ARGUMENT`.
@@ -123,14 +123,20 @@ fn request(service: &str, all: Targets) -> proto::SetDesiredRequest {
     set(service, "2.0", all)
 }
 
-/// The targets of `hostkeeper`: one `hostkeeper-archive` entry on each of `packages`' platforms,
-/// of the digest made of the character and the size.
+/// The targets of `hostkeeper`: its native entry on each of `packages`' platforms, `apt` from a
+/// repository on Linux and `macos-pkg` on macOS, of the pin made of the character.
 fn self_targets(packages: &[(&str, char, u64)]) -> Targets {
     packages
         .iter()
         .map(|(platform, c, bytes)| {
-            let archive = entry("hostkeeper", "hostkeeper-archive", *c, *bytes);
-            ((*platform).to_owned(), list(vec![archive]))
+            let own = if platform.starts_with("macos") {
+                let mut pkg = entry("hostkeeper", "macos-pkg", *c, *bytes);
+                pkg.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper".to_owned()];
+                pkg
+            } else {
+                repository_entry("hostkeeper", "2.0-1", *c)
+            };
+            ((*platform).to_owned(), list(vec![own]))
         })
         .collect()
 }
@@ -322,7 +328,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                 "linux-x86_64".to_owned(),
                 list(vec![entry("hostkeeper", "tarball", 'a', 1000)]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
         (
@@ -335,7 +341,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     entry("hostkeeper", "tarball", 'b', 1000),
                 ]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
     ];
@@ -386,6 +392,29 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
             "entry 0 of linux-x86_64: hook.boot \"restore\" needs a hook.command; the built-in steps have no boot step".to_owned(),
         ),
         (
+            "hostkeeper with its archive entry after its native one",
+            "hostkeeper",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![
+                    repository_entry("hostkeeper", "2.0-1", 'b'),
+                    entry("hostkeeper", "hostkeeper-archive", 'a', 1000),
+                ]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
+                .to_owned(),
+        ),
+        (
+            "hostkeeper with its archive entry alone",
+            "hostkeeper",
+            BTreeMap::from([(
+                "linux-x86_64".to_owned(),
+                list(vec![entry("hostkeeper", "hostkeeper-archive", 'a', 1000)]),
+            )]),
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
+                .to_owned(),
+        ),
+        (
             "hostkeeper with its archive entry before its native one",
             "hostkeeper",
             BTreeMap::from([(
@@ -395,7 +424,7 @@ async fn each_rule_of_section_3_4_refuses_the_set_target_invalid() {
                     repository_entry("hostkeeper", "2.0-1", 'b'),
                 ]),
             )]),
-            "the list of linux-x86_64 for the service hostkeeper is not one native entry with at most one hostkeeper-archive entry after it, nor one hostkeeper-archive entry"
+            "the list of linux-x86_64 for the service hostkeeper is not one native entry"
                 .to_owned(),
         ),
     ];
@@ -450,18 +479,20 @@ async fn a_package_digest_beside_targets_is_refused_index_invalid() {
     .await;
 }
 
-/// Proves that an index that does not list exactly the archive entries of the targets is
-/// refused `index_invalid`: one digest that differs, one size that differs, a platform the
-/// targets lack, and a platform the index lacks; and that an index whose digest is not the
-/// SHA-256 of its text is refused `index_digest_mismatch`, as a set without targets is. Each
-/// refusal changes no file.
+/// Proves that the text of a release index set beside targets is not read: an index that does not
+/// list the archive entries of the targets (one digest that differs, one size that differs, a
+/// platform the targets lack, a platform the index lacks, another service's, and a text that is no
+/// index at all) is accepted and kept as its digest, as an index that lists them is; and an index
+/// whose digest is not the SHA-256 of its text is refused `index_digest_mismatch`, as a set
+/// without targets is, with no file changed.
 ///
-/// Catches: an index compared by platform names only, or by the first entry of a list.
+/// Catches: an index parsed or compared with the targets, which would refuse a set the release
+/// job no longer has an index for, and a digest taken without being held to its text.
 #[tokio::test]
-async fn an_index_that_disagrees_with_the_targets_is_refused() {
-    let rig = rig_with_web("targets-index-refused").await;
+async fn an_index_beside_the_targets_is_kept_as_its_digest_whatever_its_text() {
+    let rig = rig_with_web("targets-index-kept").await;
+    put_komira(&rig).await;
     let all = self_targets(&SELF_THREE);
-    let base = request("hostkeeper", all.clone());
     let index = |packages: &[(&str, char, u64)]| index_text("hostkeeper", packages);
     let two = [SELF_THREE[0], SELF_THREE[1]];
     let mut other_digest = SELF_THREE;
@@ -476,37 +507,35 @@ async fn an_index_that_disagrees_with_the_targets_is_refused() {
             "an index of another service",
             index_text("web", &SELF_THREE),
         ),
+        ("an index that is no index", "{}".to_owned()),
+        ("the index that agrees", index(&SELF_THREE)),
     ];
-    for (why, text) in rows {
-        let index_invalid = (INVALID_ARGUMENT, "index_invalid");
-        refused(&rig, &with_index(base.clone(), &text), index_invalid, why).await;
+    for (n, (why, text)) in rows.iter().enumerate() {
+        let version = format!("2.{n}");
+        let asked = with_index(set("hostkeeper", &version, all.clone()), text);
+        let answered = grpc(&rig, SET_DESIRED, Some(&ci_token()), &asked).await;
+        assert_eq!(answered.code, 0, "{why}: {answered:?}");
+        let read = get(&rig, "hostkeeper", &version).await;
+        assert_eq!(read.code, 0, "{why}: {read:?}");
+        let kept: proto::GetReleaseResponse = read.decoded();
+        assert_eq!(kept.release_index_digest, Some(sha256_of(text)), "{why}");
     }
-    // A platform the targets lack.
-    let fewer = request("hostkeeper", self_targets(&two));
-    let text = index(&SELF_THREE);
-    refused(
-        &rig,
-        &with_index(fewer, &text),
-        (INVALID_ARGUMENT, "index_invalid"),
-        "a platform the targets lack",
-    )
-    .await;
+    // The targets lack a platform the index lists: kept all the same.
+    let fewer = with_index(
+        set("hostkeeper", "3.0", self_targets(&two)),
+        &index(&SELF_THREE),
+    );
+    let answered = grpc(&rig, SET_DESIRED, Some(&ci_token()), &fewer).await;
+    assert_eq!(answered.code, 0, "{answered:?}");
+
     // The digest of another text.
-    let mut wrong = with_index(base.clone(), &index(&SELF_THREE));
+    let mut wrong = with_index(set("hostkeeper", "4.0", all), &index(&SELF_THREE));
     wrong.release_index_digest = Some(digest('0'));
     refused(
         &rig,
         &wrong,
         (INVALID_ARGUMENT, "index_digest_mismatch"),
         "a wrong digest",
-    )
-    .await;
-    // Not an index at all.
-    refused(
-        &rig,
-        &with_index(base, "{}"),
-        (INVALID_ARGUMENT, "index_invalid"),
-        "an index that is no index",
     )
     .await;
 }
@@ -520,6 +549,7 @@ async fn an_index_that_disagrees_with_the_targets_is_refused() {
 #[tokio::test]
 async fn an_index_that_agrees_with_the_archive_entries_is_accepted() {
     let rig = rig("targets-index-accepted");
+    put_komira(&rig).await;
 
     let all = self_targets(&SELF_THREE);
     let text = index_text("hostkeeper", &SELF_THREE);

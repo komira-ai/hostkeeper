@@ -6,6 +6,8 @@
 //! executor, on a host whose record of the service does not read.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::path::PathBuf;
@@ -23,7 +25,8 @@ use hostkeeper_proto::hostkeeper::agent::v1::{self as agent, ClearRecord, Order,
 use hostkeeper_proto::hostkeeper::operator::v1::ClearRecordRequest;
 use hostkeeper_steps::record::{PARAMS_FILE, RECORD_FILE};
 use support::coordinated::{Host, coordinator_of, on_host};
-use support::{Rig, Scratch, d, name, snapshot, update};
+use support::{Rig, Scratch, d, name, snapshot};
+use support_host::NativeHost;
 
 /// A record of the step runner's committed fixtures of schema 1 (and one of schema 2).
 fn fixture(file: &str) -> String {
@@ -135,13 +138,15 @@ fn a_clear_record_or_abort_order_of_a_bad_service_name_is_invalid_order() {
 /// byte for byte as they were; and the next order of the service runs as generation 1.
 #[test]
 fn a_clear_record_order_clears_a_corrupt_record_and_nothing_else() {
-    let rig = Rig::new("clear-corrupt");
-    rig.running("web", "1.0.0");
-    rig.stage("web", "0.9.0");
-    rig.store.link("web", "previous", "0.9.0");
-    rig.add("web", "2.0.0");
-    rig.add("api", "2.0.0");
-    let daemon = rig.daemon();
+    let farm = NativeHost::new("clear-corrupt");
+    let rig = farm.rig();
+    for version in ["0.9.0", "1.0.0", "2.0.0"] {
+        farm.publish("web", version);
+    }
+    for version in ["1.0.0", "2.0.0"] {
+        farm.publish("api", version);
+    }
+    let daemon = farm.daemon();
     let succeeded = Reply::Finished {
         verdict: Verdict::Succeeded {
             promotion_pending: false,
@@ -149,12 +154,16 @@ fn a_clear_record_order_clears_a_corrupt_record_and_nothing_else() {
         reason: None,
         resent: false,
     };
-    assert_eq!(daemon.order(&update("api", "2.0.0", &d(), 1)), succeeded);
+    // `web` runs 1.0.0 with 0.9.0 as its previous release.
+    assert_eq!(daemon.order(&farm.install("web", "0.9.0", 1)), succeeded);
+    assert_eq!(daemon.order(&farm.update("web", "1.0.0", 2)), succeeded);
+    assert_eq!(daemon.order(&farm.install("api", "1.0.0", 1)), succeeded);
+    assert_eq!(daemon.order(&farm.update("api", "2.0.0", 2)), succeeded);
     let finished = fixture("finished.json");
     let truncated = &finished.as_bytes()[..finished.len() / 2];
     let wrong_type = finished.replace("\"generation\": 13", "\"generation\": \"thirteen\"");
     assert_ne!(wrong_type, finished, "the fixture has the field");
-    let dir = with_record(&rig, b"");
+    let dir = with_record(rig, b"");
     fs::write(dir.join(HELD_HALT_FILE), "3\n").expect("a held halt");
     fs::write(dir.join(PARAMS_FILE), "left = 1\n").expect("a params file");
     let kept = || {
@@ -167,7 +176,7 @@ fn a_clear_record_order_clears_a_corrupt_record_and_nothing_else() {
     };
     let before = kept();
     for corrupt in [&b""[..], truncated, wrong_type.as_bytes()] {
-        with_record(&rig, corrupt);
+        with_record(rig, corrupt);
         assert_eq!(daemon.order(&clear("web")), cleared());
         assert!(!dir.join(RECORD_FILE).exists());
         assert_eq!(
@@ -176,7 +185,7 @@ fn a_clear_record_order_clears_a_corrupt_record_and_nothing_else() {
         );
         assert_eq!(kept(), before);
     }
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 1)), succeeded);
+    assert_eq!(daemon.order(&farm.update("web", "2.0.0", 1)), succeeded);
     assert_eq!(rig.record("web").expect("the record").generation, 1);
 }
 

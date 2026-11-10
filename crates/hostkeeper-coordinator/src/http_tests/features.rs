@@ -1,12 +1,15 @@
 //! The features of a reply over HTTP: only to an agent that announced `agent_features`, and
-//! never to one whose strict reader would refuse them.
+//! never to one whose strict reader would refuse them. The JSON route carries no order, so a
+//! reply over it is `nothing`; the replies that order an update are those of a transport that
+//! carries typed orders ([`typed_text`]).
 
 use super::*;
 
-use hostkeeper_wire::wire::ORDER_FEATURE;
+use hostkeeper_wire::wire::{ORDER_FEATURE, Reply, ServiceReply};
 
 use crate::grpc::GRPC_FEATURE;
 use crate::service::FEATURES;
+use crate::testutil::version;
 
 const SERVICES_TEXT: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]\n";
 
@@ -54,17 +57,26 @@ async fn rig(name: &str, advertised: &[&str]) -> Rig {
         r#"{"version":"2.0","min_up":{"storage":1,"frontend":1}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        let (code, _) = raw(
-            &rig,
-            Surface::Control,
-            &None,
-            request("POST", DESIRED_PATH, Some(&ci_token()), body),
-        )
-        .await;
-        assert_eq!(code, 200);
+        rig.set(body).await;
     }
     rig.at(2_000);
     rig
+}
+
+/// The reply the heartbeat `body` of `host` is answered with over a transport that carries typed
+/// orders, as the JSON the route would answer, by a coordinator that lists `apt` for a daemon that
+/// announces `target-v1`.
+async fn typed_text(rig: &Rig, host: &str, role: &str, body: &str) -> String {
+    let beat: hostkeeper_wire::wire::Heartbeat = serde_json::from_str(body).expect("a heartbeat");
+    let (answer, _) = rig
+        .coordinator
+        .heartbeat_with_orders_native(
+            crate::marks_support::who(host, role),
+            beat,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .expect("answered");
+    serde_json::to_string(&answer).expect("JSON")
 }
 
 async fn beat_text(rig: &Rig, host: &str, role: &str, body: &str) -> String {
@@ -88,12 +100,20 @@ async fn an_agent_that_announced_nothing_gets_the_reply_alone() {
     let rig = rig("http-features-none", &["deferred-v1"]).await;
     let nothing = beat_text(&rig, "d1", "daemon", &beat("2.0", "")).await;
     assert_eq!(nothing, r#"{"reply":"nothing"}"#);
-    let kbf_order = beat_text(&rig, "d2", "daemon", &beat("1.0", "")).await;
+    // The JSON route carries no order: a host behind is answered `nothing` too.
+    let behind = beat_text(&rig, "d2", "daemon", &beat("1.0", "")).await;
+    assert_eq!(behind, r#"{"reply":"nothing"}"#);
+    // The updates a transport that carries typed orders answers, in the bytes they always had.
+    let kbf_order = serde_json::to_string(&Reply::Update {
+        version: version("2.0"),
+    })
+    .expect("JSON");
     assert_eq!(kbf_order, r#"{"reply":"update","version":"2.0"}"#);
-    // d2 reports its update done, so the one live update is over and d3 may be ordered.
-    let done = beat_text(&rig, "d2", "daemon", &beat("2.0", "")).await;
-    assert_eq!(done, r#"{"reply":"nothing"}"#);
-    let service_order = beat_text(&rig, "d3", "daemon", &beat("2.0", OTHER)).await;
+    let service_order = serde_json::to_string(&ServiceReply::Update {
+        service: Some("other".to_owned()),
+        version: version("3.0"),
+    })
+    .expect("JSON");
     assert_eq!(
         service_order,
         r#"{"reply":"update","service":"other","version":"3.0"}"#
@@ -125,10 +145,10 @@ async fn an_agent_that_announced_features_gets_the_supported_subset() {
         beat_text(&rig, "d1", "daemon", &unknown).await,
         r#"{"reply":"nothing","features":[]}"#
     );
-    let order = beat("1.0", r#","agent_features":["halt-v1"]"#);
+    let behind = beat("1.0", r#","agent_features":["halt-v1"]"#);
     assert_eq!(
-        beat_text(&rig, "d2", "daemon", &order).await,
-        r#"{"reply":"update","version":"2.0","features":["halt-v1"]}"#
+        beat_text(&rig, "d2", "daemon", &behind).await,
+        r#"{"reply":"nothing","features":["halt-v1"]}"#
     );
 }
 
@@ -144,10 +164,9 @@ async fn a_coordinator_that_advertises_nothing_answers_an_announcing_agent_with_
     );
 }
 
-/// Catches: a bad announcement costing the host its updates or being answered as a good one:
-/// the heartbeat is still read, the host is still ordered its kbf update, and the answer
-/// carries no `features` (a bad list is no announcement). A list one name over the bound of 16
-/// is bad.
+/// Catches: a bad announcement costing the host its heartbeat or being answered as a good one:
+/// the heartbeat is still read, and the answer carries no `features` (a bad list is no
+/// announcement). A list one name over the bound of 16 is bad.
 #[tokio::test]
 async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent() {
     let rig = rig("http-features-bad", &["halt-v1"]).await;
@@ -159,7 +178,7 @@ async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent(
     ];
     assert_eq!(
         beat_text(&rig, "d1", "daemon", &beat("1.0", bad[0])).await,
-        r#"{"reply":"update","version":"2.0"}"#
+        r#"{"reply":"nothing"}"#
     );
     for list in bad {
         assert_eq!(
@@ -171,7 +190,7 @@ async fn a_bad_announcement_is_dropped_and_the_host_is_answered_as_an_old_agent(
 }
 
 /// Catches: a new agent's heartbeat with every new fact refused, or its facts changing what
-/// it is ordered: the heartbeat is accepted and answered as the same heartbeat without them.
+/// it is answered: the heartbeat is accepted and answered as the same heartbeat without them.
 #[tokio::test]
 async fn a_heartbeat_with_every_new_fact_is_accepted_and_ordered_as_without_them() {
     let rig = rig("http-features-facts", &[]).await;
@@ -182,7 +201,7 @@ async fn a_heartbeat_with_every_new_fact_is_accepted_and_ordered_as_without_them
     );
     assert_eq!(
         beat_text(&rig, "d1", "daemon", &beat("1.0", facts)).await,
-        r#"{"reply":"update","version":"2.0"}"#
+        beat_text(&rig, "d2", "daemon", &beat("1.0", "")).await,
     );
 }
 
@@ -236,10 +255,13 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::repository_push::FEATURE {
             // The repositories of a host go only in the answer over gRPC.
             crate::repository_push_tests::repositories_v1_is_acted_on().await;
+        } else if *name == crate::facts::FEATURE {
+            // The facts of a host go only in the answer over gRPC.
+            crate::facts_tests::facts_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
-            let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
+            let without = typed_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
-            let with = beat_text(&rig, "d2", "daemon", &with_it).await;
+            let with = typed_text(&rig, "d2", "daemon", &with_it).await;
             assert_ne!(with, without, "{name} changes nothing");
         } else {
             assert_eq!(*name, "heartbeat-v2");
@@ -254,13 +276,14 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::force::FEATURE);
     handled.push(crate::picks::TARGET_FEATURE);
     handled.push(crate::repository_push::FEATURE);
+    handled.push(crate::facts::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);
 }
 
-/// Catches: `order-v1` advertised and gated but not acted on: a service with no registered
-/// package digest is ordered to an agent without it and not to one that announced it.
+/// Catches: `order-v1` advertised and gated but not acted on: the agent that announced it is
+/// answered with it in `features`, and the one that did not is not.
 async fn order_v1_is_acted_on() {
     let rig = rig("http-features-order", FEATURES).await;
     let announcing = format!(r#","agent_features":["order-v1"]{OTHER}"#);
@@ -270,7 +293,7 @@ async fn order_v1_is_acted_on() {
     );
     assert_eq!(
         beat_text(&rig, "d2", "daemon", &beat("2.0", OTHER)).await,
-        r#"{"reply":"update","service":"other","version":"3.0"}"#
+        r#"{"reply":"nothing"}"#
     );
 }
 

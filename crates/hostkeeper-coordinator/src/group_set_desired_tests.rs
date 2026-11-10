@@ -729,12 +729,8 @@ async fn the_refusals_of_a_release_hold_in_a_group() {
     assert!(matches!(refused, SetError::RepositoryUnknown), "{refused}");
     assert_eq!(farm.world.state(), before);
 
-    let text = crate::release_index_support::index_text(
-        "web",
-        "2.0",
-        &[(hostkeeper_config::platform::Platform::LinuxX86_64, 1)],
-    );
-    let sha = crate::release_index_support::sha(&text);
+    let text = crate::index_set_support::index_text("web", "2.0", &[("linux-x86_64", 1)]);
+    let sha = crate::index_set_support::sha(&text);
     let named = json!({
         "service": "web",
         "version": "2.0",
@@ -749,40 +745,6 @@ async fn the_refusals_of_a_release_hold_in_a_group() {
             .collect::<Vec<_>>(),
         [Some(format!("2.0 with release index {sha}"))]
     );
-}
-
-/// Proves: a coordinator with a release channel asks it before a group is set: a version the
-/// channel does not hold is refused `not_in_channel`, nothing changes, and once the channel holds
-/// it the same set is taken.
-///
-/// Catches: the channel skipped when the set names a group.
-#[tokio::test]
-async fn the_release_channel_is_asked_in_a_group_set() {
-    use std::sync::Arc;
-
-    use crate::channel::{ChannelRefusal, ReleaseChannel};
-    use crate::channel_tests::{D2, FakeChannel, index};
-
-    let channel = Arc::new(FakeChannel::default());
-    let mut farm = Farm::new("gs-channel");
-    farm.group("alpha", &["web"], None);
-    farm.world.rig.coordinator.channel = Some(ReleaseChannel::new(channel.clone()));
-    let before = farm.world.state();
-    let body = json!({"service": "web", "version": "2.0", "release_digest": D2});
-
-    let refused = sets(&farm, &body, &WriteAsk::default(), "alpha")
-        .await
-        .expect_err("refused");
-
-    assert!(
-        matches!(refused, SetError::Channel(ChannelRefusal::NotInChannel)),
-        "{refused}"
-    );
-    assert_eq!(farm.world.state(), before);
-    channel.hold("web", "2.0", &index("web", "2.0", &[D2]));
-    sets(&farm, &body, &WriteAsk::default(), "alpha")
-        .await
-        .expect("held");
 }
 
 /// Proves: a coordinator that holds no group refuses a set that names one `not_in_host_group`,

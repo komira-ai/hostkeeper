@@ -45,6 +45,8 @@ const FIELDS: [(&str, &[Field]); 14] = [
             ("components", 5, false),
             ("fingerprints", 6, false),
             ("keyring", 7, false),
+            ("access", 8, false),
+            ("credential_file", 9, false),
         ],
     ),
     (
@@ -197,6 +199,7 @@ fn wire_names_of_the_repositories_api_are_pinned() {
             ("capacity", 8),
             ("store_failed", 9),
             ("audit_unavailable", 10),
+            ("credential_unusable", 11),
         ])
     );
     let releases = tokens(

@@ -11,7 +11,9 @@ use hostkeeper_proto::hostkeeper::operator::v1::min_version::Scope as MinScope;
 use hostkeeper_wire::wire::{Health, ServiceBeat, ServiceReply};
 
 use crate::decide::Why;
-use crate::marks_support::{INSTALLER, WEB, ask_typed, beat_of, digest, operator, runs};
+use crate::marks_support::{
+    INSTALLER, WEB, ask_typed, beat_of, digest, native_target, operator, runs,
+};
 use crate::orders::{Order, install_order_id};
 use crate::registry::Digest;
 use crate::testutil::{Rig, id, version};
@@ -101,7 +103,7 @@ pub(crate) fn absent(service: &str, running: &str) -> ServiceBeat {
 pub(crate) fn install(to: &str, n: u8) -> Order {
     let digest = Digest::parse(&digest(n)).expect("a digest");
     Order::Install {
-        target: None,
+        target: Some(native_target(WEB, n)),
         service: WEB.to_owned(),
         version: version(to),
         order_id: install_order_id(&digest),

@@ -25,6 +25,7 @@ use hostkeeper_daemon::boot::BOOT_ID_FILE;
 use hostkeeper_daemon::mac::{HostIoreg, HostMacVerify};
 use hostkeeper_enroll::{Claims, ClaimsSource, MacClaims};
 use hostkeeper_hook::{Invocation, Outcome, Step};
+use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict};
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{
@@ -37,7 +38,6 @@ use hostkeeper_steps::{
     ArtifactError, BootId, BootIdSource, Bound, Staged, StepCall, StepLauncher,
 };
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
@@ -596,6 +596,8 @@ hosted_runner = true
         text(&state),
         "--packages-dir".to_owned(),
         text(&packages),
+        "--facts-file".to_owned(),
+        text(&state.with_file_name("facts.json")),
     ];
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let _booted = bootstrap(&daemon, &argv, root);

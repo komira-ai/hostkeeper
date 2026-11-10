@@ -20,7 +20,7 @@
 //!
 //! A refusal is reported `failed` with its token; `order_invalid` and `manifest_invalid` are
 //! reported of class `release`, before the commit point
-//! ([`crate::link_adapters::blamed`]). A missing attestation is not `order_invalid`: the fetch judges it (`not_attested`). Nothing is
+//! ([`crate::link_adapters::blamed`]). Nothing is
 //! fetched and nothing is written for any answer here.
 
 use hostkeeper_config::manifest::HostkeeperVersion;

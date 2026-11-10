@@ -84,7 +84,7 @@ fn the_committed_skip_list_holds_only_entries_no_macos_job_builds_or_reads() {
     let files = tracked();
     let device = device_tests(&doc);
     assert!(
-        device.contains("device_mac") && device.contains("unpack_mac"),
+        device.contains("device_mac") && device.contains("install_macos_pkg"),
         "{device:?}"
     );
     assert_eq!(

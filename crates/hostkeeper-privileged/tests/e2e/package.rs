@@ -1,48 +1,54 @@
-//! The tierstore-shaped package, built in memory at test time.
+//! The tierstore-shaped package, built at test time as a `.deb` and ordered through its `apt`
+//! entry.
 //!
-//! A package is the archive the daemon downloads and unpacks (`hostkeeper-unpack`): one zstd frame
-//! holding a ustar tar of `bin/`, `bin/tierstore-like`, `manifest.toml`, `units/` and one unit
-//! template, in that order, modes 0555 for directories and the binary and 0444 for the other
-//! files, owned by root, dated 0, so the bytes depend on the inputs alone. This is the shape
-//! `cargo xtask release package` builds for the production services; the test builds it itself
-//! so that each scenario can have several versions without anything binary in the repository.
+//! A package is the `.deb` (`dpkg-deb`, no maintainer script) of the service
+//! [`SERVICE`]: the `tierstore-like` program of `tests/bin/tierstore_like.rs` at `usr/bin/`
+//! (the run units' program) and again at the hook's fixed path (`usr/lib/<package>/hostkeeper-hook`,
+//! which the daemon runs from the sealed tree), the release file of the version (its version and
+//! its two run units), the unit template, and one plain unit file for each of the version's two
+//! ports (a `run` unit of an entry is a file of the package), the unit text from
+//! `fixtures/tierstore-shaped/` and a `{{placeholder}}` for the release file. This is the layout
+//! of a production service's `.deb`; the test builds it itself so that each scenario can have
+//! several versions without anything binary in the repository.
 //!
-//! The manifest and the unit come from the templates under `fixtures/tierstore-shaped/`, which
-//! `include_str!` embeds and `{{placeholder}}` fill. The binary is the `tierstore-like` program of
-//! `tests/bin/tierstore_like.rs`, whose path the caller gives (`CARGO_BIN_EXE_tierstore-like` in
-//! the test file).
-//!
-//! [`PackageBuilder::with_link`] adds a symlink entry, which the unpacker refuses: it is for the
-//! test of that refusal and no other.
+//! The entry that orders a version ([`BuiltPackage::entry`]) is the `apt` entry of the package in
+//! the scenario's repository: its pin, the two run units, the health URL with `{port}`, the
+//! hook's bounds and the params the hook reads (`tierstore_like_record_dir`,
+//! `tierstore_like_fail_verify`).
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_config::platform::Platform;
-use sha2::{Digest, Sha256};
+use hostkeeper_proto::hostkeeper::release::v1::{StepBounds, Target, TargetList};
 
-use super::{BINARY_NAME, SERVICE, UNIT_TEMPLATE};
+use super::aptrepo::{self, AptRepo, Deb, File, Published, Service};
+use super::{BINARY_NAME, REPOSITORY_NAME, SERVICE, UNIT_TEMPLATE};
 
-/// The manifest template; the placeholders are listed in `fixtures/tierstore-shaped/README.md`.
-const MANIFEST_TEMPLATE: &str = include_str!(concat!(
+/// The release file template; the placeholders are listed in `fixtures/tierstore-shaped/README.md`.
+const RELEASE_TEMPLATE: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
-    "/fixtures/tierstore-shaped/manifest.toml.tmpl"
+    "/fixtures/tierstore-shaped/release.toml.tmpl"
 ));
-/// The unit template of the run units.
+/// The unit template of the run units, and the text of each instance's unit file.
 const UNIT_TEMPLATE_TEXT: &str = include_str!(concat!(
     env!("CARGO_MANIFEST_DIR"),
     "/fixtures/tierstore-shaped/units/hostkeeper-ci-tierstore@.service.tmpl"
 ));
 
-/// Mode of a directory and of the executable.
-const MODE_EXEC: u32 = 0o555;
+/// Where the units of a package are.
+const UNIT_DIR: &str = "usr/lib/systemd/system";
+/// Where the package keeps its own files.
+const SHARE_DIR: &str = "usr/share/hostkeeper-ci-tierstore";
+/// Mode of the programs.
+const MODE_EXEC: u32 = 0o755;
 /// Mode of the other files.
-const MODE_FILE: u32 = 0o444;
+const MODE_FILE: u32 = 0o644;
 
 /// One version of the fixture service.
 #[derive(Clone, Copy, Debug)]
 pub struct FixtureVersion {
-    /// The version text, `[A-Za-z0-9._+-]`.
+    /// The version text, `[A-Za-z0-9._+-]`: the release's and the package's.
     pub version: &'static str,
     /// The ports of the two run instances (each version of a scenario has its own pair, so the
     /// old and the new release can run side by side during the cutover).
@@ -51,155 +57,154 @@ pub struct FixtureVersion {
     pub fail_verify: bool,
 }
 
-/// A built package and what the release channel needs to publish it.
+/// A built package and what an order for it needs.
 #[derive(Clone, Debug)]
 pub struct BuiltPackage {
     pub version: String,
-    /// `<service>-<version>-<platform>.tar.zst`.
-    pub file_name: String,
-    /// Where [`PackageBuilder::build`] wrote it.
-    pub path: PathBuf,
-    pub bytes: Vec<u8>,
-    /// 64 lowercase hex digits.
+    /// The package as published in the repository: its pin and its `.deb`.
+    pub published: Published,
+    /// 64 lowercase hex digits: the pin of the package's entry.
     pub sha256: String,
     pub ports: [u16; 2],
     /// `hostkeeper-ci-tierstore@<port>.service` for each port.
     pub run_units: Vec<String>,
+    /// The entry that orders this version.
+    pub entry: Target,
 }
 
-/// Builds the packages of one host's scenario.
+impl BuiltPackage {
+    /// The `targets` of a set of this version: the one `apt` entry, for this host's platform.
+    pub fn targets(&self) -> BTreeMap<String, TargetList> {
+        aptrepo::targets(self.entry.clone())
+    }
+}
+
+/// Builds the packages of one host's scenario into a repository.
 #[derive(Clone, Debug)]
 pub struct PackageBuilder {
-    /// The daemon's `--packages-dir`, which the unit's `ExecStart` names.
-    packages_dir: PathBuf,
     /// The directory the hook records into.
     record_dir: PathBuf,
     /// The built `tierstore-like` program.
     binary: PathBuf,
-    /// Symlink entries `(name, target)` appended to the archive.
-    links: Vec<(String, String)>,
 }
 
 impl PackageBuilder {
-    /// A builder for a host whose packages directory is `packages_dir`, whose hook records into
-    /// `record_dir`, and whose binary is the file `binary`.
-    pub fn new(packages_dir: &Path, record_dir: &Path, binary: &Path) -> PackageBuilder {
+    /// A builder for a host whose hook records into `record_dir`, and whose binary is the file
+    /// `binary`.
+    pub fn new(record_dir: &Path, binary: &Path) -> PackageBuilder {
         PackageBuilder {
-            packages_dir: packages_dir.to_path_buf(),
             record_dir: record_dir.to_path_buf(),
             binary: binary.to_path_buf(),
-            links: Vec::new(),
         }
     }
 
-    /// Adds a symlink entry `name` -> `target` after the regular entries. For the test that the
-    /// unpacker refuses a link and for nothing else.
-    pub fn with_link(mut self, name: &str, target: &str) -> PackageBuilder {
-        self.links.push((name.to_owned(), target.to_owned()));
-        self
-    }
-
-    /// Builds the package of `version` and writes it to `out_dir/<file name>`.
-    pub fn build(&self, version: &FixtureVersion, out_dir: &Path) -> BuiltPackage {
+    /// The package of `version`: its files, not yet in a repository.
+    pub fn deb(&self, version: &FixtureVersion) -> Deb {
         let binary = fs::read(&self.binary).unwrap_or_else(|e| {
             panic!(
                 "cannot read the fixture binary {}: {e}",
                 self.binary.display()
             )
         });
-        let manifest = manifest_text(version, &self.record_dir);
-        let unit = unit_text(&self.packages_dir);
-        let tar = self.tar(&binary, manifest.as_bytes(), unit.as_bytes());
-        let bytes = ruzstd::encoding::compress_to_vec(
-            &tar[..],
-            ruzstd::encoding::CompressionLevel::Fastest,
+        let ports = version.ports.map(|port| port.to_string());
+        let release = render(
+            RELEASE_TEMPLATE,
+            &[
+                ("service", SERVICE.to_owned()),
+                ("version", version.version.to_owned()),
+                ("port_a", ports[0].clone()),
+                ("port_b", ports[1].clone()),
+            ],
         );
-        let file_name = format!("{SERVICE}-{}-{}.tar.zst", version.version, platform());
-        fs::create_dir_all(out_dir)
-            .unwrap_or_else(|e| panic!("cannot create {}: {e}", out_dir.display()));
-        let path = out_dir.join(&file_name);
-        fs::write(&path, &bytes).unwrap_or_else(|e| panic!("cannot write {}: {e}", path.display()));
+        let mut files = vec![
+            File::new(&format!("usr/bin/{BINARY_NAME}"), binary.clone(), MODE_EXEC),
+            File::new(
+                &format!("usr/lib/{SERVICE}/hostkeeper-hook"),
+                binary,
+                MODE_EXEC,
+            ),
+            File::new(
+                &format!("{SHARE_DIR}/release.toml"),
+                release.into_bytes(),
+                MODE_FILE,
+            ),
+            File::new(
+                &format!("{UNIT_DIR}/{UNIT_TEMPLATE}"),
+                UNIT_TEMPLATE_TEXT,
+                MODE_FILE,
+            ),
+        ];
+        for port in &ports {
+            files.push(File::new(
+                &format!("{UNIT_DIR}/{SERVICE}@{port}.service"),
+                UNIT_TEMPLATE_TEXT,
+                MODE_FILE,
+            ));
+        }
+        Deb {
+            package: SERVICE.to_owned(),
+            version: version.version.to_owned(),
+            files,
+        }
+    }
+
+    /// The entry that orders `published`, the package of `version`.
+    pub fn entry(&self, version: &FixtureVersion, published: &Published) -> Target {
+        let run_units: Vec<String> = version
+            .ports
+            .iter()
+            .map(|port| format!("{SERVICE}@{port}.service"))
+            .collect();
+        let record_dir = self.record_dir.to_string_lossy().into_owned();
+        let service = Service {
+            repository: REPOSITORY_NAME.to_owned(),
+            run: run_units,
+            health_url: Some("http://127.0.0.1:{port}/healthz".to_owned()),
+            params: [
+                (
+                    "tierstore_like_record_dir".to_owned(),
+                    aptrepo::text(&record_dir),
+                ),
+                (
+                    "tierstore_like_fail_verify".to_owned(),
+                    aptrepo::flag(version.fail_verify),
+                ),
+            ]
+            .into_iter()
+            .collect(),
+            hook_command: vec![format!("/usr/lib/{SERVICE}/hostkeeper-hook")],
+            // prepare is unbounded: it waits on the drain gate for as long as the host is busy.
+            steps: StepBounds {
+                prepare: 0,
+                cutover: 60,
+                verify: 30,
+                rollback: 60,
+                cleanup: 30,
+                ..StepBounds::default()
+            },
+            // At least the verify and the rollback bounds together (30 + 60 is less than this).
+            verify_deadline_secs: 120,
+        };
+        aptrepo::entry(&service, published)
+    }
+
+    /// Builds the package of `version`, publishes it in `repo`, and gives it with its entry.
+    pub fn build(&self, version: &FixtureVersion, repo: &AptRepo) -> BuiltPackage {
+        let published = repo.publish(&self.deb(version));
+        let entry = self.entry(version, &published);
         BuiltPackage {
             version: version.version.to_owned(),
-            file_name,
-            path,
-            sha256: hex::encode(Sha256::digest(&bytes)),
-            bytes,
+            sha256: published.sha256.clone(),
+            published,
             ports: version.ports,
             run_units: version
                 .ports
                 .iter()
                 .map(|port| format!("{SERVICE}@{port}.service"))
                 .collect(),
+            entry,
         }
     }
-
-    /// The ustar archive: the entries in the order the unpacker needs (a directory before what is
-    /// in it), then any links, then the end marker `tar` writes.
-    fn tar(&self, binary: &[u8], manifest: &[u8], unit: &[u8]) -> Vec<u8> {
-        let mut builder = tar::Builder::new(Vec::new());
-        let unit_path = format!("units/{UNIT_TEMPLATE}");
-        let bin_path = format!("bin/{BINARY_NAME}");
-        append(&mut builder, "bin/", MODE_EXEC, true, &[]);
-        append(&mut builder, &bin_path, MODE_EXEC, false, binary);
-        append(&mut builder, "manifest.toml", MODE_FILE, false, manifest);
-        append(&mut builder, "units/", MODE_EXEC, true, &[]);
-        append(&mut builder, &unit_path, MODE_FILE, false, unit);
-        for (name, target) in &self.links {
-            let mut header = header(tar::EntryType::Symlink, 0o777);
-            builder
-                .append_link(&mut header, name, target)
-                .unwrap_or_else(|e| panic!("cannot add the link {name}: {e}"));
-        }
-        builder
-            .into_inner()
-            .expect("the tar archive is written to memory")
-    }
-}
-
-/// The manifest of `version`, with every placeholder of the template filled.
-pub fn manifest_text(version: &FixtureVersion, record_dir: &Path) -> String {
-    let [port_a, port_b] = version.ports;
-    render(
-        MANIFEST_TEMPLATE,
-        &[
-            ("service", SERVICE.to_owned()),
-            ("version", version.version.to_owned()),
-            ("platform", platform().to_owned()),
-            ("port_a", port_a.to_string()),
-            ("port_b", port_b.to_string()),
-            ("record_dir", path_text(record_dir)),
-            ("fail_verify", version.fail_verify.to_string()),
-        ],
-    )
-}
-
-/// The run units' template file, with the packages directory its `ExecStart` goes through.
-pub fn unit_text(packages_dir: &Path) -> String {
-    render(
-        UNIT_TEMPLATE_TEXT,
-        &[
-            ("service", SERVICE.to_owned()),
-            ("packages", path_text(packages_dir)),
-        ],
-    )
-}
-
-/// The platform string of this machine, as the daemon names it in the manifest and the file name.
-fn platform() -> &'static str {
-    Platform::current().as_str()
-}
-
-/// `path` as the text of a TOML or unit file, which must be UTF-8 without quotes or backslashes.
-fn path_text(path: &Path) -> String {
-    let text = path
-        .to_str()
-        .unwrap_or_else(|| panic!("{} is not UTF-8", path.display()));
-    assert!(
-        !text.contains(['"', '\\', '\n']),
-        "{text:?} cannot be written into a manifest or a unit"
-    );
-    text.to_owned()
 }
 
 /// Fills `{{name}}` for each `(name, value)`, and panics when a placeholder is left (a template
@@ -214,60 +219,4 @@ fn render(template: &str, values: &[(&str, String)]) -> String {
         "a placeholder of the template was not filled:\n{text}"
     );
     text
-}
-
-/// One entry of a package archive: a directory when its name ends with `/`, else a regular file
-/// with `data`.
-#[derive(Clone, Debug)]
-pub struct ArchiveEntry<'a> {
-    pub name: &'a str,
-    pub mode: u32,
-    pub data: &'a [u8],
-}
-
-/// The package archive of `entries`, in their order: a ustar tar of headers owned by root and
-/// dated 0 in one zstd frame, as [`PackageBuilder::build`] writes its own. The caller orders the
-/// entries as the unpacker needs them (a directory before what is in it).
-pub fn compressed_archive(entries: &[ArchiveEntry<'_>]) -> Vec<u8> {
-    let mut builder = tar::Builder::new(Vec::new());
-    for entry in entries {
-        let directory = entry.name.ends_with('/');
-        append(&mut builder, entry.name, entry.mode, directory, entry.data);
-    }
-    let tar = builder
-        .into_inner()
-        .expect("the tar archive is written to memory");
-    ruzstd::encoding::compress_to_vec(&tar[..], ruzstd::encoding::CompressionLevel::Fastest)
-}
-
-/// A header owned by root, dated 0.
-fn header(kind: tar::EntryType, mode: u32) -> tar::Header {
-    let mut header = tar::Header::new_ustar();
-    header.set_entry_type(kind);
-    header.set_mode(mode);
-    header.set_uid(0);
-    header.set_gid(0);
-    header.set_mtime(0);
-    header.set_size(0);
-    header
-}
-
-/// Appends a directory (`name` ends with `/`) or a regular file.
-fn append(
-    builder: &mut tar::Builder<Vec<u8>>,
-    name: &str,
-    mode: u32,
-    directory: bool,
-    data: &[u8],
-) {
-    let kind = if directory {
-        tar::EntryType::Directory
-    } else {
-        tar::EntryType::Regular
-    };
-    let mut header = header(kind, mode);
-    header.set_size(data.len() as u64);
-    builder
-        .append_data(&mut header, name, data)
-        .unwrap_or_else(|e| panic!("cannot add {name} to the archive: {e}"));
 }

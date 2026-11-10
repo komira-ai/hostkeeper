@@ -48,7 +48,7 @@ fn halted_by(rig: &Rig) -> Option<String> {
 async fn a_halt_report_from_a_host_the_selector_drops_raises_nothing() {
     let rig = rig("halt-mem-dropped", ZONE_A, &["other"]).await;
     rig.coordinator
-        .heartbeat(who("d1"), halting(true))
+        .heartbeat_native(who("d1"), halting(true))
         .expect("a heartbeat");
     assert_eq!(halted_by(&rig), None);
 }
@@ -58,7 +58,7 @@ async fn a_halt_report_from_a_host_the_selector_drops_raises_nothing() {
 async fn a_halt_report_from_an_unmanaged_host_raises_nothing() {
     let rig = rig("halt-mem-unmanaged", DAEMONS, &["other"]).await;
     rig.coordinator
-        .heartbeat(who("d1"), halting(false))
+        .heartbeat_native(who("d1"), halting(false))
         .expect("a heartbeat");
     assert_eq!(halted_by(&rig), None);
 }
@@ -70,7 +70,7 @@ async fn the_same_halt_report_from_a_counted_host_halts_the_service() {
     let rig = rig("halt-mem-counted", ZONE_A, &["other"]).await;
     labels(&rig, "d1", r#"{"zone":"a"}"#);
     rig.coordinator
-        .heartbeat(who("d1"), halting(true))
+        .heartbeat_native(who("d1"), halting(true))
         .expect("a heartbeat");
     assert_eq!(halted_by(&rig), Some("d1".to_owned()));
 }

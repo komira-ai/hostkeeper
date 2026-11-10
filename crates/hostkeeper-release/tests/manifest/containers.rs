@@ -1,17 +1,16 @@
-//! An `oci-image` manifest's containers: their units, ports and volumes.
+//! A manifest's containers: their units, ports and volumes.
 
 use hostkeeper_config::names::{PathError, UnitError};
 use hostkeeper_proto::hostkeeper::release::v1::{Container, Manifest, Port, Volume};
-use hostkeeper_release::Installer;
 use hostkeeper_release::manifest::{self, ManifestError};
 
-use crate::support::{LINUX, container, manifest, web};
+use crate::support::{LINUX, container, container_manifest, web};
 
 fn with(containers: Vec<Container>, run: &[&str]) -> Manifest {
     Manifest {
         containers,
         run: run.iter().map(|unit| (*unit).to_owned()).collect(),
-        ..manifest(Installer::OciImage)
+        ..container_manifest()
     }
 }
 

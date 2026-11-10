@@ -7,8 +7,8 @@
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
 //! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
 //! retried every minute by a thread of its own while it defers, and the adoption of the package
-//! the host was set up with ([`crate::own_package`]); [`before_records`] and [`boot_pass`]; and
-//! [`after_boot`]. [`serve`]
+//! the host was set up with ([`crate::own_package`]); [`before_records`], [`boot_pass`] and
+//! [`delete_archive_versions`]; and [`after_boot`]. [`serve`]
 //! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
 //!
@@ -20,21 +20,18 @@
 //! (design section 6.6), before any step record is read by the boot pass: the new binary
 //! confirms it, any other records it failed.
 //!
-//! [`before_records`], [`boot_pass`] and [`after_boot`] are the boot work of design section 6.5.
-//! [`before_records`] removes what a crashed package fetch or unpack left, for every service
-//! directory of the packages directory, and then reconciles the placed links: each switch a step
-//! record says was begun is finished or undone ([`crate::boot::switch_intent`]), and every link
-//! is compared with `current` ([`hostkeeper_placed::Placer::reconcile`]). A sweep or a
-//! reconciliation that fails is an alert and does not stop the start; what it could not do is in
-//! [`BootReport::reconciled`]. [`boot_pass`] reads the step records against the boot
-//! id, runs each unfinished update to its verdict and restarts the watchers
-//! ([`crate::boot`]). [`after_boot`] runs the manifest's `boot` steps, then sends the readiness
-//! notice. No loop starts before [`startup`] has returned, so no order is taken while the boot
-//! work runs.
+//! [`before_records`], [`boot_pass`], [`delete_archive_versions`] and [`after_boot`] are the boot
+//! work of design section 6.5. [`before_records`] removes what a crashed stage left, for every
+//! service directory of the packages directory; a sweep that fails is an alert and does not stop
+//! the start. [`boot_pass`] reads the step records against the boot id, runs each unfinished
+//! update to its verdict and restarts the watchers ([`crate::boot`]).
+//! [`delete_archive_versions`] deletes the archive version a native service left as `previous`
+//! ([`crate::archive_versions`]), what it did being in [`BootReport::archive_versions`].
+//! [`after_boot`] runs the manifest's `boot` steps, then sends the readiness notice. No loop
+//! starts before [`startup`] has returned, so no order is taken while the boot work runs.
 
 use std::fs::{File, OpenOptions};
 use std::io;
-use std::num::NonZeroU64;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Weak};
@@ -43,11 +40,11 @@ use hostkeeper_config::daemon::{ConfigError, DaemonConfig};
 use hostkeeper_config::manifest::{BadHostkeeperVersion, HostkeeperVersion};
 use hostkeeper_install::macos_pkg::signers::SignersError;
 use hostkeeper_install::repository::config::RepositoriesError;
+use hostkeeper_install::version::HostFs;
 use hostkeeper_observe::unlink_stale_registration_socket;
 use hostkeeper_package::stores::StoresError;
-use hostkeeper_placed::BootView;
 
-use crate::boot::{ALERT_START, BootError, BootReport, Stage, boot_changed};
+use crate::boot::{ALERT_START, BootError, BootReport, Stage};
 use crate::executor::{Daemon, Dirs, Ports};
 use crate::files;
 use crate::installed;
@@ -77,14 +74,13 @@ pub struct Settings {
     pub config: PathBuf,
     pub state_dir: PathBuf,
     pub packages_dir: PathBuf,
+    /// The host's facts file (`--facts-file`).
+    pub facts_file: PathBuf,
     /// The run directory, the host platform's (`hostkeeper_launchd::Platform`'s `run_dir`):
     /// `/run` on Linux, `/var/run` on macOS.
     pub run_dir: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
-    /// Days after which the Sigstore trusted root is reported stale
-    /// (`--trusted-root-max-age-days`).
-    pub trusted_root_max_age_days: NonZeroU64,
 }
 
 impl Settings {
@@ -274,6 +270,7 @@ pub fn startup_notifying(
     let dirs = Dirs {
         state: settings.state_dir.clone(),
         packages: settings.packages_dir.clone(),
+        facts: settings.facts_file.clone(),
     };
     let daemon = Arc::new(Daemon::new(config, dirs, ports, own_version));
     daemon.clear_policy_rc_d(&mut report);
@@ -282,6 +279,7 @@ pub fn startup_notifying(
     adopt_own_package(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
+    delete_archive_versions(&daemon, &mut report);
     after_boot(&daemon, &mut report, notifier);
     Ok(Started {
         daemon,
@@ -353,10 +351,9 @@ fn adopt_own_package(daemon: &Daemon, report: &mut BootReport) {
     report.adopted = Some(adopted);
 }
 
-/// Before the step records are read: remove what a crashed package fetch or unpack left under
-/// each service directory of the packages directory, then finish or undo each placed link left
-/// half done and relink what differs from `current` (design section 6.5). Neither stops the
-/// start: each is an alert, and a reconciliation that could not run is in the report.
+/// Before the step records are read: remove what a crashed stage left under each service
+/// directory of the packages directory. A sweep that fails is an alert and does not stop the
+/// start.
 pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
     let ctx = daemon.ctx();
     report.stages.push(Stage::BeforeRecords);
@@ -367,38 +364,48 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
         );
         Default::default()
     });
+    if services.is_empty() {
+        return;
+    }
+    let ports = &ctx.repository_ports;
+    let packages = match HostFs::open(&ports.packages_dir, ports.owner) {
+        Ok(packages) => packages,
+        Err(error) => {
+            ctx.alert(
+                ALERT_START,
+                &format!(
+                    "the package directory cannot be opened, so no leftover is removed: {error}"
+                ),
+            );
+            return;
+        }
+    };
     for service in services.into_values() {
-        if let Err(error) = ctx.packages.remove_orphans(&service) {
+        // The staging directories a stage left, then the `.fetch-*` files a fetch of a `.pkg`
+        // (or an earlier release's fetch) left.
+        let swept = hostkeeper_install::version::remove_orphans(&service, &packages)
+            .map_err(|error| error.to_string())
+            .and_then(|()| {
+                hostkeeper_package::remove_orphan_fetches(&ports.packages_dir, &service)
+                    .map_err(|error| error.to_string())
+            });
+        if let Err(error) = swept {
             ctx.alert(ALERT_START, &format!("service={service}: {error}"));
         }
     }
-    let reconciled = reconcile(daemon);
-    if let Err(why) = &reconciled {
-        ctx.alert(
-            ALERT_START,
-            &format!("the placed paths could not be reconciled: {why}"),
-        );
-    }
-    report.reconciled = Some(reconciled);
-    report.stages.push(Stage::Reconcile);
-}
-
-/// The placed paths reconciled with the switches the step records say were begun.
-fn reconcile(daemon: &Daemon) -> Result<hostkeeper_placed::ReconcileReport, String> {
-    let ctx = daemon.ctx();
-    let rebooted = boot_changed(&ctx.dirs.state, &*ctx.clock);
-    let intents = daemon.switch_intents(rebooted).map_err(|e| e.to_string())?;
-    let view = BootView {
-        intents,
-        running: ctx.own_version,
-    };
-    ctx.placer().reconcile(&view).map_err(|e| e.to_string())
 }
 
 /// The step records against the boot id, each unfinished update run to its verdict, and the
 /// watchers restarted (design section 6.5, [`Daemon::boot_pass`]).
 fn boot_pass(daemon: &Daemon, report: &mut BootReport) -> Result<(), StartError> {
     Ok(daemon.boot_pass_into(report, &|_| false)?)
+}
+
+/// After the boot pass: the archive version a native service left as `previous` deleted
+/// ([`crate::archive_versions::sweep`]), what it did recorded in `report`. A deletion that
+/// fails is an alert and the start goes on.
+fn delete_archive_versions(daemon: &Daemon, report: &mut BootReport) {
+    report.archive_versions = crate::archive_versions::sweep(daemon.ctx());
 }
 
 /// After the boot pass: the manifest's `boot` step of each service, then the readiness notice

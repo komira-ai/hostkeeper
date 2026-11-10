@@ -97,6 +97,7 @@ pub fn entry(name: &str) -> Repository {
         components: vec!["main".into()],
         fingerprints: vec![super::real::PRIMARY.into()],
         keyring: super::real::keyring(),
+        ..Repository::default()
     }
 }
 

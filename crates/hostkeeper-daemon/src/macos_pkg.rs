@@ -46,10 +46,11 @@ use hostkeeper_install::{Announcement, StageOrder, Tools};
 use hostkeeper_placed::InstalledEntry;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_release::Installer;
+use hostkeeper_steps::Staged;
 
 use crate::executor::Reply;
 use crate::installed::{CURRENT, PREVIOUS};
-use crate::packages::{PackageError, VersionDir};
+use crate::packages::PackageError;
 use crate::repository::{PlacedRecords, REMOVE_SECS_WITHOUT_BOUNDS, Repository, StageFailure};
 use crate::target;
 
@@ -218,7 +219,7 @@ impl Repository {
         version: &Version,
         entry: &Target,
         fetch_failed: &dyn Fn(PackageError) -> Reply,
-    ) -> Result<VersionDir, Reply> {
+    ) -> Result<Staged, Reply> {
         let (order, digest) = self
             .pkg_ports()
             .and_then(|_| Self::pkg_order(service, version, entry))

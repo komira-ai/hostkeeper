@@ -1,0 +1,5 @@
+# What the fixture's own programs read of the release they belong to (see README.md): the version
+# the run units' servers answer with and the run units the hook starts and stops. The test fills
+# every double-brace placeholder before it puts the file in the package.
+version = "{{version}}"
+run = ["{{service}}@{{port_a}}.service", "{{service}}@{{port_b}}.service"]

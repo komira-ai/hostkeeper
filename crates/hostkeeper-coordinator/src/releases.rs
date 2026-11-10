@@ -9,8 +9,8 @@
 //! never reads the releases, and shows the version `no_digest`.
 //!
 //! - [`checked`] judges a set's targets: the rules of `hostkeeper-release` (`target_invalid`),
-//!   then no package digest beside them and an index that agrees with their archive entries
-//!   (`index_invalid`).
+//!   then no package digest beside them (`index_invalid`). A release index set beside them is
+//!   kept as its digest and its text is not read.
 //! - [`Release`] is what is kept, and [`record`] keeps it under the registry's cap
 //!   ([`MAX_REGISTRY`]), dropping the oldest release no mark keeps.
 //! - [`encode_file`] and [`parse_file`] are the file `<state-file>.releases`; a release's
@@ -31,11 +31,8 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, LazyLock};
 
-use hostkeeper_config::index::{PackageEntry, ReleaseIndex};
-use hostkeeper_config::names::{ServiceName, Version as IndexVersion};
-use hostkeeper_config::platform::Platform;
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_proto::hostkeeper::release::v1::TargetList;
-use hostkeeper_release::Installer;
 use hostkeeper_wire::version::Version;
 use prost::Message as _;
 use prost_reflect::{DescriptorPool, DeserializeOptions, DynamicMessage, MessageDescriptor};
@@ -190,66 +187,25 @@ fn list_of(value: &Value, descriptor: Option<&MessageDescriptor>) -> Option<Targ
         .ok()
 }
 
-/// The release of a set of `service` at `version` with `targets`, once they pass: the rules of
+/// The release of a set of `service` with `targets`, once they pass: the rules of
 /// the release ([`SetError::TargetInvalid`]); no package digest beside them
-/// (`has_package_digest`, [`DesiredError::IndexInvalid`]); and, when the set carried the release
-/// index `index` of SHA-256 `index_digest`, an index that lists exactly the platforms whose list
-/// holds a `hostkeeper-archive` entry, each with that entry's size and digest (`index_invalid`).
+/// (`has_package_digest`, [`DesiredError::IndexInvalid`]). The release index the set carried,
+/// of SHA-256 `index_digest`, is kept as its digest and its text is not read.
 ///
 /// # Errors
 /// [`SetError`], as above.
 pub(crate) fn checked(
     service: &str,
-    version: &Version,
     targets: Targets,
     has_package_digest: bool,
-    index: Option<(&str, &Digest)>,
+    index_digest: Option<&Digest>,
 ) -> Result<Release, SetError> {
     if has_package_digest {
         return Err(DesiredError::IndexInvalid("targets are not set with a package digest").into());
     }
     let name = ServiceName::new(service).map_err(|_| DesiredError::UnknownService)?;
     hostkeeper_release::target::check(&name, &targets).map_err(SetError::TargetInvalid)?;
-    let index_digest = match index {
-        None => None,
-        Some((text, digest)) => {
-            let parsed = IndexVersion::new(version.as_str())
-                .ok()
-                .and_then(|at| ReleaseIndex::parse(text, &name, &at).ok())
-                .ok_or(DesiredError::IndexInvalid(
-                    "release_index is not the release index of the service at the version",
-                ))?;
-            if !agrees(parsed.packages(), &targets) {
-                return Err(DesiredError::IndexInvalid(
-                    "release_index does not list exactly the archive entries of the targets",
-                )
-                .into());
-            }
-            Some(digest.clone())
-        }
-    };
-    Ok(Release::new(targets, index_digest))
-}
-
-/// Whether `packages` are exactly the `hostkeeper-archive` entries of `targets`: one per platform
-/// whose list holds one, with its digest and size, and no other.
-fn agrees(packages: &[PackageEntry], targets: &Targets) -> bool {
-    let archive = Installer::HostkeeperArchive.as_str();
-    let entries: BTreeMap<&str, (&str, u64)> = targets
-        .iter()
-        .filter_map(|(platform, list)| {
-            let entry = list.entries.iter().find(|e| e.installer == archive)?;
-            Some((platform.as_str(), (entry.digest.as_str(), entry.bytes)))
-        })
-        .collect();
-    let listed: BTreeMap<&str, (&str, u64)> = packages
-        .iter()
-        .map(|package| {
-            let platform: Platform = package.platform;
-            (platform.as_str(), (package.sha256.as_str(), package.bytes))
-        })
-        .collect();
-    listed == entries
+    Ok(Release::new(targets, index_digest.cloned()))
 }
 
 /// Keeps `release` as the release of `version` in `book`. Past [`MAX_REGISTRY`] releases, the

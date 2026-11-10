@@ -22,6 +22,8 @@ pub struct Stanza {
     pub sha256: String,
     /// The package file's size in bytes.
     pub size: u64,
+    /// The package file's path in the repository (`Filename`); none when the stanza has none.
+    pub filename: Option<String>,
 }
 
 /// A package file's identity, as its control fields give it.

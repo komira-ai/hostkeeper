@@ -6,8 +6,10 @@
 //! API's `package_digest` has. A [`Release`] is what CI registered for a version: one package
 //! digest (a fleet of one platform; the registry writes it as that digest's text, as it always
 //! did), or the record of a release index ([`IndexRecord`]: the SHA-256 of the index and the
-//! package digest it lists for each platform, written as an object), from which each host is
-//! ordered the package of its own platform. The registry is kept in the state file beside the
+//! package digest it lists for each platform, written as an object). A version registered so
+//! orders nothing: only a release set with targets ([`crate::picks`]) orders a host, and the
+//! registry keeps these records so that a state file written before reads and writes as it did.
+//! The registry is kept in the state file beside the
 //! service's desired state ([`crate::desired`]) and is written in the same replacement of that
 //! file, so the two are never apart. It never forgets a version on its own: it holds at most
 //! [`MAX_REGISTRY`] versions per service, and only a new version past that drops one, the
@@ -91,14 +93,6 @@ pub const fn index_platform(platform: Platform) -> IndexPlatform {
     }
 }
 
-impl IndexKey {
-    /// The key of `platform`.
-    #[must_use]
-    pub const fn of(platform: IndexPlatform) -> Self {
-        Self(platform)
-    }
-}
-
 impl Serialize for IndexKey {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_str(self.0.as_str())
@@ -115,8 +109,8 @@ impl<'de> Deserialize<'de> for IndexKey {
 }
 
 /// What the coordinator keeps of a release index it checked: the SHA-256 of the index, and the
-/// SHA-256 of the package it lists for each platform. The index's text is not kept: a host
-/// fetches the index itself and checks its SHA-256 against the one its order names.
+/// SHA-256 of the package it lists for each platform. The index's text is not kept, and nothing
+/// is ordered from the record.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct IndexRecord {
@@ -137,42 +131,14 @@ pub struct Package {
     pub index_digest: Option<Digest>,
 }
 
-impl IndexRecord {
-    /// The package the index lists for `platform`, with the index's digest.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        self.packages
-            .get(&IndexKey::of(index_platform(platform)))
-            .map(|digest| Package {
-                digest: digest.clone(),
-                index_digest: Some(self.digest.clone()),
-            })
-    }
-}
-
 /// What CI registered for a version: one package digest, or a release index.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum Release {
-    /// One package, ordered to every host whatever its platform.
+    /// One package digest.
     Package(Digest),
-    /// A release index: each host is ordered the package of its own platform.
+    /// A release index's record.
     Index(IndexRecord),
-}
-
-impl Release {
-    /// The package a host of `platform` is ordered of this release; none when the release is an
-    /// index that lists no package for the platform.
-    #[must_use]
-    pub fn package_for(&self, platform: Platform) -> Option<Package> {
-        match self {
-            Self::Package(digest) => Some(Package {
-                digest: digest.clone(),
-                index_digest: None,
-            }),
-            Self::Index(record) => record.package_for(platform),
-        }
-    }
 }
 
 /// The versions CI has set for one service, each with its release, by version.

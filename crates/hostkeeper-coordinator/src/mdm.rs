@@ -106,8 +106,9 @@ pub struct MdmFlags {
     #[arg(long, requires_all = ["mdm_api_url", "mdm_daemon_config"])]
     pub mdm_profile_identifier: Option<String>,
     /// The daemon config the config profile carries: a `hostkeeper.toml` of the farm
-    /// (coordinator, ca_sha256, release_channel, trusted_signers, bounds), checked at start by
-    /// the daemon's own loader. It holds no secret. Requires --mdm-profile-identifier.
+    /// (coordinator, ca_sha256, bounds, and release_channel and trusted_signers, which the
+    /// loader still requires and the daemon no longer reads), checked at start by the daemon's
+    /// own loader. It holds no secret. Requires --mdm-profile-identifier.
     #[arg(long, requires = "mdm_profile_identifier")]
     pub mdm_daemon_config: Option<PathBuf>,
     /// The stores the config profile carries, as the domain `dev.hostkeeper.stores`: the keys of

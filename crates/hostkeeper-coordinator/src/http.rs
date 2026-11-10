@@ -25,6 +25,10 @@
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
+//! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
+//! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
+//! before a request comes here ([`crate::repository_serve`]).
+//!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin
 //! `OPTIONS` is answered as any other method a path does not take.
@@ -34,15 +38,14 @@
 //! of an internal error. A desired state may name the digest of its version's package
 //! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
 //! answered with its reason as the code: `unparseable_version` (400), and
-//! `below_min_version`, `bad_version` and `digest_conflict` (409), and, with
-//! `--release-channel`, `not_in_channel` and `channel_digest_mismatch` (409,
-//! [`crate::channel`]). A desired state may instead name the release index of its version
-//! (`release_index`, the text of its `index.json`, with `release_index_digest`, its SHA-256),
-//! from which each host is ordered the package of its own platform; one the coordinator refuses
-//! is answered `index_invalid` or `index_digest_mismatch` (400). A heartbeat that lists no
-//! services, at a coordinator with no legacy service, is a bad request. An agent that announces
-//! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
-//! heartbeat's top level is never read as the legacy service.
+//! `below_min_version`, `bad_version` and `digest_conflict` (409). A desired state may instead
+//! name the release index of its version (`release_index`, the text of its `index.json`, with
+//! `release_index_digest`, its SHA-256); one the coordinator refuses is answered `index_invalid`
+//! or `index_digest_mismatch` (400). A set with a package digest or a release index is accepted
+//! and orders nothing ([`crate::picks`]). A heartbeat that lists no services, at a coordinator
+//! with no legacy service, is a bad request. The answer to a heartbeat carries no order: an
+//! update is ordered over gRPC alone, and its heartbeat's top level is never read as the legacy
+//! service.
 //!
 //! These are the frozen JSON routes. [`crate::grpc`] routes a request first: a gRPC call, and
 //! the JSON gateway of the operator API, are answered there, and every other request comes here.
@@ -416,8 +419,7 @@ where
             | SetError::ReleaseExists
             | SetError::RepositoryUnknown
             | SetError::NotInHostGroup
-            | SetError::AmbiguousHostGroup
-            | SetError::Channel(_)),
+            | SetError::AmbiguousHostGroup),
         ) => {
             tracing::warn!(%why, "refused a desired state");
             error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))

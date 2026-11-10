@@ -12,7 +12,7 @@ use hostkeeper_wire::wire::{Heartbeat, ServiceReply};
 use crate::audit_refusal_tests::full_disk;
 use crate::clear_record::{FEATURE, order_id};
 use crate::marks_support::{
-    NEW_DAEMON, WEB, ask, ask_typed, beat_of, operator, rig, runs, set, start, update,
+    NEW_DAEMON, WEB, ask, ask_json, ask_typed, beat_of, operator, rig, runs, set, start, update,
 };
 use crate::operator::Caller;
 use crate::ops::OpsState;
@@ -156,7 +156,7 @@ async fn clear_record_is_ordered_once_to_a_daemon_that_announced_it() {
 
     // The JSON route has nowhere to put an order: it waits for a typed heartbeat.
     assert_eq!(
-        ask(&rig, "d1", "daemon", clearer("2.0")),
+        ask_json(&rig, "d1", "daemon", clearer("2.0")),
         ServiceReply::Nothing
     );
     let sent = Order::ClearRecord {

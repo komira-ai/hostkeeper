@@ -28,11 +28,9 @@ async fn an_enrolled_updater_is_answered_over_mutual_tls() {
         .await
         .expect("answered");
     assert_eq!(code, 200);
+    // The JSON route carries no order: a host behind the version is answered as one at it.
     let (code, body) = farm.beat(&who, BEAT).await.expect("answered");
-    assert_eq!(
-        (code, body.as_str()),
-        (200, r#"{"reply":"update","version":"2.0"}"#)
-    );
+    assert_eq!((code, body.as_str()), (200, r#"{"reply":"nothing"}"#));
 }
 
 /// Catches: a connection served that TLS should have refused: a client with no certificate,
@@ -140,8 +138,9 @@ async fn after_a_restart_the_state_stands_and_an_updating_host_is_counted() {
     assert_eq!(second, r#"{"reply":"nothing"}"#, "d1 holds the daemon slot");
     let done = BEAT.replace("1.0", "2.0");
     farm.beat(&d1, &done).await.expect("answered");
+    // The JSON route carries no order: once the slot is free, d2 is still told nothing.
     let (_, second) = farm.beat(&d2, BEAT).await.expect("answered");
-    assert_eq!(second, r#"{"reply":"update","version":"2.0"}"#);
+    assert_eq!(second, r#"{"reply":"nothing"}"#);
 }
 
 /// Catches: a listener that stops serving after a bad client: plain text sent to the TLS

@@ -17,18 +17,18 @@ use std::time::Duration;
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::adapters::{Adapters, host_clock};
 use hostkeeper_daemon::executor::{Dirs, Placement};
 use hostkeeper_daemon::macos_pkg;
-use hostkeeper_daemon::packages::{Entry, PackageError, Packages, Pinned, VersionDir};
+use hostkeeper_daemon::packages::{PackageError, Packages, Pinned};
 use hostkeeper_daemon::prune::{LayoutPrune, NoLockPoint};
 use hostkeeper_daemon::repository::RepositoryPorts;
-use hostkeeper_daemon::verb::PackageDigest;
 use hostkeeper_daemon::{Daemon, Ports};
 use hostkeeper_install::announce::{OsHost, announce};
 use hostkeeper_install::host::Host;
 use hostkeeper_install::tools::{ToolError, ToolOutput};
+use hostkeeper_install::version::Owner;
 use hostkeeper_install::{HostTools, Tool, Tools};
 use hostkeeper_launchd::Platform;
 use hostkeeper_observe::fake::{
@@ -41,7 +41,6 @@ use hostkeeper_proto::hostkeeper::release::v1::{
     Hook, InstallerBounds, Location, Manifest, StepBounds, Target,
 };
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::Owner;
 use sha2::{Digest, Sha256};
 
 use super::{IDENTIFIER, SERVICE, signed_answer};
@@ -150,20 +149,7 @@ impl Drop for Copy {
 }
 
 impl Packages for PkgStore {
-    fn version_dir(
-        &self,
-        _service: &ServiceName,
-        _version: &Version,
-        _digest: &PackageDigest,
-        _index_digest: Option<&PackageDigest>,
-        _entry: Option<&Entry>,
-    ) -> Result<VersionDir, PackageError> {
-        Err(PackageError::Other(
-            "this daemon stages no artifact".to_owned(),
-        ))
-    }
-
-    fn pinned(&self, service: &ServiceName, entry: &Entry) -> Result<Pinned, PackageError> {
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError> {
         self.asked.lock().expect("asked").push(entry.digest.clone());
         let from = self
             .files
@@ -281,6 +267,7 @@ pub fn daemon(signers_file: &Path) -> MacDaemon {
     let dirs = Dirs {
         state,
         packages: packages.clone(),
+        facts: packages.with_file_name("facts.json"),
     };
     MacDaemon {
         daemon: Daemon::new(config, dirs, ports, OWN),

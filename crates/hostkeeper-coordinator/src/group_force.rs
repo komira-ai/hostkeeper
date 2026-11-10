@@ -30,7 +30,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
 
-use super::{ForceTargets, Forced, Forcing, Plan, SELF_SERVICE, plan, targets_of};
+use super::{ForceTargets, Forcing, Plan, SELF_SERVICE, plan, recorded, targets_of};
 use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Fleet;
 use crate::group_reach::Reached;
@@ -125,7 +125,7 @@ impl Coordinator {
         let registered = self.desired.digests(&base.name).get(&version).cloned();
         let release = registered
             .clone()
-            .or_else(|| set_with.as_deref().and_then(crate::picks::recorded))
+            .or_else(|| set_with.as_deref().and_then(recorded))
             .ok_or(Refusal::NoDigest)?;
         let now = (self.clock)();
         // The fleet's lock is held to the end, as for a force of a service of the file.
@@ -150,10 +150,7 @@ impl Coordinator {
             let planned = plan(
                 &one.def,
                 &services,
-                Forced {
-                    version: &version,
-                    release: &release,
-                },
+                &version,
                 &targets,
                 request.include_held,
                 &fleet,

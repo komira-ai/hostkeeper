@@ -1,46 +1,41 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! hello's macOS package installed, updated, rolled back and uninstalled end to end on a Mac, as
 //! root, under the real launchd of a GitHub-hosted macOS runner, in `.github/workflows/
-//! privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). The real coordinator (in process) orders each
-//! version; the real daemon (a launchd job of the system domain) fetches it from a release
-//! channel the test serves on loopback, checks its attestation with the pinned `gh` against a
-//! test trust root, unpacks it with the Mac's quarantine and code-signature checks, links its
-//! plists into `/Library/LaunchDaemons` through `current`, loads them with `launchctl`, and runs
-//! hello's hook in step jobs; hello's hook starts and stops its two slots, the jobs `hello.a` and
-//! `hello.b`, with `launchctl` (`e2e::hello` says how the package is built).
-//!
-//! Before any order, the three packages go through the daemon's own package store on this Mac
-//! (fetch, attestation, unpack with the Mac's checks, seal): a first install the daemon refuses
-//! is reported only once the service is listed, so a refusal fails the test there with its
-//! reason instead of as a wait that never ends.
+//! privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). The real coordinator
+//! (in process) orders each version by its entry, the one `macos-pkg` entry `release targets`
+//! writes for a Mac; the daemon (the shipped daemon on the Mac's adapters, a launchd job of the
+//! system domain, `e2e::mac_host` says what its program replaces) enrolls with it, beats over
+//! mutual TLS, fetches the `.pkg` by the entry's pin from the files the test serves, has the
+//! installer check its signature (answered as a signed package, `shared/macos_pkg.rs` says why),
+//! installs it with the Mac's `installer`, and runs hello's hook in step jobs; hello's package
+//! installs its program, its two plists in `/Library/LaunchDaemons` and a `postinstall` that
+//! loads the two jobs `hello.a` and `hello.b`, and hello's hook starts and stops them, one at a
+//! time, with `launchctl` (`e2e::hello` says how the package is built).
 //!
 //! The test is one `#[test]` in four phases, each starting from the state the one before left:
 //! the install of `1.0.0`, the update to `1.1.0`, the update to `1.2.0` whose server answers
-//! `/readyz` with 503 so that hello's `verify` fails and the daemon rolls back to `1.1.0`, and
-//! the uninstall. What each phase asserts is read from where the stage it witnesses leaves it:
-//! the links in `/Library/LaunchDaemons` and the package directory (the switch and the placer),
-//! `launchctl print system/hello.<slot>` through the daemon's own `launchctl` adapter (what
-//! launchd loaded and runs: each version's plists send their output to a directory of that
-//! version, so the `stdout path` launchd prints names the version of the plist it loaded), the
-//! server's `/version` (the slot that serves), and the operator API of the coordinator (the
-//! heartbeat's report: `Hosts.Get` lists hello with the version the daemon's observer confirmed
-//! running and its health). Every wait is a bounded
-//! count of tries of an explicit state; nothing is asserted about time.
+//! `/readyz` with 503 so that hello's `verify` fails and the daemon rolls back to `1.1.0` (its
+//! kept `.pkg` installed again), and the uninstall. What each phase asserts is read from where
+//! the stage it witnesses leaves it: the package directory (the switch), `pkgutil`'s receipt of
+//! the package and the files and plists `installer` laid down, `launchctl print
+//! system/hello.<slot>` through the daemon's own `launchctl` adapter (what launchd loaded and
+//! runs), the server's `/version` (the slot that serves), and the operator API of the
+//! coordinator (the heartbeat's report: `Hosts.Get` lists hello with the version the daemon's
+//! observer confirmed running and its health). Every wait is a bounded count of tries of an
+//! explicit state; nothing is asserted about time.
 
 mod e2e;
 
 use std::collections::BTreeMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
-use e2e::channel::ReleaseChannel;
 use e2e::coordinator::CoordinatorHandle;
-use e2e::hello::{HELLO_E2E, HelloLayout, HelloPackage, SERVICE, SLOTS, label};
-use e2e::mac_host::{
-    CheckedPackage, LAUNCHD_DIR, MacHost, PLACED_DIR, is_loaded, job_fields, plist_link,
+use e2e::hello::{
+    HELLO_E2E, HelloLayout, HelloPackage, PROGRAM, SERVICE, SLOTS, SUPPORT, label, plist_path,
 };
-use e2e::scenario::{COORDINATED, LOCAL, pinned_gh};
-use e2e::signer::FixtureSigner;
+use e2e::mac_host::{MacHost, is_loaded, job_fields, receipt_version};
+use e2e::scenario::{CONFIG_TAIL, COORDINATED, LOCAL};
 use e2e::{HOST_ID, ROLE, http_get, wait_for};
 use serde_json::Value;
 
@@ -51,11 +46,11 @@ const V2: &str = "1.1.0";
 /// An update whose server is not ready, so that its `verify` fails.
 const V3: &str = "1.2.0";
 
-/// The rig of the test. The fields are dropped in this order: the coordinator and the channel,
-/// then the host (the daemon booted out, every job and path the test made taken away).
+/// The rig of the test. The fields are dropped in this order: the coordinator, then the host (the
+/// daemon booted out, every job and path the test made taken away).
 struct Rig {
     coordinator: CoordinatorHandle,
-    channel: ReleaseChannel,
+    layout: HelloLayout,
     packages: BTreeMap<&'static str, HelloPackage>,
     /// The port hello's slots serve on.
     port: u16,
@@ -70,85 +65,66 @@ impl Drop for Rig {
         }
         eprintln!(
             "the coordinator's view when the test failed:\nreleases status:\n{}\n\
-             services list:\n{}\nrelease channel requests:\n{:#?}\nstep record:\n{:#?}\n",
+             services list:\n{}\nstep record:\n{:#?}\n",
             self.coordinator.status_text(SERVICE),
             self.coordinator.services_text(),
-            self.channel.requests(),
             self.host.step_record(),
         );
     }
 }
 
 impl Rig {
-    /// The host taken over, `gh` and the fixture signer's trusted root installed, the three
-    /// versions built and published on the release channel, the coordinator started, the daemon
-    /// started as a launchd job and its enrollment approved with hello assigned. Nothing is
-    /// installed.
+    /// The host taken over, the three versions built and served to the daemon by their pins, the
+    /// coordinator started, the daemon started as a launchd job and its enrollment approved with
+    /// hello assigned. Nothing is installed.
     fn start() -> Rig {
         let host = MacHost::new("mac");
-        host.install_gh(&pinned_gh());
-        let signer = FixtureSigner::new();
-        host.install_trusted_root(&signer.trusted_root_jsonl());
-        let channel = ReleaseChannel::start();
-        host.trust_ca(&channel.ca_pem());
-
         let port = e2e::free_port();
+        let layout = HelloLayout {
+            record_dir: host.records().join(SERVICE),
+            log_dir: host.log_dir(),
+            port,
+        };
         let program = fs::read(HELLO_E2E).expect("the built hello-e2e");
         let mut packages = BTreeMap::new();
         for (version, fail_ready) in [(V1, false), (V2, false), (V3, true)] {
-            let layout = HelloLayout {
-                packages: host.packages(),
-                record_dir: host.records().join(SERVICE),
-                log_dir: host.log_dir(version),
-                port,
-            };
-            let package = layout.build(version, fail_ready, &program);
-            let bundle = signer.bundle(&package.file_name, &package.sha256);
-            channel.publish(
-                SERVICE,
-                version,
-                &package.file_name,
-                package.bytes.clone(),
-                bundle,
+            let dir = host.base().join(format!("build-{version}"));
+            let package = layout.build(&dir, version, fail_ready, &program);
+            let (digest, bytes) = host.serve_pkg(&package.pkg);
+            assert_eq!(
+                (digest.as_str(), bytes),
+                (package.sha256.as_str(), package.bytes),
+                "the served file is the package built"
             );
             packages.insert(version, package);
         }
 
         let coordinator = CoordinatorHandle::start(&host.base().join("coordinator"), SERVICE, ROLE);
-        let config = format!(
-            "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
+        host.write_config(&format!(
+            "coordinator = \"{}\"\nca_sha256 = \"{}\"\n{CONFIG_TAIL}",
             coordinator.heartbeat_url(),
             coordinator.ca_sha256(),
-            channel.base_url(),
-            signer.trusted_signers_toml(),
-        );
-        host.write_config(&config);
-        let checked: Vec<CheckedPackage> = packages
-            .values()
-            .map(|package| CheckedPackage {
-                version: package.version.clone(),
-                sha256: package.sha256.clone(),
-                file_name: package.file_name.clone(),
-                bytes: package.bytes.clone(),
-                bundle: signer.bundle(&package.file_name, &package.sha256),
-            })
-            .collect();
-        host.check_package_store(&config, SERVICE, &checked);
+        ));
         host.start_daemon();
         coordinator.approve_enrollment(HOST_ID, SERVICE);
         Rig {
             coordinator,
-            channel,
+            layout,
             packages,
             port,
             host,
         }
     }
 
-    /// Sets hello's desired version to `version`, with its package's digest.
+    /// Sets hello's desired version to `version` by targets alone, as CI's set of a release whose
+    /// entries are all native does: the one `macos-pkg` entry of its package for this Mac's
+    /// platform, through the operator API.
     fn order(&self, version: &str) {
-        let digest = self.packages[version].sha256.clone();
-        self.coordinator.set_desired(SERVICE, version, &digest);
+        self.coordinator.set_desired_targets_alone(
+            SERVICE,
+            version,
+            self.packages[version].targets(),
+        );
     }
 
     /// The test host as `releases status` lists it, `Null` before its first heartbeat.
@@ -186,43 +162,23 @@ impl Rig {
             .map(|target| target.to_string_lossy().into_owned())
     }
 
-    /// `path` with every link on the way resolved.
-    fn resolved(path: &Path) -> PathBuf {
-        fs::canonicalize(path).unwrap_or_else(|e| panic!("resolve {}: {e}", path.display()))
-    }
-
-    /// The file of `version`'s directory at `relative`, resolved.
-    fn of_version(&self, version: &str, relative: &str) -> PathBuf {
-        Rig::resolved(&self.host.service_dir().join(version).join(relative))
-    }
-
-    /// The plist of `slot` placed by the daemon: a link in `/Library/LaunchDaemons` to the
-    /// plist of `current`, which resolves to the plist of `version`.
-    fn assert_plist_placed(&self, slot: &str, version: &str) {
-        let label = label(slot);
-        let link = plist_link(&label);
-        let meta = fs::symlink_metadata(&link)
-            .unwrap_or_else(|e| panic!("{} is not there: {e}", link.display()));
+    /// The plist of `slot`, which `installer` put in `/Library/LaunchDaemons`, is a file of its
+    /// own (no link) with the text of `version`'s package: the plist of a failing build for
+    /// `fail_ready`.
+    fn assert_plist_installed(&self, slot: &str, fail_ready: bool) {
+        let path = plist_path(slot);
+        let meta = fs::symlink_metadata(&path)
+            .unwrap_or_else(|e| panic!("{} is not there: {e}", path.display()));
         assert!(
-            meta.file_type().is_symlink(),
-            "{} is a link",
-            link.display()
+            meta.is_file(),
+            "{} is a file of the package",
+            path.display()
         );
         assert_eq!(
-            fs::read_link(&link).expect("the plist link"),
-            self.host
-                .service_dir()
-                .join("current")
-                .join("units")
-                .join(format!("{label}.plist")),
-            "{} points into current",
-            link.display()
-        );
-        assert_eq!(
-            Rig::resolved(&link),
-            self.of_version(version, &format!("units/{label}.plist")),
-            "{} resolves to the plist of {version}",
-            link.display()
+            fs::read_to_string(&path).expect("the plist"),
+            self.layout.plist(slot, fail_ready),
+            "{} is the plist of the package",
+            path.display()
         );
     }
 
@@ -231,28 +187,17 @@ impl Rig {
         job_fields(&label(slot)).unwrap_or_else(|| panic!("launchd holds no job hello.{slot}"))
     }
 
-    /// The job of `slot` is loaded from the plist of `version` (its `stdout path` is in that
-    /// version's log directory) and runs `version`'s program (its program, through `current`,
-    /// resolves to `version`'s `bin/hello`).
-    fn assert_job_of(&self, slot: &str, version: &str) {
+    /// launchd holds the job of `slot`, loaded from the plist of the package: its program is the
+    /// one the package installs.
+    fn assert_job_loaded(&self, slot: &str) {
         let job = self.job(slot);
-        assert_eq!(
-            job.get("stdout path").map(PathBuf::from),
-            Some(
-                self.host
-                    .log_dir(version)
-                    .join(format!("hello.{slot}.out.log"))
-            ),
-            "hello.{slot} was loaded from the plist of {version}: {job:?}"
-        );
         let program = job
             .get("program")
             .or_else(|| job.get("arguments[0]"))
             .unwrap_or_else(|| panic!("hello.{slot} has no program: {job:?}"));
         assert_eq!(
-            Rig::resolved(Path::new(program)),
-            self.of_version(version, "bin/hello"),
-            "hello.{slot} runs the program of {version}: {job:?}"
+            program, PROGRAM,
+            "hello.{slot} runs the program the package installs: {job:?}"
         );
     }
 
@@ -290,7 +235,7 @@ impl Rig {
     }
 
     /// Waits until the host's heartbeat lists hello on `version` and healthy: the daemon's
-    /// observer saw its running executable as `version`'s, and its health check passes.
+    /// observer saw its running executable as the package's, and its health check passes.
     fn wait_observed(&self, version: &str) {
         let mut last = None;
         wait_for(
@@ -320,14 +265,19 @@ fn hello_installs_updates_rolls_back_and_uninstalls_under_launchd() {
 }
 
 /// The install of `1.0.0`: once the coordinator reports the host on it, `current` is `1.0.0`;
-/// both slots' plists are links in `/Library/LaunchDaemons` into `current`, resolving to
-/// `1.0.0`'s; launchd holds both jobs, loaded from `1.0.0`'s plists and running `1.0.0`'s
-/// program; `hello.a` serves `1.0.0` and `hello.b` does not run; the heartbeat
-/// reports hello healthy on `1.0.0`.
+/// `pkgutil` has the receipt of the package at `1.0.0`, its program and both plists are installed
+/// (the plists files of the package, not links); launchd holds both jobs, loaded from the
+/// plists, running the package's program; `hello.a` serves `1.0.0` and `hello.b` does not run;
+/// the heartbeat reports hello healthy on `1.0.0`.
 fn install(rig: &Rig) {
+    assert_eq!(receipt_version(), None, "no receipt before the install");
+    assert!(
+        fs::symlink_metadata(SUPPORT).is_err(),
+        "nothing of hello is installed before the install"
+    );
     for slot in SLOTS {
         assert!(
-            fs::symlink_metadata(plist_link(&label(slot))).is_err(),
+            fs::symlink_metadata(plist_path(slot)).is_err(),
             "no plist of hello.{slot} before the install"
         );
     }
@@ -335,19 +285,20 @@ fn install(rig: &Rig) {
     rig.wait_converged(V1);
 
     assert_eq!(rig.link("current").as_deref(), Some(V1));
+    assert_eq!(receipt_version().as_deref(), Some(V1));
+    assert!(Path::new(PROGRAM).is_file(), "the program is installed");
     for slot in SLOTS {
-        rig.assert_plist_placed(slot, V1);
-        rig.assert_job_of(slot, V1);
+        rig.assert_plist_installed(slot, false);
+        rig.assert_job_loaded(slot);
     }
     rig.wait_serving("a", V1);
     rig.wait_observed(V1);
 }
 
-/// The update to `1.1.0`: `current` is `1.1.0` and `previous` `1.0.0`; both plists still are
-/// links into `current` and now resolve to `1.1.0`'s; launchd holds both jobs loaded again from
-/// `1.1.0`'s plists (booted out and bootstrapped: `1.0.0`'s plists sent their output elsewhere)
-/// and running `1.1.0`'s program; `hello.b` serves `1.1.0` and `hello.a` no longer runs; and
-/// the heartbeat reports `1.1.0` healthy.
+/// The update to `1.1.0`: `current` is `1.1.0` and `previous` `1.0.0`; the receipt says `1.1.0`;
+/// both plists are the package's and launchd still holds both jobs, running the package's
+/// program; `hello.b` serves `1.1.0` and `hello.a` no longer runs; and the heartbeat reports
+/// `1.1.0` healthy.
 fn update(rig: &Rig) {
     rig.order(V2);
     rig.wait_converged(V2);
@@ -359,9 +310,10 @@ fn update(rig: &Rig) {
 
     assert_eq!(rig.link("current").as_deref(), Some(V2));
     assert_eq!(rig.link("previous").as_deref(), Some(V1));
+    assert_eq!(receipt_version().as_deref(), Some(V2));
     for slot in SLOTS {
-        rig.assert_plist_placed(slot, V2);
-        rig.assert_job_of(slot, V2);
+        rig.assert_plist_installed(slot, false);
+        rig.assert_job_loaded(slot);
     }
     rig.wait_serving("b", V2);
     rig.wait_observed(V2);
@@ -369,11 +321,11 @@ fn update(rig: &Rig) {
 
 /// The update to `1.2.0`, whose server answers `/readyz` with 503: the host reports it failed
 /// in `gate_release`, class `release`, reason `not_ready`, and the step record holds that
-/// verdict; `current` is `1.1.0` again (`previous` the version rolled back from); both plists
-/// resolve to `1.1.0`'s; launchd holds both jobs loaded from `1.1.0`'s plists and running
-/// `1.1.0`'s program, so no job of `1.2.0` is loaded; `hello.b` serves `1.1.0` again and is
-/// ready; the heartbeat reports `1.1.0` healthy; and the coordinator marks `1.2.0` bad and
-/// wants `1.1.0`, which the host is converged on.
+/// verdict; `current` is `1.1.0` again (`previous` the version rolled back from) and the receipt
+/// says `1.1.0` (the kept package of `1.1.0` installed again, with no fetch); both plists are
+/// `1.1.0`'s again, not the failing build's; launchd holds both jobs, running the package's
+/// program; `hello.b` serves `1.1.0` again and is ready; the heartbeat reports `1.1.0` healthy;
+/// and the coordinator marks `1.2.0` bad and wants `1.1.0`, which the host is converged on.
 fn failed_verify_rolls_back(rig: &Rig) {
     rig.order(V3);
     wait_for("the host reports an end of 1.2.0", COORDINATED, || {
@@ -396,10 +348,11 @@ fn failed_verify_rolls_back(rig: &Rig) {
 
     assert_eq!(rig.link("current").as_deref(), Some(V2));
     assert_eq!(rig.link("previous").as_deref(), Some(V3));
+    assert_eq!(receipt_version().as_deref(), Some(V2));
     rig.wait_serving("b", V2);
     for slot in SLOTS {
-        rig.assert_plist_placed(slot, V2);
-        rig.assert_job_of(slot, V2);
+        rig.assert_plist_installed(slot, false);
+        rig.assert_job_loaded(slot);
     }
     rig.wait_observed(V2);
 
@@ -417,12 +370,22 @@ fn failed_verify_rolls_back(rig: &Rig) {
     rig.wait_converged(V2);
 }
 
+/// `placed.json`, `Null` when there is none (an empty record is removed with its last path).
+fn placed(rig: &Rig) -> Value {
+    fs::read(rig.host.fixture().join("placed").join("placed.json"))
+        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
+        .unwrap_or(Value::Null)
+}
+
 /// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
-/// coordinator lists hello uninstalling on no host, both plists are gone from
-/// `/Library/LaunchDaemons`, launchd holds neither job, hello's package directory is gone with
-/// every version, link and seal in it, `placed.json` (if any is left) holds no path and no
-/// tombstone of hello, the hook's slot
-/// markers are gone, nothing answers on the port, and the heartbeat no longer reports hello healthy.
+/// coordinator lists hello uninstalling on no host and the daemon dropped hello's tombstone from
+/// `placed.json` (the last write of the uninstall, after the package directory and the records
+/// are removed; the coordinator's list follows the heartbeats, so either may come first and the
+/// wait holds for both), both plists are gone from
+/// `/Library/LaunchDaemons`, launchd holds neither job, the program and its directory are gone,
+/// `pkgutil` forgot the receipt, hello's package directory is gone with every version, link and
+/// seal in it, `placed.json` holds no record of hello and no tombstone, the hook's slot markers
+/// are gone, nothing answers on the port, and the heartbeat no longer reports hello healthy.
 fn uninstall(rig: &Rig) {
     rig.coordinator.unassign_uninstall(HOST_ID, SERVICE);
     wait_for("the uninstall of hello ends", COORDINATED, || {
@@ -436,39 +399,34 @@ fn uninstall(rig: &Rig) {
                         .is_none_or(|hosts| hosts.is_empty())
                 })
         });
-        uninstalling_none && !rig.host.service_dir().exists()
+        uninstalling_none
+            && !rig.host.service_dir().exists()
+            && placed(rig)["uninstalling"][SERVICE].is_null()
     });
 
     for slot in SLOTS {
         let label = label(slot);
         assert!(
-            fs::symlink_metadata(plist_link(&label)).is_err(),
-            "the plist of {label} is gone from {LAUNCHD_DIR}"
+            fs::symlink_metadata(plist_path(slot)).is_err(),
+            "the plist of {label} is gone from /Library/LaunchDaemons"
         );
         assert!(!is_loaded(&label), "launchd holds no job {label}");
     }
     assert!(
+        fs::symlink_metadata(SUPPORT).is_err(),
+        "hello's directory of /Library/Application Support is gone"
+    );
+    assert_eq!(receipt_version(), None, "pkgutil forgot the receipt");
+    assert!(
         !rig.host.service_dir().exists(),
         "hello's package directory is gone"
     );
-    // An empty record is removed with its last path; one that is left holds nothing of hello.
-    let placed: Value = fs::read(Path::new(PLACED_DIR).join("placed.json"))
-        .map(|bytes| serde_json::from_slice(&bytes).expect("placed.json is JSON"))
-        .unwrap_or(Value::Null);
-    let of_hello: Vec<&String> = placed["paths"]
-        .as_object()
-        .map(|paths| {
-            paths
-                .iter()
-                .filter(|(_, entry)| entry["service"] == SERVICE)
-                .map(|(path, _)| path)
-                .collect()
-        })
-        .unwrap_or_default();
+    // An empty record is removed with its last entry; one that is left holds nothing of hello.
+    let placed = placed(rig);
     assert_eq!(
-        of_hello,
-        Vec::<&String>::new(),
-        "placed.json holds no path of hello"
+        placed["installed"][SERVICE],
+        Value::Null,
+        "placed.json holds no record of hello: {placed}"
     );
     assert_eq!(
         placed["uninstalling"][SERVICE],

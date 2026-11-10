@@ -31,9 +31,7 @@ use crate::grpc::operator::ReleasesService;
 use crate::http::Surface;
 use crate::listen::CLIENT_PATIENCE;
 use crate::service::Coordinator;
-use crate::testutil::{
-    LEGACY, OPERATOR, Rig, ci_token, clock_of, kbf_prefixes, kbf_services, ops_of,
-};
+use crate::testutil::{LEGACY, OPERATOR, Rig, clock_of, kbf_prefixes, kbf_services, ops_of};
 use crate::wait::MAX_WAITS;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as _;
 
@@ -70,10 +68,7 @@ async fn world(name: &str) -> World {
         .with_prefixes(kbf_prefixes())
         .with_ops(ops_of(&rig.dir));
     rig.at(1_100);
-    coordinator
-        .set_desired(Some(&ci_token()), DESIRED.as_bytes())
-        .await
-        .expect("set");
+    crate::testutil::set_native(&coordinator, DESIRED).await;
     World {
         coordinator: Arc::new(coordinator),
         rig,
@@ -89,11 +84,20 @@ fn reads(world: &World) -> UnboundedReceiver<State> {
 }
 
 /// A heartbeat of the host `host` of role `role` with the JSON `body`, through the router.
+///
+/// The daemon announces `target-v1` and lists `apt`, so that the release set with its entry picks
+/// it.
 async fn beat(world: &World, host: &str, role: &str, body: &str) {
+    let mut fields: Value = serde_json::from_str(body).expect("a heartbeat");
+    fields["agent_features"] = json!([crate::picks::TARGET_FEATURE]);
+    world
+        .coordinator
+        .hear_apt(&crate::marks_support::who(host, role));
+    let body = fields.to_string();
     let request = Request::builder()
         .method("POST")
         .uri(HEARTBEAT_PATH)
-        .body(Full::new(Bytes::from(body.to_owned())))
+        .body(Full::new(Bytes::from(body)))
         .expect("a request");
     let (status, _, answer) = raw(
         &world.coordinator,

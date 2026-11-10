@@ -6,7 +6,9 @@
 //!
 //! [`route`] is the one entry point of a request. A call over HTTP/2 with a gRPC content type
 //! is [`grpc`]; a `POST` of a method of the operator API on the private listener is the
-//! gateway's; anything else is a JSON route. A gRPC call is served by the tonic server of its
+//! gateway's; a request for a path under `/repositories/` on the heartbeat listener is the serving of
+//! a private repository to a host (a `GET`; any other method is a 405) ([`crate::repository_serve`]), its body streamed; anything else is
+//! a JSON route. A gRPC call is served by the tonic server of its
 //! service, called in process, so a message limit and a status are tonic's. The adapters of
 //! the services ([`agent`], [`operator`]) call the same [`Coordinator`] functions the JSON
 //! routes call and have no rule of their own.
@@ -71,6 +73,7 @@ use crate::http::{
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
+use crate::repository_serve::{PREFIX, serve};
 use crate::service::{CiRefused, Coordinator, MAX_BEARER_BYTES};
 use crate::wait::CallLimit;
 
@@ -95,7 +98,8 @@ pub const GRPC_FEATURE: &str = "grpc-v1";
 /// added to a proto is listed here until its handler lands. None is.
 pub const PENDING: &[&str] = &[];
 
-/// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
+/// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response or the
+/// streamed bytes of a private repository's file.
 pub type RouteBody = Either<Full<Bytes>, GrpcBody>;
 
 /// The full name of the agent's service.
@@ -445,8 +449,9 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 ///
 /// A call over HTTP/2 with a gRPC content type is a gRPC call ([`grpc`]). Otherwise, on the
 /// private listener, a `POST` of a path that names a method of the operator API is the
-/// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. Everything
-/// else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
+/// heartbeat listener a path under `/repositories/` is a private repository's
+/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
 /// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
@@ -471,6 +476,8 @@ where
             error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
         };
         answered.map(Either::Left)
+    } else if surface == Surface::Heartbeat && request.uri().path().starts_with(PREFIX) {
+        serve(coordinator, peer, request).await
     } else {
         handle(coordinator, surface, peer, request, patience)
             .await

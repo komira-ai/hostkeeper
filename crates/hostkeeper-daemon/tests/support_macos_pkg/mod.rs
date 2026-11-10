@@ -112,9 +112,7 @@ impl MacRig {
     pub fn publish(&self, version: &str, pkg: FakePkg) -> Target {
         let bytes = format!("fake-pkg:{SERVICE}-{version}");
         let digest = sha256_hex(bytes.as_bytes());
-        self.rig
-            .store
-            .add_pinned(SERVICE, &digest, bytes.as_bytes());
+        self.rig.pins.add_pinned(SERVICE, &digest, bytes.as_bytes());
         self.mac.add(pkg);
         entry(&digest, bytes.len() as u64)
     }

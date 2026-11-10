@@ -9,6 +9,8 @@ mod support;
 
 #[path = "registry/keys.rs"]
 mod keys;
+#[path = "registry/private.rs"]
+mod private;
 #[path = "registry/real.rs"]
 mod real;
 #[path = "registry/render.rs"]

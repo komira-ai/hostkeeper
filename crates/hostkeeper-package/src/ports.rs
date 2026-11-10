@@ -11,10 +11,9 @@ use ureq::http::Uri;
 use hostkeeper_config::daemon::{Sha256Hex, TrustedSigners};
 use hostkeeper_steps::{Clock, Stamp};
 
-/// A URL on the release channel, made by [`crate::index::index_url`] or
-/// [`crate::index::package_url`] from the daemon config's channel, an order's service and version,
-/// and the host's platform (the bundle's adds a suffix to the package's). Nothing else makes one,
-/// so a fetch can only reach the configured channel.
+/// A URL of a blob in one of the host's stores, made by the store ([`crate::stores::Store`]) from
+/// its base and the blob's locator or digest. Nothing else makes one, so a fetch can only reach a
+/// store the host defines.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Url(String);
 
@@ -25,11 +24,6 @@ impl Url {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// This URL with `suffix` appended to its last segment.
-    pub(crate) fn with_suffix(&self, suffix: &str) -> Url {
-        Url(format!("{}{suffix}", self.0))
     }
 }
 

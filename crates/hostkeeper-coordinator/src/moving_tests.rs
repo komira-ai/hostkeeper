@@ -46,6 +46,7 @@ fn told_beats(farm: &Farm, host: &str, listed: Vec<ServiceBeat>) -> Option<Strin
     match (reply, order) {
         (_, Some(Order::Install { service, .. })) => Some(format!("install {service}")),
         (_, Some(Order::Uninstall { service, .. })) => Some(format!("uninstall {service}")),
+        (_, Some(Order::Update { service, .. })) => Some(format!("update {service}")),
         (_, Some(_)) => Some("other".to_owned()),
         (ServiceReply::Update { service, .. }, None) => {
             Some(format!("update {}", service.unwrap_or_default()))

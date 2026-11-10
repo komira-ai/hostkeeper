@@ -1,15 +1,15 @@
 //! Steps 7 to 18 of a force (design section 5.6), under the service's lock only, each part
 //! journaled in the force record before the next begins:
 //!
-//! 9. the `run` units of the version left are stopped: those its manifest names, and those
-//!    `placed.json` holds enabled for the service, so that a version whose manifest no longer
-//!    reads is stopped all the same; a unit that is not running is no error;
-//! 10. the units and files the target does not list are stopped, disabled and unlinked by the
-//!     placed-path linker, which runs `daemon-reload` when a unit went;
-//! 11. `current` is switched to the target, its tree checked against its seal first; `previous`
-//!     becomes the version left, and a switch to the version `current` names changes nothing;
-//! 12. the target's units, `WantedBy=` links and files are linked, written ahead in
-//!     `placed.json`;
+//! 9. the `run` units of the version left are stopped, those its manifest names; a unit that is
+//!    not running is no error;
+//! 10. nothing: no version this daemon stages places a path of its own, so there is none to
+//!     unlink;
+//! 11. the target's installer activates it ([`crate::repository::Repository::activate_version`]):
+//!     its tree checked against its seal first, the package installed, its units enabled, and
+//!     `current` switched to the target; `previous` becomes the version left, and a switch to the
+//!     version `current` names changes nothing;
+//! 12. nothing, for the same reason;
 //! 13. `daemon-reload`;
 //! 14. and 15. the target's `run` units are started, and each must be seen active once within
 //!     `force_start_secs`, polled on the daemon's clock;
@@ -26,13 +26,13 @@
 
 use std::collections::BTreeSet;
 
-use hostkeeper_config::manifest::{Expected, Manifest};
+use hostkeeper_config::manifest::Expected;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase, Verdict};
-use hostkeeper_placed::{PathKind, PlacedError, Placer};
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_steps::{ForceFailure, ForcePhase, ForceRecord, ForceVerdict, Layout, RecordStore};
 
+use super::Target;
 use crate::executor::{Ctx, Reply};
 use crate::locks::ServiceGuard;
 use crate::prune;
@@ -62,9 +62,9 @@ pub(super) fn run(
     held: &ServiceGuard<'_>,
     mut rec: Record,
     mut force: ForceRecord,
-    target: &Manifest,
+    target: &Target,
 ) -> Reply {
-    let service = &target.name;
+    let service = &target.manifest.name;
     let store = ctx.store(service);
     let failure = match parts(ctx, &store, &mut rec, &mut force, target) {
         Ok(()) => None,
@@ -100,7 +100,7 @@ pub(super) fn run(
     // an alert, and the verdict stands.
     if moved {
         ctx.force_lock_point.after_switch_before_prune();
-        prune::confirmed_switch(ctx, held, service, &target.version);
+        prune::confirmed_switch(ctx, held, service, &target.manifest.version);
     }
     Reply::Finished {
         verdict,
@@ -154,66 +154,48 @@ fn journal(
     })
 }
 
-/// Steps 8 to 15.
+/// Steps 8 to 15. Steps 10 and 12 have nothing to do for a version a repository installer
+/// staged, which places nothing, and stay in the journal as the phases a record of an earlier
+/// release names.
 fn parts(
     ctx: &Ctx,
     store: &RecordStore,
     rec: &mut Record,
     force: &mut ForceRecord,
-    target: &Manifest,
+    target: &Target,
 ) -> Result<(), Stop> {
-    let service = &target.name;
+    let manifest = &target.manifest;
+    let service = &manifest.name;
     let placer = ctx.placer();
     journal(store, rec, force, ForcePhase::Started)?;
-    stop_left(ctx, &placer, service, force.from_version.as_deref()).map_err(link_failed)?;
+    stop_left(ctx, service, force.from_version.as_deref()).map_err(link_failed)?;
     journal(store, rec, force, ForcePhase::UnitsStopped)?;
     let layout = Layout::package(&ctx.dirs.packages.join(service.as_str()));
-    let dir = layout.version_path(target.version.as_str());
-    // A repository version places nothing: its installer's `activate` installs the package,
-    // enables its units and switches `current` once the package manager shows it.
-    let repository = crate::target::read(&dir).map_err(link_failed)?;
-    if repository.is_none() {
-        placer.unlink_unlisted(target).map_err(link_failed)?;
-    }
+    let dir = layout.version_path(manifest.version.as_str());
     journal(store, rec, force, ForcePhase::Unlinked)?;
     layout
-        .check_tree(target.version.as_str())
+        .check_tree(manifest.version.as_str())
         .map_err(link_failed)?;
-    match &repository {
-        // A force reports no `drift_repaired`: what its `activate` repaired is dropped.
-        Some(entry) => {
-            let repository = ctx.repository();
-            let activated = repository.activate_version(service, &target.version, &dir, entry);
-            drop(repository.take_repaired(service));
-            activated.map_err(link_failed)?
-        }
-        None => drop(
-            placer
-                .switch_current(service, &target.version)
-                .map_err(link_failed)?,
-        ),
-    }
+    // A force reports no `drift_repaired`: what its `activate` repaired is dropped. The
+    // installer's `activate` installs the package, enables its units and switches `current`
+    // once the package manager shows it.
+    let repository = ctx.repository();
+    let activated = repository.activate_version(service, &manifest.version, &dir, &target.entry);
+    drop(repository.take_repaired(service));
+    activated.map_err(link_failed)?;
     journal(store, rec, force, ForcePhase::Switched)?;
-    if repository.is_none() {
-        link(&placer, target).map_err(link_failed)?;
-    }
     journal(store, rec, force, ForcePhase::Linked)?;
     placer
         .reload()
         .map_err(|error| Stop::Failed(ForceFailure::DaemonReloadFailed, error.to_string()))?;
     journal(store, rec, force, ForcePhase::Reloaded)?;
-    start(ctx, &target.run).map_err(|why| Stop::Failed(ForceFailure::StartFailed, why))?;
+    start(ctx, &manifest.run).map_err(|why| Stop::Failed(ForceFailure::StartFailed, why))?;
     journal(store, rec, force, ForcePhase::UnitsStarted)
 }
 
 /// Step 9: stops the `run` units of the version `from`, which `current` named when the force
-/// began: those its manifest names and those `placed.json` holds enabled for the service.
-fn stop_left(
-    ctx: &Ctx,
-    placer: &Placer<'_>,
-    service: &ServiceName,
-    from: Option<&str>,
-) -> Result<(), String> {
+/// began, those its manifest names.
+fn stop_left(ctx: &Ctx, service: &ServiceName, from: Option<&str>) -> Result<(), String> {
     let manifest = from
         .and_then(|from| Version::new(from).ok())
         .and_then(|version| {
@@ -229,33 +211,16 @@ fn stop_left(
             };
             crate::target::manifest(&dir, &expected, &ctx.own_version).ok()
         });
-    let mut units: BTreeSet<String> = manifest
+    let units: BTreeSet<String> = manifest
         .map(|manifest| manifest.run)
         .unwrap_or_default()
         .into_iter()
         .collect();
-    let record = placer.store().load().map_err(|error| error.to_string())?;
-    let enabled = record
-        .of_service(service.as_str())
-        .filter(|(_, entry)| entry.kind == PathKind::WantsLink)
-        .filter_map(|(path, _)| path.file_name())
-        .map(|name| name.to_string_lossy().into_owned());
-    units.extend(enabled);
     for unit in &units {
         ctx.units
             .stop_unit(unit)
             .map_err(|error| error.to_string())?;
     }
-    Ok(())
-}
-
-/// Step 12: every path the target places, its `WantedBy=` links included, written ahead as
-/// `pending`, linked, then marked `placed`.
-fn link(placer: &Placer<'_>, target: &Manifest) -> Result<(), PlacedError> {
-    let desired = placer.desired(target)?;
-    let linking = placer.begin(&desired)?;
-    placer.link(&linking)?;
-    placer.commit(linking)?;
     Ok(())
 }
 

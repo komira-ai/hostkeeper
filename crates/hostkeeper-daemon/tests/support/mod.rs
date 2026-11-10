@@ -3,10 +3,13 @@
 //! pipe.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
+pub mod apt;
 pub mod coordinated;
 pub mod force;
 pub mod pki;
 pub mod selfupdate;
+pub mod typed;
+pub mod versions;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -18,7 +21,6 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
-use hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS;
 use hostkeeper_daemon::links::{Links, MakeEnroller};
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
@@ -256,7 +258,10 @@ pub struct Rig {
     pub run_dir: PathBuf,
     pub clock: Arc<FakeClock>,
     pub launcher: Arc<ScriptedLauncher>,
-    pub store: Arc<FakePackages>,
+    /// Native version directories of the rig's packages directory.
+    pub store: Arc<versions::Versions>,
+    /// The package store the daemon fetches a `.pkg` by its pin from.
+    pub pins: Arc<FakePackages>,
     /// The service manager; its calls are in [`Rig::placed_log`].
     pub units: Arc<FakeUnitControl>,
     /// The writes of placed-path linking and the calls of the service manager, in order.
@@ -302,7 +307,8 @@ impl Rig {
         );
         Rig {
             state: root.join("state"),
-            store: FakePackages::new(&packages),
+            store: versions::Versions::new(&packages),
+            pins: FakePackages::new(&packages),
             packages,
             config,
             run_dir: root.join("run"),
@@ -324,7 +330,7 @@ impl Rig {
         Ports {
             announcement: Default::default(),
             launcher: self.launcher.clone(),
-            packages: self.store.clone(),
+            packages: self.pins.clone(),
             clock: self.clock.clone(),
             deadman_poll_secs: None,
             units: self.units.clone(),
@@ -409,7 +415,13 @@ impl Rig {
         Dirs {
             state: self.state.clone(),
             packages: self.packages.clone(),
+            facts: self.facts_file(),
         }
+    }
+
+    /// The host's facts file of the rig: beside its packages directory, as on a host.
+    pub fn facts_file(&self) -> PathBuf {
+        self.packages.with_file_name("facts.json")
     }
 
     /// A daemon on the rig's directories, with no dead-men.
@@ -422,9 +434,9 @@ impl Rig {
             config: self.config.clone(),
             state_dir: self.state.clone(),
             packages_dir: self.packages.clone(),
+            facts_file: self.facts_file(),
             run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
-            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
         }
     }
 
@@ -555,6 +567,11 @@ impl Rig {
     /// Whether anything is at the host path `path`, a link included.
     pub fn there(&self, path: impl AsRef<Path>) -> bool {
         fs::symlink_metadata(self.host(path)).is_ok()
+    }
+
+    /// Where `placed.json` is on disk.
+    pub fn placed_record_path(&self) -> PathBuf {
+        self.host(roots().placed_file())
     }
 
     /// `placed.json` as it is on disk.

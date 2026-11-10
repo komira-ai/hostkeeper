@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::Outcome;
 
-use crate::decide::{Decision, Gate, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Marks};
 use crate::services::{Services, ServicesError};
 use crate::stages::{Advance, HostState, View};
-use crate::testutil::{beat, desired, id, last, role, unhealthy, updating};
+use crate::testutil::{beat, decide_why, desired, id, last, native, role, unhealthy, updating};
 
 /// The service of these tests: `app` on the role `farm`, which baking `bake_beats` beats, with
 /// `extra` lines of its definition.
@@ -165,7 +165,13 @@ impl Farm {
     /// The plan as the decision reads it now.
     fn view(&self) -> View {
         let def = self.services.get("app").expect("app");
-        View::effective(def, &self.all["app"], None, &self.fleet, self.now())
+        View::effective(
+            def,
+            &self.all["app"],
+            None,
+            &native(&self.fleet, &self.all),
+            self.now(),
+        )
     }
 
     /// The hosts that are not up for `app` now: updating, ordered or unhealthy.

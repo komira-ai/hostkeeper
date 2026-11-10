@@ -5,7 +5,7 @@ use std::io::Cursor;
 use std::sync::{Arc, Mutex};
 
 use hostkeeper_package::PackageFailure;
-use hostkeeper_package::entry::Proven;
+use hostkeeper_package::entry::Pinned;
 use hostkeeper_package::net::{NetFetcher, Response, Timeouts, Transport};
 use hostkeeper_package::ports::NetError;
 use hostkeeper_proto::hostkeeper::release::v1::Target;
@@ -108,7 +108,7 @@ impl Transport for Shared {
     }
 }
 
-/// The `lan` store's URL for the repository `team/app` and the bytes of `which`.
+/// The `lan` store's URL for the repository `team/app` and the blob whose bytes are `bytes`.
 fn lan(repository: &str, bytes: &[u8]) -> String {
     format!(
         "https://lan.example/v2/{repository}/blobs/sha256:{}",
@@ -116,27 +116,22 @@ fn lan(repository: &str, bytes: &[u8]) -> String {
     )
 }
 
-/// An entry with both blobs at the `lan` store (an oci store with a basic credential).
+/// An entry with its artifact at the `lan` store (an oci store with a basic credential).
 fn at_lan() -> Target {
-    entry_of(
-        ARCHIVE,
-        &[("lan", "team/app")],
-        &bundle(),
-        &[("lan", "team/attest")],
-    )
+    entry_of(ARCHIVE, &[("lan", "team/app")])
 }
 
 /// Runs the entry through `NetFetcher` over `network`; returns the result and the requests.
 /// A result and the requests that led to it.
 type Seen = (
-    Result<Proven, PackageFailure>,
+    Result<Pinned, PackageFailure>,
     Vec<(String, Option<String>)>,
 );
 
 fn through_net(host: &Host, network: Network, target: &Target) -> Seen {
     let network = Arc::new(network);
     let fetcher = NetFetcher::new(Shared(Arc::clone(&network)), host.clock.clone());
-    let result = host.run(&fetcher, &FakeVerifier::accepting(), target);
+    let result = host.run(&fetcher, target);
     let asked = network.asked.lock().expect("log").clone();
     (result, asked)
 }
@@ -161,17 +156,15 @@ fn the_credential_goes_to_the_base_origin_and_not_past_a_cross_origin_redirect()
     let network = Network::default()
         .with(&artifact, vec![moved(inside)])
         .with(inside, vec![moved(storage)])
-        .with(storage, vec![ok(ARCHIVE)])
-        .with(&lan("team/attest", &bundle()), vec![ok(&bundle())]);
+        .with(storage, vec![ok(ARCHIVE)]);
     let (result, asked) = through_net(&host, network, &at_lan());
-    result.expect("proven");
+    result.expect("pinned");
     assert_eq!(
         asked,
         [
             pair(&artifact, Some(BASIC)),
             pair(inside, Some(BASIC)),
             pair(storage, None),
-            pair(&lan("team/attest", &bundle()), Some(BASIC)),
         ]
     );
 }
@@ -186,11 +179,8 @@ fn redirects_are_https_only_and_bounded_by_the_stores_count() {
     let host = Host::new("net-redirects", false);
     let artifact = lan("team/app", ARCHIVE);
     let hop = |n: u32| format!("https://storage.example/hop/{n}");
-    let attest = (lan("team/attest", &bundle()), vec![ok(&bundle())]);
 
-    let network = Network::default()
-        .with(&artifact, vec![moved("http://storage.example/blob")])
-        .with(&attest.0, attest.1);
+    let network = Network::default().with(&artifact, vec![moved("http://storage.example/blob")]);
     let (result, asked) = through_net(&host, network, &at_lan());
     assert_eq!(result.expect_err("refused"), deferred("fetch_failed"));
     assert_eq!(asked.len(), 1);
@@ -205,7 +195,7 @@ fn redirects_are_https_only_and_bounded_by_the_stores_count() {
             };
             network = network.with(&hop(n), vec![next]);
         }
-        network.with(&lan("team/attest", &bundle()), vec![ok(&bundle())])
+        network
     };
     let (result, _) = through_net(&host, chain(3), &at_lan());
     result.expect("three redirects are followed");
@@ -216,26 +206,18 @@ fn redirects_are_https_only_and_bounded_by_the_stores_count() {
     );
     assert_eq!(asked.len(), 4);
 
-    let on_b = entry_of(
-        ARCHIVE,
-        &[("b", ARTIFACT_AT)],
-        &bundle(),
-        &[("b", BUNDLE_AT)],
-    );
+    let on_b = entry_of(ARCHIVE, &[("b", ARTIFACT_AT)]);
     let b_url = format!("https://b.example/{ARTIFACT_AT}");
-    let b_bundle = format!("https://b.example/{BUNDLE_AT}");
     let network = Network::default()
         .with(&b_url, vec![moved(&hop(1))])
-        .with(&hop(1), vec![ok(ARCHIVE)])
-        .with(&b_bundle, vec![ok(&bundle())]);
+        .with(&hop(1), vec![ok(ARCHIVE)]);
     through_net(&host, network, &on_b)
         .0
         .expect("one redirect is followed");
     let network = Network::default()
         .with(&b_url, vec![moved(&hop(1))])
         .with(&hop(1), vec![moved(&hop(2))])
-        .with(&hop(2), vec![ok(ARCHIVE)])
-        .with(&b_bundle, vec![ok(&bundle())]);
+        .with(&hop(2), vec![ok(ARCHIVE)]);
     let (result, asked) = through_net(&host, network, &on_b);
     assert_eq!(
         result.expect_err("one past the count"),
@@ -254,15 +236,13 @@ fn redirects_are_https_only_and_bounded_by_the_stores_count() {
 fn a_token_challenge_is_answered_on_the_stores_origin_only() {
     let host = Host::new("net-challenge", false);
     let artifact = lan("team/app", ARCHIVE);
-    let attest = lan("team/attest", &bundle());
     let own = "Bearer realm=\"https://lan.example/token\",service=\"lan\",scope=\"repository:team/app:pull\"";
     let token_url = "https://lan.example/token?service=lan&scope=repository%3Ateam%2Fapp%3Apull";
     let network = Network::default()
         .with(&artifact, vec![challenge(own), ok(ARCHIVE)])
-        .with(token_url, vec![ok(b"{\"token\":\"tok\"}")])
-        .with(&attest, vec![ok(&bundle())]);
+        .with(token_url, vec![ok(b"{\"token\":\"tok\"}")]);
     let (result, asked) = through_net(&host, network, &at_lan());
-    result.expect("proven");
+    result.expect("pinned");
     assert_eq!(
         asked[..3],
         [
@@ -273,9 +253,7 @@ fn a_token_challenge_is_answered_on_the_stores_origin_only() {
     );
 
     let foreign = "Bearer realm=\"https://auth.example/token\",service=\"lan\",scope=\"x\"";
-    let network = Network::default()
-        .with(&artifact, vec![challenge(foreign)])
-        .with(&attest, vec![ok(&bundle())]);
+    let network = Network::default().with(&artifact, vec![challenge(foreign)]);
     let (result, asked) = through_net(&host, network, &at_lan());
     assert_eq!(result.expect_err("not answered"), deferred("fetch_failed"));
     assert_eq!(asked, [pair(&artifact, Some(BASIC))]);

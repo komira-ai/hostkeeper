@@ -8,13 +8,13 @@ use hostkeeper_oidc::{ConfigError, KeySourceError};
 use hostkeeper_tls::TlsError;
 use hostkeeper_wire::identity::PrefixError;
 
-use crate::channel_https::{ChannelTlsError, ChannelUrlError};
 use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
 use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
 use crate::mdm::MdmError;
 use crate::ops::OpsError;
+use crate::origin_https::OriginTlsError;
 use crate::services::ServicesError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
@@ -169,12 +169,9 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
-    /// `--release-channel` is not an `https://` base URL.
-    #[error("--release-channel: {0}")]
-    ReleaseChannel(#[from] ChannelUrlError),
-    /// The TLS client of the release channel could not be made.
-    #[error("--release-channel: {0}")]
-    ReleaseChannelTls(#[from] ChannelTlsError),
+    /// The TLS client for the repository origins could not be made.
+    #[error("repository origins: {0}")]
+    OriginTls(#[from] OriginTlsError),
     /// The MDM policy gate did not start.
     #[error(transparent)]
     Mdm(#[from] MdmError),
