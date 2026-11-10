@@ -21,11 +21,18 @@ fn with_data(base: Vec<File>, path: &str, data: Vec<u8>) -> Vec<File> {
 }
 
 const HOSTKEEPER: &str = "./usr/bin/hostkeeper";
-const PXE: &str = "./usr/bin/hostkeeper-pxe";
+const OTHER: &str = "./usr/lib/other/helper";
 
-/// The files, with the daemon and the boot server the given programs.
-fn programs(hostkeeper: Vec<u8>, pxe: Vec<u8>) -> Vec<File> {
-    with_data(with_data(files(), HOSTKEEPER, hostkeeper), PXE, pxe)
+/// The files, with the daemon the given program and one more file, `other`, that the staged
+/// check does not look at.
+fn programs(hostkeeper: Vec<u8>, other: Vec<u8>) -> Vec<File> {
+    let mut all = with_data(files(), HOSTKEEPER, hostkeeper);
+    all.push(File {
+        path: OTHER,
+        data: other,
+        ..all[0].clone()
+    });
+    all
 }
 
 /// The files with owners without names (uid 0 and an empty name is root's).
@@ -85,7 +92,7 @@ fn static_programs_pass_in_each_format_with_no_dependency() {
     let all = programs(static_pie(), Spec::static_pie(AARCH64).build());
     let static_lines = [
         "/usr/bin/hostkeeper is a static ELF program",
-        "/usr/bin/hostkeeper-pxe is a static ELF program",
+        "/usr/lib/other/helper is a static ELF program",
     ];
     for package in [deb_of(&all), rpm_of(&all), deb_of(&nameless(all.clone()))] {
         assert_eq!(
@@ -133,8 +140,8 @@ fn a_program_linked_to_a_library_or_asking_for_an_interpreter_is_refused_in_each
     let want = [
         "/usr/bin/hostkeeper: ELF program linked to libssl.so.3",
         "/usr/bin/hostkeeper: ELF program linked to libc.so.6",
-        "/usr/bin/hostkeeper-pxe: ELF program with the interpreter /lib64/ld-linux-x86-64.so.2, so not static",
-        "/usr/bin/hostkeeper-pxe: ELF program linked to libc.so.6",
+        "/usr/lib/other/helper: ELF program with the interpreter /lib64/ld-linux-x86-64.so.2, so not static",
+        "/usr/lib/other/helper: ELF program linked to libc.so.6",
     ];
     let [gz, xz, zst] = tarballs(&all);
     for package in [deb_of(&all), rpm_of(&all), gz, xz, zst] {
@@ -154,7 +161,7 @@ fn an_elf_file_that_cannot_be_read_is_refused_by_name() {
     let lines = refusals(&deb_of(&files));
     assert_eq!(
         lines[0],
-        "/usr/bin/hostkeeper-pxe: an ELF file this check cannot read: 4 bytes, too short for an ELF header"
+        "/usr/lib/other/helper: an ELF file this check cannot read: 4 bytes, too short for an ELF header"
     );
     assert!(
         lines[1].starts_with("/usr/lib/x/cut: an ELF file this check cannot read: "),
@@ -368,12 +375,12 @@ fn a_package_with_nameless_root_owners_passes_the_staged_check() {
     let case = Case::new(&package);
     let name = case.package().display().to_string();
     let lines = case.check().expect("accepted");
-    assert_eq!(lines.len(), 7, "{lines:?}");
+    assert_eq!(lines.len(), 6, "{lines:?}");
     assert_eq!(
         lines[0],
         format!("{name}: /usr/lib/hostkeeper/gh is 755 root:root and the staged bytes")
     );
-    assert_eq!(lines[6], format!("{name}: declares no dependency"));
+    assert_eq!(lines[5], format!("{name}: declares no dependency"));
 }
 
 #[test]
@@ -390,21 +397,23 @@ fn a_nameless_owner_with_an_id_other_than_0_is_not_roots() {
 }
 
 #[test]
-fn the_staged_check_holds_the_two_programs_to_their_path_mode_and_bytes() {
+fn the_staged_check_holds_the_daemon_to_its_path_mode_owner_and_bytes() {
     let daemon = "/usr/bin/hostkeeper";
-    let pxe = "/usr/bin/hostkeeper-pxe";
     let cases: Vec<(Vec<File>, Vec<String>)> = vec![
         (
-            files().into_iter().filter(|f| f.path != PXE).collect(),
-            vec![format!("{pxe}: not in the package")],
+            files()
+                .into_iter()
+                .filter(|f| f.path != HOSTKEEPER)
+                .collect(),
+            vec![format!("{daemon}: not in the package")],
         ),
         (
             with(HOSTKEEPER, |f| f.mode = 0o775),
             vec![format!("{daemon}: mode 775, not 755")],
         ),
         (
-            with(PXE, |f| f.group = "adm"),
-            vec![format!("{pxe}: owned by root:adm, not root:root")],
+            with(HOSTKEEPER, |f| f.group = "adm"),
+            vec![format!("{daemon}: owned by root:adm, not root:root")],
         ),
         (
             with(HOSTKEEPER, |f| f.data = b"another daemon".to_vec()),
@@ -426,13 +435,13 @@ fn the_staged_check_holds_the_two_programs_to_their_path_mode_and_bytes() {
 #[test]
 fn staged_with_a_static_program_adds_its_line_after_the_staged_ones() {
     let program = static_pie();
-    let all = programs(program.clone(), b"the boot server".to_vec());
+    let all = with_data(files(), HOSTKEEPER, program.clone());
     let case = Case::new(&deb_of(&all));
     std::fs::write(case.dir.join("staged/hostkeeper"), &program).expect("staged");
     let lines = case.check().expect("accepted");
     let name = case.package().display().to_string();
     assert_eq!(
-        lines[5..],
+        lines[4..],
         [
             format!("{name}: /usr/bin/hostkeeper is a static ELF program"),
             format!("{name}: declares no dependency"),

@@ -1,5 +1,8 @@
-//! The update hook of the `pxe` package (docs/design/two-programs.md, section 6.1): the steps
-//! the host updater runs as `bin/pxe <step> [<staged release>] --params <file>`.
+//! The update hook of the `pxe` .deb (docs/design/two-programs.md, section 6.1): the steps
+//! hostkeeper's daemon runs as `pxe update-hook <step> [<staged release>] --params <file>`. The
+//! manifest's hook command is `["/usr/lib/pxe/pxe", "update-hook"]`, and the daemon runs the
+//! sealed copy of that file, `/var/lib/hostkeeper/packages/pxe/<version>/tree/usr/lib/pxe/pxe`;
+//! nothing here derives a path from the running program.
 //!
 //! The package's version directory is sealed read-only by the daemon, so the boot sets live
 //! beside it, in the package param `boot_dir` (`/var/lib/pxe`): `<boot_dir>/<version>/` is what
@@ -13,7 +16,9 @@
 //!   of that version with a boot set for every platform asked for is left as it is. Nothing a
 //!   client sees changes.
 //! - `cutover`: points `current` at the version (a new symlink renamed over the old) and
-//!   restarts the unit. The unit is `Type=notify` and `serve` says it is ready only after its
+//!   restarts the unit, which is how the unit is first started: dpkg installed it and
+//!   hostkeeper's apt activate enabled it through `[Install]`, and nothing starts it before. The
+//!   unit is `Type=notify` and `serve` says it is ready only after its
 //!   whole start, so the restart returns once `serve` is serving or has refused.
 //! - `verify`: the unit is active, or the step is deferred (exit 75, `retry_after_secs` 2).
 //! - `rollback`: with a previous version whose directory is there, points `current` back at it
@@ -21,11 +26,13 @@
 //!   for a unit that is not loaded, which a first install's rollback meets, and 5 is accepted)
 //!   and removes `current`. The target's directory is then removed unless it is the previous.
 //! - `cleanup`: removes every entry of `boot_dir` but `current` and the target.
-//! - `uninstall`: removes `boot_dir` whole (the daemon has stopped the unit and removes its
-//!   links; the settings file is the operator's and stays).
+//! - `uninstall`: removes `boot_dir` whole. The daemon has stopped the `run` units, and `apt`
+//!   removes the unit file and its links with the package; the settings file is the operator's
+//!   and stays.
 //!
-//! `prepare` is also given the staged release directory; it is parsed and not otherwise used, since
-//! the boot sets are not part of the package.
+//! `prepare` is also given the staged release directory, which must be byte for byte the params'
+//! `updater.staged_release` (a step given another is refused as `bad_params`); it is not
+//! otherwise used, since the boot sets are not part of the package.
 //!
 //! The package params are `release`, `settings`, `boot_dir` and `unit` ([`params`]); the
 //! updater's `updater.target_version` and `updater.previous_version` name the versions.
@@ -47,7 +54,7 @@ mod systemctl;
 use std::io::Write;
 use std::path::Path;
 
-use hostkeeper_hook::{Class, Outcome, Params, Report, Step};
+use hostkeeper_hook::{Class, Outcome, Params, Report, STAGED_RELEASE_KEY, Step};
 
 pub(crate) use prepare::{FetchJob, fetch_with};
 pub(crate) use systemctl::{HostSystemctl, Systemctl};
@@ -109,16 +116,18 @@ impl Failure {
     }
 }
 
-/// Runs `step` as the params file `params` says; returns the exit status. Human text goes to `err`, the JSON report of a failed or
-/// deferred step to `out`.
+/// Runs `step` as the params file `params` says; `staged` is the staged release directory
+/// `prepare` was given. Returns the exit status. Human text goes to `err`, the JSON report of a
+/// failed or deferred step to `out`.
 pub(crate) fn run(
     host: &Host<'_>,
     step: Step,
     params: &Path,
+    staged: Option<&Path>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
-    match execute(host, step, params, err) {
+    match execute(host, step, params, staged, err) {
         Ok(()) => 0,
         Err(failure) => {
             drop(writeln!(err, "pxe {step}: {}", failure.text));
@@ -133,11 +142,26 @@ fn execute(
     host: &Host<'_>,
     step: Step,
     params_file: &Path,
+    staged: Option<&Path>,
     err: &mut dyn Write,
 ) -> Result<(), Failure> {
     let read = Params::read(params_file).map_err(|e| {
         Failure::environment("bad_params", format!("{}: {e}", params_file.display()))
     })?;
+    if let Some(given) = staged {
+        match read.staged_release() {
+            Some(known) if known.as_os_str() == given.as_os_str() => {}
+            _ => {
+                return Err(Failure::environment(
+                    "bad_params",
+                    format!(
+                        "prepare was given {}, which is not the params' {STAGED_RELEASE_KEY}",
+                        given.display()
+                    ),
+                ));
+            }
+        }
+    }
     let params = HookParams::of(&read, step)?;
     match step {
         Step::Prepare => prepare::prepare(host, &params, err),

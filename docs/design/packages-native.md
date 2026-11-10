@@ -21,8 +21,10 @@ channel and attested:
 - `hostkeeper` itself, on every host of the farm;
 - `hello`, the demo service, on every host of the farm;
 - `mdm`, the MDM host's service, is built as one (docs/operations/mdm-package.md), whether or not the MDM host runs
-  it under hostkeeper yet; the `pxe` package of two-programs.md section 6.1 (N1) is designed as one too, and until it
-  ships `hostkeeper-pxe` stays in hostkeeper's `.deb`.
+  it under hostkeeper yet;
+- `pxe`, the boot server of network install, ships as its own `.deb` for `linux-x86_64` and `linux-arm64`
+  (two-programs.md section 6.1, N1, **Built**): hostkeeper's `.deb` and `.rpm` no longer carry `hostkeeper-pxe`, and a
+  boot host gets `pxe` when the operator assigns the service there (docs/operations/network-install.md).
 
 tierstore is next. It runs on the lab's hosts outside hostkeeper today. No host of the farm is a Mac (none is enrolled,
 hostkeeper-mdm.md section 2), and none runs Alpine or an RPM-family distribution. The daemon itself is shipped for
@@ -175,11 +177,11 @@ packages are published.**
 - What leaves the daemon (A25): `prove.rs`, its `gh attestation verify` call and the trusted root's report
   (`crates/hostkeeper-daemon/src/trusted_root.rs`; `trusted_root_age_secs` and `trusted_root_reason` stay in the
   proto, unsent). The daemon stops reading `release_channel` and `[trusted_signers]`; the loader keeps accepting both,
-  since an older binary requires them after a fallback, `hostkeeper-pxe` reads `[trusted_signers]` from the same file,
+  since an older binary requires them after a fallback, `pxe` reads `[trusted_signers]` from the same file,
   and the file is never rewritten. Host setup keeps writing both while a release that requires them may run.
-- What stays elsewhere: `hostkeeper-pxe` checks the attestation of `netboot.json` and of the `.deb` it seeds
+- What stays elsewhere: `pxe` (`pxe update-hook prepare`) checks the attestation of `netboot.json` and of the `.deb` it seeds
   (network-install.md), on the hop before any key is on the new host, against `[trusted_signers]`. So the pinned `gh`,
-  `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it.
+  `packaging/sigstore/trusted_root.json` and its refresh workflow `trusted-root.yml` stay, for it (hostkeeper's `.deb` keeps carrying them; `pxe` uses them from `/usr/lib/hostkeeper/`).
 - A `macos-pkg` entry carries no attestation, and A18 makes the coordinator refuse one, as it refuses one on a
   repository entry (section 2.2): an attestation nobody checks must not look checked. No daemon listed `macos-pkg`
   when A18 shipped, so nothing that shipped changed; a Mac's daemon lists it from the release that runs its steps
@@ -347,7 +349,7 @@ does is not one we run.
 
 - **Crates.** `hostkeeper-unpack` (its `MacVerify` moves to `hostkeeper-install`, for `macos-pkg`'s `stage`).
   `hostkeeper-package` shrinks to what is still used: its `net`, `ports`, `bundle`, `der` and `gh` modules, which
-  `hostkeeper-pxe` uses to check what it seeds, and its fetch by digest (`stores.rs`, `entry.rs`, `stage.rs`), which
+  `pxe` uses to check what it seeds, and its fetch by digest (`stores.rs`, `entry.rs`, `stage.rs`), which
   `macos-pkg` uses, without the proof; `index.rs`, `fetch.rs` and `prove.rs` go, and its `Platform` copy gives way to
   `hostkeeper-config`'s `platform.rs`. Every release index parser goes: `hostkeeper-config`'s `index.rs`,
   `hostkeeper-package`'s and xtask's writer (`release/index.rs`), after their users move (the coordinator's
@@ -429,7 +431,7 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script starts a unit through `invoke-rc.d` or `deb-systemd-invoke` meanwhile |
 | Units a service's package installs | Any; hostkeeper never refuses a `run` unit, writes the `[Install]` links of one whose file is in the tree, and starts at `cutover` and at every daemon start each `run` unit with no such link | A unit with no `[Install]` is a valid way to ship a unit hostkeeper alone starts |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
-| `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `hostkeeper-pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
+| `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |
 | hostkeeper's own release | One native entry per platform, through the same installers | One way to install anything |
 | When hostkeeper's package is installed | After the new binary confirms, by that binary; a failure there leaves it running and reports drift | The unit starts `/usr/bin/hostkeeper`; it must always be a binary that started |

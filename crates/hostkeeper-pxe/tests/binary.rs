@@ -1,5 +1,5 @@
 //! The `pxe` binary forwards to its library: run as a program, it answers `--version` with its
-//! name and version and exits 0, a command line that does not parse exits 2, a step reaches its
+//! name and version and exits 0, a command line that does not parse exits 2, an `update-hook` step reaches its
 //! code with the exit status and the report of the contract, and `serve` reads the one thing it
 //! takes from the environment, systemd's `NOTIFY_SOCKET`.
 
@@ -25,6 +25,29 @@ fn the_binary_forwards_its_arguments_and_exit_status() {
     assert_eq!(usage.status.code(), Some(2));
     let gone = pxe().arg("fetch").output().expect("run it");
     assert_eq!(gone.status.code(), Some(2));
+    let bare = pxe()
+        .args(["uninstall", "--params", "p"])
+        .output()
+        .expect("run it");
+    assert_eq!(bare.status.code(), Some(2));
+}
+
+/// Run as a program, an `update-hook` command line the contract cannot read exits 2 with the one
+/// line `pxe update-hook: <why>` and nothing on standard output.
+///
+/// Catches a binary whose hook parse refusal exits 1 or prints a report.
+#[test]
+fn the_binary_refuses_an_unreadable_update_hook_command_line() {
+    let output = pxe()
+        .args(["update-hook", "prepare"])
+        .output()
+        .expect("run it");
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8_lossy(&output.stderr),
+        "pxe update-hook: prepare needs the staged release directory\n"
+    );
 }
 
 /// Run as a program, a step reaches the hook: a params file that is not there fails the step
@@ -37,7 +60,7 @@ fn the_binary_fails_a_step_whose_params_are_missing() {
     let base = std::env::current_exe().expect("the test binary");
     let missing = base.with_file_name("pxe-binary-scratch-missing.toml");
     let output = pxe()
-        .args(["uninstall", "--params"])
+        .args(["update-hook", "uninstall", "--params"])
         .arg(&missing)
         .output()
         .expect("run it");

@@ -400,7 +400,7 @@ impl UreqTransport {
     /// [`UreqTransport::new`], but following up to `redirects` redirects, each to an `https://`
     /// URL only (a redirect to another scheme is no connection). The response after the last
     /// redirect it follows is returned as it came, a further redirect included.
-    /// `hostkeeper-pxe fetch` downloads release assets with it: a GitHub release download
+    /// `pxe update-hook prepare` downloads release assets with it: a GitHub release download
     /// answers with a redirect to its storage host, and the bytes are trusted only once their
     /// size, SHA-256 or attestation is checked.
     pub fn following_redirects(roots: &[Vec<u8>], redirects: u32) -> UreqTransport {

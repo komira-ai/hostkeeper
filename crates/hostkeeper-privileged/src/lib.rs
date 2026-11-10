@@ -47,7 +47,7 @@
 //! `.github/workflows/net-install.yml`) install a QEMU guest
 //! by network with the real `pxe` (the program `hostkeeper-privileged-pxe`, which
 //! forwards to `hostkeeper_pxe::cli::main`) and the real coordinator's LAN listener, on a bridge
-//! of the test's with no route out, and, in `tests/net_install.rs`, install a `pxe` package under
+//! of the test's with no route out, and, in `tests/net_install.rs`, install the `pxe` .deb under
 //! systemd through the coordinator and the daemon; their rig is `tests/netinstall/`, whose root-free parts
 //! `tests/net_install_rig.rs` runs in the pull-request set.
 //! `tests/self_update_across_releases.rs` (first line `#![cfg(feature = "privileged")]`, in the

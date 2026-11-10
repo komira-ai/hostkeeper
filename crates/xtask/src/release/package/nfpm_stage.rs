@@ -1,9 +1,9 @@
-//! `release nfpm-stage`: the four files of the deb and the rpm, laid out where
+//! `release nfpm-stage`: the three files of the deb and the rpm, laid out where
 //! `packaging/linux/nfpm.yaml` takes them from: the two the daemon's attestation check runs on,
-//! and the two programs it ships. The daemon starts `gh` at `/usr/lib/hostkeeper/gh` and passes
+//! and the daemon it ships. The daemon starts `gh` at `/usr/lib/hostkeeper/gh` and passes
 //! it `/usr/lib/hostkeeper/trusted_root.json` as `--custom-trusted-root`
-//! (`hostkeeper_daemon::cli::GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`); the programs are
-//! `hostkeeper` and `hostkeeper-pxe`, taken from `--binaries`.
+//! (`hostkeeper_daemon::cli::GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`); the daemon is
+//! `hostkeeper`, taken from `--binaries`.
 //!
 //! What it does, in this order, writing nothing until every check has passed:
 //!
@@ -16,10 +16,10 @@
 //! 3. Reads `--trusted-root`, the Sigstore trusted root the workflow captured with
 //!    `gh attestation trusted-root`, and refuses a missing or empty file, and one with a
 //!    non-blank line that is not a JSON object whose `mediaType` is a Sigstore trusted root.
-//! 4. Reads `hostkeeper` and `hostkeeper-pxe` from `--binaries` and refuses either unless it is a
+//! 4. Reads `hostkeeper` from `--binaries` and refuses it unless it is a
 //!    64-bit little-endian ELF program of the architecture with no `PT_INTERP` and no
 //!    `DT_NEEDED` entry (a static build; see [`super::elf`]).
-//! 5. Writes `<out>/gh` (mode 0755), `<out>/trusted_root.json` (mode 0644) and the two programs
+//! 5. Writes `<out>/gh` (mode 0755), `<out>/trusted_root.json` (mode 0644) and `hostkeeper`
 //!    (mode 0755), replacing what was there.
 
 use std::fmt;
@@ -43,10 +43,6 @@ pub(crate) const TRUSTED_ROOT_FILE: &str = "trusted_root.json";
 
 /// The file name of the daemon in the staging directory, and in the directory of `--binaries`.
 pub(crate) const HOSTKEEPER_FILE: &str = "hostkeeper";
-
-/// The file name of the boot server of network install in the staging directory, and in the
-/// directory of `--binaries`.
-pub(crate) const PXE_FILE: &str = "hostkeeper-pxe";
 
 /// What every line of a trusted root names as its `mediaType`, before its `;version=` part.
 pub(crate) const TRUSTED_ROOT_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.trustedroot+json";
@@ -90,7 +86,7 @@ pub(crate) struct Request {
     pub(crate) gh_sha256: install::Sha256,
     /// The trusted root `gh attestation trusted-root` printed.
     pub(crate) trusted_root: PathBuf,
-    /// The directory holding the static `hostkeeper` and `hostkeeper-pxe`.
+    /// The directory holding the static `hostkeeper`.
     pub(crate) binaries: PathBuf,
     /// The staging directory; made when missing.
     pub(crate) out: PathBuf,
@@ -246,32 +242,25 @@ pub(crate) fn stage(request: &Request) -> Result<Vec<String>, Error> {
     check_elf(&gh, request.arch)?;
     let root = read(&request.trusted_root)?;
     check_trusted_root(&request.trusted_root, &root)?;
-    let mut programs = Vec::new();
-    for file in [HOSTKEEPER_FILE, PXE_FILE] {
-        let path = request.binaries.join(file);
-        let program = read(&path)?;
-        check_static(&path.display().to_string(), &program, request.arch)?;
-        programs.push((file, program));
-    }
+    let program_path = request.binaries.join(HOSTKEEPER_FILE);
+    let program = read(&program_path)?;
+    check_static(&program_path.display().to_string(), &program, request.arch)?;
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
     let gh_out = request.out.join(GH_FILE);
     let root_out = request.out.join(TRUSTED_ROOT_FILE);
     write(&gh_out, &gh, 0o755)?;
     write(&root_out, &root, 0o644)?;
-    let mut lines = Vec::new();
-    for (file, program) in &programs {
-        let out = request.out.join(file);
-        write(&out, program, 0o755)?;
-        lines.push(format!(
-            "{}: static {} program from {}, sha256 {}",
-            out.display(),
-            request.arch,
-            request.binaries.join(file).display(),
-            hex::encode(Sha::digest(program))
-        ));
-    }
-    let mut all = vec![
+    let program_out = request.out.join(HOSTKEEPER_FILE);
+    write(&program_out, &program, 0o755)?;
+    let program_line = format!(
+        "{}: static {} program from {}, sha256 {}",
+        program_out.display(),
+        request.arch,
+        program_path.display(),
+        hex::encode(Sha::digest(&program))
+    );
+    Ok(vec![
         format!(
             "{}: gh {} for {} from {}, sha256 {}",
             gh_out.display(),
@@ -286,9 +275,8 @@ pub(crate) fn stage(request: &Request) -> Result<Vec<String>, Error> {
             request.trusted_root.display(),
             hex::encode(Sha::digest(&root))
         ),
-    ];
-    all.extend(lines);
-    Ok(all)
+        program_line,
+    ])
 }
 
 #[cfg(test)]

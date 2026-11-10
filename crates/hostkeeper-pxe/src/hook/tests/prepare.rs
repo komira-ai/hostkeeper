@@ -384,7 +384,7 @@ fn a_settings_file_of_another_owner_is_refused() {
     };
     let (mut out, mut err) = (Vec::new(), Vec::new());
     assert_eq!(
-        crate::hook::run(&host, Step::Prepare, &params, &mut out, &mut err),
+        crate::hook::run(&host, Step::Prepare, &params, None, &mut out, &mut err),
         1
     );
     let text = String::from_utf8(err).expect("UTF-8");

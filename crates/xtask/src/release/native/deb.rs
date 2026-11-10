@@ -1,4 +1,4 @@
-//! `release deb`: the `.deb` of hello (and its failing build) or of mdm for one Linux platform,
+//! `release deb`: the `.deb` of hello (and its failing build), of mdm or of pxe for one Linux platform,
 //! written byte for byte the same for one commit and version, with no tool.
 //!
 //! The file is `<package>_<version>_<arch>.deb` (`amd64` for linux-x86_64, `arm64` for
@@ -16,7 +16,8 @@
 //!   package, its version and architecture, the maintainer, the installed size and the
 //!   description, and declares no dependency (the programs are built for the release runner's
 //!   glibc);
-//! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`] or [`super::mdm`] by
+//! - `data.tar.gz`, a gzip ustar of `./` and the files of [`super::hello`], [`super::mdm`] or
+//!   [`super::pxe`] by
 //!   their paths from `/` (`usr/lib/hello/hello`), each directory above them listed first (mode
 //!   0755), every entry owned by root and group root
 //!   (uid and gid 0), dated the commit.
@@ -24,6 +25,7 @@
 //! Hostkeeper's own `.deb` is not this verb's: nfpm builds it from `packaging/linux/nfpm.yaml`,
 //! with the scripts a bootstrap package needs (packages-native.md section 10.4). mdm's is built
 //! for linux-x86_64 only, from `--archives`, the pinned archives `release mdm-fetch` downloaded.
+//! pxe's holds its program and its unit, for both Linux platforms.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -31,7 +33,7 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 
 use super::hello::{self, File};
-use super::{DIR_MODE, mdm};
+use super::{DIR_MODE, mdm, pxe};
 use crate::release::Error;
 use crate::release::contract::{Commit, Package, Platform, Service, Version};
 use crate::release::ports::GitHistory;
@@ -47,25 +49,26 @@ pub(crate) struct Request {
     pub(crate) binary: PathBuf,
     /// Hello's failing build: its units start the program with `--fail-ready`.
     pub(crate) fail_ready: bool,
-    /// The directory of mdm's pinned archives; none for hello.
+    /// The directory of mdm's pinned archives; none for hello and pxe.
     pub(crate) archives: Option<PathBuf>,
     /// The directory the package is written to.
     pub(crate) out: PathBuf,
 }
 
 /// Why hostkeeper's `.deb` is not this verb's.
-pub(crate) const HOSTKEEPER_REFUSED: &str = "hostkeeper's .deb is built by nfpm from packaging/linux/nfpm.yaml, with its bootstrap scripts: release deb builds the .deb of hello or mdm";
+pub(crate) const HOSTKEEPER_REFUSED: &str = "hostkeeper's .deb is built by nfpm from packaging/linux/nfpm.yaml, with its bootstrap scripts: release deb builds the .deb of hello, mdm or pxe";
 
 /// Why a `.deb` is not built for macOS.
 const MACOS_REFUSED: &str =
     "a .deb is built for linux-x86_64 or linux-arm64; macOS takes the .pkg (release macos-pkg)";
 
-/// Why hello's `.deb` takes no `--archives`.
-const HELLO_ARCHIVES: &str =
+/// Why hello's and pxe's `.deb` take no `--archives`.
+const NO_ARCHIVES: &str =
     "--archives is an option of mdm's .deb: only it carries pinned third-party tools";
 
-/// Why mdm's `.deb` takes no `--fail-ready`.
-const MDM_FAIL_READY: &str = "--fail-ready is an option of hello's .deb: mdm has no failing build";
+/// Why mdm's and pxe's `.deb` take no `--fail-ready`.
+const NO_FAIL_READY: &str =
+    "--fail-ready is an option of hello's .deb: mdm and pxe have no failing build";
 
 /// Why mdm's `.deb` needs `--archives`.
 const MDM_ARCHIVES: &str = "mdm's .deb carries the pinned tools of hostkeeper-mdm-core's pins.txt: pass --archives with the directory `release mdm-fetch` filled";
@@ -116,10 +119,12 @@ pub(crate) fn deb_with(
     };
     let package = match (request.service, request.archives.as_deref()) {
         (Service::Hostkeeper, _) => return refuse(HOSTKEEPER_REFUSED),
-        (Service::Hello, Some(_)) => return refuse(HELLO_ARCHIVES),
+        (Service::Hello | Service::Pxe, Some(_)) => return refuse(NO_ARCHIVES),
+        (Service::Pxe, None) if request.fail_ready => return refuse(NO_FAIL_READY),
+        (Service::Pxe, None) => Package::Pxe,
         (Service::Hello, None) if request.fail_ready => Package::HelloFailReady,
         (Service::Hello, None) => Package::Hello,
-        (Service::Mdm, _) if request.fail_ready => return refuse(MDM_FAIL_READY),
+        (Service::Mdm, _) if request.fail_ready => return refuse(NO_FAIL_READY),
         (Service::Mdm, None) => return refuse(MDM_ARCHIVES),
         (Service::Mdm, Some(_)) if request.platform != Platform::LinuxX86_64 => {
             return refuse(MDM_PLATFORM);
@@ -128,9 +133,10 @@ pub(crate) fn deb_with(
     };
     let binary = std::fs::read(&request.binary)
         .map_err(Error::io(format!("read {}", request.binary.display())))?;
-    let files = match request.archives.as_deref() {
-        None => hello::deb_files(binary, request.fail_ready),
-        Some(dir) => mdm::deb_files(binary, mdm::tools(&pins()?, dir)?),
+    let files = match (package, request.archives.as_deref()) {
+        (Package::Pxe, _) => pxe::deb_files(binary),
+        (_, None) => hello::deb_files(binary, request.fail_ready),
+        (_, Some(dir)) => mdm::deb_files(binary, mdm::tools(&pins()?, dir)?),
     };
     let name = request.service.name();
     let version = package.version_text(&request.version);
@@ -155,6 +161,7 @@ pub(crate) fn deb_with(
 fn description(service: Service) -> String {
     match service {
         Service::Mdm => "the MDM server stack hostkeeper deploys\n The servers that enroll the farm's Macs (NanoHUB, the SCEP server, NanoDEP, Caddy and\n lego) and the program mdm, their update hook and Apple-facing verbs. Installed and run\n by hostkeeper.".to_owned(),
+        Service::Pxe => "pxe, the boot server of network install\n The program pxe and its unit: it serves the boot sets a bare machine installs from, and\n its update hook builds them. Installed and run by hostkeeper.".to_owned(),
         _ => "hello, the example service of hostkeeper\n An HTTP server on loopback with an update hook, deployed by hostkeeper to prove an\n install, an update and a rollback.".to_owned(),
     }
 }

@@ -240,7 +240,7 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
     lab.publish(Suite::Testing, "t", &lab.debs, "1.2.3");
     let sums = lab.sums(&lab.debs, "1.2.3");
     let said = lab.promote("p", "1.2.3", &sums).expect("promote");
-    assert_eq!(said, ["apt promote: added 7, dropped 0, listed 8"]);
+    assert_eq!(said, ["apt promote: added 9, dropped 0, listed 10"]);
     let listed = lab.listed("p");
     let digest = |name: &str, arch: &str| {
         sha256_hex(&std::fs::read(lab.debs.join(format!("{name}_1.2.3_{arch}.deb"))).expect("deb"))
@@ -265,6 +265,7 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
                 digest("hostkeeper-coordinator", "amd64")
             ),
             ("mdm".to_owned(), "1.2.3".to_owned(), digest("mdm", "amd64")),
+            ("pxe".to_owned(), "1.2.3".to_owned(), digest("pxe", "amd64")),
             (
                 "hello".to_owned(),
                 "1.2.3".to_owned(),
@@ -280,6 +281,7 @@ fn a_promotion_lists_the_testing_entries_in_stable_with_no_package_written_and_k
                 "1.2.3".to_owned(),
                 digest("hostkeeper-coordinator", "arm64")
             ),
+            ("pxe".to_owned(), "1.2.3".to_owned(), digest("pxe", "arm64")),
         ]
     );
     let puts_before = lab.aws.keys_put().len();
@@ -316,7 +318,7 @@ fn promoting_a_version_twice_writes_the_same_index_and_changes_no_entry() {
     lab.promote("one", "1.2.3", &sums).expect("first");
     lab.write_stable("one");
     let said = lab.promote("two", "1.2.3", &sums).expect("second");
-    assert_eq!(said, ["apt promote: added 0, dropped 0, listed 8"]);
+    assert_eq!(said, ["apt promote: added 0, dropped 0, listed 10"]);
     assert_eq!(lab.listed("one"), lab.listed("two"));
     for rel in [
         "main/binary-amd64/Packages",

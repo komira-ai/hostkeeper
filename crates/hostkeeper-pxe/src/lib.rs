@@ -19,9 +19,10 @@
 //!
 //! The modules, in reading order:
 //!
-//! - [`cli`]: the verbs of `pxe`: `serve` and the steps of the hook;
+//! - [`cli`]: the verbs of `pxe`: `serve` and `update-hook`, whose six steps are the hook the `pxe` .deb
+//!   ships (the manifest's hook command is `/usr/lib/pxe/pxe update-hook`);
 //! - `settings`: the settings file, expanded into the flags of `serve` and of the fetch;
-//! - `hook`: the six steps of the package's update hook, over the boot directory and `systemctl`;
+//! - `hook`: the six steps of the .deb's update hook, over the boot directory and `systemctl`;
 //! - [`fetch`]: the order of the steps of the fetch, the ports it runs on, and every refusal;
 //! - [`netboot`]: `netboot.json`, read for the platforms asked for;
 //! - `download`, `copy`: one HTTPS GET into a file, measured as it is written;

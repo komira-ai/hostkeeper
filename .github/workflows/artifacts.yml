@@ -5,8 +5,9 @@
 # its deb and rpm (packaging/coordinator/nfpm.yaml, the static build with a systemd unit),
 # the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM, and the
 # `hostkeeper-coordinator-update` binary (the coordinator updater, Linux-only, a static build) as
-# a tarball with its SBOM;
-# for linux-x86_64 the deb of `mdm`, the MDM server stack as a service package
+# a tarball with its SBOM; for each Linux platform the deb of `pxe`, the boot server of network
+# install as a service package (docs/design/two-programs.md section 6.1), whose program is the
+# static build; for linux-x86_64 the deb of `mdm`, the MDM server stack as a service package
 # (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
 # crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`);
 # for macos-arm64 the installer pkg of a Mac's first install and hello's .pkg, each signed on a
@@ -36,6 +37,7 @@
 #   hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
 #   hostkeeper-<version>-macos-arm64.pkg
 #   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg   mdm_<version>_amd64.deb
+#   pxe_<version>_<deb-arch>.deb
 #   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
 #   netboot.json
 #   SHA256SUMS
@@ -49,8 +51,8 @@
 # prints `hostkeeper-coordinator X.Y.Z+<12 hex>`, `hostkeeper-mdm --version` prints
 # `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update --version` prints
 # `hostkeeper-coordinator-update X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
-# `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` is built from the same workspace, so it carries the
-# release version (`hello --version` prints `hello X.Y.Z`); its failing build, started with
+# `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` and `pxe` are built from the same workspace, so they carry the
+# release version (`hello --version` prints `hello X.Y.Z`, `pxe --version` prints `pxe X.Y.Z`); hello's failing build, started with
 # `--fail-ready`, is named `<version>-fail-ready`, and its server answers `/version` with that
 # name: `release deb` writes its .deb into dist/ (a release file, Debian version
 # `<version>~fail.ready`), and `release macos-pkg` its .pkg under `native/`, which is not released.
@@ -140,8 +142,8 @@ jobs:
 
 
   # One job per Linux platform, each on a GitHub-hosted runner of its own architecture, so each
-  # binary runs where it is built. hostkeeper and hostkeeper-pxe, the programs of the Linux
-  # packages and of hostkeeper's binary tarball and package, are built for the platform's musl
+  # binary runs where it is built. hostkeeper, the program of hostkeeper's Linux packages and of
+  # its binary tarball, and pxe, the program of the pxe package, are built for the platform's musl
   # target (static-pie: no interpreter and no shared library, so they run on any Linux; the C
   # compiler is named in .cargo/config.toml). hostkeeper-coordinator and hostkeeper-mdm stay
   # builds for the gnu target: they need the glibc of the runner image they were built on
@@ -254,19 +256,19 @@ jobs:
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
       # RELEASE_COMMIT is a build input of the binaries (crates/hostkeeper-daemon/src/stamp.rs,
       # crates/hostkeeper-coordinator/src/stamp.rs, crates/hostkeeper-mdm/src/stamp.rs,
-      # crates/xtask/src/stamp.rs), not configuration they read when they run. hostkeeper-pxe,
-      # which the Linux packages carry, has no stamp: its --version is the workspace's version
+      # crates/xtask/src/stamp.rs), not configuration they read when they run. pxe, which the
+      # pxe package carries, has no stamp: its --version is `pxe X.Y.Z`, the workspace's version
       # alone. The coordinator and the MDM kit's binary are built for the runner's gnu target into
-      # target/release; hostkeeper, hostkeeper-pxe and hostkeeper-coordinator-update for the musl
+      # target/release; hostkeeper, pxe and hostkeeper-coordinator-update for the musl
       # target into target/$MUSL_TARGET/release.
       - name: Build hostkeeper-coordinator and hostkeeper-mdm
         env:
           RELEASE_COMMIT: ${{ github.sha }}
         run: cargo build --locked --release -p hostkeeper-coordinator --bin hostkeeper-coordinator -p hostkeeper-mdm --bin hostkeeper-mdm
-      - name: Build hostkeeper and hostkeeper-pxe (static)
+      - name: Build hostkeeper and pxe (static)
         env:
           RELEASE_COMMIT: ${{ github.sha }}
-        run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin hostkeeper-pxe
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin pxe
       # The coordinator updater is static, so it runs on whatever Linux the coordinator's machine
       # is.
       - name: Build hostkeeper-coordinator-update (static)
@@ -353,10 +355,9 @@ jobs:
         run: '"$RUNNER_TEMP/gh/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"'
       # The packages' gh and trusted root, where nfpm.yaml takes them from: gh out of the same
       # archive, checked against the pin again, refused unless it is a program of this
-      # architecture; the trusted root refused unless every line of it is one; hostkeeper and
-      # hostkeeper-pxe out of the static build, refused unless each is a static ELF of this
-      # architecture.
-      - name: Stage gh, the trusted root and the static programs for the Linux packages
+      # architecture; the trusted root refused unless every line of it is one; hostkeeper
+      # out of the static build, refused unless it is a static ELF of this architecture.
+      - name: Stage gh, the trusted root and the static daemon for the Linux packages
         env:
           ARCH: ${{ matrix.deb-arch }}
           SHA256: ${{ matrix.gh-sha256 }}
@@ -374,7 +375,7 @@ jobs:
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
       # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
-      # 0755 and 0644, root's, with the staged bytes, hostkeeper and hostkeeper-pxe in
+      # 0755 and 0644, root's, with the staged bytes, hostkeeper in
       # /usr/bin, 0755, root's, with the staged bytes, and the console's issue link
       # /etc/issue.d/hostkeeper.issue pointing at /run/hostkeeper/enrollment.issue; and it holds
       # no ELF file with an interpreter or a needed library and declares no dependency.
@@ -480,6 +481,14 @@ jobs:
       - name: mdm's .deb is named for mdm, root's, and its units start its own files
         if: matrix.platform == 'linux-x86_64'
         run: cargo xtask release check-linux-pkg "dist/mdm_${RELEASE_VERSION}_amd64.deb" --service mdm
+      # pxe's .deb, on both Linux platforms: the static pxe built above at /usr/lib/pxe/pxe and
+      # its unit (packaging/pxe/deb/pxe.service), read back like the others.
+      - name: pxe's .deb
+        run: cargo xtask release deb --service pxe --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary "target/$MUSL_TARGET/release/pxe" --out dist
+      - name: pxe's .deb is named for pxe, root's, and its unit starts its own file
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/pxe_${RELEASE_VERSION}_$ARCH.deb" --service pxe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-${{ matrix.platform }}
@@ -1070,6 +1079,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-deb-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/mdm_${V}_amd64.deb.sigstore.json"
+      - id: pxe-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/pxe_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of pxe's .deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.pxe-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/pxe_${V}_amd64.deb.sigstore.json"
       - id: deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -1158,6 +1175,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.hello-fail-ready-deb-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_arm64.deb.sigstore.json"
+      - id: pxe-deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/pxe_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of pxe's .deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.pxe-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/pxe_${V}_arm64.deb.sigstore.json"
       - id: deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:

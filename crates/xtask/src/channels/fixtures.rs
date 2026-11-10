@@ -91,7 +91,6 @@ fn files(package: &Package, arch: &str) -> Vec<(&'static str, u32, Vec<u8>)> {
     if package.name == HOSTKEEPER.packages[0].name {
         vec![
             ("/usr/bin/hostkeeper", 0o755, binary),
-            ("/usr/bin/hostkeeper-pxe", 0o755, b"pxe".to_vec()),
             (
                 "/usr/lib/systemd/system/hostkeeper.service",
                 0o644,

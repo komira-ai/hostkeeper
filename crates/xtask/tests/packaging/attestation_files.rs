@@ -18,9 +18,8 @@ use crate::nfpm::File;
 use crate::testdir::TestDir;
 use crate::{NFPM, config, read};
 
-/// The file names of the daemon and the boot server in `--binaries` and the stage directory.
+/// The file name of the daemon in `--binaries` and the stage directory.
 const HOSTKEEPER_FILE: &str = "hostkeeper";
-const PXE_FILE: &str = "hostkeeper-pxe";
 
 /// The directory, from the repository root, that nfpm.yaml takes the staged files from and the
 /// workflow passes as `--out`.
@@ -168,9 +167,7 @@ impl Root {
         std::fs::write(&trusted_root, ROOT).expect("root");
         let binaries = dir.join("target/musl/release");
         std::fs::create_dir_all(&binaries).expect("binaries");
-        for file in [HOSTKEEPER_FILE, PXE_FILE] {
-            std::fs::write(binaries.join(file), static_pie(arch)).expect("program");
-        }
+        std::fs::write(binaries.join(HOSTKEEPER_FILE), static_pie(arch)).expect("program");
         Root {
             dir,
             archive,
@@ -381,12 +378,12 @@ fn the_package_step_fails_when_a_program_is_not_the_static_build_of_the_arch() {
     ];
     for (program, words) in cases {
         let root = Root::new("not-static", "amd64");
-        std::fs::write(root.binaries.join(PXE_FILE), program).expect("program");
+        std::fs::write(root.binaries.join(HOSTKEEPER_FILE), program).expect("program");
         let message = root.stage("amd64", &root.pin.clone()).expect_err("refused");
         assert!(
             message.starts_with(&format!(
                 "{} is not a static linux amd64 program: ",
-                root.binaries.join(PXE_FILE).display()
+                root.binaries.join(HOSTKEEPER_FILE).display()
             )) && message.ends_with(words),
             "{message}"
         );
@@ -411,11 +408,9 @@ fn the_staged_programs_are_the_static_build_byte_for_byte() {
     for arch in ["amd64", "arm64"] {
         let root = Root::new("programs", arch);
         root.stage(arch, &root.pin.clone()).expect("staged");
-        for file in [HOSTKEEPER_FILE, PXE_FILE] {
-            assert_eq!(
-                std::fs::read(root.dir.join(STAGE_DIR).join(file)).expect("staged program"),
-                static_pie(arch)
-            );
-        }
+        assert_eq!(
+            std::fs::read(root.dir.join(STAGE_DIR).join(HOSTKEEPER_FILE)).expect("staged program"),
+            static_pie(arch)
+        );
     }
 }

@@ -1,5 +1,5 @@
 //! The boot server: the real `pxe` (the program `hostkeeper-privileged-pxe`, which only forwards
-//! to `hostkeeper_pxe::cli::main`), its boot set fetched and sealed by its own `prepare` step,
+//! to `hostkeeper_pxe::cli::main`), its boot set fetched and sealed by its own `update-hook prepare` step,
 //! and `serve` run in the boot server's namespace in one mode at a time.
 //!
 //! The job downloads the boot set's ISO by its pinned URL, builds the deb of this commit (x86-64)
@@ -8,7 +8,7 @@
 //! ISO's URL moved to the channel, which is the one change to the pins), each attested by the
 //! end-to-end rig's signer ([`release`]), and `prepare` checks every file against the pins and
 //! the attestations with the job's pinned `gh`, as on a farm host ([`prepare`]): it is run as the
-//! daemon runs it, `pxe prepare <staged directory> --params <file>`, with a params file and a
+//! daemon runs it, `pxe update-hook prepare <staged directory> --params <file>`, with a params file and a
 //! settings file ([`ServeSettings`], [`Tools`]) of the test's. The arm64 job builds no arm64 deb:
 //! its boot set gets a stand-in deb, which nothing fetches before the seed, where that test ends.
 //! `serve` is run with flags, not with the settings file.
@@ -24,7 +24,7 @@ use super::events::{Bus, Source};
 use super::lan::{LAN_LINK, Lan};
 use super::program::Program;
 use crate::e2e::signer::FixtureSigner;
-use crate::support::channel::{Channel, platform};
+use crate::support::channel::Channel;
 use crate::support::pair::{Coordinator, put, sha256_hex};
 use crate::support::run;
 
@@ -158,6 +158,8 @@ pub struct ServeSettings<'a> {
     pub ssh_keys: &'a Path,
     /// The guest's serial console, when the settings name one.
     pub serial_console: Option<&'a str>,
+    /// The directory of repository entries the settings give `serve`, when they do.
+    pub repositories: Option<&'a Path>,
     /// Every listener on `127.0.0.1` with a port the system picks, not the default ports.
     pub loopback: bool,
 }
@@ -181,6 +183,9 @@ impl ServeSettings<'_> {
         );
         if let Some(console) = self.serial_console {
             text.push_str(&format!("serial-console = {}\n", quoted(console)));
+        }
+        if let Some(dir) = self.repositories {
+            text.push_str(&format!("repositories = {}\n", path(dir)));
         }
         if self.loopback {
             for key in ["dhcp-listen", "tftp-listen", "http-listen", "proxy-listen"] {
@@ -230,6 +235,7 @@ pub fn prepare(
         0o600,
     );
     let args: Vec<String> = [
+        "update-hook",
         "prepare",
         &staged.display().to_string(),
         "--params",
@@ -240,7 +246,7 @@ pub fn prepare(
     let out = run(PXE, &args);
     assert!(
         out.status.success(),
-        "pxe prepare: {}{}",
+        "pxe update-hook prepare: {}{}",
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
@@ -248,43 +254,16 @@ pub fn prepare(
     boot_dir.join(version)
 }
 
-/// The committed golden manifest of the `pxe` package (version 1.2.3, linux-x86_64).
-const GOLDEN_MANIFEST: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../packaging/pxe/linux/manifest.toml"
-));
-/// The committed golden unit of the `pxe` package, as the package carries it.
-pub const UNIT: &str = include_str!(concat!(
-    env!("CARGO_MANIFEST_DIR"),
-    "/../../packaging/pxe/linux/units/pxe.service"
-));
+/// The committed golden unit of the `pxe` package, as its `.deb` carries it.
+pub const UNIT: &str = include_str!("../../../../packaging/pxe/deb/pxe.service");
 
-/// The manifest of the `pxe` package for this host's platform: the golden, with its `version`,
-/// its `platform` and the `release` of its `[params]` the only lines changed.
-pub fn manifest(version: &str, release: &str) -> String {
-    let mut changed = [false; 3];
-    let lines: Vec<String> = GOLDEN_MANIFEST
-        .lines()
-        .map(|line| {
-            if line == "version = \"1.2.3\"" {
-                changed[0] = true;
-                format!("version = {}", quoted(version))
-            } else if line == "platform = \"linux-x86_64\"" {
-                changed[1] = true;
-                format!("platform = {}", quoted(platform()))
-            } else if line.starts_with("release = ") {
-                changed[2] = true;
-                format!("release = {}", quoted(release))
-            } else {
-                line.to_owned()
-            }
-        })
-        .collect();
-    assert_eq!(
-        changed, [true; 3],
-        "the golden manifest's version, platform and release"
-    );
-    lines.join("\n") + "\n"
+/// The platform of this host, as the release's boot sets name it.
+pub fn platform() -> &'static str {
+    if cfg!(target_arch = "aarch64") {
+        "linux-arm64"
+    } else {
+        "linux-x86_64"
+    }
 }
 
 /// How a run of `serve` answers.

@@ -180,7 +180,6 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
             "test",
             "test",
             "test",
-            "test",
             "find",
             "find"
         ]
@@ -213,7 +212,7 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
     );
     // Every file is asked after with `test -f`, and the unit's links and the processes with
     // `find` and its own arguments: no shell.
-    assert!(calls.contains(&"test -f /usr/bin/hostkeeper-pxe".to_owned()));
+    assert!(calls.contains(&"test -f /usr/lib/hostkeeper/gh".to_owned()));
     assert_eq!(
         calls[calls.len() - 2],
         "find /etc/systemd/system -maxdepth 2 -path /etc/systemd/system/*.wants/hostkeeper.service -o -path /etc/systemd/system/hostkeeper.service"
@@ -230,7 +229,7 @@ fn the_daemon_is_installed_with_dnf_from_the_testing_tree_after_systemd() {
     assert_eq!(
         said,
         [
-            "check-rpm: hostkeeper 1.2.3 installed from the suite testing on x86_64; rpm -K says OK; it says \"hostkeeper 1.2.3+0123456789ab\"; its 7 files are there; the service is enabled and not running"
+            "check-rpm: hostkeeper 1.2.3 installed from the suite testing on x86_64; rpm -K says OK; it says \"hostkeeper 1.2.3+0123456789ab\"; its 6 files are there; the service is enabled and not running"
         ]
     );
 }

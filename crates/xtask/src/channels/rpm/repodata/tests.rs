@@ -82,7 +82,6 @@ A second line.</description>
       <rpm:entry name=\"/bin/sh\"/>
     </rpm:requires>
     <file>/usr/bin/hostkeeper</file>
-    <file>/usr/bin/hostkeeper-pxe</file>
   </format>
 </package>
 ",
@@ -96,7 +95,6 @@ A second line.</description>
             "<package pkgid=\"{pkgid}\" name=\"hostkeeper\" arch=\"x86_64\">
   <version epoch=\"0\" ver=\"1.2.3\" rel=\"1\"/>
   <file>/usr/bin/hostkeeper</file>
-  <file>/usr/bin/hostkeeper-pxe</file>
   <file>/usr/lib/hostkeeper/gh</file>
   <file>/usr/lib/hostkeeper/trusted_root.json</file>
   <file>/usr/lib/systemd/system/hostkeeper.service</file>

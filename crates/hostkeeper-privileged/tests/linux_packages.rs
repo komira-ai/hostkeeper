@@ -3,12 +3,12 @@
 //! family (docs/design/packages.md section 5.4, "One build, every release").
 //!
 //! The job builds the two packages into `target/linux-packages` from the programs staged in
-//! `target/nfpm` (`hostkeeper`, `hostkeeper-pxe`, `gh`), and pulls each image of
+//! `target/nfpm` (`hostkeeper`, `gh`), and pulls each image of
 //! `linux-releases.toml` in a step of its own. For each release the test runs a container of its
 //! image, with no pull and no network and the packages directory mounted read only, which
 //! installs the release's package with the format's own tool (where the image has no `systemctl`
 //! or `systemd-tmpfiles`, after putting a stand-in for it: no container runs a service manager)
-//! and runs `/usr/bin/hostkeeper --version`, `/usr/bin/hostkeeper-pxe --version` and
+//! and runs `/usr/bin/hostkeeper --version` and
 //! `/usr/lib/hostkeeper/gh --version`. The run must exit 0 and print what the same staged
 //! programs print on the runner, so no version is written here. The containers are removed when
 //! they end (`--rm`) and named for this run. The test writes nothing on the host.

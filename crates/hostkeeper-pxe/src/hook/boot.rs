@@ -8,7 +8,7 @@ use std::path::Path;
 /// The symlink to the version served.
 pub(super) const CURRENT: &str = "current";
 /// The name the new link is made under, then renamed over `current`.
-const NEXT: &str = "current.next";
+const NEXT: &str = "current-next";
 
 /// Points `<boot_dir>/current` at `version` (a relative target), atomically: a new link is made
 /// under another name and renamed over the old.

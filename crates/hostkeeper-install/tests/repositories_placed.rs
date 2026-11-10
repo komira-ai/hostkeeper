@@ -1,5 +1,5 @@
 //! `load_as` (packages-repositories.md section 3.2): the rules of `load` over a directory the
-//! host will see at another path, so `hostkeeper-pxe serve` can check the operator's directory
+//! host will see at another path, so `pxe serve` can check the operator's directory
 //! before it writes the files to `/etc/hostkeeper/repositories/` on an installed host.
 
 use std::fs;

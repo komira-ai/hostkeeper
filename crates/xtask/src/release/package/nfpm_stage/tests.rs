@@ -77,9 +77,7 @@ impl Case {
         std::fs::write(&trusted_root, root).expect("root");
         let binaries = dir.join("target/release");
         std::fs::create_dir_all(&binaries).expect("binaries");
-        for file in [HOSTKEEPER_FILE, PXE_FILE] {
-            std::fs::write(binaries.join(file), static_program(arch)).expect("program");
-        }
+        std::fs::write(binaries.join(HOSTKEEPER_FILE), static_program(arch)).expect("program");
         let request = Request {
             arch,
             gh_version: "2.0.0".parse().expect("version"),
@@ -143,17 +141,12 @@ fn stages_the_gh_of_the_package_arch_and_the_trusted_root_with_their_modes() {
             .map(|e| e.expect("entry").file_name())
             .collect();
         names.sort();
+        assert_eq!(names, ["gh", "hostkeeper", "trusted_root.json"]);
         assert_eq!(
-            names,
-            ["gh", "hostkeeper", "hostkeeper-pxe", "trusted_root.json"]
+            std::fs::read(out.join(HOSTKEEPER_FILE)).expect("program"),
+            static_program(arch)
         );
-        for file in [HOSTKEEPER_FILE, PXE_FILE] {
-            assert_eq!(
-                std::fs::read(out.join(file)).expect("program"),
-                static_program(arch)
-            );
-            assert_eq!(mode(&out.join(file)), 0o755);
-        }
+        assert_eq!(mode(&out.join(HOSTKEEPER_FILE)), 0o755);
         assert_eq!(
             lines,
             [
@@ -174,12 +167,6 @@ fn stages_the_gh_of_the_package_arch_and_the_trusted_root_with_their_modes() {
                     case.request.binaries.join("hostkeeper").display(),
                     install::Sha256::of(&static_program(arch))
                 ),
-                format!(
-                    "{}: static {arch} program from {}, sha256 {}",
-                    out.join("hostkeeper-pxe").display(),
-                    case.request.binaries.join("hostkeeper-pxe").display(),
-                    install::Sha256::of(&static_program(arch))
-                ),
             ]
         );
     }
@@ -198,7 +185,7 @@ fn a_program_that_is_not_a_static_64_bit_little_endian_one_of_the_arch_is_refuse
             "it asks for the interpreter /lib64/ld-linux-x86-64.so.2".into(),
         ),
         (
-            PXE_FILE,
+            HOSTKEEPER_FILE,
             Spec {
                 interpreter: None,
                 ..glibc.clone()
@@ -212,7 +199,7 @@ fn a_program_that_is_not_a_static_64_bit_little_endian_one_of_the_arch_is_refuse
             "ELF machine 0xb7, not 0x3e".into(),
         ),
         (
-            PXE_FILE,
+            HOSTKEEPER_FILE,
             Spec {
                 class: 1,
                 ..Spec::static_pie(0x3e)
@@ -221,7 +208,7 @@ fn a_program_that_is_not_a_static_64_bit_little_endian_one_of_the_arch_is_refuse
             "ELF class 1 and data 1, not 2 (64-bit) and 1 (little-endian)".into(),
         ),
         (
-            PXE_FILE,
+            HOSTKEEPER_FILE,
             Spec {
                 big_endian: true,
                 ..Spec::static_pie(0x3e)
@@ -257,16 +244,14 @@ fn a_program_that_is_not_a_static_64_bit_little_endian_one_of_the_arch_is_refuse
 
 #[test]
 fn a_missing_program_is_refused_and_nothing_is_written() {
-    for file in [HOSTKEEPER_FILE, PXE_FILE] {
-        let case = Case::of("absent", Arch::Amd64, &elf(Arch::Amd64), ROOT);
-        let path = case.request.binaries.join(file);
-        std::fs::remove_file(&path).expect("remove");
-        let message = case.refused_writing_nothing();
-        assert!(
-            message.starts_with(&format!("read {}: ", path.display())),
-            "{message}"
-        );
-    }
+    let case = Case::of("absent", Arch::Amd64, &elf(Arch::Amd64), ROOT);
+    let path = case.request.binaries.join(HOSTKEEPER_FILE);
+    std::fs::remove_file(&path).expect("remove");
+    let message = case.refused_writing_nothing();
+    assert!(
+        message.starts_with(&format!("read {}: ", path.display())),
+        "{message}"
+    );
 }
 
 /// Catches a staged `gh` whose archive was not the pinned one.
@@ -440,7 +425,6 @@ fn files_staged_before_are_replaced_and_given_their_modes() {
         ("gh", 0o600),
         ("trusted_root.json", 0o777),
         ("hostkeeper", 0o666),
-        ("hostkeeper-pxe", 0o600),
     ] {
         let path = out.join(name);
         std::fs::write(
@@ -458,13 +442,11 @@ fn files_staged_before_are_replaced_and_given_their_modes() {
         ROOT
     );
     assert_eq!(mode(&out.join("trusted_root.json")), 0o644);
-    for file in [HOSTKEEPER_FILE, PXE_FILE] {
-        assert_eq!(
-            std::fs::read(out.join(file)).expect("program"),
-            static_program(Arch::Amd64)
-        );
-        assert_eq!(mode(&out.join(file)), 0o755);
-    }
+    assert_eq!(
+        std::fs::read(out.join(HOSTKEEPER_FILE)).expect("program"),
+        static_program(Arch::Amd64)
+    );
+    assert_eq!(mode(&out.join(HOSTKEEPER_FILE)), 0o755);
 }
 
 #[test]
@@ -483,7 +465,6 @@ fn an_out_that_cannot_be_made_or_written_is_an_error() {
         ("gh", None),
         ("trusted_root.json", Some("gh")),
         ("hostkeeper", Some("trusted_root.json")),
-        ("hostkeeper-pxe", Some("hostkeeper")),
     ] {
         let case = Case::of("write", Arch::Amd64, &elf(Arch::Amd64), ROOT);
         let out: PathBuf = case.request.out.clone();
@@ -571,5 +552,22 @@ fn the_verb_gets_its_flags_and_asks_for_no_adapters() {
     let out = crate::release::run_with(verb(&case), &fakes.ports());
     assert_eq!(out, stage(&case.request));
     assert!(case.request.out.join("trusted_root.json").is_file());
-    assert!(case.request.out.join("hostkeeper-pxe").is_file());
+    assert!(case.request.out.join("hostkeeper").is_file());
+}
+
+/// The boot server is the `pxe` package's, not the daemon's: a `hostkeeper-pxe` left in the
+/// `--binaries` directory is neither read nor staged.
+///
+/// Catches a stage that still copies the old boot server into the daemon's deb and rpm.
+#[test]
+fn a_boot_server_in_the_binaries_directory_is_not_staged() {
+    let case = Case::of("no-pxe", Arch::Amd64, &elf(Arch::Amd64), ROOT);
+    std::fs::write(
+        case.request.binaries.join("hostkeeper-pxe"),
+        b"not even a program",
+    )
+    .expect("old boot server");
+    stage(&case.request).expect("staged");
+    assert!(!case.request.out.join("hostkeeper-pxe").exists());
+    assert!(case.request.out.join("hostkeeper").is_file());
 }

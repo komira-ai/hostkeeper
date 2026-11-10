@@ -68,7 +68,6 @@ fn files() -> Vec<File> {
             link: Some(TARGET),
             ..file(LINK, 0o777, b"")
         },
-        file("./usr/bin/hostkeeper-pxe", 0o755, b"the boot server"),
     ]
 }
 
@@ -301,7 +300,6 @@ impl Case {
         std::fs::write(dir.join("staged/gh"), GH).expect("gh");
         std::fs::write(dir.join("staged/trusted_root.json"), ROOT).expect("root");
         std::fs::write(dir.join("staged/hostkeeper"), b"the daemon").expect("hostkeeper");
-        std::fs::write(dir.join("staged/hostkeeper-pxe"), b"the boot server").expect("pxe");
         std::fs::write(dir.join("pkg"), package).expect("pkg");
         Case { dir }
     }
@@ -355,7 +353,6 @@ fn a_deb_and_an_rpm_that_install_the_staged_files_pass() {
                     "{name}: /usr/lib/hostkeeper/trusted_root.json is 644 root:root and the staged bytes"
                 ),
                 format!("{name}: /usr/bin/hostkeeper is 755 root:root and the staged bytes"),
-                format!("{name}: /usr/bin/hostkeeper-pxe is 755 root:root and the staged bytes"),
                 format!(
                     "{name}: /etc/issue.d/hostkeeper.issue is a link to /run/hostkeeper/enrollment.issue"
                 ),

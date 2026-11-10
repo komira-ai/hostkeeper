@@ -3,7 +3,7 @@
 Every release of `komira-ai/hostkeeper` that is published (see [verify-a-release.md](verify-a-release.md))
 also goes into the package repositories of the organisation, at `https://packages.komira.ai`: the
 Debian packages and the RPM packages of `hostkeeper` and `hostkeeper-coordinator`, the native
-Debian packages of the services it releases (`hello`, and `mdm` for `amd64`), and the macOS
+Debian packages of the services it releases (`hello`, `pxe`, and `mdm` for `amd64`), and the macOS
 installers of `hostkeeper` and of `hello`. A release goes to a `testing` channel first. It is installed or downloaded from
 there on clean machines, and only when all of that passed does the same release become `stable`. The
 jobs are in `.github/workflows/release.yml`; the tool they run, `cargo xtask channels`, is
@@ -32,7 +32,7 @@ or any other version in it is refused in the same way, and an `X.Y.Z~fail.ready`
 
 | Channel | `testing` | `stable` |
 |---|---|---|
-| apt, packages `hostkeeper`, `hostkeeper-coordinator` and `hello`, architectures `amd64` and `arm64`, and `mdm`, `amd64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
+| apt, packages `hostkeeper`, `hostkeeper-coordinator`, `hello` and `pxe`, architectures `amd64` and `arm64`, and `mdm`, `amd64` | `https://packages.komira.ai/apt`, suite `testing`, component `main` | the same repository, suite `stable` |
 | rpm, packages `hostkeeper` and `hostkeeper-coordinator`, architectures `x86_64` and `aarch64` | `https://packages.komira.ai/rpm/testing/<arch>/` | `https://packages.komira.ai/rpm/stable/<arch>/` |
 | macOS installers, `hostkeeper` and `hello`, `macos-arm64` | the directory `https://packages.komira.ai/pkg/hostkeeper/<version>/` | the pointer `https://packages.komira.ai/pkg/hostkeeper/stable.json` |
 
@@ -108,8 +108,9 @@ so its attestation can be verified as for any other asset.
 
 ## The native packages and their entries
 
-`hello`'s and `mdm`'s native packages (docs/design/packages-native.md, item A21) are the release's
-assets `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg` and `mdm_<version>_amd64.deb`,
+`hello`'s, `pxe`'s and `mdm`'s native packages (docs/design/packages-native.md, item A21) are the release's
+assets `hello_<version>_<arch>.deb`, `hello-<version>-macos-arm64.pkg`, `pxe_<version>_<arch>.deb` and
+`mdm_<version>_amd64.deb`,
 published with hostkeeper's own in the same passes, so a release is listed whole. hostkeeper's own native
 packages (item A23) are the daemon's `hostkeeper_<version>_<arch>.deb` and the installer
 `hostkeeper-<version>-macos-arm64.pkg`, the packages a host is set up from.
@@ -132,14 +133,14 @@ the repository entry `/etc/hostkeeper/repositories/komira-testing-fail.sources` 
 and the same keyring as `komira-testing`, which its daemon writes once the coordinator's registry entry
 `komira` lists the suite `testing-fail`.
 
-`cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello` and
-`--service mdm`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
+`cargo xtask release targets` (`--service hostkeeper`, the default, and `--service hello`,
+`--service mdm` and `--service pxe`) lists, for each platform, the native entry alone (docs/design/packages-native.md,
 section 10.5, A24): for each Linux platform an `apt` entry of the host's repository entry `komira-testing`, the `testing` suite
 above (`/etc/hostkeeper/repositories/komira-testing.sources`, which each Linux host's daemon writes
 from the coordinator's registry entry `komira`, suites `testing` and `stable`:
 [repository-keys.md](../operations/repository-keys.md#put-the-repository-in-the-registry); the
 coordinator refuses the set (`repository_unknown`) while its registry lacks `komira`), at the release's
-version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm has no
+version, pinned by the `.deb`'s SHA-256; for `macos-arm64` (hostkeeper and hello; mdm and pxe have no
 macOS platform) a `macos-pkg` entry of the signed `.pkg`, located in the store `komira-testing` at
 `hostkeeper/<version>/<file>` (the installers' `testing` directory, rooted at `pkg/`) and pinned by
 its SHA-256 and size. It writes no `hostkeeper-archive` entry, and the macOS list carries the

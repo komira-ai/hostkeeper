@@ -22,12 +22,11 @@ pub fn coordinator_update_cli() -> clap::Command {
 }
 
 /// The file names `release nfpm-stage` writes into its `--out`: `gh`, the trusted root, then
-/// the daemon and the boot server.
-pub const NFPM_STAGED: [&str; 4] = [
+/// the daemon.
+pub const NFPM_STAGED: [&str; 3] = [
     nfpm_stage::GH_FILE,
     nfpm_stage::TRUSTED_ROOT_FILE,
     nfpm_stage::HOSTKEEPER_FILE,
-    nfpm_stage::PXE_FILE,
 ];
 
 /// Where `release check-linux-pkg` requires a deb and an rpm to install `gh`, then the trusted
@@ -37,15 +36,12 @@ pub const LINUX_PKG_INSTALLED: [&str; 2] = [
     linux_check::INSTALLED_TRUSTED_ROOT,
 ];
 
-/// The programs `release check-linux-pkg --staged` requires a deb and an rpm to
-/// install, each where it is installed and the file name `release nfpm-stage` stages it as.
-pub const LINUX_PKG_PROGRAMS: [(&str, &str); 2] = [
-    (
-        linux_check::INSTALLED_HOSTKEEPER,
-        nfpm_stage::HOSTKEEPER_FILE,
-    ),
-    (linux_check::INSTALLED_PXE, nfpm_stage::PXE_FILE),
-];
+/// The program `release check-linux-pkg --staged` requires a deb and an rpm to
+/// install, where it is installed and the file name `release nfpm-stage` stages it as.
+pub const LINUX_PKG_PROGRAMS: [(&str, &str); 1] = [(
+    linux_check::INSTALLED_HOSTKEEPER,
+    nfpm_stage::HOSTKEEPER_FILE,
+)];
 
 /// The console's issue link `release check-linux-pkg` requires a deb and an rpm to install, and
 /// what it must point at.

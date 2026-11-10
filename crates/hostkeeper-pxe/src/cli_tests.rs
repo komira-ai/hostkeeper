@@ -43,24 +43,25 @@ fn run_step(args: &[&str], owner: u32, codes: &[i32]) -> (u8, String, String) {
 }
 
 /// A command line that does not parse exits 2 and says why on standard error: no verb, the
-/// verb `fetch` that is gone, a step without `--params` or without its release, an unknown
-/// flag, a mode that is not one. Nothing is reached.
+/// verb `fetch` that is gone, the bare step verbs that are gone (a step is `update-hook <step>`),
+/// a mode that is not one. Nothing is reached.
 ///
-/// Catches a step run without its params, and the old `fetch` verb still answering.
+/// Catches the old `fetch` verb or a bare step verb still answering.
 #[test]
 fn a_command_line_that_does_not_parse_exits_2() {
-    let cases: [(Vec<&str>, &str); 7] = [
+    let cases: [(Vec<&str>, &str); 5] = [
         (vec![], "Usage: pxe <COMMAND>"),
         (
             vec!["fetch", "--release", "https://r.example"],
             "unrecognized subcommand 'fetch'",
         ),
-        (vec!["prepare", "--params", "p"], "<ARTIFACT>"),
-        (vec!["prepare", "/staged"], "--params <PARAMS>"),
-        (vec!["cutover"], "--params <PARAMS>"),
         (
-            vec!["verify", "--params", "p", "--mode", "proxy"],
-            "unexpected argument '--mode'",
+            vec!["prepare", "/staged", "--params", "p"],
+            "unrecognized subcommand 'prepare'",
+        ),
+        (
+            vec!["uninstall", "--params", "p"],
+            "unrecognized subcommand 'uninstall'",
         ),
         (
             vec!["serve", "--mode", "both"],
@@ -75,6 +76,50 @@ fn a_command_line_that_does_not_parse_exits_2() {
     }
 }
 
+/// An `update-hook` command line the hook contract cannot read exits 2 with the one line
+/// `pxe update-hook: <why>` on standard error and nothing on standard output; no step runs.
+///
+/// Catches a step run without its params file, a prepare without its staged release, and a
+/// parse refusal that exits 1 or prints the contract's report.
+#[test]
+fn an_update_hook_command_line_that_cannot_be_read_exits_2() {
+    let cases: [(Vec<&str>, &str); 7] = [
+        (vec!["update-hook"], "pxe update-hook: no step given\n"),
+        (
+            vec!["update-hook", "fetch", "--params", "p"],
+            "pxe update-hook: unknown step \"fetch\"\n",
+        ),
+        (
+            vec!["update-hook", "prepare", "--params", "p"],
+            "pxe update-hook: prepare needs the staged release directory\n",
+        ),
+        (
+            vec!["update-hook", "cutover"],
+            "pxe update-hook: the step needs --params <file>\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--params"],
+            "pxe update-hook: --params needs a file\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--params", "p", "--params", "q"],
+            "pxe update-hook: --params given twice\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--mode", "proxy", "--params", "p"],
+            "pxe update-hook: unexpected argument \"--mode\"\n",
+        ),
+    ];
+    for (args, line) in cases {
+        let (status, out, err) = run_step(&args, 0, &[]);
+        assert_eq!(
+            (status, out.as_str(), err.as_str()),
+            (2, "", line),
+            "{args:?}"
+        );
+    }
+}
+
 /// `--help` and `--version` go to standard output and exit 0; the help names every verb and not
 /// `fetch`, and the version is `pxe <version>`.
 ///
@@ -83,15 +128,7 @@ fn a_command_line_that_does_not_parse_exits_2() {
 fn help_and_version_go_to_standard_output() {
     let (status, out, err) = run_step(&["--help"], 0, &[]);
     assert_eq!((status, err.as_str()), (0, ""));
-    for verb in [
-        "serve",
-        "prepare",
-        "cutover",
-        "verify",
-        "rollback",
-        "cleanup",
-        "uninstall",
-    ] {
+    for verb in ["serve", "update-hook"] {
         assert!(out.contains(&format!("  {verb} ")), "{verb}: {out}");
     }
     assert!(!out.contains("fetch"), "{out}");
@@ -111,6 +148,7 @@ fn the_program_runs_the_verb() {
     let missing = setup.path("missing.toml");
     let _ = main(vec![
         "pxe".into(),
+        "update-hook".into(),
         "uninstall".into(),
         "--params".into(),
         missing.into(),
@@ -291,12 +329,19 @@ fn serve_reads_its_flags_from_the_settings_file() {
     );
     assert_eq!(status, 2, "{err}");
     let (status, _, err) = run_with(
-        &["prepare", "/s", "--params", "p", "--settings", &settings],
+        &[
+            "update-hook",
+            "verify",
+            "--params",
+            "p",
+            "--settings",
+            &settings,
+        ],
         &unreached_serve,
         &host,
     );
     assert_eq!(status, 2, "{err}");
-    assert!(err.contains("unexpected argument '--settings'"), "{err}");
+    assert_eq!(err, "pxe update-hook: unexpected argument \"--settings\"\n");
 }
 
 /// A settings file that cannot be read, is not the owner's, or is not a settings file refuses
@@ -341,25 +386,40 @@ fn serve_refuses_a_settings_file_it_cannot_trust() {
     );
 }
 
-/// Each step verb reaches its step: the step's name is on its refusal, `pxe <step>: <text>`,
-/// whatever the verb; `prepare` takes the staged release first; a deferred step exits 75 with
+/// Each step reaches its code through `update-hook`: the step's name is on its refusal,
+/// `pxe <step>: <text>`; `prepare` takes the staged release first; a deferred step exits 75 with
 /// its report on standard output; a step that succeeds prints nothing.
 ///
-/// Catches a verb wired to another step's code.
+/// Catches a step wired to another step's code.
 #[test]
-fn each_step_verb_reaches_its_step() {
+fn each_update_hook_step_reaches_its_step() {
     let setup = Setup::new("verbs");
     let missing = setup.path("missing.toml").display().to_string();
     for (args, step) in [
         (
-            vec!["prepare", "/staged", "--params", &missing],
+            vec!["update-hook", "prepare", "/staged", "--params", &missing],
             Step::Prepare,
         ),
-        (vec!["cutover", "--params", &missing], Step::Cutover),
-        (vec!["verify", "--params", &missing], Step::Verify),
-        (vec!["rollback", "--params", &missing], Step::Rollback),
-        (vec!["cleanup", "--params", &missing], Step::Cleanup),
-        (vec!["uninstall", "--params", &missing], Step::Uninstall),
+        (
+            vec!["update-hook", "cutover", "--params", &missing],
+            Step::Cutover,
+        ),
+        (
+            vec!["update-hook", "verify", "--params", &missing],
+            Step::Verify,
+        ),
+        (
+            vec!["update-hook", "rollback", "--params", &missing],
+            Step::Rollback,
+        ),
+        (
+            vec!["update-hook", "cleanup", "--params", &missing],
+            Step::Cleanup,
+        ),
+        (
+            vec!["update-hook", "uninstall", "--params", &missing],
+            Step::Uninstall,
+        ),
     ] {
         let (status, out, err) = run_step(&args, setup.owner, &[]);
         assert_eq!(status, 1, "{args:?}");
@@ -370,9 +430,10 @@ fn each_step_verb_reaches_its_step() {
         assert!(out.contains("\"reason\":\"bad_params\""), "{out}");
     }
     let params = setup.params(None, None, "").display().to_string();
-    let (status, out, err) = run_step(&["verify", "--params", &params], setup.owner, &[]);
+    let verify = ["update-hook", "verify", "--params", &params];
+    let (status, out, err) = run_step(&verify, setup.owner, &[]);
     assert_eq!((status, out.as_str(), err.as_str()), (0, "", ""));
-    let (status, out, err) = run_step(&["verify", "--params", &params], setup.owner, &[3]);
+    let (status, out, err) = run_step(&verify, setup.owner, &[3]);
     assert_eq!(status, 75);
     assert_eq!(err, "pxe verify: pxe.service is not active\n");
     assert_eq!(
@@ -380,6 +441,155 @@ fn each_step_verb_reaches_its_step() {
         "{\"class\":\"environment\",\"detail\":\"pxe.service is not active\",\"promotion_pending\":false,\"reason\":\"not_active\",\"retry_after_secs\":2}\n"
     );
     fs::remove_file(setup.path("params.toml")).expect("remove");
+}
+
+/// `prepare`'s staged release must be the params' `updater.staged_release` byte for byte: one
+/// that differs, or a params file without the key, is refused as `bad_params` before anything is
+/// done, and the one that equals it goes on to the step (here to the settings, which are the
+/// owner's alone).
+///
+/// Catches a prepare that runs from a directory the updater did not stage.
+#[test]
+fn prepare_must_be_given_the_params_staged_release() {
+    let setup = Setup::new("staged");
+    let staged = "/var/lib/hostkeeper/packages/pxe/1.2.3";
+    let named = || {
+        setup
+            .params(
+                Some("1.2.3"),
+                None,
+                &format!("\"updater.staged_release\" = \"{staged}\"\n"),
+            )
+            .display()
+            .to_string()
+    };
+    let run = |given: &str, params: &str, owner: u32| {
+        run_step(
+            &["update-hook", "prepare", given, "--params", params],
+            owner,
+            &[],
+        )
+    };
+    let (status, out, err) = run(
+        "/var/lib/hostkeeper/packages/pxe/9.9.9",
+        &named(),
+        setup.owner,
+    );
+    assert_eq!(status, 1);
+    assert_eq!(
+        err,
+        "pxe prepare: prepare was given /var/lib/hostkeeper/packages/pxe/9.9.9, which is not the params' updater.staged_release\n"
+    );
+    assert!(out.contains("\"reason\":\"bad_params\""), "{out}");
+    let bare = setup.params(Some("1.2.3"), None, "").display().to_string();
+    let (status, _, err) = run(staged, &bare, setup.owner);
+    assert_eq!(status, 1);
+    assert!(
+        err.contains("which is not the params' updater.staged_release"),
+        "{err}"
+    );
+    let (status, _, err) = run(staged, &named(), setup.owner + 1);
+    assert_eq!(status, 1);
+    assert!(
+        err.starts_with(&format!("pxe prepare: {}: ", setup.settings.display())),
+        "{err}"
+    );
+}
+
+/// A `[serve]` key `repositories` is main's `--repositories` flag: the directory of the
+/// installed hosts' repository entries, given once in the settings file, reaches `serve`.
+///
+/// Catches a settings file whose `repositories` is dropped or refused as an unknown flag.
+#[test]
+fn serve_reads_repositories_from_the_settings_file() {
+    let setup = Setup::new("serve-repositories");
+    let settings = setup.settings.display().to_string();
+    let text = fs::read_to_string(&setup.settings).expect("the settings");
+    setup.write_settings(&text.replace(
+        "[prepare]",
+        "repositories = \"/etc/pxe/repositories\"\n[prepare]",
+    ));
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: setup.owner,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    let seen = RefCell::new(None);
+    let record = |flags: &ServeFlags| {
+        *seen.borrow_mut() = Some(flags.repositories.clone());
+        Ok(())
+    };
+    let (status, _, err) = run_with(
+        &["serve", "--settings", &settings, "--dir", "d"],
+        &record,
+        &host,
+    );
+    assert_eq!((status, err.as_str()), (0, ""));
+    assert_eq!(
+        *seen.borrow(),
+        Some(Some(PathBuf::from("/etc/pxe/repositories")))
+    );
+}
+
+/// `parse_serve_line` reads a `serve` line with the program's parser: the settings file, the
+/// directory and the readiness flag come back, a line the parser refuses is its refusal on one
+/// line, and a line of another verb is not a `serve` line.
+///
+/// Catches a unit check that accepts a line the program would refuse.
+#[test]
+fn a_serve_line_is_read_with_the_programs_parser() {
+    let words = |line: &[&str]| line.iter().map(OsString::from).collect::<Vec<_>>();
+    let all = [
+        "--mode",
+        "router",
+        "--address",
+        "192.0.2.10",
+        "--coordinator",
+        "https://192.0.2.1:8444",
+        "--ca-file",
+        "ca",
+        "--token-file",
+        "token",
+        "--daemon-config",
+        "config",
+        "--ssh-authorized-keys",
+        "keys",
+        "--user-id",
+        "1",
+        "--group-id",
+        "1",
+    ];
+    assert_eq!(
+        parse_serve_line(
+            &words(&[
+                "serve",
+                "--notify-systemd",
+                "--settings",
+                "s.toml",
+                "--dir",
+                "d"
+            ]),
+            &all
+        ),
+        Ok(ServeLine {
+            settings: Some(PathBuf::from("s.toml")),
+            dir: PathBuf::from("d"),
+            notify_systemd: true,
+        })
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["serve", "--dir", "d", "--archive", "x"]), &all),
+        Err("unexpected argument '--archive' found".to_owned())
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["serve", "--dir", "d"]), &[]).map(|l| l.dir),
+        Err("the following required arguments were not provided: --mode <MODE> --address <ADDRESS> --coordinator <COORDINATOR> --ca-file <CA_FILE> --token-file <TOKEN_FILE> --daemon-config <DAEMON_CONFIG> --ssh-authorized-keys <SSH_AUTHORIZED_KEYS> --user-id <USER_ID> --group-id <GROUP_ID>".to_owned())
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["update-hook", "verify"]), &[]),
+        Err("not a serve line".to_owned())
+    );
 }
 
 /// The release URL of the params is `https://` with no query or fragment.

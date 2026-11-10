@@ -204,7 +204,7 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 | | `push-cert` | A verb of the `mdm` package's own program, `bin/mdm push-cert`, run by root on the MDM host as today (6.2). |
 | | `dep get-cert`, `upload-token`, `define-profile`, `assign` | Verbs of `bin/mdm`, as `push-cert` (6.2). |
 | | `migrate` | Deleted once MIGRATION.md records the move done; kept in `hostkeeper-mdm` until then. |
-| `hostkeeper-pxe` | `fetch` | The `pxe` package's `prepare` step. |
+| `hostkeeper-pxe` | `fetch` | The `pxe` package's `prepare` step (`pxe update-hook prepare`). |
 | | `serve` | The `pxe` package's unit. |
 | `hello` | all | Kept: the example service and the hook contract's example. |
 | `xtask`, `coverage-gate`, test fixtures | all | Kept: build and test tooling, not shipped to hosts. `hostkeeper-selfupdate-daemon` follows the shipped CLI and loses the verbs with it. |
@@ -797,21 +797,44 @@ in every host's root process widens every host for the sake of one.
 
 ### 6.1 `pxe`
 
-- **The package** (`pxe`, `linux-x86_64` and `linux-arm64`): `bin/pxe` (`crates/hostkeeper-pxe`, the program renamed `pxe`, `src/cli.rs`, **Built**), the unit
-  `pxe.service` (`packaging/pxe/linux/units/pxe.service`, **Built**) running `pxe serve` with today's flags, `WantedBy=multi-user.target`, root to bind,
-  then the drop to the numeric user it already does (`crates/hostkeeper-pxe/src/privilege.rs`, **Built**). Its
-  settings (mode, address, coordinator URL, the token file) come from package parameters and the root-owned
-  `/etc/pxe/pxe.toml` on the host (`crates/hostkeeper-pxe/src/settings.rs`, **Built**), as today's flags do; the token is a file, never a parameter.
-- **`fetch` becomes the `prepare` step** (`crates/hostkeeper-pxe/src/hook.rs`, **Built**; the boot set lives in
-  `/var/lib/pxe/<version>`, since the version's own directory is sealed read-only). It downloads the boot set of the release the package belongs to into the
-  version's directory and checks it as `fetch` does today (pins, attestation, seal). A failed check fails `prepare`, and
-  the old version keeps serving.
-- **Running only when wanted.** network-install.md section 3 runs `hostkeeper-pxe` only in the foreground, while the
+**Built** (N1). `pxe` is a native package: a `.deb` named `pxe`, version the release's, for `linux-x86_64` (`amd64`) and
+`linux-arm64` (`arm64`), built by `cargo xtask release deb --service pxe` and published to the suites with the release's
+other packages (packages-native.md section 10).
+
+- **The package** holds two files and nothing else: `/usr/lib/pxe/pxe` (mode 0755; the `pxe` program of
+  `crates/hostkeeper-pxe`, the static musl build `artifacts.yml` already makes) and `/usr/lib/systemd/system/pxe.service`
+  (mode 0644, byte-equal to the golden `packaging/pxe/deb/pxe.service`, **Built**: `crates/hostkeeper-pxe/tests/unit_file.rs`
+  parses its `ExecStart` with the program's own parser). The unit runs `pxe serve --notify-systemd --settings
+  /etc/pxe/pxe.toml --dir /var/lib/pxe/current`, `Type=notify`, `WantedBy=multi-user.target`: root to bind, then the drop
+  to the numeric user (`crates/hostkeeper-pxe/src/privilege.rs`, **Built**). It has no maintainer script, no conffile and
+  no `/usr/bin` entry; hostkeeper's `apt` activate enables the unit through `[Install]`, and the hook's `cutover` starts it.
+  The settings (mode, address, coordinator URL, the token file) come from the root-owned `/etc/pxe/pxe.toml` on the host
+  (`crates/hostkeeper-pxe/src/settings.rs`, **Built**), which the operator writes; the token is a file, never a
+  parameter. There is no macOS package.
+- **The manifest** is compiled into xtask (`crates/xtask/src/release/targets/manifest.rs`, `pxe_manifest`, **Built**):
+  the hook command `["/usr/lib/pxe/pxe", "update-hook"]`, the run unit `pxe.service`, a `prepare` with no time limit (it
+  downloads several GiB) and the other steps bounded, and the params `release` (the release's download URL),
+  `settings` (`/etc/pxe/pxe.toml`), `boot_dir` (`/var/lib/pxe`) and `unit`. The daemon runs the sealed copy of the program
+  under `/var/lib/hostkeeper/packages/pxe/<version>/tree/`, as it does for `mdm`.
+- **`fetch` became the `prepare` step** (`pxe update-hook prepare`, `crates/hostkeeper-pxe/src/hook.rs`, **Built**; the
+  boot set lives in `/var/lib/pxe/<version>`, since the version's own directory is sealed read-only, and
+  `/var/lib/pxe/current` names the version served). It downloads the boot set of the release the package belongs to into
+  the version's directory and checks it as `fetch` did (pins, attestation, seal). A failed check fails `prepare`, and the
+  old version keeps serving. `cutover`, `verify`, `rollback`, `cleanup` and `uninstall` are the other five steps.
+- **Running only when wanted.** network-install.md section 3 ran `hostkeeper-pxe` only in the foreground, while the
   operator installs machines. As a service, that rule is the assignment: the operator assigns `pxe` to the boot host for
-  an install and unassigns it after (`hkctl services assign` / `unassign`, **Built**). The boot menu rule of
-  network-install.md section 4 (only recorded MACs get the install entry) is unchanged.
-- **The deb and the rpm** stop carrying `/usr/bin/hostkeeper-pxe` in the same pull request that ships the package (P1; `packaging/linux/nfpm.yaml`, **Built**).
-  The binary was never release-checked and has no unit, so no host runs it unattended today.
+  an install and unassigns it after (`hkctl services assign` / `unassign --uninstall true`, **Built**). Nothing sets a
+  desired version for `pxe`, as for `mdm`: the operator runs `cargo xtask release targets --service pxe` and sets it with
+  `hkctl releases set-desired` (docs/operations/network-install.md step 7). The boot menu rule of network-install.md
+  section 4 (only recorded MACs get the install entry) is unchanged.
+- **The deb and the rpm** no longer carry `/usr/bin/hostkeeper-pxe` (**Built**: `packaging/linux/nfpm.yaml`), but they keep
+  the pinned `gh` and the Sigstore trusted root, which `prepare` uses from `/usr/lib/hostkeeper/`.
+- **The proof** (**Built**): `an_assigned_pxe_package_prepares_serves_and_uninstalls` in
+  `crates/hostkeeper-privileged/tests/net_install.rs`, run as root in `net-install.yml`. A fixture apt repository holds a
+  `pxe` `.deb` with the real program and the golden unit; the test sets the desired targets, assigns `pxe` to the host,
+  and asserts that `prepare` sealed the boot set, `/var/lib/pxe/current` names the version, and `pxe.service` is active;
+  then it unassigns with an uninstall and asserts that `/var/lib/pxe`, the unit, its wants link, the package and the
+  daemon's copy are gone and `/etc/pxe/pxe.toml` stays.
 
 ### 6.2 `mdm`
 
@@ -888,7 +911,7 @@ switches to the generated client in one pull request, with its tests.
 | S2b | Stage 2: the package unit, the bootstrap unit, the plist and the postinstall (4.1) | S1b released | `crates/xtask/tests/packaging/{unit_file,daemon_flags,self_update}.rs`, `check-macos-pkg` and `crates/hostkeeper-launchd/tests/{plist,postinstall}.rs` on the new texts; the bootstrap-unit and pkg device tests of 4.5 |
 | S3 | Stage 3: `OLDEST_READER = R2`; delete `self-update-protocol`, `self-update-fallback`, `self-update-seed` (and the linked unit's line that calls it), `mac-config`, `update-hook` and its five step words, `--admin-socket`, `SELF_UPDATE_PROTOCOL`, `fallback.rs`, `selfunits.rs` and their texts; the pin of X1 moved to R2; the runbook of 4.1 | R2 converged | `crates/hostkeeper/tests/binary.rs`: each deleted verb and the flag exit 2; X1 pinned to R2; every device test of 4.5. **Built** (S3): see the **Built** notes of 4.1 to 4.5 |
 | H1 | The coordinator's `--health-listen` and `GET /healthz` (2.7); docs/deploy and coordinator-storage.md's **Health** bullet | none | coordinator tests on the router in process: `200 ok` serving; `503` with `store_unreachable`, `not_writer` and `starting` on the fake store; 404 for any other path and for `POST`; a non-loopback address and a wildcard refused at start by name; no listener without the flag; the packaging test still holds the Dockerfile to no `HEALTHCHECK` and no default arguments |
-| N1 | The `pxe` package and its `prepare` step; `hostkeeper-pxe` out of the deb and rpm; network-install.md and its runbook | G1 | `cargo xtask release package --service pxe` tests (shape, units, manifest); a privileged install, assign and unassign of a fixture `pxe` package under systemd; the `fetch` tests re-pointed at `prepare` |
+| N1 | The `pxe` package and its `prepare` step; `hostkeeper-pxe` out of the deb and rpm; network-install.md and its runbook. **Built** (6.1) | G1 | `cargo xtask release deb --service pxe` tests (shape, unit, manifest, targets); `crates/hostkeeper-pxe/tests/unit_file.rs` (the golden unit and the program's parser); a privileged install, assign and unassign of the `pxe` package under systemd; the `fetch` tests re-pointed at `prepare` |
 | M1 | The `mdm` package: build-time fetch against `pins.txt`, hook steps, units, `bin/mdm` with the `push-cert` and `dep` verbs | G1 | the `install`, `tls`, `verify`, `push_cert` and `dep` tests re-pointed at the package's program; the package tests |
 | M2 | Delete `hostkeeper-mdm` and its release assets | M1, MIGRATION.md's move done | release contract tests without the MDM asset |
 

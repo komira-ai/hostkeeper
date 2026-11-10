@@ -10,7 +10,7 @@ description = "The packets of network install: proxyDHCP answers, router-mode le
 
 # docs/design/network-install.md sections 3 and 11, item N7. A packet goes in and a packet, a
 # learned lease or a reason for silence comes out. No socket, no clock, no file and no inventory
-# read here: `hostkeeper-pxe serve` (item N9) owns those and passes in the answer set, the
+# read here: `pxe serve` (item N9) owns those and passes in the answer set, the
 # record platforms and the boot sets it has.
 [dependencies]
 # The platform of a boot set and of an inventory record.

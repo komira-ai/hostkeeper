@@ -133,7 +133,7 @@ fn the_testing_suite_lists_the_release_alone_even_when_the_assets_hold_the_faili
     let said = lab
         .publish(Suite::Testing, "t", &lab.debs, "1.2.3")
         .expect("publish");
-    assert_eq!(said, ["apt-index: added 7, dropped 0, listed 7"]);
+    assert_eq!(said, ["apt-index: added 9, dropped 0, listed 9"]);
     for arch in ["amd64", "arm64"] {
         let packages = lab.packages(Suite::Testing, arch);
         assert!(!packages.contains("fail"), "{packages}");

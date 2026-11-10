@@ -85,7 +85,7 @@ fn a_file_that_is_not_settings_is_refused_by_name() {
             "[serve] \"bad\": a value is a string or an integer, or an array of them",
         ),
         (
-            "[serve]\nbad = 1979-05-27\n",
+            "[serve]\nbad = 2030-05-27\n",
             "[serve] \"bad\": a value is a string or an integer, or an array of them",
         ),
         (
@@ -136,4 +136,18 @@ fn the_file_must_be_the_owners_and_not_writable_by_others() {
     );
     let missing = read(&dir.path().join("none.toml"), owner).expect_err("missing");
     assert!(missing.contains("none.toml: "), "{missing}");
+}
+
+/// A `[serve]` key `repositories` expands to `--repositories <dir>`, the flag that names the
+/// directory of the installed hosts' repository entries.
+///
+/// Catches a settings reader that knows only a fixed list of keys and drops this one.
+#[test]
+fn the_repositories_key_expands_to_its_flag() {
+    let settings =
+        parse("[serve]\nrepositories = \"/etc/pxe/repositories\"\n").expect("a settings file");
+    assert_eq!(
+        settings.serve,
+        args(&["--repositories", "/etc/pxe/repositories"])
+    );
 }

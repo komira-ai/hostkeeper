@@ -97,9 +97,9 @@ name = "hostkeeper-selfupdate-daemon"
 path = "tests/bin/selfupdate_daemon.rs"
 
 # The boot server the network-install tests (`tests/net_install.rs`, `tests/net_install_arm64.rs`)
-# run: `pxe`, built here so that the tests have its path. They run its `prepare` step once and
-# `serve` as a child process, and `tests/net_install.rs` puts it in a `pxe` package as `bin/pxe`
-# for the daemon to run. It only forwards to `hostkeeper_pxe::cli::main`.
+# run: `pxe`, built here so that the tests have its path. They run its `update-hook prepare` step
+# once and `serve` as a child process, and `tests/net_install.rs` puts it in a `pxe` .deb as
+# `/usr/lib/pxe/pxe` for the daemon to install and run. It only forwards to `hostkeeper_pxe::cli::main`.
 [[bin]]
 name = "hostkeeper-privileged-pxe"
 path = "tests/bin/pxe.rs"

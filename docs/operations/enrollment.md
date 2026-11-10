@@ -255,7 +255,7 @@ component and `Signed-By` a keyring of the directory, a key that turns off apt's
 no`), a keyring over 1 MiB, empty, or not of its name's kind (armor is read only from a file
 named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. `hostkeeper check-repositories`
 refuses exactly what the start refuses. A host installed by network gets the
-same files from `hostkeeper-pxe serve --repositories` ([network-install.md](network-install.md)).
+same files from the boot server's `repositories` setting ([network-install.md](network-install.md)).
 Rotating the key is [repository-keys.md](repository-keys.md).
 
 Start the unit by hand, since the package does not: `systemctl start hostkeeper.service`. The unit

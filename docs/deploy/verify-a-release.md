@@ -14,7 +14,7 @@ before it uses them.
 | Signer workflow | `komira-ai/hostkeeper/.github/workflows/artifacts.yml` |
 | Source ref | `refs/heads/main` |
 | Tag | `v<X.Y.Z>` |
-| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the coordinator updater's `hostkeeper-coordinator-update X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `hostkeeper-pxe X.Y.Z`, with no commit |
+| `--version` output | `hostkeeper X.Y.Z+<first 12 hex digits of the commit>`; the coordinator's `hostkeeper-coordinator X.Y.Z+<first 12 hex digits of the commit>`; the MDM kit's `hostkeeper-mdm X.Y.Z+<first 12 hex digits of the commit>`; the coordinator updater's `hostkeeper-coordinator-update X.Y.Z+<first 12 hex digits of the commit>`; the command line's `hkctl X.Y.Z+<first 12 hex digits of the commit>`; `pxe X.Y.Z`, with no commit |
 
 The workflow `artifacts.yml` builds the assets on a push to `refs/heads/main`, writes one
 `SHA256SUMS`, and signs build-provenance attestations (sigstore) for every summed asset, plus SBOM
@@ -39,7 +39,8 @@ binary and the coordinator updater's are for the two Linux platforms; the instal
 | `hello_<version>-fail-ready_<deb-arch>.deb` | the `.deb` of hello's failing build, for the Linux platforms: the hello package above with the service version `<version>-fail-ready` and the units started with `--fail-ready`. Its file name carries the service version; the `Version` of its `control` is the Debian version `<version>~fail.ready`, which sorts below `<version>`, so apt never takes it for the release. The release publishes it to the `testing-fail` suite of the project's apt repository, which lists it alone. It has no `.pkg` |
 | `hello-<version>-macos-arm64.pkg` | hello's native package for macOS: one component with no script, the program (which the entry's hook command names, `/Library/Application Support/hello/bin/hello update-hook`) under `/Library/Application Support/hello/`, and the two slots' jobs `hello.a` and `hello.b` in `/Library/LaunchDaemons/`; signed by the Developer ID Installer identity `Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)` with a trusted timestamp, as the installer is, not notarized, attested. The release puts it in the `testing` directory of the installers, `pkg/hostkeeper/<version>/` |
 | `mdm_<version>_amd64.deb` | mdm's native package, for linux-x86_64 only: its program, the pinned servers in `/usr/lib/mdm/` (the entry's hook command is `/usr/lib/mdm/mdm update-hook`), and its units in `/usr/lib/systemd/system/` ([docs/operations/mdm-package.md](../operations/mdm-package.md)); it has no maintainer script. Published to the `testing` suite like hello's |
-| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, `/usr/bin/hostkeeper-pxe` (the boot server of network install, docs/design/network-install.md section 3, with no unit: it runs only when an operator starts it), and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment. Also hostkeeper's native package on Linux: the release publishes it to the `testing` suite and its targets list it (docs/design/packages-native.md) |
+| `pxe_<version>_<deb-arch>.deb` | the native package of the boot server of network install (docs/design/network-install.md), for the Linux platforms: its program at `/usr/lib/pxe/pxe`, which the entry's hook command names (`/usr/lib/pxe/pxe update-hook`), and its unit `pxe.service` in `/usr/lib/systemd/system/`; it has no maintainer script, no conffile and no dependency. Published to the `testing` suite like hello's. It has no `.pkg`, and no release sets it as any host's desired release: an operator runs `cargo xtask release targets --service pxe` and sets the desired targets ([docs/operations/network-install.md](../operations/network-install.md)) |
+| `hostkeeper_<version>_<deb-arch>.deb` | the deb package: the daemon, its unit, its tmpfiles rules, its config template, the pinned `gh` and Sigstore trusted root it checks packages with, and the link `/etc/issue.d/hostkeeper.issue` to the console's issue file the daemon writes while it waits for its enrollment. Also hostkeeper's native package on Linux: the release publishes it to the `testing` suite and its targets list it (docs/design/packages-native.md) |
 | `hostkeeper-<version>-1.<rpm-arch>.rpm` | the rpm package, with the same files and link |
 | `hostkeeper-coordinator-<version>-<linux-platform>.tar.gz` | the coordinator binary |
 | `hostkeeper-coordinator-<version>-<linux-platform>.cdx.json` | its CycloneDX SBOM |
@@ -58,8 +59,8 @@ binary and the coordinator updater's are for the two Linux platforms; the instal
 | `<asset>.sigstore.json` | the attestation bundle of each `.tar.gz`, `.deb` (the services' native ones included), `.rpm`, `.image.tar` and `.pkg` (hello's included), of `netboot.json`, of the image index `hostkeeper-coordinator-<version>.image.json` and of `hkctl-<version>` |
 
 `netboot.json` is attested with a bundle of its own: it is the trust anchor of
-the boot files it pins, which come from Canonical, not from this release. `hostkeeper-pxe fetch`
-(item N8 of docs/design/network-install.md, `crates/hostkeeper-pxe`) verifies that attestation
+the boot files it pins, which come from Canonical, not from this release. the prepare step of `pxe`
+(`pxe update-hook prepare`, docs/design/network-install.md, `crates/hostkeeper-pxe`) verifies that attestation
 before it reads a pin in it.
 
 The coordinator's image runs `/usr/bin/hostkeeper-coordinator` as its entrypoint, as the
@@ -155,6 +156,8 @@ hello-<version>-macos-arm64.pkg
 hello-<version>-macos-arm64.pkg.sigstore.json
 mdm_<version>_amd64.deb
 mdm_<version>_amd64.deb.sigstore.json
+pxe_<version>_<deb-arch>.deb
+pxe_<version>_<deb-arch>.deb.sigstore.json
 ```
 
 ## What the Linux packages check packages with
@@ -187,12 +190,13 @@ and the rpm back (the deb's `data.tar.gz`; the rpm's header and payload) and fai
 both files at these paths, a regular file of exactly this mode, owned by root and group root,
 with the bytes staged, and installs `/etc/issue.d/hostkeeper.issue` as a link to
 `/run/hostkeeper/enrollment.issue`, the console's issue file the daemon writes. It also checks that
-`/usr/bin/hostkeeper` and `/usr/bin/hostkeeper-pxe` are regular files of mode 0755, owned by root
-and group root, with the bytes staged.
+`/usr/bin/hostkeeper` is a regular file of mode 0755, owned by root and group root, with the bytes
+staged.
 
-The packages' programs, `hostkeeper` and `hostkeeper-pxe`, are the static build: they are built for
-`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`, so they use no shared library of the
-host and run on any Linux distribution. `check-linux-pkg` refuses a package that holds an ELF
+The packages' program, `hostkeeper`, is the static build: it is built for
+`x86_64-unknown-linux-musl` or `aarch64-unknown-linux-musl`, so it uses no shared library of the
+host and runs on any Linux distribution (`pxe`, the program of the pxe `.deb`, is built the same
+way, though `check-linux-pkg --service` does not apply this rule to a service's `.deb`). `check-linux-pkg` refuses a package that holds an ELF
 file with an interpreter (`PT_INTERP`) or a needed library (`DT_NEEDED`), and a package that
 declares a dependency (a deb's `Depends` or `Pre-Depends`, an rpm's requirement other than
 `rpmlib(...)`). The build job also runs it, without `--staged`, on

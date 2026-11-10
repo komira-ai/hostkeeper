@@ -1,5 +1,5 @@
 //! The command line of `pxe`, the boot server of network install: `serve` ([`crate::serve`])
-//! and the six steps of the hook the `pxe` package ships ([`crate::hook`]).
+//! and `update-hook`, the six steps of the hook the `pxe` .deb ships ([`crate::hook`]).
 //!
 //! ```text
 //! pxe serve --mode proxy|router --address <IPv4> --dir <sealed directory>
@@ -45,14 +45,16 @@
 //! - `--notify-systemd`: send `READY=1` to the socket systemd names in `NOTIFY_SOCKET` once the
 //!   start is complete; without that socket the start is refused before anything is bound.
 //!
-//! The steps are run by the host updater as `<exe> <step> [<staged release>] --params <file>`
-//! ([`crate::hook`] says what each does). `--params` is the file of the package's `[params]` and
-//! the updater's `updater.*` keys.
+//! The steps are run by hostkeeper's daemon as the manifest's hook command, `/usr/lib/pxe/pxe
+//! update-hook`, then `<step> [<staged release>] --params <file>` ([`crate::hook`] says what each
+//! does); the daemon runs the sealed copy of that file in the version's tree, under
+//! `/var/lib/hostkeeper/packages/pxe/<version>/tree/`. `--params` is the file of the package's
+//! `[params]` and the updater's `updater.*` keys.
 //!
 //! Exit status: 0 when `serve` stops on SIGINT or SIGTERM or a step succeeds, 1 when the verb is
 //! refused (one line on standard error says why, as `pxe <verb>: <why>`; a refused step also
 //! ends its standard output with a JSON report), 75 for a step deferred, 2 for a command line
-//! that does not parse. `serve` logs one line per event on standard error. Configuration is
+//! that does not parse (for `update-hook`, one `pxe update-hook: <why>` line). `serve` logs one line per event on standard error. Configuration is
 //! flags and the settings file; the one thing read from the environment is systemd's
 //! `NOTIFY_SOCKET`.
 
@@ -63,7 +65,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
-use hostkeeper_hook::Step;
+use hostkeeper_hook::Invocation;
 use hostkeeper_pxe_seed::inputs::{InstallDisk, SerialConsole};
 
 use crate::hook::{self, HostSystemctl};
@@ -100,37 +102,13 @@ pub(crate) enum Verb {
     /// Serve a sealed directory to the machines the coordinator's inventory may install: by
     /// proxyDHCP or behind the router, by TFTP and by HTTP, until SIGINT or SIGTERM.
     Serve(Box<ServeFlags>),
-    /// Hook step: download the boot sets and debs of the release into
-    /// <boot_dir>/<target version>, verify them, and seal them; nothing a client sees changes.
-    Prepare(PrepareArgs),
-    /// Hook step: point <boot_dir>/current at the target version and restart the unit.
-    Cutover(StepArgs),
-    /// Hook step: the unit is active, or the step is deferred.
-    Verify(StepArgs),
-    /// Hook step: put back the previous boot set, or stop the unit on a first install.
-    Rollback(StepArgs),
-    /// Hook step: keep only the current and the target boot sets.
-    Cleanup(StepArgs),
-    /// Hook step: remove <boot_dir> whole.
-    Uninstall(StepArgs),
-}
-
-/// The arguments of the `prepare` step.
-#[derive(Debug, clap::Args)]
-pub(crate) struct PrepareArgs {
-    /// The staged release directory of the package.
-    pub(crate) artifact: PathBuf,
-    /// The params file of the step.
-    #[arg(long)]
-    pub(crate) params: PathBuf,
-}
-
-/// The arguments of every other step.
-#[derive(Debug, clap::Args)]
-pub(crate) struct StepArgs {
-    /// The params file of the step.
-    #[arg(long)]
-    pub(crate) params: PathBuf,
+    /// The update hook hostkeeper runs as root: <step> [<staged release>] --params <file>, the
+    /// step being prepare, cutover, verify, rollback, cleanup or uninstall.
+    UpdateHook {
+        /// The step and its arguments, as the hook contract gives them.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
 }
 
 /// The modes of `--mode`.
@@ -290,13 +268,34 @@ fn run(
                 1
             }
         },
-        Verb::Prepare(a) => hook::run(host, Step::Prepare, &a.params, out, err),
-        Verb::Cutover(a) => hook::run(host, Step::Cutover, &a.params, out, err),
-        Verb::Verify(a) => hook::run(host, Step::Verify, &a.params, out, err),
-        Verb::Rollback(a) => hook::run(host, Step::Rollback, &a.params, out, err),
-        Verb::Cleanup(a) => hook::run(host, Step::Cleanup, &a.params, out, err),
-        Verb::Uninstall(a) => hook::run(host, Step::Uninstall, &a.params, out, err),
+        Verb::UpdateHook { args } => update_hook(&args, host, out, err),
     }
+}
+
+/// Runs the hook step `args` give (`<step> [<staged release>] --params <file>`, parsed as the
+/// contract of `hostkeeper_hook` has it); a command line it cannot read exits 2 with
+/// `pxe update-hook: <why>` and runs nothing.
+fn update_hook(
+    args: &[OsString],
+    host: &hook::Host<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let call = match Invocation::parse(args.iter().cloned()) {
+        Ok(call) => call,
+        Err(why) => {
+            drop(writeln!(err, "pxe update-hook: {why}"));
+            return 2;
+        }
+    };
+    let Some(params) = call.params else {
+        drop(writeln!(
+            err,
+            "pxe update-hook: the step needs --params <file>"
+        ));
+        return 2;
+    };
+    hook::run(host, call.step, &params, call.artifact.as_deref(), out, err)
 }
 
 /// `args` with, for a `serve` that names `--settings`, the file's `[serve]` table expanded into
@@ -344,6 +343,38 @@ pub(crate) fn serve_flags(
     ServeOnly::try_parse_from(args)
         .map(|only| only.flags)
         .map_err(|e| one_line(&e))
+}
+
+/// What a unit's `ExecStart` gives `serve`, as [`parse_serve_line`] reads it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ServeLine {
+    /// The settings file the line names.
+    pub settings: Option<PathBuf>,
+    /// The sealed directory the line names.
+    pub dir: PathBuf,
+    /// Whether the line asks for the readiness notice.
+    pub notify_systemd: bool,
+}
+
+/// Reads `args`, the words of a `serve` command line after the program's name (`serve --settings
+/// ...`), with the parser `pxe` itself uses, over `settings_serve`, the flags the settings file's
+/// `[serve]` table would add after them. It exists so the unit the .deb ships can be checked
+/// against the program, as a test of this crate does.
+///
+/// # Errors
+/// The parser's message on one line, or that the line is not a `serve` line.
+pub fn parse_serve_line(args: &[OsString], settings_serve: &[&str]) -> Result<ServeLine, String> {
+    let mut argv: Vec<OsString> = vec!["pxe".into()];
+    argv.extend(args.iter().cloned());
+    argv.extend(settings_serve.iter().map(OsString::from));
+    match Cli::try_parse_from(argv).map_err(|e| one_line(&e))?.verb {
+        Verb::Serve(flags) => Ok(ServeLine {
+            settings: flags.settings,
+            dir: flags.dir,
+            notify_systemd: flags.notify_systemd,
+        }),
+        Verb::UpdateHook { .. } => Err("not a serve line".to_owned()),
+    }
 }
 
 /// The message of the parser's refusal `error` on one line: its words up to the usage text.

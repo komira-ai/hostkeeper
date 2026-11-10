@@ -299,7 +299,7 @@ pub fn step(
     let _alone = SPAWN
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    let code = run(&host, step, params, &mut out, &mut err);
+    let code = run(&host, step, params, None, &mut out, &mut err);
     Ended {
         code,
         out: String::from_utf8(out).expect("UTF-8"),

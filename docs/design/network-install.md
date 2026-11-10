@@ -9,7 +9,7 @@ new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
-proxyDHCP; `linux-arm64` is in v1; and the inventory record gains an optional platform. Where this document says `hostkeeper-pxe` as a separate binary in the deb, item N1 of [two-programs.md](two-programs.md) section 9 (section 6.1) replaces it: the `pxe` service package (`bin/pxe`), assigned to the boot host for the install window; its `fetch` is the `prepare` step and a restart is a restart of `pxe.service`.
+proxyDHCP; `linux-arm64` is in v1; and the inventory record gains an optional platform. Where this document says `hostkeeper-pxe` as a separate binary in the deb, item N1 of [two-programs.md](two-programs.md) section 9 (section 6.1) replaces it (**Built**): the program is `pxe`, the `.deb` named `pxe` (`/usr/lib/pxe/pxe` and `pxe.service`), assigned to the boot host for the install window; its `fetch` is the `prepare` step (`pxe update-hook prepare`) and a restart is a restart of `pxe.service`.
 
 The tags are those of hostkeeper-design.md. **Built** names code on `main` with a path. **Designed** means nothing
 implements it yet. **[V]** marks a fact about software or hardware we do not own, which must be checked on the real
@@ -29,7 +29,7 @@ operator:
 1. Records the machine as an inventory record: its data MACs, its BMC MAC and serial from the chassis label, and its
    platform, `linux-x86_64` or `linux-arm64` (section 3). A Linux request is matched by its data MACs and BMC MAC; the
    serial is shown beside the claim for the person to compare, and takes no part in the match. The record is built
-   (`hostkeeper ctl enrollment add-record`, or the UI's Inventory page), its platform an additive field
+   (`hkctl enrollment add-record`, or the UI's Inventory page), its platform an additive field
    (item N14, **Built**).
 
 The machine is then racked and powered on, as every machine is. Its firmware tries network boot, it installs Ubuntu
@@ -181,7 +181,7 @@ fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
 - **The record's platform.** The record carries an optional platform (item N14): `linux-x86_64` or `linux-arm64`. It
   chooses the boot set of the install entry, and the deb the seed installs. It is additive everywhere it appears: a new
   optional field of `InventoryRecord` and `AddRecordRequest`, typed as the existing `hostkeeper.agent.v1.Platform` with
-  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hostkeeper ctl enrollment add-record` and a
+  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hkctl enrollment add-record` and a
   field of the UI's Inventory page; and a value the coordinator's store keeps for the record, behind the store's
   interface with the rest of the inventory (`crates/hostkeeper-coordinator/src/inventory.rs`, **Built**; item N14), so the move of
   that state to Postgres takes it as a column with a default. In today's file store the inventory is in the ops file,
@@ -237,7 +237,7 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   when a `--reinstall` names no record. The fixed `grub.cfg` and the menus are served under `grub/` by HTTP as
   well as by TFTP, so a GRUB loaded by UEFI HTTP boot finds them at the same path below the server. A seed is
   served only to a MAC given its install menu in the run; its first fetch reads the answer set again and is
-  refused unless the MAC is still in it. The binary is `bin/pxe` of the `pxe` package; its
+  refused unless the MAC is still in it. The binary is `/usr/lib/pxe/pxe` of the `pxe` .deb; its
   settings are the root-owned `/etc/pxe/pxe.toml` (two-programs.md section 6.1). It reads `Enrollment.ListRecords` and `Enrollment.List`,
   not `Hosts.List`, and leaves out every record whose `host_held` is not `NONE`.
 
@@ -417,7 +417,7 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
      The arm64 kernel and initrd there are not those of the arm64 ISO, whose live system needs its own kernel.
    `netboot.json` is attested by the release workflow, like every release asset, with a bundle of its own
    (`netboot.json.sigstore.json`, `.github/workflows/artifacts.yml`, **Built**).
-   - `pxe prepare` (the former `fetch`, the package's `prepare` step) downloads the boot set and the hostkeeper deb of
+   - `pxe update-hook prepare` (the former `fetch`, the package's `prepare` step) downloads the boot set and the hostkeeper deb of
      each platform into a new directory, `/var/lib/pxe/<version>`: both
      platforms by default, or those the settings' `[prepare]` `platform` names, so a farm of one architecture does not keep an
      ISO it never serves. It verifies
@@ -784,7 +784,7 @@ The workflow lint knows the jobs and their runners.
   - the real `pxe`, with a boot set the job fetched by pinned URL and SHA-256 before the test;
   - the real coordinator, with `--lan-listen` on the bridge address.
 - It waits on progress events, never on time. Each event is a line on the guest's serial console, read as a stream, a
-  line of `pxe`'s log, or an answer from `hostkeeper ctl`. Each wait ends on its event or on the guest's
+  line of `pxe`'s log, or an answer from `hkctl`. Each wait ends on its event or on the guest's
   exit, and the job's `timeout-minutes` is the only bound.
 - In order, it checks that:
   - in proxy mode: the fake DHCP saw the guest's DISCOVER, and `pxe` sent its proxy offer;
@@ -914,12 +914,12 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N5 | `packaging/netboot/pins.toml` and `netboot.json` with a boot set for each of `linux-x86_64` and `linux-arm64` (ISO, shim, signed network GRUB, kernel, initrd), built and attested in the artifacts workflow | N1b | M |
 | N6 | Seed and menu generator: a pure crate turning a record, its platform, a daemon config and flags into the fixed `grub.cfg`, the install and local-disk menus of a MAC, autoinstall `user-data` and `meta-data`, with goldens for each platform | N1b | M |
 | N7 | proxyDHCP, router-mode learning and TFTP packet handling: a pure crate, no sockets, no inventory; architectures 7, 9, 11, 16 and 19; the router-mode `hostkeeper/boot.efi` by learned architecture. **Built**: `crates/hostkeeper-pxe-packets` | N1b | M |
-| N8 | `hostkeeper-pxe fetch`: download both platforms' boot sets and debs (or those `--platform` names), verify against the release attestation and `netboot.json`, seal | N5 | M |
-| N9 | `hostkeeper-pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records (their `host_held`, N9b) and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released as a binary with no enabled unit | N6, N7, N8, N14 | M |
+| N8 | `pxe update-hook prepare`: download both platforms' boot sets and debs (or those `--platform` names), verify against the release attestation and `netboot.json`, seal | N5 | M |
+| N9 | `pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records (their `host_held`, N9b) and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released in the `pxe` `.deb` with its unit | N6, N7, N8, N14 | M |
 | N9b | `InventoryRecord.host_held`: what the enrollment store holds for the record's host id (`NONE`, `APPROVED`, `DENIED`, `RETIRED`; `UNSPECIFIED` without a store), read by host id in `Enrollment.ListRecords` and `Enrollment.AddRecord`; the tests of section 11 | N1b | S |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
 | N11 | `cargo xtask netinstall-report`, and the report artifact of N10. **Built**: `crates/xtask/src/netinstall_report.rs`, the artifact `net-install-report` | N10 | S |
-| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hostkeeper ctl` and `hostkeeper-pxe` lines a test parses with each program's parser | N9 | S |
+| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hkctl` lines and settings files a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
 | N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built"). **Built**: `platform` on `InventoryRecord` and `AddRecordRequest` (`crates/hostkeeper-proto/proto/hostkeeper/operator/v1/enrollment.proto`), `crates/hostkeeper-coordinator/src/inventory.rs` and the `platforms` key of the halts file in `ops_file.rs`, the ctl's `--platform` (generated from the descriptor), `ui/pages/inventory.js`, the record platforms read by `crates/hostkeeper-pxe/src/serve/` | N1b | S |
 

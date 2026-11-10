@@ -1,4 +1,4 @@
-//! The repository entries the installed host gets (`hostkeeper-pxe serve --repositories`,
+//! The repository entries the installed host gets (`pxe serve --repositories`,
 //! packages-repositories.md sections 3.1 and 3.2): a directory of the operator's, written by the
 //! test with the files the coordinator's registry renders for the entry [`NAME`] (the rig's apt
 //! repository, served by the channel on the LAN, which the rig puts in the registry):
