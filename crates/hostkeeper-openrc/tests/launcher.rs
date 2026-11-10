@@ -87,6 +87,7 @@ fn a_step_is_run_as_its_invocation_prints_it_in_a_clean_environment() {
     );
     let call = hostkeeper_steps::StepCall {
         service: "web",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Prepare,
             artifact: Some(PathBuf::from("/stage/release")),
@@ -514,6 +515,27 @@ fn a_unit_that_is_running_cannot_be_run_again() {
     rig.launcher
         .run(&step_call(&quick, UNIT, Bound::Unbounded))
         .expect("the step ran again");
+}
+
+/// Proves a step of an update is run with the hook command's leading arguments before the step
+/// and its own arguments, in order.
+///
+/// Catches: leading arguments dropped, or given after the step, by `run`.
+#[test]
+fn a_step_is_run_with_the_hooks_arguments_before_its_step() {
+    let rig = Rig::new("step-args", 1);
+    let hook = rig.script("hook", "printf 'arg:%s\\n' \"$@\"\nexit 0");
+    let hook_args = ["update-hook".to_owned(), "--fast".to_owned()];
+    let call = hostkeeper_steps::StepCall {
+        hook_args: &hook_args,
+        ..step_call(&hook, UNIT, secs(100))
+    };
+    let got = rig.launcher.run(&call).expect("the step ran");
+    assert_eq!(got.code, Some(0));
+    assert_eq!(
+        text(&rig.log()[0].1.stdout),
+        format!("arg:update-hook\narg:--fast\narg:cutover\narg:--params\narg:{PARAMS}\n")
+    );
 }
 
 #[test]

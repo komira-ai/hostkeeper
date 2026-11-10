@@ -1,17 +1,13 @@
-//! The checks of a repository package's extracted tree and the enablement of its `run` units
-//! (packages-native.md section 10.2, packages-repositories.md sections 3.4 and 5; packages-tests.md,
-//! "The hook, scripts and paths"), run directly over scratch trees.
+//! A repository package's unit files and the enablement of its `run` units (packages-native.md
+//! section 10.2, packages-repositories.md section 5), run directly over scratch trees.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::os::unix::fs::{PermissionsExt, symlink};
-use std::os::unix::net::UnixListener;
 use std::path::{Path, PathBuf};
 
-use hostkeeper_install::repository::enable::{SYSTEMD_DIR, apply, remove_link, wanted};
-use hostkeeper_install::repository::tree::{
-    HOOK, Rules, TreeError, check, hook_path, install_links, is_service_unit, unit_file,
-};
+use hostkeeper_install::repository::enable::{SYSTEMD_DIR, apply, remove_link, unlinked, wanted};
+use hostkeeper_install::repository::tree::{install_links, unit_file};
 use hostkeeper_testkit::Scratch;
 
 fn scratch(name: &str) -> Scratch {
@@ -55,296 +51,6 @@ impl Tree {
     }
 }
 
-/// The rules of the service `mdm` whose package is `mdm`, with `run` and no boot step.
-fn rules<'a>(run: &'a [String]) -> Rules<'a> {
-    Rules {
-        service: "mdm",
-        package: "mdm",
-        run,
-        boot: None,
-        params: false,
-    }
-}
-
-fn checked(tree: &Tree) -> Result<bool, TreeError> {
-    check(&tree.root(), &rules(&[]))
-}
-
-const UNITS: &str = "usr/lib/systemd/system";
-
-/// Proves every path of the rule is allowed: the binaries, the package's and the service's own
-/// directories, the plain unit files named for the service in both unit directories (run units or
-/// not: `.service`, `.socket`, `.timer`, a `-` or `@` suffix), and the directories above them.
-#[test]
-fn a_tree_of_the_allowed_paths_passes() {
-    let tree = Tree::new("allowed");
-    for file in [
-        "usr/bin/mdm",
-        "usr/bin/tool/nested",
-        "usr/lib/mdm/lib.so",
-        "usr/share/mdm/data",
-        "usr/share/doc/mdm/copyright",
-        "etc/mdm/mdm.conf",
-        "usr/lib/systemd/system/mdm.service",
-        "usr/lib/systemd/system/mdm-worker.service",
-        "usr/lib/systemd/system/mdm@.service",
-        "usr/lib/systemd/system/mdm@one.service",
-        "usr/lib/systemd/system/mdm.socket",
-        "usr/lib/systemd/system/mdm.timer",
-        "lib/systemd/system/mdm-cleanup.timer",
-    ] {
-        tree.file(file, "x", 0o644);
-    }
-    tree.link("usr/bin/mdm-alias", "mdm");
-    assert_eq!(checked(&tree), Ok(false));
-}
-
-/// Proves the three kinds of unit and the eight units of a service's package (three of them run
-/// units, five not) are accepted together.
-#[test]
-fn a_package_of_eight_units_with_three_run_units_passes() {
-    let tree = Tree::new("eight");
-    let names = [
-        "mdm.service",
-        "mdm-a.service",
-        "mdm-b.service",
-        "mdm@.service",
-        "mdm.socket",
-        "mdm-a.socket",
-        "mdm.timer",
-        "mdm-a.timer",
-    ];
-    for name in names {
-        tree.file(&format!("{UNITS}/{name}"), "[Service]\n", 0o644);
-    }
-    let run: Vec<String> = ["mdm.service", "mdm-a.service", "mdm.timer"]
-        .map(str::to_owned)
-        .to_vec();
-    assert_eq!(check(&tree.root(), &rules(&run)), Ok(false));
-}
-
-/// Proves a package whose name differs from its service's has the package's directories under
-/// `usr/lib`, `usr/share` and `usr/share/doc`, and the service's own under `etc` and in the unit
-/// directories; neither takes the other's place; a unit is named for the service, whatever the package.
-#[test]
-fn the_package_and_the_service_have_their_own_paths() {
-    let tree = Tree::new("names");
-    for file in [
-        "usr/lib/mdm-server/x",
-        "usr/share/mdm-server/x",
-        "usr/share/doc/mdm-server/x",
-        "etc/mdm/x",
-        "usr/lib/systemd/system/mdm.service",
-        "usr/lib/systemd/system/mdm-server.service",
-    ] {
-        tree.file(file, "x", 0o644);
-    }
-    let rules = Rules {
-        service: "mdm",
-        package: "mdm-server",
-        run: &[],
-        boot: None,
-        params: false,
-    };
-    assert_eq!(check(&tree.root(), &rules), Ok(false));
-    for wrong in ["usr/lib/mdm/x", "etc/mdm-server/x"] {
-        let tree = Tree::new("names-wrong");
-        tree.file(wrong, "x", 0o644);
-        let outside = check(&tree.root(), &rules);
-        let first = wrong.rsplit_once('/').expect("a directory").0;
-        assert!(
-            matches!(&outside, Err(TreeError::Outside(path)) if path == first || path == wrong),
-            "{wrong}: {outside:?}"
-        );
-    }
-}
-
-/// Proves each path outside the rule is refused, naming the path: an enablement link's
-/// directory, a cron file, a sudoers file, another package's directory, a name that only starts
-/// like the package's, a file under `/opt`, and a drop-in directory of the service's own unit.
-#[test]
-fn a_path_outside_the_rule_is_refused_naming_it() {
-    for (file, outside) in [
-        (
-            "etc/systemd/system/multi-user.target.wants/x",
-            "etc/systemd",
-        ),
-        ("etc/cron.d/mdm", "etc/cron.d"),
-        ("etc/sudoers.d/mdm", "etc/sudoers.d"),
-        ("usr/sbin/mdm", "usr/sbin"),
-        ("usr/lib/other/x", "usr/lib/other"),
-        ("usr/lib/mdmx/x", "usr/lib/mdmx"),
-        ("usr/share/other/x", "usr/share/other"),
-        ("usr/share/doc/other/x", "usr/share/doc/other"),
-        ("opt/mdm/x", "opt"),
-        ("var/lib/mdm/x", "var"),
-        (
-            "usr/lib/systemd/system/mdm.service.d/x.conf",
-            "usr/lib/systemd/system/mdm.service.d",
-        ),
-        ("usr/lib/systemd/user/mdm.service", "usr/lib/systemd/user"),
-        (
-            "usr/lib/systemd/system/other.service",
-            "usr/lib/systemd/system/other.service",
-        ),
-        (
-            "usr/lib/systemd/system/mdmx.service",
-            "usr/lib/systemd/system/mdmx.service",
-        ),
-        (
-            "lib/systemd/system/mdm.mount",
-            "lib/systemd/system/mdm.mount",
-        ),
-        (
-            "usr/lib/systemd/system/mdm.service.wants/x",
-            "usr/lib/systemd/system/mdm.service.wants",
-        ),
-        ("lib/modules/x", "lib/modules"),
-    ] {
-        let tree = Tree::new("outside");
-        tree.file(file, "x", 0o644);
-        let error = checked(&tree).expect_err(file);
-        assert_eq!(error, TreeError::Outside(outside.to_owned()), "{file}");
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "the package installs /{outside}, outside the paths a service's package may use"
-            )
-        );
-    }
-}
-
-/// Proves a link in a unit directory, an empty drop-in directory, and a file named for a link
-/// target outside the service's names are refused.
-#[test]
-fn a_link_or_a_directory_in_a_unit_directory_is_refused() {
-    let tree = Tree::new("unit-link");
-    tree.link("usr/lib/systemd/system/mdm.service", "/dev/null");
-    assert_eq!(
-        checked(&tree),
-        Err(TreeError::Outside(
-            "usr/lib/systemd/system/mdm.service".to_owned()
-        ))
-    );
-    let tree = Tree::new("unit-dir");
-    tree.dir("usr/lib/systemd/system/mdm.service.d");
-    assert_eq!(
-        checked(&tree),
-        Err(TreeError::Outside(
-            "usr/lib/systemd/system/mdm.service.d".to_owned()
-        ))
-    );
-    let tree = Tree::new("unit-dir-as-unit");
-    tree.dir("usr/lib/systemd/system/mdm.service");
-    assert_eq!(
-        checked(&tree),
-        Err(TreeError::Outside(
-            "usr/lib/systemd/system/mdm.service".to_owned()
-        ))
-    );
-}
-
-/// Proves a socket node in the tree is refused as neither a file, a directory nor a link.
-#[test]
-fn a_special_file_is_refused() {
-    let tree = Tree::new("special");
-    tree.dir("usr/bin");
-    let _listener = UnixListener::bind(tree.root().join("usr/bin/mdm.sock")).expect("a socket");
-    let error = checked(&tree).expect_err("a socket is refused");
-    assert_eq!(error, TreeError::Special("usr/bin/mdm.sock".to_owned()));
-    assert_eq!(
-        error.to_string(),
-        "the package installs /usr/bin/mdm.sock, which is neither a file, a directory nor a link"
-    );
-}
-
-/// Proves a tree that cannot be read is refused with the OS error.
-#[test]
-fn a_tree_that_cannot_be_read_is_refused() {
-    let scratch = scratch("missing-tree");
-    let error = check(&scratch.path().join("none"), &rules(&[])).expect_err("no tree");
-    assert_eq!(
-        error,
-        TreeError::Io("No such file or directory (os error 2)".to_owned())
-    );
-    assert_eq!(
-        error.to_string(),
-        "the tree cannot be read: No such file or directory (os error 2)"
-    );
-}
-
-/// Proves `is_service_unit` accepts `<service>.<kind>`, `<service>-x.<kind>`, `<service>@.<kind>`
-/// and `<service>@x.<kind>` of the kinds service, socket and timer, and refuses another name,
-/// another kind, a name that only starts with the service, a name with a slash or odd bytes.
-#[test]
-fn is_service_unit_follows_the_naming_rule() {
-    for name in [
-        "mdm.service",
-        "mdm-x.service",
-        "mdm-x.y_z:w@1.service",
-        "mdm@.service",
-        "mdm@x.service",
-        "mdm.socket",
-        "mdm-x.socket",
-        "mdm@x.timer",
-        "mdm.timer",
-    ] {
-        assert!(is_service_unit("mdm", name), "{name}");
-    }
-    for name in [
-        "other.service",
-        "xmdm.service",
-        "mdmx.service",
-        "mdm.mount",
-        "mdm.path",
-        "mdm.swap",
-        "mdm.service.d",
-        "mdm",
-        "mdm.",
-        ".service",
-        "",
-        "mdm/x.service",
-        "mdm-a/b.service",
-        "mdm@x/y.timer",
-        "mdm-x y.service",
-        "mdm-é.service",
-        "mdm_x.service",
-    ] {
-        assert!(!is_service_unit("mdm", name), "{name:?}");
-    }
-    assert!(is_service_unit("my-svc", "my-svc.service"));
-    assert!(is_service_unit("my-svc", "my-svc-x.timer"));
-    assert!(!is_service_unit("my-svc", "my.service"));
-}
-
-/// Proves a `run` unit that is not a regular file of one of the unit directories is refused,
-/// naming it, and that both unit directories hold one.
-#[test]
-fn a_run_unit_must_be_a_unit_file_of_the_package() {
-    let tree = Tree::new("run-missing");
-    tree.file("usr/lib/systemd/system/mdm.service", "[Service]\n", 0o644);
-    let run = vec!["mdm.service".to_owned(), "mdm-b.service".to_owned()];
-    let error = check(&tree.root(), &rules(&run)).expect_err("a missing unit");
-    assert_eq!(error, TreeError::NoUnit("mdm-b.service".to_owned()));
-    assert_eq!(
-        error.to_string(),
-        "the run unit mdm-b.service is not a unit file of the package"
-    );
-    let tree = Tree::new("run-lib");
-    tree.file("lib/systemd/system/mdm.service", "[Service]\n", 0o644);
-    assert_eq!(
-        check(&tree.root(), &rules(&["mdm.service".to_owned()])),
-        Ok(false)
-    );
-    let tree = Tree::new("run-other-name");
-    tree.file("usr/lib/systemd/system/mdm.service", "[Service]\n", 0o644);
-    let run = vec!["mdm.service".to_owned(), "mdm.timer".to_owned()];
-    assert_eq!(
-        check(&tree.root(), &rules(&run)),
-        Err(TreeError::NoUnit("mdm.timer".to_owned()))
-    );
-}
-
 /// Proves `unit_file` finds a regular file in `usr/lib/systemd/system` first and
 /// `lib/systemd/system` next, and nothing for a link, a directory or a missing unit.
 #[test]
@@ -374,130 +80,8 @@ fn unit_file_finds_a_regular_file_in_either_directory() {
     }
 }
 
-/// Proves the hook is `usr/lib/<package>/hostkeeper-hook`, and that a package with an executable
-/// regular one gets `Ok(true)`, also with a boot step and params, which only a hook reads.
-#[test]
-fn a_package_with_an_executable_hook_has_one() {
-    assert_eq!(HOOK, "hostkeeper-hook");
-    assert_eq!(hook_path("mdm"), "usr/lib/mdm/hostkeeper-hook");
-    let tree = Tree::new("hook");
-    tree.file("usr/lib/mdm/hostkeeper-hook", "#!/bin/sh\n", 0o755);
-    assert_eq!(checked(&tree), Ok(true));
-    let with = Rules {
-        boot: Some("start"),
-        params: true,
-        ..rules(&[])
-    };
-    assert_eq!(check(&tree.root(), &with), Ok(true));
-}
-
-/// Proves a hook that is not executable, is a link, is a directory, or is reached through a link
-/// is refused, naming the hook and what is wrong with it.
-#[test]
-fn a_hook_that_is_not_a_regular_executable_file_is_refused() {
-    type Build = Box<dyn Fn(&Tree)>;
-    let cases: [(&str, Build, &str); 3] = [
-        (
-            "plain",
-            Box::new(|t| {
-                t.file("usr/lib/mdm/hostkeeper-hook", "x", 0o644);
-            }),
-            "not executable",
-        ),
-        (
-            "link",
-            Box::new(|t| {
-                t.file("usr/lib/mdm/real", "x", 0o755);
-                t.link("usr/lib/mdm/hostkeeper-hook", "real");
-            }),
-            "a link",
-        ),
-        (
-            "dir",
-            Box::new(|t| {
-                t.dir("usr/lib/mdm/hostkeeper-hook");
-            }),
-            "not a regular file",
-        ),
-    ];
-    for (name, build, why) in cases {
-        let tree = Tree::new(name);
-        build(&tree);
-        let error = checked(&tree).expect_err(name);
-        assert_eq!(
-            error,
-            TreeError::Hook("usr/lib/mdm/hostkeeper-hook".to_owned(), why),
-            "{name}"
-        );
-        assert_eq!(
-            error.to_string(),
-            format!("the hook /usr/lib/mdm/hostkeeper-hook is {why}")
-        );
-    }
-}
-
-/// Proves a package with no hook (nothing at its path, no package directory) has none, and then a
-/// boot step or params is refused; a file or a link where the package directory would be is
-/// refused by the path rule.
-#[test]
-fn without_a_hook_a_boot_step_or_params_is_refused() {
-    let tree = Tree::new("no-hook");
-    tree.file("usr/lib/mdm/other", "x", 0o755);
-    assert_eq!(checked(&tree), Ok(false));
-    let boot = Rules {
-        boot: Some("start"),
-        ..rules(&[])
-    };
-    let error = check(&tree.root(), &boot).expect_err("a boot step");
-    assert_eq!(error, TreeError::BootWithoutHook("start".to_owned()));
-    assert_eq!(
-        error.to_string(),
-        "the manifest names the boot step \"start\", and the package has no hook"
-    );
-    let params = Rules {
-        params: true,
-        ..rules(&[])
-    };
-    let error = check(&tree.root(), &params).expect_err("params");
-    assert_eq!(error, TreeError::ParamsWithoutHook);
-    assert_eq!(
-        error.to_string(),
-        "the manifest has params, which only a hook reads, and the package has no hook"
-    );
-    let both = Rules {
-        boot: Some("start"),
-        params: true,
-        ..rules(&[])
-    };
-    assert_eq!(
-        check(&tree.root(), &both),
-        Err(TreeError::BootWithoutHook("start".to_owned()))
-    );
-    let bare = Tree::new("no-package-dir");
-    bare.file("usr/bin/mdm", "x", 0o755);
-    assert_eq!(
-        check(&bare.root(), &boot),
-        Err(TreeError::BootWithoutHook("start".to_owned()))
-    );
-    let file = Tree::new("file-for-dir");
-    file.file("usr/lib/mdm", "x", 0o644);
-    assert_eq!(
-        checked(&file),
-        Err(TreeError::Outside("usr/lib/mdm".to_owned()))
-    );
-    let linked = Tree::new("linked-dir");
-    linked.link("usr/lib/mdm", "elsewhere");
-    assert_eq!(
-        checked(&linked),
-        Err(TreeError::Outside("usr/lib/mdm".to_owned()))
-    );
-}
-
 fn links(unit: &str, text: &str) -> Vec<String> {
-    install_links(unit, text)
-        .expect("the links")
-        .into_iter()
-        .collect()
+    install_links(unit, text).into_iter().collect()
 }
 
 /// Proves `WantedBy=` gives a `<target>.wants/<unit>` link and `RequiredBy=` a
@@ -586,10 +170,10 @@ fn install_links_follow_an_empty_assignment_and_ignore_other_sections() {
     );
 }
 
-/// Proves a target that is not a unit name (no dot, a slash, an odd byte, empty after a dot-less
-/// word, 256 bytes) is refused naming the unit and the target, and one of 255 bytes is accepted.
+/// Proves a target that is not a unit name (no dot, a slash, an odd byte, 256 bytes) yields no
+/// link and no refusal, the good targets beside it still link, and one of 255 bytes is accepted.
 #[test]
-fn install_links_refuse_a_target_that_is_not_a_unit_name() {
+fn install_links_skip_a_target_that_is_not_a_unit_name() {
     let long = format!("{}.target", "a".repeat(249));
     for (key, target) in [
         ("WantedBy", "nodot"),
@@ -599,23 +183,10 @@ fn install_links_refuse_a_target_that_is_not_a_unit_name() {
         ("RequiredBy", "../x.target"),
         ("WantedBy", long.as_str()),
     ] {
-        let text = format!("[Install]\n{key}={target}\n");
-        let error = install_links("mdm.service", &text).expect_err(target);
-        let shown = target.split_whitespace().next().expect("a word");
-        let expected = match shown == target {
-            true => target.to_owned(),
-            false => shown.to_owned(),
-        };
-        assert!(
-            matches!(&error, TreeError::Target { unit, target: found } if unit == "mdm.service" && found == &expected),
-            "{target}: {error:?}"
-        );
+        let text = format!("[Install]\n{key}={target}\nWantedBy=multi-user.target\n");
+        let found = links("mdm.service", &text);
+        assert_eq!(found, ["multi-user.target.wants/mdm.service"], "{target}");
     }
-    let error = install_links("mdm.service", "[Install]\nWantedBy=nodot\n").expect_err("nodot");
-    assert_eq!(
-        error.to_string(),
-        "the unit mdm.service is wanted by \"nodot\", not a unit name"
-    );
     let at_bound = format!("{}.target", "a".repeat(248));
     assert_eq!(at_bound.len(), 255);
     assert_eq!(
@@ -666,10 +237,10 @@ fn wanted_maps_each_link_to_its_unit_file() {
     assert_eq!(found, want);
 }
 
-/// Proves `wanted` refuses a run unit the package does not hold, a unit that cannot be read, and a
-/// unit asking for a target that is not a unit name.
+/// Proves `wanted` never refuses a run unit: one the package does not hold, or asking for a
+/// target that is not a unit name, adds no link; a unit file that cannot be read is an I/O error.
 #[test]
-fn wanted_refuses_a_missing_unreadable_or_bad_unit() {
+fn wanted_adds_nothing_for_a_missing_or_bad_unit_and_reports_an_unreadable_one() {
     let tree = Tree::new("wanted-bad");
     tree.file(
         "usr/lib/systemd/system/mdm.service",
@@ -677,24 +248,66 @@ fn wanted_refuses_a_missing_unreadable_or_bad_unit() {
         0o644,
     );
     tree.file("usr/lib/systemd/system/locked.service", "x", 0o000);
-    let run = ["absent.service".to_owned()];
+    let run = ["absent.service".to_owned(), "mdm.service".to_owned()];
     assert_eq!(
-        wanted(&tree.root(), &run),
-        Err(TreeError::NoUnit("absent.service".to_owned()))
-    );
-    let run = ["mdm.service".to_owned()];
-    assert_eq!(
-        wanted(&tree.root(), &run),
-        Err(TreeError::Target {
-            unit: "mdm.service".to_owned(),
-            target: "nodot".to_owned()
-        })
+        wanted(&tree.root(), &run).expect("no refusal"),
+        BTreeMap::new()
     );
     let run = ["locked.service".to_owned()];
-    assert_eq!(
-        wanted(&tree.root(), &run),
-        Err(TreeError::Io("Permission denied (os error 13)".to_owned()))
+    let error = wanted(&tree.root(), &run).expect_err("unreadable");
+    assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+}
+
+/// Proves `unlinked` lists, in the run list's order, the units with no unit file in the tree, no
+/// `[Install]` section, or only targets that are not unit names, and leaves out a unit with a
+/// link in either unit directory; a unit file that cannot be read is listed too (a superuser reads it, so this holds for a
+/// non-root run, as the suite's others do).
+#[test]
+fn unlinked_lists_the_run_units_the_tree_gives_no_link() {
+    let tree = Tree::new("unlinked");
+    tree.file(
+        "usr/lib/systemd/system/a.service",
+        "[Install]\nWantedBy=multi-user.target\n",
+        0o644,
     );
+    tree.file(
+        "lib/systemd/system/b.service",
+        "[Install]\nWantedBy=timers.target\n",
+        0o644,
+    );
+    tree.file("usr/lib/systemd/system/bare.service", "[Service]\n", 0o644);
+    tree.file(
+        "usr/lib/systemd/system/bad.service",
+        "[Install]\nWantedBy=nodot\n",
+        0o644,
+    );
+    tree.dir("usr/lib/systemd/system/dir.service");
+    tree.file(
+        "usr/lib/systemd/system/locked.service",
+        "[Install]\nWantedBy=multi-user.target\n",
+        0o000,
+    );
+    let run = [
+        "bare.service",
+        "a.service",
+        "ghost.service",
+        "b.service",
+        "bad.service",
+        "dir.service",
+        "locked.service",
+    ]
+    .map(str::to_owned);
+    assert_eq!(
+        unlinked(&tree.root(), &run),
+        [
+            "bare.service",
+            "ghost.service",
+            "bad.service",
+            "dir.service",
+            "locked.service"
+        ]
+    );
+    assert!(unlinked(&tree.root(), &[]).is_empty());
 }
 
 /// Proves a unit file that is not UTF-8 is read lossily: its `[Install]` section still counts.

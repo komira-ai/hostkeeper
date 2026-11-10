@@ -112,6 +112,7 @@ fn hook_file(name: &str) -> (Scratch, PathBuf) {
 fn call<'a>(executable: &'a Path, params: &Path, unit: &'a str) -> StepCall<'a> {
     StepCall {
         service: "svc",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Cutover,
             artifact: None,

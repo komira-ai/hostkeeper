@@ -190,8 +190,9 @@ fn hellos_and_mdms_debs_as_release_deb_writes_them_pass() {
 }
 
 #[test]
-fn a_deb_with_a_postinst_or_any_other_maintainer_script_is_refused() {
-    // Catches: a deb whose control archive runs code as root at install, upgrade or removal.
+fn a_deb_with_a_maintainer_script_passes() {
+    // Catches: a check that refuses a package for the scripts of its control archive, which
+    // hostkeeper does not hold a package to.
     for script in [
         "postinst", "preinst", "prerm", "postrm", "config", "triggers",
     ] {
@@ -201,93 +202,58 @@ fn a_deb_with_a_postinst_or_any_other_maintainer_script_is_refused() {
             0o755,
             b"#!/bin/sh\nsystemctl enable hello@a\n",
         ));
-        assert_eq!(
-            refused(script, &deb_of(&control, &data)),
-            [format!(
-                "control.tar.gz holds {script}: a service's .deb holds only control, md5sums and conffiles there, and no maintainer script"
-            )]
-        );
+        check(script, &deb_of(&control, &data)).expect("a script is not refused");
     }
-    let (mut control, data) = hello_entries();
-    control.push(file("./md5sums", 0o644, b""));
-    control.push(file("./conffiles", 0o644, b""));
-    check("md5sums", &deb_of(&control, &data)).expect("md5sums and conffiles are allowed");
 }
 
 #[test]
-fn an_enablement_link_a_drop_in_or_a_unit_of_another_name_is_refused() {
-    // Catches: a deb that enables its own unit at install, changes a unit of the host through a
-    // drop-in, shadows one, or installs a link in the unit directory.
-    let cases: Vec<(Ent, &str)> = vec![
-        (
-            Ent {
-                kind: tar::EntryType::Symlink,
-                link: Some("/usr/lib/systemd/system/hello@a.service"),
-                ..file(
-                    "./etc/systemd/system/multi-user.target.wants/hello@a.service",
-                    0o777,
-                    b"",
-                )
-            },
-            "/etc/systemd/system/multi-user.target.wants/hello@a.service: outside the paths",
-        ),
-        (
-            dir("./usr/lib/systemd/system/ssh.service.d/"),
-            "/usr/lib/systemd/system/ssh.service.d: in /usr/lib/systemd/system/",
-        ),
-        (
-            file("./usr/lib/systemd/system/ssh.service", 0o644, b""),
-            "/usr/lib/systemd/system/ssh.service: in /usr/lib/systemd/system/",
-        ),
-        (
-            Ent {
-                kind: tar::EntryType::Symlink,
-                link: Some("hello@a.service"),
-                ..file("./usr/lib/systemd/system/hello.service", 0o777, b"")
-            },
-            "/usr/lib/systemd/system/hello.service: in /usr/lib/systemd/system/",
-        ),
-        (
-            file("./etc/cron.d/hello", 0o644, b""),
-            "/etc/cron.d/hello: outside the paths",
-        ),
+fn files_links_and_units_anywhere_pass() {
+    // Catches: a check that holds the package to a path allow-list, to unit names, or to units
+    // installed disabled: an enablement link, a drop-in, a unit of another name and a file
+    // outside the service's directories are all accepted.
+    let cases: Vec<Ent> = vec![
+        Ent {
+            kind: tar::EntryType::Symlink,
+            link: Some("/usr/lib/systemd/system/hello@a.service"),
+            ..file(
+                "./etc/systemd/system/multi-user.target.wants/hello@a.service",
+                0o777,
+                b"",
+            )
+        },
+        dir("./usr/lib/systemd/system/ssh.service.d/"),
+        file("./usr/lib/systemd/system/ssh.service", 0o644, b""),
+        Ent {
+            kind: tar::EntryType::Symlink,
+            link: Some("hello@a.service"),
+            ..file("./usr/lib/systemd/system/hello.service", 0o777, b"")
+        },
+        file("./etc/cron.d/hello", 0o644, b""),
+        file("./usr/lib/hello/no-hook-here", 0o755, b"#!/bin/sh\n"),
     ];
-    for (n, (entry, words)) in cases.into_iter().enumerate() {
+    for (n, entry) in cases.into_iter().enumerate() {
         let (control, mut data) = hello_entries();
         data.push(entry);
-        let lines = refused(&format!("link-{n}"), &deb_of(&control, &data));
-        assert_eq!(lines.len(), 1, "{words}: {lines:?}");
-        assert!(
-            lines.iter().any(|l| l.starts_with(words)),
-            "{words}: {lines:?}"
-        );
+        check(&format!("anywhere-{n}"), &deb_of(&control, &data)).expect("accepted");
     }
 }
 
 #[test]
-fn a_missing_or_unrunnable_hook_or_a_unit_starting_a_program_not_packaged_is_refused() {
-    // Catches: a deb whose hook the daemon cannot run (missing, a directory, not executable), or
-    // whose unit starts a program at a path the package does not install (the archive's
-    // current, say).
-    let hook = "./usr/lib/hello/hostkeeper-hook";
+fn a_package_without_a_hostkeeper_hook_file_passes() {
+    // Catches: a check that wants a hook file at a fixed path; the manifest names the hook.
     let (control, data) = hello_entries();
-    let without: Vec<Ent> = data.iter().filter(|e| e.path != hook).cloned().collect();
-    assert_eq!(
-        refused("no-hook", &deb_of(&control, &without)),
-        ["/usr/lib/hello/hostkeeper-hook: not in the package: the hook is at that path"]
+    assert!(
+        data.iter().all(|e| !e.path.ends_with("hostkeeper-hook")),
+        "the fixture has no hook file"
     );
-    let mut as_dir = without.clone();
-    as_dir.push(dir(&format!("{hook}/")));
-    assert_eq!(
-        refused("hook-dir", &deb_of(&control, &as_dir)),
-        ["/usr/lib/hello/hostkeeper-hook: not a regular file"]
-    );
-    let mut not_exec = without.clone();
-    not_exec.push(file(hook, 0o644, b"#!/bin/sh\n"));
-    assert_eq!(
-        refused("hook-mode", &deb_of(&control, &not_exec)),
-        ["/usr/lib/hello/hostkeeper-hook: mode 644, not 755"]
-    );
+    check("no-hook", &deb_of(&control, &data)).expect("accepted");
+}
+
+#[test]
+fn a_unit_starting_a_program_not_packaged_is_refused() {
+    // Catches: a deb whose unit starts a program at a path the package does not install (the
+    // archive's current, say).
+    let (control, data) = hello_entries();
     let mut stale = data.clone();
     let unit = stale
         .iter_mut()
@@ -304,8 +270,8 @@ fn a_missing_or_unrunnable_hook_or_a_unit_starting_a_program_not_packaged_is_ref
 }
 
 #[test]
-fn an_entry_not_roots_writable_by_others_or_setuid_and_a_device_are_refused() {
-    // Catches: a file another account owns or may change, a setuid program, and a fifo.
+fn an_entry_not_roots_writable_by_others_or_setuid_are_refused() {
+    // Catches: a file another account owns or may change, and a setuid program.
     let (control, data) = hello_entries();
     let mut changed = data.clone();
     let program = changed
@@ -315,14 +281,9 @@ fn an_entry_not_roots_writable_by_others_or_setuid_and_a_device_are_refused() {
     program.uid = 1000;
     program.owner = "build";
     program.mode = 0o4775;
-    changed.push(Ent {
-        kind: tar::EntryType::Fifo,
-        ..file("./usr/lib/hello/fifo", 0o644, b"")
-    });
     assert_eq!(
         refused("owners", &deb_of(&control, &changed)),
         [
-            "/usr/lib/hello/fifo: neither a directory, a regular file nor a link",
             "/usr/lib/hello/hello: owned by id 1000:root, not root:root",
             "/usr/lib/hello/hello: mode 4775 has a setuid, setgid or sticky bit",
             "/usr/lib/hello/hello: mode 4775 lets a group or others write it",

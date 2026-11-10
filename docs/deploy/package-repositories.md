@@ -146,11 +146,53 @@ manifest of the failing build's archive; none for macOS. Without `--fail-ready` 
 above, and a failing build is never among them.
 
 hostkeeper's entries carry the floor of its archive (`min_hostkeeper`, the oldest daemon that reads
-the release) and no hook: its daemon updates itself through its package with built-in steps
+the release) and no hook command: its daemon updates itself through its package with built-in steps
 (docs/design/packages-native.md, section 10.4). A host whose daemon does not announce `apt`, or has no
 such entry, is ordered nothing (`installer_dropped`); stage 9's counts are zero before such a release
 is set (docs/operations/move-to-native.md). A host picked an entry before the publish below has put its
 package into `testing` defers it (`not_in_repository`) and takes it once it is there.
+
+## Packaging a service
+
+Ship the `.deb` or `.pkg` as you would anyway: the binary where you want it, your maintainer scripts, your unit or
+plist. hostkeeper imposes no rule on a package's files, paths, units or scripts; what it checks is the bytes (the
+order's SHA-256 pin and the repository's or the package's signature) and that no package of the same name was installed
+by hand. Around its own `apt-get install` and `dpkg --purge` it keeps a `postinst` from starting or restarting the unit
+through `invoke-rc.d` or `deb-systemd-invoke`, as debhelper's scripts do, until the hand-over (a `policy-rc.d` that
+exits 101, present only while hostkeeper runs the package manager); a script that calls `systemctl` itself is not
+held back. A `.pkg`
+has no such guard: the scripts run when `installer` runs them, before `cutover`, so a `.pkg` whose scripts load its job
+needs the built-in steps or a hook that tolerates it.
+
+The hook is named in the release manifest's entry, not in the package. `hook.command[0]` is the absolute path of a file
+the package installs, and the elements after it are leading arguments:
+
+```json
+{
+  "installer": "apt",
+  "repository": "komira-stable",
+  "package_version": "1.6.0-1",
+  "digest": "<64 hex>",
+  "manifest": {
+    "package": "tierstore",
+    "run": ["tierstore.service"],
+    "hook": {
+      "command": ["/usr/bin/tierstore", "update-hook"],
+      "timeout_secs": { "...": "..." }
+    }
+  }
+}
+```
+
+hostkeeper runs `/usr/bin/tierstore update-hook <step> [<version dir>] --params <file>` from the sealed copy of that
+file in the version it staged, so `prepare` runs the version being installed before it is installed. `stage` refuses
+(`manifest_invalid`) a command whose file is not an executable regular file of the package. The contract the hook
+keeps (the steps, the exit codes, the params file) is that of
+[`crates/hostkeeper-hook`](../../crates/hostkeeper-hook/README.md).
+
+Without a hook command the built-in steps stop, swap and start the `run` units. A `run` unit needs no `[Install]`
+section: hostkeeper writes the links of one that has `[Install]` targets, and starts any other, or one whose file is
+not in the package, at `cutover` and at every daemon start.
 
 ## What the release workflow does
 
@@ -181,8 +223,8 @@ changes of the older ones. Each job is a green no-op until the settings below ex
    Fedora container, both images pinned by digest, and each holds the installed system to what the
    package promises: the version its binary says (and the commit, but for `hello`, whose program
    prints its version alone), the files it ships, the user and the units, and that the units are
-   enabled or not as the package says (a service's native package enables none: hostkeeper's
-   installer does). `check-pkg` downloads each installer, its bundle and the directory's
+   enabled or not as the package says (hostkeeper enables the `[Install]` links of a `run` unit
+   itself and starts one that nothing enables). `check-pkg` downloads each installer, its bundle and the directory's
    `SHA256SUMS` from the public host and compares them with the release's `SHA256SUMS`.
 3. **Decision.** `promote-check` (`cargo xtask channels decide`) promotes when every write succeeded
    and every check succeeded or had nothing to check.

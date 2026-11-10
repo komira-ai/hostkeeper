@@ -6,7 +6,7 @@
 //! `current` names) into `/etc/systemd/system` immediately before `cutover` and back before
 //! `rollback`; from the `.deb`, dpkg installs the binaries in `/usr/lib/mdm` and the units in
 //! `/usr/lib/systemd/system/` at the daemon's `activate`, before `cutover`, and the daemon runs
-//! the hook as the tree's `usr/lib/mdm/hostkeeper-hook`, which runs `mdm update-hook` beside it.
+//! the manifest's `hook.command`, `/usr/lib/mdm/mdm update-hook`, from the sealed tree.
 //! The program's path says which of the two builds runs ([`package::Layout::of_program`]). The
 //! hook does what `hostkeeper-mdm install` did besides placing binaries and units, which are now
 //! the package's:

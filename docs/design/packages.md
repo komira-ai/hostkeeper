@@ -44,9 +44,9 @@ disagree, that one wins; its section 0 lists what it replaces, and its section 8
 format ends: once the farm has moved, every service and hostkeeper itself install only through `apt` and `macos-pkg`
 (`apk` for the Alpine daemon, `dnf` later). `hostkeeper-archive` is deleted (A25), `tarball` and `oci-image` are
 withdrawn (A10 with it), so wherever this file makes the tarball a host's fallback, a host takes its native entry or
-none; a package's hook is a program at a fixed path of the package, a service's package has no maintainer scripts,
-the host checks no attestation, and the release channel ends. Its stages 5 to 10 replace stages 5 and 6 of section 9.2, its
-A18 to A28 replace A11 and A12, and where it disagrees with this file, it wins.
+none; a package's hook is the manifest's `hook.command`, the absolute path of a file the package installs, a package
+may have maintainer scripts, the host checks no attestation, and the release channel ends. Its stages 5 to 10 replace
+stages 5 and 6 of section 9.2, its A18 to A28 replace A11 and A12, and where it disagrees with this file, it wins.
 
 Today a service can be deployed by hostkeeper only as hostkeeper's own package: a `tar.zst` archive holding
 `manifest.toml`, `bin/`, `units/` and `files/`. Every service must repackage what it builds into that shape, even when it
@@ -154,7 +154,7 @@ Every item is **Built** at the path given.
   `current`, and records every path in `/var/lib/hostkeeper/placed.json` (`crates/hostkeeper-placed`). Removal removes
   only a path the record lists and only while it is still the link recorded (`remove.rs`). That is what this design
   calls **closed-world removal**: hostkeeper removes what it put on the host, all of it, and nothing else.
-- **The hook.** A program inside the package, named by `[hook] command`, run as root in a bounded transient unit
+- **The hook.** A program of the package, named by `[hook] command`, run as root in a bounded transient unit
   (`crates/hostkeeper-steps/src/systemd.rs`): `prepare`, `cutover`, `verify`, `rollback`, `cleanup`, and the additive
   `uninstall` and `boot` (`crates/hostkeeper-hook`). Before `cutover` the daemon switches `current` and relinks
   (`hooked_switch`, `crates/hostkeeper-daemon/src/place.rs`).
@@ -445,10 +445,10 @@ checks are today's `Manifest::load` rules moved to the message, plus those for i
   3.3), the fields its installer requires are present and those it refuses absent. At most 16 KiB encoded, 64 `run` entries, 256 `place` entries, 64 params, 32 containers.
 - **Bounds.** As today: every step bound but `prepare` non-zero; `verify_deadline_secs` at least `verify` plus
   `rollback`; `promotion_ceiling_secs` not 0. Each installer bound from 1 up to 3600 seconds.
-- **The hook program.** `command[0]` is a relative path of plain names, no `.` or `..`. It is relative to `tree/` of
-  the version directory (section 6.1). After staging it must be a regular file there, reached through no link. A
-  program outside the attested bytes can never be named. For `oci-image`, `command` must be empty, since an image
-  stages no tree.
+- **The hook program.** `command[0]` is, for `hostkeeper-archive` and `tarball`, a relative path of plain names in
+  `tree/` (section 6.1), a regular file there reached through no link; for `apt` and `macos-pkg`, an absolute path of
+  an executable file the package installs, run from its sealed copy (packages-native.md section 10.2). `boot` needs a
+  command. For `oci-image`, `command` must be empty. No rule applies to a native package's files or scripts.
 - **Names.** Each `run` entry and each container's `unit` is a unit of the service, by today's rules (`names.rs`): for
   systemd, a base of `<service>` or `<service>-…`, an optional `@<instance>`, and a suffix `.service`, `.socket` or
   `.timer`; for launchd, a label `<service>` or `<service>.…`. A unit `place` entry's `path` is such a name too. Every
@@ -726,7 +726,7 @@ installer. The digest and the attestation are checked for every installer the sa
 | Digest and attestation before any byte is read | `fetch.rs`, `prove.rs`, `VerifiedArchive`, then `unpack` | The same, for every artifact entry (section 7.4); a repository entry is checked by the repository's key and the pin (packages-repositories.md section 3.3) |
 | Only the trusted signers' builds run | `[trusted_signers]`, the pinned `gh`, the fixed issuer and predicate | Unchanged. The attestation field is a lookup; what it is checked against is the host's root-owned config |
 | The host runs its platform's build | The daemon takes its own platform's index entry | The coordinator picks among the entries of the platform the daemon reports from its compile target, by the installers it announces; an installer and its format's tool refuse bytes for another architecture (`dpkg`, `rpm`, `installer`, `podman` do), the format's dependency check refuses a build for a newer C library (section 5.4), and the observer reports a program that does not run |
-| What runs as root | The hook the attested `manifest.toml` names, from attested bytes | The format's scripts, from attested bytes, and a program of the attested tree with arguments the unattested manifest chooses (section 8.2); for `hostkeeper-archive`, unchanged |
+| What runs as root | The hook the attested `manifest.toml` names, from attested bytes | The format's scripts, from attested (or, for a repository package, signed) bytes, and a program of the package with arguments the unattested manifest chooses (section 8.2); for `hostkeeper-archive`, unchanged |
 | Removal | The links `placed.json` records | What each installer recorded at `activate` (section 6.5) |
 
 **What the attestation proves that the digest does not.** The digest says which bytes. Anyone who can make bytes can
@@ -743,12 +743,12 @@ coordinator) decides the manifest. That is a change: today the signer's bytes de
 
 What that caller can decide:
 
-- which program of the attested tree runs as root as the hook, with which leading arguments, and with which bounds;
+- which program of the attested tree (for a native package, which file of the package, by absolute path) runs as root as the hook, with which leading arguments, and with which bounds;
 - which files of a tarball's tree are linked to which paths outside the refused prefixes, and which of its units are
   placed;
 - which `run` units start, a container's arguments, ports and volumes, the params and the health URL.
 
-What that caller cannot do: run a byte no trusted signer built (for a repository entry: no byte the repository's key did not sign, packages-repositories.md section 3.3), run a program outside the attested tree, choose the
+What that caller cannot do: run a byte no trusted signer built (for a repository entry: no byte the repository's key did not sign, packages-repositories.md section 3.3), run a program outside the package's bytes, choose the
 installer's code, or reach a path the checks of section 4.4 refuse.
 
 The plain consequence: most artifacts hold a program that runs what it is told (a shell, an interpreter, the service's
@@ -965,12 +965,12 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
 | How the daemon says which installers it has | `HeartbeatRequest.installers`, from the tools present at start | The set depends on the host's tools and grows with each format; the 16-name feature list would fill |
 | One installer per service | Recorded at first install; another is refused until uninstall | Keeps an archive service's attested manifest from being bypassed by relabelling it `tarball` |
 | Installers as subprocess verbs or in-process | In-process modules running the format's tools through the step launcher | The two-programs design removes plumbing verbs; the tools still run bounded in transient units |
-| What `stage` extracts | The whole package tree, with the format's own extractor, no scripts, then walked, bounded and normalised by the core | The hook can run from it before `activate`, and the observer can hash the attested files |
+| What `stage` extracts | The whole package tree, with the format's own extractor, running no script, then walked, bounded and normalised by the core | The hook can run from it before `activate`, and the observer can hash the attested files |
 | An archive version's layout | Today's, with no `target.json` | An older binary reads it unchanged after a fallback |
 | An order for a sealed version | The sealed `target.json` wins; a different entry is `target_changed` | A release is immutable, and the daemon checks it rather than trust the coordinator |
 | Prune and uninstall | Two steps, `retire` (a version's directory only) and `remove` (the service's installed package) | A native format's database holds only the installed version, so pruning an old one must not call the tool |
 | Repository package removal | `dpkg --purge` (for `apt`; each later backend its own), at whatever version is installed | Removes the package's files as the format lists them; a package at another version is drift, which hostkeeper repairs and reports, and an uninstall still purges it |
-| Package scripts that restart the service | Not suppressed; the service builds packages that leave restarts to its hook | Suppressing them would mean writing `policy-rc.d` into `/usr`, host-wide, for one format only |
+| Package scripts that restart the service | Suppressed on `apt` by a `policy-rc.d` that exits 101, written around every dpkg run that can run a script and removed after it, success or failure (a stale one removed at daemon start; an operator's own left untouched). Not suppressed on `macos-pkg` | A package installs as it would anyway and the hand-over stays the hook's; the file exists only while hostkeeper runs the package manager. `installer` has no equivalent |
 | A service with no hand-over | Built-in steps, chosen by an empty `command`; always uninstallable | Most packaged services and every image need only restart and check |
 | An OCI image's units | Generated from a fixed template; args after the image; structured ports and volumes | An unattested manifest must not write unit text or runtime options, which are a root command line |
 | Rollback of hostkeeper below an installer in use | Refused by the daemon, from a compiled table of each installer's first release | The daemon knows what its disk holds; the coordinator does not |
@@ -984,8 +984,8 @@ payload) by A10, and P10 and P12 (stages 5 and 6) by A11 and A12.
    commands on its hosts, as ruled. CI could write each manifest as a file of the release and attest it in the same
    step as the artifacts; the daemon would verify it as it verifies the artifact, and the coordinator would forward it
    unchanged. It is additive (an optional `Blob manifest_attestation` on the entry) and could follow A4. Answered by
-   packages-native.md section 10.2: the hook is a program at a fixed path of the signed package, so the manifest no
-   longer chooses a root program or its arguments, and the host checks no attestation (10.3).
+   packages-native.md section 10.2: the hook command names a file of the signed, pinned package, so it chooses among
+   the package's programs and their arguments, never one outside, and the host checks no attestation (10.3).
 2. **The OCI installer in v1.** Answered: A10 is withdrawn, since no service we run ships an image to a host
    (packages-native.md section 10.1).
 3. **The hostkeeper-only channel after stage 5.** Answered: the channel ends once the first release with no archive

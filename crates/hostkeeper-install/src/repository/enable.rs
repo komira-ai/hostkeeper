@@ -1,9 +1,10 @@
 //! The enablement of a repository package's `run` units (packages-repositories.md section 5):
-//! the package installs them disabled, and each `activate` writes the `WantedBy=` and
-//! `RequiredBy=` links of every unit not yet enabled, records them, and takes away the recorded
-//! links of a unit the version no longer runs, so the units start at host boot. `remove` takes
-//! every recorded link away. A link already there that hostkeeper did not write (the package's
-//! own scripts, an operator) is left as it is and never recorded, so it is never removed.
+//! each `activate` writes the `WantedBy=` and `RequiredBy=` links of every unit whose unit file
+//! is in the package's tree and not yet enabled, records them, and takes away the recorded links
+//! of a unit the version no longer runs, so those units start at host boot. `remove` takes every
+//! recorded link away. A link already there that hostkeeper did not write (the package's own
+//! scripts, an operator) is left as it is and never recorded, so it is never removed. A run
+//! unit the tree gives no link for ([`unlinked`]) is started by hostkeeper itself.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -11,23 +12,43 @@ use std::io;
 use std::os::unix::fs::{DirBuilderExt, symlink};
 use std::path::{Path, PathBuf};
 
-use super::tree::{TreeError, UNIT_DIRS, install_links, unit_file};
+use super::tree::{UNIT_DIRS, install_links, unit_file};
 
 /// The service manager's directory of enablement links, relative to the host's root.
 pub const SYSTEMD_DIR: &str = "etc/systemd/system";
 
 /// The links the `run` units of `tree` ask for: each link's absolute path on the host, and the
-/// unit file it points at, absolute, where the package installs it.
-pub fn wanted(tree: &Path, run: &[String]) -> Result<BTreeMap<String, String>, TreeError> {
+/// unit file it points at, absolute, where the package installs it. A unit with no unit file in
+/// the tree, or no link to ask for, adds none.
+pub fn wanted(tree: &Path, run: &[String]) -> io::Result<BTreeMap<String, String>> {
     let mut out = BTreeMap::new();
     for unit in run {
-        let rel = unit_file(tree, unit).ok_or_else(|| TreeError::NoUnit(unit.clone()))?;
-        let text = fs::read(tree.join(&rel)).map_err(|e| TreeError::Io(e.to_string()))?;
-        for link in install_links(unit, &String::from_utf8_lossy(&text))? {
+        let Some(rel) = unit_file(tree, unit) else {
+            continue;
+        };
+        let text = fs::read(tree.join(&rel))?;
+        for link in install_links(unit, &String::from_utf8_lossy(&text)) {
             out.insert(format!("/{SYSTEMD_DIR}/{link}"), format!("/{rel}"));
         }
     }
     Ok(out)
+}
+
+/// The `run` units, in order, for which `tree` gives no enablement link: hostkeeper starts them
+/// itself. A unit with no unit file in the tree, or whose unit file has no `[Install]` target
+/// that is a unit's name, is one. A tree that cannot be read gives no link either.
+pub fn unlinked(tree: &Path, run: &[String]) -> Vec<String> {
+    run.iter()
+        .filter(|unit| {
+            let Some(rel) = unit_file(tree, unit) else {
+                return true;
+            };
+            fs::read(tree.join(rel))
+                .map(|text| install_links(unit, &String::from_utf8_lossy(&text)).is_empty())
+                .unwrap_or(true)
+        })
+        .cloned()
+        .collect()
 }
 
 /// The links of `wanted` not on the host yet: the ones an `apply` would write.

@@ -1,27 +1,19 @@
 //! The shape of an expanded `.pkg` (packages-repositories.md section 4.7, `stage` step 4): a
 //! component package, or a product archive whose `Distribution` names one component, selected by
-//! default, with no `script`, `installation-check` or `volume-check`; the component holds its
-//! `Bom`, `PackageInfo` and `Payload` and nothing else; its `PackageInfo` has the order's
-//! identifier and version, installs at `/`, and names no `bundle` (so nothing is relocated, and
-//! `installer` writes exactly what its `Bom` lists).
+//! default, with no `script`, `installation-check` or `volume-check` (these decide what installs,
+//! so the pin stays meaningful); the component holds its `Bom`, `PackageInfo` and `Payload` and
+//! may hold a `Scripts` directory; its `PackageInfo` has the order's identifier and version,
+//! installs at `/`, and names no `bundle` (so nothing is relocated, and `installer` writes exactly
+//! what its `Bom` lists).
 //!
-//! A script `installer` would run as root is `package_scripts` (packages-native.md section 10.2):
-//! a `Scripts` entry beside the component or in it, or a `preinstall`, `postinstall`,
-//! `preupgrade` or `postupgrade` in its `PackageInfo`. The checks run in one order, whatever the
-//! order of the directory's entries: a `Scripts` entry of the expansion first; then a product
-//! archive's `Distribution` (whose `script` stays `manifest_invalid`, as section 4.7 refuses it)
-//! and the entries beside its component; then a `Scripts` entry of the component, its
-//! `PackageInfo`'s script elements, and only then the component's other entries and the files
-//! it lacks. hostkeeper's own `.pkg` ([`super::own`]) is the exception: its component may hold a
-//! `Scripts` directory with the one regular file `postinstall`, and its `PackageInfo` the
-//! `<postinstall>` element and no other script element; a `Scripts` beside the component, any
-//! other script and every `Distribution` script element are refused as for every package. The empty `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every
-//! `PackageInfo` name nothing and are accepted.
+//! The scripts of a package (a `Scripts` entry beside the component or in it, the script elements
+//! of its `PackageInfo`) are not examined: `installer` runs them at `activate`. The empty
+//! `<scripts/>` and `<relocate/>` that `pkgbuild` writes into every `PackageInfo` name nothing and
+//! are accepted.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use super::own::POSTINSTALL;
 use super::xml::{self, Element};
 
 /// The elements of a `Distribution` that run or decide anything at install time.
@@ -32,14 +24,12 @@ pub const CHOICE_SWITCHES: [&str; 4] = ["start_selected", "selected", "start_ena
 /// bundle it may relocate or upgrade in place (inside `<relocate>`, `<bundle-version>` and the
 /// like, which are empty when the package has none).
 pub const REFUSED_PACKAGE_INFO: [&str; 1] = ["bundle"];
-/// The elements of a `PackageInfo` that name a script `installer` runs.
-pub const SCRIPT_ELEMENTS: [&str; 4] = ["preinstall", "postinstall", "preupgrade", "postupgrade"];
 /// The entry of an expansion that holds a package's scripts.
 pub const SCRIPTS: &str = "Scripts";
 /// The entries a product archive's expansion may hold beside its component.
-pub const PRODUCT_EXTRAS: [&str; 2] = ["Distribution", "Resources"];
+pub const PRODUCT_EXTRAS: [&str; 3] = ["Distribution", "Resources", SCRIPTS];
 /// The entries a component's expansion holds.
-pub const COMPONENT_ENTRIES: [&str; 3] = ["Bom", "PackageInfo", "Payload"];
+pub const COMPONENT_ENTRIES: [&str; 4] = ["Bom", "PackageInfo", "Payload", SCRIPTS];
 
 /// The component of an expanded package: its directory and the three entries `stage` reads.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -80,10 +70,8 @@ pub enum ShapeError {
     NotSelected(String, String),
     #[error("the product archive holds {0:?}, beside its one component")]
     Extra(String),
-    #[error("the component holds {0:?}, beside its Bom, PackageInfo and Payload")]
+    #[error("the component holds {0:?}, beside its Bom, PackageInfo, Payload and Scripts")]
     ComponentExtra(String),
-    #[error("the package carries a script: {0}")]
-    Scripts(String),
     #[error("the component has no {0}")]
     Missing(&'static str),
     #[error("the PackageInfo has no <pkg-info> element first")]
@@ -94,34 +82,12 @@ pub enum ShapeError {
     RefusedPackageInfo(String),
 }
 
-impl ShapeError {
-    /// Whether the package is refused for a script it carries (`package_scripts`), and not for its
-    /// shape (`manifest_invalid`).
-    pub fn is_scripts(&self) -> bool {
-        matches!(self, ShapeError::Scripts(_))
-    }
-}
-
 /// Checks the expansion at `expanded` against the order's `identifier` and `version`, and finds
-/// its component. `own` is whether the package is hostkeeper's own ([`super::own::is_own`]),
-/// which may carry the script `postinstall` in its component.
-pub fn check(
-    expanded: &Path,
-    identifier: &str,
-    version: &str,
-    own: bool,
-) -> Result<Component, ShapeError> {
+/// its component.
+pub fn check(expanded: &Path, identifier: &str, version: &str) -> Result<Component, ShapeError> {
     let top = names(expanded, "the expansion")?;
     let distribution = expanded.join("Distribution");
     let product_archive = distribution.is_file();
-    // Without a `Distribution` the expansion is the component, whose `Scripts` is checked below.
-    if top.iter().any(|name| name == SCRIPTS) && (product_archive || !own) {
-        let holder = match product_archive {
-            true => "the product archive",
-            false => "the component",
-        };
-        return Err(ShapeError::Scripts(format!("{holder} holds {SCRIPTS:?}")));
-    }
     let (component, entries) = match product_archive {
         true => {
             let component = product(
@@ -139,37 +105,13 @@ pub fn check(
             top,
         ),
     };
-    let scripts = entries.iter().any(|name| name == SCRIPTS);
-    if scripts && !own {
-        return Err(ShapeError::Scripts(format!(
-            "the component holds {SCRIPTS:?}"
-        )));
-    }
-    if scripts {
-        own_scripts(&component.dir.join(SCRIPTS))?;
-    }
-    let allowed: &[&str] = match own {
-        true => &[POSTINSTALL],
-        false => &[],
-    };
     let info = match component.package_info().is_file() {
         true => Some(read_xml(&component.package_info(), "the PackageInfo")?),
         false => None,
     };
-    if let Some(script) = info
-        .iter()
-        .flatten()
-        .find(|e| SCRIPT_ELEMENTS.contains(&e.name.as_str()) && !allowed.contains(&e.name.as_str()))
-    {
-        return Err(ShapeError::Scripts(format!(
-            "the PackageInfo has a <{}> element",
-            script.name
-        )));
-    }
     let mut extras: Vec<&String> = entries
         .iter()
-        // A `Scripts` entry got here only for hostkeeper's own component, and was checked above.
-        .filter(|name| !COMPONENT_ENTRIES.contains(&name.as_str()) && *name != SCRIPTS)
+        .filter(|name| !COMPONENT_ENTRIES.contains(&name.as_str()))
         .collect();
     extras.sort_unstable();
     if let Some(extra) = extras.first() {
@@ -186,29 +128,6 @@ pub fn check(
     }
     package_info(&info, identifier, version)?;
     Ok(component)
-}
-
-/// Checks the `Scripts` directory of hostkeeper's own component: the regular file `postinstall`
-/// and nothing else.
-fn own_scripts(dir: &Path) -> Result<(), ShapeError> {
-    let mut found = names(dir, "the component's Scripts")?;
-    found.sort_unstable();
-    if found != [POSTINSTALL] {
-        return Err(ShapeError::Scripts(format!(
-            "the component's {SCRIPTS:?} holds {}, not {POSTINSTALL:?} alone",
-            found
-                .iter()
-                .map(|name| format!("{name:?}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )));
-    }
-    match fs::symlink_metadata(dir.join(POSTINSTALL)) {
-        Ok(meta) if meta.file_type().is_file() => Ok(()),
-        _ => Err(ShapeError::Scripts(format!(
-            "the component's {POSTINSTALL:?} is not a regular file"
-        ))),
-    }
 }
 
 /// The names of the entries of `dir`.

@@ -240,15 +240,21 @@ fn native_entry(
     repository: &str,
     package_version: &str,
 ) -> Value {
+    let mut hook = json!({
+        "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
+        "verifyDeadlineSecs": "120",
+    });
+    // The program the service's `.deb` installs, with the archive command's `update-hook`;
+    // hostkeeper's daemon runs built-in steps and names none.
+    if service != "hostkeeper" {
+        hook["command"] = json!([format!("/usr/lib/{service}/{service}"), "update-hook"]);
+    }
     json!({
         "installer": "apt",
         "digest": sha256(bytes),
         "manifest": {
             "package": service,
-            "hook": {
-                "timeoutSecs": {"cutover": "60", "verify": "30", "rollback": "60", "cleanup": "30"},
-                "verifyDeadlineSecs": "120",
-            },
+            "hook": hook,
             "run": [run_unit(service, platform)],
             "minHostkeeper": FLOOR,
             "installerBounds": {"stageSecs": "600", "activateSecs": "300", "removeSecs": "300"},

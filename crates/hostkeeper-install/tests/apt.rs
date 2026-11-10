@@ -20,8 +20,8 @@ mod harness;
 mod io;
 #[path = "apt/order.rs"]
 mod order;
-#[path = "apt/own.rs"]
-mod own;
+#[path = "apt/policy.rs"]
+mod policy;
 #[path = "apt/remove.rs"]
 mod remove;
 #[path = "apt/stage.rs"]

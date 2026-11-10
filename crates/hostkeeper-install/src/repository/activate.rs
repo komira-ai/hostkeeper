@@ -7,6 +7,7 @@ use std::path::Path;
 
 use super::enable;
 use super::outcome::{Failure, Reason};
+use super::policy;
 use super::record::PackageRecord;
 use super::stage::TREE;
 use super::tools::{Run, Tool};
@@ -30,7 +31,7 @@ impl RepositoryInstaller<'_> {
             .restore(&dir.join(backend.meta_dir()), &work)
             .map_err(|e| io_failure("the version's copy of the index", e))?;
         let wanted = enable::wanted(&dir.join(TREE), &order.run)
-            .map_err(|e| Failure::new(Reason::ManifestInvalid, e.to_string()))?;
+            .map_err(|e| io_failure("the units' unit files", e))?;
         // The pending record claims the links this run is about to write, so a run found
         // pending after a crash owns the links the crashed run wrote; a link already there is
         // not claimed.
@@ -47,7 +48,13 @@ impl RepositoryInstaller<'_> {
         self.records
             .save(&order.service, &next)
             .map_err(record_failure)?;
-        backend.install(tools, &work, package, version, bound)?;
+        {
+            // The policy file is in place for the install alone, and out again before the lock
+            // is let go.
+            let _policy = policy::Guard::hold(&self.dirs.root)
+                .map_err(|e| io_failure("the policy-rc.d file", e))?;
+            backend.install(tools, &work, package, version, bound)?;
+        }
         match backend.installed(tools, package, bound)? {
             Some(found) if found.complete & (found.version == version) => {}
             found => {

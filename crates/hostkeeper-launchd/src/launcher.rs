@@ -251,7 +251,12 @@ impl<'a> Run<'a> {
             unit: call.unit,
             what: HOOK,
             executable: call.executable,
-            args: call.invocation.to_args(),
+            args: call
+                .hook_args
+                .iter()
+                .map(OsString::from)
+                .chain(call.invocation.to_args())
+                .collect(),
             params: call.invocation.params.as_deref(),
             bound: call.bound,
         }

@@ -546,7 +546,7 @@ fn hellos_clean_install_says_its_version_without_a_commit_and_enables_neither_sl
     assert_eq!(
         said,
         [
-            "check-apt: hello 1.2.3 installed from the suite testing on amd64; it says \"hello 1.2.3\"; its 4 files are there; the service is not enabled and not running"
+            "check-apt: hello 1.2.3 installed from the suite testing on amd64; it says \"hello 1.2.3\"; its 3 files are there; the service is not enabled and not running"
         ]
     );
     // The stamp of the shipped binaries, with a commit, is not what hello says.
@@ -602,7 +602,7 @@ fn an_architecture_the_package_is_not_built_for_is_a_usage_error_before_anything
     assert_eq!(
         said,
         [
-            "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 10 files are there; the service is not enabled and not running"
+            "check-apt: mdm 1.2.3 installed from the suite testing on amd64; it says \"mdm 1.2.3+0123456789ab\"; its 9 files are there; the service is not enabled and not running"
         ]
     );
 }
