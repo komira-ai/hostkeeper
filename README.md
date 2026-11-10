@@ -17,8 +17,8 @@ It is made of two programs:
   `RuntimeMaxSec` only. That is safe because the hook came byte for byte from the package that a
   trusted signer attested when it was published. The conformance suite runs in the service's own CI
   ([docs/conformance.md](docs/conformance.md)); nothing confines a hook at runtime;
-- **one coordinator**, `hostkeeper-coordinator serve`, which assigns services to hosts and holds
-  the desired version of each, and moves hosts to it stage by stage, each service by its update
+- **one coordinator**, `hostkeeper-coordinator serve`, which places hosts in host groups (each
+  group lists the packages its hosts run) and holds the desired version of each package per group, and moves hosts to it stage by stage, each service by its update
   plan. It keeps its state in one Postgres database, the desired versions, every operator change,
   the enrollment store and an append-only audit log, and takes the database's lock so that a second
   coordinator refuses to start; the plain files it kept before stay selectable as the way back
@@ -60,13 +60,13 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-openrc`](crates/hostkeeper-openrc) | the OpenRC side of an Alpine host behind existing ports: unit control over `rc-service`, the observer's service manager over `rc-service status` and supervise-daemon's child pid, and the step launcher (`OpenrcLauncher`: each step a child process group of the daemon, bounded and killed by it) ([design](docs/design/two-programs.md) section 4.6) |
 | [`hostkeeper-mdm`](crates/hostkeeper-mdm) | the MDM kit's binary, run by the operator on the MDM host: `fetch` the pinned tools, `install` (or `--uninstall`) the MDM services, `tls` for their certificate, `verify` the host against the render, `push-cert` for the APNs certificate and the enrollment profile at `/enroll`, `dep` for Apple Business Manager and the ADE profile, and `migrate --from` the old kit's stack; every verb dry-runs unless given `--apply` ([design](docs/design/hostkeeper-mdm.md), tasks M4 and M5) |
 | [`hostkeeper-mdm-step`](crates/hostkeeper-mdm-step) | the host-step layer of the MDM host kit: a dry-run-by-default planner of directory, file, user, unit and command steps over the machine or a fake, with every path walked without links and through trusted owners only ([design](docs/design/hostkeeper-mdm.md), task M3) |
-| [`hostkeeper-pxe`](crates/hostkeeper-pxe) | the `pxe` program, shipped as the `pxe` `.deb` (`/usr/lib/pxe/pxe` and `pxe.service`, installed by the daemon when the service is assigned to a host; two-programs.md section 6.1): `pxe update-hook prepare`: the boot sets and debs of a release downloaded into a new directory, `netboot.json` and each deb attested by the daemon config's trusted signer through the daemon's verifier, the ISO and the kernel, initrd, shim and GRUB taken out of it each held to its pin, and a seal over all of it (item N8); `pxe serve`: that directory checked against its seal and served by proxyDHCP or behind the router, TFTP and HTTP, with the menus and seeds, only to the machines the coordinator's inventory may install, after a drop to an unprivileged user ([design](docs/design/network-install.md), item N9); the other hook steps cut over, verify, roll back and clean up the boot sets |
+| [`hostkeeper-pxe`](crates/hostkeeper-pxe) | the `pxe` program, shipped as the `pxe` `.deb` (`/usr/lib/pxe/pxe` and `pxe.service`, installed by the daemon when the host's group lists it; two-programs.md section 6.1): `pxe update-hook prepare`: the boot sets and debs of a release downloaded into a new directory, `netboot.json` and each deb attested by the daemon config's trusted signer through the daemon's verifier, the ISO and the kernel, initrd, shim and GRUB taken out of it each held to its pin, and a seal over all of it (item N8); `pxe serve`: that directory checked against its seal and served by proxyDHCP or behind the router, TFTP and HTTP, with the menus and seeds, only to the machines the coordinator's inventory may install, after a drop to an unprivileged user ([design](docs/design/network-install.md), item N9); the other hook steps cut over, verify, roll back and clean up the boot sets |
 | [`hostkeeper-pxe-packets`](crates/hostkeeper-pxe-packets) | the packets of network install, with no socket and no inventory: proxyDHCP offers and ACKs for architectures 7, 9, 11, 16 and 19, router-mode learning of each client's address and architecture, and TFTP read requests (only served names, `hostkeeper/boot.efi` as the shim of the learned architecture) and transfers ([design](docs/design/network-install.md), item N7) |
 | [`hostkeeper-pxe-seed`](crates/hostkeeper-pxe-seed) | what a network-installed machine boots into: the fixed `grub.cfg`, the install or local-disk menu of a MAC, and its autoinstall seed, each a pure function of the inventory record, the daemon config and the flags ([design](docs/design/network-install.md), item N6) |
 | [`hostkeeper-wire`](crates/hostkeeper-wire) | what the coordinator and a host exchange: the heartbeat and its reply, versions, host ids, role names and platforms, the certificate identity, the secret-file rule |
 | [`hostkeeper-proto`](crates/hostkeeper-proto) | the protobuf services of the coordinator (`hostkeeper.agent.v1`, `hostkeeper.operator.v1`) and the frozen file of the daemon's former admin socket (`hostkeeper.local.v1`, no code generated from it), the messages of a release (`hostkeeper.release.v1`), the command table `hkctl` and the UI's generated client are made from, and the compatibility test |
 | [`hostkeeper-hkctl`](crates/hostkeeper-hkctl) | `hkctl`, the operator's bash command line over the gateway: the emitter of its script from the same command table (`cargo xtask release hkctl` writes the asset `hkctl-<version>`), [docs/cli.md](docs/cli.md), and the scan that holds the script to bash 3.2 |
-| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the services and roles of a rollout file and the host groups, the desired version of each service, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
+| [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the host groups (the packages, rollout policy and hosts of each), the desired version of each package per group, the repository of each package (`Services.SetRepository`), the verb `host-groups migrate` that turns an older store's roles, rollout file and assignments into groups, the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock, `import` and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
@@ -118,12 +118,16 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
   [Operator verbs on the host](#operator-verbs-on-the-host)).
 - **Packages and placement.** Built: B5 (fetch, verify, unpack, seal), B27 (placed-path
   linking), B28 (hookless force), B23 (the `install` and `uninstall` orders in the daemon, and
-  the assignment of services by the coordinator: roles in the rollout file, and the operator
-  API's `Services.Assign` and `Services.Unassign`, which are served), and the first part of host
-  groups (HG1 to HG3 of [hostgroups.md](docs/design/hostgroups.md): the coordinator holds groups,
-  places each host by its group, decides and rolls out by group, and moves a host between
-  groups; [docs/operations/hostgroups.md](docs/operations/hostgroups.md) says what is built).
-- **Coordinator and rollout.** Built: B6 (the coordinator, its rollout file and operator tokens),
+  the placement of services by the coordinator, which since HG8 is by host group alone:
+  `Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`), and host groups
+  (HG1 to HG8 of [hostgroups.md](docs/design/hostgroups.md), all built: the coordinator holds
+  groups, places each host by its group, decides and rolls out by group, moves a host between
+  groups, takes a package's repository from `Services.SetRepository`, converts an older store with
+  `hostkeeper-coordinator host-groups migrate` and refuses `serve --rollout-file`; the Rollout
+  page of the web UI has a host groups section;
+  [docs/operations/hostgroups.md](docs/operations/hostgroups.md) says what the coordinator does
+  with groups, and [MIGRATION.md](MIGRATION.md#from-roles-to-host-groups) the move from roles).
+- **Coordinator and rollout.** Built: B6 (the coordinator and operator tokens; its rollout file is retired by HG8),
   B7 (holds, halts, abort, exclude, force with targets, set-desired refusals), and the
   coordinator's state in Postgres (items C1 to C6 of
   [coordinator-storage.md](docs/design/coordinator-storage.md); the lab's coordinator runs on it).

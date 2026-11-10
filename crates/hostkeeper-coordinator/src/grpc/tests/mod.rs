@@ -31,6 +31,7 @@ mod report;
 mod repositories;
 mod repository_serve;
 mod rollouts;
+mod services_repository;
 mod support;
 mod targets;
 mod trusted_root;

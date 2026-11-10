@@ -97,7 +97,8 @@ fn rollout_shows_assigned_roles_operator_assignments_hosts_and_uninstalling() {
         bodies(&ui),
         [
             (m("Releases/Status"), json!({})),
-            (m("Services/List"), json!({}))
+            (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({}))
         ]
     );
 }
@@ -156,7 +157,7 @@ fn rollout_still_shows_status_when_the_service_list_fails() {
         2,
         "{text}"
     );
-    assert_eq!(ui.requests().len(), 2);
+    assert_eq!(ui.requests().len(), 3);
 }
 
 #[test]
@@ -184,7 +185,14 @@ return null;"#,
         ])
     );
     assert_eq!(out["seen"]["refreshes"], 0);
-    assert_eq!(ui.methods(), [m("Releases/Status"), m("Services/List")]);
+    assert_eq!(
+        ui.methods(),
+        [
+            m("Releases/Status"),
+            m("Services/List"),
+            m("HostGroups/List")
+        ]
+    );
 }
 
 #[test]
@@ -232,7 +240,7 @@ return null;"#,
         d
     };
     assert_eq!(
-        bodies(&ui)[2..],
+        bodies(&ui)[3..],
         [
             (
                 m("Releases/SetDesired"),
@@ -314,7 +322,7 @@ return null;"#,
         "[]",
     );
     assert_eq!(
-        bodies(&ui)[2..],
+        bodies(&ui)[3..],
         [
             (
                 m("Services/Assign"),
@@ -357,7 +365,7 @@ return null;"#,
         "[false, true]",
     );
     assert_eq!(
-        bodies(&ui)[2..],
+        bodies(&ui)[3..],
         [
             (
                 m("Services/Unassign"),
@@ -697,7 +705,7 @@ await click(tree, "set-min-version");"#,
         ])
     );
     assert_eq!(
-        bodies(&ui)[2..],
+        bodies(&ui)[3..],
         [
             (
                 m("Services/SetMinVersion"),
@@ -705,6 +713,7 @@ await click(tree, "set-min-version");"#,
             ),
             (m("Releases/Status"), json!({})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
         ]
     );
     assert_eq!(out["seen"]["refreshes"], 1);

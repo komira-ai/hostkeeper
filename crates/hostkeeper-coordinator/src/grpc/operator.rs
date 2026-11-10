@@ -674,6 +674,17 @@ impl ServicesApi for ServicesService {
             .map_err(refusal::services)
     }
 
+    async fn set_repository(
+        &self,
+        request: Request<proto::SetRepositoryRequest>,
+    ) -> Result<Response<proto::SetRepositoryResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .set_repository(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
     async fn hold(
         &self,
         request: Request<proto::HoldRequest>,

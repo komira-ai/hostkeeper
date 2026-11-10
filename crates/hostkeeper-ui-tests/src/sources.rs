@@ -46,6 +46,7 @@ ui_files![
     "pages/enrollment.js",
     "pages/fleet.js",
     "pages/holds.js",
+    "pages/hostgroups.js",
     "pages/host.js",
     "pages/inventory.js",
     "pages/release.js",

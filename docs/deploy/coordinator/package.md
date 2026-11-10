@@ -57,7 +57,7 @@ place the files the flags name:
 - **Owned by `hostkeeper-coordinator`, mode 0600:** the tokens file, the TLS key, and, for
   Postgres, the connection string of `database-dsn-file` (mode 0400 is also accepted). The
   coordinator refuses these files when they are readable by others.
-- **Root's, readable by the group:** the certificate, `client-ca.pem`, `oidc.toml` and `rollout.toml`.
+- **Root's, readable by the group:** the certificate, `client-ca.pem`, and `oidc.toml`. There is no rollout file: `serve` refuses `--rollout-file`.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

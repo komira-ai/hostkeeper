@@ -156,7 +156,7 @@ installed afresh ([network-install.md](network-install.md)).
 1. **Put the repository** `komira` in the coordinator's registry, with the suites `testing` and
    `stable`, the component `main`, the keyring and its fingerprints: `hkctl repositories put
    --request komira.json`, as [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)
-   says. Every service of the rollout file names `komira` unless it names another repository;
+   says. Every package names `komira` unless `hkctl services set-repository` gave it another repository;
    `hkctl repositories list` prints `unregistered` empty when the registry holds every one.
 2. **Each host writes its entries.** At its next heartbeat, the daemon of each Linux host whose
    services name `komira` (from the release with `repositories-v1`) writes
@@ -192,8 +192,7 @@ files, or by hand ([repository-keys.md](repository-keys.md)). Its daemon reads t
 **Holds when** `not-announcing` with `--arg installer apt` prints `0`. A host it still names
 keeps stages 7 to 9 from holding, since it runs its services from archives.
 
-**Back out**, while no host runs a service from `apt`: name another repository in each service of
-the rollout file, or remove the services' entries that need `komira`, then `hkctl repositories
+**Back out**, while no host runs a service from `apt`: give each package that needs `komira` another repository (`hkctl services set-repository`), or take it out of its group, then `hkctl repositories
 remove --name komira`. A host keeps the files it holds; to stop one announcing `apt`, as root,
 remove the directory's files and the directory and restart the daemon, and the next release of
 each service picks it the archive entry (since A25, nothing: `installer_dropped`). A host that runs a service from `apt` backs out stage 7

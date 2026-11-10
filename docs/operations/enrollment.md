@@ -56,10 +56,11 @@ its server by hand. The group must be one the coordinator holds (`unknown_host_g
 `--role` beside `--host-group` must be the same name (`invalid_role`). The record keeps the
 group's name as its `role` too, and `list-records` shows it as both `role` and `hostGroup`.
 
-A coordinator that holds no host group yet (before the move from roles to groups,
-[hostgroups.md](hostgroups.md)) places nothing by group: it refuses `--host-group`
-(`unknown_host_group`), and a record names a `--role` instead, which it keeps and shows as it is,
-with no `hostGroup`. The rest of this page holds for it with role in place of host group.
+A coordinator that holds no host group yet refuses every `--host-group` (`unknown_host_group`)
+and orders every host nothing: put a group first (`hkctl host-groups put`,
+[hostgroups.md](hostgroups.md)), or convert a fleet placed by roles with
+`hostkeeper-coordinator host-groups migrate` ([hostgroups.md](hostgroups.md#migrating-from-roles)),
+which gives each record and approval the group of its role.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -415,9 +416,7 @@ With nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)
 stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
 A Mac approved by its nonce is put in the host group of its allowlist entry, and the approval is
-audited `enroll_approve` by `mdm-nonce` naming the group; the group decides what it runs. (A
-coordinator that holds no host group assigns the entry's services instead, audited `assign` by
-`mdm-nonce`.) A Mac wiped and enrolled in MDM again
+audited `enroll_approve` by `mdm-nonce` naming the group; the group decides what it runs. A Mac wiped and enrolled in MDM again
 takes its own host id over from its old key without an operator (`enroll_replace` by
 `mdm-nonce`); that does not apply to a denied host id, which stays `denied`, nor to a host id
 approved for a request that claimed another serial, which is `host_id_taken`: approve those by
@@ -475,10 +474,6 @@ group's packages from its first heartbeat. The approval's audit entry names the 
 web`, and `hostGroup`). The certificate is not in the answer: the host takes it at its next poll,
 within seconds.
 
-A coordinator that holds no host group yet refuses `--host-group` (`unknown_host_group`): approve
-with `--role` and the `--services` to assign (each one the coordinator's rollout file defines;
-none is allowed), as before groups.
-
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
 ```
@@ -521,15 +516,6 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 
 Without `--replace` none of these is changed. For a renewal, `--replace` lifts only
 `duplicate_claim`: a renewal is approved under the host id it renews, and no other.
-
-On a coordinator that holds no host group, when an approval stands but its services could not be
-assigned, the coordinator logs `the services of an approval were not assigned: assign them with
-Services.Assign`. Assign them:
-
-```
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    services assign --node-id web-17 --service api
-```
 
 ## Reject
 
@@ -608,8 +594,7 @@ request for the key it holds, with `renewal_of` set to its host id, and waits as
 (`not enrolled; waiting for approval`). The request is listed with `renewal_of` and the same
 `key_sha256` as before; its inventory match is shown but not used. Approve it with `--host-id`
 equal to `renewal_of` and the host's group again: a renewal keeps the host's group, and naming
-another is refused `host_group_differs`. (On a coordinator that holds no host group, name the
-role again and the services again: they replace the host's.) The node
+another is refused `host_group_differs`. The node
 then logs `enrolled as host:<id> (generation <n>)`. A request whose `renewal_of` names a host that
 is unknown, denied or certified for another key is refused `renewal_not_allowed`.
 
@@ -617,11 +602,10 @@ is unknown, denied or certified for another key is refused `renewal_not_allowed`
 
 Retire a node that is lost, dead or replaced. A deny row is written for its host id: its
 heartbeats and its `Renew` are refused `denied` at once, though its certificate stays valid until
-it expires (7 days at most). Every entry of its own in the services' assignments is dropped: an
-assignment or exclusion of the host (`services assign --node-id`, `services unassign --node-id`),
-its minimum version (`services set-min-version` of the host), and an uninstall it was ordered,
-which is cancelled. What its role or the rollout file assigns is not. It is sent no `uninstall`:
-what it runs stays as it is. The reason may be left out.
+it expires (7 days at most). Every entry of its own is dropped: an exclusion of the host, its
+minimum version (`services set-min-version` of the host), and an uninstall it was ordered, which is
+cancelled. Its group's list is not changed. It is sent no `uninstall`: what it runs stays as it
+is. The reason may be left out.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -688,8 +672,8 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `pending_full` | RESOURCE_EXHAUSTED | the pending queue is full; returned to the host's `Enroll`, never by these calls | see [the cap](#the-pending-enrollment-cap) |
 | `duplicate_claim` | FAILED_PRECONDITION | the request is flagged `duplicate_claim` | find which server it is; `--replace true` when it is yours |
 | `invalid_host_id` | INVALID_ARGUMENT | the host id breaks its rule (1 to 63 of `a-z0-9-`, not starting or ending with `-`), none is named for a request that matches no record or several or for a renewal, or a renewal is approved under another host id | name a valid host id; for a renewal, `renewal_of` |
-| `invalid_role` | INVALID_ARGUMENT | the role breaks its rule; or `approve` names neither `--host-group` nor `--role`; or `--role` beside `--host-group` is another name | pass `--host-group` alone (or `--role` on a coordinator that holds no host group): 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
-| `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule or names no service the rollout file defines | name only services of the rollout file |
+| `invalid_role` | INVALID_ARGUMENT | the role breaks its rule; or `approve` names neither `--host-group` nor `--role`; or `--role` beside `--host-group` is another name | pass `--host-group` alone (or `--role` as the group's name): 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
+| `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule (a coordinator started by `serve` refuses any `--services` as `services_retired` first) | leave out `--services` |
 | `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
@@ -703,9 +687,9 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no host group | give one field, within the maximum, for a record with a host group |
 | `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
-| `services_retired` | INVALID_ARGUMENT | `approve` with `--services`, on a coordinator that holds host groups: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
+| `services_retired` | INVALID_ARGUMENT | `approve` with `--services`: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
 | `host_group_differs` | FAILED_PRECONDITION | `approve` of a renewal, or with `--replace`, that names another group than the one the host it renews or replaces is in | name the host's own group; to change it, approve in that group and then `hkctl host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
-| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold; on a coordinator that holds no group, any `--host-group` | name a group `hkctl host-groups list` shows, or make it with `hkctl host-groups put` ([hostgroups.md](hostgroups.md)); on a coordinator that holds none, name the role with `--role` |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold, which is any group on a coordinator that holds none | name a group `hkctl host-groups list` shows, or make it with `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
 
 ## Refusals of the host's calls
 

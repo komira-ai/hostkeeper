@@ -26,7 +26,7 @@ fn allowlist(rows: &[&str]) -> MacAllowlist {
 }
 
 /// A world whose coordinator holds no host group.
-fn legacy(name: &str) -> World {
+fn ungrouped(name: &str) -> World {
     World::new(name)
 }
 
@@ -37,39 +37,41 @@ fn grouped(name: &str) -> World {
     world
 }
 
-/// Proves: a coordinator that holds no group refuses an allowlist whose entry names a service
-/// the rollout file does not define, as `MacService` naming it, with the exact text.
+/// Proves: a coordinator that holds no group refuses an entry that names services, as
+/// `MacServicesRetired` naming its serial, and an entry whose group it does not hold, as
+/// `MacHostGroup` naming the group, with the exact texts.
 ///
-/// Catches: a start that accepts a Mac entry it can never assign.
+/// Catches: a start that accepts a Mac entry no group can place because the coordinator has not
+/// been given its groups yet.
 #[test]
-fn without_groups_an_unknown_service_is_refused() {
-    let world = legacy("mac-check-unknown-service");
-    let list = allowlist(&[
-        "serial = \"S1\"\nrole = \"build\"\nservices = [\"web\"]",
-        "serial = \"S2\"\nrole = \"build\"\nservices = [\"ghost\"]",
-    ]);
+fn without_groups_services_and_unheld_groups_are_refused() {
+    let world = ungrouped("mac-check-no-groups");
+    let by_services = allowlist(&["serial = \"S1\"\nrole = \"build\"\nservices = [\"web\"]"]);
+    let by_group = allowlist(&["serial = \"S2\"\nhost_group = \"build\""]);
 
-    let refused = check_allowlist(&list, world.coordinator()).expect_err("refused");
+    let services = check_allowlist(&by_services, world.coordinator()).expect_err("refused");
+    let group = check_allowlist(&by_group, world.coordinator()).expect_err("refused");
 
-    assert!(matches!(&refused, StartError::MacService(name) if name == "ghost"));
+    assert!(matches!(&services, StartError::MacServicesRetired(serial) if serial == "S1"));
     assert_eq!(
-        refused.to_string(),
-        "--mac-serial-allowlist names service ghost, which --rollout-file does not define"
+        services.to_string(),
+        "--mac-serial-allowlist: the entry of serial S1 names services; the coordinator places \
+         hosts by host group, and the Mac's group decides what it runs: name its host_group alone"
+    );
+    assert!(matches!(&group, StartError::MacHostGroup(name) if name == "build"));
+    assert_eq!(
+        group.to_string(),
+        "--mac-serial-allowlist names host group build, which the coordinator does not hold"
     );
 }
 
-/// Proves: a coordinator that holds no group accepts an allowlist whose services it all
-/// manages, one that names none, and the empty allowlist.
+/// Proves: a coordinator that holds no group accepts the empty allowlist.
 ///
-/// Catches: a start that refuses the legacy allowlists that worked before host groups.
+/// Catches: a start that refuses a coordinator with no Mac entries.
 #[test]
-fn without_groups_known_or_no_services_pass() {
-    let world = legacy("mac-check-legacy-ok");
-    let managed = allowlist(&["serial = \"S1\"\nrole = \"build\"\nservices = [\"web\", \"db\"]"]);
-    let none = allowlist(&["serial = \"S1\"\nrole = \"build\""]);
+fn without_groups_the_empty_allowlist_passes() {
+    let world = ungrouped("mac-check-empty-ok");
 
-    assert!(check_allowlist(&managed, world.coordinator()).is_ok());
-    assert!(check_allowlist(&none, world.coordinator()).is_ok());
     assert!(check_allowlist(&MacAllowlist::default(), world.coordinator()).is_ok());
 }
 
@@ -92,8 +94,8 @@ fn with_groups_an_entry_naming_services_is_refused() {
     assert!(matches!(&refused, StartError::MacServicesRetired(serial) if serial == "S2"));
     assert_eq!(
         refused.to_string(),
-        "--mac-serial-allowlist: the entry of serial S2 names services; the coordinator holds \
-         host groups, and the Mac's group decides what it runs: name its host_group alone"
+        "--mac-serial-allowlist: the entry of serial S2 names services; the coordinator places \
+         hosts by host group, and the Mac's group decides what it runs: name its host_group alone"
     );
 }
 

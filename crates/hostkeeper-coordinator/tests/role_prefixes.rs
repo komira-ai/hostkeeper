@@ -41,7 +41,6 @@ fn serve(extra: &[&str]) -> hostkeeper_coordinator::config::Serve {
         ("--state-file", "desired.json"),
         ("--oidc-config", "oidc.toml"),
         ("--operator-token-file", "operator.token"),
-        ("--rollout-file", "rollout.toml"),
     ] {
         args.push(flag.into());
         args.push(value.into());

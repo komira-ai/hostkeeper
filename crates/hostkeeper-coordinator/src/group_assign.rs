@@ -33,7 +33,6 @@ use crate::host_groups::GroupName;
 use crate::operator::{entry_proto, hold_proto};
 use crate::ops::{AuditEntry, OpsState, Write};
 use crate::service::Coordinator;
-use crate::services::DEFAULT_REPOSITORY;
 
 impl Coordinator {
     /// The desired state that bounds a minimum version set for `scope`: the package's, or, for a
@@ -179,11 +178,7 @@ impl Coordinator {
                     roles: Vec::new(),
                     assignments: Vec::new(),
                     assigned,
-                    repository: self
-                        .services
-                        .get(package)
-                        .map_or(DEFAULT_REPOSITORY, |def| def.repository.as_str())
-                        .to_owned(),
+                    repository: state.repository_of(&self.services, package),
                     uninstalling: own
                         .into_iter()
                         .flat_map(|entries| entries.uninstall.keys().cloned())
