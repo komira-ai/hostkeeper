@@ -5,8 +5,9 @@
 //! of the others' rollouts, only of its own service's slots. Holders
 //! of several services and hosts release the fleet only when the last of them does; until then
 //! the services that are not live are held with `rollout_elsewhere`. A host takes part in a plan
-//! only while it is live, so the asking host beats before each question. Every time is
-//! explicit; the fleets are built beat by beat.
+//! only while it is live, so the asking host beats before each question. A host that bakes is
+//! first heard at an older version: a bake of a host first heard at the version proves no update
+//! (`bake.rs`, `Found`). Every time is explicit; the fleets are built beat by beat.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -173,6 +174,7 @@ fn a_bake_is_counted_with_its_own_services_version_and_beats() {
     assert_eq!(f.why("a", "d2", 190), go("2.0"), "baked");
 
     let mut moved = Farm::new();
+    moved.daemon("b", "d1", beat("1.0"), 85);
     moved.daemon("b", "d1", beat("5.0"), 100);
     moved.daemon("a", "d2", beat("1.0"), 100);
     assert_eq!(moved.why("a", "d2", 100), elsewhere);
@@ -245,6 +247,7 @@ fn a_silent_holder_keeps_the_slot_unless_it_was_only_baking() {
     assert_eq!(f.why("a", "d2", 1_000), go("2.0"), "failed and unhealthy");
 
     let mut f = Farm::new();
+    f.daemon("b", "d1", beat("1.0"), 85);
     f.daemon("b", "d1", beat("5.0"), 100);
     f.daemon("a", "d2", beat("1.0"), 144);
     assert_eq!(f.why("a", "d2", 144), gate(Gate::RolloutElsewhere));
@@ -309,6 +312,7 @@ fn several_holders_release_the_fleet_only_when_the_last_one_does() {
     f.daemon("broken", "d2", pending("2.0"), 100);
     f.daemon("a", "d3", beat("1.0"), 100);
     f.fleet.order("a", id("d3"), version("2.0"), secs(100));
+    f.daemon("b", "d3", beat("1.0"), 85);
     f.daemon("b", "d3", beat("5.0"), 100);
     f.daemon("c", "d4", beat("1.0"), 100);
     assert_eq!(f.why("c", "d4", 100), elsewhere, "all four");

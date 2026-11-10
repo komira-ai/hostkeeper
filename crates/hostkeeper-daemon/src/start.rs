@@ -7,7 +7,8 @@
 //! socket kbf's agent may have left ([`Settings::kbf_run_dir`]), before any unit is touched;
 //! [`settle_self_update`]; the `activate` of hostkeeper's own package that its new binary owes,
 //! retried every minute by a thread of its own while it defers, and the adoption of the package
-//! the host was set up with ([`crate::own_package`]); [`before_records`], [`boot_pass`] and
+//! the host was set up with ([`crate::own_package`]); [`remove_dangling_unit_links`];
+//! [`before_records`], [`boot_pass`] and
 //! [`delete_archive_versions`]; and [`after_boot`]. [`serve`]
 //! then starts the enrollment and heartbeat loops ([`crate::links`]) and runs them until the
 //! daemon is asked to exit for its own update ([`crate::selfupdate::Restart`]).
@@ -277,6 +278,7 @@ pub fn startup_notifying(
     settle_self_update(&daemon, &mut report);
     activate_own_package(&daemon, &mut report);
     adopt_own_package(&daemon, &mut report);
+    remove_dangling_unit_links(&daemon, &mut report);
     before_records(&daemon, &mut report);
     boot_pass(&daemon, &mut report)?;
     delete_archive_versions(&daemon, &mut report);
@@ -399,6 +401,14 @@ pub fn before_records(daemon: &Daemon, report: &mut BootReport) {
 /// watchers restarted (design section 6.5, [`Daemon::boot_pass`]).
 fn boot_pass(daemon: &Daemon, report: &mut BootReport) -> Result<(), StartError> {
     Ok(daemon.boot_pass_into(report, &|_| false)?)
+}
+
+/// After the `activate` of hostkeeper's own package and its adoption, before the boot pass
+/// starts any unit: the dangling unit links an earlier move left removed
+/// ([`crate::unit_links::repair`]), what it removed recorded in `report`. A repair that fails
+/// is an alert and the start goes on.
+fn remove_dangling_unit_links(daemon: &Daemon, report: &mut BootReport) {
+    report.unit_links = crate::unit_links::repair(daemon.ctx());
 }
 
 /// After the boot pass: the archive version a native service left as `previous` deleted

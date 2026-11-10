@@ -9,6 +9,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use super::engine::{Engine, Probe, Probed};
+use super::public::FetchError;
 use super::{Pause, Ports, Releases};
 use crate::release::contract::{Repo, Version};
 use crate::release::ports::{PortError, Release, StoredAsset};
@@ -254,14 +255,20 @@ pub(super) fn ports<'a>(
 
 /// The published releases of each repository and the bytes of their assets, in memory. A
 /// download writes the bytes to the directory it is given; it fails, writing nothing, once
-/// `downloads_left` downloads have succeeded (a transfer cut short), and for a release, asset or
-/// repository the source does not hold. Each download is recorded as `<repo> <tag> <name>`.
+/// `downloads_left` downloads have succeeded (a transfer cut short, or GitHub's limit used up
+/// when `limited` is set), and for a release, asset or repository the source does not hold. The
+/// list answers that the limit is used up when `list_limited` is set. Each download is recorded
+/// as `<repo> <tag> <name>`.
 #[derive(Default)]
 pub(crate) struct FakeSource {
     releases: RefCell<BTreeMap<String, Vec<Release>>>,
     bytes: RefCell<BTreeMap<(String, String, String), Vec<u8>>>,
     /// When set, downloads fail once this many have succeeded.
     pub(crate) downloads_left: Cell<Option<usize>>,
+    /// The downloads `downloads_left` stops fail as GitHub's limit, not as a cut transfer.
+    pub(crate) limited: Cell<bool>,
+    /// The list answers that GitHub's limit is used up.
+    pub(crate) list_limited: Cell<bool>,
     pub(crate) downloads: RefCell<Vec<String>>,
 }
 
@@ -311,19 +318,26 @@ impl FakeSource {
 }
 
 impl Releases for FakeSource {
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
-        self.releases
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, FetchError> {
+        if self.list_limited.get() {
+            return Err(FetchError::RateLimited("the list: HTTP 403".to_owned()));
+        }
+        Ok(self
+            .releases
             .borrow()
             .get(repo.as_str())
             .cloned()
-            .ok_or_else(|| PortError::new(format!("list the releases of {repo}"), "HTTP 404"))
+            .ok_or_else(|| PortError::new(format!("list the releases of {repo}"), "HTTP 404"))?)
     }
 
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), FetchError> {
         let what = format!("download {name} of {repo} {tag}");
         if let Some(left) = self.downloads_left.get() {
+            if left == 0 && self.limited.get() {
+                return Err(FetchError::RateLimited(format!("{what}: HTTP 429")));
+            }
             if left == 0 {
-                return Err(PortError::new(what, "the connection was reset"));
+                return Err(PortError::new(what, "the connection was reset").into());
             }
             self.downloads_left.set(Some(left - 1));
         }

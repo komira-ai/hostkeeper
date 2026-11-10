@@ -183,9 +183,17 @@ started a host and still has one to order (a paused plan and one waiting for an 
 A failed host does not make its service live: it still counts against its own group's
 `max_updating`, but a halted service, a version marked bad, a plan held by a failed host and a
 service whose only occupants are failed hosts order nothing until an operator acts, so they hold
-no other service. A service whose rollout is not live is told `rollout_elsewhere` while N others
-are, and its plan in `Releases.Status` names them (`waiting_on`); a service that is live is never
-held by the others. The default keeps one service's rollout at a time in each group.
+no other service. A bake counts only for a host of the plan (live, in the group, neither excluded nor
+held, picked a package of the version) that the coordinator saw update: a host the release picks
+no package for (`no_build_for_host`), an excluded or held host, a host that stopped heartbeating,
+and a host the coordinator first heard after it started already at the version (after a restart,
+it cannot tell whether the host updated) bake nothing that holds another service. So a service
+whose every host runs its desired version, with nothing updating or ordered, holds no other. A
+service whose rollout is not live is told `rollout_elsewhere` while N others are, and its plan in
+`Releases.Status` names them (`waiting_on`) and, for each, why it is live and on which host
+(`waiting_on_why`: `updating`, `promotion_pending`, `ordered`, `baking` with the host, or
+`plan_under_way`); the web UI shows it as `rollout_elsewhere on hello (baking on db-5)`. A
+service that is live is never held by the others. The default keeps one service's rollout at a time in each group.
 
 ## What a restart keeps
 
@@ -193,7 +201,8 @@ The position of each plan (the desired version it is for, the stages entered, th
 done, a pause) is kept for each (group, package) in the ops file, under `host_groups`
 ([coordinator-state.md](coordinator-state.md)), and read back at start: the plan goes on at the
 stage it had entered, and a host recorded done is neither ordered again nor made to bake again. A
-host of the current stage that had not finished its bake bakes again from zero. A new desired
+host of the current stage that had not finished its bake bakes again from zero; its bake holds
+no other service's rollout (the coordinator did not see it update). A new desired
 version starts the plan over. A plan that never goes past its first stage writes nothing.
 
 On the database store ([coordinator-state.md](coordinator-state.md#the-database-store)) the

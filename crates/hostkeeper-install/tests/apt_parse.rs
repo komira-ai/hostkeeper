@@ -762,7 +762,7 @@ fn comparing_an_invalid_version_is_none() {
 
 /// The reasons of packages-repositories.md section 4.5 (and of 2.3, packages-native.md 10.2 and
 /// section 4.7's two of `macos-pkg` for the rest), each with its token, class and outcome, and its place in `Reason::ALL`.
-const TABLE: [(Reason, &str, Class, Outcome); 20] = [
+const TABLE: [(Reason, &str, Class, Outcome); 21] = [
     (
         Reason::CoordinatorTooOld,
         "coordinator_too_old",
@@ -878,6 +878,12 @@ const TABLE: [(Reason, &str, Class, Outcome); 20] = [
         Outcome::Deferred,
     ),
     (
+        Reason::UnitNotLoaded,
+        "unit_not_loaded",
+        Class::Environment,
+        Outcome::Failed,
+    ),
+    (
         Reason::UnsafeDirectory,
         "unsafe_directory",
         Class::Environment,
@@ -907,7 +913,8 @@ fn place(reason: Reason) -> usize {
         Reason::RepositoryUnknown => 16,
         Reason::Signature => 17,
         Reason::StoreDigestMismatch => 18,
-        Reason::UnsafeDirectory => 19,
+        Reason::UnitNotLoaded => 19,
+        Reason::UnsafeDirectory => 20,
     }
 }
 

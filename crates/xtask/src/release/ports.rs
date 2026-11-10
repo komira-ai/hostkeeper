@@ -253,6 +253,22 @@ pub(crate) trait Exec {
     fn spawn(&self, program: &str, args: &[String]) -> std::io::Result<Ran>;
 }
 
+/// One run of a program that inherits nothing: its environment is exactly `env`, and it runs in
+/// `cwd`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Sealed {
+    /// An absolute path.
+    pub(crate) program: std::path::PathBuf,
+    pub(crate) args: Vec<String>,
+    pub(crate) env: Vec<(String, String)>,
+    pub(crate) cwd: std::path::PathBuf,
+}
+
+/// Starts a [`Sealed`] run and waits for it (the coordinator updater's offline `gh`).
+pub(crate) trait ExecSealed {
+    fn spawn_sealed(&self, run: &Sealed) -> std::io::Result<Ran>;
+}
+
 /// The ports one verb runs against.
 #[derive(Clone, Copy)]
 pub(crate) struct Ports<'a> {

@@ -31,7 +31,7 @@ use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform, RoleName};
 
 use crate::assignment::{Placement, assigned, effective_min_version};
-use crate::bake::Bake;
+use crate::bake::{Bake, Found};
 use crate::defer::{DeferBackoff, Defers};
 use crate::holds::holding;
 use crate::rollouts::Rollout;
@@ -184,6 +184,8 @@ pub struct Fleet {
     orders: BTreeMap<(HostId, String), Order>,
     /// Healthy beats in a row at one version, per service and host ([`Bake`]).
     bake: BTreeMap<(String, HostId), Bake>,
+    /// The hosts first heard settled at a version and not seen to move since ([`Found`]).
+    pub(crate) found: Found,
     defers: Defers,
     /// The release failures heard, each counted once ([`crate::verdicts`]).
     verdicts: Verdicts,
@@ -234,6 +236,7 @@ impl Fleet {
             outside: BTreeMap::new(),
             orders: BTreeMap::new(),
             bake: BTreeMap::new(),
+            found: Found::default(),
             defers: Defers::default(),
             verdicts: Verdicts::default(),
             marks: Marks::default(),
@@ -473,6 +476,7 @@ impl Fleet {
         }
         self.orders.retain(|(o, _), _| o != id);
         self.bake.retain(|(_, o), _| o != id);
+        self.found.forget_host(id);
         self.nodes.remove(id);
         self.picks.forget(id);
         true
@@ -544,6 +548,7 @@ impl Fleet {
         // `failed_here`, the plan's failed host, a force's verdict), and it only moves the try.
         let mut beat = beat;
         let refusal = beat.last_update.take_if(|r| r.is_try_refusal());
+        let had_order = self.orders.contains_key(&key);
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
             deferred_order = beat
@@ -587,6 +592,9 @@ impl Fleet {
             }
         }
         let baking = (key.1.clone(), key.0.clone());
+        // A beat that ends an order is the host's move, even its first: it is never found.
+        let first = self.occupant(&key.1, &key.0).is_none() && !had_order;
+        self.found.observe(baking.clone(), &beat, first);
         match Bake::after(self.bake.get(&baking), &beat, now) {
             Some(bake) => {
                 self.bake.insert(baking, bake);
@@ -659,6 +667,7 @@ impl Fleet {
         now: Duration,
     ) {
         let key = (id, service.to_owned());
+        self.found.forget(&(service.to_owned(), key.0.clone()));
         if self.is_ordered(service, &key.0, now)
             && self
                 .orders
@@ -913,6 +922,7 @@ impl Fleet {
         }
         self.orders.remove(&(id.clone(), service.to_owned()));
         self.bake.remove(&(service.to_owned(), id.clone()));
+        self.found.forget(&(service.to_owned(), id.clone()));
     }
 
     /// Whether the standing force of `service` orders the host `id`.

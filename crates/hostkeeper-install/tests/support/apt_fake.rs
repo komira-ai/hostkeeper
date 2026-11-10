@@ -24,6 +24,9 @@ use hostkeeper_install::repository::tools::ToolError;
 use hostkeeper_install::repository::{Run, Tool, ToolOutput, Tools};
 use sha2::{Digest, Sha256};
 
+#[path = "apt_fake_units.rs"]
+mod units;
+
 /// The events the fake and the records port both log, in order.
 pub type Events = Arc<Mutex<Vec<String>>>;
 
@@ -330,6 +333,9 @@ pub struct FakeHost {
     events: Events,
     /// The host's root, whose policy file each call records.
     root: Mutex<Option<PathBuf>>,
+    /// The service manager's unit directory: where it is on disk and how the host names it,
+    /// read by `systemctl show` ([`FakeHost::watch_units`]).
+    units: Mutex<Option<(PathBuf, String)>>,
 }
 
 /// The name a run goes by in the fake's record.
@@ -443,7 +449,13 @@ impl FakeHost {
             lock_path: lock_path.to_path_buf(),
             events,
             root: Mutex::new(None),
+            units: Mutex::new(None),
         }
+    }
+
+    /// Makes `systemctl show` read the unit directory the host names `spelled`, at `disk`.
+    pub fn watch_units(&self, disk: &Path, spelled: &str) {
+        *self.units.lock().expect("the units") = Some((disk.to_path_buf(), spelled.to_owned()));
     }
 
     /// Makes each call record the policy file under `root`.
@@ -591,6 +603,7 @@ impl Tools for FakeHost {
             rule.skip -= 1;
         }
         Ok(match label.as_str() {
+            "systemctl show" => units::show(self.units.lock().expect("the units").clone(), &s, run),
             "apt-get update" => update(&s, run),
             "apt-cache show" => show(run),
             "apt-get simulate" => simulate(&mut s, run),

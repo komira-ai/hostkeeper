@@ -300,9 +300,20 @@ function waitStage(plan) {
   }
 }
 
+// A service the plan waits on, with why its rollout is live and on which host when the
+// coordinator says (`waitingOnWhy`; a coordinator before it names the service alone).
+function liveOn(plan, service) {
+  const why = (plan.waitingOnWhy || []).find((w) => w.service === service);
+  if (!why) {
+    return service;
+  }
+  const host = why.nodeId ? ` on ${why.nodeId}` : "";
+  return `${service} (${enumLabel(why.reason, "LIVE_REASON_")}${host})`;
+}
+
 // Why the plan orders no new host: the wait with its stage or, for another service's rollout,
-// the services it waits on (none from a coordinator that does not name them), and the pause
-// with who and why.
+// the services it waits on, each with why it is live and on which host (none from a coordinator
+// that does not name them), and the pause with who and why.
 export function planWaiting(plan) {
   if (!plan) {
     return "-";
@@ -310,7 +321,7 @@ export function planWaiting(plan) {
   const parts = [];
   if (plan.waiting !== "PLAN_WAIT_PAUSED") {
     const stage = waitStage(plan);
-    const on = (plan.waitingOn || []).join(", ");
+    const on = (plan.waitingOn || []).map((service) => liveOn(plan, service)).join(", ");
     parts.push(
       enumLabel(plan.waiting, "PLAN_WAIT_") +
         (stage === null ? "" : `, stage ${stage}`) +

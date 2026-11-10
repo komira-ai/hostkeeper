@@ -337,6 +337,8 @@ mod inventory_tests;
 #[cfg(test)]
 mod inventory_window_tests;
 #[cfg(test)]
+mod live_converged_tests;
+#[cfg(test)]
 mod live_tests;
 #[cfg(test)]
 mod marks_support;

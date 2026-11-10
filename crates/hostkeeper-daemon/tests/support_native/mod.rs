@@ -66,6 +66,7 @@ impl NativeRig {
         let lock = rig.scratch.path().join("installer.lock");
         let host = Arc::new(FakeHost::new(&lock, Arc::clone(&events)));
         rig.launcher.answer_tools(bridge(Arc::clone(&host)));
+        host.watch_units(&rig.host("/units"), "/units");
         let layout = Layout::new(&binary_dir(&rig.state));
         let old = rig.scratch.path().join("v1-binary");
         fs::write(&old, binary_text(V1)).expect("the binary of V1");
