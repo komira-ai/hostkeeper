@@ -54,7 +54,8 @@
 //!   order's repository entry, `activate` in the switch, the rollback, the purge at uninstall and
 //!   the drift of each heartbeat; [`target`] the sealed `target.json` of such a version and the
 //!   one reader of a version directory's manifest; [`builtin`] the built-in steps of a version
-//!   with no hook program.
+//!   with no hook program; [`repository_push`] the repository sets the coordinator pushes, written
+//!   as the host's repository configuration and taken into use without a restart.
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`trusted_root`]: the Sigstore trusted root package checks use, and the age and reason
 //!   [`Daemon::status`] reports of it.
@@ -112,6 +113,7 @@ pub mod real_packages;
 pub mod refusal;
 pub mod repositories;
 pub mod repository;
+pub mod repository_push;
 pub mod rollback_floor;
 pub mod run_units;
 pub mod seed;

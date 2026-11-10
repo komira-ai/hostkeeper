@@ -539,6 +539,7 @@ fn an_older_reader_keeps_the_assignments_of_services() {
             holds: Vec::new(),
         }],
         uninstalling: vec!["db-2".to_owned()],
+        repository: "komira".to_owned(),
     };
     let cases: [(&str, &str, Vec<u8>); 3] = [
         (

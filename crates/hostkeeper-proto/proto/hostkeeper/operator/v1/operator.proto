@@ -21,7 +21,8 @@
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
-// `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, and `MdmRefusal` in mdm.proto),
+// `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, `MdmRefusal` in mdm.proto, and
+// `RepositoriesRefusal` in repositories.proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -293,6 +294,11 @@ enum ReleasesRefusal {
   // NOT_FOUND: `GetRelease` of a version the service was never set with targets, or whose release
   // was dropped with it from the registry.
   RELEASES_REFUSAL_RELEASE_UNKNOWN = 27;
+  // FAILED_PRECONDITION: `SetDesired` with a repository entry while the registry
+  // (`Repositories`) does not hold the repository the service names (`repository` of its
+  // `ServiceEntry`), or of an entry whose `repository` is not `<name>-<suite>` of that
+  // repository's name and one of its suites. Nothing changed.
+  RELEASES_REFUSAL_REPOSITORY_UNKNOWN = 28;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -454,6 +460,29 @@ message Host {
   // a host not heard since the coordinator started, the time of the heartbeat that last changed
   // what its enrollment kept (a heartbeat that says the same writes nothing).
   optional uint64 running_unix = 23;
+  // The package repositories the coordinator sends the host, and what its daemon reported of
+  // them. Absent for a host whose daemon has not announced `repositories-v1` since the
+  // coordinator started (a Mac's never does).
+  optional HostRepositories repositories = 24;
+}
+
+// A host's package repositories: what the coordinator's registry holds for it and what its
+// daemon reported (`HeartbeatRequest.repositories`).
+message HostRepositories {
+  // The repositories its services name, by name.
+  repeated string named = 1;
+  // Those the registry does not hold: while any is, the host is sent no repository.
+  repeated string unregistered = 2;
+  // The digest of the set the coordinator sends it; empty when it sends none.
+  string digest = 3;
+  // The generation of the set in force on the host, as its daemon reported it; 0 while it holds
+  // none the coordinator sent since the daemon started.
+  uint64 generation = 4;
+  // Whether the set in force on the host is `digest`.
+  bool current = 5;
+  // Why the daemon refused the set it was last sent, when it refused it and it is still `digest`;
+  // empty otherwise.
+  string refused = 6;
 }
 
 // One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).
@@ -1151,6 +1180,9 @@ message ServiceEntry {
   repeated AssignedHost assigned = 8;
   // The hosts ordered to uninstall the service, until each reports it gone.
   repeated string uninstalling = 9;
+  // The package repository of the registry (`Repositories`) its hosts install it from: the
+  // rollout file's `repository`, `komira` when it names none.
+  string repository = 10;
 }
 
 // An operator's assignment of a service, to a role or a host, or its removal from one.

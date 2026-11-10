@@ -159,7 +159,7 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
     let judged = order.package.entry.as_ref().map_or(Ok(()), |entry| {
         entry::check(
             ctx.own_version,
-            &ctx.announcement.installers,
+            &ctx.installers(),
             &service,
             &order.package.digest,
             entry,

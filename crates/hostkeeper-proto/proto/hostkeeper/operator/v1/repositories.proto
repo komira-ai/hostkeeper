@@ -1,0 +1,137 @@
+// hostkeeper.operator.v1: the `Repositories` service of the operator API and its refusals
+// (`RepositoriesRefusal`): the coordinator's registry of package repositories
+// (docs/design/packages-repositories.md section 3). Each entry is a
+// `hostkeeper.release.v1.Repository`: a name, the package manager, the URI, the suites, the
+// components, the signing keys' fingerprints and the keyring. Each service of the rollout file
+// names one (`repository`, `komira` when it names none); the coordinator sends each Linux host
+// the repositories its services name, and the host's daemon writes them as its repository
+// configuration. The rest of the package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto)
+// and `Audit` and `AuditRefusal` among it, is operator.proto; this file is the same package and
+// API, kept apart so that each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Repositories` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `RepositoriesRefusal`, written
+// as the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing.
+//
+// Units: as operator.proto says. A repository's bounds are the comments of
+// `hostkeeper.release.v1.Repository`; the registry holds at most 16. A reason is 1 to 256 bytes
+// of UTF-8 with no control character.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/entry.proto";
+import "hostkeeper/release/v1/release.proto";
+
+// The coordinator's registry of package repositories.
+service Repositories {
+  // Every repository of the registry, by name, without its keyring (`keyring_sha256` names it),
+  // and the registry's generation. Changes nothing.
+  rpc List(ListRepositoriesRequest) returns (ListRepositoriesResponse);
+  // One repository, with its keyring. Changes nothing.
+  rpc Get(GetRepositoryRequest) returns (GetRepositoryResponse);
+  // Adds a repository, or replaces the one of its name: a new keyring or new fingerprints are a
+  // key rotation, which reaches each host whose services name it at its next heartbeat. The
+  // registry's generation grows by one. Writes the audit entry `repository_put`.
+  rpc Put(PutRepositoryRequest) returns (PutRepositoryResponse);
+  // Removes a repository no service of the rollout file names. The registry's generation grows
+  // by one. Writes the audit entry `repository_remove`.
+  rpc Remove(RemoveRepositoryRequest) returns (RemoveRepositoryResponse);
+}
+
+// Why `Repositories` refused a request. The token is the value's name without the prefix, in
+// lower case.
+enum RepositoriesRefusal {
+  REPOSITORIES_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  REPOSITORIES_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Repositories` does not take.
+  REPOSITORIES_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a name that is not 1 to 32 bytes of `[a-z0-9-]`, a reason that breaks its
+  // rule, or a `Put` whose repository breaks a rule of its fields other than its keyring's.
+  REPOSITORIES_REFUSAL_INVALID_REQUEST = 3;
+  // INVALID_ARGUMENT: `Put` of a keyring that is not a binary OpenPGP keyring of public keys,
+  // that lacks a fingerprint of `fingerprints`, or that holds a primary key none of whose
+  // fingerprints is listed.
+  REPOSITORIES_REFUSAL_KEYRING_INVALID = 4;
+  // NOT_FOUND: `Get` or `Remove` of a name the registry does not hold.
+  REPOSITORIES_REFUSAL_UNKNOWN_REPOSITORY = 5;
+  // FAILED_PRECONDITION: `Remove` of a repository a service of the rollout file names.
+  REPOSITORIES_REFUSAL_IN_USE = 6;
+  // FAILED_PRECONDITION: `Put` of a repository one of whose entries `<name>-<suite>` is an entry
+  // of another repository of the registry.
+  REPOSITORIES_REFUSAL_CONFLICT = 7;
+  // RESOURCE_EXHAUSTED: `Put` of a new repository while the registry holds 16.
+  REPOSITORIES_REFUSAL_CAPACITY = 8;
+  // INTERNAL: the registry could not be written. Nothing changed.
+  REPOSITORIES_REFUSAL_STORE_FAILED = 9;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  REPOSITORIES_REFUSAL_AUDIT_UNAVAILABLE = 10;
+}
+
+// A repository of the registry, and what the coordinator knows of it.
+message RegisteredRepository {
+  // The repository; without its keyring in `List`'s answer.
+  hostkeeper.release.v1.Repository repository = 1;
+  // The SHA-256 of its keyring, 64 lower-case hex characters.
+  string keyring_sha256 = 2;
+  // The registry's generation when it was last put.
+  uint64 generation = 3;
+  // The services of the rollout file that name it, by name.
+  repeated string services = 4;
+}
+
+message ListRepositoriesRequest {}
+
+message ListRepositoriesResponse {
+  // The repositories, by name.
+  repeated RegisteredRepository repositories = 1;
+  // The registry's generation: 0 until the first `Put`.
+  uint64 generation = 2;
+  // The repositories the services of the rollout file name that the registry does not hold,
+  // by name. A host one of whose services names one is sent no repository.
+  repeated string unregistered = 3;
+}
+
+message GetRepositoryRequest {
+  // The repository's name.
+  string name = 1;
+}
+
+message GetRepositoryResponse {
+  RegisteredRepository repository = 1;
+}
+
+message PutRepositoryRequest {
+  // The repository, every field set.
+  hostkeeper.release.v1.Repository repository = 1;
+  // Why, for the audit entry.
+  string reason = 2;
+}
+
+message PutRepositoryResponse {
+  // The repository as the registry now holds it, with its keyring.
+  RegisteredRepository repository = 1;
+  AuditEntry entry = 2;
+}
+
+message RemoveRepositoryRequest {
+  // The repository's name.
+  string name = 1;
+  // Why, for the audit entry.
+  string reason = 2;
+}
+
+message RemoveRepositoryResponse {
+  // The registry's generation after the removal.
+  uint64 generation = 1;
+  AuditEntry entry = 2;
+}

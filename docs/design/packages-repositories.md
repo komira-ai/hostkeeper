@@ -20,7 +20,9 @@ of section 4.5; a package without a hook runs the built-in steps (`builtin.rs`).
 `crates/hostkeeper-pxe-seed/src/seed.rs`), the enrollment runbook's step, the MDM profile's two domains and their
 re-send (`crates/hostkeeper-mdm-gate/src/profile.rs`, `enroll.rs`), the daemon's rendering of them
 (`crates/hostkeeper-daemon/src/mac_config.rs`), and the rotation runbook
-([repository-keys.md](../operations/repository-keys.md)). Nothing else here is built. This amends [packages.md](packages.md),
+([repository-keys.md](../operations/repository-keys.md)). Build item A29 is **Built**: the coordinator's registry of
+repositories and its push to the hosts (section 3.2; `crates/hostkeeper-release/src/registry.rs`, the coordinator's
+`Repositories` service, and the daemon's switch of its repository configuration). Nothing else here is built. This amends [packages.md](packages.md),
 [packages-lifecycle.md](packages-lifecycle.md) and [packages-tests.md](packages-tests.md), as the maintainers ruled:
 hostkeeper installs a Linux service's package from a package repository with the host's package manager
 (`apt-get install tierstore=<V>` from the suite the host is configured with). It does not fetch a `.deb` and install
@@ -65,7 +67,7 @@ design (section 6). dnf is the next one and gets its full design when the first 
 | packages.md 5.2, 5.4: `deb`, `rpm`, `arch`, `apk` | Installers that fetch a package file by digest, check its attestation and install the file with the format's tool | Withdrawn. `apt` (A7) installs from an apt repository; `dnf` (A8) is later (section 6); `arch` and `apk` are withdrawn with no successor |
 | packages.md 5.2: `macos-pkg`, and this file's first section 4.7, a Homebrew backend | `pkgutil --expand-full`, `installer -pkg`, a package found on the host refused (`package_conflict`) | `macos-pkg` (A9): a signed `.pkg` fetched by digest as an artifact, its signature checked against configured signers, drift corrected, rollback from the kept `.pkg`, removal by the receipt (section 4.7) |
 | packages.md 5.2, 5.3: "the daemon never runs `apt`"; "no installer fetches" | Every tool run has `PrivateNetwork=yes` | A repository installer fetches through the package manager, from the one repository the order names, in `stage` only: two commands that run no package script, and every other tool run keeps `PrivateNetwork=yes` (section 4.6). `macos-pkg` fetches nothing itself; the daemon's own fetch brings its `.pkg` (section 4.7) |
-| packages.md 7.4, 8: trust for a service's package | `[trusted_signers]` and the artifact's attestation | The repository's key, part of hostkeeper's host configuration placed at host setup, and the required digest pin. No attestation is checked or accepted for a repository entry (section 3). A Mac's `.pkg` keeps the digest and attestation of every artifact and adds its signature, checked against the host's configured signers (section 4.7) |
+| packages.md 7.4, 8: trust for a service's package | `[trusted_signers]` and the artifact's attestation | The repository's key, from the coordinator's registry of repositories, and the required digest pin. No attestation is checked or accepted for a repository entry (section 3). A Mac's `.pkg` keeps the digest and attestation of every artifact and adds its signature, checked against the host's configured signers (section 4.7) |
 | packages-lifecycle.md 6.1, 6.4 to 6.6 for `deb` and `rpm` | The kept artifact; rollback installs it; `dpkg --purge`; a package installed by hand refused (`package_not_ours`) | The kept index and package apt fetched; rollback is a downgrade with apt; the hold; `dpkg --purge`; a package at a version hostkeeper did not set is drift, repaired and reported (section 4.4) |
 | packages-tests.md: `deb`, `rpm`, `arch`, `macos-pkg` cases | Device tests that install a fixture file | The cases of A16 and A7 (packages-tests.md), with a fixture repository on the runner's disk, and A9's, with signed fixture `.pkg` files |
 
@@ -98,9 +100,10 @@ fetches it from the stores the entry names, checks its size, digest and Sigstore
       "manifest": { "package": "dev.tierstore.server", "run": ["dev.tierstore.server"], ... } } ] }
   ```
 
-- `komira-testing` is not a URL. It names an entry of the host's own repository configuration, which host setup put
-  there with the repository's signing key, as part of hostkeeper's own configuration (section 3). The coordinator
-  never sends a URL, a suite or a key. On the Mac, `komira-testing` names a store of the host's `stores.toml`, the
+- `komira-testing` is not a URL. It names an entry of the host's own repository configuration, which the host's
+  daemon writes from the coordinator's registry of repositories with the repository's signing key: the suite
+  `testing` of the registry's repository `komira` (section 3.2). An order never carries a URL, a suite or a key. On
+  the Mac, `komira-testing` names a store of the host's `stores.toml`, the
   channel's location for `.pkg` files, placed the same way.
 - A Debian or Ubuntu host with that entry runs, in effect, `apt-get install tierstore=1.6.0-1` against that
   repository alone, refuses it unless its SHA-256 is the order's, holds the package (`apt-mark hold`), and starts the
@@ -230,8 +233,9 @@ and an install image use), one suite, at least one component, and `Signed-By:` a
 directory; the keyring is read, at most 1 MiB, and must be what apt reads at its name: armored when it is named `.asc`,
 a binary OpenPGP keyring otherwise (an empty file, or armor in a `.gpg`, is refused). `Trusted:`, `Allow-Insecure:`, `Allow-Weak:`, `Allow-Downgrade-To-Insecure:` and `Check-Valid-Until: no`
 are refused: an entry that turns off apt's signature checks is never used. A daemon that refuses to start runs no
-self-update either, which is why host setup checks the directory with the daemon's own loader before it writes it
-(section 3.2), as it does `hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judges a staged directory as
+self-update either, which is why the daemon judges a set the coordinator sends with this same loader before it
+replaces the directory (section 3.2), and host setup checks a directory it places with it too, as it does
+`hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judges a staged directory as
 the daemon would take it here (a `Signed-By` of this directory names the file of `DIR`), exits 0 listing each entry,
 and 1 with the loader's refusal (README, "Checking a repositories directory").
 
@@ -240,29 +244,73 @@ These files are hostkeeper's and not the system's: they are not in `/etc/apt/sou
 repository for the system too (for a command-line tool); the hold of section 4.4 keeps such upgrades off the
 packages hostkeeper manages.
 
-The two entries a host has are the two channels, testing and stable, of the same repository and key. A repository
+The two entries a host has are the two channels, testing and stable, of the same repository and key: in the
+coordinator's registry, one repository `komira` with the suites `testing` and `stable`. While hello's failing-build
+proof runs, `komira` also lists the suite `testing-fail`, so every host whose services name `komira` gets a third
+entry, `komira-testing-fail` ([package-repositories.md](../deploy/package-repositories.md)). A repository
 name means the same channel on every host: CI's order names it, and every host it reaches reads it from its own disk.
-Names that say the origin and the channel (`komira-testing`, `komira-stable`) keep that plain. A host whose configuration lacks the named entry answers `Failed`, `environment`, `repository_unknown`: host
-setup is wrong there, and the rollout gate stops on it.
+Names that say the origin and the channel (`komira-testing`, `komira-stable`) keep that plain. A host whose
+configuration lacks the named entry answers `Failed`, `environment`, `repository_unknown`: its set is not in force
+there (section 3.2), and the rollout gate stops on it.
 
-### 3.2 Who places the key and who rotates it
+### 3.2 Who places the key and who rotates it: the coordinator's registry
 
-The entries and the key are part of hostkeeper's own host configuration, beside `hostkeeper.toml` and `stores.toml`,
-and they are placed where that configuration is placed: at host setup. The coordinator never sends them. On a host installed by network
-(network-install.md), `hostkeeper-pxe` takes a directory of entries and keyrings with `--repositories <dir>`, checks
-it with the daemon's own loader before it writes a single seed (as it does `hostkeeper.toml`), and writes it to
-`/etc/hostkeeper/repositories/` through the same autoinstall user data. On a host set up by hand, the enrollment
-runbook (docs/operations/enrollment.md) gains the step that copies them. On a Mac, the MDM kit that places
-`hostkeeper.toml` (hostkeeper-mdm.md) places the channel stores of `stores.toml` and the signers of
-`macos-pkg.toml` (section 4.7) too. That is A17.
+**The registry.** The coordinator holds the package repositories, durable in its store beside the releases
+(`<state-file>.repositories`, or the tables of migration `0007` in Postgres; coordinator-storage.md). Each is a
+`hostkeeper.release.v1.Repository`: a name (`komira`), the package manager (`apt`; the shape takes `dnf` and others
+later), an `https://` URI, its suites (`testing`, `stable`), its components (`main`), the fingerprints of the keys that
+sign it and the binary keyring that holds them. The operator sets it through `Repositories` (repositories.proto, over
+gRPC and the JSON gateway, and `hkctl repositories`): `List`, `Get`, `Put` and `Remove`, `Put` and `Remove` each an
+audit entry (`repository_put`, `repository_remove`) and one more registry generation. `Put` refuses a keyring that is
+not a binary keyring of public keys, a listed fingerprint the keyring lacks, and a primary key of the keyring none of
+whose fingerprints is listed (`keyring_invalid`), so the operator states every key the hosts will trust. Each service
+of the rollout file names its repository (`repository`, `komira` when it names none); `Remove` refuses a repository a
+service names (`in_use`). The rules of an entry are the crate `hostkeeper-release`'s (`registry`), shared by the
+coordinator and the daemon.
 
-**Rotation is host setup's too.** The repository's owner publishes the next key ahead of time and signs the suites
-with both keys for an overlap. Host setup replaces the keyring with one that holds both keys, on every host, before
-the repository stops signing with the old key, and with the new key alone after. apt reads the keyring at every
-`apt-get update`, so a new keyring needs no daemon restart; a new or changed `.sources` file takes effect at the
-daemon's next start. hostkeeper never changes a keyring, and no order can name one. A keyring package from the
-repository itself (Debian's `debian-archive-keyring` pattern) is not used: a key that signs its own successor cannot
-be taken back after it leaks.
+**The push.** At each heartbeat of a daemon that announces `repositories-v1` (a Linux daemon), the coordinator takes
+the repositories the host's services name: those assigned to the host and those it runs. When the registry holds every
+one of them, and the host's report (`HeartbeatRequest.repositories`) holds neither that set's digest in force nor that
+digest refused, the reply carries the set, whole (`HeartbeatResponse.repositories`): the entries, the registry's
+generation and the SHA-256 of the files they are written as. The daemon checks each entry by the shared rules and the
+digest, and writes per repository the keyring `<name>.gpg` and per suite the entry `<name>-<suite>.sources`, one
+stanza of the shape of section 3.1 whose `Signed-By` names that keyring. When the directory already holds exactly
+those files, byte for byte, it adopts them and writes nothing: the entries host setup placed for `komira` with the same
+URI, components and keyring are taken as they are. Otherwise it writes the files into a staging directory beside it
+(`/etc/hostkeeper/.repositories.next`), judges that directory with the loader of section 3.1 as if it were in place,
+checks each fingerprint of the registry against the keyring the loader read, and only then exchanges it with the
+directory in one rename, under the installer lock, so an `apt` run never sees half a set. The pushed set is the whole
+configuration: an entry or a keyring the set does not hold is gone after the switch. The repository installer and the
+announcement of `apt` (section 4.1) take the new set at once, with no restart. A set that breaks a rule, whose digest
+is not its files', that the loader refuses or whose keyring lacks a fingerprint is refused: the daemon reports it
+(`RepositoriesReport.refused`, with the reason), never uses it, and keeps the set in force, and the coordinator sends
+that set again only once the registry or the host's services change it. A failure to write is not a refusal: the
+report does not name the set, and the next heartbeat brings it again. `Hosts.List` and `Hosts.Get` show the host's
+set (`Host.repositories`): the repositories its services name, those the registry lacks, the generation and digest in
+force and whether they are current, and the reason of a refusal.
+
+What is not pushed: an order never carries a repository's configuration; a repository entry names the entry
+`<name>-<suite>` (section 2.1), and `SetDesired` refuses a set with a repository entry when the registry lacks the
+service's repository or the entry names none of its suites (`repository_unknown`), so a release never waits on a
+repository no host will get. A host one of whose services names a repository the registry lacks is sent nothing, and
+its configuration stays as it is. A Mac never announces `repositories-v1`: its `.pkg` comes by digest from the stores
+of its `stores.toml`, and the MDM kit that places `hostkeeper.toml` (hostkeeper-mdm.md) places the channel stores
+and the signers of `macos-pkg.toml` (section 4.7); nothing of a Mac reads the registry. That is A17's, as before.
+
+**Host setup.** On a host installed by network (network-install.md), `hostkeeper-pxe` takes a directory of entries and
+keyrings with `--repositories <dir>`, checks it with the daemon's own loader before it writes a single seed, and writes
+it to `/etc/hostkeeper/repositories/`; on a host set up by hand, the enrollment runbook (docs/operations/enrollment.md)
+has the step that copies them. Both are now for a host that must install from the repository before it reaches the
+coordinator; the first set the coordinator sends adopts those files or replaces them.
+
+**Rotation is the registry's.** The repository's owner publishes the next key ahead of time and signs the suites with
+both keys for an overlap. The operator puts the repository with a keyring that holds both keys and both fingerprints
+before the repository stops signing with the old key, and with the new key alone after
+([repository-keys.md](../operations/repository-keys.md)); each host gets the new keyring at its next heartbeat. The
+coordinator holds the trust root of every Linux host's repository installs: the operator token guards it, every change
+is an audit entry, and the fingerprints are checked at `Put` and again by each daemon before its switch. No order can
+name a keyring. A keyring package from the repository itself (Debian's `debian-archive-keyring` pattern) is not used: a
+key that signs its own successor cannot be taken back after it leaks.
 
 ### 3.3 What is trusted, and what is not used
 
@@ -324,9 +372,11 @@ A Mac's installer, `macos-pkg`, is not a backend of this kind but an artifact in
 A Linux daemon announces `apt` (packages.md section 5.4's table) when the host's family is `deb`; `/usr/bin/apt-get`,
 `/usr/bin/apt-mark`, `/usr/bin/dpkg`, `/usr/bin/dpkg-deb` and `/usr/bin/dpkg-query` are present; the installed `apt` is
 2.2 or later (Debian 11, Ubuntu 22.04 and later: the first with `apt-get update --error-on=any`, without which an
-update that fails its signature check still exits 0); and at least one entry is in `/etc/hostkeeper/repositories/`
-(every entry there passed section 3.1's checks, or the daemon did not start). A host set up without a repository therefore never announces `apt` and keeps taking
-tarballs.
+update that fails its signature check still exits 0); and at least one entry is in force: read from
+`/etc/hostkeeper/repositories/` at the start (every entry there passed section 3.1's checks, or the daemon did not
+start), or written from a set the coordinator sent (section 3.2). The daemon decides its installers again at every
+heartbeat, so a host that starts with no entry announces `apt` from the heartbeat after its first set is in force. A
+host without a repository never announces `apt` and keeps taking tarballs.
 
 ### 4.2 The version directory
 
@@ -772,6 +822,7 @@ its build items (10.8) re-scope A6, A7 and A9 again, add A18 to A28, and withdra
 | A13 | Withdrawn, with `apk` |
 | A14 | Withdrawn, with `arch` |
 | A16 (new) | `Target.repository` and `Target.package_version` in `release.proto`; `hostkeeper-release`'s checks of section 2.2 and its installer set (`apt` beside `hostkeeper-archive`, `tarball`, `macos-pkg`, `oci-image`; `deb`, `rpm`, `arch`, `apk` dropped; a later backend adds its name); the coordinator's audit of a repository entry; after A2, before A7 |
+| A29 (new) | The coordinator's registry of repositories (section 3.2): `Repositories` List, Get, Put and Remove with their audit, the store's file and tables, each service's `repository`, the `repository_unknown` refusal of `SetDesired`, the push in the heartbeat reply, the daemon's check, adoption, staged switch and reload, and the host's report and its view in `Hosts`; after A7 and A17 |
 | A17 (new) | Host setup places repository entries and keyrings: `hostkeeper-pxe --repositories <dir>` checked by the daemon's loader, the enrollment runbook's step, and a rotation runbook (section 3.2); on a Mac, the MDM kit's profile carries the channel stores and the signers as the domains `dev.hostkeeper.stores` and `dev.hostkeeper.macos-pkg`, which the daemon's start renders to `stores.toml` and `macos-pkg.toml` with its own loader (section 4.7), and the signer rotation runbook; after A7 and A9 |
 
 A5 (CI's archive entries for hostkeeper and `hello`) and A15 (the static build) are unaffected. A service's release
@@ -804,7 +855,10 @@ an item of this repository.
 | The repositories | Two channels, testing and stable, of one repository and key, as host configuration | CI decides the version per host; hostkeeper installs exactly that from the channel named |
 | Who starts the units | hostkeeper: at host boot by the `WantedBy` links it writes for a unit whose file is in the tree, else directly at `cutover` and at daemon start; no script starts one meanwhile through `invoke-rc.d` or `deb-systemd-invoke` (`policy-rc.d`) | The package may enable its units however it likes; the hand-over needs the start to be hostkeeper's |
 | The hook of a repository package | The manifest's `hook.command`: a file of the downloaded package, run as its sealed copy in the tree, or built-in steps | The program is part of the signed package, and the hook contract stays the same for every installer |
-| Key placement and rotation | Host setup (`hostkeeper-pxe --repositories`, the runbook), with an overlap of two keys | The coordinator never holds the trust root; a self-renewing keyring package cannot be revoked after a leak |
+| Key placement and rotation | The coordinator's registry (`Repositories.Put`), sent to each Linux host whose services name the repository, with an overlap of two keys; host setup only for a host that installs before it reaches the coordinator | Configured once for the fleet, audited, fingerprint-checked at `Put` and on each host; a self-renewing keyring package cannot be revoked after a leak |
+| A pushed set the daemon refuses | Reported in the heartbeat, never used; the set in force stays; not sent again until it changes | A bad set must not take a host's repositories away, and sending it again cannot change the verdict |
+| A pushed set and the files already there | Adopted when byte for byte the same, else replaced whole through a staging directory and one rename | Host setup's files need no second write, and a host never holds a mix of two sets |
+| The registry and the Mac | Not sent: a Mac does not announce `repositories-v1` | A Mac installs a `.pkg` by digest from its stores; it has no repository configuration |
 | `deb`, `rpm`, `arch`, `apk` | Withdrawn | The ruling: no Linux package file is installed; no daemon ever listed them |
 | The Mac installer | `macos-pkg`: a signed `.pkg` installed by `installer` as root. No Homebrew backend; a Homebrew tap stays a route for people installing a service on their own Mac, and hostkeeper never uses it | `installer` runs as root, which fits hostkeeper's one root daemon, where Homebrew refuses root; no package manager to install and keep current on each Mac; MDM already needs a signed `.pkg` for hostkeeper's own first install, so one Mac format and one signing setup |
 | A Mac's entry | An artifact entry: the channel's store (`komira-testing`, `komira-stable`) as its location, the required `digest`, the attestation; the version is the release's, and the package's `PackageInfo` version must equal it | A `.pkg` has no repository or index to name a version in; an artifact entry already names exact bytes, needs no coordinator change, and the same file in both channels has the same digest |

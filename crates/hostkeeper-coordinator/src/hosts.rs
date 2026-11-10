@@ -116,6 +116,7 @@ impl Coordinator {
                     let heard = fleet.node(&id).map(|node| {
                         let mut host = report::host(&id, node, &status, now, unix_now);
                         crate::picks::show(&fleet, &id, &mut host, &self.services, &desired);
+                        self.show_repositories(&fleet, &id, &mut host);
                         host
                     });
                     (id, heard)
@@ -164,6 +165,7 @@ impl Coordinator {
             let status = self.status_in(&fleet, now);
             let mut host = report::host(&id, node, &status, now, unix_now);
             crate::picks::show(&fleet, &id, &mut host, &self.services, &self.desired.all());
+            self.show_repositories(&fleet, &id, &mut host);
             // The verdict of a `clear_record` the host reported, which no rule reads.
             for one in &mut host.services {
                 if let Some(cleared) = fleet.clear_records.shown(&id, &one.service) {

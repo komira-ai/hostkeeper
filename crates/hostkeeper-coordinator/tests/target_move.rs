@@ -17,7 +17,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::release::v1::{Target, TargetList};
 use support::beats::{Daemon, FORCE, converge, grpc_beat, json_beat, reason, runs, said};
 use support::rig::{Rig, Spec};
-use support::targets::{SET_DESIRED, digest, entry, grpc, list, repository_entry};
+use support::targets::{SET_DESIRED, digest, entry, grpc, list, put_komira, repository_entry};
 use support::{OPERATOR, ci_token};
 
 const SERVICES: &str = r#"
@@ -119,6 +119,7 @@ async fn a_host_running_from_archives_that_lists_apt_is_picked_the_apt_entry_whe
         ),
     ] {
         let rig = rig(name);
+        put_komira(&rig).await;
         set(&rig, "2.0", x86(entries)).await;
         rig.at(LATER);
         let archived = Daemon::new("m1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", None));
@@ -155,6 +156,7 @@ async fn a_host_running_from_archives_that_lists_apt_is_picked_the_apt_entry_whe
 async fn a_host_that_lists_no_native_installer_of_the_list_and_an_old_daemon_are_picked_the_archive_entry()
  {
     let rig = rig("move-not-listed");
+    put_komira(&rig).await;
     set(&rig, "2.0", x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'f')])).await;
     rig.at(LATER);
     for (host, installers) in [
@@ -193,6 +195,7 @@ async fn a_list_with_no_native_entry_its_daemon_lists_leaves_an_archive_host_on_
 {
     for (name, other) in [("move-other-deb", "deb"), ("move-other-tarball", "tarball")] {
         let rig = rig(name);
+        put_komira(&rig).await;
         set(&rig, "2.0", x86(vec![web(other, 'a'), web(ARCHIVE, 'f')])).await;
         rig.at(LATER);
         let daemon = Daemon::new("k1", X86, &[ARCHIVE, other]).running(runs("web", "1.0", None));
@@ -213,6 +216,7 @@ async fn a_list_with_no_native_entry_its_daemon_lists_leaves_an_archive_host_on_
 #[tokio::test]
 async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version() {
     let rig = rig("move-no-way-back");
+    put_komira(&rig).await;
     set(&rig, "2.0", x86(vec![web(ARCHIVE, 'f'), apt("2.0-1", 'a')])).await;
     rig.at(LATER);
     let moved = Daemon::new("v1", X86, &[ARCHIVE, "apt"]).running(runs("web", "1.0", Some("apt")));
@@ -244,6 +248,7 @@ async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version
 async fn a_rollback_across_the_move_carries_the_archive_entry_unless_the_version_has_a_native_one()
 {
     let rig = rig("move-rollback");
+    put_komira(&rig).await;
     let one = x86(vec![web(ARCHIVE, 'f')]);
     let one_five = x86(vec![apt("1.5-1", 'b'), web(ARCHIVE, 'e')]);
     let two = x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'd')]);
@@ -298,6 +303,7 @@ async fn a_rollback_across_the_move_carries_the_archive_entry_unless_the_version
 #[tokio::test]
 async fn a_force_back_across_the_move_carries_the_archive_entry() {
     let rig = rig("move-force-back");
+    put_komira(&rig).await;
     let one = x86(vec![web(ARCHIVE, 'f')]);
     set(&rig, "1.0", one).await;
     set(&rig, "2.0", x86(vec![apt("2.0-1", 'a'), web(ARCHIVE, 'd')])).await;
@@ -344,6 +350,7 @@ async fn the_releases_of_the_move_are_accepted() {
             .without_legacy(),
     )
     .routed();
+    put_komira(&rig).await;
     let own = || {
         let mut own = repository_entry("hostkeeper", "2.0-1", 'a');
         own.manifest.as_mut().expect("a manifest").run = vec!["hostkeeper.service".to_owned()];

@@ -101,14 +101,16 @@ refusals!(
     EnrollmentRefusal,
     AuditRefusal,
     AlertsRefusal,
-    MdmRefusal
+    MdmRefusal,
+    RepositoriesRefusal
 );
 
 changing!(
     HostsRefusal,
     ReleasesRefusal,
     ServicesRefusal,
-    EnrollmentRefusal
+    EnrollmentRefusal,
+    RepositoriesRefusal
 );
 
 /// `Audit` only reads: a log that cannot be read is `store_failed`.

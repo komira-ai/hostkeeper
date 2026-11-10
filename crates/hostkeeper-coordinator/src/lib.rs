@@ -67,6 +67,10 @@
 //! - `releases`: the release each version was set with by `SetDesired` with targets, kept
 //!   beside the desired state, checked by the rules of `hostkeeper-release`, and read back by
 //!   `Releases.GetRelease`;
+//! - `repositories`: the registry of package repositories the operator keeps (`Repositories`:
+//!   [`operator_repositories`]), kept beside the desired state, and `repository_push`: the
+//!   set of it each Linux host is sent in the answer to a heartbeat over gRPC, and what its
+//!   daemon reported of it;
 //! - [`status`]: what an operator reads, and the convergence of a service;
 //! - [`alerts`]: the conditions that need a person, derived from what the coordinator holds,
 //!   answered by `Alerts.List` and logged with an `alert=` field;
@@ -138,6 +142,7 @@ pub mod operate;
 pub mod operator;
 pub mod operator_enrollment;
 pub mod operator_mdm;
+pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
 pub mod order_terms;
@@ -147,6 +152,8 @@ pub mod reconcile;
 pub mod registry;
 pub mod release_index;
 pub(crate) mod releases;
+pub(crate) mod repositories;
+pub(crate) mod repository_push;
 pub mod rollouts;
 mod running;
 pub mod service;
@@ -188,6 +195,8 @@ mod audit_rotation_tests;
 mod backup_refusal_tests;
 #[cfg(test)]
 mod backup_releases_tests;
+#[cfg(test)]
+pub(crate) mod backup_repositories_tests;
 #[cfg(test)]
 mod backup_segment_tests;
 #[cfg(test)]
@@ -273,6 +282,8 @@ mod one_live_update_release_tests;
 #[cfg(test)]
 mod one_live_update_tests;
 #[cfg(test)]
+mod operator_repositories_tests;
+#[cfg(test)]
 mod ops_commit_tests;
 #[cfg(test)]
 mod ops_crash_tests;
@@ -303,9 +314,17 @@ mod release_index_support;
 #[cfg(test)]
 mod release_index_tests;
 #[cfg(test)]
+mod release_set_repository_tests;
+#[cfg(test)]
 mod release_set_tests;
 #[cfg(test)]
 mod releases_tests;
+#[cfg(test)]
+mod repositories_support;
+#[cfg(test)]
+mod repositories_tests;
+#[cfg(test)]
+mod repository_push_tests;
 #[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]
@@ -332,6 +351,8 @@ mod running_tests;
 mod self_update_fallback_tests;
 #[cfg(test)]
 mod service_tests;
+#[cfg(test)]
+mod services_repository_tests;
 #[cfg(test)]
 mod services_tests;
 #[cfg(test)]

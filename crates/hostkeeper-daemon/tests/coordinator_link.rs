@@ -416,6 +416,7 @@ fn bare_beat() -> Heartbeat {
         renewal: Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     }
 }
 

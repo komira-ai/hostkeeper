@@ -157,6 +157,9 @@ hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollm
   `mdm_devices`; `export` writes them back as the same files, byte for byte.
 - What each host's daemon last said it runs, kept in the host's file (`hosts/<host id>.pb`), is the
   row of the host in `enrollment_host_running`; `export` writes it back into the host's file.
+- The registry of package repositories (`<state-file>.repositories`) is written as the rows of
+  `repositories`, one per repository, and the one row of `repository_generation`; `export` writes
+  the file back, also for a registry whose last repository was removed (its generation is not 0).
 - No file is changed: the file coordinator can start again on the same files.
 
 A second import needs an empty database: drop it and create it again first.
@@ -193,6 +196,7 @@ The rest of this page is the file store.
 |---|---|---|
 | `--state-file` | The desired state of each service (version, limits, minimums) and the package digest of every version CI has set. | No service has a desired version until CI sets it again. |
 | `<state-file>.releases` | The release each version was set with by a `SetDesired` with targets: per platform, its artifacts in the order set, and the digest of the release index set with them ([packages.md](../design/packages.md) section 3.6). Written once a version is set with targets. A coordinator before targets does not read it. | `Releases.GetRelease` answers `release_unknown` for every version, and a version can be set again with other targets. |
+| `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |

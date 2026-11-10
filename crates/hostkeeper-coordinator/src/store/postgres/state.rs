@@ -35,8 +35,9 @@ use crate::ops::{
 use crate::rollouts::{Pause, Rollout};
 use crate::verdict_file::{self, VerdictsError};
 
-/// The desired state's tables, the releases of `0004` last ([`super::releases`]).
-pub(crate) const DESIRED: [Table; 3] = [
+/// The desired state's tables, the releases of `0004` ([`super::releases`]) and the registry's
+/// of `0007` ([`super::repositories`]) last.
+pub(crate) const DESIRED: [Table; 5] = [
     Table {
         name: "desired",
         keys: &[("service", KeyTy::Text)],
@@ -59,6 +60,8 @@ pub(crate) const DESIRED: [Table; 3] = [
         values: &[("release", Ty::Json)],
     },
     super::releases::TABLE,
+    super::repositories::TABLE,
+    super::repositories::GENERATION,
 ];
 
 /// The verdicts' tables.
@@ -285,10 +288,13 @@ pub(crate) fn desired_rows(held: &desired::Held) -> Result<Tables, StoreError> {
         desired.insert(vec![text(&service)], row);
     }
     let releases = super::releases::rows(&held.releases);
+    let (repositories, repository_generation) = super::repositories::rows(&held.repositories)?;
     Ok(Tables::from([
         ("desired", desired),
         ("desired_digests", digests),
         ("releases", releases),
+        ("repositories", repositories),
+        ("repository_generation", repository_generation),
     ]))
 }
 
@@ -338,6 +344,10 @@ pub(crate) fn desired_of(tables: &Tables) -> Result<desired::Held, StoreError> {
     })?;
     held.records = super::generations::records_of(tables.get("desired").unwrap_or(&empty))?;
     held.releases = super::releases::of(tables.get("releases").unwrap_or(&empty))?;
+    held.repositories = super::repositories::of(
+        tables.get("repositories").unwrap_or(&empty),
+        tables.get("repository_generation").unwrap_or(&empty),
+    )?;
     Ok(held)
 }
 

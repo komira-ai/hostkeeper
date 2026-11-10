@@ -204,6 +204,7 @@ fn the_heartbeat_json_has_the_wire_names() {
         renewal: hostkeeper_link::Renewal::default(),
         trusted_root: None,
         installers: Vec::new(),
+        repositories: None,
     };
     let mut expected = serde_json::json!({
         "platform": "darwin-arm64",
