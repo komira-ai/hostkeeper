@@ -16,8 +16,8 @@
 //!
 //! - [`Registry::put`] and [`Registry::remove`] make the registry a change would leave, and
 //!   refuse a repository that clashes with another or past [`MAX_REPOSITORIES`].
-//! - [`Registry::set_for`] is what a host is sent: the entries it needs, their generation and
-//!   their digest ([`registry::digest`]).
+//! - [`Registry::entries_of`] is what a host is sent: the entries its services name, when the
+//!   registry holds every one (`repository_push.rs` adds the generation and the digest).
 //! - [`put_reason`] and [`remove_reason`] are the reasons of the audit entries
 //!   `repository_put` and `repository_remove`.
 

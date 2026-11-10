@@ -302,8 +302,13 @@ pub fn komira() -> proto_release::Repository {
 /// Puts [`komira`] into the registry as the operator: a set with a repository entry is refused
 /// until the registry holds the repository its service names.
 pub async fn put_komira(rig: &Rig) {
+    put_repository(rig, komira()).await;
+}
+
+/// Puts `repository` into the registry as the operator.
+pub async fn put_repository(rig: &Rig, repository: proto_release::Repository) {
     let request = proto::PutRepositoryRequest {
-        repository: Some(komira()),
+        repository: Some(repository),
         reason: "a test".to_owned(),
     };
     let answered = grpc(rig, PUT_REPOSITORY, Some(OPERATOR), &request).await;

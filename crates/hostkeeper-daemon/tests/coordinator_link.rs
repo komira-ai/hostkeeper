@@ -24,7 +24,7 @@ use hostkeeper_coordinator::ops::OpsStore;
 use hostkeeper_coordinator::service::{Clock, Coordinator};
 use hostkeeper_coordinator::services::Services;
 use hostkeeper_daemon::Daemon;
-use hostkeeper_daemon::cli::{HostFiles, host_links};
+use hostkeeper_daemon::cli::host_links;
 use hostkeeper_daemon::links::{HostLink, coordinator_link};
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::testing::RecordingLog;
@@ -35,12 +35,8 @@ use hostkeeper_link::{
 use hostkeeper_testkit::Scratch;
 use hostkeeper_tls::TlsSource;
 use http_body_util::{BodyExt, Full};
-use rcgen::{
-    BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
-    ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType,
-};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
+use support::pki::{Ca, HOST, Leaf, config, enroll, files_under, scratch};
 use support::{OWN, Rig, alerting, lines};
 
 /// The operator token of the coordinator, for its status.
@@ -49,98 +45,8 @@ const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
 /// How long the coordinator waits for a client, as its own default.
 const PATIENCE: Duration = Duration::from_secs(10);
 
-/// The node id of the host's certificate.
-const HOST: &str = "d1";
-
 /// The heartbeat period the tests give `host_links`; nothing waits for it.
 const PERIOD: NonZeroU64 = NonZeroU64::new(60).expect("not zero");
-
-/// A test certificate authority.
-struct Ca {
-    issuer: CertifiedIssuer<'static, KeyPair>,
-    der: Vec<u8>,
-    pem: String,
-}
-
-/// A certificate of a [`Ca`] and its key: the PEM of both, and the key as PKCS#8 DER, as
-/// enrollment writes it into a generation of the pki directory.
-struct Leaf {
-    cert_pem: String,
-    key_pem: String,
-    key_der: Vec<u8>,
-}
-
-impl Ca {
-    fn new(common_name: &str) -> Ca {
-        let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
-        params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
-        params.distinguished_name = named(common_name);
-        params.key_usages = vec![
-            KeyUsagePurpose::KeyCertSign,
-            KeyUsagePurpose::DigitalSignature,
-        ];
-        let issuer = CertifiedIssuer::self_signed(params, KeyPair::generate().expect("a CA key"))
-            .expect("a CA certificate");
-        Ca {
-            der: issuer.der().to_vec(),
-            pem: issuer.pem(),
-            issuer,
-        }
-    }
-
-    /// Its SHA-256 in hex, as the daemon config pins it.
-    fn sha256_hex(&self) -> String {
-        Sha256::digest(&self.der)
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect()
-    }
-
-    fn leaf(&self, common_name: &str, names: Vec<SanType>, usage: ExtendedKeyUsagePurpose) -> Leaf {
-        let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
-        params.distinguished_name = named(common_name);
-        params.subject_alt_names = names;
-        params.extended_key_usages = vec![usage];
-        // rcgen's default: a P-256 key, the only kind the pki directory holds.
-        let key = KeyPair::generate().expect("a key");
-        let cert = params.signed_by(&key, &self.issuer).expect("signed");
-        Leaf {
-            cert_pem: cert.pem(),
-            key_pem: key.serialize_pem(),
-            key_der: key.serialize_der(),
-        }
-    }
-
-    /// The coordinator's certificate: for the loopback address, a server's only.
-    fn coordinator(&self) -> Leaf {
-        self.leaf(
-            "coordinator",
-            vec![SanType::IpAddress([127, 0, 0, 1].into())],
-            ExtendedKeyUsagePurpose::ServerAuth,
-        )
-    }
-
-    /// The certificate of the updater [`HOST`] on a host of role `daemon`, as the coordinator
-    /// reads one by default.
-    fn host(&self) -> Leaf {
-        let uri = |text: &str| SanType::URI(text.to_owned().try_into().expect("a URI"));
-        self.leaf(
-            HOST,
-            vec![
-                uri("urn:hostkeeper:role:updater"),
-                uri("urn:hostkeeper:host-role:daemon"),
-                SanType::DnsName(HOST.to_owned().try_into().expect("a DNS name")),
-            ],
-            ExtendedKeyUsagePurpose::ClientAuth,
-        )
-    }
-}
-
-fn named(common_name: &str) -> DistinguishedName {
-    let mut name = DistinguishedName::new();
-    name.push(DnType::CommonName, common_name);
-    name
-}
 
 /// A coordinator that runs `web` on the role `daemon` and wants it at 2.0, over the files of
 /// `dir`; its clock is past its quiet start, so it orders at once.
@@ -343,50 +249,6 @@ fn json() -> Vec<String> {
 
 fn grpc() -> Vec<String> {
     vec!["h2".to_owned()]
-}
-
-/// A daemon config whose coordinator is `coordinator` and whose CA pin is `pin`.
-fn config(coordinator: &str, pin: &str) -> DaemonConfig {
-    let text = format!(
-        "coordinator = \"{coordinator}\"\nca_sha256 = \"{pin}\"\n\
-         release_channel = \"https://releases.example\"\n\n[trusted_signers]\n\
-         organisation = \"komira-ai\"\nworkflow = \".github/workflows/release.yml\"\n\
-         refs = [\"refs/tags/*\"]\nhosted_runner = true\n"
-    );
-    DaemonConfig::parse(&text).expect("a daemon config")
-}
-
-fn scratch(name: &str) -> Scratch {
-    Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch directory")
-}
-
-/// The host's files under `root`, its pki directory `root/pki`.
-fn files_under(root: &Path) -> HostFiles {
-    HostFiles {
-        repositories: None,
-        os_root: root.join("os"),
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
-        stores: root.join("stores.toml"),
-        macos_pkg_signers: None,
-        pki: root.join("pki"),
-        console: None,
-        managed_config: None,
-        managed_stores: None,
-        managed_macos_pkg: None,
-    }
-}
-
-/// Writes a complete generation of the pki directory `pki`, as enrollment leaves it: `leaf`'s
-/// certificate and key and `ca`'s bundle in `gen-1`, and `current` naming it.
-fn enroll(pki: &Path, leaf: &Leaf, ca: &Ca) {
-    let generation = pki.join("gen-1");
-    std::fs::create_dir_all(&generation).expect("a generation");
-    std::fs::write(generation.join("cert.pem"), &leaf.cert_pem).expect("the certificate");
-    std::fs::write(generation.join("key"), &leaf.key_der).expect("the key");
-    std::fs::write(generation.join("ca.pem"), &ca.pem).expect("the CA bundle");
-    std::os::unix::fs::symlink("gen-1", pki.join("current")).expect("current");
 }
 
 /// A dispatcher that keeps each job for the test, which never runs it: the order a reply

@@ -135,3 +135,22 @@ message RemoveRepositoryResponse {
   uint64 generation = 1;
   AuditEntry entry = 2;
 }
+
+// A host's package repositories: what the coordinator's registry holds for it and what its
+// daemon reported (`HeartbeatRequest.repositories`).
+message HostRepositories {
+  // The repositories its services name, by name.
+  repeated string named = 1;
+  // Those the registry does not hold: while any is, the host is sent no repository.
+  repeated string unregistered = 2;
+  // The digest of the set the coordinator sends it; empty when it sends none.
+  string digest = 3;
+  // The generation of the set in force on the host, as its daemon reported it; 0 while it holds
+  // none the coordinator sent since the daemon started.
+  uint64 generation = 4;
+  // Whether the set in force on the host is `digest`.
+  bool current = 5;
+  // Why the daemon refused the set it was last sent, when it refused it and it is still `digest`;
+  // empty otherwise.
+  string refused = 6;
+}

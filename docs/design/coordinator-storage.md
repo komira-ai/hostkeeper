@@ -136,14 +136,6 @@ releases(                                -- migration 0004: the release a versio
   targets jsonb NOT NULL,                -- per platform, its TargetList as proto3 JSON
   release_index_digest text,             -- the index set with the targets; NULL for none
   PRIMARY KEY (service, version))
-
-repositories(                            -- migration 0007: the registry of package repositories
-  name   text PRIMARY KEY CHECK (name ~ '^[a-z0-9-]{1,32}$'),
-  record jsonb NOT NULL)                 -- {"generation": n, "repository": {...}}, the keyring as base64
-
-repository_generation(                   -- migration 0007: the registry's generation, one row
-  id bigint PRIMARY KEY CHECK (id = 1),
-  generation bigint NOT NULL CHECK (generation > 0))
 ```
 
 A service's row and its registry rows change in one transaction, so they are never apart (today they are one file,
@@ -151,15 +143,8 @@ A service's row and its registry rows change in one transaction, so they are nev
 Rust (`registry.rs`). A version set with targets is written as one set with neither a digest nor an index, and its
 release in `releases`, in the same transaction; the releases of a service keep the registry's cap and eviction rule
 (`releases.rs`), and are what the file store keeps in `<state-file>.releases`. `0004` is `may-run`: an older release
-never reads the table. The registry of package repositories is in the desired state's tables too: one row of
-`repositories` per repository and the registry's generation in `repository_generation` (no row while it is 0; the row
-stays when the last repository is removed, so the generation never goes back), written in the same transaction as
-the desired state or the audit entry it is changed with (`repositories.rs`); the file store keeps the registry in
-`<state-file>.repositories`, written whole, before the state file, when a commit changes it. `0007` is `may-run`: an
-older release never reads either table or the file, and a start on them finds no registry. A load judges every
-repository by the rules of `hostkeeper-release` again and refuses a registry that breaks one, naming the repository.
-`--legacy-service` keeps its meaning for the JSON routes; the single-state file form it selects is
-a file encoding and has no table.
+never reads the table. So is `0007`, the repository registry's (`repositories.rs`). `--legacy-service` keeps its
+meaning for the JSON routes; the single-state file form it selects is a file encoding and has no table.
 
 **Generations and write ids.** The operator API already defines them (`SetDesiredRequest.if_generation` and `write_id`,
 `SetDesiredResponse.record`, the `WriteRecord` and `Replaced` messages, the refusal `generation_conflict`). The file

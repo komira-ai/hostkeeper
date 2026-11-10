@@ -325,7 +325,7 @@ impl Coordinator {
     /// Refuses a set whose `release` holds a repository entry (`repository_unknown`) when the
     /// registry does not hold the repository `def` names, or when an entry's `repository` is not
     /// `<name>-<suite>` of that repository's name and one of its suites
-    /// ([`registry::channel`]). A set without targets, or with artifact entries alone, is not
+    /// ([`registry::channels`]). A set without targets, or with artifact entries alone, is not
     /// checked.
     fn refuse_repository(
         &self,

@@ -76,7 +76,7 @@ fn the_uri_is_https_a_host_a_port_and_a_path() {
         "https://repo.example.com:8443",
         "https://repo.example.com:1",
         "https://repo.example.com:65535/a/b_c~d.e-f",
-        "https://1.2.3.4/x",
+        "https://192.0.2.1/x",
         "https://a-b.example.com",
     ] {
         assert_eq!(check(&with(|e| e.uri = s(uri))), Ok(()), "{uri}");
@@ -87,7 +87,7 @@ fn the_uri_is_https_a_host_a_port_and_a_path() {
         "https://",
         "https:///path",
         "https://.example.com",
-        "https://-example.com",
+        "https://-repo.example.com",
         "https://repo_x.example.com",
         "https://user@repo.example.com",
         "https://repo.example.com:",
@@ -105,7 +105,10 @@ fn the_uri_is_https_a_host_a_port_and_a_path() {
             "{uri}"
         );
     }
-    let at_max = format!("https://h/{}", "a".repeat(512 - "https://h/".len()));
+    let at_max = format!(
+        "https://example.com/{}",
+        "a".repeat(512 - "https://example.com/".len())
+    );
     assert_eq!(at_max.len(), 512);
     assert_eq!(check(&with(|e| e.uri = at_max.clone())), Ok(()));
     let over = format!("{at_max}a");

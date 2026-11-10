@@ -11,7 +11,7 @@
 
 use std::collections::BTreeMap;
 
-use super::rows::{KeyTy, KeyVal, Rows, Table, Ty, Val};
+use super::rows::{KeyTy, KeyVal, Rows, Table, Tables, Ty, Val};
 use super::state::{int, json_of, place};
 use crate::desired::{DesiredError, StoreError};
 use crate::repositories::{Kept, Registry};
@@ -50,6 +50,29 @@ pub(crate) fn rows(registry: &Registry) -> Result<(Rows, Rows), StoreError> {
         );
     }
     Ok((repositories, generation))
+}
+
+/// Puts the rows of `registry` ([`rows`]) into `tables`, under the tables' names.
+///
+/// # Errors
+/// As [`rows`].
+pub(crate) fn insert(registry: &Registry, tables: &mut Tables) -> Result<(), StoreError> {
+    let (repositories, generation) = rows(registry)?;
+    tables.insert(TABLE.name, repositories);
+    tables.insert(GENERATION.name, generation);
+    Ok(())
+}
+
+/// The registry `tables` hold ([`of`]); a table they lack reads as empty.
+///
+/// # Errors
+/// As [`of`].
+pub(crate) fn of_tables(tables: &Tables) -> Result<Registry, StoreError> {
+    let empty = Rows::new();
+    of(
+        tables.get(TABLE.name).unwrap_or(&empty),
+        tables.get(GENERATION.name).unwrap_or(&empty),
+    )
 }
 
 /// The registry the rows hold, read as the repositories file's reader reads it.

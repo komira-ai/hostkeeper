@@ -5,6 +5,7 @@
 
 pub mod coordinated;
 pub mod force;
+pub mod pki;
 pub mod selfupdate;
 
 use std::fs;

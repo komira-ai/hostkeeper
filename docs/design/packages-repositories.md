@@ -312,6 +312,12 @@ is an audit entry, and the fingerprints are checked at `Put` and again by each d
 name a keyring. A keyring package from the repository itself (Debian's `debian-archive-keyring` pattern) is not used: a
 key that signs its own successor cannot be taken back after it leaks.
 
+**A `Put` that drops a suite.** `Put` checks a repository against the registry alone, not against the releases already
+set: a `Put` that drops a suite (`testing-fail` once hello's proof is over) is taken even while a set release still
+names its entry. A host then answers an order of that entry `Failed`, `environment`, `repository_unknown`, and the
+rollout gate stops on it, as for any entry its configuration lacks; a new set that names it is refused
+`repository_unknown`. `Remove` is refused while a service of the rollout file names the repository (`in_use`).
+
 ### 3.3 What is trusted, and what is not used
 
 This section is apt's; section 4.7 says what a Mac trusts instead. For an apt entry, the chain is apt's: the keyring on the host verifies the suite's `InRelease`, which lists the
