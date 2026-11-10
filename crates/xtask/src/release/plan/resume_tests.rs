@@ -5,7 +5,7 @@
 
 use super::*;
 use crate::release::fakes::{FakeHistory, FakeRuns, Fakes, nth_commit};
-use crate::release::ports::{Adapters, GitHubRuns, Issue, PortError, Run};
+use crate::release::ports::{Adapters, GitHubRuns, Issue, Job, PortError, Run};
 
 fn repo() -> Repo {
     "komira-ai/hostkeeper".parse().expect("a repository")
@@ -51,7 +51,7 @@ fn publish_job(commit: &Commit) -> String {
 }
 
 /// A run of release.yml on `branch` for the head `head` that ended `conclusion` (none: still
-/// going), with the jobs `jobs`; its id.
+/// going), with the jobs `jobs`, each ended as the run did; its id.
 fn release_run(
     fakes: &Fakes,
     head: &Commit,
@@ -62,7 +62,14 @@ fn release_run(
     let id = fakes
         .runs
         .add("release.yml", head, "workflow_run", branch, conclusion);
-    fakes.runs.jobs.borrow_mut().insert(id, jobs.to_vec());
+    let jobs = jobs
+        .iter()
+        .map(|name| Job {
+            name: name.clone(),
+            conclusion: conclusion.map(str::to_owned),
+        })
+        .collect();
+    fakes.runs.jobs.borrow_mut().insert(id, jobs);
     id
 }
 
@@ -224,7 +231,7 @@ impl GitHubRuns for NoJobs<'_> {
     fn runs(&self, repo: &Repo, workflow: &str, commit: &Commit) -> Result<Vec<Run>, PortError> {
         self.0.runs(repo, workflow, commit)
     }
-    fn job_names(&self, _: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+    fn jobs(&self, _: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
         Err(PortError::new(format!("gh jobs {run}"), "HTTP 502"))
     }
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError> {

@@ -6,7 +6,7 @@
 
 use super::lint::entry;
 use super::set_desired::{ALWAYS_IF, CALL_STEPS, ORDERED, WAIT_IF};
-use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, command};
+use super::set_desired_calls::{CALLS, OUTPUTS_ENV, REQUEST_ARGS, SET_REDIRECT, command};
 use super::set_desired_tests::{CLIENT, CLIENT_BLOCK, assert_client, moved, real, step_ids};
 use super::with_in;
 use super::yaml::{self, Node, Value};
@@ -187,26 +187,43 @@ fn a_call_is_one_hkctl_command_of_the_table_into_its_own_files() {
             "step 11 (`set-desired`) passes `--response-file`, which is not a flag of `releases set-desired`",
         ],
     );
-    let no_err = "step 11 (`set-desired`) does not end with `2> \"$RUNNER_TEMP/hkctl-set.err\"`, the file the outputs step reads";
+    let no_err = "step 11 (`set-desired`) does not end with `2> >(tee \"$RUNNER_TEMP/hkctl-set.err\" >&2)`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-set.err`, the file the outputs step reads";
+    // The diagnostics not sent anywhere: the outputs step reads nothing and the log shows them.
     assert_client(
-        &with_in(
-            CLIENT,
-            "--request \"$RUNNER_TEMP/hkctl-request.json\" \\\n            2> \"$RUNNER_TEMP/hkctl-set.err\"\n",
+        &set_with(
+            &format!(
+                "--request \"$RUNNER_TEMP/hkctl-request.json\" \\\n            {SET_REDIRECT}\n"
+            ),
             "--request \"$RUNNER_TEMP/hkctl-request.json\"\n",
         ),
         &[no_err],
     );
+    for to in [
+        // The set step as it was: its own log shows only hkctl's exit code.
+        "2> \"$RUNNER_TEMP/hkctl-set.err\"",
+        // The wait's file, which the outputs step does not read for the set.
+        "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)",
+        // To the log alone: the outputs step reads no diagnostics.
+        "2>&1",
+        // To the file and to stdout, which carries only the mask line.
+        "2> >(tee \"$RUNNER_TEMP/hkctl-set.err\")",
+        // A tee that appends to a file a re-run of the job left.
+        "2> >(tee -a \"$RUNNER_TEMP/hkctl-set.err\" >&2)",
+        // A pipe: the step's code becomes tee's, and a failed set reads as a success.
+        "2>&1 | tee \"$RUNNER_TEMP/hkctl-set.err\"",
+    ] {
+        assert_client(&set_with(SET_REDIRECT, to), &[no_err]);
+    }
+    // The wait ends with its file alone: the rule of its own end is unchanged.
     assert_client(
         &with_in(
             CLIENT,
-            "2> \"$RUNNER_TEMP/hkctl-set.err\"",
-            "2> \"$RUNNER_TEMP/hkctl-wait.err\"",
+            "2> \"$RUNNER_TEMP/hkctl-wait.err\"\n",
+            "2> >(tee \"$RUNNER_TEMP/hkctl-wait.err\" >&2)\n",
         ),
-        &[no_err],
-    );
-    assert_client(
-        &with_in(CLIENT, "2> \"$RUNNER_TEMP/hkctl-set.err\"", "2>&1"),
-        &[no_err],
+        &[
+            "step 12 (`wait`) does not end with `2> \"$RUNNER_TEMP/hkctl-wait.err\"`, which sends its diagnostics to `$RUNNER_TEMP/hkctl-wait.err`, the file the outputs step reads",
+        ],
     );
 }
 
@@ -630,4 +647,93 @@ fn the_request_takes_each_part_of_the_release_from_its_own_input() {
             &[&not_arg],
         );
     }
+}
+
+/// Runs the set step of the real `set-desired.yml`, under the runner's shell, with a fake hkctl
+/// that writes `stderr` and exits `status`: the step's exit code, what it printed to stderr, and
+/// what the diagnostics file the outputs step reads holds.
+fn run_set_step(name: &str, stderr: &str, status: u8) -> (Option<i32>, String, String) {
+    use std::os::unix::fs::PermissionsExt;
+    let doc = yaml::load(&real()).expect("set-desired.yml parses");
+    let steps = match entry(&doc, "jobs")
+        .and_then(|jobs| entry(jobs, "set-desired"))
+        .and_then(|job| entry(job, "steps"))
+        .map(|s| &s.value)
+    {
+        Some(Value::Seq(steps)) => steps,
+        _ => panic!("the job set-desired has steps"),
+    };
+    let step = steps
+        .iter()
+        .find(|s| entry(s, "id").and_then(Node::as_str) == Some("set-desired"))
+        .expect("the set step");
+    let script = entry(step, "run").and_then(Node::as_str).expect("its run");
+    let base = std::path::Path::new(env!("CARGO_TARGET_TMPDIR")).join("set-step-run");
+    let root = super::testdir::TestDir::under(&base, name);
+    let bin = root.join("hkctl-bin");
+    std::fs::create_dir_all(&bin).expect("make the fake's directory");
+    let fake = bin.join("hkctl");
+    std::fs::write(
+        &fake,
+        "#!/bin/bash\nprintf '%s' \"$FAKE_STDERR\" >&2\nexit \"$FAKE_STATUS\"\n",
+    )
+    .expect("write the fake hkctl");
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+    let out = std::process::Command::new("bash")
+        .args(["--noprofile", "--norc", "-eo", "pipefail", "-c", script])
+        .env_clear()
+        .env("PATH", "/usr/bin:/bin")
+        .env("RUNNER_TEMP", &*root)
+        .env("SERVICE", "hostkeeper")
+        .env("COORDINATOR_URL", "https://coordinator.example")
+        .env("AUDIENCE", "hostkeeper-ci")
+        .env("FAKE_STDERR", stderr)
+        .env("FAKE_STATUS", status.to_string())
+        .output()
+        .expect("run bash");
+    let saved = std::fs::read_to_string(root.join("hkctl-set.err")).expect("the diagnostics file");
+    (
+        out.status.code(),
+        String::from_utf8(out.stderr).expect("utf-8"),
+        saved,
+    )
+}
+
+#[test]
+fn a_failed_set_prints_hkctls_diagnostics_and_keeps_its_exit_code() {
+    // Catches: a red set step whose own log shows only `exit code 2`, a failure turned into
+    // success or into another code (the outputs step reads the step's outcome), and the
+    // diagnostics file left empty for the outputs step.
+    let refusal =
+        "hkctl: the coordinator answered FAILED_PRECONDITION\nrefused: repository_unknown\n";
+    assert_eq!(
+        run_set_step("refused", refusal, 2),
+        (Some(2), refusal.to_owned(), refusal.to_owned())
+    );
+    // No answer at all is hkctl's exit 1, printed the same way.
+    let no_answer = "hkctl: no answer from https://coordinator.example (curl exited 7)\n";
+    assert_eq!(
+        run_set_step("no-answer", no_answer, 1),
+        (Some(1), no_answer.to_owned(), no_answer.to_owned())
+    );
+    // A failure with no diagnostics still ends with hkctl's code, and prints nothing.
+    assert_eq!(
+        run_set_step("silent", "", 4),
+        (Some(4), String::new(), String::new())
+    );
+}
+
+#[test]
+fn a_set_that_succeeds_succeeds_and_shows_what_hkctl_wrote() {
+    // Catches: a success turned into a failure by the redirect, and a warning on success lost
+    // from the log or from the file.
+    assert_eq!(
+        run_set_step("success", "", 0),
+        (Some(0), String::new(), String::new())
+    );
+    let warning = "hkctl: a warning\n";
+    assert_eq!(
+        run_set_step("success-warning", warning, 0),
+        (Some(0), warning.to_owned(), warning.to_owned())
+    );
 }

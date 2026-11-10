@@ -1,7 +1,7 @@
 use super::*;
 use crate::release::contract::Commit;
 use crate::release::fakes::{FakeAdvisories, FakeExec, FakeRuns};
-use crate::release::ports::Run;
+use crate::release::ports::{Job, Run};
 
 /// cargo-deny 0.20.2 on a crate that locks smallvec 0.6.13 and time 0.1.43: two advisories and
 /// the summary, as it wrote them to stderr (each advisory's date and description shortened).
@@ -448,8 +448,8 @@ impl GitHubRuns for Down {
     fn runs(&self, _: &Repo, _: &str, _: &Commit) -> Result<Vec<Run>, PortError> {
         Err(self.fail("runs"))
     }
-    fn job_names(&self, _: &Repo, _: u64) -> Result<Vec<String>, PortError> {
-        Err(self.fail("job_names"))
+    fn jobs(&self, _: &Repo, _: u64) -> Result<Vec<Job>, PortError> {
+        Err(self.fail("jobs"))
     }
     fn on_main(&self, _: &Repo, _: &Commit) -> Result<bool, PortError> {
         Err(self.fail("on_main"))
@@ -478,8 +478,8 @@ impl GitHubRuns for ReadOnly {
     fn runs(&self, repo: &Repo, w: &str, c: &Commit) -> Result<Vec<Run>, PortError> {
         self.down.runs(repo, w, c)
     }
-    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
-        self.down.job_names(repo, run)
+    fn jobs(&self, repo: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
+        self.down.jobs(repo, run)
     }
     fn on_main(&self, repo: &Repo, c: &Commit) -> Result<bool, PortError> {
         self.down.on_main(repo, c)

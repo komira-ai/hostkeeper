@@ -8,8 +8,10 @@
 //! of [`TOKEN_INPUTS`] among them (a call takes the job's own OIDC token, by
 //! `--github-oidc-audience`, and no token is ever a file or stdin of the job); it does not call
 //! `releases <method>`, or that is not a command of hkctl's table (`hostkeeper_proto::ctl`); a flag
-//! after the method is not one of that command; or it does not end by sending its diagnostics to
-//! its own file (`2> <file>`), the one the outputs step reads; or it does not pass each flag of
+//! after the method is not one of that command; or it does not end with exactly its `redirect`,
+//! which sends its diagnostics to its own file, the one the outputs step reads (the set:
+//! [`SET_REDIRECT`], through `tee` to its log as well; the wait: `2> <file>`); or it does not
+//! pass each flag of
 //! its `fields` after the method exactly once with exactly its value (the set: the service and
 //! [`REQUEST_FILE`], which the request step writes; the wait: the service, the version and
 //! [`WAIT_SECS`]); or a variable of [`CALL_ENV`] its command names is not given in its `env` as
@@ -28,14 +30,22 @@ use super::set_desired::{CLIENT_STEP, PROGRAM, WAIT_STEP, logical_lines, text, v
 use super::yaml::Node;
 
 /// One call step: its `id`, the method of `releases` it calls, the files of its answer and of
-/// its diagnostics, and the flags of the method it passes with their values.
+/// its diagnostics, the flags of the method it passes with their values, and the redirect that
+/// ends its command line and sends its diagnostics to `err`.
 pub struct Call {
     pub step: &'static str,
     pub method: &'static str,
     pub response: &'static str,
     pub err: &'static str,
     pub fields: &'static [(&'static str, &'static str)],
+    pub redirect: &'static str,
 }
+
+/// The set's redirect: its diagnostics go to the file the outputs step reads and, through
+/// `tee`, to the step's own log, so a failed set names its cause there (the coordinator's code
+/// and its `refused: <token>` line). It is a redirect of the one command, so the step ends with
+/// hkctl's exit code.
+pub const SET_REDIRECT: &str = r#"2> >(tee "$RUNNER_TEMP/hkctl-set.err" >&2)"#;
 
 /// The two calls, in the order they run.
 pub const CALLS: [Call; 2] = [
@@ -45,6 +55,7 @@ pub const CALLS: [Call; 2] = [
         response: "$RUNNER_TEMP/hkctl-set.json",
         err: "$RUNNER_TEMP/hkctl-set.err",
         fields: &[("--service", "$SERVICE"), ("--request", REQUEST_FILE)],
+        redirect: SET_REDIRECT,
     },
     Call {
         step: WAIT_STEP,
@@ -56,6 +67,7 @@ pub const CALLS: [Call; 2] = [
             ("--version", "$VERSION"),
             WAIT_SECS,
         ],
+        redirect: r#"2> "$RUNNER_TEMP/hkctl-wait.err""#,
     },
 ];
 /// What a call step's `env` gives each variable its command names, exactly: the caller's inputs.
@@ -238,10 +250,10 @@ pub fn step_call_problems(who: &str, step: &Node, call: &Call) -> Vec<String> {
             ));
         }
     }
-    if rest.get(2 + field_took..) != Some(&["2>", call.err][..]) {
+    if rest.get(2 + field_took..) != Some(&words(call.redirect)[..]) {
         problems.push(format!(
-            "{who} does not end with `2> \"{}\"`, the file the outputs step reads",
-            call.err
+            "{who} does not end with `{}`, which sends its diagnostics to `{}`, the file the outputs step reads",
+            call.redirect, call.err
         ));
     }
     let after = rest.get(2..2 + field_took).unwrap_or_default();

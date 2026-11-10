@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::contract::{Commit, MAIN, Repo, Signer};
 use super::git::stdout_of;
 use super::ports::{
-    Attestation, Exec, GitHubRuns, Issue, PortError, Release, ReleaseStore, Run, StoredAsset,
+    Attestation, Exec, GitHubRuns, Issue, Job, PortError, Release, ReleaseStore, Run, StoredAsset,
     Verifier,
 };
 
@@ -193,17 +193,20 @@ impl<E: Exec> GitHubRuns for Gh<E> {
     }
 
     /// Every page of the list: a run of many releases has more jobs than one page holds.
-    fn job_names(&self, repo: &Repo, run: u64) -> Result<Vec<String>, PortError> {
+    fn jobs(&self, repo: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
         let path = format!("repos/{repo}/actions/runs/{run}/jobs?per_page=100");
         let (value, what) = self.json(&["api", "--paginate", "--slurp", &path])?;
         let r = Reader { what: &what };
-        let mut names = Vec::new();
+        let mut jobs = Vec::new();
         for page in r.list(&value, "the reply")? {
             for job in r.list(&page["jobs"], "jobs")? {
-                names.push(r.string(&job["name"], "name")?);
+                jobs.push(Job {
+                    name: r.string(&job["name"], "name")?,
+                    conclusion: job["conclusion"].as_str().map(str::to_owned),
+                });
             }
         }
-        Ok(names)
+        Ok(jobs)
     }
 
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError> {
