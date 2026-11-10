@@ -21,6 +21,7 @@ mod coordinator_wait;
 mod coordinator_wait_run_tests;
 mod coordinator_wait_tests;
 mod desired;
+mod desired_channels_tests;
 mod desired_tests;
 mod downloads;
 mod downloads_tests;

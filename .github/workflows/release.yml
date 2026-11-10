@@ -80,7 +80,9 @@
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: write the targets of the newest release, wait until the
 #          coordinator runs at least that release (its own machine updates it; this workflow
-#          never changes it), then set the release as hostkeeper's desired version on the
+#          never changes it) and the package channels its targets point at list it (the apt
+#          suite `testing`, written by testing-apt-write; the installers' `testing` directory,
+#          by testing-pkg-upload), then set the release as hostkeeper's desired version on the
 #          coordinator, by one call of the CI client (set-desired.yml) with an OIDC token. See
 #          the comment above the three jobs.
 #
@@ -492,13 +494,22 @@ jobs:
   #          the service `hostkeeper` first, then the rest once they have baked, stage by stage by the
   #          service's update plan, which is longer than a job should hold the release group.
   #          The job ends once the coordinator stored the version (`reason` `not_waited`).
+  #          It runs only once the channels the targets point at hold the release: a host
+  #          defers an entry its channel does not list yet (`not_in_repository`). So it needs
+  #          the three attempts of the testing apt write, and runs once one of them reported
+  #          `conflict` `false` (its index lists the .debs), and the pkg upload, and runs once
+  #          that ran with its settings (`enabled` `true`); `!cancelled() && !failure()`, since
+  #          attempts 2 and 3 are skipped when attempt 1 landed, and any job it needs that
+  #          failed, at any depth, still stops it. The release's targets name no other channel
+  #          (no rpm entry): the workflow lint holds these needs to the channels of the targets
+  #          the real `release targets` writes (crates/xtask/tests/workflows/desired.rs).
   #          The join, when HOSTKEEPER_TAILNET_CLIENT_ID is set, asks for the tag of the
   #          repository variable HOSTKEEPER_TAILNET_TAG (`tag:ci`), the one the federation's trust
   #          credential issues; the client checks it at its first step, with or without the join,
   #          so the variable must be set.
   set-desired:
-    needs: [plan, targets, coordinator]
-    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}
+    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' }}
     permissions:
       contents: read
       id-token: write

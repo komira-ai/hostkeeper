@@ -47,7 +47,7 @@ one credential is the OIDC token GitHub issues to the job.
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds
    no other token right; it joins no tailnet.
 5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
-   the condition `set-desired` has). The coordinator is updated by its own machine
+   the condition of `targets` and only when its release is the newest published). The coordinator is updated by its own machine
    (`hostkeeper-coordinator-update`, a release asset, on a timer there, [coordinator-update.md](coordinator-update.md)),
    not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
    same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from
@@ -62,7 +62,14 @@ one credential is the OIDC token GitHub issues to the job.
    coordinator updater reported this release (<X.Y.Z>) (is the timer installed?)`; after anything
    else (000, no answer: the tailnet join, the CA or the URL variable), that the coordinator did
    not answer, with the last status.
-6. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`). The job calls the CI client
+6. **Set the desired version** (job `set-desired` of `release.yml`, which needs `coordinator`
+   and the package channels' writes of the release: the three attempts of `testing-apt-write`
+   and `testing-pkg-upload`). It runs only once the coordinator runs the release and every
+   channel the targets point at holds it: one attempt of the apt write wrote the `testing`
+   index with the `.deb`s in it (`conflict` `false`), and the pkg upload put the `.pkg` with
+   its settings (`enabled` `true`). Before that a host would defer the release
+   (`not_in_repository`). A failed write, or a channel without its settings, leaves
+   `set-desired` skipped: nothing is set. The job calls the CI client
    ([set-desired.yml](ci-client.md)) once: it verifies the pinned hostkeeper release's `hkctl`,
    joins the tailnet when `HOSTKEEPER_TAILNET_CLIENT_ID` is set, and runs `hkctl releases set-desired` for the
    service `hostkeeper` at `<X.Y.Z>`; hkctl requests the OIDC token itself and hands it to the
@@ -242,6 +249,7 @@ call gets a new token.
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
 | `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
+| `testing-apt-write`, `testing-apt-write-3` or `testing-pkg-upload` | A package channel was not written (the last apt attempt lost the race for the index too, or a write failed), so `set-desired` did not run: nothing is set. A channel without its settings ends green with a notice, and `set-desired` is skipped too. | Fix the channel ([package-repositories.md](package-repositories.md)), then **Re-run failed jobs**. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin. |
 | `set-desired`: Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (the allow-list entry, above, its `host_groups` included), `not_in_host_group` (no group lists `hostkeeper`), `limits_in_host_group` (the set carried `max_updating` or `min_up`), `target_invalid` (a list the coordinator's checks refuse), `held_bad`, `below_min_version`, `no_answer` (the coordinator is not reachable: the tailnet variables) ([the full table](ci-client.md#when-it-fails)). | Fix what the token names, then re-run. |
 

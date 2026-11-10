@@ -3,7 +3,9 @@
 //! repository's `release.yml` and reading the exact problems the lint reports.
 
 use super::callers::{CLIENT_COMMIT, CLIENT_RELEASE};
-use super::desired::{DESIRED_IF, GATE, SET_IF, TARGETS_OUTPUTS, TARGETS_STEPS};
+use super::desired::{
+    DESIRED_IF, GATE, SET_DESIRED_IF, SET_IF, TARGETS_OUTPUTS, TARGETS_STEPS, caller_needs,
+};
 use super::lint::lint;
 use super::release::publish_problems;
 use super::{with_in, workflows};
@@ -52,9 +54,25 @@ fn targets_if() -> String {
     format!("    if: {DESIRED_IF}\n")
 }
 
-/// The `if:` line of the job set-desired.
+/// The `if:` line of the job coordinator.
 fn set_if() -> String {
     format!("    if: {SET_IF}\n")
+}
+
+/// The `if:` line of the job set-desired.
+fn set_desired_if() -> String {
+    format!("    if: {SET_DESIRED_IF}\n")
+}
+
+/// The `needs:` line of the job set-desired.
+const SET_NEEDS: &str = "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload]\n";
+
+/// The problem of the job set-desired whose sorted needs are `got`.
+fn set_needs_problem(got: &[&str]) -> String {
+    format!(
+        "release.yml: job set-desired needs {got:?}, not {:?}",
+        caller_needs()
+    )
 }
 
 /// The problem a changed step `n` (from 1) of the job targets is reported with.
@@ -77,8 +95,12 @@ fn the_deploy_jobs_of_the_repository_pass() {
     let text = release_yml();
     assert_eq!(lint("release.yml", &text), Vec::<String>::new());
     assert_eq!(deploy_jobs().matches(&targets_if()).count(), 1);
-    // The coordinator wait and set-desired run under the one `if:`.
-    assert_eq!(deploy_jobs().matches(&set_if()).count(), 2);
+    // The coordinator wait runs under the `if:` of the deploy, and set-desired under it with
+    // the channel writes landed.
+    assert_eq!(deploy_jobs().matches(&set_if()).count(), 1);
+    assert_eq!(deploy_jobs().matches(&set_desired_if()).count(), 1);
+    assert!(SET_DESIRED_IF.contains(&SET_IF[4..SET_IF.len() - 3]));
+    assert_eq!(deploy_jobs().matches(SET_NEEDS).count(), 1);
 }
 
 #[test]
@@ -86,7 +108,7 @@ fn the_deploy_is_turned_on_only_by_the_repository_variable_being_true() {
     // Catches: the gate written against another variable, or as "set to anything", so that the
     // variable no longer turns the deploy off.
     let gate = format!(" && vars.{GATE} == 'true'");
-    assert!(DESIRED_IF.contains(&gate) && SET_IF.contains(&gate));
+    assert!(DESIRED_IF.contains(&gate) && SET_IF.contains(&gate) && SET_DESIRED_IF.contains(&gate));
     let text = release_yml().replace(&gate, "");
     assert_eq!(
         lint("release.yml", &text),
@@ -94,8 +116,8 @@ fn the_deploy_is_turned_on_only_by_the_repository_variable_being_true() {
             format!("job coordinator: `id-token: write` needs the exact `if: {SET_IF}`"),
             format!("release.yml: job targets needs the exact `if: {DESIRED_IF}`"),
             format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
-            format!("release.yml: job set-desired needs the exact `if: {SET_IF}`"),
-            format!("job set-desired needs the exact `if: {SET_IF}`"),
+            format!("release.yml: job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
+            format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
         ]
     );
     let text = release_yml().replace(&gate, &format!(" && vars.{GATE} != ''"));
@@ -118,21 +140,16 @@ fn the_targets_job_without_its_if_is_refused() {
 fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() {
     // Catches: a late run of an older commit, released after a newer one, setting its older
     // version and moving the fleet back; and the check that says so dropped from the targets job.
-    let without = format!(
-        "    if: {DESIRED_IF}\n    permissions:\n      contents: read\n      id-token: write\n"
-    );
+    let newest = " && needs.targets.outputs.newest == 'true'";
     assert_problems(
-        &format!(
-            "{}    permissions:\n      contents: read\n      id-token: write\n",
-            set_if()
-        ),
-        &without,
+        &set_desired_if(),
+        &set_desired_if().replacen(newest, "", 1),
         &[
-            &format!("release.yml: job set-desired needs the exact `if: {SET_IF}`"),
-            &format!("job set-desired needs the exact `if: {SET_IF}`"),
+            &format!("release.yml: job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
+            &format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
         ],
     );
-    assert!(SET_IF.contains("needs.targets.outputs.newest == 'true'"));
+    assert!(SET_IF.contains(newest) && SET_DESIRED_IF.contains(newest));
     assert!(TARGETS_STEPS[6].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
     assert_problems(
         "      newest: ${{ steps.latest.outputs.newest }}\n",
@@ -151,7 +168,7 @@ fn a_deploy_job_that_goes_on_after_a_failure_is_refused() {
     for (job, after) in [
         ("targets", "    timeout-minutes: 20\n"),
         ("coordinator", "    timeout-minutes: 40\n"),
-        ("set-desired", "    needs: [plan, targets, coordinator]\n"),
+        ("set-desired", SET_NEEDS),
     ] {
         assert_problems(
             after,
@@ -279,21 +296,71 @@ fn a_targets_job_that_writes_out_an_index_is_refused() {
 fn a_set_desired_job_that_does_not_wait_for_the_targets_is_refused() {
     // Catches: the call made straight after the publish, with no targets written yet and no
     // check that this run's release is the newest.
+    let writes = "testing-apt-write, testing-apt-write-2, testing-apt-write-3, testing-pkg-upload";
     assert_problems(
-        "    needs: [plan, targets, coordinator]\n",
-        "    needs: [plan, publish, coordinator]\n",
-        &[
-            "release.yml: job set-desired needs [\"coordinator\", \"plan\", \"publish\"], not [\"coordinator\", \"plan\", \"targets\"]",
-        ],
+        SET_NEEDS,
+        &format!("    needs: [plan, publish, coordinator, {writes}]\n"),
+        &[&set_needs_problem(&[
+            "coordinator",
+            "plan",
+            "publish",
+            "testing-apt-write",
+            "testing-apt-write-2",
+            "testing-apt-write-3",
+            "testing-pkg-upload",
+        ])],
     );
     // Without the wait for the coordinator: set-desired no longer needs it.
     assert_problems(
-        "    needs: [plan, targets, coordinator]\n",
-        "    needs: [plan, targets]\n",
-        &[
-            "release.yml: job set-desired needs [\"plan\", \"targets\"], not [\"coordinator\", \"plan\", \"targets\"]",
-        ],
+        SET_NEEDS,
+        &format!("    needs: [plan, targets, {writes}]\n"),
+        &[&set_needs_problem(&[
+            "plan",
+            "targets",
+            "testing-apt-write",
+            "testing-apt-write-2",
+            "testing-apt-write-3",
+            "testing-pkg-upload",
+        ])],
     );
+}
+
+#[test]
+fn a_set_desired_job_that_does_not_wait_for_the_channel_writes_is_refused() {
+    // Catches: the call made once the coordinator runs the release but before the testing apt
+    // write or the pkg upload lands, so every host defers the release (`not_in_repository`)
+    // until it does; and the needs kept while the `if:` no longer asks that a write landed.
+    assert_problems(
+        SET_NEEDS,
+        "    needs: [plan, targets, coordinator]\n",
+        &[&set_needs_problem(&["coordinator", "plan", "targets"])],
+    );
+    assert_problems(
+        SET_NEEDS,
+        "    needs: [plan, targets, coordinator, testing-apt-write, testing-apt-write-2, testing-apt-write-3]\n",
+        &[&set_needs_problem(&[
+            "coordinator",
+            "plan",
+            "targets",
+            "testing-apt-write",
+            "testing-apt-write-2",
+            "testing-apt-write-3",
+        ])],
+    );
+    for landed in [
+        " && needs.testing-pkg-upload.outputs.enabled == 'true'",
+        " || needs.testing-apt-write-3.outputs.conflict == 'false'",
+        "!cancelled() && !failure() && ",
+    ] {
+        assert_problems(
+            &set_desired_if(),
+            &set_desired_if().replacen(landed, "", 1),
+            &[
+                &format!("release.yml: job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
+                &format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
+            ],
+        );
+    }
 }
 
 #[test]
