@@ -325,6 +325,13 @@ pub struct AuditEntry {
     /// The operator's reason, if one was given.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// The user or API token the action concerned, if any (`password_reset`, `user_create`,
+    /// `api_token_create` and the rest of [`crate::audit_actions`]); `by` is who did it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subject: Option<String>,
+    /// The peer address a login came from, if the entry records one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
 }
 
 impl AuditEntry {
@@ -339,6 +346,8 @@ impl AuditEntry {
             node_id: None,
             host_group: None,
             reason: None,
+            subject: None,
+            source: None,
         }
     }
 }

@@ -288,6 +288,8 @@ fn logged_of(row: &postgres::Row) -> Logged {
             node_id: row.get(5),
             host_group: row.get(7),
             reason: row.get(6),
+            subject: None,
+            source: None,
         },
     }
     .into_logged()
