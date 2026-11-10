@@ -550,7 +550,8 @@ and have not been heard since the coordinator started: not live, with no heartbe
 
 ## Renewal
 
-A host certificate lasts 7 days. From half its life the daemon renews it with `Renew`, over
+A host certificate lasts 7 days, or what the coordinator's `--host-cert-validity-secs` says (60
+seconds to 7 days). From half its life the daemon renews it with `Renew`, over
 mutual TLS with the certificate it holds, for the same key; no operator is involved. The node
 logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator `renewed a host
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.

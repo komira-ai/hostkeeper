@@ -12,7 +12,9 @@
 //! enrollment and its heartbeat); a coordinator killed and started
 //! again on the same files hears the same host again with no new request, no new certificate and
 //! the same enrollment, and so does a coordinator that a killed and restarted daemon (its boot pass)
-//! comes back to.
+//! comes back to; and a daemon whose certificate the coordinator issues for a minute
+//! (`--host-cert-validity-secs 60`) renews it, for the same subject and key, and is heard over
+//! the renewed one.
 //!
 //! The daemon fixes its pki directory (`/etc/updater/pki`) and installs its self-update units
 //! under `/etc/systemd/system`; the test refuses to run on a host that has either and removes
@@ -162,10 +164,11 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     );
 }
 
-/// Catches a renewal that does not happen at half life, a renewed certificate of another subject
-/// or key, and a daemon that stops beating over its renewed certificate.
+/// Catches a coordinator whose `--host-cert-validity-secs` does not reach the certificates it
+/// issues and renews, a renewal that does not happen, a renewed certificate of another subject or
+/// key, and a coordinator that does not hear the daemon over its renewed certificate. The wait is
+/// for the certificate's serial to change, not for a time.
 #[test]
-#[ignore = "no flag of the coordinator sets the validity of the host certificates it issues: https://github.com/komira-ai/hostkeeper/issues/100"]
 fn a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on() {
     let bench = Bench::new("first_boot_renewal");
     let _host = HostPaths::claim(&[], &[]);
@@ -198,11 +201,15 @@ fn a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on() {
     );
     assert_none_pending(&coordinator);
 
-    // A coordinator started again hears the host over its renewed certificate.
+    // A coordinator started again hears the host over a renewed certificate: this one, or a
+    // later renewal of it, since the daemon renews again every half minute whatever the
+    // restart takes.
     coordinator.restart();
     coordinator.wait_heard(node, &mut daemon);
+    let now = HostCertificate::current().unwrap_or_else(|e| panic!("{e}"));
+    assert_ne!(now.serial, first.serial, "a renewed certificate");
     assert_eq!(
-        HostCertificate::current().map(|c| c.serial),
-        Ok(renewed.serial)
+        (&now.subject, &now.key_sha256),
+        (&renewed.subject, &renewed.key_sha256)
     );
 }

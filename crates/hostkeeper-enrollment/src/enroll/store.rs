@@ -15,7 +15,7 @@ use super::{
     Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, NewRequest, PostError,
     PostOutcome, RecordedApproval, RequestState, RequestView, StoreError,
 };
-use crate::ca::check_request;
+use crate::ca::{HOST_VALIDITY_SECS, check_request};
 use crate::fs::Fs;
 use crate::names::{HostId, KeyHash, MacAddress};
 
@@ -40,6 +40,8 @@ pub struct EnrollmentStore {
     pub(super) live: Mutex<BTreeMap<HostId, BTreeMap<String, u64>>>,
     /// The most requests that may wait for an operator.
     max_pending: usize,
+    /// How long a host certificate the store issues is valid, in seconds.
+    host_validity_secs: u64,
     /// The hosts whose host record is known to hold a first heartbeat since its approval, so a
     /// later heartbeat takes neither the lock nor a read ([`EnrollmentStore::note_heartbeat`]).
     /// An approval of the host takes it out.
@@ -85,6 +87,7 @@ impl EnrollmentStore {
             mutex: Mutex::new(()),
             live: Mutex::new(BTreeMap::new()),
             max_pending: DEFAULT_MAX_PENDING,
+            host_validity_secs: HOST_VALIDITY_SECS,
             heard: Mutex::new(BTreeSet::new()),
             served: Mutex::new(BTreeSet::new()),
             running: Mutex::new(BTreeMap::new()),
@@ -101,6 +104,21 @@ impl EnrollmentStore {
     /// The most requests that may wait for an operator.
     pub fn max_pending(&self) -> usize {
         self.max_pending
+    }
+
+    /// The same store, issuing host certificates valid `secs` from their signing (the
+    /// coordinator's `--host-cert-validity-secs`). The CA refuses a value of 0 or over
+    /// [`HOST_VALIDITY_SECS`] when it signs ([`crate::ca::SignError`]).
+    #[must_use]
+    pub fn with_host_validity_secs(mut self, secs: u64) -> EnrollmentStore {
+        self.host_validity_secs = secs;
+        self
+    }
+
+    /// How long a host certificate the store issues is valid, in seconds: [`HOST_VALIDITY_SECS`]
+    /// unless [`EnrollmentStore::with_host_validity_secs`] says otherwise.
+    pub fn host_validity_secs(&self) -> u64 {
+        self.host_validity_secs
     }
 
     /// Takes the store's mutex, then the records' lock.
