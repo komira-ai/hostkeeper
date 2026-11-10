@@ -46,7 +46,8 @@ fn held(database: &TestDatabase) -> Vec<pb::Running> {
 }
 
 /// Proves: over Postgres, what a host runs is written into the table `enrollment_host_running`
-/// and not into `enrollment_hosts`, whose columns are the ones the release before reads; a host
+/// and not into `enrollment_hosts`, whose columns are the ones `0001` and `0002` made and the
+/// three of `0008` (the host's group, the group it moves from, its facts' generation); a host
 /// id never approved writes nothing; the same record again runs no statement; a change replaces
 /// the row; a store made again over the tables reads the record back and writes nothing for it;
 /// and a new approval of the host id deletes the row.
@@ -72,7 +73,10 @@ fn what_a_host_runs_is_a_row_of_its_own_table_written_on_change_and_deleted_by_a
             "services",
             "duplicate",
             "first_heartbeat_unix",
-            "first_serving_unix"
+            "first_serving_unix",
+            "host_group",
+            "moving_from",
+            "facts_generation"
         ]
         .map(|column| vec![Some(column.to_owned())])
     );
@@ -164,16 +168,17 @@ fn a_running_record_that_does_not_decode_is_refused_at_start_and_by_an_export() 
     assert!(matches!(refused, StoreError::Corrupt { .. }), "{refused}");
 }
 
-/// Proves: the release before this one (migrations `0001` to `0005`) starts on a database this
-/// release migrated and holds a running record of: it runs nothing, `0006` says `may-run`, its
-/// load reads the state this release loads, the columns of `enrollment_hosts` it reads and
-/// writes are all still there, and its write of a host row leaves the running record as it was.
-/// And the other way: this release starts on a database the release before migrated, runs `0006`
-/// alone, and reads its hosts with nothing run.
+/// Proves: `0006` does not stop the release before it (migrations `0001` to `0005`) on a database
+/// this release migrated and holds a running record of: its runner is refused naming `0008`, the
+/// first migration after its own that says `refuse`, not `0006`, which says `may-run`; the state
+/// reads as this release loads it; and the write of a host row as that release makes it, naming
+/// the columns `enrollment_hosts` had then, is refused by the table `0008` added columns to, which
+/// is why `0008` says `refuse`. And the other way: this release starts on a database the release
+/// before migrated, runs `0006` to `0008`, and reads its hosts with nothing run.
 ///
-/// Catches: a record that makes the previous coordinator refuse to start (the back-out of a
-/// release would need the database restored), a column the release before reads that is gone,
-/// and a migration that this release does not run on a database of the release before.
+/// Catches: a running record that stops the previous coordinator by itself, a release before that
+/// would write host rows the database now refuses, and a migration that this release does not run
+/// on a database of the release before.
 #[test]
 fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     let database = TestDatabase::new();
@@ -186,14 +191,20 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     let (ran, before_loaded) = with_session(&database, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..5]).expect("the release before's set");
         (
-            migrate::apply(session, &before).expect("the release before migrates"),
-            load_all(session, SPENT_NOW).expect("its load reads the state"),
+            migrate::apply(session, &before)
+                .expect_err("the release before is refused")
+                .to_string(),
+            load_all(session, SPENT_NOW).expect("the state reads"),
         )
     });
-    assert_eq!(ran, Vec::<i32>::new());
+    assert_eq!(
+        ran,
+        "the database's schema is newer than this coordinator (migration 8, host_groups)"
+    );
     assert_eq!(before_loaded, loaded);
-    // The release before writes a host row as it always did.
-    database
+    // The release before's write of a host row, as it always made it, names fewer columns than
+    // the row now has.
+    let refused = database
         .run(
             "INSERT INTO enrollment_hosts (host_id, key_hash, machine_id, role, services, \
              duplicate, first_heartbeat_unix, first_serving_unix) \
@@ -201,7 +212,13 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
              ON CONFLICT (host_id) DO UPDATE SET (host_id, key_hash, machine_id, role, services, \
              duplicate, first_heartbeat_unix, first_serving_unix) = ROW(EXCLUDED.*)",
         )
-        .expect("the release before's write");
+        .expect_err("the release before's write is refused");
+    // 42601: the server's code for a column list that does not match its values.
+    assert_eq!(
+        refused.as_db_error().map(|e| e.code().code()),
+        Some("42601"),
+        "{refused:?}"
+    );
     assert_eq!(held(&database).len(), 1, "its running record is left");
 
     let older = TestDatabase::new();
@@ -220,7 +237,7 @@ fn the_release_before_starts_on_a_database_with_0006_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=7)
+        (1..=8)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

@@ -97,6 +97,14 @@ fn full_ops() -> OpsState {
         serde_json::from_value(json!({"version": "1.0", "entered": 2, "done": []}))
             .expect("a rollout"),
     );
+    state.inventory[1].host_group = "web".to_owned();
+    state.host_groups.0.insert(
+        "web".parse().expect("a group name"),
+        std::collections::BTreeMap::from([(
+            "tierstore".to_owned(),
+            crate::host_groups::tests::every_mark(),
+        )]),
+    );
     state
 }
 

@@ -35,6 +35,8 @@
 //!   entries per role and host on top, the minimum versions per role and host, and the hosts
 //!   ordered to uninstall a service; the uninstall intents a heartbeat ends are cleared by
 //!   `intents`;
+//! - `host_groups`: the stored form of the host groups (their packages, policy, generation and
+//!   desired versions) and of each (group, package)'s marks, which nothing decides by yet;
 //! - [`order_terms`]: the order id, try and package digest an update answer carries to an agent
 //!   that announced `order-v1`, over a transport that carries typed orders (the JSON route
 //!   carries no order);
@@ -125,6 +127,7 @@ pub mod grpc;
 pub mod halt;
 pub(crate) mod health;
 pub mod holds;
+pub(crate) mod host_groups;
 pub mod hosts;
 pub mod http;
 pub mod identity;

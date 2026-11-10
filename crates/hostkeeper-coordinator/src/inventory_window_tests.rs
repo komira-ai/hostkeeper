@@ -550,6 +550,7 @@ fn the_ops_file_reads_a_record_without_the_new_keys_and_writes_them_only_when_se
             AuditEntry::new("operator", "record_add"),
             |state| {
                 state.inventory.push(InventoryRecord {
+                    host_group: String::new(),
                     host_id: "db-2".to_owned(),
                     role: "storage".to_owned(),
                     data_macs: vec!["0c:c4:7a:00:00:03".to_owned()],
@@ -598,6 +599,7 @@ fn the_ops_file_reads_a_record_without_the_new_keys_and_writes_them_only_when_se
 #[test]
 fn marking_a_record_used_leaves_a_used_or_missing_record_alone() {
     let record = |host: &str| InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: "storage".to_owned(),
         data_macs: Vec::new(),
@@ -636,6 +638,7 @@ fn marking_a_record_used_leaves_a_used_or_missing_record_alone() {
 #[test]
 fn a_record_matches_exactly_only_what_the_coordinator_approves_by() {
     let record = |data: &[&str], bmc: &str, serial: &str| InventoryRecord {
+        host_group: String::new(),
         host_id: "db-1".to_owned(),
         role: "storage".to_owned(),
         data_macs: data.iter().map(|m| (*m).to_owned()).collect(),

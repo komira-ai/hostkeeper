@@ -315,5 +315,9 @@ mod files_releases_tests;
 mod files_repositories_tests;
 
 #[cfg(test)]
+#[path = "files_host_groups_tests.rs"]
+mod files_host_groups_tests;
+
+#[cfg(test)]
 #[path = "store_tests.rs"]
 mod tests;
