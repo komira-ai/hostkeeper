@@ -712,7 +712,7 @@ Naming: `updater` names (`/var/lib/updater/{state,hooks}`, unit names, reserved 
 - A coordinator high-availability build: coordinator-storage.md section 7 designs a standby by advisory lock, and does not build it.
 - Automated rollback rehearsal in every release.
 - TPM-based hardware identity for enrollment.
-- Power control through the BMC. The BMC MAC of each inventory record (section 5.7) is kept for it: the host's out-of-band handle, to find the BMC's address and power-cycle a host that stopped answering.
+- Power control through the BMC. The BMC MAC of each inventory record (section 5.7) is kept for it: the host's out-of-band handle, to find the BMC's address and power-cycle a host that stopped answering. Designed in [console-broker.md](console-broker.md): serial console, KVM, power and boot device through a relay on the lab LAN, and a Mac's screen.
 
 ### 12.2 Build order, from today's code to done
 

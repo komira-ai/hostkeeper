@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 450" width="1200" height="450" role="img" aria-label="Time runs down the page across the operator client, coordinator, relay and the BMC. A power or boot-device change is refused for a live host unless the operator says so.">
+<title>Power action: one typed RPC, one audit line, one IPMI command</title>
+<desc>Time runs down the page across the operator client, coordinator, relay and the BMC. A power or boot-device change is refused for a live host unless the operator says so.</desc>
+<defs><marker id="console-power-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="console-power-sequence-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="450" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Power action: one typed RPC, one audit line, one IPMI command</text>
+<path d="M130,76 L130,420" class="life"/>
+<path d="M400,76 L400,420" class="life"/>
+<path d="M680,76 L680,420" class="life"/>
+<path d="M960,76 L960,420" class="life"/>
+<rect x="55" y="44" width="150" height="32" rx="5" class="box"/>
+<text x="130" y="65" class="b" text-anchor="middle">Operator client</text>
+<rect x="325" y="44" width="150" height="32" rx="5" class="box-b"/>
+<text x="400" y="65" class="b" text-anchor="middle">Coordinator</text>
+<rect x="605" y="44" width="150" height="32" rx="5" class="box-o"/>
+<text x="680" y="65" class="b" text-anchor="middle">Relay (lab host)</text>
+<rect x="885" y="44" width="150" height="32" rx="5" class="box"/>
+<text x="960" y="65" class="b" text-anchor="middle">BMC (UDP 623)</text>
+<path d="M130,110 L400,110" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="144" cy="96" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="144" y="100" class="b" font-size="12" text-anchor="middle">1</text>
+<text x="265" y="90" class="t-m lbl" text-anchor="middle">Console.Power(node, cycle, reason, live_ok)</text>
+<rect x="290" y="136" width="220" height="28" rx="5" class="box-o"/>
+<text x="400" y="154" class="t-m" text-anchor="middle">token, host_live check, audit line</text>
+<circle cx="275" cy="150" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="275" y="154" class="b" font-size="12" text-anchor="middle">2</text>
+<path d="M400,190 L680,190" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="414" cy="176" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="414" y="180" class="b" font-size="12" text-anchor="middle">3</text>
+<text x="540" y="170" class="t-m lbl" text-anchor="middle">command + credential (held poll)</text>
+<rect x="570" y="216" width="220" height="28" rx="5" class="box-o"/>
+<text x="680" y="234" class="t-m" text-anchor="middle">MAC -&gt; address, RMCP ping</text>
+<circle cx="555" cy="230" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="555" y="234" class="b" font-size="12" text-anchor="middle">4</text>
+<path d="M680,270 L960,270" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="694" cy="256" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="694" y="260" class="b" font-size="12" text-anchor="middle">5</text>
+<text x="820" y="250" class="t-m lbl" text-anchor="middle">ipmitool chassis power cycle</text>
+<path d="M960,310 L680,310" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="946" cy="296" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="946" y="300" class="b" font-size="12" text-anchor="middle">6</text>
+<text x="820" y="290" class="t-m lbl" text-anchor="middle">accepted</text>
+<path d="M680,350 L400,350" class="ln" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="666" cy="336" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="666" y="340" class="b" font-size="12" text-anchor="middle">7</text>
+<text x="540" y="330" class="t-m lbl" text-anchor="middle">result (closed enum)</text>
+<path d="M400,390 L130,390" class="ln-d" marker-end="url(#console-power-sequence-ak)"/>
+<circle cx="386" cy="376" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
+<text x="386" y="380" class="b" font-size="12" text-anchor="middle">8</text>
+<text x="265" y="370" class="t-m lbl" text-anchor="middle">accepted by the BMC</text>
+</svg>

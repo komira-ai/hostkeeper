@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 760" width="1200" height="760" role="img" aria-label="Components of the console broker: operator client and coordinator and relay inside the hostkeeper box; BMC, Mac, ipmitool, browser and NanoHUB outside it.">
+<title>Components: what hostkeeper runs for the console broker</title>
+<desc>The operator's client, the coordinator's console module and the relay are hostkeeper. The BMC, the Mac, ipmitool, the browser and NanoHUB are not.</desc>
+<defs><marker id="console-broker-components-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="console-broker-components-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="760" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Console broker components: the box is exactly what hostkeeper runs</text>
+<rect x="20" y="60" width="760" height="620" rx="8" class="tb"/>
+<text x="36" y="84" class="b" text-anchor="start">hostkeeper (all of it is this repository)</text>
+<rect x="40" y="110" width="200" height="100" rx="5" class="box"/>
+<text x="140.0" y="132" class="b" text-anchor="middle">hostkeeper console</text>
+<text x="140.0" y="150" class="t-m" text-anchor="middle">client verb on the</text>
+<text x="140.0" y="166" class="t-m" text-anchor="middle">operator's machine</text>
+<text x="140.0" y="182" class="t-m" text-anchor="middle">local port 127.0.0.1</text>
+<rect x="300" y="110" width="220" height="240" rx="5" class="box-b"/>
+<text x="410.0" y="132" class="b" text-anchor="middle">Coordinator (dev box)</text>
+<text x="410.0" y="150" class="t-m" text-anchor="middle">console module:</text>
+<text x="410.0" y="166" class="t-m" text-anchor="middle">Console.* RPCs, tickets,</text>
+<text x="410.0" y="182" class="t-m" text-anchor="middle">session table, splice,</text>
+<text x="410.0" y="198" class="t-m" text-anchor="middle">console listener</text>
+<text x="410.0" y="214" class="t-m" text-anchor="middle">tokens + console cap,</text>
+<text x="410.0" y="230" class="t-m" text-anchor="middle">audit log, inventory,</text>
+<text x="410.0" y="246" class="t-m" text-anchor="middle">credential file (D5)</text>
+<rect x="560" y="110" width="200" height="100" rx="5" class="box-o"/>
+<text x="660.0" y="132" class="b" text-anchor="middle">Console relay</text>
+<text x="660.0" y="150" class="t-m" text-anchor="middle">unprivileged, lab host</text>
+<text x="660.0" y="166" class="t-m" text-anchor="middle">resolver, ipmitool port,</text>
+<text x="660.0" y="182" class="t-m" text-anchor="middle">SID login, TCP dials</text>
+<rect x="560" y="260" width="200" height="80" rx="5" class="box-o"/>
+<text x="660.0" y="282" class="b" text-anchor="middle">hostkeeper daemon</text>
+<text x="660.0" y="300" class="t-m" text-anchor="middle">not involved in the</text>
+<text x="660.0" y="316" class="t-m" text-anchor="middle">console path (D1)</text>
+<rect x="300" y="400" width="220" height="100" rx="5" class="box-b"/>
+<text x="410.0" y="422" class="b" text-anchor="middle">MDM gate (in coordinator)</text>
+<text x="410.0" y="440" class="t-m" text-anchor="middle">EnableRemoteDesktop</text>
+<text x="410.0" y="456" class="t-m" text-anchor="middle">(designed, C11)</text>
+<path d="M240,160 L300,160" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="270" y="150" class="t-m lbl" text-anchor="middle">tailnet, TLS</text>
+<path d="M560,140 L520,140" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
+<text x="540" y="130" class="t-m lbl" text-anchor="middle">held poll</text>
+<path d="M560,180 L520,180" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="540" y="198" class="t-m lbl" text-anchor="middle">data conn</text>
+<path d="M410,350 L410,400" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<rect x="820" y="110" width="340" height="60" rx="5" class="box"/>
+<text x="990.0" y="132" class="b" text-anchor="middle">BMC (lab LAN)</text>
+<text x="990.0" y="150" class="t-m" text-anchor="middle">UDP 623 RMCP+ / HTTPS 443</text>
+<rect x="820" y="200" width="340" height="60" rx="5" class="box"/>
+<text x="990.0" y="222" class="b" text-anchor="middle">Mac (lab LAN)</text>
+<text x="990.0" y="240" class="t-m" text-anchor="middle">TCP 5900 Screen Sharing</text>
+<rect x="820" y="290" width="340" height="60" rx="5" class="box-p"/>
+<text x="990.0" y="312" class="b" text-anchor="middle">ipmitool (child of the relay)</text>
+<text x="990.0" y="330" class="t-m" text-anchor="middle">not hostkeeper</text>
+<rect x="820" y="400" width="340" height="60" rx="5" class="box"/>
+<text x="990.0" y="422" class="b" text-anchor="middle">NanoHUB (MDM host)</text>
+<text x="990.0" y="440" class="t-m" text-anchor="middle">API on loopback (Q1)</text>
+<rect x="40" y="260" width="200" height="60" rx="5" class="box-p"/>
+<text x="140.0" y="282" class="b" text-anchor="middle">Browser / VNC viewer</text>
+<text x="140.0" y="300" class="t-m" text-anchor="middle">connects to 127.0.0.1</text>
+<path d="M140,260 L140,210" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="190" y="240" class="t-m lbl" text-anchor="middle">local port</text>
+<path d="M760,140 L820,140" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="790" y="128" class="t-m lbl" text-anchor="middle">RMCP+, TLS</text>
+<path d="M760,220 L820,230" class="ln" marker-end="url(#console-broker-components-ak)"/>
+<text x="790" y="208" class="t-m lbl" text-anchor="middle">RFB</text>
+<path d="M760,170 L820,310" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
+<path d="M520,450 L820,430" class="ln-d" marker-end="url(#console-broker-components-ak)"/>
+<text x="670" y="455" class="t-m lbl" text-anchor="middle">loopback only today</text>
+<text x="20" y="712" class="t-m" text-anchor="start">Solid: a byte stream or request. Dashed: a held poll, or a path blocked until Q1 is answered. The lab LAN is never routed onto the tailnet.</text>
+</svg>
