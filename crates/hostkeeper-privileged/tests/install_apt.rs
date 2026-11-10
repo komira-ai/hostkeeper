@@ -240,6 +240,131 @@ fn the_daemon_installs_updates_rolls_back_and_uninstalls_an_apt_service() {
     );
 }
 
+/// The unit link an archive version of an earlier release placed for the package's unit.
+const ARCHIVE_UNIT: &str = "/etc/systemd/system/hkaptfix.service";
+/// A unit link an operator placed, which points nowhere hostkeeper owns.
+const OPERATOR_UNIT: &str = "/etc/systemd/system/hkaptfix-operator.service";
+
+/// Takes away the unit links [`ARCHIVE_UNIT`] and [`OPERATOR_UNIT`] and reloads systemd when the
+/// test ends, however it ends.
+struct UnitLinks;
+
+impl Drop for UnitLinks {
+    /// Never panics: it may run while the test is already panicking.
+    fn drop(&mut self) {
+        for link in [ARCHIVE_UNIT, OPERATOR_UNIT] {
+            drop(fs::remove_file(link));
+        }
+        drop(Command::new("systemctl").arg("daemon-reload").status());
+    }
+}
+
+/// What systemd says of `hkaptfix.service`: its `LoadState` and its `FragmentPath`.
+fn loaded_from() -> (String, String) {
+    let value = |property: &str| {
+        print(
+            "systemctl",
+            &["show", "--value", "-p", property, "--", "hkaptfix.service"],
+        )
+        .text
+        .trim()
+        .to_owned()
+    };
+    (value("LoadState"), value("FragmentPath"))
+}
+
+/// Proves, against the real systemd: the daemon's install of a package over a dangling unit link
+/// an archive version left in `/etc/systemd/system/` takes the link away, reloads systemd, and
+/// systemd then loads the unit from the package's file. Then, with the package installed, the
+/// same dangling link put back hides the package's unit (systemd does not load it), and the
+/// start's repair removes it, so systemd loads the package's unit again; an operator's dangling
+/// link that points outside the packages directory is left as it is.
+///
+/// Catches: the move leaving the archive's unit link (packages-native.md section 10.6), so the
+/// service's unit never loads again; a repair that does not fix a host an earlier release moved,
+/// or that removes a link it does not own.
+#[test]
+fn an_archive_unit_link_is_taken_away_and_systemd_loads_the_packages_unit() {
+    let rig = Rig::new("apt-archive-unit", Trust::Entry);
+    let (daemon, _, scratch) = daemon::daemon(&rig);
+    let _links = UnitLinks;
+    let package_unit = (String::from("loaded"), UNIT.to_owned());
+    let target = scratch
+        .path()
+        .join("packages")
+        .join(PACKAGE)
+        .join("current/units/hkaptfix.service");
+    let dangle = || {
+        std::os::unix::fs::symlink(&target, ARCHIVE_UNIT).expect("the archive's unit link");
+        print("systemctl", &["daemon-reload"]);
+    };
+    let record = serde_json::json!({
+        "schema": 1,
+        "paths": {
+            ARCHIVE_UNIT: {
+                "service": PACKAGE,
+                "version": "0.9.0",
+                "kind": "unit",
+                "state": "placed",
+                "link_target": target.to_string_lossy(),
+            }
+        },
+        "uninstalling": {},
+    });
+    fs::write(
+        scratch.path().join("placed/placed.json"),
+        serde_json::to_vec_pretty(&record).expect("json"),
+    )
+    .expect("placed.json as the release before the native installers wrote it");
+    dangle();
+
+    let reply = daemon.order(&daemon::install("1.0-1", &rig.pin("1.0-1"), 1));
+    assert!(
+        matches!(
+            &reply,
+            hostkeeper_daemon::Reply::Finished {
+                verdict: hostkeeper_hook::Verdict::Succeeded { .. },
+                ..
+            }
+        ),
+        "{reply:?}"
+    );
+    assert!(
+        fs::symlink_metadata(ARCHIVE_UNIT).is_err(),
+        "the link remains"
+    );
+    assert_eq!(loaded_from(), package_unit);
+
+    dangle();
+    std::os::unix::fs::symlink("/nonexistent/hkaptfix-operator.service", OPERATOR_UNIT)
+        .expect("the operator's link");
+    assert_ne!(
+        loaded_from().0,
+        "loaded",
+        "the dangling link hides the package's unit"
+    );
+    assert_eq!(
+        hostkeeper_daemon::unit_links::repair(daemon.ctx()),
+        [std::path::PathBuf::from(ARCHIVE_UNIT)]
+    );
+    assert_eq!(loaded_from(), package_unit);
+    assert!(
+        fs::symlink_metadata(OPERATOR_UNIT).is_ok(),
+        "the operator's link is gone"
+    );
+    let reply = daemon.order(&daemon::uninstall(2));
+    assert!(
+        matches!(
+            &reply,
+            hostkeeper_daemon::Reply::Finished {
+                verdict: hostkeeper_hook::Verdict::Succeeded { .. },
+                ..
+            }
+        ),
+        "the uninstall: {reply:?}"
+    );
+}
+
 /// Proves: the version hostkeeper installed is held, so an upgrade of the host that sees a newer
 /// version in the repository (`apt-get upgrade -y`) leaves it as it is; the same upgrade
 /// simulated once the hold is released would take the newer one.

@@ -23,6 +23,8 @@
 //! - [`record`]: the service's `installed` entry, behind the [`Records`] port.
 //! - [`lock`]: the host-wide installer lock.
 //! - [`tree`] and [`enable`]: the package's unit files, and the units' enablement.
+//! - [`loaded`]: the check that systemd loads the package's own unit, not one an earlier release
+//!   left in its place.
 //! - [`policy`]: the `policy-rc.d` file held while the package manager runs.
 //! - [`announce`]: when a daemon announces a repository installer (section 4.1).
 //! - [`launcher`]: the [`Tools`] port over the step launcher's transient units.
@@ -33,6 +35,7 @@ pub mod backend;
 pub mod config;
 pub mod enable;
 pub mod launcher;
+pub mod loaded;
 pub mod lock;
 pub mod mirror;
 pub mod outcome;

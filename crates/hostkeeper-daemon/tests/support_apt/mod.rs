@@ -113,6 +113,7 @@ impl AptRig {
         let lock = rig.scratch.path().join("installer.lock");
         let host = Arc::new(FakeHost::new(&lock, Arc::clone(&events)));
         rig.launcher.answer_tools(bridge(Arc::clone(&host)));
+        host.watch_units(&rig.host("/units"), "/units");
         AptRig { rig, host, events }
     }
 

@@ -2,7 +2,8 @@
 //! sections 4.1, 5.1, 5.2, 6.2, 6.3, 8.1 and 8.3).
 //!
 //! - [`start`]: start-up, in order: the daemon config, the lock on the state directory, the
-//!   registration socket of kbf's agent unlinked, the sweep of package leftovers, the boot work,
+//!   registration socket of kbf's agent unlinked, the removal of the dangling unit links an
+//!   earlier move left ([`unit_links`]), the sweep of package leftovers, the boot work,
 //!   the deletion of the archive version a native service left as `previous`
 //!   ([`archive_versions`]); then serving: the enrollment and heartbeat loops started
 //!   ([`links`]). The daemon serves nothing on the host.
@@ -129,6 +130,7 @@ pub mod target;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 pub mod uninstall;
+pub mod unit_links;
 pub mod unix_clock;
 pub mod verb;
 pub mod verbs;

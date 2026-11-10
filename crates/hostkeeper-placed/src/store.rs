@@ -142,6 +142,16 @@ impl Default for PlacedRecord {
 }
 
 impl PlacedRecord {
+    /// The keys of a newer or an earlier writer this daemon does not know, as read.
+    pub(crate) fn extra(&self) -> &Map<String, Value> {
+        &self.extra
+    }
+
+    /// [`PlacedRecord::extra`], to change before the record is written again.
+    pub(crate) fn extra_mut(&mut self) -> &mut Map<String, Value> {
+        &mut self.extra
+    }
+
     /// The installer recorded for `service`; `None` for a service with none.
     pub fn installer_of(&self, service: &str) -> Option<&str> {
         self.installed
