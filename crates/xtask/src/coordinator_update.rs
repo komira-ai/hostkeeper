@@ -14,8 +14,10 @@
 //!    container `<name>-next` may exist (an earlier run was cut short).
 //! 3. The running version: the coordinator's `/v1/version`, or for an older coordinator that has
 //!    no such route the version in its image's `hostkeeper-coordinator:<version>` tag. A running
-//!    version at least the target ends the run: up to date, nothing changed. One that cannot be
-//!    read does not.
+//!    version at least the target ends the run: up to date, nothing changed. A tag that names no
+//!    version is an unknown version, and the update goes on; a `/v1/version` that gives no answer
+//!    it can read (a wrong CA, an outage) refuses the run, since the same probe judges the new
+//!    container.
 //! 4. A marker `failed-v<target>` in `--download-dir` (a run that rolled back) refuses the
 //!    version until the operator removes it.
 //! 5. The image tarball, its bundle and `SHA256SUMS` are downloaded to `v<target>/`; the tarball
@@ -28,8 +30,9 @@
 //!    it is ready (running, not restarting, restart count 0, and the coordinator answers
 //!    `?at_least=<target>`); then the old container is deleted (never with its volumes) and the
 //!    new one renamed. A new container that is not ready is stopped and deleted, the old one is
-//!    started again, and the version is marked failed. Only a successful update keeps the newest
-//!    two `v*` directories.
+//!    started again, and the version is marked failed. A docker call that fails while the new
+//!    container is checked is one check that is not ready. Only a successful update removes old
+//!    downloads, keeping the newest two `v*` directories and the one just installed.
 
 mod engine;
 mod rebase;
@@ -257,7 +260,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
     let old_image = ports
         .engine
         .image(field(&old, &["Image"], "the container")?)?;
-    let running = running_version(ports.probe, old_image.as_ref());
+    let running = running_version(ports.probe, old_image.as_ref())?;
     let was = running.map_or_else(|| "an unknown version".to_owned(), |v| format!("v{v}"));
     lines.push(said(format!("{name} runs {was}")));
     if running.is_some_and(|r| r >= target) {
@@ -299,7 +302,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
     lines.push(said(format!(
         "{name} now runs v{target} (was {was}); its command line, mounts and volumes are the old container's"
     )));
-    lines.extend(prune(&flags.download_dir)?);
+    lines.extend(prune(&flags.download_dir, target)?);
     Ok(lines)
 }
 
@@ -350,20 +353,30 @@ fn inspect_old(engine: &dyn Engine, name: &str) -> Result<Value, Error> {
 
 /// The version the coordinator runs: its `/v1/version`; for one that has no such route, the
 /// version in its image's tag; none when neither says.
-fn running_version(probe: &dyn Probe, image: Option<&Value>) -> Option<Version> {
+///
+/// # Errors
+/// A refusal when `/v1/version` cannot be read (no answer, another status): the same probe
+/// decides whether a new container is ready, so a run that went on would stop a coordinator
+/// that may well be up to date and then roll it back. Nothing is changed.
+fn running_version(probe: &dyn Probe, image: Option<&Value>) -> Result<Option<Version>, Error> {
     match probe.version(None) {
-        Probed::Running(v) => Some(v),
-        Probed::NotFound => image?["RepoTags"]
-            .as_array()?
-            .iter()
-            .filter_map(|t| {
-                t.as_str()?
-                    .strip_prefix(&format!("{COORDINATOR}:"))?
-                    .parse()
-                    .ok()
-            })
-            .max(),
-        Probed::Older | Probed::Failed(_) => None,
+        Probed::Running(v) => Ok(Some(v)),
+        Probed::NotFound => Ok(image.and_then(|image| {
+            image["RepoTags"]
+                .as_array()?
+                .iter()
+                .filter_map(|t| {
+                    t.as_str()?
+                        .strip_prefix(&format!("{COORDINATOR}:"))?
+                        .parse()
+                        .ok()
+                })
+                .max()
+        })),
+        Probed::Older => Ok(None),
+        Probed::Failed(why) => Err(Error::Refused(format!(
+            "the coordinator's version cannot be read ({why}): check --coordinator-url and --ca-file; nothing changed"
+        ))),
     }
 }
 
@@ -504,7 +517,7 @@ fn replace(
     }
     let why = match engine.start(&new_id) {
         Err(e) => format!("v{target}: starting {next} failed: {e}"),
-        Ok(()) if ready(ports, flags, &new_id, target)? => {
+        Ok(()) if ready(ports, flags, &new_id, target) => {
             return finish(engine, (old_id, &new_id), (name, target, was));
         }
         Ok(()) => format!(
@@ -516,20 +529,27 @@ fn replace(
 }
 
 /// Polls the new container, at most `ready_checks` times with a pause between.
-fn ready(ports: &Ports<'_>, flags: &Flags, id: &str, target: Version) -> Result<bool, Error> {
+fn ready(ports: &Ports<'_>, flags: &Flags, id: &str, target: Version) -> bool {
     for check in 0..flags.ready_checks {
         if check > 0 {
             ports.pause.pause(flags.check_every_secs);
         }
-        let state = ports.engine.container(id)?.unwrap_or(Value::Null);
+        // A docker call that fails is one check that is not ready, never an end of the run: the
+        // old container is stopped by now, and only the roll back starts it again.
+        let state = ports
+            .engine
+            .container(id)
+            .ok()
+            .flatten()
+            .unwrap_or(Value::Null);
         let up = (state["State"]["Running"] == true)
             & (state["State"]["Restarting"] != true)
             & (state["RestartCount"] == 0);
         if up && matches!(ports.probe.version(Some(&target)), Probed::Running(_)) {
-            return Ok(true);
+            return true;
         }
     }
-    Ok(false)
+    false
 }
 
 /// The new container is ready: the old one goes (its volumes stay) and the new one takes its name.
@@ -603,8 +623,9 @@ fn roll_back(
     Error::Failed(text)
 }
 
-/// Removes the `v<version>` directories of `dir` but the newest two; the lines it reports.
-fn prune(dir: &Path) -> Result<Vec<String>, Error> {
+/// Removes the `v<version>` directories of `dir` but the newest two and that of `installed`
+/// (the version just installed, which an older `--version` may have been); the lines it reports.
+fn prune(dir: &Path, installed: Version) -> Result<Vec<String>, Error> {
     let what = format!("read {}", dir.display());
     let mut kept: Vec<(Version, PathBuf)> = Vec::new();
     for entry in std::fs::read_dir(dir).map_err(release::Error::io(&what))? {
@@ -619,7 +640,7 @@ fn prune(dir: &Path) -> Result<Vec<String>, Error> {
     kept.sort();
     let old = kept.len().saturating_sub(2);
     let mut lines = Vec::new();
-    for (version, path) in &kept[..old] {
+    for (version, path) in kept[..old].iter().filter(|(v, _)| *v != installed) {
         std::fs::remove_dir_all(path)
             .map_err(release::Error::io(format!("remove {}", path.display())))?;
         lines.push(said(format!("removed the downloads of v{version}")));

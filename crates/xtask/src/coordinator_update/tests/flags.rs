@@ -97,7 +97,7 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
     for good in [
         "https://c.example.com",
         "https://c.example.com:8444",
-        "https://10.0.0.5:443",
+        "https://192.0.2.5:443",
         "https://[::1]:8444",
         "https://[::1]",
     ] {

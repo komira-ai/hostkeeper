@@ -185,3 +185,27 @@ fn a_ready_container_whose_swap_does_not_finish_says_what_to_do() {
         "hostkeeper-coordinator-next runs v0.1.219 (was v0.1.218) and the old container is deleted, but hostkeeper-coordinator-next could not be renamed to hostkeeper-coordinator: docker rename newid0000000000 hostkeeper-coordinator: HTTP 500: it failed; rename it (docker rename hostkeeper-coordinator-next hostkeeper-coordinator)"
     );
 }
+
+#[test]
+fn a_docker_error_while_waiting_rolls_back_instead_of_ending_the_run() {
+    // Proves: an inspect of the new container that fails during the checks is a check that is
+    // not ready, never an early end with the old container stopped: every check is made, then
+    // the new container goes, the old one runs again and the version is marked failed.
+    let w = world("cu-inspect-fails");
+    w.engine.failing(&format!("inspect {NEW_ID}"));
+    let err = w.update().expect_err("not ready");
+    assert_eq!(err.to_string(), rolled_back_text(""));
+    assert_eq!(
+        w.engine
+            .calls()
+            .iter()
+            .filter(|c| **c == format!("inspect {NEW_ID}"))
+            .count(),
+        3
+    );
+    assert!(w.engine.is_running(NAME) && !w.engine.exists(NEXT));
+    assert_eq!(
+        w.marker().as_deref(),
+        Some("v0.1.219 did not become ready within 3 checks: the old container runs again\n")
+    );
+}

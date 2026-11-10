@@ -23,8 +23,11 @@ changes nothing.
    named `<name>-next` must not exist.
 3. The running version: the coordinator's `GET <url>/v1/version`, or, for a coordinator too old to
    have that route (it answers 404), the version in its image's `hostkeeper-coordinator:<version>`
-   tag. A running version at least the target ends the run: "up to date", nothing changed. A
-   version that cannot be read does not stop the update.
+   tag. A running version at least the target ends the run: "up to date", nothing changed. A tag
+   that names no version is an unknown version, and the update goes on. A `/v1/version` that
+   gives no answer the verb can read (a wrong `--ca-file`, the listener down) refuses the run with
+   nothing changed: the same request judges the new container, so going on would stop a
+   coordinator that may be up to date and then roll it back.
 4. A file `failed-v<target>` in the download directory refuses the version (see "A failed
    version").
 5. The image tarball, its bundle and `SHA256SUMS` are downloaded to `<download dir>/v<target>/`
@@ -49,9 +52,11 @@ changes nothing.
    `GET /v1/version?at_least=<target>` with 200. Then the old container is deleted (its volumes
    stay) and the new one is renamed to the old name. Otherwise the new container's last 50 log
    lines go in the failure, it is stopped and deleted, the old container is started again and
-   checked, and the version is marked failed.
+   checked, and the version is marked failed. A docker call that fails while the new container is checked counts as
+   a check that is not ready, so it ends in the same roll back.
 
-Only a successful update removes old downloads, keeping the newest two `v*` directories.
+Only a successful update removes old downloads, keeping the newest two `v*` directories and the
+one it just installed.
 
 ## Install
 

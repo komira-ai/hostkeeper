@@ -111,7 +111,7 @@ fn the_timer_starts_the_committed_unit_whose_command_the_verbs_parser_accepts() 
         .iter()
         .map(|a| {
             if a.starts_with("https://") {
-                "http://c:1"
+                "http://coordinator.example.com:8444"
             } else {
                 a
             }

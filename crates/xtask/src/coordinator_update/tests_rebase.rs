@@ -109,8 +109,8 @@ fn a_user_network_carries_its_aliases_and_fixed_addresses() {
     old["NetworkSettings"]["Networks"] = json!({
         "coordinator_default": {
             "Aliases": ["coordinator", "oldid0000000"],
-            "IPAMConfig": {"IPv4Address": "10.1.0.5"},
-            "IPAddress": "10.1.0.5",
+            "IPAMConfig": {"IPv4Address": "198.51.100.5"},
+            "IPAddress": "198.51.100.5",
             "NetworkID": "abc"
         },
         "plain": {"IPAMConfig": null}
@@ -119,7 +119,7 @@ fn a_user_network_carries_its_aliases_and_fixed_addresses() {
     assert_eq!(
         body["NetworkingConfig"],
         json!({"EndpointsConfig": {
-            "coordinator_default": {"Aliases": ["coordinator"], "IPAMConfig": {"IPv4Address": "10.1.0.5"}},
+            "coordinator_default": {"Aliases": ["coordinator"], "IPAMConfig": {"IPv4Address": "198.51.100.5"}},
             "plain": {}
         }})
     );

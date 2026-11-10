@@ -88,7 +88,7 @@ pub(super) fn old_container() -> Value {
             "User": "65532",
             "Image": "hostkeeper-coordinator:0.1.218",
             "Entrypoint": ["/hostkeeper-coordinator"],
-            "Cmd": ["serve", "--listen", "10.0.0.5:8444", "--database-dsn-file", "/run/secrets/db-dsn"],
+            "Cmd": ["serve", "--listen", "192.0.2.5:8444", "--database-dsn-file", "/run/secrets/db-dsn"],
             "WorkingDir": "/",
             "Env": ["PATH=/usr/local/bin", "TZ=UTC", "SSL_CERT_FILE=/etc/ssl/ca.pem"],
             "Labels": {
@@ -368,8 +368,8 @@ fn a_coordinator_at_least_the_target_is_left_alone() {
 
 #[test]
 fn an_older_coordinator_without_the_route_is_known_by_its_images_tag() {
-    // Proves: a 404 from /v1/version reads the version from the image's tag; with no such tag,
-    // or no answer at all, the version is unknown and the update goes on.
+    // Proves: a 404 from /v1/version reads the version from the image's tag; with no such tag
+    // the version is unknown and the update goes on.
     let cases = [
         (
             Probed::NotFound,
@@ -383,11 +383,6 @@ fn an_older_coordinator_without_the_route_is_known_by_its_images_tag() {
         (
             Probed::NotFound,
             json!(["x:1", "hostkeeper-coordinator:latest"]),
-            "an unknown version",
-        ),
-        (
-            Probed::Failed("down".to_owned()),
-            json!(["hostkeeper-coordinator:0.1.218"]),
             "an unknown version",
         ),
         (Probed::Older, json!([]), "an unknown version"),
@@ -413,6 +408,61 @@ fn an_older_coordinator_without_the_route_is_known_by_its_images_tag() {
             )
         );
     }
+}
+
+#[test]
+fn a_version_route_that_cannot_be_read_refuses_the_run_and_changes_nothing() {
+    // Proves: when /v1/version gives no answer it can read (a wrong CA, an outage), the run stops
+    // before anything is downloaded or stopped: the same probe judges the new container, so going
+    // on would stop a coordinator that may be up to date and roll it back.
+    let mut w = world("cu-unreadable");
+    w.probe = FakeProbe::new(
+        Probed::Failed("GET https://coordinator.example.com:8444/v1/version: HTTP 502".to_owned()),
+        vec![Probed::Running(v("0.1.219"))],
+    );
+    assert_eq!(
+        w.refused(),
+        "the coordinator's version cannot be read (GET https://coordinator.example.com:8444/v1/version: HTTP 502): check --coordinator-url and --ca-file; nothing changed"
+    );
+    assert_eq!(
+        w.engine.calls(),
+        vec![
+            format!("inspect {NAME}"),
+            format!("inspect {NEXT}"),
+            "image sha256:oldimage".to_owned(),
+        ]
+    );
+    assert!(!w.loaded() && w.engine.is_running(NAME) && w.marker().is_none());
+    assert!(dir_names(&w.download).is_empty());
+}
+
+#[test]
+fn an_older_wanted_version_keeps_its_downloads_when_newer_ones_are_there() {
+    // Proves: the version just installed is never pruned, even when two newer download
+    // directories are there (an operator's `--version` of an older release).
+    let mut w = world("cu-prune-installed");
+    for newer in ["v0.1.230", "v0.1.231"] {
+        std::fs::create_dir(w.download.join(newer)).expect("a newer download");
+    }
+    let mut flags = w.flags();
+    flags.version = Some(v("0.1.218"));
+    w.probe = FakeProbe::new(
+        Probed::Running(v("0.1.100")),
+        vec![Probed::Running(v("0.1.218"))],
+    );
+    w.engine
+        .loads_as
+        .borrow_mut()
+        .replace(("hostkeeper-coordinator:0.1.218".to_owned(), config_id()));
+    let lines = w.update_with(&flags).expect("the older release");
+    assert!(
+        !lines.iter().any(|l| l.contains("removed the downloads")),
+        "{lines:?}"
+    );
+    assert_eq!(
+        dir_names(&w.download),
+        ["v0.1.218", "v0.1.230", "v0.1.231"].map(str::to_owned)
+    );
 }
 
 #[test]
