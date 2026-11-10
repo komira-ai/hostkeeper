@@ -19,19 +19,28 @@
 //! seen at the next call).
 //!
 //! A request that matches an open inventory record exactly is not left to an operator: the
-//! coordinator approves it itself, as the record's host id and role, with no service, when it is
+//! coordinator approves it itself, as the record's host id and role (or group), with no service, when it is
 //! posted ([`Coordinator::enroll`]) and when the record is added or opened
 //! ([`Coordinator::add_record`], [`Coordinator::open_record`]); the conditions are
 //! [`Enrollment::approve_by_record`]'s. What waits for an operator is listed with the record's
 //! state (`record_state`, `record_approve_until_unix`).
 //!
-//! An approval assigns the services it names to the host it approves
+//! From a coordinator that holds host groups, an approval puts its host in a group
+//! (`docs/design/hostgroups.md` section 1.2, [`Enrollment::approve`]) and names no services:
+//! the group decides what the host runs. The group named is checked and the approval written
+//! under the fleet's lock, which `HostGroups.Remove` checks under, so no approval lands in a
+//! group being removed; so is an approval by a record ([`Coordinator::enroll`],
+//! [`Coordinator::add_record`], [`Coordinator::open_record`]). A coordinator that holds none
+//! approves by role and services, as before groups, and refuses a `host_group`
+//! (`unknown_host_group`), with enrollment or without.
+//!
+//! An approval by role assigns the services it names to the host it approves
 //! ([`Coordinator::assign_host`], the one path by which `Services.Assign` of a host assigns
 //! too), after the approval is recorded: each service is one audit entry `assign`. An
 //! assignment that cannot be written is logged and leaves the approval standing; the operator
 //! assigns the services with `Services.Assign`. A Mac approved by its MDM nonce at its
 //! `Enroll` ([`Coordinator::enroll`]) has the services of its allowlist entry assigned the same
-//! way, by `mdm-nonce`. An approval by a record assigns none.
+//! way, by `mdm-nonce`. An approval by a record assigns none, nor does one by group.
 
 use std::collections::BTreeMap;
 
@@ -42,6 +51,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use hostkeeper_wire::{HostId, RoleName};
 
 use crate::enrollment::{ByRecord, Enrollment, MAC_APPROVER, RpcError};
+use crate::host_groups::GroupName;
 use crate::inventory::show_match;
 use crate::operator::{Caller, entry_proto};
 use crate::service::Coordinator;
@@ -67,6 +77,7 @@ impl Coordinator {
         let mut listed = enrollment.list(request)?;
         let now = self.ops.unix_now();
         let records = self.ops.read(|state| state.inventory.clone());
+        let by_group = self.desired.in_group_mode();
         // An expired request is not pending, so no contest names it.
         let contested: BTreeMap<String, Vec<String>> = enrollment
             .contests(&records)?
@@ -74,7 +85,7 @@ impl Coordinator {
             .map(|(id, others)| (id.to_hex(), others.iter().map(KeyHash::to_hex).collect()))
             .collect();
         for pending in &mut listed.requests {
-            show_match(pending, &records, now);
+            show_match(pending, &records, now, by_group);
             if let Some(others) = contested.get(&pending.request_id) {
                 pending.contested_by.clone_from(others);
             }
@@ -83,26 +94,46 @@ impl Coordinator {
     }
 
     /// `Enrollment.Approve`: approves a pending request as the role and services it names,
-    /// which must be services this coordinator manages, and as the host id it names or, for a
-    /// request that matches one inventory record, that record's ([`Enrollment::approve`]); and
-    /// assigns those services to the host ([`Coordinator::assign_host`]). The answer names the
-    /// host id approved. The host gets its certificate at its next `Poll`, never in this answer.
+    /// which must be services this coordinator manages, or, from a coordinator that holds host
+    /// groups, in the group it names, and as the host id it names or, for a request that
+    /// matches one inventory record, that record's ([`Enrollment::approve`]), under the fleet's
+    /// lock; and assigns the services to the host ([`Coordinator::assign_host`]). The answer
+    /// names the host id approved. The host gets its certificate at its next `Poll`, never in
+    /// this answer.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, and the refusals of [`Enrollment::approve`]; without
-    /// enrollment, `unknown_request`.
+    /// enrollment, `unknown_host_group` for a `host_group` the coordinator does not hold, else
+    /// `unknown_request`.
     pub fn enrollment_approve(
         &self,
         caller: &Caller,
         request: proto::ApproveRequest,
     ) -> Result<proto::ApproveResponse, EnrollmentRefusal> {
         let by = caller.operator()?;
-        let enrollment: &Enrollment = self.enrollment().ok_or(EnrollmentRefusal::UnknownRequest)?;
+        let Some(enrollment) = self.enrollment() else {
+            let held = request
+                .host_group
+                .parse::<GroupName>()
+                .ok()
+                .and_then(|name| self.desired.host_group(&name));
+            return Err(if request.host_group.is_empty() || held.is_some() {
+                EnrollmentRefusal::UnknownRequest
+            } else {
+                EnrollmentRefusal::UnknownHostGroup
+            });
+        };
         let known = |name: &str| self.services.get(name).is_some();
         let (role, services) = (request.role.clone(), request.services.clone());
         let records = self.ops.read(|state| state.inventory.clone());
-        let approved = enrollment.approve(by, request, &known, &records)?;
-        self.assign_approved(by, approved.host_id.as_str(), &role, &services);
+        let approved = {
+            let _fleet = self.lock_fleet();
+            enrollment.approve(by, request, &known, &records)?
+        };
+        // An approval by group names none.
+        if !services.is_empty() {
+            self.assign_approved(by, approved.host_id.as_str(), &role, &services);
+        }
         Ok(proto::ApproveResponse {
             host_id: approved.host_id.to_string(),
             certificate_issued_at_poll: true,
@@ -113,9 +144,10 @@ impl Coordinator {
     /// `Enroll` of `hostkeeper.agent.v1.Coordinator` over `enrollment`, this coordinator's
     /// ([`Enrollment::enrolled`]): when a Mac's request is approved by its nonce, the services
     /// of its allowlist entry are assigned to its host by `mdm-nonce`, as an operator's
-    /// approval assigns the services it names. A request still pending (a new one or a repost)
-    /// is tried against the host inventory ([`Enrollment::approve_by_record`]); one it approves
-    /// is answered as one already approved (`UNSPECIFIED`: poll it), as a Mac's by its nonce.
+    /// approval assigns the services it names (an approval by group names none). A request
+    /// still pending (a new one or a repost) is tried against the host inventory
+    /// ([`Enrollment::approve_by_record`]), under the fleet's lock; one it approves is answered
+    /// as one already approved (`UNSPECIFIED`: poll it), as a Mac's by its nonce.
     ///
     /// # Errors
     /// As [`Enrollment::enrolled`].
@@ -128,7 +160,11 @@ impl Coordinator {
         if enrolled.response.state == EnrollState::Pending as i32 {
             self.approve_posted(enrollment, &enrolled.request_id, &mut enrolled.response);
         }
-        if let Some(entry) = &enrolled.by_nonce {
+        if let Some(entry) = enrolled
+            .by_nonce
+            .as_ref()
+            .filter(|e| !e.services.is_empty())
+        {
             let services: Vec<String> = entry
                 .services
                 .iter()
@@ -152,6 +188,7 @@ impl Coordinator {
         request_id: &KeyHash,
         response: &mut EnrollResponse,
     ) {
+        let _fleet = self.lock_fleet();
         let records = self.ops.read(|state| state.inventory.clone());
         if let ByRecord::Approved { .. } = enrollment.approve_by_record(request_id, &records) {
             response.state = EnrollState::Unspecified as i32;

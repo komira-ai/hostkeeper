@@ -1,15 +1,24 @@
 //! The host inventory (design 5.7, **Host inventory**): the record an operator adds for each
 //! server when building it, and the match of a pending enrollment request against the records.
 //!
-//! A record names a host id, an optional role, the server's data MACs, its BMC MAC, an optional
-//! serial and notes. It lives in the ops file ([`crate::ops::OpsState::inventory`]) with the
+//! A record names a host id, an optional host group or role, the server's data MACs, its BMC MAC,
+//! an optional serial and notes. It lives in the ops file ([`crate::ops::OpsState::inventory`]) with the
 //! other operator state, and every change to it is made under the ops file's lock with its
 //! audit entry: `Enrollment.AddRecord` ([`Coordinator::add_record`]),
 //! `Enrollment.ListRecords` ([`Coordinator::list_records`]), `Enrollment.RemoveRecord`
 //! ([`Coordinator::remove_record`]) and `Enrollment.OpenRecord` ([`Coordinator::open_record`]).
 //! No two records hold one host id, one MAC or one serial.
 //!
-//! A record that names a role is the approval of the host it was entered for: it has a window
+//! From a coordinator that holds host groups (`docs/design/hostgroups.md` section 1.2), a record
+//! names a group by its `host_group`, or by its `role` read as a group's name, which must be one
+//! the coordinator holds (`unknown_host_group`); the record keeps the group's name as both, and
+//! answers it as both, for readers that know only the role. `AddRecord` checks the group under
+//! the lock `HostGroups.Remove` checks the records under, so no record lands in a group being
+//! removed. A coordinator that holds none keeps a record's role as before, and refuses a
+//! `host_group`.
+//!
+//! A record that names a host group, or a role ([`InventoryRecord::group`]), is the approval of
+//! the host it was entered for: it has a window
 //! (`approve_until_unix`) and, once the coordinator approved a request by it, a mark that it is
 //! used ([`RecordUse`]), and while its window is open and it is unused a pending request that
 //! matches it exactly is approved by the coordinator itself
@@ -20,7 +29,8 @@
 //!
 //! `Enrollment.List` ([`Coordinator::enrollment_list`]) shows each pending request with its
 //! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every
-//! candidate named, none chosen). A match fills in a host id, a role, the record's serial and
+//! candidate named, none chosen). A match fills in a host id, a role (and a host group, from a
+//! coordinator that holds groups), the record's serial and
 //! BMC MAC and where its window stands, for the operator to read: a request that is still
 //! pending against an open record waits for an operator for another reason. Two pending
 //! requests that match one record contest it ([`contests`]): the list names, on each, the
@@ -66,6 +76,8 @@ pub use window::{
     RecordWindow, WindowAboveMax,
 };
 
+use crate::enrollment::groups::{group_in, held_in};
+use crate::host_groups::HostGroups;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
@@ -98,7 +110,7 @@ fn is_zero(n: &u64) -> bool {
 pub struct InventoryRecord {
     /// The host id the server is meant to enroll as.
     pub host_id: String,
-    /// The role it is meant for.
+    /// The role it is meant for; from a coordinator that holds host groups, its group's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
     /// The host group it is meant for; empty when it names none. Written only when it names one,
@@ -123,7 +135,8 @@ pub struct InventoryRecord {
     pub at_unix: u64,
     /// The end of the record's approval window, in unix seconds: a request that matches the
     /// record exactly is approved by the coordinator while the time is before it. 0 for a
-    /// record with no window (one that names no role, or one a release before windows added).
+    /// record with no window (one that names no group nor role, or one a release before windows
+    /// added).
     #[serde(default, skip_serializing_if = "is_zero")]
     pub approve_until_unix: u64,
     /// The approval that used the record, once the coordinator approved a request by it.
@@ -137,6 +150,17 @@ pub struct InventoryRecord {
 }
 
 impl InventoryRecord {
+    /// The host group the record names: its `host_group`, or else its role, read as a group's
+    /// name (a record added before groups names one only so); empty when it names neither.
+    #[must_use]
+    pub fn group(&self) -> &str {
+        if self.host_group.is_empty() {
+            &self.role
+        } else {
+            &self.host_group
+        }
+    }
+
     /// Every MAC the record holds: its data MACs and its BMC MAC.
     fn macs(&self) -> impl Iterator<Item = &str> {
         self.data_macs
@@ -181,7 +205,9 @@ impl InventoryRecord {
     /// A line for the audit: what the record holds, the notes left out.
     fn describe(&self) -> String {
         let mut parts = Vec::new();
-        if !self.role.is_empty() {
+        if !self.host_group.is_empty() {
+            parts.push(format!("group {}", self.host_group));
+        } else if !self.role.is_empty() {
             parts.push(format!("role {}", self.role));
         }
         if !self.data_macs.is_empty() {
@@ -381,16 +407,23 @@ fn held_proto(held: HostHeld) -> proto::HostHeld {
 }
 
 /// `record` as `hostkeeper.operator.v1` says it at `now`; `enrolled` when a host is enrolled
-/// against it, and `held` what the enrollment store holds for its host id.
+/// against it, and `held` what the enrollment store holds for its host id. `by_group` from a
+/// coordinator that holds host groups: the record's group is its `host_group` and its `role`.
 fn record_proto(
     record: &InventoryRecord,
     enrolled: bool,
     held: proto::HostHeld,
     now: u64,
+    by_group: bool,
 ) -> proto::InventoryRecord {
+    let group = if by_group { record.group() } else { "" };
     proto::InventoryRecord {
         host_id: record.host_id.clone(),
-        role: record.role.clone(),
+        role: if by_group {
+            group.to_owned()
+        } else {
+            record.role.clone()
+        },
         data_macs: record.data_macs.clone(),
         bmc_mac: record.bmc_mac.clone(),
         serial: record.serial.clone(),
@@ -411,7 +444,7 @@ fn record_proto(
             .platform
             .map_or(agent::Platform::Unspecified, platform_proto)
             .into(),
-        host_group: String::new(),
+        host_group: group.to_owned(),
     }
 }
 
@@ -452,25 +485,37 @@ fn is_serial(text: &str) -> bool {
 }
 
 /// The record `request` asks for, by `by` at `at_unix`, checked field by field, with the window
-/// `window` gives it.
+/// `window` gives it. With `held`, the host groups the coordinator holds, the record names one
+/// of them, as the module says, or none; without, a role or none.
 fn record_of(
     request: proto::AddRecordRequest,
     by: &str,
     at_unix: u64,
     window: &RecordWindow,
+    held: Option<&HostGroups>,
 ) -> Result<InventoryRecord, proto::EnrollmentRefusal> {
-    use proto::EnrollmentRefusal::{InvalidHostId, InvalidRequest, InvalidRole};
+    use proto::EnrollmentRefusal::{InvalidHostId, InvalidRequest, InvalidRole, UnknownHostGroup};
+    // A coordinator that holds no group refuses a group first, as it did before groups.
+    if held.is_none() && !request.host_group.is_empty() {
+        return Err(UnknownHostGroup);
+    }
     let host_id = request
         .host_id
         .parse::<HostId>()
         .map_err(|_| InvalidHostId)?
         .to_string();
-    let role = match request.role.as_str() {
-        "" => String::new(),
-        text => text
-            .parse::<RoleName>()
-            .map_err(|_| InvalidRole)?
-            .to_string(),
+    let (role, host_group) = match (held, request.role.as_str()) {
+        (None, "") => (String::new(), String::new()),
+        (None, text) => (
+            text.parse::<RoleName>()
+                .map_err(|_| InvalidRole)?
+                .to_string(),
+            String::new(),
+        ),
+        (Some(held), role) => match group_in(&request.host_group, role, held)? {
+            Some(group) => (group.to_string(), group.to_string()),
+            None => (String::new(), String::new()),
+        },
     };
     let mut data_macs = request
         .data_macs
@@ -503,7 +548,7 @@ fn record_of(
     Ok(InventoryRecord {
         host_id,
         role,
-        host_group: String::new(),
+        host_group,
         data_macs,
         bmc_mac,
         serial,
@@ -531,14 +576,25 @@ fn claims_of(claims: &agent::Claims) -> Claims {
 
 /// Fills in how the pending request `pending` matches `records`: the one record's host id,
 /// role, serial, BMC MAC and where its window stands at `now`, every candidate of an ambiguous
-/// match, or unmatched.
-pub fn show_match(pending: &mut proto::PendingEnrollment, records: &[InventoryRecord], now: u64) {
+/// match, or unmatched. `by_group` from a coordinator that holds host groups: the record's group
+/// is its `record_host_group` and its `record_role`.
+pub fn show_match(
+    pending: &mut proto::PendingEnrollment,
+    records: &[InventoryRecord],
+    now: u64,
+    by_group: bool,
+) {
     let claims = claims_of(&pending.claims.clone().unwrap_or_default());
     match match_claims(&claims, records) {
         InventoryMatch::Matched(record) => {
             pending.set_inventory_match(proto::InventoryMatch::Matched);
             pending.record_host_id.clone_from(&record.host_id);
-            pending.record_role.clone_from(&record.role);
+            if by_group {
+                pending.record_role = record.group().to_owned();
+                pending.record_host_group = record.group().to_owned();
+            } else {
+                pending.record_role.clone_from(&record.role);
+            }
             pending.record_serial.clone_from(&record.serial);
             pending.record_bmc_mac.clone_from(&record.bmc_mac);
             pending.set_record_state(record.state_at(now));
@@ -602,14 +658,17 @@ impl Coordinator {
 
     /// `Enrollment.AddRecord`: records a server the operator built, before it first boots.
     /// Under the ops file's lock: a record for the host id is refused, and so is a MAC or a
-    /// serial another record holds, and a record past [`MAX_RECORDS`]. A record that names a
-    /// role is added with its approval window ([`RecordWindow::end`]), and the pending requests
+    /// serial another record holds, and a record past [`MAX_RECORDS`]. From a coordinator that
+    /// holds host groups the group it names must be one held, checked and written under the
+    /// fleet's lock, which `HostGroups.Remove` checks the records under. A record that names a
+    /// group or a role is added with its approval window ([`RecordWindow::end`]), and the pending requests
     /// that match it are tried once it is kept ([`Coordinator::approve_waiting`]). The answer's
     /// record is as added, `enrolled` when a host already enrolled matches it, and no other
     /// record, and says what the enrollment store holds for its host id (`host_held`).
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role`, `invalid_request` (a
+    /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role` (also a role beside a
+    /// `host_group` that is another name), `unknown_host_group`, `invalid_request` (a
     /// MAC, the serial, the notes, more than [`MAX_DATA_MACS`] data MACs, a data MAC that is
     /// also the BMC MAC, neither a data MAC nor a serial, or a platform that is not a Linux
     /// one), `invalid_window`,
@@ -623,7 +682,9 @@ impl Coordinator {
     ) -> Result<proto::AddRecordResponse, proto::EnrollmentRefusal> {
         let by = caller.operator()?;
         let now = self.ops.unix_now();
-        let record = record_of(request, by, now, &self.ops.record_window())?;
+        let fleet = self.lock_fleet();
+        let groups = held_in(&self.desired);
+        let record = record_of(request, by, now, &self.ops.record_window(), groups.as_ref())?;
         let hosts = self
             .enrolled_hosts()
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
@@ -659,7 +720,8 @@ impl Coordinator {
                 .contains(&record.host_id);
             Ok(())
         })?;
-        let shown = record_proto(&record, enrolled, held, now);
+        drop(fleet);
+        let shown = record_proto(&record, enrolled, held, now, groups.is_some());
         self.approve_waiting(&record.host_id);
         Ok(proto::AddRecordResponse {
             record: Some(shown),
@@ -698,6 +760,7 @@ impl Coordinator {
             .enrolled_hosts()
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
         let now = self.ops.unix_now();
+        let by_group = self.desired.in_group_mode();
         let (mut records, more) = self.ops.read(|state| {
             let enrolled = RecordIndex::new(&state.inventory).enrolled(&hosts);
             let mut rest = state
@@ -710,6 +773,7 @@ impl Coordinator {
                         enrolled.contains(&r.host_id),
                         proto::HostHeld::Unspecified,
                         now,
+                        by_group,
                     )
                 })
                 .filter(|r| request.enrolled.is_none_or(|want| r.enrolled == want));

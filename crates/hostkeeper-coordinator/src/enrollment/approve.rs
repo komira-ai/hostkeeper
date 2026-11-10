@@ -12,8 +12,18 @@
 //! [`EnrollmentStore::approve_recorded`], which checks again under its lock: the request is
 //! pending, not a `duplicate_claim` unless the approval replaces, the host id is not held by
 //! another key nor denied unless it replaces. That one write records the approval with the
-//! host id, role, services (the host's first assignment), approver, time and reason; issuance
-//! stays with `Poll`.
+//! host id, role, services (the host's first assignment), host group, approver, time and reason;
+//! issuance stays with `Poll`.
+//!
+//! From a coordinator that holds host groups ([`Enrollment::held_groups`]) an approval places
+//! its host in a group (`docs/design/hostgroups.md` section 1.2): the one its `host_group` names,
+//! or else its `role`, read as a group's name ([`group_in`]), which must be held
+//! (`unknown_host_group`); one of the two is required (`invalid_role`), and the role the store
+//! writes is the group's name. It names no services (`services_retired`): the group decides what
+//! the host runs. A renewal, or a `replace` of a host in a group, keeps that group: naming
+//! another is `host_group_differs`, checked by the store under its lock. A coordinator that
+//! holds none approves by role and services, as before groups, and refuses a `host_group`
+//! (`unknown_host_group`).
 //!
 //! The audit entry lives in the coordinator's ops store, a second file, so it cannot be in the
 //! approval's write. It is made from the approval record right after that write
@@ -41,6 +51,8 @@ use hostkeeper_wire::RoleName;
 use super::Enrollment;
 use super::by_record::{ACTION_AUTO_APPROVED, INVENTORY_APPROVER, record_auto_approval};
 use super::expiry::ExpiriesAudited;
+use super::groups::group_in;
+use crate::host_groups::HostGroups;
 use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
 use crate::operator::valid_reason;
 use crate::ops::{AuditEntry, OpsStore, Write};
@@ -75,6 +87,8 @@ struct Asked {
     host_id: Option<HostId>,
     role: Role,
     services: Vec<ServiceName>,
+    /// The host group, from a coordinator that holds one.
+    host_group: Option<String>,
     replace: bool,
     reason: String,
 }
@@ -90,6 +104,7 @@ impl Asked {
                 role: self.role,
                 services: self.services,
                 replace: self.replace,
+                host_group: self.host_group,
             },
             reason: self.reason,
         }
@@ -129,11 +144,18 @@ fn services_of(names: &[String], known: &dyn Fn(&str) -> bool) -> Option<Vec<Ser
         .collect()
 }
 
-/// `request`'s fields checked, each against its own refusal; an empty host id is none named.
+/// `request`'s fields checked, each against its own refusal; an empty host id is none named. With
+/// `held`, the host groups the coordinator holds, the host is placed by group, as the module
+/// says; without, by its role and services.
 fn check(
     request: proto::ApproveRequest,
     known: &dyn Fn(&str) -> bool,
+    held: Option<&HostGroups>,
 ) -> Result<Asked, EnrollmentRefusal> {
+    // A coordinator that holds no group refuses a group first, as it did before groups.
+    if held.is_none() && !request.host_group.is_empty() {
+        return Err(EnrollmentRefusal::UnknownHostGroup);
+    }
     let invalid = EnrollmentRefusal::InvalidRequest;
     let request_id = KeyHash::from_hex(&request.request_id).ok_or(invalid)?;
     let key_sha256 = KeyHash::from_hex(&request.key_sha256).ok_or(invalid)?;
@@ -141,9 +163,23 @@ fn check(
         "" => None,
         text => Some(HostId::parse(text).map_err(|_| EnrollmentRefusal::InvalidHostId)?),
     };
-    let role = role_of(&request.role).ok_or(EnrollmentRefusal::InvalidRole)?;
-    let services =
-        services_of(&request.services, known).ok_or(EnrollmentRefusal::InvalidService)?;
+    let (role, services, host_group) = match held {
+        None => (
+            role_of(&request.role).ok_or(EnrollmentRefusal::InvalidRole)?,
+            services_of(&request.services, known).ok_or(EnrollmentRefusal::InvalidService)?,
+            None,
+        ),
+        Some(_) if !request.services.is_empty() => {
+            return Err(EnrollmentRefusal::ServicesRetired);
+        }
+        Some(held) => {
+            let group = group_in(&request.host_group, &request.role, held)?
+                .ok_or(EnrollmentRefusal::InvalidRole)?;
+            // A group's name follows the operator API's rule of a role, which is the stricter.
+            let role = role_of(group.as_str()).ok_or(EnrollmentRefusal::InvalidRole)?;
+            (role, Vec::new(), Some(group.to_string()))
+        }
+    };
     let reason = valid_reason(&request.reason).ok_or(invalid)?;
     Ok(Asked {
         request_id,
@@ -151,6 +187,7 @@ fn check(
         host_id,
         role,
         services,
+        host_group,
         replace: request.replace,
         reason,
     })
@@ -196,6 +233,7 @@ pub(super) fn refusal_of(error: &ApproveError) -> EnrollmentRefusal {
         // A renewal is approved under the host id it renews, and no other.
         ApproveError::RenewalOfOtherHost => EnrollmentRefusal::InvalidHostId,
         ApproveError::DuplicateClaim => EnrollmentRefusal::DuplicateClaim,
+        ApproveError::HostGroupDiffers { .. } => EnrollmentRefusal::HostGroupDiffers,
         // Only the Mac path names a nonce, and it declines on a nonce refusal before it asks
         // this; what remains is a failure of the store.
         ApproveError::MacNonce(_) | ApproveError::Store(_) => {
@@ -239,7 +277,9 @@ pub(super) fn claims_summary(claims: &Claims) -> String {
 
 /// The audit entry of `approval`: by its approver, about its host id; its reason starts with
 /// `request <id>;`, which is how a start finds the approvals already audited. An approval by an
-/// inventory record is `enrollment.auto_approved` and names the record after the request.
+/// inventory record is `enrollment.auto_approved` and names the record after the request. An
+/// approval that put its host in a group names the group (`group web`), in its reason and as the
+/// entry's `host_group`, in place of its role and services.
 pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
     let (action, record) = if approval.approver == INVENTORY_APPROVER {
         (
@@ -256,12 +296,17 @@ pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
     } else {
         approval.services.join(",")
     };
+    let placed = if approval.host_group.is_empty() {
+        format!("role {}; services {services}", approval.role)
+    } else {
+        format!("group {}", approval.host_group)
+    };
     let mut entry = AuditEntry::new(&approval.approver, action);
     entry.node_id = Some(approval.host_id.clone());
+    entry.host_group = Some(approval.host_group.clone()).filter(|group| !group.is_empty());
     entry.reason = Some(format!(
-        "request {}; {record}role {}; services {services}; claims {}; {}",
+        "request {}; {record}{placed}; claims {}; {}",
         approval.request_id,
-        approval.role,
         claims_summary(&approval.claims),
         approval.reason
     ));
@@ -364,14 +409,18 @@ impl Enrollment {
 
     /// `Enrollment.Approve` by `by` (the name of the operator's token, already checked): the
     /// pending request it names is approved as the role and services it names, which `known`
-    /// says the coordinator manages, and as the host id [`host_id_for`] gives by the host
+    /// says the coordinator manages, or, from a coordinator that holds host groups, in the group
+    /// it names (the module says how), and as the host id [`host_id_for`] gives by the host
     /// inventory `inventory`: the one matching record's when the request matches one, which an
-    /// empty host id defaults to. The certificate is made at the host's next `Poll`.
+    /// empty host id defaults to. The certificate is made at the host's next `Poll`. The caller
+    /// holds the lock `HostGroups.Remove` checks under, so the group named is not removed while
+    /// the approval is written.
     ///
     /// # Errors
     /// `invalid_request` (the request id, the key hash or the reason), `invalid_host_id`,
-    /// `invalid_role`, `invalid_service`, `unknown_request`, `key_mismatch`, `record_contested`,
-    /// `record_mismatch`, `not_pending`, `duplicate_claim`, `host_id_taken`, `denied`, `store_failed`. Each is
+    /// `invalid_role`, `invalid_service`, `services_retired`, `unknown_host_group`,
+    /// `unknown_request`, `key_mismatch`, `record_contested`, `record_mismatch`, `not_pending`,
+    /// `duplicate_claim`, `host_id_taken`, `denied`, `host_group_differs`, `store_failed`. Each is
     /// audited `enroll_approve_refused`, and nothing else changes.
     pub fn approve(
         &self,
@@ -381,7 +430,7 @@ impl Enrollment {
         inventory: &[InventoryRecord],
     ) -> Result<Approved, EnrollmentRefusal> {
         let id = KeyHash::from_hex(&request.request_id);
-        let asked = match check(request, known) {
+        let asked = match check(request, known, self.held_groups().as_ref()) {
             Ok(asked) => asked,
             Err(refusal) => {
                 self.audit_refused(by, refusal, id.as_ref(), None);
@@ -407,7 +456,8 @@ impl Enrollment {
             mac_nonce: None,
             mac_enrolled_since_unix: None,
         };
-        self.store
+        let approval = self
+            .store
             .approve_recorded(
                 &checked.request_id,
                 &checked.key_sha256,
@@ -415,7 +465,7 @@ impl Enrollment {
                 &record,
             )
             .map_err(|error| refused(refusal_of(&error), Some(&checked.decision.host_id)))?;
-        Ok(self.audited(&checked, &record, pending.claims))
+        Ok(self.audited(&checked, &record, pending.claims, &approval.host_group))
     }
 
     /// The request `request_id` names, when it exists and `key_sha256` is its key's hash
@@ -457,14 +507,15 @@ impl Enrollment {
     }
 
     /// The approval of `checked` with `record`, which the store just wrote for a request that
-    /// claimed `claims`, audited.
+    /// claimed `claims`, putting its host in `host_group` (empty for none), audited.
     pub(super) fn audited(
         &self,
         checked: &Checked,
         record: &ApprovalRecord,
         claims: Claims,
+        host_group: &str,
     ) -> Approved {
-        let approval = self.recorded(checked, record, claims);
+        let approval = self.recorded(checked, record, claims, host_group);
         Approved {
             host_id: checked.decision.host_id.clone(),
             entry: self.audit(approval_entry(&approval)),
@@ -472,7 +523,8 @@ impl Enrollment {
     }
 
     /// The approval the store just wrote for `checked` with `record`, for a request that claimed
-    /// `claims`, as the store lists it ([`EnrollmentStore::recorded_approvals`]).
+    /// `claims`, putting its host in `host_group` (empty for none), as the store lists it
+    /// ([`EnrollmentStore::recorded_approvals`]).
     ///
     /// [`EnrollmentStore::recorded_approvals`]: hostkeeper_enrollment::enroll::EnrollmentStore::recorded_approvals
     pub(super) fn recorded(
@@ -480,11 +532,13 @@ impl Enrollment {
         checked: &Checked,
         record: &ApprovalRecord,
         claims: Claims,
+        host_group: &str,
     ) -> RecordedApproval {
         RecordedApproval {
             request_id: checked.request_id,
             host_id: checked.decision.host_id.to_string(),
             role: checked.decision.role.as_str().to_owned(),
+            host_group: host_group.to_owned(),
             services: checked
                 .decision
                 .services

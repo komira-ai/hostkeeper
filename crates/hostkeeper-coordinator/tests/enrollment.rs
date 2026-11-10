@@ -22,6 +22,7 @@ use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_proto::hostkeeper::agent::v1::{Claims, EnrollRequest, PollRequest, PollState};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PublicKeyData, SigningKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
@@ -250,6 +251,78 @@ fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
     assert_eq!(full.token(), "pending_full");
 }
 
+/// An allowlist of one Mac serial, approved as `mac-<serial>`, whose entry's lines are `entry`.
+fn allowlist_of(entry: &str) -> String {
+    format!("[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\n{entry}\n")
+}
+
+/// Proves: `serve` started over state files that hold the host group `build` (put through
+/// `HostGroups.Put` by an earlier run) refuses a Mac allowlist whose entry names services
+/// (`MacServicesRetired`, naming the serial) and one whose entry names a group it does not hold
+/// (`MacHostGroup`, naming the group), each with its message; and starts, with enrollment, with
+/// an entry that names `build` by `host_group`, and with one that names it by `role`.
+///
+/// Catches: the start's allowlist check of a coordinator that holds groups not reached from the
+/// flags and the state files, so that a Mac entry the coordinator cannot place starts it.
+#[tokio::test]
+async fn a_coordinator_holding_groups_starts_only_with_an_allowlist_it_can_place() {
+    let files = Files::new("enrollment-mac-groups");
+    let first = start(&files, &enrollment_flags(true)).expect("started");
+    let operator = first.coordinator.caller(Some(OPERATOR)).await;
+    first
+        .coordinator
+        .host_groups_put(
+            &operator,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
+    // The state files' lock is the running coordinator's: each start below takes it after it.
+    drop(first);
+    let with_allowlist = || {
+        let mut flags = enrollment_flags(false);
+        flags.extend_from_slice(&["--mac-serial-allowlist", "=mac.toml"]);
+        flags
+    };
+
+    files.put(
+        "mac.toml",
+        &allowlist_of("host_group = \"build\"\nservices = [\"kbf\"]"),
+        0o600,
+    );
+    match start(&files, &with_allowlist()) {
+        Err(why @ StartError::MacServicesRetired(_)) => assert_eq!(
+            why.to_string(),
+            "--mac-serial-allowlist: the entry of serial C02XK1ABJG5J names services; the \
+             coordinator holds host groups, and the Mac's group decides what it runs: name its \
+             host_group alone"
+        ),
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started with an entry naming services"),
+    }
+    files.put("mac.toml", &allowlist_of("host_group = \"lab\""), 0o600);
+    match start(&files, &with_allowlist()) {
+        Err(why @ StartError::MacHostGroup(_)) => assert_eq!(
+            why.to_string(),
+            "--mac-serial-allowlist names host group lab, which the coordinator does not hold"
+        ),
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started with an entry naming a group it does not hold"),
+    }
+    for entry in ["host_group = \"build\"", "role = \"build\""] {
+        files.put("mac.toml", &allowlist_of(entry), 0o600);
+        let parts = start(&files, &with_allowlist()).expect("started");
+        assert!(parts.coordinator.enrollment().is_some(), "{entry}");
+    }
+}
+
 /// Catches `--enrollment-request-ttl` accepted without enrollment, or with a value that is not
 /// digits and one unit, is no time, or overflows; a unit read as another; a default other than
 /// 72 hours; the TTL not reaching the enrollment the coordinator starts; and the flag missing
@@ -406,6 +479,7 @@ fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
                 role: Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
         )
         .expect("approved");
