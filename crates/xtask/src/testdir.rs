@@ -154,9 +154,10 @@ mod tests {
         }
         let next = AtomicU64::new(0);
         let failed = std::panic::catch_unwind(|| unique(&parent, "full", &next, 3));
-        let Err(said) = failed else {
-            panic!("a directory was made though every number was taken");
-        };
+        // `err().expect`, as `TestDir` has no `Debug` for `expect_err` to print.
+        let said = failed
+            .err()
+            .expect("no directory is made when every number is taken");
         let said = said.downcast_ref::<String>().cloned().unwrap_or_default();
         assert_eq!(
             said,
