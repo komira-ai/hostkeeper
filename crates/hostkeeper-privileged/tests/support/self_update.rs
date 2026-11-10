@@ -300,6 +300,8 @@ pub fn test_unit(real: &str, paths: &Paths, fixture_flags: &[String]) -> String 
             daemon.push((*flag).to_owned());
             daemon.push(plain(ours));
         }
+        daemon.push("--facts-file".to_owned());
+        daemon.push(plain(&paths.packages.with_file_name("facts.json")));
         daemon.extend(["--heartbeat-secs", "1"].map(str::to_owned));
         out.push_str(&format!("ExecStart={}\n", daemon.join(" ")));
     }

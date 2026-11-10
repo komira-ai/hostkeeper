@@ -100,6 +100,8 @@ pub use hostkeeper_install::macos_pkg::signers::SIGNERS_FILE;
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 /// The default of `--packages-dir`.
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
+/// The default of `--facts-file`, on Linux and on a Mac.
+pub const DEFAULT_FACTS_FILE: &str = "/var/lib/hostkeeper/facts.json";
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
@@ -169,6 +171,10 @@ pub struct DaemonFlags {
     /// The packages, a directory per service with its versions and `current` and `previous`.
     #[arg(long, default_value = DEFAULT_PACKAGES_DIR)]
     pub packages_dir: PathBuf,
+    /// The host's facts file, which the daemon writes from the facts the coordinator sends: the
+    /// host id, host group, platform and labels, for the services that read them.
+    #[arg(long, default_value = DEFAULT_FACTS_FILE)]
+    pub facts_file: PathBuf,
     /// Tell systemd the daemon is ready (`READY=1` on the notify socket systemd sets for a unit
     /// of `Type=notify`) once its boot work is over.
     #[arg(long, conflicts_with = "ready_file")]
@@ -195,6 +201,7 @@ impl DaemonFlags {
             config: self.config.clone(),
             state_dir: self.state_dir.clone(),
             packages_dir: self.packages_dir.clone(),
+            facts_file: self.facts_file.clone(),
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
             trusted_root_max_age_days: self.trusted_root_max_age_days,

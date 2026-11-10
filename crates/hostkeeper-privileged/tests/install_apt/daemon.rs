@@ -143,7 +143,12 @@ pub fn daemon_with(rig: &Rig, store: Arc<dyn Packages>) -> (Daemon, Vec<String>,
         )),
     };
     let config = DaemonConfig::parse(CONFIG).expect("the config");
-    let dirs = Dirs { state, packages };
+    let facts = packages.with_file_name("facts.json");
+    let dirs = Dirs {
+        state,
+        packages,
+        facts,
+    };
     (Daemon::new(config, dirs, ports, OWN), names, scratch)
 }
 

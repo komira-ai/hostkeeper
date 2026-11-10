@@ -17,8 +17,9 @@
 //! reason (`TRUSTED_ROOT_REASON_NONE` for a root that needs no attention); a heartbeat with no
 //! report of the root leaves the age out and the reason unspecified, which the coordinator reads
 //! as unknown. The JSON route has no field for it. The installers go out as `installers`, and the
-//! JSON route has no field for them either, nor for a service's installer. No facts generation
-//! goes out: the daemon does not announce `facts-v1`.
+//! JSON route has no field for them either, nor for a service's installer. The generation of the
+//! facts the daemon's facts file holds goes out as `facts_generation` when there is one; the
+//! JSON route has no field for it.
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none), in the order of the
@@ -28,8 +29,8 @@
 //! daemon's grammars read every word of it. The `repositories` set is kept as decoded, with no check of it: the daemon judges it. An `update`, `force` or `install` carries the `target`
 //! entry as decoded (see [`Entry`]), with no check of it: the daemon judges it. Any other order (a verb the daemon does not run, no verb, or a word the
 //! daemon cannot read) is not run: it is returned beside the reply ([`Mapped::dropped`]), with
-//! why, for the link to log. The `facts` of a reply are not read: a coordinator sends them only
-//! to a daemon that announced `facts-v1`, which this one does not.
+//! why, for the link to log. The `facts` are kept as decoded, their labels by key, with no check
+//! of them: the daemon writes them.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
@@ -38,6 +39,7 @@ use hostkeeper_wire::version::Version as WireVersion;
 use hostkeeper_wire::wire::{is_drift_version, is_service_name};
 
 use crate::beat::{AGENT_NAME, Feature, Health, Heartbeat, Platform, RootReason, ServiceFacts};
+use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest};
 use crate::order::{DeferredReport, Entry, Order, OrderResult, Outcome, Reply, Target, Verb};
 use crate::ports::{Drift, Unsendable};
@@ -83,7 +85,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<pb::HeartbeatRequest, Unsend
                 root.reason.map_or(pb::TrustedRootReason::None, root_reason)
             })
             .into(),
-        facts_generation: None,
+        facts_generation: beat.facts_generation,
     })
 }
 
@@ -249,7 +251,7 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
         halt_generations,
         acks,
         repositories,
-        facts: _,
+        facts,
     } = response;
     let features = features
         .iter()
@@ -283,6 +285,12 @@ pub(crate) fn reply(response: pb::HeartbeatResponse) -> Mapped {
                 generation: set.generation,
                 digest: set.digest,
                 entries: set.entries,
+            }),
+            facts: facts.map(|facts| PushedFacts {
+                generation: facts.generation,
+                host_id: facts.host_id,
+                host_group: facts.host_group,
+                labels: facts.labels.into_iter().collect(),
             }),
         },
         dropped,
@@ -411,3 +419,7 @@ fn target(terms: &TargetTerms) -> Option<Target> {
 #[cfg(test)]
 #[path = "proto_map_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "proto_map_facts_tests.rs"]
+mod facts_tests;

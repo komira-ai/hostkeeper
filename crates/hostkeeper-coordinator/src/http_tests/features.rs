@@ -236,6 +236,9 @@ async fn advertised_features_equal_the_handled_set() {
         } else if *name == crate::repository_push::FEATURE {
             // The repositories of a host go only in the answer over gRPC.
             crate::repository_push_tests::repositories_v1_is_acted_on().await;
+        } else if *name == crate::facts::FEATURE {
+            // The facts of a host go only in the answer over gRPC.
+            crate::facts_tests::facts_v1_is_acted_on().await;
         } else if let Some(extra) = uses.get(name) {
             let without = beat_text(&rig, "d1", "daemon", &beat("1.0", &announce)).await;
             let with_it = beat("1.0", &format!("{announce}{extra}"));
@@ -254,6 +257,7 @@ async fn advertised_features_equal_the_handled_set() {
     handled.push(crate::force::FEATURE);
     handled.push(crate::picks::TARGET_FEATURE);
     handled.push(crate::repository_push::FEATURE);
+    handled.push(crate::facts::FEATURE);
     handled.sort_unstable();
     proven.sort_unstable();
     assert_eq!(proven, handled);

@@ -15,11 +15,12 @@ use hostkeeper_steps::{BootId, BootIdError, Clock};
 
 use crate::beat::{Health, Heartbeat, Liveness, Platform, Renewal, TrustedRootFacts};
 use crate::heartbeater::{DEFAULT_HEARTBEAT_SECS, Heartbeater, LoopConfig, Ports};
+use crate::host_facts::PushedFacts;
 use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply};
 use crate::ports::{
-    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, HeldHalts, Job, LinkError,
-    Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver,
-    ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
+    CertSource, CertState, ClientIdentity, CoordinatorLink, Dispatch, FactsSink, HeldHalts, Job,
+    LinkError, Log, Observation, OrderSink, RecordedService, RenewalSource, RepositorySink,
+    ServiceObserver, ServiceRecords, Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 use crate::repositories::{PushedSet, RepositoriesReport};
 
@@ -483,6 +484,57 @@ impl RepositorySink for FakeRepositories {
     }
 }
 
+/// The host's facts file, as a test sets it: it records every facts it is given, with how many
+/// jobs the [`World`]'s dispatcher held at that moment (so a test sees what came first), holds
+/// the generation of the last facts it took, and fails every write while a test says so.
+#[derive(Default)]
+pub struct FakeFacts {
+    held: Mutex<Option<u64>>,
+    applied: Mutex<Vec<(PushedFacts, usize)>>,
+    failing: Mutex<bool>,
+    dispatch: Arc<ManualDispatch>,
+}
+
+impl FakeFacts {
+    /// A facts file that counts the jobs of `dispatch` at each write.
+    pub fn seeing(dispatch: Arc<ManualDispatch>) -> FakeFacts {
+        FakeFacts {
+            dispatch,
+            ..FakeFacts::default()
+        }
+    }
+
+    /// Makes every later write fail (`true`) or succeed (`false`).
+    pub fn set_failing(&self, failing: bool) {
+        *lock(&self.failing) = failing;
+    }
+
+    /// Sets the generation the file holds, as one written before.
+    pub fn set_generation(&self, generation: Option<u64>) {
+        *lock(&self.held) = generation;
+    }
+
+    /// Every facts the loop gave it, in order, each with the jobs the dispatcher held then.
+    pub fn applied(&self) -> Vec<(PushedFacts, usize)> {
+        lock(&self.applied).clone()
+    }
+}
+
+impl FactsSink for FakeFacts {
+    fn generation(&self) -> Option<u64> {
+        *lock(&self.held)
+    }
+
+    fn apply(&self, facts: &PushedFacts) -> bool {
+        lock(&self.applied).push((facts.clone(), self.dispatch.pending()));
+        if *lock(&self.failing) {
+            return false;
+        }
+        *lock(&self.held) = Some(facts.generation);
+        true
+    }
+}
+
 /// The unix second the [`World`]'s clock starts at.
 pub const START_UNIX: u64 = 2_000_000_000;
 
@@ -507,6 +559,10 @@ pub struct World {
     /// [`World::managing_repositories`].
     pub repositories: Arc<FakeRepositories>,
     managing: bool,
+    /// The host's facts file, which counts the jobs of [`World::dispatch`]; the ports hold it
+    /// only after [`World::keeping_facts`].
+    pub facts: Arc<FakeFacts>,
+    keeping_facts: bool,
 }
 
 impl Default for World {
@@ -518,13 +574,16 @@ impl Default for World {
 impl World {
     /// The world with `orders` as its executor.
     pub fn with_orders(orders: FakeSink) -> World {
+        let dispatch = Arc::new(ManualDispatch::default());
         World {
             link: Arc::default(),
             certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("a")))),
             records: Arc::default(),
             observer: Arc::default(),
             orders: Arc::new(orders),
-            dispatch: Arc::default(),
+            facts: Arc::new(FakeFacts::seeing(Arc::clone(&dispatch))),
+            keeping_facts: false,
+            dispatch,
             halts: Arc::default(),
             renewal: Arc::default(),
             trusted_root: Arc::default(),
@@ -539,6 +598,13 @@ impl World {
     /// [`World::repositories`], and it announces `repositories-v1`.
     pub fn managing_repositories(mut self) -> World {
         self.managing = true;
+        self
+    }
+
+    /// The world of a host that keeps a facts file: its ports hold [`World::facts`], and it
+    /// announces `facts-v1`.
+    pub fn keeping_facts(mut self) -> World {
+        self.keeping_facts = true;
         self
     }
 
@@ -559,6 +625,9 @@ impl World {
             repositories: self
                 .managing
                 .then(|| Arc::clone(&self.repositories) as Arc<dyn RepositorySink>),
+            facts: self
+                .keeping_facts
+                .then(|| Arc::clone(&self.facts) as Arc<dyn FactsSink>),
         }
     }
 

@@ -42,6 +42,12 @@
 //!    executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
 //!    the reply advertises `repositories-v1` and the host has a sink (the sink's own checks are
 //!    its to make); a set from a coordinator that did not advertise the feature is dropped.
+//!    The host's facts of the reply go to the [`FactsSink`] next, before anything else of the
+//!    reply is acted on, when the reply advertises `facts-v1` and the host has a sink; facts
+//!    from a coordinator that did not advertise it are dropped. When the sink cannot write them,
+//!    the order of the reply is not run (an `abort` is: it starts nothing that reads the file)
+//!    and the loop logs that it waits; the sink still reports the generation before, so the
+//!    coordinator sends the facts, and the order, again.
 //!
 //! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
 //! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
@@ -102,16 +108,17 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform, REPOSITORIES,
-    Renewal, ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform,
+    REPOSITORIES, Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
+use crate::host_facts::PushedFacts;
 use crate::names::Reason;
 use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
-    CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords, Sleeper, Tick,
-    TrustedRootSource, UnixClock,
+    CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
+    OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
+    Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -167,6 +174,9 @@ pub struct Ports {
     /// The host's repository configuration; none on a host that has none to manage (a Mac),
     /// which then announces no `repositories-v1`, sends no report and applies no set.
     pub repositories: Option<Arc<dyn RepositorySink>>,
+    /// The host's facts file; none on a host that keeps none, which then announces no
+    /// `facts-v1`, reports no generation and writes no facts.
+    pub facts: Option<Arc<dyn FactsSink>>,
 }
 
 /// What one heartbeat came to.
@@ -530,15 +540,19 @@ impl Heartbeater {
                 .as_ref()
                 .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
             repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
+            facts_generation: self.ports.facts.as_ref().and_then(|sink| sink.generation()),
         })
     }
 
-    /// The features every heartbeat announces: [`ANNOUNCED`], and `repositories-v1` when the
-    /// host has a repository configuration to manage.
+    /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
+    /// has a repository configuration to manage, and `facts-v1` when it has a facts file.
     fn announced(&self) -> Vec<Feature> {
         let mut features = ANNOUNCED.to_vec();
         if self.ports.repositories.is_some() {
             features.push(REPOSITORIES);
+        }
+        if self.ports.facts.is_some() {
+            features.push(FACTS);
         }
         features
     }
@@ -601,8 +615,10 @@ impl Heartbeater {
             halt_generations,
             acknowledged,
             repositories,
+            facts,
         } = reply;
         self.advertised = Features::of(&features);
+        let facts_held = self.write_facts(facts);
         if let Some(set) = repositories
             && self.advertised.has(Feature::RepositoriesV1)
             && let Some(sink) = &self.ports.repositories
@@ -655,7 +671,29 @@ impl Heartbeater {
             }
         }
         if let Some(order) = order {
-            self.dispatch(order);
+            if facts_held || matches!(order.verb, Verb::Abort(_)) {
+                self.dispatch(order);
+            } else {
+                self.log(&format!(
+                    "order {} try {} of {} waits: the facts file does not hold the facts of its reply",
+                    order.id.as_str(),
+                    order.order_try,
+                    order.service()
+                ));
+            }
+        }
+    }
+
+    /// Gives the host's `facts` of a reply to the [`FactsSink`], when the reply advertises
+    /// `facts-v1` and the host has a sink: whether the facts file holds them, or true when there
+    /// was nothing to write. Facts from a coordinator that did not advertise the feature are
+    /// dropped.
+    fn write_facts(&self, facts: Option<PushedFacts>) -> bool {
+        match (facts, &self.ports.facts) {
+            (Some(facts), Some(sink)) if self.advertised.has(Feature::FactsV1) => {
+                sink.apply(&facts)
+            }
+            _ => true,
         }
     }
 
