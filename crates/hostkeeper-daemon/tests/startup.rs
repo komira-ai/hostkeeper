@@ -11,9 +11,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR,
-    DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED,
-    Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGES_DIR,
+    DEFAULT_STATE_DIR, DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED,
+    EXIT_LOCKED, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
@@ -151,6 +151,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             config: DEFAULT_CONFIG.into(),
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
+            facts_file: DEFAULT_FACTS_FILE.into(),
             notify_systemd: false,
             ready_file: None,
             trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
@@ -170,6 +171,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--config` | `{DEFAULT_CONFIG}`"),
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
+        format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("`--trusted-root-max-age-days` | `{DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS}`"),
@@ -181,6 +183,22 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
+}
+
+/// Proves `--facts-file` reaches the settings, and from them the daemon's directories, as given.
+#[test]
+fn the_facts_file_flag_reaches_the_settings() {
+    let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--facts-file", "/srv/facts.json"]);
+    let Ok(Cli {
+        command: Command::Daemon(flags),
+    }) = parsed
+    else {
+        panic!("the flag parses: {parsed:?}");
+    };
+    assert_eq!(
+        flags.settings().facts_file,
+        std::path::PathBuf::from("/srv/facts.json")
+    );
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage

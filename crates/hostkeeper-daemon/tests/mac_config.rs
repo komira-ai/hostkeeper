@@ -80,6 +80,7 @@ impl Mac {
         let settings = Settings {
             config: self.config.clone(),
             state_dir: self.root().join("state"),
+            facts_file: packages.with_file_name("facts.json"),
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),
