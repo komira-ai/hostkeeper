@@ -133,9 +133,10 @@ index older than its TTL is not (a stale index could hide a release), the client
 **Where the origins come from.** A public repository's base URL (the registry entry's `uri`; no `proxy_origins` setting, section 11 item 1), and for a pkg, the `url` of its `installs` entry: the signed macOS pkg is published to packages.komira.ai (section 10).
 
 **Host configuration.** A group's repository entry names `https://<mdm name>/apt/<repo>/` as its URI. The daemon config's `release_channel`
-key stays required by the loader (above); until a loader that does not read it has shipped for a release, every config sets it to
-`https://<mdm name>/`, so no config names the dead server. Dropping the requirement is additive for readers (a new loader accepts both) and
-is task PP5.
+key is optional in the loader since PP5 (a config with it and one without both load; a present value is still checked as an `https://`
+URL). A daemon of the previous release still refuses a config without it (B8: the change is additive for readers only), so until the
+loader of PP5 has shipped for a release every generated config sets it to `https://<mdm name>/`, so no config names the dead server.
+Dropping it from the generated configs is a separate change one release later.
 
 ## 5. Edge cases, with the mechanism
 
@@ -167,8 +168,7 @@ before `target-v1` fetches its archive through it, an older binary requires `rel
    [docs/operations/move-to-native.md](../operations/move-to-native.md) (stage 9): no registered host below the `target-v1` daemon, and no
    host whose desired release still lists an archive entry. The repository's own reading of the daemon is only part of the evidence (the
    loader reads `release_channel` and the daemon does not); the farm's configs and any older daemons are what the counts cover.
-2. **Point `release_channel` in every host config at the proxy's name.** This needs no new code (the loader still requires the key, so
-   PP5 is not a blocker) and no host reads it for anything else.
+2. **Point `release_channel` in every host config at the proxy's name.** This needs no new code (the loader accepts the key, and PP5 makes it optional only for readers; a generated config keeps it until a release after PP5) and no host reads it for anything else.
 3. **Repoint repositories and Mac profiles** to the proxy (per group, section 3), then check one `apt update` on a host and one pkg pull
    by a Mac through the proxy before going on.
 4. **Stop the sync's timer first, and keep the channel container for one release**, then remove the container, its tree and its

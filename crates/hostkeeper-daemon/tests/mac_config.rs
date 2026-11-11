@@ -261,8 +261,8 @@ fn mac_config_writes_the_toml_the_loader_accepts() {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         );
         assert_eq!(
-            config.release_channel.as_str(),
-            "https://releases.example/path"
+            config.release_channel.as_ref().map(|u| u.as_str()),
+            Some("https://releases.example/path")
         );
         assert_eq!(config.trusted_signers.organisation, "komira-ai");
         assert_eq!(
@@ -299,10 +299,9 @@ fn the_bounds_table_is_optional() {
 /// leaves a directory or a file behind.
 #[test]
 fn each_missing_required_key_is_refused_with_the_loaders_reason() {
-    let keys: [&[&str]; 7] = [
+    let keys: [&[&str]; 6] = [
         &["coordinator"],
         &["ca_sha256"],
-        &["release_channel"],
         &["trusted_signers"],
         &["trusted_signers", "organisation"],
         &["trusted_signers", "workflow"],
