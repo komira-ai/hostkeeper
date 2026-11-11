@@ -21,6 +21,7 @@ fn serve_help_lists_the_macs_listener_flags() {
         "--mdm-listen <MDM_LISTEN>",
         "--mdm-command-timeout-s <MDM_COMMAND_TIMEOUT_S>",
         "--mdm-queue-sweep-s <MDM_QUEUE_SWEEP_S>",
+        "--mdm-pkg-dir <MDM_PKG_DIR>",
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }

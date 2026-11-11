@@ -146,6 +146,21 @@ fn refused(code: &str, reason: &str) -> String {
     format!(r#"{{"code":"{code}","reason":"{reason}"}}"#)
 }
 
+/// Proves: the Macs' listener of a coordinator that runs no MDM server answers a package path
+/// `404` like any other path it does not serve, and does not look for a file.
+///
+/// Catches: a package route that answers on a coordinator with no `--mdm-pkg-dir`, or that panics
+/// for want of the server it would read the directory from.
+#[tokio::test]
+async fn the_macs_listener_without_an_mdm_server_answers_a_pkg_path_not_found() {
+    let world = Gateway::new("gw-mdm-pkg-without-server");
+    let path = format!("/pkg/{}.pkg", "ab".repeat(32));
+    let sent = world
+        .send_on(Surface::Mdm, http("GET", &path, None, ""))
+        .await;
+    assert_eq!(sent.status, StatusCode::NOT_FOUND);
+}
+
 /// Proves: `POST /<package>.<Service>/<Method>` with canonical JSON and CI's token on
 /// `Releases/SetDesired` writes the desired file byte for byte as the gRPC call of the same
 /// message does on a twin coordinator, and answers 200 with the stored state as JSON; operator

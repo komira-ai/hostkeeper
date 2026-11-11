@@ -763,7 +763,7 @@ fn macs() -> Vec<&'static str> {
 
 /// Catches: `--mdm-listen` accepted without the enrollment store the gate's records live in, a
 /// wildcard address (the Macs reach the server by the address of one interface), the timeout and
-/// sweep flags accepted without the listener, and a timeout of 0.
+/// sweep and pkg directory flags accepted without the listener, and a timeout of 0.
 #[test]
 fn the_macs_listener_needs_enrollment_and_a_named_interface() {
     let files = Files::new("mdm-listen-flags");
@@ -771,6 +771,7 @@ fn the_macs_listener_needs_enrollment_and_a_named_interface() {
         vec!["--mdm-listen", MACS],
         vec!["--mdm-command-timeout-s", "60"],
         vec!["--mdm-queue-sweep-s", "5"],
+        vec!["--mdm-pkg-dir", "=pkgs"],
     ] {
         assert_eq!(
             hostkeeper_coordinator::config::main(files.args(&args)),

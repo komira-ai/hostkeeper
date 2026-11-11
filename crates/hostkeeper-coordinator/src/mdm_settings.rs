@@ -21,9 +21,6 @@ enum Shape {
     Name,
     /// One to five whole numbers from 1 to 3650 that fall, separated by commas (`60,14`).
     FallingDays,
-    /// The named installs: a JSON array [`hostkeeper_mdm_gate::Installs`] reads, stored as the
-    /// canonical text it writes back.
-    Installs,
     /// One whole number between `min` and `max`, of seconds, bytes or a count.
     Whole { min: u64, max: u64 },
     /// One of the values listed.
@@ -34,6 +31,9 @@ enum Shape {
     HttpsUrl,
     /// An email address: one `@`, text each side, no space, up to 254 bytes; empty clears it.
     Email,
+    /// The named installs: a JSON array [`hostkeeper_mdm_gate::Installs`] reads, stored as the
+    /// canonical text it writes back.
+    Installs,
 }
 
 /// One setting: its name, its default and what it takes.
@@ -275,14 +275,14 @@ impl Setting {
                 let days = parse_days(value)?;
                 (min..=max).contains(&days).then(|| days.to_string())
             }
-            Shape::Installs => Installs::parse(value)
-                .ok()
-                .map(|installs| installs.to_json()),
             Shape::Whole { min, max } => {
                 let whole = parse_whole(value)?;
                 (min..=max).contains(&whole).then(|| whole.to_string())
             }
             Shape::OneOf(values) => values.contains(&value).then(|| value.to_owned()),
+            Shape::Installs => Installs::parse(value)
+                .ok()
+                .map(|installs| installs.to_json()),
             Shape::Name => {
                 let printable = value.chars().all(|c| !c.is_control());
                 ((1..=64).contains(&value.chars().count()) && printable).then(|| value.to_owned())

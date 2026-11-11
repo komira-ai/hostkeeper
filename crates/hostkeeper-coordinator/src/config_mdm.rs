@@ -41,6 +41,7 @@ pub(super) struct Wiring {
     pushers: Pushers,
     tls: Arc<MdmTls>,
     renewer: Arc<TlsRenewer>,
+    pkg_dir: Option<std::path::PathBuf>,
 }
 
 /// The issuers a client certificate of the MDM listener may chain to. The CA of the Macs'
@@ -96,6 +97,7 @@ pub(super) fn wire(
         pushers,
         tls: Arc::new(MdmTls::new(Arc::clone(setup), trusted_issuers())),
         renewer: Arc::new(production_renewer(setup)),
+        pkg_dir: flags.mdm.mdm_pkg_dir.clone(),
     })
 }
 
@@ -118,6 +120,7 @@ impl Wiring {
             sweep: self.sweep,
             abm: None,
             renewer: self.renewer,
+            pkg_dir: self.pkg_dir,
         });
         (
             coordinator.with_mdm_server(Some(Arc::new(server))),

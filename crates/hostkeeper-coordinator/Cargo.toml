@@ -102,7 +102,7 @@ subtle.workspace = true
 thiserror.workspace = true
 # The RFC 3339 expiry of the ABM token (`src/mdm_status.rs`).
 toml.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
 # NFKC of a password before it is hashed.
 unicode-normalization.workspace = true

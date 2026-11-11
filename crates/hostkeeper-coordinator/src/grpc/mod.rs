@@ -624,7 +624,23 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    let answered = if surface == Surface::Mdm {
+    let answered = if surface == Surface::Mdm
+        && request
+            .uri()
+            .path()
+            .starts_with(crate::mdm_server::pkg::PREFIX)
+        && let Some(server) = coordinator.mdm_server()
+    {
+        // A pkg is streamed from a file, so it is not a [`handle`] answer.
+        crate::mdm_server::pkg::serve(
+            coordinator,
+            server,
+            request.method(),
+            request.uri().path(),
+            request.headers(),
+        )
+        .await
+    } else if surface == Surface::Mdm {
         // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
         handle(coordinator, surface, peer, request, patience)
             .await
