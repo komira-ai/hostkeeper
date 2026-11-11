@@ -270,6 +270,8 @@ The wire stays additive (section 7.2), and the coordinator's own store is intern
 
 ## 10. Migration in one update window
 
+*Removed:* the verb `hostkeeper-coordinator host-groups migrate` described here was removed after it shipped in release 0.1.253. A fleet placed by roles moves to groups through the operator API, in [Moving a fleet from roles to host groups](../operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups); the rest of this section is the design as it was built, kept as history.
+
 Today's roles, rollout file and assignments become groups in one window, with the hosts running throughout. The new coordinator's `serve` refuses `--rollout-file`; the conversion is one offline verb over the store:
 
 `hostkeeper-coordinator host-groups migrate --rollout-file FILE <the store's flags> [--apply]`
