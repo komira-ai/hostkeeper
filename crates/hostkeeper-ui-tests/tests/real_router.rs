@@ -73,6 +73,8 @@ const SESSION_ONLY_CALLS: &[&str] = &[
     "hostkeeper.operator.v1.Mdm/CreatePushRequest",
     "hostkeeper.operator.v1.Mdm/PutPushCertificate",
     "hostkeeper.operator.v1.Mdm/PutPushReply",
+    "hostkeeper.operator.v1.Mdm/PutSecret",
+    "hostkeeper.operator.v1.Mdm/PutSetting",
 ];
 
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
@@ -164,6 +166,14 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Mdm/PutPushReply",
         r#"{"reply": "MDBmZg=="}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Mdm/PutSecret",
+        r#"{"kind": "tls_key", "material": "MDBmZg=="}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Mdm/PutSetting",
+        r#"{"name": "dns_zone", "value": "example.com"}"#,
     ),
     ("hostkeeper.operator.v1.Mdm/Status", "{}"),
     (

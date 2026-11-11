@@ -224,7 +224,9 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_STORE_UNREACHABLE"
     | "ALERT_KIND_TRUSTED_ROOT"
-    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY";
+    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
+    | "ALERT_KIND_MDM_TLS_RENEWAL_FAILED"
+    | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -287,10 +289,10 @@ export namespace hostkeeper_operator_v1 {
     | "CONVERGENCE_STATE_IN_PROGRESS";
   export interface CreateApiTokenRequest { name?: string; }
   export interface CreateApiTokenResponse { token?: hostkeeper_operator_v1.ApiTokenInfo; secret?: string; }
-  export interface CreateUserRequest { name?: string; }
-  export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface CreatePushRequestRequest { email?: string; submit?: boolean; }
   export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }
+  export interface CreateUserRequest { name?: string; }
+  export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
   export interface DeleteUserRequest { name?: string; }
   export interface DeleteUserResponse {
@@ -538,12 +540,12 @@ export namespace hostkeeper_operator_v1 {
   export interface ListServicesRequest {
   }
   export interface ListServicesResponse { services?: hostkeeper_operator_v1.ServiceEntry[]; holds?: hostkeeper_operator_v1.HoldMark[]; }
-  export interface ListUsersRequest {
-  }
-  export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export interface ListSettingsRequest {
   }
   export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
+  export interface ListUsersRequest {
+  }
+  export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"
@@ -625,6 +627,8 @@ export namespace hostkeeper_operator_v1 {
     abmNotAfterUnix?: string;
     tlsNotAfterUnix?: string;
     tlsNames?: string[];
+    dnsCredential?: hostkeeper_operator_v1.SecretInfo;
+    tlsRenewal?: hostkeeper_operator_v1.TlsRenewal;
   }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
@@ -854,6 +858,7 @@ export namespace hostkeeper_operator_v1 {
     factsDropped?: { [key: string]: string };
     audit?: hostkeeper_operator_v1.AuditEntry[];
   }
+  export interface TlsRenewal { sinceUnix?: string; attempts?: number; message?: string; dnsRejected?: string; retryAtUnix?: string; }
   export interface UnassignRequest { nodeId?: string; service?: string; uninstall?: boolean; role?: string; }
   export interface UnassignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnholdRequest { scope?: hostkeeper_operator_v1.HoldScope; service?: string; reason?: string; }

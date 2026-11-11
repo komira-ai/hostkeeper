@@ -23,6 +23,8 @@
     { "function": "mdm.listSettings", "method": "hostkeeper.operator.v1.Mdm/ListSettings", "pages": ["mdm"] },
     { "function": "mdm.putPushCertificate", "method": "hostkeeper.operator.v1.Mdm/PutPushCertificate", "pages": ["mdm"] },
     { "function": "mdm.putPushReply", "method": "hostkeeper.operator.v1.Mdm/PutPushReply", "pages": ["mdm"] },
+    { "function": "mdm.putSecret", "method": "hostkeeper.operator.v1.Mdm/PutSecret", "pages": ["mdm"] },
+    { "function": "mdm.putSetting", "method": "hostkeeper.operator.v1.Mdm/PutSetting", "pages": ["mdm"] },
     { "function": "mdm.status", "method": "hostkeeper.operator.v1.Mdm/Status", "pages": ["mdm"] },
     { "function": "releases.clearHalt", "method": "hostkeeper.operator.v1.Releases/ClearHalt", "pages": ["rollout"] },
     { "function": "releases.converge", "method": "hostkeeper.operator.v1.Releases/Converge", "pages": ["rollout"] },

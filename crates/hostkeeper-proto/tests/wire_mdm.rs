@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 24] = [
+const FIELDS: [(&str, &[Field]); 25] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -189,6 +189,18 @@ const FIELDS: [(&str, &[Field]); 24] = [
             ("abm_not_after_unix", 14, true),
             ("tls_not_after_unix", 15, true),
             ("tls_names", 16, false),
+            ("dns_credential", 17, true),
+            ("tls_renewal", 18, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.TlsRenewal",
+        &[
+            ("since_unix", 1, false),
+            ("attempts", 2, false),
+            ("message", 3, false),
+            ("dns_rejected", 4, false),
+            ("retry_at_unix", 5, true),
         ],
     ),
     (

@@ -212,6 +212,24 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 abm_not_after_unix: Some(1_825_020_096),
                 tls_not_after_unix: Some(1_850_000_000),
                 tls_names: vec!["mdm.example.com".to_owned()],
+                dns_credential: Some(secret_info()),
+                tls_renewal: Some(op::TlsRenewal {
+                    since_unix: 1_800_000_000,
+                    attempts: 3,
+                    message: "the provider refused the credential".to_owned(),
+                    dns_rejected: "the provider refused the credential".to_owned(),
+                    retry_at_unix: Some(1_800_003_600),
+                }),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.TlsRenewal",
+            round_trip(&op::TlsRenewal {
+                since_unix: 1_800_000_000,
+                attempts: 1,
+                message: "no order".to_owned(),
+                dns_rejected: String::new(),
+                retry_at_unix: None,
             }),
         ),
         (

@@ -1,7 +1,9 @@
-// MDM setup: the status panel and the push certificate step. Calls: Mdm.Status and Mdm.ListSettings
-// (the thresholds of the reminders) on every drawing; on a button, Mdm.CreatePushRequest,
-// Mdm.PutPushReply and Mdm.PutPushCertificate (a certificate for the pending request, or, with a key,
-// an existing certificate and key).
+// MDM setup: the status panel, the push certificate step and the TLS step. Calls: Mdm.Status and
+// Mdm.ListSettings (the thresholds of the reminders, and the ACME settings) on every drawing; on a
+// button, Mdm.CreatePushRequest, Mdm.PutPushReply and Mdm.PutPushCertificate (a certificate for the
+// pending request, or, with a key, an existing certificate and key), and for the TLS step
+// Mdm.PutSecret (`tls_key`, `tls_cert`, `dns_credential`) and Mdm.PutSetting (`dns_zone`,
+// `acme_directory`, `acme_contact`).
 //
 // The status panel is what the coordinator computes from its records: *configured*, or what is
 // missing, in words; the name; and, for the push certificate and key, the ABM token and the TLS
@@ -18,13 +20,23 @@
 // portal. *Store certificate* takes the certificate Apple returns. The migration takes an existing
 // certificate and its key (PKCS#1 or PKCS#8) in one step.
 //
+// The TLS step is the certificate the Macs' TLS connection to the coordinator is served with, for
+// the MDM name. It has two halves. *Upload a certificate and key* works with no ACME at all: the
+// chain (a file, or pasted) and the key (a file) are stored as `tls_cert` and `tls_key`, the key
+// first, one call each. *Renew by ACME* is the DNS-01 renewal of the coordinator: the settings
+// `dns_zone`, `acme_directory` and `acme_contact`, and the DNS credential (the provider's
+// sso-key pair, or a personal access token), which is typed into a password field, sent and
+// dropped. The renewal status is what the coordinator reports of it: off, with what is missing, or
+// failing, with the last error, when it began, how many attempts failed and when the next may
+// start. That report is kept in the coordinator's memory only: a restart clears it.
+//
 // Uploads are read when the button is pressed, sent and dropped: a file is kept only as the file
 // the browser handed over, never its contents, and a key is never typed or pasted. The page shows
 // no value of a secret, only what the coordinator says of it (kind, version, fingerprint, expiry).
 
 import { toBase64, utf8 } from "../bytes.js";
 import {
-  h, action, area, checkbox, errorView, field, filePicker, fmtUnix, table, trimmed,
+  h, action, area, checkbox, describeError, errorView, field, filePicker, fmtUnix, select, table, trimmed,
 } from "../view.js";
 
 const TITLE = "MDM setup";
@@ -32,6 +44,12 @@ const DAY = 86400;
 // The limits of operator.proto on the three uploads, in bytes.
 const REPLY_LIMIT = 32768;
 const PEM_LIMIT = 16384;
+// The limit of `PutSecret`, in bytes: a certificate chain is longer than one certificate.
+const SECRET_LIMIT = 32768;
+// The settings of the ACME half, in the order of its fields.
+const ACME_SETTINGS = ["dns_zone", "acme_directory", "acme_contact"];
+// The DNS provider the coordinator can order through.
+const DNS_PROVIDER = "godaddy";
 const THRESHOLD_SETTINGS = ["push_alert_days", "abm_alert_days", "tls_renew_days"];
 
 // What each condition of `Mdm.Status`'s `missing` says, by the token (the value without its
@@ -94,12 +112,18 @@ function settingValue(reply, name) {
   return found === undefined ? undefined : found.value;
 }
 
-// The thresholds of the three settings, each a list of days or null.
-async function thresholds(ctx) {
-  let reply;
+// The settings of the coordinator, or null when they cannot be read.
+async function readSettings(ctx) {
   try {
-    reply = await ctx.api.mdm.listSettings({});
+    return await ctx.api.mdm.listSettings({});
   } catch {
+    return null;
+  }
+}
+
+// The thresholds of the three settings, each a list of days or null.
+function thresholds(reply) {
+  if (reply === null) {
     return null;
   }
   const out = {};
@@ -133,6 +157,17 @@ export function panelRows(status, now, days) {
   ];
 }
 
+// The alert line of the status panel for a failing renewal of the TLS certificate; null when it
+// is not failing. The details are in the TLS step.
+function renewalLine(status) {
+  const failing = status.tlsRenewal;
+  if (!failing) {
+    return null;
+  }
+  return h("p", { class: "warning", role: "alert", name: "renewal-failing" },
+    `The renewal of the TLS certificate is failing: ${failing.message || "no reason given"}`);
+}
+
 function levelClass(level) {
   return level === "ok" || level === "none" ? "" : "warning";
 }
@@ -148,6 +183,7 @@ function statusPanel(status, now, days) {
       : h("div", { name: "configured" },
         h("p", { class: "warning" }, "Not configured, because:"),
         h("ul", {}, missing.map((value) => h("li", {}, conditionWords(value))))),
+    renewalLine(status),
     status.sealing === true
       ? null
       : h("p", { class: "error", role: "alert" },
@@ -346,6 +382,190 @@ function migrationSection(ctx, flow) {
     }));
 }
 
+// The TLS step. ---------------------------------------------------------------------------------
+
+// What the renewal needs and lacks, in words, for the line that says why it is off: the MDM name,
+// the zone and the DNS credential.
+function renewalMissing(status, current) {
+  const lacks = [];
+  if (!status["name"]) {
+    lacks.push("the MDM name");
+  }
+  if (current !== null && (current["dns_zone"] || "") === "") {
+    lacks.push("the DNS zone");
+  }
+  if (!status.dnsCredential) {
+    lacks.push("a DNS credential");
+  }
+  return lacks;
+}
+
+// The renewal status, as a block: off (and what it lacks), failing (the last error, when it
+// began, the attempts, the provider's refusal, the next attempt), or waiting for the days.
+function renewalStatus(status, current, days) {
+  const lacks = renewalMissing(status, current);
+  const failing = status.tlsRenewal;
+  const rows = [];
+  if (failing) {
+    rows.push(["Last error", failing.message || "-"]);
+    rows.push(["First failed", fmtUnix(failing.sinceUnix)]);
+    rows.push(["Failed attempts", String(failing.attempts || 0)]);
+    if (failing.dnsRejected) {
+      rows.push(["DNS provider", `refused the credential: ${failing.dnsRejected}`]);
+    }
+    rows.push(["Next attempt", failing.retryAtUnix ? `not before ${fmtUnix(failing.retryAtUnix)}` : "at the next look"]);
+  }
+  return h("div", { name: "renewal-status" },
+    lacks.length > 0
+      ? h("p", { class: "note", name: "renewal-off" },
+        `The renewal by ACME is off: it needs ${lacks.join(", ")}. A certificate uploaded below is served and not renewed.`)
+      : null,
+    lacks.length === 0 && !failing
+      ? h("p", { name: "renewal-waiting" },
+        "The renewal by ACME is on. No attempt has failed since the coordinator started"
+        + (days !== null && days.tls_renew_days ? `; it orders a certificate when the one in use has ${days.tls_renew_days[0]} days left or fewer.` : "."))
+      : null,
+    failing
+      ? h("div", { name: "renewal-failing-detail" },
+        h("p", { class: "warning", role: "alert" }, "The last attempt to renew the certificate failed."),
+        table(["", ""], rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))))
+      : null,
+    h("p", { class: "note" },
+      "This status is kept in the coordinator's memory: a restart clears it, and the next failed attempt shows it again."));
+}
+
+function uploadTlsSection(ctx, flow) {
+  return h("fieldset", {},
+    h("legend", {}, "Upload a certificate and key"),
+    h("p", { class: "note" },
+      "The certificate chain, leaf first, for the MDM name, and its key. This works without ACME. "
+      + "The key is stored first, then the certificate; the status says whether they are a pair, name the "
+      + "MDM name and are unexpired. The key is read from its file when the button is pressed, sent and dropped; it is never shown."),
+    filePicker("Certificate file", "tls-certificate-file", flow, "tlsCertFile"),
+    area("Or the certificate, pasted", "tls-certificate-text", flow, "tlsCertText"),
+    filePicker("Key file", "tls-key-file", flow, "tlsKeyFile"),
+    action(ctx, "Store certificate and key", "put-tls", async () => {
+      const certificate = await bytesOf(flow.tlsCertFile, flow.tlsCertText, "The certificate", SECRET_LIMIT);
+      if (typeof certificate === "string") {
+        return certificate;
+      }
+      if (!flow.tlsKeyFile) {
+        return "Choose the key file.";
+      }
+      const key = await bytesOf(flow.tlsKeyFile, "", "The key", SECRET_LIMIT);
+      if (typeof key === "string") {
+        return key;
+      }
+      const stored = await ctx.api.mdm.putSecret({ kind: "tls_key", material: toBase64(key) });
+      flow.tlsKeyFile = null;
+      let made;
+      try {
+        made = await ctx.api.mdm.putSecret({ kind: "tls_cert", material: toBase64(certificate) });
+      } catch (error) {
+        await again(ctx, flow);
+        return `The key was stored (version ${stored.secret ? stored.secret.version : "?"}), the certificate was not: `
+          + `${describeError(error)}. Until a certificate for this key is stored, the status shows a pair that does not match.`;
+      }
+      flow.tlsCertFile = null;
+      flow.tlsCertText = "";
+      await again(ctx, flow);
+      return `Stored the TLS key and certificate (certificate version ${made.secret ? made.secret.version : "?"}). `
+        + "The status says whether it is a pair, names the MDM name and has not expired.";
+    }));
+}
+
+function acmeSettingsSection(ctx, flow, current) {
+  if (current === null) {
+    return h("p", { class: "note", name: "acme-settings-unread" },
+      "The ACME settings could not be read, so they are not offered here.");
+  }
+  return h("fieldset", {},
+    h("legend", {}, "ACME settings"),
+    h("p", { class: "note" },
+      "The zone is the DNS zone the MDM name lives in at the DNS provider (never worked out from the name: "
+      + "mdm.internal.example.net is in the zone example.net). Empty, the certificate is not ordered. "
+      + "The staging directory of the CA is the choice for a first try, because the production CA rate-limits failures."),
+    field("DNS zone", "acme-dns-zone", flow, "zone", { maxlength: 253 }),
+    field("ACME directory", "acme-directory", flow, "directory", { maxlength: 512 }),
+    field("Contact address (optional)", "acme-contact", flow, "contact", { maxlength: 254 }),
+    action(ctx, "Save ACME settings", "put-acme-settings", async () => {
+      const wanted = { dns_zone: trimmed(flow["zone"]), acme_directory: trimmed(flow["directory"]), acme_contact: trimmed(flow["contact"]) };
+      const saved = [];
+      for (const name of ACME_SETTINGS) {
+        if (wanted[name] === current[name]) {
+          continue;
+        }
+        try {
+          await ctx.api.mdm.putSetting({ name, value: wanted[name] });
+        } catch (error) {
+          if (saved.length > 0) {
+            await again(ctx, flow);
+          }
+          return `${describeError(error)} (${name})${saved.length > 0 ? `; saved before it: ${saved.join(", ")}` : ""}`;
+        }
+        saved.push(name);
+      }
+      flow["zone"] = wanted["dns_zone"];
+      flow["directory"] = wanted["acme_directory"];
+      flow["contact"] = wanted["acme_contact"];
+      if (saved.length === 0) {
+        return "Nothing changed.";
+      }
+      await again(ctx, flow);
+      return `Saved ${saved.join(", ")}.`;
+    }));
+}
+
+function dnsCredentialSection(ctx, flow, status) {
+  return h("fieldset", {},
+    h("legend", {}, "DNS credential"),
+    h("p", { class: "note" },
+      `Held: ${heldWords(status.dnsCredential)}. For the challenge record at ${DNS_PROVIDER}: an API key and secret `
+      + "(sso-key), or a personal access token. It is typed into a password field, sent when the button "
+      + "is pressed and dropped; it is never shown, and a new one replaces the one in use."),
+    select("Kind", "dns-kind", flow, "dnsKind", [["sso-key", "API key and secret (sso-key)"], ["bearer", "Personal access token"]]),
+    field("Key (sso-key)", "dns-key", flow, "dnsKey", { type: "password", maxlength: 512 }),
+    field("Secret (sso-key)", "dns-secret", flow, "dnsSecret", { type: "password", maxlength: 512 }),
+    field("Token (personal access token)", "dns-token", flow, "dnsToken", { type: "password", maxlength: 512 }),
+    action(ctx, "Store DNS credential", "put-dns-credential", async () => {
+      const kind = flow["dnsKind"];
+      const key = trimmed(flow["dnsKey"]);
+      const secret = trimmed(flow["dnsSecret"]);
+      const token = trimmed(flow["dnsToken"]);
+      const body = kind === "sso-key" ? { provider: DNS_PROVIDER, kind, key, secret } : { provider: DNS_PROVIDER, kind, token };
+      if (kind === "sso-key" ? key === "" || secret === "" : token === "") {
+        return kind === "sso-key" ? "Give the key and the secret." : "Give the token.";
+      }
+      // The values are dropped whatever the answer is, and the page is drawn again so the fields
+      // are empty in the browser too.
+      flow["dnsKey"] = "";
+      flow["dnsSecret"] = "";
+      flow["dnsToken"] = "";
+      let reply;
+      try {
+        reply = await ctx.api.mdm.putSecret({ kind: "dns_credential", material: toBase64(utf8(JSON.stringify(body))) });
+      } catch (error) {
+        await again(ctx, flow);
+        throw error;
+      }
+      await again(ctx, flow);
+      return `Stored the DNS credential (version ${reply.secret ? reply.secret.version : "?"}).`;
+    }));
+}
+
+function tlsStep(ctx, flow, status, current, days) {
+  return h("div", { name: "tls-step" },
+    h("h3", {}, "TLS certificate"),
+    h("p", { class: "note" },
+      "The certificate the Macs see on the coordinator's address for the MDM name. Upload one first; it is "
+      + "served as soon as it is a pair that names the MDM name. The renewal by ACME then replaces it."),
+    uploadTlsSection(ctx, flow),
+    h("h3", {}, "Renewal by ACME"),
+    renewalStatus(status, current, days),
+    acmeSettingsSection(ctx, flow, current),
+    dnsCredentialSection(ctx, flow, status));
+}
+
 async function view(ctx, flow) {
   let status;
   try {
@@ -353,7 +573,15 @@ async function view(ctx, flow) {
   } catch (error) {
     return errorView(TITLE, error);
   }
-  const days = await thresholds(ctx);
+  const reply = await readSettings(ctx);
+  const days = thresholds(reply);
+  const current = reply === null ? null : Object.fromEntries(
+    ACME_SETTINGS.map((name) => [name, settingValue(reply, name) || ""]));
+  if (current !== null && flow["zone"] === null) {
+    flow["zone"] = current["dns_zone"];
+    flow["directory"] = current["acme_directory"];
+    flow["contact"] = current["acme_contact"];
+  }
   return h("section", { class: "page" },
     h("h2", {}, TITLE),
     h("p", { class: "note" },
@@ -363,7 +591,8 @@ async function view(ctx, flow) {
     createSection(ctx, flow),
     replySection(ctx, flow),
     certificateSection(ctx, flow),
-    migrationSection(ctx, flow));
+    migrationSection(ctx, flow),
+    tlsStep(ctx, flow, status, current, days));
 }
 
 export async function render(ctx) {
@@ -379,5 +608,15 @@ export async function render(ctx) {
     existingCertFile: null,
     existingCertText: "",
     existingKeyFile: null,
+    tlsCertFile: null,
+    tlsCertText: "",
+    tlsKeyFile: null,
+    zone: null,
+    directory: "",
+    contact: "",
+    dnsKind: "sso-key",
+    dnsKey: "",
+    dnsSecret: "",
+    dnsToken: "",
   });
 }
