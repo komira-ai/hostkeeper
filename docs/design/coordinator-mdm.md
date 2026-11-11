@@ -226,9 +226,12 @@ the gate after it. Rules, which fail closed:
 - If it cannot be verified, `/enroll` **issues no challenge on its own**: the request waits as an operator click (the same place a
   `no_group` request waits), because a serial is not a secret and "the serial is in the ABM table" alone would let a LAN peer who knows one
   obtain an identity.
-- A `/enroll` for a serial that already has a live approved enrollment gets a challenge only when the blob verifies or an operator
-  confirms, and a new `Authenticate` never supersedes a live enrollment silently: the supersession is audited and, when the blob did not
-  verify, held for the operator.
+- A `/enroll` for a serial that already has a live approved enrollment gets a challenge only when an operator confirms, and a new
+  `Authenticate` never supersedes a live enrollment unless the challenge it used was issued after an operator's confirmation or the live
+  enrollment has checked out: otherwise it is refused, audited, and waits for the operator. A verified blob is not enough, because the blob has no freshness and a replay
+  verifies as well, and the check at `/enroll` alone is not enough, because two requests can arrive before either `Authenticate`, while no
+  enrollment is live (the model check of section 10 finds both). An operator's confirmation re-reads the ABM table at that moment: a serial
+  removed since the request waited gets no challenge.
 - ACME with attestation (CM16) is the real fix for the weaker case, since the certificate is then bound to the hardware. 9.2 says so.
 
 **Renewal.** Identity validity is the setting `identity_days`, default 1095 (a tunable, with its default from the start, edited on the setup page). At
@@ -603,7 +606,9 @@ quiet Mac costs 2 commands and 1 push per six hours.
 
 ![A wiped Mac re-enrolling](diagrams/coordinator-mdm-wiped-mac.svg)
 
-A serial has one live enrollment. The new `Authenticate` marks the old row replaced and its certificate hash is no longer accepted. The
+A serial has one live enrollment. The new `Authenticate` marks the old row replaced and its certificate hash is no longer accepted; it
+does so without an operator only when the old enrollment has checked out (`CheckOutWhenRemoved` in the enrollment profile, to be
+confirmed on the farm Mac), and otherwise it waits for one confirmation (4.2, and the model check of section 10). The
 gate's record is reset by `Event::Authenticate` (**Built** behaviour of the gate), and the daemon's re-enrollment replaces the old host id
 under the existing rule (**Built**: `enrolled_since_unix` newer than the old approval and the same serial). No allowlist redeploy and no
 operator action are involved.
@@ -775,6 +780,21 @@ does not block a PR under R6; this note is the reason to keep CM12c's limits.
   - *enrollment*: `/enroll`, SCEP, `Authenticate`, `TokenUpdate`, `CheckOut`, re-enrollment of one serial. Invariants: a challenge is
     consumed at most once; a serial has one live enrollment; a superseded certificate is never accepted.
   - *later*: DDM's sync token (CM15).
+- **What the model checks found (CM4, `crates/hostkeeper-mdm-model`)**, measured by exhaustive search; each rule below has a test that
+  turns it off and expects the invariant it protects to break:
+  - *Queue.* The rules hold for two commands, two enrollments of one serial and two connections (31165 states). Three rules are not in
+    4.3 and 5.2 as first written and are now part of them: `NotNow` arms the push floor (otherwise a command that was deferred has no
+    wake once the Mac closes the connection); a command returned to the queue by the timeout is pushed; a command deferred on a
+    connection is not handed back on that connection. The claim takes only `Queued` commands, a result changes only a command in `Sent`,
+    enqueuing an id that exists changes nothing, the gate's enqueue for a replaced enrollment is refused, and a request on the identity of a
+    replaced enrollment is refused.
+  - *Delivery is at least once.* "At most one connection at a time" holds only while the Mac answers within `--mdm-command-timeout-s`
+    or never: when the timeout fires while the Mac still holds the command, it is sent again. Every other invariant still holds in that
+    case (97029 states). The gate's commands, and the pinned command types, must tolerate a second delivery.
+  - *Enrollment.* The rules hold for two challenges, two identities and a LAN peer that replays a blob (683400 states). The check of 4.2
+    at `/enroll` alone fails: the shortest trace is two `/enroll` requests before either `Authenticate`; the check at `Authenticate`
+    alone holds. A replay before the Mac's first enrollment still lets the peer hold the serial's enrollment until an operator confirms
+    the Mac, and that enrollment never approves, since its nonce reaches only the peer.
 - **SCEP tests** (CM12b): a lost `CertRep` retried with the same key and `transactionID` gets the stored certificate; a different key
   reusing a consumed challenge is refused; `/enroll` for a serial with a live enrollment issues nothing without verification or an
   operator. **Listener tests** (CM11a): `/enroll` accepts no client certificate while `/checkin` refuses without one; an unknown
@@ -803,7 +823,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | L0 to L9, K1 | **Operator login**, specified and tasked in [operator-login.md](operator-login.md) section 14, and not repeated here. The ids this table depends on: L5 (the first admin and its one-hour file), L6b (sign-in routes, cookie-or-bearer `Caller`, the session-only attribute), L8a (UI sign-in and forced change), L7 and L8b (`Users`, `ApiTokens` and their UI pages), K1 (the held script: mint step, `--reset-admin`, the port-443 setting of 4.1, optional tokens file) | each as listed there | S to L |
 | CM2 | Seam: `Gate::handle(Event)`; the webhook becomes a thin adapter over it (a refactor only, P7) | none | S |
 | CM3 | `DeviceStatus` carries `enrolled_via_dep`; decline token `device_not_via_dep`; docs | none | S |
-| CM4 | Model checks of the command queue and of enrollment (section 10), with the invariants as the tests' names | CM1 | S |
+| CM4 | Model checks of the command queue and of enrollment (section 10), with the invariants as the tests' names. **Built**: `crates/hostkeeper-mdm-model` | CM1 | S |
 | CM12a | Spike on the farm Mac: capture the `/enroll` POST and prove the Apple chain verifies; read whether the `/enroll` response must be signed; run a SCEP exchange against a library fixture; read which client-auth mode the live profile uses. Output: a note and fixtures, decides 4.2 | CM1 | S |
 | CM5 | `hostkeeper-mdm-server`: plist wire types for check-in and results, with Apple-schema fixtures and negative cases | CM1 | M |
 | CM6 | The MDM migration (after the login one), the file-store families, conformance tests for both stores, `abm_devices` (with `abm_state.profile_uuid`) and `mdm_enrollments` first | CM4 | M |
