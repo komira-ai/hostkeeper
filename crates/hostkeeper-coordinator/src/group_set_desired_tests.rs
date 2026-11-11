@@ -60,6 +60,8 @@ fn deployment(seq: u64, by: &str, group: &str, reason: &str) -> AuditEntry {
         node_id: None,
         host_group: Some(group.to_owned()),
         reason: Some(reason.to_owned()),
+        subject: None,
+        source: None,
     }
 }
 

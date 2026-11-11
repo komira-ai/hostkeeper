@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use super::TestDatabase;
+use crate::accounts::Accounts;
 use crate::desired;
 use crate::ops::OpsState;
 use crate::store::Commit;
@@ -16,20 +17,22 @@ use crate::store::postgres::{TIMEOUTS, migrate, records, state, statements};
 use crate::verdict_file;
 
 /// The statements that write `moved` into the empty tables of a database: the desired state, the
-/// operations state and the verdicts as a commit from nothing writes them, the whole audit history
+/// operations state, the verdicts and the accounts as a commit from nothing writes them, the whole audit history
 /// with its numbers, CI's spent ids, the enrollment records, the MDM gate's device records, and,
 /// when `moved` says its oldest audit lines were pruned, the import record of a release before
 /// this one that says so.
 fn writes(moved: &Moved) -> Vec<Stmt> {
-    let (desired, ops, verdicts) = (
+    let (desired, ops, verdicts, held) = (
         desired::Held::default(),
         OpsState::default(),
         verdict_file::Held::default(),
+        Accounts::default(),
     );
     let mut out = statements(&Commit {
         desired: Some((&desired, &moved.loaded.desired)),
         ops: Some((&ops, &moved.loaded.ops)),
         verdicts: Some((&verdicts, &moved.loaded.verdicts)),
+        accounts: Some((&held, &moved.loaded.accounts)),
         audit: &moved.audit,
     })
     .expect("the state makes rows");

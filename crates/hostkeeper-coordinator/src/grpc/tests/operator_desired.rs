@@ -251,7 +251,6 @@ async fn an_operator_set_is_audited_under_the_token_name_and_names_the_digest() 
             .extensions_mut()
             .insert(crate::grpc::Admitted::Operator {
                 caller: crate::operator::Caller::Operator(caller),
-                bearer: ALICE.to_owned(),
             });
         request
     };

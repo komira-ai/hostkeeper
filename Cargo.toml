@@ -13,6 +13,9 @@ publish = false
 # Every external dependency is declared here once and used from a member as
 # `name.workspace = true` (members add features they need).
 [workspace.dependencies]
+# Argon2id, the operator password hash of hostkeeper-coordinator (docs/design/operator-login.md
+# section 6.1). Pure Rust, MIT OR Apache-2.0; the PHC string format comes with it.
+argon2 = "0.6.0"
 # The JWT segments of a CI token (hostkeeper-oidc); the attestation bundle's DSSE payload and
 # certificate (hostkeeper-package).
 base64 = "0.23.1"
@@ -133,6 +136,9 @@ serde_json = "1.0.151"
 socket2 = { version = "0.6.5", features = ["all"] }
 sha1 = "0.11.0"
 sha2 = "0.11.0"
+# NFKC of a password before it is hashed (hostkeeper-coordinator). MIT OR Apache-2.0; already in
+# the tree through the URL parsers.
+unicode-normalization = "0.1.25"
 # The operator token compared in constant time (hostkeeper-coordinator).
 subtle = "2.6.1"
 # `sysctlbyname` behind a safe interface (MIT): the boot id of a Mac, `kern.bootsessionuuid`

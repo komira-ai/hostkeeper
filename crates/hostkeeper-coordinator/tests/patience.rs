@@ -28,7 +28,8 @@ fn connected(farm: &Farm, surface: Surface) -> DuplexStream {
     let (client, server) = tokio::io::duplex(64 * 1024);
     let tls = match surface {
         Surface::Heartbeat => farm.tls.0.clone(),
-        Surface::Control => farm.tls.1.clone(),
+        // No farm has an MDM listener; its TLS is the private listener's here.
+        Surface::Control | Surface::Mdm => farm.tls.1.clone(),
     };
     tokio::spawn(connection(
         server,
