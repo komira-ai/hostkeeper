@@ -212,6 +212,12 @@ side, which the crate writes, and its builder omits `contentType` and `messageDi
 SHA-1 requests are accepted and not advertised, and there is no `Renewal` (renewal is the `InstallProfile` below). Which capabilities the Mac's
 client requires is not measured; the first real-Mac run decides whether `DES3`, `SHA-1` or `Renewal` must be advertised.
 
+The crate reads DER only; whether a Mac's CMS stack sends BER (indefinite lengths) is not measured, and a BER request is answered with an HTTP error
+until a capture of a real request says otherwise. A `Replayed` verdict proves knowledge of the challenge and of the key's public half and not
+possession of the private key (the reply is enveloped to the retry's signer certificate), so CM12c does not mark a device enrolled on it. The
+envelope is opened with the CA's RSA key before the challenge can be read, from an unauthenticated signer, so CM12c rate-limits per peer before
+calling `pki_operation` and keeps the refusal reason in the audit log, never in the reply. A validity no time can hold (a setting too large) is an error, not a panic.
+
 **Why SCEP and not the alternatives.**
 
 | Option | For | Against |

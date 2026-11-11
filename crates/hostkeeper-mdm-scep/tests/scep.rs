@@ -736,3 +736,40 @@ fn no_corruption_of_a_valid_request_panics_and_a_corrupted_signed_part_is_never_
     }
     let _ = client;
 }
+
+#[test]
+fn a_validity_no_time_can_hold_is_an_error_and_not_a_panic() {
+    let key = ca().key_pkcs8_der().expect("a key");
+    let policy = |identity_days, backdate_s| hostkeeper_mdm_scep::Policy {
+        identity_days,
+        backdate_s,
+        ..Default::default()
+    };
+    for (days, backdate) in [(1, u64::MAX), (u32::MAX, 0)] {
+        let generated = Ca::generate(
+            &mut rand::rng(),
+            1024,
+            "CN=x",
+            now(),
+            days,
+            policy(1, backdate),
+        );
+        assert_eq!(generated.err(), Some(Error::Build("a validity time")));
+        let odd = Ca::from_der(ca().cert_der(), &key, policy(days, backdate)).expect("a CA");
+        let client = Client::new(2048);
+        let mut store = Store::with(CHALLENGE, SERIAL);
+        let outcome = odd.pki_operation(
+            &request(&client, &Spec::default()),
+            &mut store,
+            now(),
+            &mut rand::rng(),
+        );
+        let reply = outcome.expect("a reply");
+        assert_eq!(
+            reply.verdict,
+            Verdict::Refused(Refusal::IssueFailed),
+            "{days} {backdate}"
+        );
+        assert!(store.consumed.is_empty(), "the challenge stays open");
+    }
+}

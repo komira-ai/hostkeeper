@@ -118,10 +118,18 @@ impl BuilderProfile for Profile {
     }
 }
 
-fn time(at: SystemTime) -> Result<Time, Error> {
-    Time::try_from(at)
-        .ok()
+fn time(at: Option<SystemTime>) -> Result<Time, Error> {
+    at.and_then(|at| Time::try_from(at).ok())
         .ok_or(Error::Build("a validity time"))
+}
+
+/// The validity from `backdate_s` before `now` for `days`; a value no time can hold is an error,
+/// not a panic, since both come from settings.
+fn validity(now: SystemTime, backdate_s: u64, days: u32) -> Result<Validity, Error> {
+    Ok(Validity::new(
+        time(now.checked_sub(Duration::from_secs(backdate_s)))?,
+        time(now.checked_add(Duration::from_secs(u64::from(days) * SECONDS_PER_DAY)))?,
+    ))
 }
 
 impl Ca {
@@ -158,10 +166,7 @@ impl Ca {
             .ok()
             .ok_or(Error::CaMaterial("subject"))?;
         let spki = spki_of(&key)?;
-        let validity = Validity::new(
-            time(now - Duration::from_secs(policy.backdate_s))?,
-            time(now + Duration::from_secs(u64::from(days) * SECONDS_PER_DAY))?,
-        );
+        let validity = validity(now, policy.backdate_s, days)?;
         let profile = Profile {
             kind: Kind::Root,
             issuer: name.clone(),
@@ -227,12 +232,7 @@ impl Ca {
         ))
         .ok()
         .ok_or(Error::Build("the subject"))?;
-        let validity = Validity::new(
-            time(now - Duration::from_secs(self.policy.backdate_s))?,
-            time(
-                now + Duration::from_secs(u64::from(self.policy.identity_days) * SECONDS_PER_DAY),
-            )?,
-        );
+        let validity = validity(now, self.policy.backdate_s, self.policy.identity_days)?;
         let profile = Profile {
             kind: Kind::Identity,
             issuer: self.cert.tbs_certificate().subject().clone(),

@@ -94,7 +94,11 @@ pub enum Redeem {
 pub enum Verdict {
     /// A certificate was issued and the challenge consumed.
     Issued,
-    /// A retry with the same key got the stored certificate.
+    /// A retry with the same key got the stored certificate. This proves knowledge of the
+    /// challenge and of the key's public half, which is public, and not possession of the private
+    /// key: the reply is enveloped to the signer certificate of the retry, which is not tied to
+    /// the key hash. The caller must not treat it as proof of key possession (for example by
+    /// marking the device enrolled).
     Replayed,
     /// A FAILURE reply: the request was refused.
     Refused(Refusal),
@@ -141,6 +145,15 @@ impl Ca {
 
     /// `PKIOperation`: `body` is the DER of the PKCS#7 message (the POST body, or the decoded
     /// `message` of a GET). `now` and `rng` are the clock and the random source.
+    ///
+    /// The caller's contract: this opens an envelope with the CA's RSA private key before the
+    /// challenge can be looked up (the challenge is inside the encrypted request), and the signer
+    /// of a request is unauthenticated, so the caller rate-limits per peer before calling it (CM12c
+    /// tests that limit). The reason in [`Verdict::Refused`] is for the audit log; it is never sent
+    /// to the peer, which sees only the failure reply, because the reasons differ in what they
+    /// reveal about the envelope. The input is DER; BER encodings (indefinite lengths, segmented
+    /// octet strings) are answered with [`Error::Malformed`], and no capture of a real Mac's
+    /// request has confirmed they are not needed.
     pub fn pki_operation(
         &self,
         body: &[u8],
