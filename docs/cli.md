@@ -446,7 +446,7 @@ holds no master key.
 | `--kind` | STRING | The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `push_pending_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`; else `invalid_request`. |
 | `--not-after-unix` | INT64 | When the value stops being good, when it says so; shown by `ListSecrets` and the status. |
 
-Through `--request` only: `material` (bytes).
+Through `--request` only: `material` (bytes), `with_certificate` (bytes).
 
 #### `hkctl mdm put-setting`
 

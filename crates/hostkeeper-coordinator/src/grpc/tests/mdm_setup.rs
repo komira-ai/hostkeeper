@@ -188,15 +188,6 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 },
                 Some(OPERATOR),
             )
-        } else if *path == PUT_ABM_TOKEN {
-            grpc_request(
-                path,
-                proto::PutAbmTokenRequest {
-                    token_json: b"{}".to_vec(),
-                    token_p7m: Vec::new(),
-                },
-                Some(OPERATOR),
-            )
         } else if *path == GET_ABM_PUBLIC_KEY {
             grpc_request(path, proto::GetAbmPublicKeyRequest {}, Some(OPERATOR))
         } else {

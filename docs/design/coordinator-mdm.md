@@ -606,6 +606,26 @@ timed out, and sends HTTP/2 PINGs every 60 s, also while idle. The settings `pus
 expires within the largest of `push_alert_days` (60 and 14), with the smallest threshold reached as its version, so that 14 days is a new
 alert, and `expired` after expiry. The production transport to mdmcert.download is built at start, and a
 coordinator built with none reaches no network.
+**What CM22a built of the setup page.** (`ui/pages/mdm.js`, `ui/bytes.js`, `docs/ui-serving.md`.) A page "MDM setup" in the UI's page list (any signed-in user; the writes it
+calls are session-only). The status panel draws `Mdm.Status` with the thresholds of `Mdm.ListSettings` (`push_alert_days`, `abm_alert_days`, `tls_renew_days`) on every drawing: configured, or each missing condition in words;
+per secret the version, the first 16 hex digits of the fingerprint, the expiry and the days left, with a reminder line and a coloured row inside the largest threshold, and `expired` after the end; the name and
+its enrollment URL, the push topic and the TLS names. The push step is `CreatePushRequest` (email, send or not) with the CSR and the encryption certificate shown and downloadable, `PutPushReply` (the emailed
+attachment as a file or its pasted hex text, sent as bytes) with the signed request downloadable, `PutPushCertificate` for the certificate Apple returns, and one form that sends an existing certificate and a key
+file (PKCS#1 or PKCS#8) in one call. The page reads a file when its button is pressed, sends it and drops it, takes a key only as a file, and shows nothing of a secret; a refusal is the API's `CODE reason`
+unchanged. The request made in the page is kept in the page only: after a reload the coordinator still holds it pending, and the reply can be checked without it; the CSR is shown again only by making a new request.
+The TLS step is CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder.
+
+**What CM22b built of the ABM and name steps.** (`ui/pages/mdm.js`, `docs/ui-serving.md`.) The ABM step has four parts: *Take over the existing token* sends the
+JSON of the token's four parts and expiry as a file (`PutAbmToken.token_json`; there is no field to paste it into, because it holds secrets), *Upload the token file from ABM* sends a `.p7m` as a file
+(`token_p7m`), *Take over the existing key pair* sends the key with its certificate in one `PutSecret` (`abm_key` with `with_certificate`, field 4; the server stores neither unless the certificate is the key's, and refuses an `abm_key` alone that is not the key of the
+`abm_cert` held, so a wrong pair cannot replace the key a held certificate was added in ABM with; the certificate alone when the key is stored already), and *Get public key* calls `GetAbmPublicKey` and shows the certificate, its fingerprint and whether this call made the pair, with a download; it is for a new server entry, because
+the call makes a pair when none is held. A stored token is answered by the server entry and the organisation Apple names and the expiry (`2027-10-31 22:01:36 UTC` for the live token). The two faults Apple names are
+explained in the page, after the API's own `CODE reason`: `abm_clock_refused` and the sync's `timestamp_refused` (set the clock of the machine the coordinator runs on), `abm_credential_refused` and `signature_invalid`
+(the four parts do not belong together, or the token was revoked). The name step sets the name with `PutName` and shows the enrollment URL the coordinator answers; the name needs a DNS record that resolves, on the LAN,
+to the coordinator's MDM listener; once `name_locked` is true the page shows the name and the reason and no form. Three additive fields of `MdmStatusResponse` carry what the sync knows, which closes the dead-code
+exception of `Abm::status`: `abm_last_sync_unix` (the last pass that ended without an error, as the running coordinator saw it; absent after a start until a pass ends well, so a restart reads *none since the
+coordinator started*) and `abm_sync_error` (the words of the last failure, empty after a good pass; a token ABM accepts clears it at once) and `abm_unavailable` (this coordinator runs no ABM client, which the row says). They are not part of *configured*. The numbers of the ABM refusals are 17 to 22, after `topic_changed` (16), because
+CM7 holds 8 to 16, after main's `name_locked` (7); none of them is released. Not verified: the browser glue in `ui/main.js` (the blob download), a real file chooser, and ABM's own pages.
 
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not
