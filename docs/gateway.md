@@ -33,9 +33,9 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`; none is yet. `Users` and `ApiTokens` take an operator only (a token
-of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
-in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
+refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret`, `Mdm.PutSetting` and
+`Mdm.PutName` (`docs/design/coordinator-mdm.md`, section 4.9), which an API token, the tokens file's or one
+made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets`, `Mdm.ListSettings` and `Mdm.Status`. `Users` and `ApiTokens` take an operator only (a token of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
 `Releases.GetRelease`, which change nothing, also take CI's OIDC token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
 the admitting allow-list entry names. With an operator token it sets any service the coordinator

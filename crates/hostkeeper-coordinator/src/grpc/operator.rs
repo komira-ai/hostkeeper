@@ -869,6 +869,72 @@ impl MdmApi for MdmService {
             .map(Response::new)
             .map_err(refusal::mdm)
     }
+
+    async fn put_secret(
+        &self,
+        request: Request<proto::PutSecretRequest>,
+    ) -> Result<Response<proto::PutSecretResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_secret(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_setting(
+        &self,
+        request: Request<proto::PutSettingRequest>,
+    ) -> Result<Response<proto::PutSettingResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_setting(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn list_secrets(
+        &self,
+        request: Request<proto::ListSecretsRequest>,
+    ) -> Result<Response<proto::ListSecretsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_secrets(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn list_settings(
+        &self,
+        request: Request<proto::ListSettingsRequest>,
+    ) -> Result<Response<proto::ListSettingsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_settings(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn status(
+        &self,
+        request: Request<proto::MdmStatusRequest>,
+    ) -> Result<Response<proto::MdmStatusResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_status(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_name(
+        &self,
+        request: Request<proto::PutNameRequest>,
+    ) -> Result<Response<proto::PutNameResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_name(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
 }
 
 /// `Rollouts` over the coordinator.

@@ -1,5 +1,7 @@
 //! The operator's browser sessions and the login limiter, in memory
-//! (docs/design/operator-login.md, sections 5.2 and 5.4). No route uses them yet.
+//! (docs/design/operator-login.md, sections 5.2 and 5.4).
+//! The login routes (`login_routes.rs`) create, look up and end sessions here and consult the
+//! limiter.
 //!
 //! [`Sessions`] holds one entry per signed-in browser. The session id is 32 random bytes; the
 //! table keeps only its SHA-256 and a CSRF token of its own, so a copy of the coordinator's

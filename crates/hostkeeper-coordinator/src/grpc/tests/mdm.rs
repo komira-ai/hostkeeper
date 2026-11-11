@@ -67,6 +67,21 @@ async fn gateway(served: &Served, bearer: Option<&str>, body: &str) -> (StatusCo
     (status, serde_json::from_slice(&bytes).expect("JSON"))
 }
 
+/// The conditions a coordinator whose setup holds nothing is missing, as `missing` lists them.
+pub(super) fn not_configured() -> Vec<i32> {
+    use proto::MdmCondition as C;
+    [
+        C::PushCertMissing,
+        C::PushKeyMissing,
+        C::AbmTokenMissing,
+        C::NameMissing,
+        C::TlsCertMissing,
+        C::TlsKeyMissing,
+    ]
+    .map(i32::from)
+    .to_vec()
+}
+
 /// The enrollment ids of `listed`.
 fn ids(listed: &proto::ListDevicesResponse) -> Vec<&str> {
     listed
@@ -168,6 +183,7 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
         // This coordinator's gate has no baseline: no state is shown.
         baseline_state: proto::MdmBaselineState::Unspecified.into(),
         baseline_reason: String::new(),
+        ..proto::MdmDevice::default()
     };
     let bare = proto::MdmDevice {
         enrollment_id: "BBBB-BARE".to_owned(),
@@ -180,6 +196,8 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
         devices: vec![full, bare],
         next_page_token: String::new(),
         gate: true,
+        configured: false,
+        missing: not_configured(),
     };
     assert_eq!(listed, want);
     assert_eq!(listed.devices[1].supervised, None);
@@ -231,7 +249,15 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
                     "lastCheckinUnix": "1800000000"
                 }
             ],
-            "gate": true
+            "gate": true,
+            "missing": [
+                "MDM_CONDITION_PUSH_CERT_MISSING",
+                "MDM_CONDITION_PUSH_KEY_MISSING",
+                "MDM_CONDITION_ABM_TOKEN_MISSING",
+                "MDM_CONDITION_NAME_MISSING",
+                "MDM_CONDITION_TLS_CERT_MISSING",
+                "MDM_CONDITION_TLS_KEY_MISSING"
+            ]
         })
     );
 }
@@ -332,6 +358,7 @@ async fn devices_are_paged_by_enrollment_id() {
         listed,
         proto::ListDevicesResponse {
             gate: true,
+            missing: not_configured(),
             ..Default::default()
         }
     );
@@ -431,11 +458,19 @@ async fn a_coordinator_without_the_gate_lists_nothing_and_says_so() {
     for (limit, token) in [(0, ""), (1, ""), (1000, "AAAA-1")] {
         let (code, said, listed) = page(&bare, limit, token).await;
         assert_eq!((code, said.as_str()), (Code::Ok, ""));
-        assert_eq!(listed, proto::ListDevicesResponse::default());
+        assert_eq!(
+            listed,
+            proto::ListDevicesResponse {
+                missing: not_configured(),
+                ..proto::ListDevicesResponse::default()
+            }
+        );
         assert!(!listed.gate);
     }
     let (status, json) = gateway(&bare, Some(OPERATOR), "{}").await;
-    assert_eq!((status, json), (StatusCode::OK, json!({})));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["missing"].as_array().map(Vec::len), Some(6));
+    assert_eq!(json.as_object().map(|o| o.len()), Some(1));
 }
 
 /// Proves: CI's token is refused `forbidden` and no token `unauthorized` by `Mdm.ListDevices`,

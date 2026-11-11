@@ -161,6 +161,12 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
+pub(crate) mod mdm_certs;
+pub(crate) mod mdm_name;
+pub mod mdm_secrets;
+pub mod mdm_settings;
+pub mod mdm_setup;
+pub mod mdm_status;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -169,6 +175,10 @@ pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
+pub mod operator_mdm_setup;
+#[cfg(test)]
+#[path = "operator_mdm_setup_tests.rs"]
+mod operator_mdm_setup_tests;
 pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
@@ -361,6 +371,8 @@ mod marks_support;
 #[cfg(test)]
 mod marks_tests;
 #[cfg(test)]
+pub(crate) mod mdm_pki_support;
+#[cfg(test)]
 mod membership_tests;
 #[cfg(test)]
 mod moving_facts_tests;
@@ -372,6 +384,10 @@ mod one_live_update_coordinator_tests;
 mod one_live_update_release_tests;
 #[cfg(test)]
 mod one_live_update_tests;
+#[cfg(test)]
+mod operator_mdm_devices_tests;
+#[cfg(test)]
+mod operator_mdm_name_tests;
 #[cfg(test)]
 mod operator_repositories_tests;
 #[cfg(test)]

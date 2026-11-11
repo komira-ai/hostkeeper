@@ -47,6 +47,12 @@ export interface Client {
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
+    putSecret(request: hostkeeper_operator_v1.PutSecretRequest): Promise<hostkeeper_operator_v1.PutSecretResponse>;
+    putSetting(request: hostkeeper_operator_v1.PutSettingRequest): Promise<hostkeeper_operator_v1.PutSettingResponse>;
+    listSecrets(request: hostkeeper_operator_v1.ListSecretsRequest): Promise<hostkeeper_operator_v1.ListSecretsResponse>;
+    listSettings(request: hostkeeper_operator_v1.ListSettingsRequest): Promise<hostkeeper_operator_v1.ListSettingsResponse>;
+    status(request: hostkeeper_operator_v1.MdmStatusRequest): Promise<hostkeeper_operator_v1.MdmStatusResponse>;
+    putName(request: hostkeeper_operator_v1.PutNameRequest): Promise<hostkeeper_operator_v1.PutNameResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -498,7 +504,13 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface ListAuditResponse { entries?: hostkeeper_operator_v1.AuditEntry[]; nextSeq?: string; }
   export interface ListDevicesRequest { limit?: number; pageToken?: string; }
-  export interface ListDevicesResponse { devices?: hostkeeper_operator_v1.MdmDevice[]; nextPageToken?: string; gate?: boolean; }
+  export interface ListDevicesResponse {
+    devices?: hostkeeper_operator_v1.MdmDevice[];
+    nextPageToken?: string;
+    gate?: boolean;
+    configured?: boolean;
+    missing?: hostkeeper_operator_v1.MdmCondition[];
+  }
   export interface ListHostGroupsRequest { limit?: number; pageToken?: string; }
   export interface ListHostGroupsResponse { hostGroups?: hostkeeper_operator_v1.HostGroupState[]; nextPageToken?: string; }
   export interface ListHostsRequest { limit?: number; pageToken?: string; }
@@ -514,12 +526,18 @@ export namespace hostkeeper_operator_v1 {
     generation?: string;
     unregistered?: string[];
   }
+  export interface ListSecretsRequest {
+  }
+  export interface ListSecretsResponse { secrets?: hostkeeper_operator_v1.SecretInfo[]; sealing?: boolean; }
   export interface ListServicesRequest {
   }
   export interface ListServicesResponse { services?: hostkeeper_operator_v1.ServiceEntry[]; holds?: hostkeeper_operator_v1.HoldMark[]; }
   export interface ListUsersRequest {
   }
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
+  export interface ListSettingsRequest {
+  }
+  export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"
@@ -530,12 +548,30 @@ export namespace hostkeeper_operator_v1 {
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export type MdmBaseline = "MDM_BASELINE_UNSPECIFIED" | "MDM_BASELINE_PENDING" | "MDM_BASELINE_APPLIED" | "MDM_BASELINE_FAILED";
   export type MdmBaselineState =
     | "MDM_BASELINE_STATE_UNSPECIFIED"
     | "MDM_BASELINE_STATE_PENDING"
     | "MDM_BASELINE_STATE_APPLIED"
     | "MDM_BASELINE_STATE_FAILED";
   export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
+  export type MdmCondition =
+    | "MDM_CONDITION_UNSPECIFIED"
+    | "MDM_CONDITION_PUSH_CERT_MISSING"
+    | "MDM_CONDITION_PUSH_KEY_MISSING"
+    | "MDM_CONDITION_PUSH_PAIR_INVALID"
+    | "MDM_CONDITION_PUSH_CERT_EXPIRED"
+    | "MDM_CONDITION_ABM_TOKEN_MISSING"
+    | "MDM_CONDITION_ABM_TOKEN_UNREADABLE"
+    | "MDM_CONDITION_ABM_TOKEN_EXPIRED"
+    | "MDM_CONDITION_NAME_MISSING"
+    | "MDM_CONDITION_TLS_CERT_MISSING"
+    | "MDM_CONDITION_TLS_KEY_MISSING"
+    | "MDM_CONDITION_TLS_PAIR_INVALID"
+    | "MDM_CONDITION_TLS_CERT_EXPIRED"
+    | "MDM_CONDITION_TLS_NAME_MISMATCH"
+    | "MDM_CONDITION_PUSH_CERT_NOT_YET_VALID"
+    | "MDM_CONDITION_TLS_CERT_NOT_YET_VALID";
   export interface MdmDevice {
     enrollmentId?: string;
     udid?: string;
@@ -558,8 +594,32 @@ export namespace hostkeeper_operator_v1 {
     installSha256?: string;
     baselineState?: hostkeeper_operator_v1.MdmBaselineState;
     baselineReason?: string;
+    hostId?: string;
+    group?: string;
+    baseline?: hostkeeper_operator_v1.MdmBaseline;
   }
   export type MdmPhase = "MDM_PHASE_UNSPECIFIED" | "MDM_PHASE_AUTHENTICATED" | "MDM_PHASE_ENROLLED" | "MDM_PHASE_CHECKED_OUT";
+  export interface MdmSetting { name?: string; value?: string; isDefault?: boolean; }
+  export interface MdmStatusRequest {
+  }
+  export interface MdmStatusResponse {
+    configured?: boolean;
+    missing?: hostkeeper_operator_v1.MdmCondition[];
+    name?: string;
+    enrollmentUrl?: string;
+    nameLocked?: boolean;
+    sealing?: boolean;
+    pushCert?: hostkeeper_operator_v1.SecretInfo;
+    pushKey?: hostkeeper_operator_v1.SecretInfo;
+    abmToken?: hostkeeper_operator_v1.SecretInfo;
+    tlsCert?: hostkeeper_operator_v1.SecretInfo;
+    tlsKey?: hostkeeper_operator_v1.SecretInfo;
+    pushTopic?: string;
+    pushNotAfterUnix?: string;
+    abmNotAfterUnix?: string;
+    tlsNotAfterUnix?: string;
+    tlsNames?: string[];
+  }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
     | "MEMBERSHIP_PRESENT"
@@ -631,11 +691,17 @@ export namespace hostkeeper_operator_v1 {
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutNameRequest { name?: string; }
+  export interface PutNameResponse { name?: string; enrollmentUrl?: string; }
   export interface PutRepositoryRequest { repository?: hostkeeper_release_v1.Repository; reason?: string; }
   export interface PutRepositoryResponse {
     repository?: hostkeeper_operator_v1.RegisteredRepository;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
+  export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; }
+  export interface PutSecretResponse { secret?: hostkeeper_operator_v1.SecretInfo; }
+  export interface PutSettingRequest { name?: string; value?: string; }
+  export interface PutSettingResponse { name?: string; value?: string; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
   export interface RegisteredRepository {
     repository?: hostkeeper_release_v1.Repository;
@@ -689,6 +755,14 @@ export namespace hostkeeper_operator_v1 {
     liveRollouts?: number;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
+  export interface SecretInfo {
+    kind?: string;
+    version?: number;
+    fingerprintSha256?: string;
+    notAfterUnix?: string;
+    createdUnix?: string;
+    supersededUnix?: string;
+  }
   export interface ServiceEntry {
     service?: string;
     hosts?: string[];
