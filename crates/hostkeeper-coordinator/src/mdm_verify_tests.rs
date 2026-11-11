@@ -44,6 +44,7 @@ fn put_token(world: &World) {
                 kind: "abm_token".to_owned(),
                 material: br#"{"consumer_key":"ck","consumer_secret":"cs","access_token":"at","access_secret":"as","access_secret_expiry":"2027-10-31T22:01:36Z"}"#.to_vec(),
                 not_after_unix: None,
+                with_certificate: Vec::new(),
             },
         )
         .expect("stored");

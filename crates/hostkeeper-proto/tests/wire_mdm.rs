@@ -92,6 +92,7 @@ const FIELDS: [(&str, &[Field]); 32] = [
             ("kind", 1, false),
             ("material", 2, false),
             ("not_after_unix", 3, true),
+            ("with_certificate", 4, false),
         ],
     ),
     (
@@ -189,6 +190,9 @@ const FIELDS: [(&str, &[Field]); 32] = [
             ("abm_not_after_unix", 14, true),
             ("tls_not_after_unix", 15, true),
             ("tls_names", 16, false),
+            ("abm_last_sync_unix", 17, true),
+            ("abm_sync_error", 18, false),
+            ("abm_unavailable", 19, false),
         ],
     ),
     (

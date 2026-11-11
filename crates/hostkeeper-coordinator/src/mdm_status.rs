@@ -84,6 +84,13 @@ impl Coordinator {
         status.abm_token = in_use(SecretKind::AbmToken);
         status.tls_cert = in_use(SecretKind::TlsCert);
         status.tls_key = in_use(SecretKind::TlsKey);
+        if let Some(abm) = &self.abm {
+            let sync = abm.status();
+            status.abm_last_sync_unix = sync.last_ok_unix.and_then(|at| i64::try_from(at).ok());
+            status.abm_sync_error = sync.last_error.unwrap_or_default();
+        } else {
+            status.abm_unavailable = true;
+        }
 
         let mut missing = Vec::new();
         self.check_push(&mut status, &mut missing, now)?;

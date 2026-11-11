@@ -168,6 +168,7 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                     kind: "push_key".to_owned(),
                     material: MATERIAL.to_vec(),
                     not_after_unix: None,
+                    with_certificate: Vec::new(),
                 },
                 Some(OPERATOR),
             )
@@ -189,6 +190,8 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 },
                 Some(OPERATOR),
             )
+        } else if *path == GET_ABM_PUBLIC_KEY {
+            grpc_request(path, proto::GetAbmPublicKeyRequest {}, Some(OPERATOR))
         } else {
             grpc_request(path, (), Some(OPERATOR))
         };
@@ -496,6 +499,7 @@ async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
         LIST_SECRETS,
         LIST_SETTINGS,
         LIST_DEVICES,
+        GET_ABM_PUBLIC_KEY,
     ] {
         assert_eq!(operator_limit(path), 4096, "{path}");
     }

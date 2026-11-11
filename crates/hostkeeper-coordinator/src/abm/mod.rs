@@ -135,12 +135,20 @@ impl Abm {
     }
 
     /// The status of the last pass.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by Mdm.Status, task CM21"))]
     pub(crate) fn status(&self) -> SyncStatus {
         self.status
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .clone()
+    }
+
+    /// Forgets the error of the last pass: a token ABM has just accepted answers it, and the
+    /// status should not go on naming a fault the operator has fixed until the next pass.
+    pub(crate) fn clear_error(&self) {
+        self.status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last_error = None;
     }
 
     /// Whether `serial` is in our ABM now: in the table and not marked removed. The approval of a

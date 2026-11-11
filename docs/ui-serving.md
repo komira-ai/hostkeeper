@@ -79,8 +79,8 @@ Sign out ends the session on the coordinator.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.
-- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate step, `docs/design/coordinator-mdm.md`
-  sections 4.4 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
+- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate, ABM and name steps,
+  `docs/design/coordinator-mdm.md` sections 4.4, 4.5 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
   because:* and each missing condition in words; the push certificate and key, the ABM token and the TLS certificate and key with the
   version and the first 16 hex digits of the fingerprint `Status` gives, when each expires and the days left. The days left are
   coloured and listed as a reminder once they are inside the largest value of the setting that names them (`push_alert_days`,
@@ -98,6 +98,16 @@ Sign out ends the session on the coordinator.
   ones (*Load enrolled Macs*, `Mdm.ListDevices`, asked only when that button is pressed), one test push. A failed push is worded by
   its class, so that a refused topic, a dead token and a certificate of the wrong environment read differently. The push carries no
   command and records nothing against the Mac.
+  The ABM step takes the token of a takeover (the JSON of its four parts and expiry, `Mdm.PutAbmToken`) or the `.p7m` ABM hands
+  over, each as a file that the coordinator proves to Apple before it keeps it (the answer names the server entry, the
+  organisation and the expiry); the existing key pair of the server entry (`Mdm.PutSecret`, the key and its certificate
+  together as files, stored only when the certificate is the key's); and *Get public key* (`Mdm.GetAbmPublicKey`), for a new server entry only, which shows the
+  certificate of the key pair the coordinator holds, makes one when it holds none, and offers it as a download. A token or a key
+  can only be chosen as a file. The status panel adds the time of the last ABM sync that ended well and, when the last sync
+  failed, Apple's words for it; for the two faults Apple names (`timestamp_refused`, `signature_invalid`) and for the same
+  refusals of an upload (`abm_clock_refused`, `abm_credential_refused`) the page says what to do. The name step sets the host
+  name the Macs enroll at (`Mdm.PutName`) and shows the enrollment URL; the name needs a DNS record that resolves, on the LAN, to
+  the coordinator's MDM listener, and once a Mac has enrolled at it the coordinator locks it and the page shows no form for it.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary

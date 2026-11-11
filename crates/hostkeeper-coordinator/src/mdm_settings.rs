@@ -15,7 +15,7 @@ use hostkeeper_mdm_gate::Installs;
 /// What a setting's value is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
-    /// One whole number between `min` and `max`.
+    /// One whole number of days between `min` and `max`.
     Days { min: u32, max: u32 },
     /// A name of 1 to 64 printable characters, as Apple shows it.
     Name,

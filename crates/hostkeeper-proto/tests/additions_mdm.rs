@@ -98,6 +98,7 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 kind: "abm_token".to_owned(),
                 material: vec![0, 1, 2, 255],
                 not_after_unix: Some(1_900_000_000),
+                with_certificate: vec![4, 5, 6],
             }),
         ),
         (
@@ -212,6 +213,9 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 abm_not_after_unix: Some(1_825_020_096),
                 tls_not_after_unix: Some(1_850_000_000),
                 tls_names: vec!["mdm.example.com".to_owned()],
+                abm_last_sync_unix: Some(1_800_000_000),
+                abm_sync_error: "ABM refused the timestamp (timestamp_refused)".to_owned(),
+                abm_unavailable: true,
             }),
         ),
         (
@@ -403,6 +407,7 @@ fn an_absent_time_of_a_secret_stays_absent_and_a_zero_is_written() {
             kind: "tls_key".to_owned(),
             material: vec![1],
             not_after_unix: None,
+            with_certificate: Vec::new(),
         })
         .as_slice(),
     )

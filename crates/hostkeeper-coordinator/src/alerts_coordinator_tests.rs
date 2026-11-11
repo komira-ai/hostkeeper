@@ -342,6 +342,7 @@ async fn a_coordinator_alerts_on_the_push_certificate_it_holds() {
                 kind: "push_key".to_owned(),
                 material: b"a key that is not a certificate".to_vec(),
                 not_after_unix: None,
+                with_certificate: Vec::new(),
             },
         )
         .expect("stored");

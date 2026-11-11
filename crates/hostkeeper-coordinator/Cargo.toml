@@ -56,7 +56,7 @@ hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The Argon2id hash of an operator password (`src/password.rs`).
 argon2.workspace = true
-# The expiry of the ABM token, an RFC 3339 time (`src/operator_abm.rs`).
+# The RFC 3339 expiry of the ABM token (`src/operator_abm.rs`, `src/mdm_status.rs`).
 time = { workspace = true, features = ["parsing"] }
 # The ABM token's CMS envelope and the RSA key it is encrypted to (`src/abm/p7m.rs`).
 aes.workspace = true
