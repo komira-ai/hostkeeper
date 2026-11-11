@@ -212,25 +212,25 @@ fn a_header_that_is_not_a_signature_is_refused_as_encoding() {
         signer(BODY, &header(BODY, &mac, &indefinite)),
         Err(SignatureError::Encoding)
     );
-    // A signer's info cut short: before its digest algorithm, and before its signature.
-    for fields in [2, 5] {
+    // A signer info cut after its signer, after its attributes, and a signer named by a sequence
+    // that is not an issuer and a serial.
+    for keep in [2, 4] {
         let cut = Spec {
-            info_fields: Some(fields),
+            keep_fields: Some(keep),
             ..Spec::default()
         };
         assert_eq!(
             signer(BODY, &header(BODY, &mac, &cut)),
             Err(SignatureError::Encoding),
-            "{fields} fields"
+            "{keep} fields"
         );
     }
-    // A signer named by an issuer and no serial number.
-    let short = Spec {
-        short_sid: true,
+    let lone = Spec {
+        lone_sid: true,
         ..Spec::default()
     };
     assert_eq!(
-        signer(BODY, &header(BODY, &mac, &short)),
+        signer(BODY, &header(BODY, &mac, &lone)),
         Err(SignatureError::Encoding)
     );
 }
