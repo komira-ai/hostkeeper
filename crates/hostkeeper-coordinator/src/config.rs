@@ -872,19 +872,10 @@ where
         Some((_, accept)) => Either::Left(mdm_listener::serve(accept, Arc::clone(&coordinator))),
         None => Either::Right(std::future::pending()),
     };
+    let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(
-            heartbeat,
-            Arc::clone(&coordinator),
-            CLIENT_PATIENCE,
-            MAX_CONNECTIONS,
-        ),
-        serve(
-            control,
-            Arc::clone(&coordinator),
-            CLIENT_PATIENCE,
-            MAX_CONNECTIONS,
-        ),
+        serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
     );
     let reloading = reload_every(
         enrollment,

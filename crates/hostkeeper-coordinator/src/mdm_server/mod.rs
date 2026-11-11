@@ -23,9 +23,9 @@
 //! request ([`MdmServer::serves`]), so a Linux-only farm that never uploads an Apple credential
 //! serves its packages. In this task the MDM family's prerequisite is a push identity; the CA of
 //! the Macs' identities (CM12c) and the ABM token (CM13) add theirs there. `/enroll` and `/scep`
-//! stay with the old stack until CM12c (Caddy routes them), and the proxy's routes land with PP2:
-//! a request for any of them answers `404` once its family is served. Every other path answers
-//! `404`, whoever asks.
+//! are answered here by the enrollment and SCEP handlers (CM12c); the proxy's routes land with
+//! PP2, and a request for one of them answers `404` once its family is served. Every other path
+//! answers `404`, whoever asks.
 //!
 //! **What an unknown enrollment is answered** (section 6, lesson 3; section 12 item 12, not
 //! verified): `401` with `{"error":"unauthorized"}`, for a request without a certificate or a

@@ -258,11 +258,9 @@ pub struct Coordinator {
     pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
-    /// Where the request for a push certificate is posted to mdmcert.download
-    /// ([`crate::mdm_push`]).
+    /// Where the push certificate request is posted to mdmcert.download ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
-    /// The ABM client: the sync, the token upload and the key pair ([`crate::abm`]); `None` in a
-    /// coordinator built without an MDM store.
+    /// The ABM client ([`crate::abm`]); `None` in a coordinator built without an MDM store.
     pub(crate) abm: Option<Arc<crate::abm::Abm>>,
     /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
     pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
@@ -281,8 +279,7 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
-    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write, so two calls do
-    /// not each make a pair and show a certificate whose key is then replaced.
+    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write: one pair is made.
     pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.

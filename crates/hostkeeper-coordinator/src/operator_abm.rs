@@ -304,3 +304,7 @@ pub async fn abm_sync_every(coordinator: std::sync::Arc<Coordinator>) -> std::co
 #[cfg(test)]
 #[path = "operator_abm_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "operator_abm_timer_tests.rs"]
+mod timer_tests;

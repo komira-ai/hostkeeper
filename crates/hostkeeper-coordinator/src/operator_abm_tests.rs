@@ -32,7 +32,7 @@ fn alice() -> Caller {
     Caller::Operator("alice".parse().expect("a token name"))
 }
 
-fn token_json() -> Vec<u8> {
+pub(super) fn token_json() -> Vec<u8> {
     let token = sample_token();
     format!(
         r#"{{"consumer_key":"{}","consumer_secret":"{}","access_token":"{}","access_secret":"{}","access_secret_expiry":"{}"}}"#,
@@ -72,16 +72,16 @@ impl<'a> MakeWriter<'a> for Everything {
 }
 
 /// A coordinator whose ABM is simulated.
-struct Rig {
-    world: World,
-    sim: Sim,
-    fake: Arc<FakeAbm>,
-    store: Arc<FileMdm>,
+pub(super) struct Rig {
+    pub(super) world: World,
+    pub(super) sim: Sim,
+    pub(super) fake: Arc<FakeAbm>,
+    pub(super) store: Arc<FileMdm>,
     _dir: hostkeeper_testkit::Scratch,
 }
 
 /// A coordinator over a simulated ABM, with a master key when `keyed` and an ABM client when `abm`.
-fn start(name: &str, keyed: bool, abm: bool) -> Rig {
+pub(super) fn start(name: &str, keyed: bool, abm: bool) -> Rig {
     start_over(name, keyed, abm, None)
 }
 
@@ -953,55 +953,4 @@ fn a_serial_is_in_abm_while_the_table_lists_it_and_has_not_removed_it() {
     assert_eq!(coordinator.serial_in_abm("NEVER"), Ok(false));
     let none = start("abm-serial-none", true, false);
     assert_eq!(none.world.coordinator.serial_in_abm("HERE"), Ok(false));
-}
-
-/// Proves: the coordinator's timer does nothing and never ends without an ABM client, and with one
-/// runs a pass (here with no token: nothing is asked of Apple) and then waits.
-///
-/// Catches: a timer that ends and takes the serve with it, or one that asks Apple with no token.
-#[tokio::test(start_paused = true)]
-async fn the_coordinators_timer_idles_without_a_client_and_runs_with_one() {
-    for abm in [false, true] {
-        let rig = start("abm-timer-coordinator", true, abm);
-        let timer = crate::operator_abm::abm_sync_every(Arc::clone(&rig.world.coordinator));
-        tokio::select! {
-            never = timer => match never {},
-            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-        }
-        assert!(rig.fake.seen().is_empty());
-    }
-}
-
-/// Proves: the coordinator's timer syncs while the coordinator leads its store, asks Apple nothing
-/// while the store's session is lost, and goes on when it is back.
-///
-/// Catches: a coordinator that keeps syncing ABM after another one took over the database, or one
-/// that never syncs again after a lost session was revived.
-#[tokio::test(start_paused = true)]
-async fn the_coordinators_timer_syncs_only_while_its_store_is_led() {
-    let rig = start("abm-timer-lease", true, true);
-    rig.world
-        .coordinator
-        .mdm_setup
-        .put_secret(SecretKind::AbmToken, &Secret::new(token_json()), None, 1)
-        .expect("the token");
-    let run = || async {
-        let timer = crate::operator_abm::abm_sync_every(Arc::clone(&rig.world.coordinator));
-        tokio::select! {
-            never = timer => match never {},
-            () = tokio::time::sleep(std::time::Duration::from_secs(1)) => {}
-        }
-    };
-    rig.world.fake.set_health(crate::store::Health::Lost);
-    run().await;
-    assert!(
-        rig.fake.seen().is_empty(),
-        "nothing is asked while it is lost"
-    );
-    rig.world.fake.set_health(crate::store::Health::Up);
-    run().await;
-    assert!(
-        !rig.fake.seen().is_empty(),
-        "it syncs once the store is back"
-    );
 }
