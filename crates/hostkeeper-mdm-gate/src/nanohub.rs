@@ -20,6 +20,7 @@ use std::time::Duration;
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use bytes::Bytes;
+use futures::future::BoxFuture;
 use hostkeeper_wire::secret::{SecretError, read_secret};
 use http_body_util::{BodyExt as _, Full, Limited};
 use hyper::header::{AUTHORIZATION, CONNECTION, CONTENT_TYPE, HOST};
@@ -208,6 +209,21 @@ pub struct Queued {
     pub push_error: Option<String>,
 }
 
+/// Where the gate puts a command for a Mac: NanoHUB's queue ([`NanoHub`]), or the coordinator's own
+/// (`docs/design/coordinator-mdm.md`, section 5.2), which holds the command until the Mac connects
+/// and pushes it. A queue refuses a command whose type is off [`crate::COMMAND_TYPES`], and says
+/// with [`EnqueueError`] why a command was not queued; the gate then asks again at the Mac's next
+/// check-in.
+pub trait CommandQueue: Send + Sync + std::fmt::Debug {
+    /// Queues `command` for the device `id`. Queuing a command whose UUID is already queued for
+    /// `id` changes nothing and succeeds.
+    fn enqueue<'a>(
+        &'a self,
+        id: &'a EnrollmentId,
+        command: &'a Command,
+    ) -> BoxFuture<'a, Result<Queued, EnqueueError>>;
+}
+
 /// The client of NanoHUB's command queue.
 #[derive(Clone, Debug)]
 pub struct NanoHub {
@@ -217,6 +233,26 @@ pub struct NanoHub {
 
 fn text_of(value: &serde_json::Value) -> String {
     shown(value.as_str().unwrap_or("an error"))
+}
+
+impl<T: CommandQueue + ?Sized> CommandQueue for std::sync::Arc<T> {
+    fn enqueue<'a>(
+        &'a self,
+        id: &'a EnrollmentId,
+        command: &'a Command,
+    ) -> BoxFuture<'a, Result<Queued, EnqueueError>> {
+        (**self).enqueue(id, command)
+    }
+}
+
+impl CommandQueue for NanoHub {
+    fn enqueue<'a>(
+        &'a self,
+        id: &'a EnrollmentId,
+        command: &'a Command,
+    ) -> BoxFuture<'a, Result<Queued, EnqueueError>> {
+        Box::pin(NanoHub::enqueue(self, id, command))
+    }
 }
 
 impl NanoHub {

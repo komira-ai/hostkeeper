@@ -161,7 +161,9 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
+pub mod mdm_push;
 pub mod mdm_secrets;
+pub(crate) mod mdm_server;
 pub mod mdm_settings;
 pub mod mdm_setup;
 pub mod membership;
@@ -171,6 +173,13 @@ pub mod operator;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
+pub mod operator_mdm_push;
+#[cfg(test)]
+#[path = "operator_mdm_push_cert_tests.rs"]
+mod operator_mdm_push_cert_tests;
+#[cfg(test)]
+#[path = "operator_mdm_push_tests.rs"]
+mod operator_mdm_push_tests;
 pub mod operator_mdm_setup;
 #[cfg(test)]
 #[path = "operator_mdm_setup_tests.rs"]

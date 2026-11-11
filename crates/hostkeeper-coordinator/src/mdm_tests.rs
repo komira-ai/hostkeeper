@@ -68,6 +68,9 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_macos_pkg: None,
         mdm_pkg_allowlist: None,
         mdm_host: None,
+        mdm_listen: None,
+        mdm_command_timeout_s: crate::mdm::DEFAULT_COMMAND_TIMEOUT_S,
+        mdm_queue_sweep_s: crate::mdm::DEFAULT_QUEUE_SWEEP_S,
     }
 }
 

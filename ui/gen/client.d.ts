@@ -46,6 +46,9 @@ export interface Client {
     putSetting(request: hostkeeper_operator_v1.PutSettingRequest): Promise<hostkeeper_operator_v1.PutSettingResponse>;
     listSecrets(request: hostkeeper_operator_v1.ListSecretsRequest): Promise<hostkeeper_operator_v1.ListSecretsResponse>;
     listSettings(request: hostkeeper_operator_v1.ListSettingsRequest): Promise<hostkeeper_operator_v1.ListSettingsResponse>;
+    createPushRequest(request: hostkeeper_operator_v1.CreatePushRequestRequest): Promise<hostkeeper_operator_v1.CreatePushRequestResponse>;
+    putPushReply(request: hostkeeper_operator_v1.PutPushReplyRequest): Promise<hostkeeper_operator_v1.PutPushReplyResponse>;
+    putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -205,7 +208,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_SILENT_HOST"
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_STORE_UNREACHABLE"
-    | "ALERT_KIND_TRUSTED_ROOT";
+    | "ALERT_KIND_TRUSTED_ROOT"
+    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApproveRequest {
     requestId?: string;
@@ -264,6 +268,8 @@ export namespace hostkeeper_operator_v1 {
     | "CONVERGENCE_STATE_BLOCKED"
     | "CONVERGENCE_STATE_HALTED"
     | "CONVERGENCE_STATE_IN_PROGRESS";
+  export interface CreatePushRequestRequest { email?: string; submit?: boolean; }
+  export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
   export interface DesiredState {
     version?: string;
@@ -603,6 +609,16 @@ export namespace hostkeeper_operator_v1 {
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }
+  export interface PutPushCertificateResponse {
+    topic?: string;
+    notBeforeUnix?: string;
+    notAfterUnix?: string;
+    secret?: hostkeeper_operator_v1.SecretInfo;
+    renewal?: boolean;
+  }
+  export interface PutPushReplyRequest { reply?: string; }
+  export interface PutPushReplyResponse { signedRequest?: string; }
   export interface PutRepositoryRequest { repository?: hostkeeper_release_v1.Repository; reason?: string; }
   export interface PutRepositoryResponse {
     repository?: hostkeeper_operator_v1.RegisteredRepository;

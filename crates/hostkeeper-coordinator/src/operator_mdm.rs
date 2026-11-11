@@ -28,6 +28,22 @@ impl Coordinator {
         self
     }
 
+    /// The same coordinator serving the Macs' listener with `server`.
+    #[must_use]
+    pub(crate) fn with_mdm_server(
+        mut self,
+        server: Option<Arc<crate::mdm_server::MdmServer>>,
+    ) -> Self {
+        self.mdm_server = server;
+        self
+    }
+
+    /// The MDM server of the Macs' listener, if the coordinator has one.
+    #[must_use]
+    pub(crate) fn mdm_server(&self) -> Option<&Arc<crate::mdm_server::MdmServer>> {
+        self.mdm_server.as_ref()
+    }
+
     /// The MDM policy gate, if the coordinator runs it.
     #[must_use]
     pub fn mdm(&self) -> Option<&Arc<Mdm>> {

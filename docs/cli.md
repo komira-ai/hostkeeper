@@ -410,7 +410,7 @@ holds no master key.
 
 | flag | value | meaning |
 |---|---|---|
-| `--kind` | STRING | The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`; else `invalid_request`. |
+| `--kind` | STRING | The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `push_pending_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`; else `invalid_request`. |
 | `--not-after-unix` | INT64 | When the value stops being good, when it says so; shown by `ListSecrets` and the status. |
 
 Through `--request` only: `material` (bytes).
@@ -440,6 +440,55 @@ each, never its value. Changes nothing.
 
 Every setting this release knows, with its value and whether that is its default. Changes
 nothing.
+
+#### `hkctl mdm create-push-request`
+
+`/hostkeeper.operator.v1.Mdm/CreatePushRequest`
+
+Makes a push certificate request: an RSA 2048 key, a CSR over it with the `email` in its
+subject, and a second key and self-signed certificate that mdmcert.download encrypts its
+reply to. Both keys are sealed and kept; a request pending before is replaced. With `submit`
+the coordinator posts the CSR and the encryption certificate to mdmcert.download, which
+**emails** the signed request to `email`: the reply is not in this answer, the operator
+uploads the attachment with `PutPushReply`. Without `submit` nothing is sent, and the CSR is
+for a vendor certificate or a signer of the operator's own. Session-only; audited as
+`mdm_push_csr`. Refused `invalid_request` (the email is not one address),
+`secrets_unavailable`, `mdmcert_unavailable` (the service could not be reached or did not
+take it; the request stays pending), `audit_unavailable`, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--email` | STRING | The address the request is made for: it is in the CSR's subject, and mdmcert.download emails its reply to it. One plain address (`local@domain`), up to 254 bytes; else `invalid_request`. |
+| `--submit` | true\|false | Whether the coordinator posts the request to mdmcert.download. |
+
+#### `hkctl mdm put-push-reply`
+
+`/hostkeeper.operator.v1.Mdm/PutPushReply`
+
+Decrypts the reply of mdmcert.download (the attachment of its email, as the mail has it, hex
+text, or its raw bytes) with the pending request's encryption key and checks that it is the
+signed request for the pending CSR; answers it, for the operator to upload to Apple's push
+portal, which returns the certificate for `PutPushCertificate`. Stores nothing. Session-only;
+audited as `mdm_push_reply_put`. Refused `no_pending_request`, `reply_undecryptable` (not a
+message encrypted to the pending request's key), `reply_not_for_request`, `audit_unavailable`.
+
+Through `--request` only: `reply` (bytes).
+
+#### `hkctl mdm put-push-certificate`
+
+`/hostkeeper.operator.v1.Mdm/PutPushCertificate`
+
+Stores a push certificate. Without `key_pem` the certificate must match the pending request's
+key (what Apple returned for the request); with it, the pair is stored as it is (the
+migration of an existing certificate and key; PKCS#1 `BEGIN RSA PRIVATE KEY` and PKCS#8 are
+both read). It must match its key, be unexpired, carry a topic that starts
+`com.apple.mgmt.External.`, and, when a certificate is already in use, the same topic.
+Session-only; audited as `mdm_push_cert_put` with the topic and the expiry, never the key.
+Refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expired`,
+`topic_changed`, `no_pending_request`, `secrets_unavailable`, `audit_unavailable`,
+`store_failed`.
+
+Through `--request` only: `certificate_pem` (bytes), `key_pem` (bytes).
 
 ### `releases`
 

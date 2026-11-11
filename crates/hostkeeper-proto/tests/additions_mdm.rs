@@ -142,6 +142,50 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 }],
             }),
         ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestRequest",
+            round_trip(&op::CreatePushRequestRequest {
+                email: "ops@example.org".to_owned(),
+                submit: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestResponse",
+            round_trip(&op::CreatePushRequestResponse {
+                csr_pem: "-----BEGIN CERTIFICATE REQUEST-----".to_owned(),
+                encryption_certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                submitted: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyRequest",
+            round_trip(&op::PutPushReplyRequest {
+                reply: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyResponse",
+            round_trip(&op::PutPushReplyResponse {
+                signed_request: b"<plist/>".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateRequest",
+            round_trip(&op::PutPushCertificateRequest {
+                certificate_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                key_pem: b"-----BEGIN RSA PRIVATE KEY-----".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateResponse",
+            round_trip(&op::PutPushCertificateResponse {
+                topic: "com.apple.mgmt.External.d1801ae1".to_owned(),
+                not_before_unix: 1_800_000_000,
+                not_after_unix: 1_900_000_000,
+                secret: Some(secret_info()),
+                renewal: true,
+            }),
+        ),
     ]
 }
 
@@ -156,7 +200,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 12);
+    assert_eq!(messages.len(), 18);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

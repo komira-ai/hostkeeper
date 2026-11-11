@@ -39,6 +39,12 @@ hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 # The MDM policy gate's device side (`--mdm-api-url`): its records answer the Mac path's
 # `DeviceState`, and it serves NanoHUB's webhook.
 hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
+# The MDM push side: the push certificate and its request, the mdmcert.download request and the
+# APNs sender and push policy (`src/mdm_push.rs`).
+hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push" }
+# The check-in, result and command messages of the Macs' MDM protocol, which the listener's
+# `/checkin` and `/mdm` routes read (`src/mdm_server`).
+hostkeeper-mdm-server = { path = "../hostkeeper-mdm-server" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 # The messages and refusals of the operator's calls, the orders a typed heartbeat answer
 # carries, and the messages of `Enroll`, `Poll` and `Renew`.
@@ -97,6 +103,9 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# The fakes of the clock, the APNs sender and the mdmcert.download transport, and the keys and
+# certificates the push tests make.
+hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push", features = ["testkit"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
@@ -105,6 +114,9 @@ hyper = { workspace = true, features = ["client"] }
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
+# The RSA keys of the push tests, read back from the sealed records to make a certificate or a
+# reply for them.
+rsa.workspace = true
 # The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
 # that release's daemon does (tests/move_v0_1_221.rs).
 protox.workspace = true

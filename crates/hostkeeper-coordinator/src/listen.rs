@@ -34,6 +34,7 @@ use hyper::body::Incoming;
 use hyper::server::conn::{http1, http2};
 use hyper::service::service_fn;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
+use rustls::ServerConfig;
 use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::Semaphore;
@@ -43,6 +44,7 @@ use tokio_rustls::TlsAcceptor;
 use crate::enrollment::Enrollment;
 use crate::grpc::route;
 use crate::http::{Peer, PeerAddr, Surface};
+use crate::mdm_server::ConnectionTried;
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
@@ -157,6 +159,39 @@ where
     .await
 }
 
+/// Serves the Macs' listener for `coordinator` for as long as the future is polled: each
+/// connection takes the TLS configuration of the MDM server as it is when the connection arrives
+/// (a certificate stored since is served from the next handshake on), and a connection that
+/// arrives while there is none is closed. Limits as [`serve`]. It never returns.
+pub(crate) async fn serve_mdm<A, F, S>(
+    accept: A,
+    coordinator: Arc<Coordinator>,
+    patience: Duration,
+    max_connections: usize,
+) -> Infallible
+where
+    A: FnMut() -> F + Send,
+    F: Future<Output = io::Result<S>> + Send,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
+{
+    accept_each(
+        accept,
+        Arc::new(Semaphore::new(max_connections)),
+        move |stream| {
+            let config = coordinator
+                .mdm_server()
+                .and_then(|server| server.tls().config());
+            let coordinator = Arc::clone(&coordinator);
+            async move {
+                if let Some(config) = config {
+                    connection_with(stream, config, Surface::Mdm, coordinator, patience).await;
+                }
+            }
+        },
+    )
+    .await
+}
+
 /// Accepts the connections `accept` yields and serves each on a task of its own with
 /// `serve_one`, holding one of `slots` for each while it is served: with none free, clients
 /// queue in the kernel's backlog. A failed accept is logged and tried again after a pause. It
@@ -191,10 +226,17 @@ where
     }
 }
 
-/// What a connection hands each of its requests besides the request: its held waits, and the
-/// address it came from when it has one.
-fn carry<B>(request: &mut hyper::Request<B>, waits: &ConnectionWaits, remote: Option<SocketAddr>) {
+/// What a connection hands each of its requests besides the request: its held waits, the commands
+/// tried on it ([`ConnectionTried`], read by the MDM listener's `/mdm` only), and the address it
+/// came from when it has one.
+fn carry<B>(
+    request: &mut hyper::Request<B>,
+    waits: &ConnectionWaits,
+    tried: &ConnectionTried,
+    remote: Option<SocketAddr>,
+) {
     request.extensions_mut().insert(waits.clone());
+    request.extensions_mut().insert(tried.clone());
     if let Some(from) = remote {
         request.extensions_mut().insert(PeerAddr(from));
     }
@@ -316,8 +358,21 @@ pub async fn connection<S>(
 ) where
     S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
+    connection_with(stream, tls.config(), surface, coordinator, patience).await;
+}
+
+/// [`connection`] over the configuration `config`, which the caller took for this connection.
+pub(crate) async fn connection_with<S>(
+    stream: S,
+    config: Arc<ServerConfig>,
+    surface: Surface,
+    coordinator: Arc<Coordinator>,
+    patience: Duration,
+) where
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
+{
     let remote = stream.remote();
-    let mut config = (*tls.config()).clone();
+    let mut config = (*config).clone();
     config.alpn_protocols = ALPN.iter().map(|name| name.to_vec()).collect();
     let shaken = tokio::time::timeout(patience, TlsAcceptor::from(Arc::new(config)).accept(stream));
     let tls = match shaken.await {
@@ -340,10 +395,11 @@ pub async fn connection<S>(
     let speaks_h2 = tls.get_ref().1.alpn_protocol() == Some(H2);
     let waits = ConnectionWaits::default();
     let held = waits.clone();
+    let tried = ConnectionTried::default();
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
-        carry(&mut request, &held, remote);
+        carry(&mut request, &held, &tried, remote);
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));

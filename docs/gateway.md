@@ -32,8 +32,9 @@ that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, an
 who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
-refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret` and
-`Mdm.PutSetting` (`docs/design/coordinator-mdm.md`, section 4.9), which an API token, the tokens file's or one
+refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret`,
+`Mdm.PutSetting` and the three of the push certificate, `Mdm.CreatePushRequest`, `Mdm.PutPushReply` and
+`Mdm.PutPushCertificate` (`docs/design/coordinator-mdm.md`, sections 4.4 and 4.9), which an API token, the tokens file's or one
 made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets` and `Mdm.ListSettings`. `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
 `Releases.GetRelease`, which change nothing, also take CI's OIDC token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
