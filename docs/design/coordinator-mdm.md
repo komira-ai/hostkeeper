@@ -580,19 +580,7 @@ its enrollment URL, the push topic and the TLS names. The push step is `CreatePu
 attachment as a file or its pasted hex text, sent as bytes) with the signed request downloadable, `PutPushCertificate` for the certificate Apple returns, and one form that sends an existing certificate and a key
 file (PKCS#1 or PKCS#8) in one call. The page reads a file when its button is pressed, sends it and drops it, takes a key only as a file, and shows nothing of a secret; a refusal is the API's `CODE reason`
 unchanged. The request made in the page is kept in the page only: after a reload the coordinator still holds it pending, and the reply can be checked without it; the CSR is shown again only by making a new request.
-The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder.
-
-**What CM11b built of `mdm verify`.** (`mdm_verify.rs`, `Pusher::test_push`, the *Verify* section of `ui/pages/mdm.js`.) `Mdm.Verify` (session-only, audited as
-`mdm_verify` with the enrollment id before anything is sent or asked) answers in one call: the status as `Status` computes it at that call; whether the Macs' listener runs, whether it has a TLS configuration, the
-names of the certificate it serves and whether they cover the MDM name; the ABM check; and, when the caller names an enrolled Mac, a test push. The ABM check asks Apple through a port,
-`AbmAccountCheck`, which the ABM client (CM13) implements and the MDM server holds; `GET /account` is the proof, since it answers only an accepted token (spike `abm.md`). A coordinator with
-no such client answers `not_checked`, never `accepted`; with no token it answers `no_token`, and a token that does not read `unreadable`, without asking. The test push goes through the sender of the queue and
-its pusher, by `Pusher::test_push`, which is outside the push policy: it waits for no floor, arms none and leaves no push outstanding, with `apns-expiration` 0, so that a test push
-a Mac got later proves nothing; no command is queued and nothing is recorded against the Mac. Its result is one class: sent, no push identity, no listener, no such (live) enrollment, no push token,
-and the answers of APNs apart: `BadDeviceToken` and `410` (this Mac's token), `TopicDisallowed` (the certificate and topic do not belong together, for every Mac),
-`BadCertificateEnvironment` (a development certificate on the production service, which arrives as a connection alert, not a response), another certificate refusal, no client certificate, throttled, unavailable, any
-other refusal and a failed connection. A check that fails is a field of the answer, not a refusal. The page loads the enrolled Macs by a button, so that drawing the page asks for nothing it does not show.
-**Not verified:** the ABM check against Apple (only the port and a fake are built until CM13 gives the client), and a test push against the real APNs; the classes are those of the spikes and of `apns.rs`.
+The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder. The CM11b setup check is in `coordinator-mdm-cm11b.md`: the ABM check answers `not_checked` until CM13 (#328) gives the client.
 
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not

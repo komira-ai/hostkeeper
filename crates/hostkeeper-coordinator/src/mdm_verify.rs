@@ -152,8 +152,13 @@ impl Coordinator {
         };
         let secret = match self.mdm_setup.open(SecretKind::AbmToken) {
             Ok(Some(secret)) => secret,
-            Ok(None) | Err(SetupFailure::NoKey) => {
-                return check(MdmAbmResult::NoToken, String::new(), String::new());
+            Ok(None) => return check(MdmAbmResult::NoToken, String::new(), String::new()),
+            Err(SetupFailure::NoKey) => {
+                return check(
+                    MdmAbmResult::Unreadable,
+                    String::new(),
+                    "no secrets key is configured".to_owned(),
+                );
             }
             Err(SetupFailure::Seal(_)) => {
                 return check(

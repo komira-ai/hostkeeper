@@ -83,6 +83,42 @@ async fn a_token_held_without_a_client_is_not_checked_and_one_the_key_does_not_o
     assert_eq!(check.detail, "the token held does not open");
 }
 
+/// Proves: a token held by a coordinator that has no master key is not called missing: the answer is
+/// `unreadable` saying no secrets key is configured, and `no_token` is said only for a store with no
+/// token under a key.
+#[tokio::test]
+async fn a_token_held_with_no_master_key_is_unreadable_and_not_missing() {
+    let store: Arc<dyn SetupStore> = Arc::new(FileSetup::volatile());
+    let keyed = world_over(Arc::clone(&store), 0x31, "mdm-verify-nokey-before");
+    let answer = keyed
+        .coordinator
+        .mdm_verify(&alice(), ask())
+        .await
+        .expect("verified");
+    assert_eq!(
+        answer.abm.expect("a check").result,
+        i32::from(MdmAbmResult::NoToken)
+    );
+    put_token(&keyed);
+
+    let world = World::build_timed(
+        "mdm-verify-nokey-after",
+        crate::login_support::settings(),
+        crate::login_support::counting(),
+        true,
+        |c, _| c.with_mdm_setup(MdmSetup::new(store, None, crate::enrollment::os_random())),
+    );
+    world.at(1_800_000_000);
+    let answer = world
+        .coordinator
+        .mdm_verify(&alice(), ask())
+        .await
+        .expect("verified");
+    let check = answer.abm.expect("a check");
+    assert_eq!(check.result, i32::from(MdmAbmResult::Unreadable));
+    assert_eq!(check.detail, "no secrets key is configured");
+}
+
 /// Proves: a store whose secrets stop reading after some number of reads makes the call refuse
 /// `store_failed` wherever it stops, never answer a half-read setup, and never panic; the call is
 /// answered once the store reads again.
