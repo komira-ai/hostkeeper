@@ -156,7 +156,7 @@ impl ApiKey {
 /// Why a command was not queued. No text holds the key.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EnqueueError {
-    /// The command's type is not one of the five the gate sends; NanoHUB was not called.
+    /// The command's type is not one of the seven the gate sends; NanoHUB was not called.
     #[error("the gate does not send {0} commands")]
     NotAllowed(String),
     /// NanoHUB could not be reached.
