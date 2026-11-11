@@ -18,6 +18,15 @@
 // Units: as operator.proto says. An enrollment id is NanoMDM's, on a Mac its UDID: 1 to 64 ASCII
 // letters, digits and `-`. A serial is 1 to 64 ASCII letters and digits.
 //
+// The setup (`PutSecret`, `PutSetting`, `ListSecrets`, `ListSettings`; docs/design/coordinator-mdm.md
+// section 4.9): the secrets the MDM server keeps, sealed in the coordinator's store under the key of
+// `--mdm-secrets-key-file`, and its settings. The two writes are session-only: a call that carries a
+// bearer token, an operator token or one made in the UI, is refused `PERMISSION_DENIED` with the
+// message `session_required`, and only a signed-in user's call (the JSON gateway with the session
+// cookie) is served. The two reads take either. No call returns a secret's value: what an answer
+// shows of one is its kind, version, SHA-256 fingerprint and times, and no refusal, log line or
+// audit row holds it either.
+//
 // Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
 // rename, retype or remove one, and never reuse a number.
 syntax = "proto3";
@@ -29,6 +38,29 @@ service Mdm {
   // The devices the gate has a record of, by enrollment id, from the records alone: no device
   // is asked. A coordinator that runs no gate answers none, with `gate` false. Changes nothing.
   rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+
+  // Seals `material` as the next version of the secret of `kind` and keeps it; the version it
+  // replaces is kept for the `secret_grace_days` setting, so that a wrong upload is undone by
+  // uploading again. Session-only: a call with a bearer token is refused `PERMISSION_DENIED`
+  // `session_required`, so `hkctl` cannot make it. Audited under the signed-in user's name as
+  // `mdm_push_cert_put`, `mdm_abm_token_put`, `mdm_tls_put`, `mdm_acme_credential_put` or
+  // `mdm_secret_put` by the kind, with the kind, the fingerprint and the expiry, and never the
+  // material; a refusal after the caller is known is audited with its token. Answers what
+  // `ListSecrets` shows of the version made. Refused `secrets_unavailable` when the coordinator
+  // holds no master key.
+  rpc PutSecret(PutSecretRequest) returns (PutSecretResponse);
+
+  // Sets the setting `name` to `value`, replacing what it was. Session-only, as `PutSecret` is.
+  // Audited as `mdm_setting_set` with the name and the value.
+  rpc PutSetting(PutSettingRequest) returns (PutSettingResponse);
+
+  // Every version of every secret the coordinator holds, by kind and version: what is shown of
+  // each, never its value. Changes nothing.
+  rpc ListSecrets(ListSecretsRequest) returns (ListSecretsResponse);
+
+  // Every setting this release knows, with its value and whether that is its default. Changes
+  // nothing.
+  rpc ListSettings(ListSettingsRequest) returns (ListSettingsResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -40,6 +72,13 @@ enum MdmRefusal {
   MDM_REFUSAL_FORBIDDEN = 2;
   // INVALID_ARGUMENT: the page token is not one an answer gave.
   MDM_REFUSAL_INVALID_REQUEST = 3;
+  // INTERNAL: the setup store did not take the change, or could not be read.
+  MDM_REFUSAL_STORE_FAILED = 4;
+  // UNAVAILABLE: the audit entry of a setup write could not be written, so the write was not made.
+  MDM_REFUSAL_AUDIT_UNAVAILABLE = 5;
+  // FAILED_PRECONDITION: the coordinator holds no master key (`--mdm-secrets-key-file` is not
+  // given), so it keeps no secret.
+  MDM_REFUSAL_SECRETS_UNAVAILABLE = 6;
 }
 
 // Where a device is in its MDM enrollment.
@@ -122,4 +161,77 @@ message MdmDevice {
   optional uint64 install_last_sent_unix = 18;
   // The SHA-256 of the pkg it last sent, 64 lower-case hex digits; empty before the first send.
   string install_sha256 = 19;
+}
+
+message PutSecretRequest {
+  // The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `abm_key`, `abm_cert`,
+  // `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`;
+  // else `invalid_request`.
+  string kind = 1;
+  // The value: 1 to 32768 bytes (else `invalid_request`). For `abm_token`, a JSON object of
+  // `consumer_key`, `consumer_secret`, `access_token`, `access_secret` and
+  // `access_secret_expiry` (RFC 3339), each a non-empty string. Never returned by any call.
+  bytes material = 2;
+  // When the value stops being good, when it says so; shown by `ListSecrets` and the status.
+  optional int64 not_after_unix = 3;
+}
+
+// What `ListSecrets` shows of one version of one secret.
+message SecretInfo {
+  // The kind.
+  string kind = 1;
+  // 1 for the first upload of a kind, and one more for each replacement.
+  uint32 version = 2;
+  // The SHA-256 of the value, 64 lower-case hex digits.
+  string fingerprint_sha256 = 3;
+  // When the value stops being good, when it said so.
+  optional int64 not_after_unix = 4;
+  // When this version was stored.
+  int64 created_unix = 5;
+  // When a newer version took its place; absent for the version in use.
+  optional int64 superseded_unix = 6;
+}
+
+message PutSecretResponse {
+  // The version made.
+  SecretInfo secret = 1;
+}
+
+message PutSettingRequest {
+  // The setting, one `ListSettings` names: else `invalid_request`.
+  string name = 1;
+  // The value, in the form the setting takes (a number of days, or a falling list of them such as
+  // `60,14`): else `invalid_request`.
+  string value = 2;
+}
+
+message PutSettingResponse {
+  // The setting.
+  string name = 1;
+  // The value as it is kept.
+  string value = 2;
+}
+
+message ListSecretsRequest {}
+
+message ListSecretsResponse {
+  // Every version held, by kind and then version.
+  repeated SecretInfo secrets = 1;
+  // Whether the coordinator holds a master key, so that `PutSecret` is served.
+  bool sealing = 2;
+}
+
+message ListSettingsRequest {}
+
+message MdmSetting {
+  // The setting's name.
+  string name = 1;
+  // Its value: what was set, or its default.
+  string value = 2;
+  // Whether `value` is the default, because none was set.
+  bool is_default = 3;
+}
+
+message ListSettingsResponse {
+  repeated MdmSetting settings = 1;
 }

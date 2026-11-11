@@ -176,6 +176,9 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::Unauthorized => Code::Unauthenticated,
         MdmRefusal::Forbidden => Code::PermissionDenied,
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
+        MdmRefusal::StoreFailed => Code::Internal,
+        MdmRefusal::AuditUnavailable => Code::Unavailable,
+        MdmRefusal::SecretsUnavailable => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
 }

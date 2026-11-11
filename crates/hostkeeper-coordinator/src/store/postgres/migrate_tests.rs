@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 11] = [
+const PINNED: [(i32, &str, &str); 12] = [
     (
         1,
         "state",
@@ -60,6 +60,11 @@ const PINNED: [(i32, &str, &str); 11] = [
         "mdm",
         "d3656f75d7e6b204b0a7edfe8512ad74ea9c33098561f6f671b006ee864fdfa0",
     ),
+    (
+        12,
+        "mdm_setup",
+        "92d720d9a443e560b9367dc7093714eb29c57ffe247dfae871a3f373b38dc637",
+    ),
 ];
 
 fn hex(bytes: &[u8]) -> String {
@@ -82,10 +87,11 @@ fn what(statement: &str) -> String {
 /// Proves: the migrations this build ships are the ones that were released: their numbers and
 /// names are exactly [(1, "state"), (2, "first_serving"), (3, "generations"), (4, "releases"),
 /// (5, "mdm_devices"), (6, "host_running"), (7, "repositories"), (8, "host_groups"),
-/// (9, "service_repository"), (10, "accounts"), (11, "mdm")], each file's
+/// (9, "service_repository"), (10, "accounts"), (11, "mdm"),
+/// (12, "mdm_setup")], each file's
 /// SHA-256 is the pinned one, and every one passes the header rule, the lint and the numbering;
 /// the first three and `host_groups` say older releases must not run on them, and `releases`,
-/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts` and `mdm` that
+/// `mdm_devices`, `host_running`, `repositories`, `service_repository`, `accounts`, `mdm` and `mdm_setup` that
 /// they may (an older release never reads any of those tables).
 ///
 /// Catches: an edit to a shipped migration (a database that ran the old text would differ from
@@ -106,7 +112,8 @@ fn the_shipped_migrations_are_unchanged() {
             (8, "host_groups"),
             (9, "service_repository"),
             (10, "accounts"),
-            (11, "mdm")
+            (11, "mdm"),
+            (12, "mdm_setup")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -135,6 +142,7 @@ fn the_shipped_migrations_are_unchanged() {
             (9, "service_repository", OlderReleases::MayRun),
             (10, "accounts", OlderReleases::MayRun),
             (11, "mdm", OlderReleases::MayRun),
+            (12, "mdm_setup", OlderReleases::MayRun),
         ]
     );
 }

@@ -55,8 +55,10 @@ base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
-# The poll nonces.
+# The poll nonces, and the bytes of a new MDM master key.
 getrandom.workspace = true
+# The sealed MDM secrets in a file, and their fingerprints.
+hex.workspace = true
 http-body-util.workspace = true
 # The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
@@ -70,6 +72,8 @@ prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
+# AES-256-GCM, the seal of the MDM secrets (`src/mdm_secrets.rs`).
+ring.workspace = true
 # The TLS of the listeners.
 rustls.workspace = true
 rustls-native-certs.workspace = true
