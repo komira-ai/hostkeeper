@@ -136,20 +136,22 @@ fn only_the_attest_job_holds_id_token_write() {
         .filter(|a| a.scope == "id-token" || a.scope == "attestations")
         .map(|a| (a.file, a.job))
         .collect();
-    // The one other job with `id-token: write` signs nothing: the coordinator wait of release.yml
-    // holds it for the tailnet join, with no `attestations` scope (coordinator_wait_tests.rs).
+    // The two other jobs with `id-token: write` sign nothing, and hold no `attestations` scope:
+    // the coordinator wait of release.yml holds it for the tailnet join (coordinator_wait_tests.rs),
+    // and the control-plane deploy for the OIDC tokens of its requests (cp_deploy_tests.rs).
     assert_eq!(
         signers,
         [
             ("artifacts.yml", "attest"),
             ("artifacts.yml", "attest"),
-            ("release.yml", "coordinator")
+            ("release.yml", "coordinator"),
+            ("release.yml", "cp-deploy")
         ]
     );
     assert!(
         WRITE_ALLOWED
             .iter()
-            .all(|a| a.job != "coordinator" || a.scope == "id-token")
+            .all(|a| (a.job != "coordinator" && a.job != "cp-deploy") || a.scope == "id-token")
     );
     let version_job = "  version:\n    runs-on: ubuntu-24.04\n    timeout-minutes: 15\n    permissions:\n      contents: read\n";
     let text = with_in(
@@ -552,8 +554,8 @@ fn release_workflow_publishes_one_tag_at_a_time_across_its_groups() {
 
 #[test]
 fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
-    // Catches: a job added beside plan, verify, publish, image, the three deploy jobs and the
-    // package channels (which could write or build without a rule about it), publish no longer waiting for verify, and verify
+    // Catches: a job added beside plan, verify, publish, image, the deploy jobs, the two jobs of
+    // the control-plane deploy and the package channels (which could write or build without a rule about it), publish no longer waiting for verify, and verify
     // no longer running the binary it is about to release.
     let text = with_in(
         &workflow("release.yml"),
@@ -572,7 +574,7 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"image\", \"newest\", \"no-downgrade\", \"notify\", \"plan\"",
+        "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"cp-deploy\", \"cp-deploy-digest\", \"image\", \"newest\", \"no-downgrade\", \"notify\", \"plan\"",
     );
     for program in super::release::SHIPPED_BINARIES {
         let text = workflow("release.yml"); // The step's name, `if:` (`release_assets.rs`), run:
