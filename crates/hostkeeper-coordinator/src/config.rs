@@ -80,7 +80,7 @@ use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::inventory::RecordWindow;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, accept_tcp, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
@@ -718,7 +718,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     run_as(parts, bind, ready, Serving::default()).await
 }
@@ -735,7 +735,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let (health, probing) = match parts.health_listen {
         Some(addr) => {
@@ -775,7 +775,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     // The lock of the state files is held for as long as this serves.
     let _held = parts.lock;
@@ -898,7 +898,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
     let health = Serving::default();

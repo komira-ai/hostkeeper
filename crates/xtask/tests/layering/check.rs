@@ -28,6 +28,7 @@ const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
 const MDM_SERVER: &str = "hostkeeper-mdm-server";
 const MDM_MODEL: &str = "hostkeeper-mdm-model";
+const MDM_SCEP: &str = "hostkeeper-mdm-scep";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
@@ -92,7 +93,7 @@ pub type Layer = (
 /// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
 /// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
 /// the coordinator starts; neither depends on the gate or the coordinator.
-pub const LAYERS: [Layer; 34] = [
+pub const LAYERS: [Layer; 35] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
@@ -127,6 +128,7 @@ pub const LAYERS: [Layer; 34] = [
     (MDM_GATE, &[CONFIG, ENROLLMENT, INSTALL, PACKAGE, WIRE], &[]),
     (MDM_SERVER, &[], &[]),
     (MDM_MODEL, &[], &[]),
+    (MDM_SCEP, &[], &[]),
     (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),
