@@ -49,6 +49,8 @@ export interface Client {
     createPushRequest(request: hostkeeper_operator_v1.CreatePushRequestRequest): Promise<hostkeeper_operator_v1.CreatePushRequestResponse>;
     putPushReply(request: hostkeeper_operator_v1.PutPushReplyRequest): Promise<hostkeeper_operator_v1.PutPushReplyResponse>;
     putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
+    putAbmToken(request: hostkeeper_operator_v1.PutAbmTokenRequest): Promise<hostkeeper_operator_v1.PutAbmTokenResponse>;
+    getAbmPublicKey(request: hostkeeper_operator_v1.GetAbmPublicKeyRequest): Promise<hostkeeper_operator_v1.GetAbmPublicKeyResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -343,6 +345,9 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_INSTALL_ORDER"
     | "GATE_REASON_MOVING"
     | "GATE_REASON_UNINSTALL_ORDER";
+  export interface GetAbmPublicKeyRequest {
+  }
+  export interface GetAbmPublicKeyResponse { certificatePem?: string; fingerprintSha256?: string; created?: boolean; }
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }
   export interface GetHostGroupResponse { hostGroup?: hostkeeper_operator_v1.HostGroupState; nodeIds?: string[]; nextPageToken?: string; }
   export interface GetHostRequest { nodeId?: string; }
@@ -607,6 +612,8 @@ export namespace hostkeeper_operator_v1 {
     | "PLAN_WAIT_DEFERRING"
     | "PLAN_WAIT_BAKING";
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
+  export interface PutAbmTokenRequest { tokenJson?: string; tokenP7m?: string; }
+  export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
   export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }

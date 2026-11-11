@@ -26,6 +26,8 @@ const PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
 const CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
 const PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 const PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+const PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
+const GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
@@ -103,7 +105,9 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             PUT_SETTING,
             CREATE_PUSH_REQUEST,
             PUT_PUSH_REPLY,
-            PUT_PUSH_CERTIFICATE
+            PUT_PUSH_CERTIFICATE,
+            PUT_ABM_TOKEN,
+            GET_ABM_PUBLIC_KEY
         ]
     );
     for path in &writes {
@@ -429,13 +433,15 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
 #[tokio::test]
 async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
     assert_eq!(operator_limit(PUT_SECRET), 65_536);
-    // The emailed reply of mdmcert.download and a certificate with its key are larger than 4 KiB
-    // once the gateway has them as base64.
+    // The emailed reply of mdmcert.download, a certificate with its key and an ABM token are larger
+    // than 4 KiB once the gateway has them as base64.
     assert_eq!(operator_limit(PUT_PUSH_REPLY), 65_536);
     assert_eq!(operator_limit(PUT_PUSH_CERTIFICATE), 65_536);
+    assert_eq!(operator_limit(PUT_ABM_TOKEN), 65_536);
     for path in [
         PUT_SETTING,
         CREATE_PUSH_REQUEST,
+        GET_ABM_PUBLIC_KEY,
         LIST_SECRETS,
         LIST_SETTINGS,
         LIST_DEVICES,
@@ -539,6 +545,81 @@ async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
             ("alice".to_owned(), "mdm_push_csr".to_owned()),
             ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
             ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user uploads an ABM token and asks for the public key through the JSON
+/// gateway as themselves, the answers hold what `ListSecrets` shows and who Apple says the
+/// token is for and no part of the token or of the key, the audit holds the user's name, and a
+/// token Apple refuses is answered with its own token, `abm_credential_refused`, as a precondition
+/// that failed.
+///
+/// Catches: an ABM call that only a script could make, and an Apple fault shown as a server
+/// error.
+#[tokio::test]
+async fn a_session_uploads_the_abm_token_and_asks_for_the_public_key() {
+    let (abm, sim, _fake, _dir) = crate::abm::fake::simulated_abm("mdm-abm-gateway");
+    let world = World::build(
+        "mdm-abm-gateway",
+        settings(),
+        counting(),
+        |coordinator, rig| {
+            std::fs::write(rig.dir.path().join("index.html"), "<html></html>").expect("an index");
+            coordinator
+                .with_mdm_setup(
+                    MdmSetup::volatile().with_key(MasterKey::from_bytes(&[5; 32]).expect("a key")),
+                )
+                .with_abm(abm)
+                .with_ui(Some(UiDir::new(rig.dir.path()).expect("a ui directory")))
+        },
+    );
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let token = br#"{"consumer_key":"CKGATEWAYMARK","consumer_secret":"b","access_token":"c","access_secret":"d","access_secret_expiry":"2027-10-31T22:01:36Z"}"#;
+    let body = |bytes: &[u8]| {
+        json!({ "tokenJson": base64::engine::general_purpose::STANDARD.encode(bytes) }).to_string()
+    };
+    let put = world.send(alice.post(PUT_ABM_TOKEN, &body(token))).await;
+    assert_eq!(put.status, StatusCode::OK, "{put:?}");
+    let answer = put.json();
+    assert_eq!(answer["secret"]["kind"], "abm_token");
+    assert_eq!(answer["secret"]["notAfterUnix"], "1825020096");
+    assert_eq!(answer["serverName"], "js-mdm");
+    assert_eq!(answer["orgName"], "Org");
+    assert!(!String::from_utf8_lossy(&put.body).contains("GATEWAYMARK"));
+
+    let key = world.send(alice.post(GET_ABM_PUBLIC_KEY, "{}")).await;
+    assert_eq!(key.status, StatusCode::OK, "{key:?}");
+    assert_eq!(key.json()["created"], true);
+    assert!(
+        key.json()["certificatePem"]
+            .as_str()
+            .expect("a certificate")
+            .starts_with("-----BEGIN CERTIFICATE-----")
+    );
+    assert!(!String::from_utf8_lossy(&key.body).contains("PRIVATE KEY"));
+
+    sim.state().session_fault = Some((403, "signature_invalid".to_owned()));
+    sim.state().session = None;
+    let refused = world.send(alice.post(PUT_ABM_TOKEN, &body(token))).await;
+    assert_eq!(
+        refused.json()["reason"],
+        "abm_credential_refused",
+        "{refused:?}"
+    );
+
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
+            ("alice".to_owned(), "mdm_abm_cert_get".to_owned()),
+            ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
         ]
     );
 }

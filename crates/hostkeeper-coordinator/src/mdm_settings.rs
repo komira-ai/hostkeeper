@@ -14,6 +14,8 @@ use std::collections::BTreeMap;
 enum Shape {
     /// One whole number between `min` and `max`.
     Days { min: u32, max: u32 },
+    /// A name of 1 to 64 printable characters, as Apple shows it.
+    Name,
     /// One to five whole numbers from 1 to 3650 that fall, separated by commas (`60,14`).
     FallingDays,
     /// One whole number (seconds, or a count) between `min` and `max`.
@@ -33,7 +35,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 8] = [
+pub const SETTINGS: [Setting; 12] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -90,6 +92,35 @@ pub const SETTINGS: [Setting; 8] = [
         default: "30",
         shape: Shape::Whole { min: 1, max: 300 },
     },
+    // Seconds between two passes of the ABM sync (`docs/design/coordinator-mdm.md`, 4.5): one
+    // request when nothing changed.
+    Setting {
+        name: "abm_sync_s",
+        default: "300",
+        shape: Shape::Whole {
+            min: 60,
+            max: 86_400,
+        },
+    },
+    // Seconds one request to ABM may take, connecting to the last byte of the answer.
+    Setting {
+        name: "abm_request_timeout_s",
+        default: "30",
+        shape: Shape::Whole { min: 5, max: 300 },
+    },
+    // How many times a request ABM answered 429 is made again, each after the wait its
+    // `Retry-After` names (never longer than one sync interval).
+    Setting {
+        name: "abm_retries",
+        default: "3",
+        shape: Shape::Whole { min: 0, max: 10 },
+    },
+    // The name of the ADE profile the sync defines at ABM.
+    Setting {
+        name: "ade_profile_name",
+        default: "Komira MDM",
+        shape: Shape::Name,
+    },
 ];
 
 /// The setting called `name`, if this release knows it.
@@ -114,6 +145,10 @@ impl Setting {
                 (min..=max).contains(&number).then(|| number.to_string())
             }
             Shape::OneOf(values) => values.contains(&value).then(|| value.to_owned()),
+            Shape::Name => {
+                let printable = value.chars().all(|c| !c.is_control());
+                ((1..=64).contains(&value.chars().count()) && printable).then(|| value.to_owned())
+            }
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =
                     value.split(',').map(|d| parse_days(d.trim())).collect();
@@ -166,6 +201,13 @@ pub fn list_of(set: &BTreeMap<String, String>, name: &str) -> Vec<u32> {
     find(name)
         .and_then(|setting| parse(value_of(set, setting)).or_else(|| parse(setting.default)))
         .unwrap_or_default()
+}
+
+/// The text of the setting `name` among the `set` ones: what was set or its default, and none for
+/// a name this release does not know.
+#[must_use]
+pub fn text_of<'a>(set: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    find(name).map(|setting| value_of(set, setting))
 }
 
 #[cfg(test)]

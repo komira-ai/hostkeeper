@@ -581,7 +581,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
-        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
+            roots.clone(),
+        )?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator
@@ -589,6 +591,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_mdmcert(Arc::new(
             hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
         ));
+    coordinator = coordinator.with_abm(state::abm(Arc::clone(&mdm_store), roots.clone())?);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -839,6 +842,7 @@ where
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
+    let syncing = crate::operator_abm::abm_sync_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -875,7 +879,10 @@ where
     );
     let all = together(
         together(together(serving, serving_lan), serving_macs),
-        together(reloading, together(observing, together(webhook, adopting))),
+        together(
+            reloading,
+            together(observing, together(webhook, together(adopting, syncing))),
+        ),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).

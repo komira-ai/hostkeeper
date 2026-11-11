@@ -16,9 +16,9 @@ use rcgen::{
     CertificateParams, DistinguishedName, DnType, DnValue, ExtendedKeyUsagePurpose, KeyPair,
     KeyUsagePurpose, PKCS_RSA_SHA256, SanType,
 };
-use rsa::RsaPrivateKey;
-use rsa::pkcs1::EncodeRsaPrivateKey as _;
-use rsa::pkcs8::{EncodePrivateKey as _, LineEnding};
+use rsa09::RsaPrivateKey;
+use rsa09::pkcs1::EncodeRsaPrivateKey as _;
+use rsa09::pkcs8::{EncodePrivateKey as _, LineEnding};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 
 use crate::KeyBytes;

@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 20] = [
+const FIELDS: [(&str, &[Field]); 24] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -162,6 +162,27 @@ const FIELDS: [(&str, &[Field]); 20] = [
             ("renewal", 5, false),
         ],
     ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenRequest",
+        &[("token_json", 1, false), ("token_p7m", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenResponse",
+        &[
+            ("secret", 1, true),
+            ("server_name", 2, false),
+            ("org_name", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.GetAbmPublicKeyRequest", &[]),
+    (
+        "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+        &[
+            ("certificate_pem", 1, false),
+            ("fingerprint_sha256", 2, false),
+            ("created", 3, false),
+        ],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -190,6 +211,8 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
             "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
             "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
+            "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
+            "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
         ]
     );
 
@@ -215,6 +238,12 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("key_mismatch", 13),
             ("certificate_expired", 14),
             ("topic_changed", 15),
+            ("abm_unavailable", 16),
+            ("abm_key_missing", 17),
+            ("abm_token_unreadable", 18),
+            ("abm_credential_refused", 19),
+            ("abm_clock_refused", 20),
+            ("abm_unreachable", 21),
         ])
     );
     assert_eq!(

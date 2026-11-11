@@ -186,6 +186,29 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 renewal: true,
             }),
         ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenRequest",
+            round_trip(&op::PutAbmTokenRequest {
+                token_json: b"{}".to_vec(),
+                token_p7m: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenResponse",
+            round_trip(&op::PutAbmTokenResponse {
+                secret: Some(secret_info()),
+                server_name: "js-mdm".to_owned(),
+                org_name: "Org".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+            round_trip(&op::GetAbmPublicKeyResponse {
+                certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                fingerprint_sha256: "ab".repeat(32),
+                created: true,
+            }),
+        ),
     ]
 }
 
@@ -200,7 +223,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 18);
+    assert_eq!(messages.len(), 21);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

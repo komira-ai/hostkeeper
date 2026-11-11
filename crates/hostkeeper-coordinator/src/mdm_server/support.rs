@@ -24,8 +24,8 @@ use rcgen::{
     KeyUsagePurpose, PKCS_RSA_SHA256, SanType,
 };
 use ring::digest;
-use rsa::Pkcs1v15Sign;
-use rsa::pkcs8::EncodePrivateKey as _;
+use rsa09::Pkcs1v15Sign;
+use rsa09::pkcs8::EncodePrivateKey as _;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use sha2::{Digest as _, Sha256};

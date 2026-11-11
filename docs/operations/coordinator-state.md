@@ -133,6 +133,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
   push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
   reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).
+- **The ABM sync.** The tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store that is given the key flag.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

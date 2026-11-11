@@ -11,7 +11,7 @@ use hostkeeper_mdm_push::testkit::{
 };
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
-use rsa::pkcs8::EncodePrivateKey as _;
+use rsa09::pkcs8::EncodePrivateKey as _;
 use sha2::Digest as _;
 
 use crate::mdm_secrets::{Secret, SecretKind};
@@ -122,7 +122,7 @@ async fn an_existing_certificate_and_key_are_stored_as_they_are() {
     assert!(!answer.renewal);
     let held = rig.open(SecretKind::PushKey).expect("held");
     assert_eq!(held.expose(), pkcs1.expose());
-    let pkcs8 = key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).expect("pem");
+    let pkcs8 = key.to_pkcs8_pem(rsa09::pkcs8::LineEnding::LF).expect("pem");
     let again = rig
         .certificate(&cert, pkcs8.as_bytes())
         .expect("stored again");
