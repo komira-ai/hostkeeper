@@ -46,7 +46,7 @@ impl Coordinator {
     }
 
     /// One audit entry, `action` by `by` about `subject`, with `reason`.
-    fn audit_setup(
+    pub(crate) fn audit_setup(
         &self,
         by: &str,
         action: &str,

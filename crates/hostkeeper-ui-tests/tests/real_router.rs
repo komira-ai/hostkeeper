@@ -62,6 +62,19 @@ const PATIENCE: Duration = Duration::from_secs(30);
 /// The reason the gateway gives a body that is not the method's request as JSON.
 const INVALID_REQUEST: &str = "invalid_request";
 
+/// The reason a bearer is given for a method only a signed-in person's session may call.
+const SESSION_REQUIRED: &str = "session_required";
+
+/// The methods of `ui/calls.json` that are session-only (`grpc::SESSION_ONLY`): the writes of the
+/// MDM setup. The app calls them with the person's session, which this file has none of, so a
+/// bearer is answered `PERMISSION_DENIED` `session_required` and that answer is the proof that the
+/// coordinator serves the method and keeps it from a token. Any other method answered so fails.
+const SESSION_ONLY_CALLS: &[&str] = &[
+    "hostkeeper.operator.v1.Mdm/CreatePushRequest",
+    "hostkeeper.operator.v1.Mdm/PutPushCertificate",
+    "hostkeeper.operator.v1.Mdm/PutPushReply",
+];
+
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
 /// calls the method sends it (`ui/pages/*.js`), with values the coordinator takes: a service, a
 /// role, a host id, a reason. A host or request id no heartbeat or
@@ -139,6 +152,20 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Hosts/SetLabels",
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,
     ),
+    (
+        "hostkeeper.operator.v1.Mdm/CreatePushRequest",
+        r#"{"email": "ops@example.org", "submit": false}"#,
+    ),
+    ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),
+    (
+        "hostkeeper.operator.v1.Mdm/PutPushCertificate",
+        r#"{"certificatePem": "MDBmZg=="}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Mdm/PutPushReply",
+        r#"{"reply": "MDBmZg=="}"#,
+    ),
+    ("hostkeeper.operator.v1.Mdm/Status", "{}"),
     (
         "hostkeeper.operator.v1.Releases/ClearHalt",
         r#"{"service": "kbf", "reason": "fixed"}"#,
@@ -547,6 +574,11 @@ fn framed(message: &[u8]) -> Bytes {
 /// when the method is served and the credential allowed.
 fn failure(method: &str, transport: Transport, answer: &Answer) -> Option<String> {
     let why = match answer.code {
+        Code::PermissionDenied
+            if answer.reason == SESSION_REQUIRED && SESSION_ONLY_CALLS.contains(&method) =>
+        {
+            return None;
+        }
         Code::Unimplemented => "UNIMPLEMENTED: the coordinator has no handler for it",
         Code::PermissionDenied => "PERMISSION_DENIED: the app's credential is forbidden it",
         Code::Unauthenticated => "UNAUTHENTICATED: the app's credential is refused",
@@ -617,6 +649,56 @@ async fn every_call_of_the_app_is_served_to_the_operators_token() {
         methods.len() * Transport::ALL.len(),
         failures.join("\n")
     );
+}
+
+/// Catches: the session-only exemption passing more than it should. A bearer refused
+/// `session_required` is a pass for a method of `SESSION_ONLY_CALLS` and a failure, naming the
+/// refusal, for any other method; the same refusal of another reason, or another code, fails
+/// the session-only method too.
+#[test]
+fn a_session_required_refusal_passes_only_for_a_session_only_method() {
+    let refused = |code, reason: &str| Answer {
+        code,
+        reason: reason.to_owned(),
+    };
+    let session_only = "hostkeeper.operator.v1.Mdm/PutPushReply";
+    let other = "hostkeeper.operator.v1.Mdm/Status";
+    let transport = Transport::Gateway;
+    assert_eq!(
+        failure(
+            session_only,
+            transport,
+            &refused(Code::PermissionDenied, "session_required")
+        ),
+        None
+    );
+    assert_eq!(
+        failure(
+            other,
+            transport,
+            &refused(Code::PermissionDenied, "session_required")
+        ),
+        Some(format!(
+            "{other} over the gateway: PERMISSION_DENIED: the app's credential is forbidden it \
+             (reason \"session_required\")"
+        ))
+    );
+    for answer in [
+        refused(Code::PermissionDenied, "forbidden"),
+        refused(Code::Unauthenticated, "unauthorized"),
+        refused(Code::Unimplemented, ""),
+    ] {
+        assert!(
+            failure(session_only, transport, &answer).is_some(),
+            "{answer:?}"
+        );
+    }
+    for method in SESSION_ONLY_CALLS {
+        assert!(
+            listed().iter().any(|m| m == method),
+            "{method} is not a call of the app"
+        );
+    }
 }
 
 /// Catches: a call added to `ui/calls.json` with no request here (it would go unchecked), a

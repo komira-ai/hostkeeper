@@ -29,6 +29,7 @@ const MDM: &str = "hostkeeper-mdm";
 const MDM_SERVER: &str = "hostkeeper-mdm-server";
 const MDM_MODEL: &str = "hostkeeper-mdm-model";
 const MDM_SCEP: &str = "hostkeeper-mdm-scep";
+const MDM_PUSH: &str = "hostkeeper-mdm-push";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
@@ -99,9 +100,9 @@ pub const LAYERS: [Layer; 35] = [
     (
         COORDINATOR,
         &[
-            CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, RELEASE, TLS, WIRE,
+            CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, OIDC, PROTO, RELEASE, TLS, WIRE,
         ],
-        &[OIDC],
+        &[MDM_PUSH, OIDC],
     ),
     (
         DAEMON,
@@ -129,6 +130,7 @@ pub const LAYERS: [Layer; 35] = [
     (MDM_SERVER, &[], &[]),
     (MDM_MODEL, &[], &[]),
     (MDM_SCEP, &[], &[]),
+    (MDM_PUSH, &[], &[]),
     (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),

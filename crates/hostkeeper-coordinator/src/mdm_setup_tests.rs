@@ -329,6 +329,10 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_alert_days", "60".to_owned(), true),
             ("tls_renew_days", "10".to_owned(), false),
             ("secret_grace_days", "7".to_owned(), true),
+            ("push_retry_s", "3600".to_owned(), true),
+            ("push_expiry_s", "86400".to_owned(), true),
+            ("push_priority", "10".to_owned(), true),
+            ("push_timeout_s", "30".to_owned(), true),
         ]
     );
     assert_eq!(
@@ -387,6 +391,56 @@ fn a_failing_store_is_a_failure() {
     assert!(MdmSetup::holds_secrets(&*failing).is_err());
     failing.reads.store(false, Ordering::SeqCst);
     assert!(MdmSetup::holds_secrets(&*failing).expect("read"));
+}
+
+/// Proves: every version of a kind still held is opened, newest first; a kind with none gives an
+/// empty list; no master key is `NoKey`; and a version that does not open fails the whole read.
+///
+/// Catches: a reader of replaced versions that skips a version it cannot open and so pairs a
+/// certificate with a key that was never checked.
+#[test]
+fn every_held_version_of_a_kind_opens_newest_first() {
+    let (setup, store) = setup();
+    assert_eq!(setup.open_held(SecretKind::PushKey), Ok(Vec::new()));
+    setup
+        .put_secret(SecretKind::PushKey, &secret("one"), None, 1)
+        .expect("v1");
+    setup
+        .put_secret(SecretKind::PushKey, &secret("two"), None, 2)
+        .expect("v2");
+    setup
+        .put_secret(SecretKind::TlsKey, &secret("other kind"), None, 2)
+        .expect("tls");
+    assert_eq!(
+        setup.open_held(SecretKind::PushKey),
+        Ok(vec![secret("two"), secret("one")])
+    );
+    let keyless = MdmSetup::new(
+        Arc::<FileSetup>::clone(&store),
+        None,
+        crate::enrollment::os_random(),
+    );
+    assert_eq!(
+        keyless.open_held(SecretKind::PushKey),
+        Err(SetupFailure::NoKey)
+    );
+    let tls = store
+        .secrets()
+        .expect("rows")
+        .into_iter()
+        .find(|row| row.kind == "tls_key")
+        .expect("the tls row");
+    store
+        .put_secret(&SecretRow {
+            kind: "push_key".to_owned(),
+            version: 3,
+            ..tls
+        })
+        .expect("copied under another kind");
+    assert_eq!(
+        setup.open_held(SecretKind::PushKey),
+        Err(SetupFailure::Seal(SealError::Open))
+    );
 }
 
 /// Proves: when the replacement is stored but the settings cannot be read for the grace, or the

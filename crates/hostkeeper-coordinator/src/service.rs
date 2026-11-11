@@ -256,6 +256,9 @@ pub struct Coordinator {
     pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
+    /// Where the request for a push certificate is posted to mdmcert.download
+    /// ([`crate::mdm_push`]).
+    pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -314,6 +317,7 @@ impl Coordinator {
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
+            mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             initial_admin: None,
             login: None,
             verifier,

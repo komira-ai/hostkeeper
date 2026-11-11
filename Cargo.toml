@@ -81,6 +81,8 @@ prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
 # hostkeeper-ui-tests and hostkeeper-testkit add `serde` to read a message's canonical JSON against
 # its descriptor.
+# The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.
@@ -172,6 +174,9 @@ tonic-prost-build = "0.14.6"
 # fields; the coordinator's logs.
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+# The root certificates of the public web, which the APNs and mdmcert.download clients trust
+# (hostkeeper-mdm-push). Licence CDLA-Permissive-2.0, allowed in deny.toml.
+webpki-roots = "1.0.12"
 # Reads a CSR and a certificate (hostkeeper-enrollment), and its tests read issued certificates
 # back; a certificate's subjectAltNames and validity (hostkeeper-wire, hostkeeper-tls).
 x509-parser = "0.18.1"
@@ -179,7 +184,7 @@ x509-parser = "0.18.1"
 tower = { version = "0.5.3", default-features = false }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
 # the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
-# and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
+# and no webpki-roots (the package fetch trusts the roots its caller gives it, not a bundled set). The ring provider is ureq's
 # `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
 # feature with a leading underscore is not covered by semver, so the version is exact.
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
@@ -225,3 +230,11 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# The RSA keys of a push certificate request (hostkeeper-mdm-push) are generated with the `rsa`
+# crate's big-number arithmetic, which takes tens of seconds a key unoptimized; the tests make
+# keys, so these two packages are optimized in dev and test builds.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.test.package.num-bigint-dig]
+opt-level = 3
