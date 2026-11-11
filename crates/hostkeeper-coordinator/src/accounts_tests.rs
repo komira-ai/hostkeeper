@@ -515,7 +515,8 @@ fn a_file_that_cannot_be_written_leaves_the_accounts_as_they_were() {
         .change(|held| held.with_user(user("alice")))
         .expect("created");
     let before = fs::read(&path).expect("written");
-    fs::create_dir(dir.path().join("desired.json.accounts.new")).expect("in the way");
+    fs::create_dir(dir.path().join(format!("desired.json.accounts.{}", "new")))
+        .expect("in the way");
     let refused = store.change(|held| held.with_user(user("bob")));
     assert!(matches!(refused, Err(AccountsError::Io(_))), "{refused:?}");
     assert_eq!(store.snapshot(), with(&["alice"]));

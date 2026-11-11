@@ -89,7 +89,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 10,
+        version: 11,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -102,14 +102,14 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 10,
+            version: 11,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 10 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 11 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),
@@ -119,7 +119,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 10,
+        version: 11,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -130,10 +130,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![10], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![11], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("10", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("11", "later", "may-run")]].concat()
     );
 }
 

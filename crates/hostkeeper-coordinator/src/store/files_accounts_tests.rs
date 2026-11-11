@@ -82,7 +82,8 @@ fn a_commit_of_the_desired_state_and_the_accounts_writes_both_and_a_failed_one_l
     assert!(dir.path().join("desired.json").exists());
     assert_eq!(files.load_accounts().expect("loads"), held);
 
-    fs::create_dir(dir.path().join("desired.json.accounts.new")).expect("in the way");
+    fs::create_dir(dir.path().join(format!("desired.json.accounts.{}", "new")))
+        .expect("in the way");
     let refused = files.commit(&Commit {
         accounts: Some((&held, &Accounts::default())),
         ..Commit::default()
