@@ -11,10 +11,22 @@ use support::Ui;
 const LIST: &str = "hostkeeper.operator.v1.Hosts/List";
 const FORCE: &str = "hostkeeper.operator.v1.Releases/Force";
 
-/// A token no reply, message or page would show by chance. It is also a well-formed refusal
+/// A CSRF token no reply, message or page would show by chance. It is also a well-formed refusal
 /// token (lower case, digits, `_`), so a gateway that echoed it as a reason would pass the
 /// reason's grammar.
 const TOKEN: &str = "tok_7f3a9c41e2b85d06";
+
+/// A driver that starts the app in a fake document kept as `globalThis.doc` and lets it read the
+/// session the browser holds.
+const START_APP: &str = r#"
+import { fakeDocument, settle } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  await settle();
+}"#;
 
 /// How a driver calls `method` through the generated client: `hosts.list` for
 /// `hostkeeper.operator.v1.Hosts/List`.
@@ -26,7 +38,7 @@ fn function(method: &str) -> String {
         .call()
 }
 
-/// A driver that signs in with `TOKEN`, calls `method` with `body` through the generated
+/// A driver that is signed in with the CSRF token `TOKEN`, calls `method` with `body` through the generated
 /// client and returns what happened: `{reply}` or
 /// `{error: {name, message, code, reason, httpStatus, signInRequired}}`, and whether a token is
 /// still held.
@@ -49,16 +61,16 @@ fn driver(call: &str, body: &str) -> String {
     format!(
         r#"
 import {{ api, transport }} from "../test/kit.js";
-import {{ getToken }} from "./session.js";
+import {{ getCsrf }} from "./session.js";
 export async function main() {{
   try {{
     const reply = await {call}({body});
-    return {{ reply, signedIn: getToken() !== null }};
+    return {{ reply, signedIn: getCsrf() !== null }};
   }} catch (e) {{
     return {{
       error: {{ name: e["name"], message: e.message, code: e.code, reason: e.reason,
                httpStatus: e.httpStatus, signInRequired: e.signInRequired, text: String(e) }},
-      signedIn: getToken() !== null,
+      signedIn: getCsrf() !== null,
     }};
   }}
 }}"#,
@@ -66,9 +78,10 @@ export async function main() {{
 }
 
 #[test]
-fn call_sends_post_path_bearer_token_and_json_body() {
-    // Catches: a wrong path, HTTP method or Authorization header, a missing content type, a body
-    // that is not the request's JSON, and a reply not returned as sent.
+fn call_sends_post_path_csrf_token_and_json_body() {
+    // Catches: a wrong path or HTTP method, a missing or wrong X-HK-CSRF header, a bearer header
+    // sent in its place, a missing content type, a body that is not the request's JSON, and a
+    // reply not returned as sent.
     let mut ui = Ui::start();
     let hosts = json!({"hosts": [{"nodeId": "web-1", "role": "web", "live": true}]});
     ui.reply(LIST, hosts.clone());
@@ -79,10 +92,8 @@ fn call_sends_post_path_bearer_token_and_json_body() {
     let sent = &requests[0];
     assert_eq!(sent.url, "/hostkeeper.operator.v1.Hosts/List");
     assert_eq!(sent.http_method(), "POST");
-    assert_eq!(
-        sent.header("authorization"),
-        Some(format!("Bearer {TOKEN}").as_str())
-    );
+    assert_eq!(sent.header("x-hk-csrf"), Some(TOKEN));
+    assert_eq!(sent.header("authorization"), None);
     assert_eq!(sent.header("content-type"), Some("application/json"));
     assert_eq!(sent.body(), json!({}));
     assert_fetch_protections(sent);
@@ -101,25 +112,26 @@ fn call_sends_post_path_bearer_token_and_json_body() {
     assert_fetch_protections(&requests[1]);
 }
 
-/// The options every request carries: no cookie or other credential, no cache, no redirect
-/// followed, no referrer.
+/// The options every request carries: the browser's own credential for this origin only (the
+/// session, which the app cannot read), no cache, no redirect followed, no referrer.
 fn assert_fetch_protections(sent: &support::Request) {
     for (option, value) in [
         ("method", "POST"),
-        ("credentials", "omit"),
+        ("credentials", "same-origin"),
         ("cache", "no-store"),
         ("redirect", "error"),
         ("referrerPolicy", "no-referrer"),
     ] {
         assert_eq!(sent.init[option], value, "{option}");
     }
-    let headers: Vec<String> = sent.init["headers"]
+    let mut headers: Vec<String> = sent.init["headers"]
         .as_object()
         .expect("headers")
         .keys()
         .map(|k| k.to_ascii_lowercase())
         .collect();
-    assert_eq!(headers, ["authorization", "content-type"]);
+    headers.sort();
+    assert_eq!(headers, ["content-type", "x-hk-csrf"]);
 }
 
 #[test]
@@ -186,11 +198,11 @@ export async function main() {{
 
 #[test]
 fn a_refusal_whose_body_cannot_be_read_still_says_what_its_status_says() {
-    // Catches: a 401 or 403 whose body fails to read taken as a network failure, which would
-    // keep the refused token.
+    // Catches: a 401 whose body fails to read taken as a network failure, which would keep the
+    // ended session, and a 403 whose reason is unknown taken as the end of the session.
     let cases: [(u16, &str, bool); 4] = [
         (401, "UNAUTHENTICATED", false),
-        (403, "PERMISSION_DENIED", false),
+        (403, "PERMISSION_DENIED", true),
         (500, "UNKNOWN", true),
         (200, "NETWORK", true),
     ];
@@ -213,7 +225,8 @@ fn a_refusal_whose_body_cannot_be_read_still_says_what_its_status_says() {
 
 #[test]
 fn call_before_sign_in_sends_nothing() {
-    // Catches: a request that leaves without a token, or with an empty one.
+    // Catches: a request that leaves with no session, or with one that has no user name or no
+    // CSRF token.
     let mut ui = Ui::start();
     let out = ui.run(&format!(
         r#"
@@ -222,8 +235,8 @@ import {{ signIn }} from "./session.js";
 export async function main() {{
   const out = [];
   const client = api(null);
-  for (const pasted of [null, "", "   "]) {{
-    out.push(signIn(pasted));
+  for (const view of [null, {{}}, {{ username: "operator", csrf: "" }}, {{ username: "", csrf: "x" }}]) {{
+    out.push(signIn(view));
     try {{ await client.{list}({{}}); out.push("sent"); }}
     catch (e) {{ out.push([e.code, e.signInRequired, e.httpStatus]); }}
   }}
@@ -232,7 +245,12 @@ export async function main() {{
         list = function(LIST)
     ));
     let refused = json!(["SIGN_IN_REQUIRED", true, 0]);
-    assert_eq!(out, json!([false, refused, false, refused, false, refused]));
+    assert_eq!(
+        out,
+        json!([
+            false, refused, false, refused, false, refused, false, refused
+        ])
+    );
     assert!(ui.requests().is_empty());
 }
 
@@ -254,7 +272,7 @@ fn a_bad_method_name_sends_nothing() {
 #[test]
 fn a_gateway_error_becomes_an_api_error_with_code_and_reason() {
     // Catches: a refusal whose code or reason is lost, or whose HTTP status is not kept, and a
-    // refusal not about the token that signs the operator out.
+    // refusal not about the session that signs the operator out.
     let mut ui = Ui::start();
     ui.refuse(FORCE, 412, "FAILED_PRECONDITION", "halted");
     let out = ui.run(&call_driver(FORCE, "{}"));
@@ -318,25 +336,60 @@ fn a_reply_that_breaks_the_gateway_shape_is_an_error_without_its_text() {
 }
 
 #[test]
-fn an_unauthenticated_reply_clears_the_token() {
-    // Catches: a token that survives a 401 or 403, or an UNAUTHENTICATED or PERMISSION_DENIED
-    // code, so that the next call still sends it.
-    let refusals: [(u16, &str, &str); 5] = [
-        (401, "UNAUTHENTICATED", "unauthorized"),
-        (403, "PERMISSION_DENIED", "forbidden"),
+fn a_reply_that_ends_the_session_forgets_it() {
+    // Catches: a session that survives a 401, or a refusal for the CSRF token, so that the next
+    // call still sends it; and a refusal that is not about the session (any other 403) that signs
+    // the operator out.
+    let ends: [(u16, &str, &str); 5] = [
+        (401, "UNAUTHENTICATED", "sign_in_required"),
+        (403, "PERMISSION_DENIED", "csrf"),
         (400, "UNAUTHENTICATED", "unauthorized"),
-        (400, "PERMISSION_DENIED", "forbidden"),
+        (400, "PERMISSION_DENIED", "csrf"),
         (401, "", ""),
     ];
-    for (status, code, reason) in refusals {
+    for (status, code, reason) in ends {
         let mut ui = Ui::start();
         if code.is_empty() {
             ui.reply_raw(LIST, status, "");
         } else {
             ui.refuse(LIST, status, code, reason);
         }
-        let out = ui.run(&format!(
-            r#"
+        let out = ui.run(&twice_driver());
+        let first = if code.is_empty() || status == 401 {
+            "UNAUTHENTICATED"
+        } else {
+            code
+        };
+        assert_eq!(
+            out,
+            json!([[first, true], ["SIGN_IN_REQUIRED", true]]),
+            "{status} {code} {reason}"
+        );
+        assert_eq!(
+            ui.requests().len(),
+            1,
+            "{status} {code} {reason}: the second call sent nothing"
+        );
+    }
+    for reason in ["forbidden", "session_required"] {
+        let mut ui = Ui::start();
+        ui.refuse(LIST, 403, "PERMISSION_DENIED", reason);
+        ui.refuse(LIST, 403, "PERMISSION_DENIED", reason);
+        let out = ui.run(&twice_driver());
+        assert_eq!(
+            out,
+            json!([["PERMISSION_DENIED", false], ["PERMISSION_DENIED", false]]),
+            "{reason}"
+        );
+        assert_eq!(ui.requests().len(), 2, "{reason}: the session is kept");
+    }
+}
+
+/// A driver that calls `Hosts/List` twice signed in with `TOKEN` and returns, for each, the
+/// error's code and whether it says to sign in.
+fn twice_driver() -> String {
+    format!(
+        r#"
 import {{ api }} from "../test/kit.js";
 export async function main() {{
   const client = api("{TOKEN}");
@@ -347,33 +400,39 @@ export async function main() {{
   }}
   return out;
 }}"#,
-            list = function(LIST)
-        ));
-        let first = if code.is_empty() || status == 401 {
-            "UNAUTHENTICATED"
-        } else if status == 403 {
-            "PERMISSION_DENIED"
-        } else {
-            code
-        };
-        assert_eq!(
-            out,
-            json!([[first, true], ["SIGN_IN_REQUIRED", true]]),
-            "{status} {code}"
-        );
-        assert_eq!(
-            ui.requests().len(),
-            1,
-            "{status} {code}: the second call sent nothing"
-        );
-    }
+        list = function(LIST)
+    )
 }
 
 #[test]
-fn the_token_is_not_in_any_error_message_or_rendered_text() {
-    // Catches: an error that echoes the request's headers or the token, and a page or the frame
-    // that shows it. Every failure path of the data layer is driven with a recognisable token,
-    // and the whole app is run in a fake document through a refusal and a sign-out.
+fn a_refusal_that_owes_a_new_password_keeps_the_session_and_says_so() {
+    // Catches: a 403 password_change_required that signs the operator out, or that the app is
+    // not told of (it must show the form of the new password).
+    let mut ui = Ui::start();
+    ui.refuse(LIST, 403, "PERMISSION_DENIED", "password_change_required");
+    let out = ui.run(&format!(
+        r#"
+import {{ api }} from "../test/kit.js";
+import {{ who }} from "./session.js";
+export async function main() {{
+  let error = null;
+  try {{ await api("{TOKEN}").{list}({{}}); }} catch (e) {{ error = [e.code, e.signInRequired, e.passwordChangeRequired]; }}
+  return {{ error, who: who() }};
+}}"#,
+        list = function(LIST)
+    ));
+    assert_eq!(
+        out,
+        json!({"error": ["PERMISSION_DENIED", false, true],
+               "who": {"username": "operator", "mustChange": true, "mustChangeUntil": 0}})
+    );
+}
+
+#[test]
+fn the_csrf_token_is_not_in_any_error_message_or_rendered_text() {
+    // Catches: an error that echoes the request's headers or the CSRF token, and a page or the
+    // frame that shows it. Every failure path of the data layer is driven with a recognisable
+    // token, and the whole app is run in a fake document through a refusal and a sign-out.
     let failures: [(u16, String); 9] = [
         (
             401,
@@ -406,8 +465,9 @@ fn the_token_is_not_in_any_error_message_or_rendered_text() {
     let out = ui.run(&raw_driver("not a method", "{}"));
     assert!(!out.to_string().contains(TOKEN), "{out}");
 
-    // The app: sign in through the form, fail every page's first call, then be refused.
+    // The app: read the session, fail every page's first call, then be refused.
     let mut ui = Ui::start();
+    ui.session(TOKEN);
     for page in [
         "Hosts/List",
         "Hosts/Get",
@@ -422,18 +482,7 @@ fn the_token_is_not_in_any_error_message_or_rendered_text() {
             &json!({"code": "INTERNAL", "reason": TOKEN}).to_string(),
         );
     }
-    ui.run(&format!(
-        r#"
-import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
-import {{ startApp }} from "./app.js";
-export async function main() {{
-  const doc = fakeDocument();
-  globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
-  fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
-  fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#,
-    ));
+    ui.run(START_APP);
     let shown = ui.run(
         r#"
 import { domTexts, elements, domNamed, fire } from "../test/kit.js";
@@ -481,21 +530,24 @@ export async function main() {
     let signed_out = ui.run(
         r#"
 import { domTexts, domNamed } from "../test/kit.js";
-import { getToken } from "./session.js";
+import { getCsrf } from "./session.js";
 export async function main() {
   const doc = globalThis.doc;
-  return { token: getToken(), text: domTexts(doc.root).join(" "), form: domNamed(doc.root, "token").attributes };
+  return { csrf: getCsrf(), text: domTexts(doc.root).join(" "), form: domNamed(doc.root, "password").attributes };
 }"#,
     );
-    assert_eq!(signed_out["token"], Value::Null);
+    assert_eq!(signed_out["csrf"], Value::Null);
     let text = signed_out["text"].as_str().expect("text");
-    assert!(text.contains("Paste your operator token"), "{text}");
     assert!(
-        text.contains("The coordinator refused the token (UNAUTHENTICATED unauthorized)."),
+        text.contains("Sign in with your user name and password."),
+        "{text}"
+    );
+    assert!(
+        text.contains("Your session has ended (UNAUTHENTICATED unauthorized). Sign in again."),
         "{text}"
     );
     assert_eq!(signed_out["form"]["type"], "password");
-    assert_eq!(signed_out["form"]["autocomplete"], "off");
+    assert_eq!(signed_out["form"]["autocomplete"], "current-password");
     assert!(!signed_out.to_string().contains(TOKEN), "{signed_out}");
 }
 
@@ -504,20 +556,10 @@ fn a_page_that_fails_unexpectedly_says_so() {
     // Catches: a page whose rendering throws on a reply it did not expect, left on "Loading..."
     // with nothing shown.
     let mut ui = Ui::start();
+    ui.session(TOKEN);
     ui.reply_raw(LIST, 200, r#"{"hosts": 5}"#);
     ui.reply("hostkeeper.operator.v1.Releases/Status", json!({}));
-    ui.run(&format!(
-        r#"
-import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
-import {{ startApp }} from "./app.js";
-export async function main() {{
-  const doc = fakeDocument();
-  globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
-  fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
-  fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#,
-    ));
+    ui.run(START_APP);
     let shown = ui.run(
         r#"
 import { domTexts } from "../test/kit.js";
@@ -531,34 +573,26 @@ export async function main() {
 }
 
 #[test]
-fn signing_out_forgets_the_token_and_shows_sign_in() {
-    // Catches: a Sign out that leaves the token held, or a frame that keeps showing a page.
+fn signing_out_ends_the_session_and_shows_sign_in() {
+    // Catches: a Sign out that leaves the session held, one that is not told to the coordinator
+    // (with the CSRF token it needs), or a frame that keeps showing a page.
     let mut ui = Ui::start();
+    ui.session(TOKEN);
+    ui.reply_raw(support::LOGOUT, 200, "{}");
     ui.reply(LIST, json!({"hosts": []}));
     ui.reply("hostkeeper.operator.v1.Releases/Status", json!({}));
     ui.reply("hostkeeper.operator.v1.Alerts/List", json!({}));
-    ui.run(&format!(
-        r#"
-import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
-import {{ startApp }} from "./app.js";
-export async function main() {{
-  const doc = fakeDocument();
-  globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
-  fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{TOKEN}" }} }});
-  fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
-}}"#,
-    ));
+    ui.run(START_APP);
     let before = ui.run(
         r#"
 import { domTexts, domNamed, fire } from "../test/kit.js";
-import { getToken } from "./session.js";
+import { getCsrf } from "./session.js";
 export async function main() {
   const doc = globalThis.doc;
   const text = domTexts(doc.root).join(" ");
-  const held = getToken() !== null;
+  const held = getCsrf() !== null;
   fire(domNamed(doc.root, "sign-out"), "click", {});
-  return { text, held, after: getToken(), shown: domTexts(doc.root).join(" ") };
+  return { text, held, after: getCsrf(), shown: domTexts(doc.root).join(" ") };
 }"#,
     );
     assert!(
@@ -568,16 +602,25 @@ export async function main() {
     assert_eq!(before["held"], true);
     assert_eq!(before["after"], Value::Null);
     let after = before["shown"].as_str().expect("text");
-    assert!(after.contains("Paste your operator token"), "{after}");
+    assert!(
+        after.contains("Sign in with your user name and password."),
+        "{after}"
+    );
     assert!(!after.contains("refused"), "{after}");
     assert_eq!(
         ui.methods(),
         [
+            "v1/session",
             LIST,
             "hostkeeper.operator.v1.Releases/Status",
-            "hostkeeper.operator.v1.Alerts/List"
+            "hostkeeper.operator.v1.Alerts/List",
+            "v1/logout"
         ]
     );
+    let requests = ui.requests();
+    let logout = requests.last().expect("a request");
+    assert_eq!(logout.http_method(), "POST");
+    assert_eq!(logout.header("x-hk-csrf"), Some(TOKEN));
 }
 
 /// The hosts of the force tests: `api` installed on web-1, web-2 (held) and clone-1; web-3 and

@@ -1,0 +1,248 @@
+// hostkeeper.operator.v1: the `Users` and `ApiTokens` services of the operator API and their
+// refusals (`UsersRefusal`, `ApiTokensRefusal`): the people who sign in to the coordinator's web
+// page with a name and a password, and the tokens a script calls with
+// (docs/design/operator-login.md, section 7). The rest of the package, `Enrollment` and
+// `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, is
+// operator.proto; this file is the same package and API, kept apart so that each file stays
+// short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Users` and `ApiTokens` take the operator's credential only; no CI token
+// reaches them. The credential is a bearer token (one of `--tokens-file`, or one made by
+// `ApiTokens.Create`) or, on the JSON gateway, the session of a signed-in user. Every operator
+// is equal: a token may call `Users` and `ApiTokens` as it may call every other operator method.
+// A password is never an argument of any call here: a person chooses theirs at sign-in, on the
+// coordinator's own page, and `Users` only makes a temporary one.
+//
+// Refusals: a gRPC status whose message is exactly one token of `UsersRefusal` or
+// `ApiTokensRefusal`, written as the value's name without the prefix, in lower case; the status
+// code is the one each value names. A refused request changes nothing; a call that cannot write
+// its audit line changes nothing either (`audit_unavailable`).
+//
+// Units: as operator.proto says; times are unix seconds. A user's or a token's name is 1 to 32
+// bytes of `[a-z0-9-]`, other than the names the audit uses for changes that are not an
+// operator's (`coordinator`, `ci` and the automatic approvals'); users and tokens are one
+// namespace, and the names in the coordinator's tokens file are in it. A request is at most
+// 4 KiB.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+// The people who sign in with a name and a password. A user is an operator, as a token is: there
+// are no roles. Each mutating call is audited under the caller's name, with the user it concerned
+// as the entry's subject: `user_create`, `user_disable`, `user_enable`, `user_delete` and
+// `password_reset`.
+service Users {
+  // Every user, by name. Changes nothing. No password and no hash is ever in the answer.
+  rpc List(ListUsersRequest) returns (ListUsersResponse);
+  // Makes a user with a generated temporary password, which the answer carries once: the
+  // coordinator keeps its hash only. The user must choose a new password at the first sign-in,
+  // and the temporary one stops working an hour after it was made.
+  rpc Create(CreateUserRequest) returns (CreateUserResponse);
+  // Stops a user signing in, and ends their sessions at once. The last enabled user cannot be
+  // disabled. Disabling a disabled user changes nothing.
+  rpc Disable(DisableUserRequest) returns (DisableUserResponse);
+  // Lets a disabled user sign in again, with the password they had. Enabling an enabled user
+  // changes nothing.
+  rpc Enable(EnableUserRequest) returns (EnableUserResponse);
+  // Gives a user a new temporary password, which the answer carries once, makes them choose
+  // another at the next sign-in, and ends their sessions. Refused for the caller's own name: a
+  // person changes their own password on the coordinator's page.
+  rpc ResetPassword(ResetPasswordRequest) returns (ResetPasswordResponse);
+  // Removes a user and ends their sessions. The audit entries that name them stay. The last
+  // enabled user cannot be deleted.
+  rpc Delete(DeleteUserRequest) returns (DeleteUserResponse);
+}
+
+// The tokens a script calls with. A token acts as the operator it is named for and cannot sign
+// in. Each mutating call is audited under the caller's name, with the token as the entry's
+// subject: `api_token_create` and `api_token_revoke`.
+service ApiTokens {
+  // Every token, by name: the coordinator's tokens file's, which are read-only, and those made
+  // here. Changes nothing. No token and no digest is ever in the answer.
+  rpc List(ListApiTokensRequest) returns (ListApiTokensResponse);
+  // Makes a token of 32 random bytes, `hkt_` and 43 base64url characters, which the answer carries
+  // once: the coordinator keeps its SHA-256 only.
+  rpc Create(CreateApiTokenRequest) returns (CreateApiTokenResponse);
+  // Removes a token made here: it is refused from then on. A token of the tokens file is removed
+  // by editing the file.
+  rpc Revoke(RevokeApiTokenRequest) returns (RevokeApiTokenResponse);
+}
+
+// Why `Users` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum UsersRefusal {
+  USERS_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  USERS_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Users` does not take.
+  USERS_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: `Create` of a name that is not 1 to 32 bytes of `[a-z0-9-]`, or one the
+  // audit uses for changes that are not an operator's.
+  USERS_REFUSAL_INVALID_REQUEST = 3;
+  // ALREADY_EXISTS: `Create` of a name that is already a user's, an API token's or a name in the
+  // tokens file.
+  USERS_REFUSAL_NAME_TAKEN = 4;
+  // NOT_FOUND: a name that is no user's, whatever it is (only `Create` judges a name's form).
+  USERS_REFUSAL_UNKNOWN_USER = 5;
+  // FAILED_PRECONDITION: `Disable` or `Delete` of the only enabled user.
+  USERS_REFUSAL_LAST_ENABLED = 6;
+  // FAILED_PRECONDITION: `ResetPassword` of the caller's own name.
+  USERS_REFUSAL_OWN_PASSWORD = 7;
+  // INTERNAL: the change could not be written, or a password could not be made. Nothing
+  // changed, and asking again is safe.
+  USERS_REFUSAL_STORE_FAILED = 8;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  USERS_REFUSAL_AUDIT_UNAVAILABLE = 9;
+}
+
+// Why `ApiTokens` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum ApiTokensRefusal {
+  API_TOKENS_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  API_TOKENS_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `ApiTokens` does not take.
+  API_TOKENS_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: `Create` of a name that is not 1 to 32 bytes of `[a-z0-9-]`, or one the
+  // audit uses for changes that are not an operator's.
+  API_TOKENS_REFUSAL_INVALID_REQUEST = 3;
+  // ALREADY_EXISTS: `Create` of a name that is already a user's, an API token's or a name in the
+  // tokens file.
+  API_TOKENS_REFUSAL_NAME_TAKEN = 4;
+  // NOT_FOUND: `Revoke` of a name that is no stored API token's. A token of the tokens file is
+  // not one: it is removed by editing the file.
+  API_TOKENS_REFUSAL_UNKNOWN_TOKEN = 5;
+  // INTERNAL: the change could not be written, or a token could not be made. Nothing changed,
+  // and asking again is safe.
+  API_TOKENS_REFUSAL_STORE_FAILED = 6;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  API_TOKENS_REFUSAL_AUDIT_UNAVAILABLE = 7;
+}
+
+// A user as `Users` tells it. Neither the password nor its hash is ever in it.
+message UserInfo {
+  // The name, which the audit's `by` is.
+  string name = 1;
+  // Whether the user may sign in.
+  bool enabled = 2;
+  // Whether the user must choose a new password before anything else.
+  bool must_change = 3;
+  // Who made the user: a user's or a token's name, or `coordinator` for the first admin.
+  string created_by = 4;
+  // When the user was made, in unix seconds.
+  uint64 created_unix = 5;
+  // When the user last signed in, in unix seconds; absent if never.
+  optional uint64 last_login_unix = 6;
+  // The second after which a temporary password no longer signs in, while the user has not
+  // changed it; absent otherwise.
+  optional uint64 password_valid_until_unix = 7;
+}
+
+message ListUsersRequest {}
+
+message ListUsersResponse {
+  // The users, by name.
+  repeated UserInfo users = 1;
+}
+
+message CreateUserRequest {
+  // The new user's name.
+  string name = 1;
+}
+
+message CreateUserResponse {
+  UserInfo user = 1;
+  // The temporary password, 24 characters. Shown here once; the coordinator keeps no copy.
+  string password = 2;
+}
+
+message DisableUserRequest {
+  // The user's name.
+  string name = 1;
+}
+
+message DisableUserResponse {
+  // The user as they are now.
+  UserInfo user = 1;
+}
+
+message EnableUserRequest {
+  // The user's name.
+  string name = 1;
+}
+
+message EnableUserResponse {
+  // The user as they are now.
+  UserInfo user = 1;
+}
+
+message ResetPasswordRequest {
+  // The user's name.
+  string name = 1;
+}
+
+message ResetPasswordResponse {
+  // The user as they are now.
+  UserInfo user = 1;
+  // The temporary password, 24 characters. Shown here once; the coordinator keeps no copy.
+  string password = 2;
+}
+
+message DeleteUserRequest {
+  // The user's name.
+  string name = 1;
+}
+
+message DeleteUserResponse {}
+
+// Where a token comes from.
+enum ApiTokenSource {
+  API_TOKEN_SOURCE_UNSPECIFIED = 0;
+  // Made by `ApiTokens.Create` and kept in the coordinator's store.
+  API_TOKEN_SOURCE_STORE = 1;
+  // Named in the coordinator's tokens file (or the single operator token file): read-only here.
+  API_TOKEN_SOURCE_TOKENS_FILE = 2;
+}
+
+// A token as `ApiTokens` tells it. Neither the token nor its digest is ever in it.
+message ApiTokenInfo {
+  // The name, which the audit's `by` is.
+  string name = 1;
+  // Where the token comes from.
+  ApiTokenSource source = 2;
+  // Who made the token; empty for a token of the tokens file, which no one made here.
+  string created_by = 3;
+  // When it was made, in unix seconds; 0 for a token of the tokens file.
+  uint64 created_unix = 4;
+}
+
+message ListApiTokensRequest {}
+
+message ListApiTokensResponse {
+  // The tokens of the tokens file, then those of the store, each by name.
+  repeated ApiTokenInfo tokens = 1;
+}
+
+message CreateApiTokenRequest {
+  // The new token's name.
+  string name = 1;
+}
+
+message CreateApiTokenResponse {
+  ApiTokenInfo token = 1;
+  // The token itself, `hkt_` and 43 base64url characters. Shown here once; the coordinator keeps
+  // its SHA-256 only.
+  string secret = 2;
+}
+
+message RevokeApiTokenRequest {
+  // The token's name.
+  string name = 1;
+}
+
+message RevokeApiTokenResponse {}
