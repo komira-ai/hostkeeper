@@ -187,8 +187,8 @@ impl Coordinator {
         if let (Some(cert), Some(_)) = (&cert, &key) {
             return Ok((cert.clone(), false));
         }
-        if cert.is_some() && key.is_none() {
-            // A held certificate is the one the operator may have given ABM: never replace it.
+        if cert.is_some() {
+            // Only the key is missing here: the held certificate may be the one given to ABM, so never replace it.
             return Err(MdmRefusal::AbmKeyMissing);
         }
         let (key, key_made) = match key {

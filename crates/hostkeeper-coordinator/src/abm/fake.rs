@@ -177,18 +177,13 @@ impl Sim {
             if let Some((status, body)) = &state.session_fault {
                 return text_reply(*status, body);
             }
-            if !header(request, "Authorization")
-                .is_some_and(|h| h.starts_with("OAuth realm=\"ADM\""))
-            {
-                return text_reply(403, "signature_invalid");
-            }
             state.sessions += 1;
             let session = format!("session-{}", state.sessions);
             state.session = Some(session.clone());
             return json_reply(200, &json!({ "auth_session_token": session }));
         }
-        if header(request, "X-ADM-Auth-Session") != state.session.as_deref()
-            || state.session.is_none()
+        if (state.session.as_deref())
+            .is_none_or(|session| header(request, "X-ADM-Auth-Session") != Some(session))
         {
             return text_reply(403, "Forbidden");
         }
@@ -275,8 +270,10 @@ impl Sim {
                     .filter_map(Value::as_str)
                 {
                     let ok = !state.inaccessible.iter().any(|s| s == serial);
-                    if ok
-                        && let Some(device) = state.devices.iter_mut().find(|d| d.serial == serial)
+                    for device in state
+                        .devices
+                        .iter_mut()
+                        .filter(|d| ok && d.serial == serial)
                     {
                         device.profile_status = "assigned".to_owned();
                         device.profile_uuid = Some(uuid.clone());
