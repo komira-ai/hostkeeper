@@ -627,7 +627,7 @@ the writing session being up. A lost session or a store another coordinator led 
 `flock`, always hold it. Before each act the node asks `Lease::held`: a push to APNs (the enqueue of a command, the timeout return, the
 floor, a Mac's `NotNow`), a pass of the ABM sync, and, when CM17 lands, a renewal. A node that does not hold the lease does none of
 them and asks again at its next tick, so a node whose session is revived goes on by itself, and a node that took the lease over starts its
-push floor at its first sweep, one floor before its first push (at most one early push per Mac, as for a renewed push certificate). No
+push floor at its first sweep, one floor before its first push. A sweep without the lease drops what the node armed and what its push policy held for those Macs, so a node whose lease came back starts its floors anew from the store instead of pushing at a floor, or for a Mac, it knew before the gap. No
 second lock is made, so the lease that fences the store's writes is the lease that fences the timers. An act that began while the lease
 was held is not cut short; its writes are fenced by the database (`lease_fenced`) and what it sent to Apple is repeatable. The
 earlier plan, a refusal to start the MDM listener beside a lease holder that serves MDM, is not built: what keeps two coordinators off one

@@ -144,3 +144,49 @@ async fn only_the_holder_returns_a_timed_out_command_to_the_queue() {
     assert_eq!(state(), CommandState::Queued, "the holder returned it");
     assert_eq!(rig.apns.sent().len(), 1, "and pushed for it");
 }
+
+/// Proves: a node whose lease was lost and is held again starts the floor of a waiting Mac anew at
+/// its first sweep, and does not push at the floor it had before the gap.
+///
+/// Catches: a node pushing once at a floor that was set before it lost the lease, from what it
+/// knew of the Macs then.
+#[tokio::test]
+async fn a_node_that_regains_the_lease_starts_its_floor_anew() {
+    let rig = Rig::new("lease-queue-regain");
+    left_queued(&rig);
+    let seat = Seat::empty();
+    let node = rig.queue_under(seat.node("a"));
+    seat.give_to("a");
+    node.sweep().await.expect("swept");
+    seat.lose();
+    rig.time.advance(FLOOR - 10);
+    node.sweep().await.expect("swept");
+    seat.give_to("a");
+    node.sweep().await.expect("swept");
+    rig.time.advance(20);
+    node.sweep().await.expect("swept");
+    assert!(
+        rig.apns.sent().is_empty(),
+        "the floor of the first hold is gone"
+    );
+    rig.time.advance(FLOOR);
+    node.sweep().await.expect("swept");
+    assert_eq!(rig.apns.sent().len(), 1, "the new floor pushes");
+}
+
+/// Proves: a node that holds no push identity and no lease sweeps without error, and once it holds
+/// the lease it sweeps as before and pushes nothing.
+///
+/// Catches: the sweep of a node with nothing to push with failing while the lease is out.
+#[tokio::test]
+async fn a_node_without_a_push_identity_sweeps_through_a_gap_in_the_lease() {
+    let rig = Rig::new("lease-queue-no-identity");
+    left_queued(&rig);
+    let seat = Seat::empty();
+    let node = rig.queue_without_push_identity(seat.node("a"));
+    node.sweep().await.expect("swept without the lease");
+    seat.give_to("a");
+    rig.time.advance(FLOOR);
+    node.sweep().await.expect("swept with the lease");
+    assert!(rig.apns.sent().is_empty(), "there is nothing to push with");
+}

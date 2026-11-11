@@ -258,6 +258,18 @@ impl Rig {
         )
     }
 
+    /// A queue of a node that holds no push identity, over the same tables and setup.
+    pub(crate) fn queue_without_push_identity(&self, lease: Lease) -> MdmQueue {
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(|| None),
+            lease,
+            Arc::clone(&self.setup),
+            86_400,
+        )
+    }
+
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
     pub(crate) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
         let rig = Self::build(name, None, random, None, None);

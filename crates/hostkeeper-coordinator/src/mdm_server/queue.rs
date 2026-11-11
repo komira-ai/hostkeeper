@@ -246,6 +246,15 @@ impl MdmQueue {
     /// [`MdmError::Store`]: the timed-out commands could not be returned.
     pub(crate) async fn sweep(&self) -> Result<(), MdmError> {
         if !self.lease.held() {
+            // A gap in the lease is a gap in what this node saw (connections, ended enrollments):
+            // what it armed is dropped, and the store names what waits when the lease is back.
+            let dropped =
+                std::mem::take(&mut *self.armed.lock().unwrap_or_else(PoisonError::into_inner));
+            if let Some(pusher) = (self.pushers)() {
+                for enrollment_id in &dropped {
+                    pusher.forget(enrollment_id);
+                }
+            }
             return Ok(());
         }
         let before = self
