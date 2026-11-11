@@ -185,6 +185,32 @@ fn a_linux_hosts_enrollment_request_carries_the_mac_its_bmc_answers_with() {
     assert_eq!(bmc.asked(), [(1, 5)]);
 }
 
+/// Catches an OpenRC host (Alpine) claimed as a Mac or with nothing: its claims are a Linux
+/// host's, the machine id, the addresses and the MAC its BMC answers with.
+#[test]
+fn an_openrc_host_claims_as_a_linux_host() {
+    let scratch = Scratch::new("bmc-claim-openrc");
+    let bmc = Arc::new(FakeBmc::default());
+    let claims = host_claims(
+        PlatformKind::Openrc,
+        linux_files(scratch.path()),
+        Box::new(OneMac),
+        Arc::clone(&bmc) as Arc<dyn Ipmi>,
+    )
+    .claims()
+    .expect("the claims");
+    assert_eq!(
+        claims,
+        Claims {
+            machine_id: Some(MACHINE_ID.to_owned()),
+            network_addresses: vec![DATA_MAC.to_owned()],
+            bmc_mac: Some(BMC_MAC_TEXT.to_owned()),
+            ..Claims::default()
+        }
+    );
+    assert_eq!(bmc.asked(), [(1, 5)]);
+}
+
 /// Catches a host with no IPMI device whose enrollment fails or stops instead of posting its
 /// request without a BMC MAC, and its other claims lost with the BMC's.
 #[test]

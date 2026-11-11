@@ -25,15 +25,14 @@ description = "The update coordinator: tells each host's updater which version t
 # keeps the enrollment store and the CA key file, answers Enroll, Poll and Renew, and makes its
 # own server certificate. With `--mdm-api-url` it also runs the MDM policy gate's device side
 # (hostkeeper-mdm-gate), whose records say whether a Mac is enrolled and supervised.
-# The services it manages are data: the rollout file named by `--rollout-file`. An operator is
-# one of the named tokens of `--tokens-file`.
+# It places hosts by host group and reads no rollout file. An operator is one of the named
+# tokens of `--tokens-file`.
 [[bin]]
 name = "hostkeeper-coordinator"
 path = "src/main.rs"
 
 [dependencies]
-# The release index (`index.json`) a desired state may carry: parsed once when it is set, to learn
-# the package digest of each platform.
+# The platform and the service name grammars it shares with the daemon.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
@@ -44,6 +43,9 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 # The messages and refusals of the operator's calls, the orders a typed heartbeat answer
 # carries, and the messages of `Enroll`, `Poll` and `Renew`.
 hostkeeper-proto = { path = "../hostkeeper-proto" }
+# The rules of a release a set with targets is judged by (docs/design/packages.md, section 3.4),
+# the same code the daemon judges an order's entry by.
+hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The PEM of the CA bundle and of the server certificate file.
@@ -54,18 +56,19 @@ futures.workspace = true
 # The poll nonces.
 getrandom.workspace = true
 http-body-util.workspace = true
-# The server of the listeners; the client of the release channel's fetch (`src/channel_https.rs`).
+# The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 # `O_NOFOLLOW`, for reading the files of a snapshot without following a link (`src/backup.rs`).
 libc.workspace = true
+# The Postgres store of `--database-dsn-file` (`src/store/postgres`), on the store's own threads.
+postgres.workspace = true
 prost.workspace = true
 # The descriptors the JSON gateway of the operator API reads and writes messages by.
 prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
-# The TLS client of the release channel's fetch (`--release-channel`), and the host's roots it
-# trusts.
+# The TLS of the listeners.
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
@@ -86,9 +89,6 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
-# `hostkeeper ctl` run against an in-process coordinator, through gRPC and the gateway
-# (`src/grpc/tests/ctl.rs`).
-hostkeeper-ctl = { path = "../hostkeeper-ctl" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
@@ -97,6 +97,12 @@ hyper = { workspace = true, features = ["client"] }
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
+# The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
+# that release's daemon does (tests/move_v0_1_221.rs).
+protox.workspace = true
+# The compose file of the deployment (docs/deploy/coordinator/compose.yaml), whose coordinator
+# command the deployment test (tests/deploy.rs) starts, read with the workflow lint's YAML reader.
+saphyr-parser.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "test-util", "time"] }
 

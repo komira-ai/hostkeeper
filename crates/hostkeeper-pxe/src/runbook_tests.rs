@@ -1,170 +1,263 @@
-//! `docs/operations/network-install.md`, the operator runbook, against this command line: every
-//! line in a fenced block that begins `hostkeeper-pxe` parses with the program's own parser
-//! ([`Cli`]), and the runbook has a line of each run it describes: a fetch, `serve` in proxy
-//! mode, `serve` in router mode, and a `serve` with `--reinstall`. A line continued with a
-//! trailing `\` is one line; the words are split at white space, and a line with a quote is
-//! refused, since none of the runbook's lines needs one. A renamed or misspelled flag, a value a
-//! flag does not take, or a required flag the runbook leaves out fails here.
+//! `docs/operations/network-install.md`, the operator runbook, against the settings code: every
+//! example settings file in it is a fenced block with the info string `toml` whose first line is
+//! exactly `# /etc/pxe/pxe.toml`, and each is read by the code `serve --settings` and `prepare`
+//! read the real file with ([`settings::parse`], then the parser of `serve` with a `--dir`, and
+//! that of `[prepare]`). Every block must read, and among the blocks there must be one in proxy
+//! mode, one in router mode, one with `reinstall`, and one with a `[prepare]` table that names
+//! `platform`. The runbook shows no `pxe serve` or `pxe prepare` command line to type: the unit
+//! and the daemon run them. A renamed or misspelled key, a value a flag does not take, or a
+//! required flag the runbook leaves out fails here.
 
 use std::collections::BTreeSet;
 use std::path::Path;
 
 use clap::Parser;
 
-use super::{Cli, ModeFlag, Verb};
+use crate::cli::{ModeFlag, serve_flags};
+use crate::hook::prepare::PrepareFlags;
+use crate::settings;
 
 /// The runbook, from this crate's directory.
 const RUNBOOK: &str = "../../docs/operations/network-install.md";
 
-/// The runs the runbook must show.
-const RUNS: [&str; 4] = ["fetch", "serve proxy", "serve router", "serve --reinstall"];
+/// The first line of an example settings file.
+const MARK: &str = "# /etc/pxe/pxe.toml";
 
-/// The fenced lines that begin `hostkeeper-pxe`, each line ending in `\` joined to the next. A
-/// line still continued where its block ends is kept with its `\`, which [`problems`] refuses.
-fn command_lines(doc: &str) -> Vec<String> {
-    let mut lines = Vec::new();
-    let mut fenced = false;
-    let mut pending = String::new();
+/// The kinds of settings file the runbook must show.
+const KINDS: [&str; 4] = ["proxy", "router", "reinstall", "prepare platform"];
+
+/// The example settings files of `doc`, in order. A fence may be indented (a block inside a list
+/// item); the block's lines lose the opening fence's indentation, and a line indented less (a
+/// blank line) loses all of its own. A block still open at the end is returned with a final line
+/// `<unterminated>`, which no settings file parses as.
+fn examples(doc: &str) -> Vec<String> {
+    let mut blocks = Vec::new();
+    let mut open: Option<(usize, Vec<&str>)> = None;
     for line in doc.lines() {
-        let line = line.trim();
-        if line.starts_with("```") {
-            if !pending.is_empty() {
-                lines.push(format!("{}\\", std::mem::take(&mut pending)));
+        let text = line.trim_end();
+        let fence = text.trim_start();
+        let indent = text.len() - fence.len();
+        open = match (open.take(), fence) {
+            (None, "```toml") => Some((indent, Vec::new())),
+            (Some((_, lines)), "```") => {
+                if lines.first() == Some(&MARK) {
+                    blocks.push(lines.join("\n"));
+                }
+                None
             }
-            fenced = !fenced;
-            continue;
-        }
-        if !fenced {
-            continue;
-        }
-        match line.strip_suffix('\\') {
-            Some(head) => {
-                pending.push_str(head.trim_end());
-                pending.push(' ');
+            (Some((at, mut lines)), _) => {
+                lines.push(text.get(at..).unwrap_or(fence));
+                Some((at, lines))
             }
-            None => {
-                pending.push_str(line);
-                lines.push(std::mem::take(&mut pending));
-            }
-        }
+            (None, _) => None,
+        };
     }
-    lines
-        .into_iter()
-        .filter(|l| l.split_whitespace().next() == Some("hostkeeper-pxe"))
-        .collect()
+    if let Some(mut lines) = open
+        .map(|(_, lines)| lines)
+        .filter(|lines| lines.first() == Some(&MARK))
+    {
+        lines.push("<unterminated>");
+        blocks.push(lines.join("\n"));
+    }
+    blocks
 }
 
-/// The run `line` is, as [`RUNS`] names it, or why it does not parse.
-fn run_of(line: &str) -> Result<&'static str, String> {
-    if line.ends_with('\\') || line.contains(['"', '\'']) {
-        return Err(format!("{line}\na line cut at its \\ or quoted"));
+/// The kinds `block` is, or why it does not read.
+fn kinds_of(block: &str) -> Result<BTreeSet<&'static str>, String> {
+    let file = settings::parse(block)?;
+    let serve = serve_flags(
+        Path::new("/etc/pxe/pxe.toml"),
+        &file.serve,
+        Path::new("/var/lib/pxe/current"),
+    )?;
+    let prepare = PrepareFlags::try_parse_from(&file.prepare)
+        .map_err(|e| format!("[prepare]: {}", crate::cli::one_line(&e)))?;
+    let mut kinds = BTreeSet::new();
+    kinds.insert(match serve.mode {
+        ModeFlag::Proxy => "proxy",
+        ModeFlag::Router => "router",
+    });
+    if !serve.reinstall.is_empty() {
+        kinds.insert("reinstall");
     }
-    let cli = Cli::try_parse_from(line.split_whitespace())
-        .map_err(|e| format!("{line}\n{}", e.render()))?;
-    Ok(match cli.verb {
-        Verb::Fetch(_) => "fetch",
-        Verb::Serve(flags) if !flags.reinstall.is_empty() => "serve --reinstall",
-        Verb::Serve(flags) if flags.mode == ModeFlag::Proxy => "serve proxy",
-        Verb::Serve(_) => "serve router",
-    })
+    if !prepare.platforms.is_empty() {
+        kinds.insert("prepare platform");
+    }
+    Ok(kinds)
 }
 
-/// Every line of `doc` that does not parse, and every run of [`RUNS`] no line shows.
+/// Every block of `doc` that does not read, and every kind of [`KINDS`] no block shows.
 fn problems(doc: &str) -> Vec<String> {
     let mut problems = Vec::new();
     let mut shown = BTreeSet::new();
-    for line in command_lines(doc) {
-        match run_of(&line) {
-            Ok(run) => {
-                shown.insert(run);
-            }
-            Err(why) => problems.push(why),
+    for block in examples(doc) {
+        match kinds_of(&block) {
+            Ok(kinds) => shown.extend(kinds),
+            Err(why) => problems.push(format!("{block}\n{why}")),
         }
     }
-    for run in RUNS {
-        if !shown.contains(run) {
-            problems.push(format!("no command line shows `hostkeeper-pxe {run}`"));
+    for kind in KINDS {
+        if !shown.contains(kind) {
+            problems.push(format!("no example settings file shows {kind}"));
         }
     }
     problems
 }
 
-/// A fenced block holding `line`.
-fn fenced(line: &str) -> String {
-    format!("text\n\n```\n{line}\n```\n")
+/// A settings file of `mode` with `extra` lines in `[serve]` and `prepare` as its `[prepare]`
+/// table.
+fn settings_file(mode: &str, extra: &str, prepare: &str) -> String {
+    format!(
+        "{MARK}\n[serve]\nmode = \"{mode}\"\naddress = \"192.0.2.10\"\n\
+         coordinator = \"https://192.0.2.1:8444\"\nca-file = \"/etc/pxe/ca.pem\"\n\
+         token-file = \"/etc/pxe/token\"\ndaemon-config = \"/etc/hostkeeper/hostkeeper.toml\"\n\
+         ssh-authorized-keys = \"/etc/pxe/authorized_keys\"\nuser-id = 65534\ngroup-id = 65534\n\
+         {extra}{prepare}"
+    )
 }
 
-/// The serve flags every run needs, after the mode.
-const SERVE: &str = "--address 192.0.2.10 --dir d --daemon-config c --ssh-authorized-keys k \
-     --coordinator https://c.example --ca-file a --token-file t --user-id 1 --group-id 1";
+/// A document holding `blocks` as fenced `toml` blocks.
+fn document(blocks: &[String]) -> String {
+    blocks
+        .iter()
+        .map(|block| format!("Text.\n\n```toml\n{block}\n```\n"))
+        .collect()
+}
 
-/// A line of each run.
-fn run_lines() -> [String; 4] {
-    [
-        "hostkeeper-pxe fetch --release https://r.example/v1 --dir d --daemon-config c".to_owned(),
-        format!("hostkeeper-pxe serve --mode proxy {SERVE}"),
-        format!("hostkeeper-pxe serve --mode router {SERVE}"),
-        format!("hostkeeper-pxe serve --mode proxy {SERVE} --reinstall web-17"),
+/// A document with a block of each kind.
+fn every_kind() -> Vec<String> {
+    vec![
+        settings_file("proxy", "", ""),
+        settings_file(
+            "router",
+            "reinstall = [\"web-17\"]\n",
+            "\n[prepare]\nplatform = [\"linux-arm64\"]\n",
+        ),
     ]
 }
 
-/// A runbook with a line of each run, in a block each.
-fn every_run() -> String {
-    run_lines().iter().map(|line| fenced(line)).collect()
-}
-
-/// Catches a runbook command line that `hostkeeper-pxe` would refuse as a usage error, and a run
-/// the runbook describes with no command line.
+/// The runbook's example settings files all read, and it shows each kind of file.
+///
+/// Catches a runbook that shows a key `pxe` would refuse, or leaves out an example it promises.
 #[test]
-fn the_runbook_command_lines_parse() {
+fn the_runbook_settings_files_read() {
     let path = Path::new(env!("CARGO_MANIFEST_DIR")).join(RUNBOOK);
     let doc = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("read {RUNBOOK}: {e}"));
     let problems = problems(&doc);
     assert!(problems.is_empty(), "{RUNBOOK}:\n{}", problems.join("\n"));
 }
 
-/// Catches the check passing a misspelled flag, a missing required flag, a value a flag does not
-/// take, a quoted line, and a line cut at its `\`.
+/// Blocks with the mark are read and the rest are not: a block of another info string, one that
+/// does not begin with the mark, and prose that mentions the mark.
+///
+/// Catches an extraction that reads a command or another file's example as a settings file.
 #[test]
-fn a_line_the_parser_refuses_is_a_problem() {
-    assert_eq!(problems(&every_run()), Vec::<String>::new());
-    for line in [
-        format!("hostkeeper-pxe serve --mode proxy {SERVE} --reinstal web-17"),
-        format!("hostkeeper-pxe serve --mode both {SERVE}"),
-        "hostkeeper-pxe serve --mode proxy --address 192.0.2.10".to_owned(),
-        "hostkeeper-pxe fetch --release http://r.example --dir d --daemon-config c".to_owned(),
-        "hostkeeper-pxe fetch --release https://r.example --dir \"d\" --daemon-config c".to_owned(),
-        "hostkeeper-pxe fetch --release https://r.example \\".to_owned(),
-    ] {
-        let problems = problems(&(every_run() + &fenced(&line)));
-        assert_eq!(problems.len(), 1, "{line}: {problems:?}");
-        assert!(
-            problems[0].starts_with(&format!("{line}\n")),
-            "{problems:?}"
-        );
-    }
+fn only_marked_toml_blocks_are_examples() {
+    let marked = settings_file("proxy", "", "");
+    let doc = format!(
+        "{MARK}\n```\n{MARK}\nnot toml\n```\n```toml\nmode = 3\n```\n```toml\n{MARK}\nmode = \"x\"\n```\n{}",
+        document(std::slice::from_ref(&marked))
+    );
+    assert_eq!(
+        examples(&doc),
+        [format!("{MARK}\nmode = \"x\""), marked.clone()]
+    );
+    assert_eq!(examples(&format!("```toml\n{marked}\n")).len(), 1);
+    assert_eq!(kinds_of(&marked), Ok(BTreeSet::from(["proxy"])));
 }
 
-/// Catches a runbook that leaves out a run, and lines read from outside a fenced block or from a
-/// line that does not begin with the program.
+/// A block inside a list item, its fences and lines indented, is read with the indentation taken
+/// off, a blank line in it kept blank.
+///
+/// Catches an extraction that skips the runbook's examples set inside a numbered step.
 #[test]
-fn every_run_has_a_command_line() {
-    let without_router: String = run_lines()
-        .iter()
-        .filter(|line| !line.contains("--mode router"))
-        .map(|line| fenced(line))
-        .collect();
-    let outside = format!(
-        "Run `hostkeeper-pxe serve` and\nhostkeeper-pxe serve --bad\n{}",
-        fenced("sudo hostkeeper-pxe serve --bad")
+fn an_indented_block_is_read_without_its_indentation() {
+    let doc = format!(
+        "1. Write the file:\n\n   ```toml\n   {MARK}\n   [serve]\n\n   mode = \"router\"\n   ```\n"
     );
     assert_eq!(
-        problems(&(without_router + &outside)),
-        ["no command line shows `hostkeeper-pxe serve router`"]
+        examples(&doc),
+        [format!("{MARK}\n[serve]\n\nmode = \"router\"")]
     );
-    let continued = format!("hostkeeper-pxe serve --mode router \\\n    {SERVE}");
+}
+
+/// A document with a block of each kind has no problem.
+///
+/// Catches a check that fails a good runbook.
+#[test]
+fn a_document_with_each_kind_has_no_problem() {
+    assert_eq!(problems(&document(&every_kind())), Vec::<String>::new());
+}
+
+/// A block the parsers refuse is a problem that names the block and the reason: a key `serve`
+/// does not take, a mode it does not know, a file that is not TOML, a flag it needs left out, a
+/// value of a type no flag takes, a `[prepare]` key that is not a flag, a block never closed.
+///
+/// Catches the check passing a misspelled key or a value a flag does not take.
+#[test]
+fn a_block_the_parsers_refuse_is_a_problem() {
+    let cases = [
+        (
+            settings_file("proxy", "reinstal = [\"web-17\"]\n", ""),
+            "unexpected argument '--reinstal' found",
+        ),
+        (
+            settings_file("both", "", ""),
+            "invalid value 'both' for '--mode <MODE>' [possible values: proxy, router]",
+        ),
+        (format!("{MARK}\n[serve\n"), "unclosed table, expected `]`"),
+        (
+            format!("{MARK}\n[serve]\nmode = \"proxy\"\n"),
+            "the following required arguments were not provided: --address <ADDRESS> --coordinator <COORDINATOR> --ca-file <CA_FILE> --token-file <TOKEN_FILE> --daemon-config <DAEMON_CONFIG> --ssh-authorized-keys <SSH_AUTHORIZED_KEYS> --user-id <USER_ID> --group-id <GROUP_ID>",
+        ),
+        (
+            settings_file("proxy", "interface = true\n", ""),
+            "[serve] \"interface\": a value is a string or an integer, or an array of them",
+        ),
+        (
+            settings_file("proxy", "", "\n[prepare]\nplatforms = [\"linux-arm64\"]\n"),
+            "[prepare]: unexpected argument '--platforms' found",
+        ),
+    ];
+    for (block, why) in cases {
+        let found = problems(&(document(&every_kind()) + &document(std::slice::from_ref(&block))));
+        assert_eq!(found.len(), 1, "{found:?}");
+        let expected = format!("{block}\n");
+        assert!(found[0].starts_with(&expected), "{found:?}");
+        assert!(
+            found[0][expected.len()..].contains(why),
+            "{}: {why}",
+            found[0]
+        );
+    }
+    let cut = problems(&(document(&every_kind()) + &format!("```toml\n{MARK}\n[serve]\n")));
+    assert_eq!(cut.len(), 1, "{cut:?}");
+}
+
+/// A runbook that leaves out a kind of settings file has a problem that names it.
+///
+/// Catches a runbook that stops showing proxy mode, router mode, `reinstall` or a `[prepare]`
+/// platform.
+#[test]
+fn a_missing_kind_is_a_problem() {
+    let proxy = settings_file("proxy", "", "");
+    let router = settings_file("router", "", "");
+    let reinstall = settings_file("proxy", "reinstall = [\"web-17\"]\n", "");
+    let platform = settings_file("proxy", "", "\n[prepare]\nplatform = [\"linux-x86_64\"]\n");
+    let all = [proxy, router, reinstall, platform];
+    for (left_out, kind) in [(1, "router"), (2, "reinstall"), (3, "prepare platform")] {
+        let blocks: Vec<String> = all
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != left_out)
+            .map(|(_, b)| b.clone())
+            .collect();
+        let found = problems(&document(&blocks));
+        let want = format!("no example settings file shows {kind}");
+        assert_eq!(found, [want], "{kind}");
+    }
     assert_eq!(
-        command_lines(&fenced(&continued)),
-        [format!("hostkeeper-pxe serve --mode router {SERVE}")]
+        problems("no blocks"),
+        KINDS.map(|k| format!("no example settings file shows {k}"))
     );
 }

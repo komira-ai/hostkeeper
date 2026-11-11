@@ -143,11 +143,15 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
     fs::set_permissions(&rig.config, fs::Permissions::from_mode(0o600)).expect("its mode");
     let root = rig.scratch.path();
     let files = HostFiles {
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
+        repositories: None,
+        os_root: root.join("os"),
+        stores: root.join("stores.toml"),
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: None,
+        managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let notifier = FakeNotifier::new(Events::default());
     let started = start::startup_notifying(&rig.settings(), rig.ports(), OWN, &*notifier)
@@ -233,8 +237,7 @@ fn without_a_certificate_the_daemon_waits_and_names_the_missing_file() {
 
     step.send(Tick::Stop).expect("the loop takes the tick");
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     // Checked once the server is over, on purpose: a line said again would be queued, so it is
     // taken at once, and a wait with none fails at once rather than waiting.
     assert!(

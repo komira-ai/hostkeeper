@@ -1,6 +1,7 @@
 //! What `backup` and `restore` refuse, and what a refused or failed one leaves: a restore over
 //! targets that hold state or under a held lock, a snapshot changed after the backup or holding
-//! what its manifest does not name, a backup over one already there; each leaves the targets
+//! what its manifest does not name, a backup over one already there, the marker of a
+//! `host-groups migrate --apply` of release 0.1.253 that stopped partway; each leaves the targets
 //! (or the place of the snapshot) as they were.
 
 use std::ffi::OsStr;
@@ -11,7 +12,8 @@ use std::path::{Path, PathBuf};
 use serde_json::{Value, json};
 
 use crate::backup::{
-    BackupError, MANIFEST, StatePaths, backup, ops_path, parent_of, restore, restore_marker,
+    BackupError, MANIFEST, StatePaths, backup, migrate_marker, ops_path, parent_of, restore,
+    restore_marker,
 };
 use crate::backup_tests::{
     Unopenable, backup_flags, files_under, restore_flags, small_snapshot, small_state, targets_in,
@@ -473,6 +475,8 @@ fn a_backup_copies_the_store_files_alone_and_names_what_it_passed_over() {
     assert_eq!(
         absent,
         [
+            format!("{state}.releases"),
+            format!("{state}.repositories"),
             format!("{state}.verdicts"),
             ops.clone(),
             format!("{ops}.audit"),
@@ -521,7 +525,7 @@ fn the_marker_of_an_unfinished_halt_is_restored_and_said() {
     assert_eq!(
         report.to_string().lines().last(),
         Some(
-            "the snapshot holds the marker of a halt that was being written: serve refuses to start until the halts file is settled by hand and the marker removed, as it did before the backup"
+            "the snapshot holds the marker of changes that were not yet written: serve refuses to start until they are settled by hand and the marker removed, unless the ops file holds every change it lists, as it did before the backup"
         )
     );
 }
@@ -602,4 +606,50 @@ fn a_restore_that_did_not_finish_is_refused_by_restore_and_serve() {
             marker.display()
         )
     );
+}
+
+/// Proves: the marker of a `host-groups migrate --apply` of release 0.1.253 that stopped partway
+/// (`<state-file>.migrate-unfinished`, which this release never writes) refuses a backup of those
+/// files, with the text that names it and says to restore the backup taken before the migration,
+/// and makes no snapshot; `serve`'s start refuses it with the same text; and `restore` takes such
+/// a marker in its targets for state, and writes nothing there.
+///
+/// Catches: a backup or a start over state files that hold part of a migration, because the verb
+/// that wrote the marker is gone.
+#[test]
+fn the_marker_of_a_migration_the_release_before_stopped_refuses_backup_restore_and_serve() {
+    let dir = scratch("migrate-marker");
+    let paths = small_state(&dir);
+    let marker = migrate_marker(&paths.state_file);
+    fs::write(&marker, b"").expect("the marker");
+    let text = format!(
+        "{}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup \
+         taken before it",
+        marker.display()
+    );
+    let out = scratch("migrate-marker-out");
+    let snapshot = out.path().join("snapshot");
+    let refused = backup(&backup_flags(&paths, &snapshot), &FileLock).expect_err("refused");
+    assert!(
+        matches!(&refused, BackupError::MigrateUnfinished { path } if *path == marker),
+        "{refused:?}"
+    );
+    assert_eq!(refused.to_string(), text);
+    assert!(!snapshot.exists(), "no snapshot is made");
+    let start = crate::config::refuse_unfinished_migrate(&paths.state_file).expect_err("marker");
+    assert_eq!(start.to_string(), text);
+    assert!(marker.exists(), "the marker stays for the operator");
+
+    let (_from, made) = small_snapshot("migrate-marker-snapshot");
+    let target = scratch("migrate-marker-target");
+    let into = targets_in(&target);
+    let in_target = migrate_marker(&into.state_file);
+    fs::create_dir_all(in_target.parent().expect("a parent")).expect("a directory");
+    fs::write(&in_target, b"").expect("a marker in the target");
+    let refused = restore(&restore_flags(&made, &into), &FileLock).expect_err("state");
+    assert!(
+        matches!(&refused, BackupError::NotEmpty { path } if *path == in_target),
+        "{refused:?}"
+    );
+    assert!(!into.state_file.exists(), "nothing is restored");
 }

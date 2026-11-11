@@ -1,0 +1,47 @@
+# mdm-proxy.service: Caddy as the TLS front of the MDM. A unit of the mdm
+# package.
+#
+# Binds the LAN address only (the Caddyfile's default_bind), port 443 through
+# CAP_NET_BIND_SERVICE and no other capability, and its sockets talk only to
+# loopback and the rack LAN: the drop-in mdm-proxy.service.d/settings.conf,
+# which the package's hook writes from the settings, adds the LAN to
+# IPAddressAllow. It routes /mdm, /checkin, /scep, /enroll, /version and
+# /pkg/<sha256>.pkg; everything else, NanoHUB's API included, is 404.
+# It starts only once lego's certificate is there; mdm-cert.service restarts it
+# after each run.
+[Unit]
+Description=mdm HTTPS proxy (LAN address only)
+After=network-online.target mdm-nanohub.service mdm-scep.service
+Wants=network-online.target
+ConditionPathExistsGlob=/var/lib/mdm/lego/certificates/*.crt
+
+[Service]
+Type=simple
+User=mdm
+Group=mdm
+Slice=mdm.slice
+Environment=XDG_DATA_HOME=/var/lib/mdm/caddy XDG_CONFIG_HOME=/var/lib/mdm/caddy
+ExecStart=/var/lib/hostkeeper/packages/mdm/current/bin/caddy run --config /etc/mdm/Caddyfile --adapter caddyfile
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=yes
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mdm/caddy
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=any
+IPAddressAllow=localhost
+
+[Install]
+WantedBy=multi-user.target

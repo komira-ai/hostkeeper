@@ -46,6 +46,18 @@ use crate::verify::VALID_FOR_DAYS;
 use crate::{Env, MdmError, secret};
 
 const OPENSSL: &str = "/usr/bin/openssl";
+/// The flags of `lego renew` the `mdm` package's renewal unit passes.
+pub const LEGO_RENEW_FLAGS: [&str; 9] = [
+    "--email",
+    "--server",
+    "--path",
+    "--key-type",
+    "--dns",
+    "--domains",
+    "--dns.resolvers",
+    "--dns.propagation.wait",
+    "--days",
+];
 /// The flags of `lego run` the certificate unit passes.
 pub const LEGO_FLAGS: [&str; 9] = [
     "--accept-tos",
@@ -78,25 +90,7 @@ pub fn run(
         secret::read(host, &dns_env, var)?;
     }
     writeln!(out, "dns.env: holds {} (values not shown)", vars.join(" "))?;
-    let lego = format!("{}/lego", c.bin());
-    if host.stat(&lego)?.map(|m| m.kind) != Some(Kind::File) {
-        return Err(MdmError::NoLego(lego));
-    }
-    let help = host.run(&Cmd::new(&lego).arg("run").arg("--help"))?;
-    if help.code != 0 {
-        return Err(MdmError::LegoHelp {
-            lego,
-            code: help.code,
-        });
-    }
-    let help = help.stdout + &help.stderr;
-    // Whole words: `--dns` is not there because `--dns.resolvers` is.
-    let words: BTreeSet<&str> = help
-        .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '=')
-        .collect();
-    if let Some(flag) = LEGO_FLAGS.into_iter().find(|f| !words.contains(f)) {
-        return Err(MdmError::LegoFlag { lego, flag });
-    }
+    check_lego(host, &format!("{}/lego", c.bin()), "run", &LEGO_FLAGS)?;
 
     let crt = format!("{}/lego/certificates/{}.crt", c.state(), c.dns_name());
     let key = format!("{}.key", crt.strip_suffix(".crt").unwrap_or(crt.as_str()));
@@ -147,6 +141,36 @@ pub fn run(
     }
     for line in shown.stdout.lines() {
         writeln!(out, "certificate: {line}")?;
+    }
+    Ok(())
+}
+
+/// `lego` is a file, `lego <command> --help` exits 0 and lists every one of `flags`, the flags
+/// a certificate unit passes to that command.
+pub(crate) fn check_lego(
+    host: &dyn Host,
+    lego: &str,
+    command: &str,
+    flags: &[&'static str],
+) -> Result<(), MdmError> {
+    let lego = lego.to_owned();
+    if host.stat(&lego)?.map(|m| m.kind) != Some(Kind::File) {
+        return Err(MdmError::NoLego(lego));
+    }
+    let help = host.run(&Cmd::new(&lego).arg(command).arg("--help"))?;
+    if help.code != 0 {
+        return Err(MdmError::LegoHelp {
+            lego,
+            code: help.code,
+        });
+    }
+    let help = help.stdout + &help.stderr;
+    // Whole words: `--dns` is not there because `--dns.resolvers` is.
+    let words: BTreeSet<&str> = help
+        .split(|ch: char| ch.is_whitespace() || ch == ',' || ch == '=')
+        .collect();
+    if let Some(&flag) = flags.iter().find(|f| !words.contains(*f)) {
+        return Err(MdmError::LegoFlag { lego, flag });
     }
     Ok(())
 }

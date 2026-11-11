@@ -3,6 +3,7 @@
 //! step record, and reports each service as the daemon's observer saw it.
 
 mod support;
+mod support_apt;
 
 use std::fs;
 use std::sync::Arc;
@@ -18,18 +19,47 @@ use hostkeeper_observe::{
     HealthView, ServiceState, UnhealthyReason, UnobservedReason, VersionView,
 };
 use hostkeeper_steps::record::RECORD_FILE;
-use support::{Rig, d, name, update};
+use support::{Rig, name};
+use support_apt::AptRig;
+use support_apt::seen::succeeded;
+use support_apt::services;
 
 fn version(text: &str) -> Version {
     Version::new(text).expect("a version")
 }
 
+/// `service` listed at `at`, updating to `updating`, with no step record's try.
 fn listed(service: &str, at: &str, updating: Option<&str>) -> RecordedService {
+    tried(service, at, updating, None)
+}
+
+/// `service` listed at `at`, updating to `updating`, its step record at the try `record_try`.
+fn tried(
+    service: &str,
+    at: &str,
+    updating: Option<&str>,
+    record_try: Option<u64>,
+) -> RecordedService {
     RecordedService {
         name: name(service),
         version: version(at),
         updating: updating.map(version),
         last_result: None,
+        record_try,
+        installer: None,
+    }
+}
+
+/// `listed` for a service installed with `apt`: its heartbeat names that installer.
+fn apt_listed(
+    service: &str,
+    at: &str,
+    updating: Option<&str>,
+    record_try: Option<u64>,
+) -> RecordedService {
+    RecordedService {
+        installer: Some("apt".to_owned()),
+        ..tried(service, at, updating, record_try)
     }
 }
 
@@ -52,35 +82,83 @@ fn the_installed_services_are_those_whose_current_names_a_version() {
     );
 }
 
+/// Catches a heartbeat that names the wrong installer of a service (`ServiceBeat.installer`,
+/// packages.md section 5.1): a service `placed.json` records with an installer is listed with
+/// it, a `hostkeeper-archive` service, which has no entry, with none, and every service with
+/// none while `placed.json` cannot be read.
+#[test]
+fn each_service_is_listed_with_the_installer_placed_json_records() {
+    let rig = Rig::new("records-installer");
+    rig.running("web", "1.0.0");
+    rig.running("api", "3.1.0");
+    let mut record = rig.placed_record();
+    record.installed.insert(
+        "web".to_owned(),
+        hostkeeper_placed::InstalledEntry::new("apt"),
+    );
+    rig.save_placed(&record);
+    let records = DaemonRecords::new(Arc::new(rig.daemon()));
+    let mut web = listed("web", "1.0.0", None);
+    web.installer = Some("apt".to_owned());
+    assert_eq!(
+        records.installed().expect("read"),
+        [listed("api", "3.1.0", None), web]
+    );
+    let placed = rig.scratch.path().join("placed/placed.json");
+    fs::write(&placed, "not JSON").expect("placed.json");
+    assert_eq!(
+        records.installed().expect("read"),
+        [listed("api", "3.1.0", None), listed("web", "1.0.0", None)]
+    );
+}
+
 /// Catches a heartbeat that does not say an update runs, or that keeps saying it after it ended:
 /// while an update of `web` to 2.0.0 is held in `verify`, the step record is unfinished and `web`
 /// is listed updating to 2.0.0 (at the version `current` names by then); once it ended it is
-/// listed at 2.0.0 updating nothing.
+/// listed at 2.0.0 updating nothing. Both times the listing carries the record's try, 1.
 #[test]
 fn an_unfinished_step_record_is_listed_as_updating_to_its_target() {
-    let rig = Rig::new("records-updating");
-    rig.add("web", "2.0.0");
-    let daemon = Arc::new(rig.daemon());
+    let apt = AptRig::new("records-updating");
+    let order = services::update_of(&apt, "web", "2.0.0", 1);
+    let daemon = Arc::new(apt.daemon());
     let records = DaemonRecords::new(Arc::clone(&daemon));
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "0.0.0", None)]
+        [apt_listed("web", "0.0.0", None, None)]
     );
-    let gate = rig.launcher.hold("web", Step::Verify);
+    let gate = apt.rig.launcher.hold("web", Step::Verify);
     let running = Arc::clone(&daemon);
-    let order = spawn("the order", move || {
-        running.order(&update("web", "2.0.0", &d(), 1))
-    });
+    let order = spawn("the order", move || running.order(&order));
     gate.entered(&order).expect("the held step is entered");
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "2.0.0", Some("2.0.0"))]
+        [apt_listed("web", "2.0.0", Some("2.0.0"), Some(1))]
     );
     gate.release();
     order.join().expect("the order's thread");
     assert_eq!(
         records.installed().expect("read"),
-        [listed("web", "2.0.0", None)]
+        [apt_listed("web", "2.0.0", None, Some(1))]
+    );
+}
+
+/// Catches a heartbeat that leaves out the try a finished step record holds, which a coordinator
+/// that never heard the order's verdict needs to number past (the install of a self-update, which
+/// the daemon ran across its own restart): after an install of `web` at try 1 and a restart of
+/// the daemon, `web` is listed at 1.0.0, updating nothing, with the record's try 1.
+#[test]
+fn the_try_of_a_finished_step_record_is_listed_after_a_restart() {
+    let apt = AptRig::new("records-try");
+    let first = apt.daemon();
+    assert_eq!(
+        first.order(&services::install_of(&apt, "web", "1.0.0", 1)),
+        succeeded()
+    );
+    drop(first);
+    let records = DaemonRecords::new(Arc::new(apt.daemon()));
+    assert_eq!(
+        records.installed().expect("read"),
+        [apt_listed("web", "1.0.0", None, Some(1))]
     );
 }
 
@@ -127,6 +205,7 @@ fn a_service_is_observed_through_the_daemons_observer() {
         version: None,
         health: Health::Unhealthy,
         health_detail: Some(NOT_OBSERVED.to_owned()),
+        drift: None,
     };
     assert_eq!(observer.observe(&name("db")), unobserved);
     assert_eq!(observer.observe(&name("api")), unobserved);
@@ -137,6 +216,7 @@ fn a_service_is_observed_through_the_daemons_observer() {
             version: None,
             health: Health::Unhealthy,
             health_detail: Some("unmonitored".to_owned()),
+            drift: None,
         }
     );
 }
@@ -166,10 +246,11 @@ fn reported(
         version: version.map(self::version),
         health,
         health_detail: detail.map(str::to_owned),
+        drift: None,
     }
 }
 
-/// Catches an observation reported in other words than the admin `Status`'s: every state of the
+/// Catches an observation reported in other words than `Daemon::status`'s: every state of the
 /// observer is its liveness (live is running); the version is reported only when the running
 /// executable confirmed it; the health is the heartbeat's (a mismatch or a failed probe is
 /// unhealthy, an absent service absent, a health nobody probed unhealthy); the detail is the

@@ -37,7 +37,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"1.0\",\"health\":\"healthy\"}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"version\":\"2.0\"}"
   },
   {
    "at_secs": 2000,
@@ -55,7 +56,8 @@
    "role": "daemon",
    "body": "{\"platform\":\"linux-x86_64\",\"version\":\"2.0\",\"health\":\"healthy\",\"services\":[{\"name\":\"other\",\"version\":\"1.0\",\"health\":\"healthy\"}]}",
    "expect_status": 200,
-   "expect_body": "{\"reply\":\"update\",\"service\":\"other\",\"version\":\"3.0\"}"
+   "expect_body": "{\"reply\":\"nothing\"}",
+   "kbf_body": "{\"reply\":\"update\",\"service\":\"other\",\"version\":\"3.0\"}"
   }
  ]
 }

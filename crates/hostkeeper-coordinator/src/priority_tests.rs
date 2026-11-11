@@ -75,13 +75,14 @@ fn offered(rig: &Rig, announced: &[&str]) -> Vec<String> {
                         step_secs: Default::default(),
                         promotion_pending: false,
                         deferred: None,
+                        record_try: None,
                     }
                 })
                 .collect(),
         );
         match rig
             .coordinator
-            .heartbeat(who.clone(), heartbeat)
+            .heartbeat_native(who.clone(), heartbeat)
             .expect("a heartbeat")
             .reply
         {

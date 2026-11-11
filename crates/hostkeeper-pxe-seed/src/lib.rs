@@ -10,7 +10,7 @@
 //! - [`inputs`] and [`keys`]: the values both are made from, each checked once when it is made
 //!   (the daemon config by the daemon's own parser, the SSH keys file with any private key
 //!   refused), so neither generator can fail.
-//! - [`layout`]: the TFTP and HTTP paths the menus and seeds name, which `hostkeeper-pxe serve`
+//! - [`layout`]: the TFTP and HTTP paths the menus and seeds name, which `pxe serve`
 //!   serves.
 //!
 //! The crate is pure: it reads no file, socket, clock or environment. Every output is a

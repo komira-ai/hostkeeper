@@ -1,0 +1,27 @@
+schema = 1
+name = "mdm"
+version = "1.2.3"
+platform = "linux-x86_64"
+min_hostkeeper = "0.1.53"
+
+[hook]
+command = ["bin/mdm", "update-hook"]
+verify_deadline_secs = 600
+
+[hook.timeout_secs]
+prepare = 300
+cutover = 120
+verify = 60
+rollback = 120
+cleanup = 30
+uninstall = 120
+
+[units]
+run = ["mdm-scep.service", "mdm-nanohub.service", "mdm-depserver.service"]
+
+[health]
+url = "http://127.0.0.1:9004/version"
+
+[params]
+settings = "/etc/mdm/settings"
+record_dir = "/var/lib/updater/hooks/mdm"

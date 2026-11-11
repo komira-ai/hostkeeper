@@ -39,10 +39,10 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 
 /// The fields of the plan's messages and of the two views that carry it, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 11] = [
+const FIELDS: [(&str, &[(&str, u32)]); 12] = [
     (
         "hostkeeper.operator.v1.AdvanceRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.AdvanceResponse",
@@ -50,7 +50,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
     ),
     (
         "hostkeeper.operator.v1.PauseRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.PauseResponse",
@@ -58,7 +58,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
     ),
     (
         "hostkeeper.operator.v1.ResumeRequest",
-        &[("service", 1), ("reason", 2)],
+        &[("service", 1), ("reason", 2), ("host_group", 3)],
     ),
     (
         "hostkeeper.operator.v1.ResumeResponse",
@@ -76,7 +76,14 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
             ("paused_by", 7),
             ("pause_reason", 8),
             ("finished", 9),
+            ("waiting_on", 10),
+            ("host_group", 11),
+            ("waiting_on_why", 12),
         ],
+    ),
+    (
+        "hostkeeper.operator.v1.LiveRollout",
+        &[("service", 1), ("reason", 2), ("node_id", 3)],
     ),
     (
         "hostkeeper.operator.v1.PlanStage",
@@ -119,6 +126,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
             ("slots_held", 6),
             ("marks", 7),
             ("plan", 8),
+            ("host_group", 9),
         ],
     ),
 ];
@@ -132,7 +140,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 11] = [
 fn wire_names_of_the_update_plan_are_pinned() {
     let pool = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
 
-    let cases: [(&str, &str, &[&str]); 4] = [
+    let cases: [(&str, &str, &[&str]); 5] = [
         (
             "hostkeeper.operator.v1.RolloutsRefusal",
             "ROLLOUTS_REFUSAL_",
@@ -147,6 +155,8 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "not_paused",
                 "store_failed",
                 "audit_unavailable",
+                "ambiguous_host_group",
+                "not_in_host_group",
             ],
         ),
         (
@@ -174,6 +184,17 @@ fn wire_names_of_the_update_plan_are_pinned() {
                 "updating",
                 "deferring",
                 "baking",
+            ],
+        ),
+        (
+            "hostkeeper.operator.v1.LiveReason",
+            "LIVE_REASON_",
+            &[
+                "updating",
+                "promotion_pending",
+                "ordered",
+                "baking",
+                "plan_under_way",
             ],
         ),
     ];

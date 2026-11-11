@@ -1,22 +1,23 @@
-//! The staging file and the one download loop that fills it, shared by the archive and the
-//! attestation bundle.
+//! The staging file and the one download loop that fills it.
 //!
-//! A staging file is `packages/<service>/.fetch-<pid>-<n>` (the bundle's with `.json` after it): created exclusively (an existing
+//! A staging file is `packages/<service>/.fetch-<pid>-<n>`: created exclusively (an existing
 //! name, a link included, is never opened), never through a link, mode 0600, and removed when
 //! its [`TempFile`] is dropped, so every path that does not hand it on leaves nothing behind.
-//! The bytes are counted and hashed in the pass that writes them.
+//! The bytes are counted and hashed in the pass that writes them. [`remove_orphan_fetches`]
+//! removes the staging files a fetch that did not end left.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, Permissions};
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_steps::{Clock, Stamp};
 use sha2::{Digest, Sha256};
 
-use crate::ports::{Fetcher, Got, Limit, Sink, Stop, Url, remaining_secs};
+use crate::ports::{Fetcher, Got, Limit, Request, Sink, Stop, remaining_secs};
 
 /// The prefix of every staging file's name.
 pub(crate) const PREFIX: &str = ".fetch-";
@@ -74,25 +75,41 @@ pub(crate) fn make_dir(dir: &Path) -> io::Result<()> {
     is_dir(dir).map(|_| ())
 }
 
-/// The names a staging file is tried under, in order. A list, not an iterator, so that
-/// [`create`] has one instantiation whatever its caller.
+/// The names a staging file is tried under, in order. Every name begins with [`PREFIX`], which is
+/// what the orphan sweep looks for. A list, not an iterator, so that [`create`] has one
+/// instantiation whatever its caller.
 pub(crate) fn names() -> Vec<String> {
-    names_with("")
-}
-
-/// [`names`], each ending in `suffix`: the bundle's end in `.json`, because `gh` reads the
-/// extension of the file it is given to choose its parser. Every name still begins with
-/// [`PREFIX`], which is what the orphan sweep looks for.
-pub(crate) fn names_with(suffix: &str) -> Vec<String> {
     let pid = std::process::id();
     (0..NAME_TRIES)
-        .map(|_| {
-            format!(
-                "{PREFIX}{pid}-{}{suffix}",
-                NEXT.fetch_add(1, Ordering::Relaxed)
-            )
-        })
+        .map(|_| format!("{PREFIX}{pid}-{}", NEXT.fetch_add(1, Ordering::Relaxed)))
         .collect()
+}
+
+/// Removes the staging files (`.fetch-*`) left in `packages_root/<service>/` by a fetch that did
+/// not end: regular files, and links, which are unlinked and never followed. Directories and
+/// everything else are left, and so is every other name. A service with no directory has
+/// nothing to remove.
+///
+/// [`crate::entry::fetch_pinned`] calls it before each fetch, and the daemon's start for each
+/// service, to remove what a fetch of an earlier release left. The caller holds the service's lock:
+/// a sweep while another fetch of the same service runs would remove that fetch's staging file.
+pub fn remove_orphan_fetches(packages_root: &Path, service: &ServiceName) -> io::Result<()> {
+    let dir = packages_root.join(service.as_str());
+    if !is_dir(&dir)? {
+        return Ok(());
+    }
+    for entry in fs::read_dir(&dir)? {
+        let entry = entry?;
+        let kind = entry.file_type()?;
+        let ours = entry
+            .file_name()
+            .as_encoded_bytes()
+            .starts_with(PREFIX.as_bytes());
+        if ours & (kind.is_file() | kind.is_symlink()) {
+            fs::remove_file(entry.path())?;
+        }
+    }
+    Ok(())
 }
 
 /// Creates the first of `names` that does not exist in `dir`, exclusively and without following
@@ -142,9 +159,7 @@ pub(crate) struct Job<'a> {
     pub fetcher: &'a dyn Fetcher,
     pub clock: &'a dyn Clock,
     pub dir: &'a Path,
-    pub url: &'a Url,
-    /// What the staging file's name ends in: `""`, or `.json` for a bundle.
-    pub suffix: &'static str,
+    pub request: Request<'a>,
     pub cap: u64,
     pub deadline: Stamp,
 }
@@ -213,7 +228,7 @@ impl Sink for Staging<'_> {
 /// Downloads `job.url` into a new staging file in `job.dir`, written through `writer`. On any
 /// fault the staging file is removed before this returns.
 pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fault> {
-    let (file, temp) = create(job.dir, names_with(job.suffix)).map_err(Fault::Storage)?;
+    let (file, temp) = create(job.dir, names()).map_err(Fault::Storage)?;
     let mut sink = Staging {
         out: writer(&file),
         hasher: Sha256::new(),
@@ -227,7 +242,7 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
         connect_timeout: CONNECT_TIMEOUT,
         deadline: job.deadline.clone(),
     };
-    let got = job.fetcher.get(job.url, &mut sink, limit);
+    let got = job.fetcher.get_request(&job.request, &mut sink, limit);
     let Staging {
         hasher,
         count,
@@ -252,19 +267,6 @@ pub(crate) fn download(job: &Job<'_>, writer: OpenWriter) -> Result<Download, Fa
             })
         }
     }
-}
-
-/// The bytes of the staging file at `path`, at most `cap` of them, read without following a
-/// link.
-pub(crate) fn read_back(path: &Path, cap: u64) -> io::Result<Vec<u8>> {
-    let mut bytes = Vec::new();
-    OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?
-        .take(cap)
-        .read_to_end(&mut bytes)?;
-    Ok(bytes)
 }
 
 /// Whether `e` is a full disk (`ENOSPC`). A quota that is reached (`EDQUOT`) is not: it is

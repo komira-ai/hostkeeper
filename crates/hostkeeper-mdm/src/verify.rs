@@ -117,7 +117,7 @@ impl fmt::Display for Check {
 }
 
 /// What a check function returns before it becomes a [`Verdict`].
-type Outcome = Result<String, String>;
+pub(crate) type Outcome = Result<String, String>;
 
 fn text(e: impl fmt::Display) -> String {
     e.to_string()
@@ -269,7 +269,7 @@ fn settle(host: &dyn Host, v: &Verify<'_>) -> (u32, bool) {
     }
 }
 
-fn active(host: &dyn Host, unit: &str) -> Outcome {
+pub(crate) fn active(host: &dyn Host, unit: &str) -> Outcome {
     let out = host
         .run(&Cmd::new(SYSTEMCTL).arg("is-active").arg(unit))
         .map_err(text)?;
@@ -280,7 +280,7 @@ fn active(host: &dyn Host, unit: &str) -> Outcome {
 }
 
 /// The local addresses (`addr:port`) of the listeners on `port` in `ss -Hltn` output.
-fn listeners(ss: &str, port: u16) -> Vec<&str> {
+pub(crate) fn listeners(ss: &str, port: u16) -> Vec<&str> {
     let tail = format!(":{port}");
     ss.lines()
         .filter_map(|l| l.split_whitespace().nth(3))
@@ -288,7 +288,7 @@ fn listeners(ss: &str, port: u16) -> Vec<&str> {
         .collect()
 }
 
-fn listens_only(ss: &str, port: u16, addr: &str) -> Outcome {
+pub(crate) fn listens_only(ss: &str, port: u16, addr: &str) -> Outcome {
     let want = format!("{addr}:{port}");
     match listeners(ss, port).as_slice() {
         [one] if *one == want => Ok(String::new()),
@@ -297,7 +297,7 @@ fn listens_only(ss: &str, port: u16, addr: &str) -> Outcome {
     }
 }
 
-fn certificate(host: &dyn Host, crt: &str) -> Outcome {
+pub(crate) fn certificate(host: &dyn Host, crt: &str) -> Outcome {
     host.stat(crt)
         .map_err(text)?
         .ok_or(format!("{crt} is not there"))?;
@@ -310,19 +310,19 @@ fn certificate(host: &dyn Host, crt: &str) -> Outcome {
     }
 }
 
-fn state_dir(host: &dyn Host, c: &MdmConfig) -> Outcome {
+pub(crate) fn state_dir(host: &dyn Host, c: &MdmConfig) -> Outcome {
     let ids = ids(host, &Account::new(c.user(), c.user())).map_err(text)?;
     let (uid, _) = ids.ok_or(format!("no user {}", c.user()))?;
     mode_is(host, c.state().as_str(), Kind::Dir, 0o700, uid)
 }
 
 /// Where `push-cert` writes the enrollment profile.
-fn profile_path(c: &MdmConfig) -> String {
+pub(crate) fn profile_path(c: &MdmConfig) -> String {
     format!("{}/www/enroll.mobileconfig", c.state())
 }
 
 /// The enrollment profile is a 0640 file of root's in the service user's group.
-fn profile_file(host: &dyn Host, c: &MdmConfig) -> Outcome {
+pub(crate) fn profile_file(host: &dyn Host, c: &MdmConfig) -> Outcome {
     let path = profile_path(c);
     let (_, gid) = ids(host, &Account::new(c.user(), c.user()))
         .map_err(text)?
@@ -341,7 +341,7 @@ fn profile_file(host: &dyn Host, c: &MdmConfig) -> Outcome {
     }
 }
 
-fn mode_is(host: &dyn Host, path: &str, kind: Kind, mode: u32, uid: u32) -> Outcome {
+pub(crate) fn mode_is(host: &dyn Host, path: &str, kind: Kind, mode: u32, uid: u32) -> Outcome {
     let meta = host
         .stat(path)
         .map_err(text)?

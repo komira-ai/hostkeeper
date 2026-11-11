@@ -7,7 +7,7 @@
 //! updater verified, and a crash at any point leaves a record that [`StepRunner::run`] picks up: a step found `running` has its unit
 //! stopped by name and is run again, a step found `done` is not.
 //!
-//! The daemon's own moves around the hook's steps, `current` and the placed links switched to
+//! The daemon's own moves around the hook's steps, `current` and `previous` switched to
 //! the target immediately before `cutover` and back immediately before `rollback` (design
 //! section 5.2, steps 5 and 6), come in through [`StepRunner::with_switch`]: the runner calls the
 //! [`Switch`] before every run of those two steps, resumed ones included, so the switch must be
@@ -39,9 +39,12 @@ use hostkeeper_hook::{
 use crate::artifact::{ArtifactError, Staged};
 use crate::clock::{BootId, Clock, Stamp};
 use crate::deadman::Watch;
-use crate::launcher::{Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::launcher::{BUILTIN_EXIT, Bound, LaunchError, StepCall, StepExit, StepLauncher};
+use crate::order_util::{
+    PreviousHook, hook_of, longest_step_unit, path_str, same_update, wait_secs,
+};
 use crate::record::{HookSel, Loaded, Progress, Record, RecordError, RecordStore, SCHEMA, State};
-use crate::systemd::unit_name;
+pub use crate::switch::{Builtin, Switch, SwitchError, Toward};
 
 /// The protocol version of this updater: an order's `min_updater_protocol` above it is
 /// `Deferred` with the reason `updater_old` until the updater has updated itself.
@@ -68,26 +71,6 @@ pub const REASON_UNSTOPPABLE: &str = "unstoppable";
 /// The reason of a `rollback` that declines a first install: there is no previous release to go
 /// back to (design section 5.7, step 6).
 pub const REASON_NO_PREVIOUS_RELEASE: &str = "no_previous_release";
-
-/// Which way the daemon switches a service around a step of the hook.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Toward {
-    /// To the target, immediately before `cutover`.
-    Target,
-    /// Back, immediately before `rollback`.
-    Back,
-    /// After a `cleanup` that succeeded, before the verdict is written: the daemon commits the
-    /// placed paths and unlinks what the version no longer lists. It is called again by a run
-    /// that finds the `cleanup` done, so it must be idempotent.
-    Confirmed,
-}
-
-/// The daemon's switch of `current` and the placed links around the hook's steps
-/// ([`StepRunner::with_switch`]): called with [`Toward::Target`] before each run of `cutover`,
-/// [`Toward::Back`] before each run of `rollback` and [`Toward::Confirmed`] after a `cleanup`
-/// that succeeded, with the order. `Err` says why it could not switch: the step does not run (for
-/// `Confirmed`, the verdict is not written), and the runner stops with [`RunError::Switch`].
-pub type Switch = Arc<dyn Fn(Toward, &UpdateOrder) -> Result<(), String> + Send + Sync>;
 
 /// The bounds of the manifest's `hook.timeout_secs` and the other hook keys the runner reads (and
 /// no other key of it).
@@ -140,22 +123,28 @@ pub struct UpdateOrder {
     pub service: String,
     pub target_version: String,
     pub previous_version: Option<String>,
-    /// The sha256 of the release artifact the updater verified (its attested tarball): 64
-    /// lower-case hex digits, the value in the order and in the release's SHA256SUMS. It is
-    /// written to every step's params file as `updater.artifact_digest` = `sha256:<hex>`, and an
-    /// order with another artifact digest is another update even for the same tree.
+    /// The sha256 of the package the updater staged (the digest the order names): 64
+    /// lower-case hex digits. It is written to every step's params file as
+    /// `updater.artifact_digest` = `sha256:<hex>`, and an order with another artifact digest is
+    /// another update even for the same tree.
     ///
-    /// **This crate does not bind the digest to the unpacked bytes.** The step that unpacks the
-    /// tarball must hash the bytes as it reads them and unpack from that same stream, so that the
-    /// digest is of what was unpacked, then seal the tree with [`Staged::seal`].
+    /// **This crate does not bind the digest to the staged bytes.** The step that stages the
+    /// package must see that the digest is of what it staged, then seal the tree with
+    /// [`Staged::seal`].
     pub artifact_digest: String,
-    /// The verified staged release (the unpacked tree of that artifact).
+    /// The verified staged release (the tree staged from that package).
     pub staged: Staged,
     /// The release being replaced, kept staged until `cleanup` has succeeded; `None` on the first
     /// install.
     pub previous: Option<Staged>,
     /// The hook executable within a release: the program of the manifest's `[hook] command`.
     pub hook_binary: PathBuf,
+    /// The arguments of the manifest's hook command after its program, given before the step;
+    /// empty for the built-in steps.
+    pub hook_args: Vec<String>,
+    /// The previous release's own hook, for the `rollback` fallback to it; `None`: the fallback
+    /// runs [`Self::hook_binary`] and [`Self::hook_args`] from the previous release.
+    pub previous_hook: Option<PreviousHook>,
     pub bounds: Bounds,
     /// The manifest's `[params]` table.
     pub declared_params: Params,
@@ -164,6 +153,11 @@ pub struct UpdateOrder {
     /// The coordinator's try of the order (`Order.try`), kept in the record as `order_try`;
     /// `None` for an update that came without one.
     pub order_try: Option<u64>,
+    /// Every step is built in: no command is launched, and the release is checked as a tree
+    /// ([`Staged::check_tree`]), with no hook. Each step runs the [`Builtin`] of
+    /// [`StepRunner::with_builtin`], or, with none, ends at once as a hook that exits 0 and prints
+    /// nothing ([`BUILTIN_EXIT`]). The record is the one that hook gives.
+    pub builtin_steps: bool,
 }
 
 /// How an update ended.
@@ -237,6 +231,7 @@ pub struct StepRunner {
     watch: Arc<Watch>,
     fault: Option<CheckFault>,
     switch: Option<Switch>,
+    builtin: Option<Builtin>,
     /// [`StepRunner::with_held_success`].
     held_success: bool,
     /// The generation of the update an abort asked to end ([`StepRunner::abort`]); 0 for none.
@@ -259,6 +254,7 @@ impl StepRunner {
             watch: Watch::new(),
             fault: None,
             switch: None,
+            builtin: None,
             held_success: false,
             aborted: AtomicU64::new(0),
             met: Mutex::default(),
@@ -342,23 +338,34 @@ impl StepRunner {
         self
     }
 
-    /// The switch before `step`, if the runner has one and the step has one.
-    fn switch_for(&self, order: &UpdateOrder, step: Step) -> Result<(), RunError> {
+    /// The same runner, `builtin` run for each step of an order with `builtin_steps` in place of
+    /// a command.
+    pub fn with_builtin(mut self, builtin: Builtin) -> StepRunner {
+        self.builtin = Some(builtin);
+        self
+    }
+
+    /// The switch before `step`, if the runner has one and the step has one. `Some` is the exit
+    /// the switch ended the step with ([`SwitchError::Ended`]).
+    fn switch_for(&self, order: &UpdateOrder, step: Step) -> Result<Option<StepExit>, RunError> {
         let toward = match step {
             Step::Cutover => Toward::Target,
             Step::Rollback => Toward::Back,
-            _ => return Ok(()),
+            _ => return Ok(None),
         };
-        match &self.switch {
-            Some(switch) => switch(toward, order).map_err(RunError::Switch),
-            None => Ok(()),
+        match self.switch.as_ref().map(|switch| switch(toward, order)) {
+            None | Some(Ok(())) => Ok(None),
+            Some(Err(SwitchError::Failed(why))) => Err(RunError::Switch(why)),
+            Some(Err(SwitchError::Ended(exit))) => Ok(Some(exit)),
         }
     }
 
-    /// The confirming call of the switch, if the runner has one.
+    /// The confirming call of the switch, if the runner has one. A step cannot end here: an
+    /// `Ended` is a failure with its text.
     fn confirm(&self, order: &UpdateOrder) -> Result<(), RunError> {
         match &self.switch {
-            Some(switch) => switch(Toward::Confirmed, order).map_err(RunError::Switch),
+            Some(switch) => switch(Toward::Confirmed, order)
+                .map_err(|error| RunError::Switch(error.to_string())),
             None => Ok(()),
         }
     }
@@ -605,7 +612,10 @@ impl StepRunner {
         };
         let checked = match self.fault.as_ref().and_then(|fault| fault(rec.step)) {
             Some(error) => Err(ArtifactError::Io(error)),
-            None => release.check(&order.hook_binary),
+            // Built-in steps exec nothing: the tree is checked without a hook, and the
+            // executable passed on is empty.
+            None if order.builtin_steps => release.check_tree().map(|()| PathBuf::new()),
+            None => release.check(hook_of(order, rec.hook).0),
         };
         let ran = match checked {
             Ok(executable) => match self.launch(order, rec, &executable)? {
@@ -665,8 +675,11 @@ impl StepRunner {
         executable: &Path,
     ) -> Result<Option<Ran>, RunError> {
         // `current` and the links are switched before the step starts; a failed switch leaves it
-        // pending, and nothing of it runs.
-        self.switch_for(order, rec.step)?;
+        // pending, and nothing of it runs. A switch that ended the step gives its exit: nothing
+        // is recorded running or launched.
+        if let Some(exit) = self.switch_for(order, rec.step)? {
+            return Ok(Some(Ran::Exit(exit)));
+        }
         let started = Stamp::now(&*self.clock);
         // Nothing is left of the bound (the verify window has passed): the step is not started,
         // and never as unbounded, which only a `prepare` whose manifest timeout is 0
@@ -699,17 +712,24 @@ impl StepRunner {
         if !unbounded {
             self.watch.arm(&unit, deadline_secs);
         }
-        let result = self.launcher.run(&StepCall {
-            service: &order.service,
-            invocation: Invocation {
-                step: rec.step,
-                artifact,
-                params: Some(rec.params.clone()),
-            },
-            executable,
-            unit: &unit,
-            bound,
-        });
+        let result = match order.builtin_steps {
+            true => Ok(match &self.builtin {
+                Some(builtin) => builtin(rec.step, order, bound),
+                None => BUILTIN_EXIT,
+            }),
+            false => self.launcher.run(&StepCall {
+                service: &order.service,
+                invocation: Invocation {
+                    step: rec.step,
+                    artifact,
+                    params: Some(rec.params.clone()),
+                },
+                hook_args: hook_of(order, rec.hook).1,
+                executable,
+                unit: &unit,
+                bound,
+            }),
+        };
         let stop_error = self.watch.disarm();
         // An aborted step's report is not read, whoever stopped it: the write of its end closes
         // the update.
@@ -959,34 +979,4 @@ impl StepRunner {
             reason: report.reason.clone(),
         };
     }
-}
-
-/// How long to wait: what the hook asked for, or `default`, never more than [`MAX_RETRY_SECS`].
-fn wait_secs(asked: Option<u64>, default: u64) -> u64 {
-    asked.unwrap_or(default).min(MAX_RETRY_SECS)
-}
-
-/// Whether `rec` is the update `order` asks for.
-fn same_update(rec: &Record, order: &UpdateOrder) -> bool {
-    rec.service == order.service
-        && rec.target_version == order.target_version
-        && rec.artifact_digest == order.staged.digest()
-        && rec.tarball_digest == order.artifact_digest
-        && rec.previous_digest.as_deref() == order.previous.as_ref().map(Staged::digest)
-}
-
-fn path_str(path: &Path) -> Result<&str, RunError> {
-    path.to_str()
-        .ok_or(RunError::BadOrder("a release path that is not UTF-8"))
-}
-
-/// The bytes of the longest unit a step of `service` can run in: the longest step name, the
-/// largest generation and the `.service` systemd adds.
-fn longest_step_unit(service: &str) -> usize {
-    Step::ALL
-        .iter()
-        .map(|step| unit_name(service, *step, u64::MAX).len())
-        .max()
-        .unwrap_or_default()
-        + ".service".len()
 }

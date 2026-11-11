@@ -1,27 +1,24 @@
 //! `Enrollment.List` over the enrollment store and the host inventory: each pending request is
-//! shown with the one record it matches, none, or every candidate; a match approves nothing; a
+//! shown with the one record it matches, none, or every candidate; a match against a record whose
+//! window is closed approves nothing (the coordinators here have only closed windows); a
 //! MAC bound to an enrolled host is a duplicate claim. Paging, tokens and an unreadable store are
 //! `list.rs`'s.
-
-use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::RequestState;
 use hostkeeper_proto::hostkeeper::agent::v1::{EnrollResponse, EnrollState};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
-use super::support::{HostKey, Rig, approve, enroll_request};
+use super::support::{HostKey, Rig, approve, closed_windows, enroll_request};
 use crate::marks_support::operator;
 use crate::testutil::{Log, Rig as CoordinatorRig};
 
 use proto::EnrollmentRefusal as Refusal;
 use proto::InventoryMatch as Match;
 
-/// A coordinator over the enrollment of `enrollment`.
+/// A coordinator over the enrollment of `enrollment`, whose records' windows are closed
+/// ([`closed_windows`]): a matching request waits for an operator here.
 fn coordinator(name: &str, enrollment: &Rig) -> CoordinatorRig {
-    let mut rig = CoordinatorRig::new(name);
-    rig.coordinator = CoordinatorRig::start(&rig.dir, &rig.clock)
-        .with_enrollment(Arc::clone(&enrollment.enrollment));
-    rig
+    closed_windows(name, enrollment)
 }
 
 /// Records `host` (role `storage`) with the data MACs `data` and the BMC MAC `bmc`.
@@ -189,6 +186,7 @@ fn a_matched_request_still_refuses_another_key() {
         services: Vec::new(),
         replace: false,
         reason: "built today".to_owned(),
+        host_group: String::new(),
     };
     let other = HostKey::new();
     let refused = rig

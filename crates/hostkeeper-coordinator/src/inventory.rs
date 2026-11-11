@@ -1,23 +1,46 @@
 //! The host inventory (design 5.7, **Host inventory**): the record an operator adds for each
 //! server when building it, and the match of a pending enrollment request against the records.
 //!
-//! A record names a host id, an optional role, the server's data MACs, its BMC MAC, an optional
-//! serial and notes. It lives in the ops file ([`crate::ops::OpsState::inventory`]) with the
+//! A record names a host id, an optional host group or role, the server's data MACs, its BMC MAC,
+//! an optional serial and notes. It lives in the ops file ([`crate::ops::OpsState::inventory`]) with the
 //! other operator state, and every change to it is made under the ops file's lock with its
 //! audit entry: `Enrollment.AddRecord` ([`Coordinator::add_record`]),
-//! `Enrollment.ListRecords` ([`Coordinator::list_records`]) and `Enrollment.RemoveRecord`
-//! ([`Coordinator::remove_record`]). No two records hold one host id, one MAC or one serial.
+//! `Enrollment.ListRecords` ([`Coordinator::list_records`]), `Enrollment.RemoveRecord`
+//! ([`Coordinator::remove_record`]) and `Enrollment.OpenRecord` ([`Coordinator::open_record`]).
+//! No two records hold one host id, one MAC or one serial.
+//!
+//! From a coordinator that holds host groups (`docs/design/hostgroups.md` section 1.2), a record
+//! names a group by its `host_group`, or by its `role` read as a group's name, which must be one
+//! the coordinator holds (`unknown_host_group`); the record keeps the group's name as both, and
+//! answers it as both, for readers that know only the role. `AddRecord` checks the group under
+//! the lock `HostGroups.Remove` checks the records under, so no record lands in a group being
+//! removed. A coordinator that holds none keeps a record's role as before, and refuses a
+//! `host_group`.
+//!
+//! A record that names a host group, or a role ([`InventoryRecord::group`]), is the approval of
+//! the host it was entered for: it has a window
+//! (`approve_until_unix`) and, once the coordinator approved a request by it, a mark that it is
+//! used ([`RecordUse`]), and while its window is open and it is unused a pending request that
+//! matches it exactly is approved by the coordinator itself
+//! ([`crate::enrollment::Enrollment::approve_by_record`]). The window, its limits, the state
+//! it shows (open, closed, used) and `OpenRecord` are in `inventory_window.rs`. Exactly is
+//! [`InventoryRecord::matches_exactly`]: [`match_claims`] finds the one record, and the claims
+//! then agree with every MAC the record holds, its BMC MAC included.
 //!
 //! `Enrollment.List` ([`Coordinator::enrollment_list`]) shows each pending request with its
-//! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every candidate named, none
-//! chosen). A match fills in a host id, a role, and the record's serial and BMC MAC for the
-//! operator to read; it approves nothing, and an approval still names the request's key hash
-//! (design 5.7, step 3). Two pending requests that match one record contest it ([`contests`]):
-//! the list names, on each, the others, and `Enrollment.Approve` of any of them is refused
-//! `record_contested` until all but one are rejected. `Enrollment.Approve`
+//! match ([`show_match`], [`match_claims`]): the one record it matches, none, or several (every
+//! candidate named, none chosen). A match fills in a host id, a role (and a host group, from a
+//! coordinator that holds groups), the record's serial and
+//! BMC MAC and where its window stands, for the operator to read: a request that is still
+//! pending against an open record waits for an operator for another reason. Two pending
+//! requests that match one record contest it ([`contests`]): the list names, on each, the
+//! others, neither is approved by the record, and `Enrollment.Approve` of any of them is
+//! refused `record_contested` until all but one are rejected. `Enrollment.Approve`
 //! matches the request again ([`match_claims`]): a request (not a renewal) that matches exactly
 //! one record is approved as that record's host id, which an empty host id defaults to, and
-//! another host id is `record_mismatch` unless the approval replaces.
+//! another host id is `record_mismatch` unless the approval replaces. An approval an operator
+//! makes does not mark a record used; the enrollment store's one host per host id keeps the
+//! record from approving a second key.
 //!
 //! An enrolled host ([`EnrolledHost`]: it holds an approval and is not denied) is matched the
 //! same way, by the claims of the request its key was approved from ([`RecordIndex`], which
@@ -29,7 +52,14 @@
 //! Apart from the match, each record says what the enrollment store holds for its host id
 //! (`host_held`, [`Coordinator::host_held`]): no host, an approved host, or a denied or retired
 //! one. It is read from the store by host id, so it holds after a restart and for a host never
-//! heard from, which `Hosts.List` (the hosts heard from since start) does not show.
+//! heard from, and for a denied or retired host, which `Hosts.List` does not show when it is not heard.
+//!
+//! A record may also state the platform its server is installed as by network boot
+//! ([`InventoryRecord::platform`]: `linux-x86_64` or `linux-arm64`), which `hostkeeper-pxe` needs
+//! in router mode (network-install design, section 3). It is kept with the rest of the record in
+//! the operations state, but the ops file, whose reader in the release before refuses a key it
+//! does not know, never holds it: the files keep it in the halts file beside it
+//! ([`crate::ops_file`]).
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,9 +67,17 @@ use hostkeeper_enrollment::enroll::{Claims, EnrolledHost, HostHeld, RequestView,
 use hostkeeper_enrollment::names::{KeyHash, MacAddress};
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_wire::{HostId, RoleName};
+use hostkeeper_wire::{HostId, Platform, RoleName};
 use serde::{Deserialize, Serialize};
 
+pub(crate) use window::mark_used;
+pub use window::{
+    ACTION_RECORD_OPEN, DEFAULT_APPROVE_FOR_SECS, DEFAULT_APPROVE_MAX_SECS, RecordUse,
+    RecordWindow, WindowAboveMax,
+};
+
+use crate::enrollment::groups::{group_in, held_in};
+use crate::host_groups::HostGroups;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
@@ -56,6 +94,15 @@ pub const MAX_PAGE: usize = 256;
 /// The longest serial a record holds.
 const MAX_SERIAL: usize = 64;
 
+/// The approval window of a record, and `Enrollment.OpenRecord`.
+#[path = "inventory_window.rs"]
+mod window;
+
+/// Whether `n` is zero: a window a record does not have is left out of the ops file.
+fn is_zero(n: &u64) -> bool {
+    *n == 0
+}
+
 /// One server the operator recorded, as the ops file keeps it. The MACs are in their one
 /// spelling ([`MacAddress`]'s), the data MACs sorted; an empty text is "none".
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -63,9 +110,13 @@ const MAX_SERIAL: usize = 64;
 pub struct InventoryRecord {
     /// The host id the server is meant to enroll as.
     pub host_id: String,
-    /// The role it is meant for.
+    /// The role it is meant for; from a coordinator that holds host groups, its group's name.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub role: String,
+    /// The host group it is meant for; empty when it names none. Written only when it names one,
+    /// so a file whose records name none keeps the shape the release before reads.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub host_group: String,
     /// The MACs of its data interfaces.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub data_macs: Vec<String>,
@@ -82,9 +133,34 @@ pub struct InventoryRecord {
     pub by: String,
     /// When it was added, in unix seconds.
     pub at_unix: u64,
+    /// The end of the record's approval window, in unix seconds: a request that matches the
+    /// record exactly is approved by the coordinator while the time is before it. 0 for a
+    /// record with no window (one that names no group nor role, or one a release before windows
+    /// added).
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub approve_until_unix: u64,
+    /// The approval that used the record, once the coordinator approved a request by it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub used: Option<RecordUse>,
+    /// The platform to install it as by network boot: a Linux platform, or `None` when the
+    /// record states none. Never in the ops file: the files keep it in the halts file
+    /// ([`crate::ops_file`]).
+    #[serde(skip)]
+    pub platform: Option<Platform>,
 }
 
 impl InventoryRecord {
+    /// The host group the record names: its `host_group`, or else its role, read as a group's
+    /// name (a record added before groups names one only so); empty when it names neither.
+    #[must_use]
+    pub fn group(&self) -> &str {
+        if self.host_group.is_empty() {
+            &self.role
+        } else {
+            &self.host_group
+        }
+    }
+
     /// Every MAC the record holds: its data MACs and its BMC MAC.
     fn macs(&self) -> impl Iterator<Item = &str> {
         self.data_macs
@@ -113,10 +189,25 @@ impl InventoryRecord {
         shares_data_mac && bmc_agrees
     }
 
+    /// Whether the record matches a request that claims `claims` exactly, which is what the
+    /// coordinator approves by: a Mac by its serial ([`Self::matches`]); otherwise by one of the
+    /// data MACs ([`Self::matches`]) and, when the record holds a BMC MAC, the claim of that
+    /// BMC MAC (a request that claims none does not match a record that holds one, which
+    /// [`Self::matches`] accepts).
+    pub(crate) fn matches_exactly(&self, claims: &Claims) -> bool {
+        let bmc_claimed = self.bmc_mac.is_empty()
+            || claims
+                .bmc()
+                .is_some_and(|bmc| bmc.to_string() == self.bmc_mac);
+        self.matches(claims) && (!claims.mac_serial.is_empty() || bmc_claimed)
+    }
+
     /// A line for the audit: what the record holds, the notes left out.
     fn describe(&self) -> String {
         let mut parts = Vec::new();
-        if !self.role.is_empty() {
+        if !self.host_group.is_empty() {
+            parts.push(format!("group {}", self.host_group));
+        } else if !self.role.is_empty() {
             parts.push(format!("role {}", self.role));
         }
         if !self.data_macs.is_empty() {
@@ -127,6 +218,12 @@ impl InventoryRecord {
         }
         if !self.serial.is_empty() {
             parts.push(format!("serial {}", self.serial));
+        }
+        if self.approve_until_unix > 0 {
+            parts.push(format!("approve until {}", self.approve_until_unix));
+        }
+        if let Some(platform) = self.platform {
+            parts.push(format!("platform {platform}"));
         }
         parts.join("; ")
     }
@@ -269,8 +366,9 @@ impl<'a> RecordIndex<'a> {
 }
 
 /// Fills in what the host inventory says of `host`, enrolled as `enrolled` (`None` when it is
-/// not): when it was approved, when its first heartbeat since then was accepted, and the
-/// record its claims match, if one does.
+/// not): when it was approved, when its first heartbeat since then was accepted, when its first
+/// heartbeat that reported a managed service serving was, and the record its claims match, if
+/// one does.
 pub fn show_inventory(
     host: &mut proto::Host,
     enrolled: Option<&EnrolledHost>,
@@ -281,6 +379,7 @@ pub fn show_inventory(
     };
     host.enrolled_unix = enrolled.approved_unix;
     host.first_heartbeat_unix = enrolled.first_heartbeat_unix;
+    host.first_serving_unix = enrolled.first_serving_unix;
     if let Some(record) = index.matched(&enrolled.claims) {
         host.inventory_record_id.clone_from(&record.host_id);
         host.data_macs.clone_from(&record.data_macs);
@@ -307,16 +406,24 @@ fn held_proto(held: HostHeld) -> proto::HostHeld {
     }
 }
 
-/// `record` as `hostkeeper.operator.v1` says it; `enrolled` when a host is enrolled against it,
-/// and `held` what the enrollment store holds for its host id.
+/// `record` as `hostkeeper.operator.v1` says it at `now`; `enrolled` when a host is enrolled
+/// against it, and `held` what the enrollment store holds for its host id. `by_group` from a
+/// coordinator that holds host groups: the record's group is its `host_group` and its `role`.
 fn record_proto(
     record: &InventoryRecord,
     enrolled: bool,
     held: proto::HostHeld,
+    now: u64,
+    by_group: bool,
 ) -> proto::InventoryRecord {
+    let group = if by_group { record.group() } else { "" };
     proto::InventoryRecord {
         host_id: record.host_id.clone(),
-        role: record.role.clone(),
+        role: if by_group {
+            group.to_owned()
+        } else {
+            record.role.clone()
+        },
         data_macs: record.data_macs.clone(),
         bmc_mac: record.bmc_mac.clone(),
         serial: record.serial.clone(),
@@ -325,6 +432,40 @@ fn record_proto(
         added_unix: record.at_unix,
         enrolled,
         host_held: held.into(),
+        approve_until_unix: record.approve_until_unix,
+        state: record.state_at(now).into(),
+        used_by_request_id: record
+            .used
+            .as_ref()
+            .map(|used| used.request_id.clone())
+            .unwrap_or_default(),
+        used_unix: record.used.as_ref().map_or(0, |used| used.at_unix),
+        platform: record
+            .platform
+            .map_or(agent::Platform::Unspecified, platform_proto)
+            .into(),
+        host_group: group.to_owned(),
+    }
+}
+
+/// A Linux platform as `hostkeeper.agent.v1` says it.
+pub(crate) fn platform_proto(platform: Platform) -> agent::Platform {
+    match platform {
+        Platform::LinuxX86_64 => agent::Platform::LinuxX8664,
+        Platform::LinuxArm64 => agent::Platform::LinuxArm64,
+        Platform::DarwinArm64 => agent::Platform::DarwinArm64,
+    }
+}
+
+/// The platform a record may state, from `AddRecordRequest.platform`'s number: `None` for
+/// `PLATFORM_UNSPECIFIED`, a Linux platform for its value; any other (a Mac's platform, which
+/// is not installed by network boot, or a number this release does not know) is refused.
+fn record_platform(number: i32) -> Result<Option<Platform>, proto::EnrollmentRefusal> {
+    match agent::Platform::try_from(number) {
+        Ok(agent::Platform::Unspecified) => Ok(None),
+        Ok(agent::Platform::LinuxX8664) => Ok(Some(Platform::LinuxX86_64)),
+        Ok(agent::Platform::LinuxArm64) => Ok(Some(Platform::LinuxArm64)),
+        Ok(agent::Platform::DarwinArm64) | Err(_) => Err(proto::EnrollmentRefusal::InvalidRequest),
     }
 }
 
@@ -343,24 +484,38 @@ fn is_serial(text: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
-/// The record `request` asks for, by `by` at `at_unix`, checked field by field.
+/// The record `request` asks for, by `by` at `at_unix`, checked field by field, with the window
+/// `window` gives it. With `held`, the host groups the coordinator holds, the record names one
+/// of them, as the module says, or none; without, a role or none.
 fn record_of(
     request: proto::AddRecordRequest,
     by: &str,
     at_unix: u64,
+    window: &RecordWindow,
+    held: Option<&HostGroups>,
 ) -> Result<InventoryRecord, proto::EnrollmentRefusal> {
-    use proto::EnrollmentRefusal::{InvalidHostId, InvalidRequest, InvalidRole};
+    use proto::EnrollmentRefusal::{InvalidHostId, InvalidRequest, InvalidRole, UnknownHostGroup};
+    // A coordinator that holds no group refuses a group first, as it did before groups.
+    if held.is_none() && !request.host_group.is_empty() {
+        return Err(UnknownHostGroup);
+    }
     let host_id = request
         .host_id
         .parse::<HostId>()
         .map_err(|_| InvalidHostId)?
         .to_string();
-    let role = match request.role.as_str() {
-        "" => String::new(),
-        text => text
-            .parse::<RoleName>()
-            .map_err(|_| InvalidRole)?
-            .to_string(),
+    let (role, host_group) = match (held, request.role.as_str()) {
+        (None, "") => (String::new(), String::new()),
+        (None, text) => (
+            text.parse::<RoleName>()
+                .map_err(|_| InvalidRole)?
+                .to_string(),
+            String::new(),
+        ),
+        (Some(held), role) => match group_in(&request.host_group, role, held)? {
+            Some(group) => (group.to_string(), group.to_string()),
+            None => (String::new(), String::new()),
+        },
     };
     let mut data_macs = request
         .data_macs
@@ -374,6 +529,7 @@ fn record_of(
         text => mac(text)?,
     };
     let serial = request.serial.trim().to_owned();
+    let platform = record_platform(request.platform)?;
     let notes = match request.notes.trim() {
         "" => String::new(),
         text => valid_reason(text).ok_or(InvalidRequest)?,
@@ -383,15 +539,25 @@ fn record_of(
     if !identified || !bounded || !(serial.is_empty() || is_serial(&serial)) {
         return Err(InvalidRequest);
     }
+    let approve_until_unix = window.end(
+        request.approve_until_unix,
+        request.approve_for_secs,
+        !role.is_empty(),
+        at_unix,
+    )?;
     Ok(InventoryRecord {
         host_id,
         role,
+        host_group,
         data_macs,
         bmc_mac,
         serial,
         notes,
         by: by.to_owned(),
         at_unix,
+        approve_until_unix,
+        used: None,
+        platform,
     })
 }
 
@@ -409,16 +575,30 @@ fn claims_of(claims: &agent::Claims) -> Claims {
 }
 
 /// Fills in how the pending request `pending` matches `records`: the one record's host id,
-/// role, serial and BMC MAC, every candidate of an ambiguous match, or unmatched.
-pub fn show_match(pending: &mut proto::PendingEnrollment, records: &[InventoryRecord]) {
+/// role, serial, BMC MAC and where its window stands at `now`, every candidate of an ambiguous
+/// match, or unmatched. `by_group` from a coordinator that holds host groups: the record's group
+/// is its `record_host_group` and its `record_role`.
+pub fn show_match(
+    pending: &mut proto::PendingEnrollment,
+    records: &[InventoryRecord],
+    now: u64,
+    by_group: bool,
+) {
     let claims = claims_of(&pending.claims.clone().unwrap_or_default());
     match match_claims(&claims, records) {
         InventoryMatch::Matched(record) => {
             pending.set_inventory_match(proto::InventoryMatch::Matched);
             pending.record_host_id.clone_from(&record.host_id);
-            pending.record_role.clone_from(&record.role);
+            if by_group {
+                pending.record_role = record.group().to_owned();
+                pending.record_host_group = record.group().to_owned();
+            } else {
+                pending.record_role.clone_from(&record.role);
+            }
             pending.record_serial.clone_from(&record.serial);
             pending.record_bmc_mac.clone_from(&record.bmc_mac);
+            pending.set_record_state(record.state_at(now));
+            pending.record_approve_until_unix = record.approve_until_unix;
         }
         InventoryMatch::Unmatched => pending.set_inventory_match(proto::InventoryMatch::Unmatched),
         InventoryMatch::Ambiguous(ids) => {
@@ -478,23 +658,33 @@ impl Coordinator {
 
     /// `Enrollment.AddRecord`: records a server the operator built, before it first boots.
     /// Under the ops file's lock: a record for the host id is refused, and so is a MAC or a
-    /// serial another record holds, and a record past [`MAX_RECORDS`]. The answer's record is
-    /// `enrolled` when a host already enrolled matches it, and no other record, and says what
-    /// the enrollment store holds for its host id (`host_held`).
+    /// serial another record holds, and a record past [`MAX_RECORDS`]. From a coordinator that
+    /// holds host groups the group it names must be one held, checked and written under the
+    /// fleet's lock, which `HostGroups.Remove` checks the records under. A record that names a
+    /// group or a role is added with its approval window ([`RecordWindow::end`]), and the pending requests
+    /// that match it are tried once it is kept ([`Coordinator::approve_waiting`]). The answer's
+    /// record is as added, `enrolled` when a host already enrolled matches it, and no other
+    /// record, and says what the enrollment store holds for its host id (`host_held`).
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role`, `invalid_request` (a
+    /// `unauthorized`, `forbidden`, `invalid_host_id`, `invalid_role` (also a role beside a
+    /// `host_group` that is another name), `unknown_host_group`, `invalid_request` (a
     /// MAC, the serial, the notes, more than [`MAX_DATA_MACS`] data MACs, a data MAC that is
-    /// also the BMC MAC, or neither a data MAC nor a serial), `record_exists`,
-    /// `record_conflict`, `capacity`, `store_failed` (also when the enrolled hosts, or what the
-    /// store holds for the host id, cannot be read: nothing is written then).
+    /// also the BMC MAC, neither a data MAC nor a serial, or a platform that is not a Linux
+    /// one), `invalid_window`,
+    /// `record_exists`, `record_conflict`, `capacity`, `store_failed` (also when the enrolled
+    /// hosts, or what the store holds for the host id, cannot be read: nothing is written
+    /// then).
     pub fn add_record(
         &self,
         caller: &Caller,
         request: proto::AddRecordRequest,
     ) -> Result<proto::AddRecordResponse, proto::EnrollmentRefusal> {
         let by = caller.operator()?;
-        let record = record_of(request, by, self.ops.unix_now())?;
+        let now = self.ops.unix_now();
+        let fleet = self.lock_fleet();
+        let groups = held_in(&self.desired);
+        let record = record_of(request, by, now, &self.ops.record_window(), groups.as_ref())?;
         let hosts = self
             .enrolled_hosts()
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
@@ -530,8 +720,11 @@ impl Coordinator {
                 .contains(&record.host_id);
             Ok(())
         })?;
+        drop(fleet);
+        let shown = record_proto(&record, enrolled, held, now, groups.is_some());
+        self.approve_waiting(&record.host_id);
         Ok(proto::AddRecordResponse {
-            record: Some(record_proto(&record, enrolled, held)),
+            record: Some(shown),
             entry: Some(entry_proto(&done)),
         })
     }
@@ -540,7 +733,8 @@ impl Coordinator {
     /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` when a host is
     /// enrolled against it; with `enrolled` set, only the records whose `enrolled` is that.
     /// Each record of the page says what the enrollment store holds for its host id
-    /// (`host_held`, [`Coordinator::host_held`]), read after the page is chosen. Changes nothing.
+    /// (`host_held`, [`Coordinator::host_held`]), read after the page is chosen, and where its
+    /// approval window stands at the time of the call (`state`). Changes nothing.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (a page token that is no host id),
@@ -565,6 +759,8 @@ impl Coordinator {
         let hosts = self
             .enrolled_hosts()
             .map_err(unreadable(proto::EnrollmentRefusal::StoreFailed))?;
+        let now = self.ops.unix_now();
+        let by_group = self.desired.in_group_mode();
         let (mut records, more) = self.ops.read(|state| {
             let enrolled = RecordIndex::new(&state.inventory).enrolled(&hosts);
             let mut rest = state
@@ -576,6 +772,8 @@ impl Coordinator {
                         r,
                         enrolled.contains(&r.host_id),
                         proto::HostHeld::Unspecified,
+                        now,
+                        by_group,
                     )
                 })
                 .filter(|r| request.enrolled.is_none_or(|want| r.enrolled == want));

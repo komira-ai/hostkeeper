@@ -1,0 +1,283 @@
+// hostkeeper.operator.v1: the `HostGroups` service of the operator API, its refusals
+// (`HostGroupsRefusal`) and its messages: the host groups the coordinator holds, each a name, the
+// ordered list of the packages its hosts run and one rollout policy, and the move of a host from
+// one group to another (docs/design/hostgroups.md). The rest of the package is in other files:
+// `Enrollment` and `EnrollmentRefusal` in enrollment.proto, and `Audit`, `AuditRefusal` and the
+// other services in operator.proto. This file is the same package and API, kept apart so that
+// each file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `HostGroups` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `HostGroupsRefusal`, written as
+// the value's name without the prefix, in lower case; the status code is the one each value
+// names. A refused request changes nothing, and a call that cannot write its audit line changes
+// nothing either (`audit_unavailable`).
+//
+// Units: as operator.proto says. A host group's name is a role name: 1 to 32 bytes of
+// `[a-z0-9-]`, a letter first, no `--`, not ending in `-`. A package is a service name. A request
+// is at most 4 KiB, but `Put`'s is at most 64 KiB. A percent is 1 to 100.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/operator.proto";
+
+// The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host
+// is in exactly one group, and runs exactly the packages its group lists. Each mutating call
+// takes a reason and answers the audit entry it wrote.
+service HostGroups {
+  // Every group, by name, a page at a time, each with its packages, policy, generation, host
+  // count and, per package, its desired version. Changes nothing.
+  rpc List(ListHostGroupsRequest) returns (ListHostGroupsResponse);
+  // One group, with, per package, its desired version, minimum version and convergence, and a
+  // page of its hosts. Changes nothing.
+  rpc Get(GetHostGroupRequest) returns (GetHostGroupResponse);
+  // Create a group, or replace one whole. A package taken out of the list is uninstalled from
+  // the group's hosts; one added is installed once the group has a desired version for it. A
+  // package's minimum version in the group is not part of the body: `Put` neither reads nor
+  // resets it (`Services.SetMinVersion` writes it). Audited `host_group_put`.
+  rpc Put(PutHostGroupRequest) returns (PutHostGroupResponse);
+  // Remove a group no host is in or moving into, and that no inventory record, pending approval
+  // or Mac allowlist entry names, with its desired versions and plan positions. Audited
+  // `host_group_remove`.
+  rpc Remove(RemoveHostGroupRequest) returns (RemoveHostGroupResponse);
+  // Move an enrolled host into another group, in one call: it is in the new group from this
+  // write, and is moving until its packages match the new group's. Audited `host_move`.
+  rpc Move(MoveHostRequest) returns (MoveHostResponse);
+}
+
+// Why `HostGroups` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum HostGroupsRefusal {
+  HOST_GROUPS_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no bearer, or not the operator token.
+  HOST_GROUPS_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `HostGroups` does not take.
+  HOST_GROUPS_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a field breaks its rule (a node id, a reason, a page token, a limit), or the
+  // request is over its size.
+  HOST_GROUPS_REFUSAL_INVALID_REQUEST = 3;
+  // INTERNAL: the change could not be written, or the store read; nothing changed, and asking
+  // again is safe.
+  HOST_GROUPS_REFUSAL_STORE_FAILED = 4;
+  // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
+  // changed, and asking again is safe once the file takes lines again.
+  HOST_GROUPS_REFUSAL_AUDIT_UNAVAILABLE = 5;
+  // NOT_FOUND: the coordinator holds no group of the name.
+  HOST_GROUPS_REFUSAL_UNKNOWN_HOST_GROUP = 6;
+  // INVALID_ARGUMENT: `Put` of a group whose name breaks its rule.
+  HOST_GROUPS_REFUSAL_INVALID_HOST_GROUP = 7;
+  // INVALID_ARGUMENT: `Put` of a group whose list names a package that is no service name, or
+  // names one package twice.
+  HOST_GROUPS_REFUSAL_INVALID_PACKAGE = 8;
+  // INVALID_ARGUMENT: `Put` of a policy with a key out of its range; the audit and the log name
+  // the key.
+  HOST_GROUPS_REFUSAL_INVALID_POLICY = 9;
+  // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper` (an empty list
+  // included).
+  HOST_GROUPS_REFUSAL_HOSTKEEPER_NOT_LISTED = 10;
+  // INVALID_ARGUMENT: `Put` of a group that lists more than 64 packages.
+  HOST_GROUPS_REFUSAL_TOO_MANY_PACKAGES = 11;
+  // FAILED_PRECONDITION: `Put` that replaces a group and names no `if_generation`, or one that is
+  // not the group's generation now; or `Put` that names an `if_generation` for a group that does
+  // not exist.
+  HOST_GROUPS_REFUSAL_GENERATION_MISMATCH = 12;
+  // FAILED_PRECONDITION: `Remove` of a group a host is in or moving into, or that an inventory
+  // record, a pending approval or the Mac allowlist names.
+  HOST_GROUPS_REFUSAL_NOT_EMPTY = 13;
+  // NOT_FOUND: `Move` of a host the coordinator has not enrolled.
+  HOST_GROUPS_REFUSAL_UNKNOWN_HOST = 14;
+  // FAILED_PRECONDITION: `Move` of a host into the group it is in.
+  HOST_GROUPS_REFUSAL_SAME_HOST_GROUP = 15;
+}
+
+// A group's body, as `Put` takes it and the answers carry it.
+message HostGroup {
+  // The group's name.
+  string name = 1;
+  // The packages its hosts run, 1 to 64, none twice, `hostkeeper` among them. The order is the
+  // order in which a host is offered its packages and the order of installs: a host is offered
+  // the install of a package only once every package before it is installed or cannot be.
+  // Uninstalls run in the reverse order.
+  repeated string packages = 2;
+  // How every package of the group rolls out; absent: every key at its default.
+  RolloutPolicy policy = 3;
+}
+
+// The rollout policy of every package of a group. A key left out takes its default.
+message RolloutPolicy {
+  // The update plan: 1 to 16 stages whose percents rise strictly to 100. Empty: the default plan,
+  // `[1, 10, 50, 100]`, every stage entered by itself.
+  repeated PolicyStage stages = 1;
+  // A first stage of this many hosts, entered by itself, before the stages; absent: none.
+  Canary canary = 2;
+  // Healthy beats a host at the desired version sends before its stage can be done: 0 (the
+  // default) to 100.
+  uint32 bake_beats = 3;
+  // Whether the coordinator rolls a package back by itself when a release fails on enough hosts.
+  RollbackMode rollback = 4;
+  // How many hosts must fail before it does; absent: 25 percent and 2 hosts.
+  FailThreshold rollback_after_failed = 5;
+  // How long a host that deferred an update is left alone; absent: 300, 2 and 3600.
+  DeferBackoff defer_backoff = 6;
+  // How many hosts of the group may update one package at once, 0 to 10000; absent: 1. 0 holds
+  // the group: none of its hosts is ordered.
+  optional uint32 max_updating = 7;
+  // The fewest live hosts of the group that must stay up for a package while others update it, 0
+  // (the default) to 10000.
+  uint32 min_up = 8;
+  // How many of the group's packages may have a live rollout at once, 1 to 16; absent: the
+  // coordinator's `--live-rollouts`.
+  optional uint32 live_rollouts = 9;
+}
+
+// One stage of a group's update plan.
+message PolicyStage {
+  // The percent of the group's eligible hosts the plan reaches once the stage is done, 1 to 100.
+  uint32 percent = 1;
+  // How the plan enters it: UNSPECIFIED is AUTO.
+  StageAdvance advance = 2;
+}
+
+// A canary: a first stage of a number of hosts.
+message Canary {
+  // How many hosts, 1 to 10000.
+  uint32 count = 1;
+}
+
+// Whether a group's packages roll back by themselves.
+enum RollbackMode {
+  // MANUAL, the default.
+  ROLLBACK_MODE_UNSPECIFIED = 0;
+  // An operator sets the version back.
+  ROLLBACK_MODE_MANUAL = 1;
+  // The coordinator sets the group's last good version when a release fails on enough hosts.
+  ROLLBACK_MODE_AUTOMATIC = 2;
+}
+
+// How many hosts must fail a release before an automatic rollback: the larger of `min_hosts` and
+// `percent` of the live hosts, rounded up. A key left out takes its default.
+message FailThreshold {
+  // 1 to 100; absent: 25.
+  optional uint32 percent = 1;
+  // 1 to 10000; absent: 2.
+  optional uint32 min_hosts = 2;
+}
+
+// The backoff of a deferral: the n-th deferral of one version waits `initial_secs *
+// factor^(n-1)`, capped at `max_secs`, or the host's own `retry_after_secs` if that is larger. A
+// key left out takes its default.
+message DeferBackoff {
+  // At least 1; absent: 300.
+  optional uint64 initial_secs = 1;
+  // 1 to 16; absent: 2.
+  optional uint32 factor = 2;
+  // At least `initial_secs` and at most 604800 (7 days); absent: 3600.
+  optional uint64 max_secs = 3;
+}
+
+// A group as the coordinator holds it.
+message HostGroupState {
+  HostGroup group = 1;
+  // Raised by every change of the group; what a `Put` that replaces it names.
+  uint64 generation = 2;
+  // How many enrolled hosts are in the group, those moving into it included.
+  uint32 hosts = 3;
+  // Each package of the group, in its list's order.
+  repeated GroupPackage packages = 4;
+}
+
+// One package of a group.
+message GroupPackage {
+  string package = 1;
+  // The group's desired version of it; absent when none was set.
+  optional string desired_version = 2;
+  // The group's minimum version of it, as `Services.SetMinVersion` set it; absent when none was
+  // set. Answered by `Get` only.
+  optional string min_version = 3;
+  // How far the group's hosts are from its desired version. Answered by `Get` only.
+  Convergence convergence = 4;
+}
+
+message ListHostGroupsRequest {
+  // The most groups to return; capped at 256, and 0 means the cap.
+  uint32 limit = 1;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 2;
+}
+
+message ListHostGroupsResponse {
+  // By name.
+  repeated HostGroupState host_groups = 1;
+  // The token of the next page; empty on the last.
+  string next_page_token = 2;
+}
+
+message GetHostGroupRequest {
+  // The group.
+  string host_group = 1;
+  // The most hosts to return; capped at 256, and 0 means the cap.
+  uint32 limit = 2;
+  // Where to go on, as `next_page_token` gave it; empty for the first page.
+  string page_token = 3;
+}
+
+message GetHostGroupResponse {
+  HostGroupState host_group = 1;
+  // A page of the group's hosts, by node id, those moving into it included.
+  repeated string node_ids = 2;
+  // The token of the next page of hosts; empty on the last.
+  string next_page_token = 3;
+}
+
+message PutHostGroupRequest {
+  // The group's body, whole.
+  HostGroup host_group = 1;
+  // The generation of the group this replaces, as `List` or `Get` answered it. Absent to create a
+  // group; a replacement without it is refused `generation_mismatch`.
+  optional uint64 if_generation = 2;
+  // Why; 1 to 256 bytes.
+  string reason = 3;
+}
+
+message PutHostGroupResponse {
+  // The `host_group_put` entry; its reason names what changed.
+  AuditEntry entry = 1;
+  // The group's generation after the change.
+  uint64 generation = 2;
+}
+
+message RemoveHostGroupRequest {
+  // The group.
+  string host_group = 1;
+  // Why; 1 to 256 bytes.
+  string reason = 2;
+}
+
+message RemoveHostGroupResponse {
+  // The `host_group_remove` entry.
+  AuditEntry entry = 1;
+}
+
+message MoveHostRequest {
+  // The host, by the host id it was enrolled as.
+  string node_id = 1;
+  // The group it moves into.
+  string host_group = 2;
+  // Why; 1 to 256 bytes.
+  string reason = 3;
+}
+
+message MoveHostResponse {
+  // The `host_move` entry: its `node_id` is the host, its `host_group` the new group, and its
+  // reason "from <old> to <new>: " followed by the request's reason.
+  AuditEntry entry = 1;
+  // The group the host was in.
+  string from_host_group = 2;
+}

@@ -2,23 +2,28 @@
 //! try rules, the halt, and the step runner's verdicts, all on fakes of the daemon's ports.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::sync::Arc;
 
 use hostkeeper_config::names::ServiceName;
-use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::{FakeClock, manifest, spawn};
 use hostkeeper_daemon::verb::{DIGEST_RULE, NO_TRY, NO_VERB, SERVICE_RULE, VERSION_RULE};
 use hostkeeper_daemon::verbs::update::declared_params;
 use hostkeeper_daemon::{Refusal, Reply};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_proto::hostkeeper::agent::v1::{
-    Abort, ClearHalt, Force, Install, Order, Uninstall, order,
+    Abort, ClearHalt, ClearRecord, Force, Install, Order, Uninstall, order,
 };
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 use hostkeeper_steps::record::{Loaded, RECORD_FILE};
 use hostkeeper_steps::{RecordStore, tree_digest};
-use support::{Rig, d, digest, force_rollback, update};
+use support::versions::hook_path;
+use support::{d, digest, force_rollback, update};
+use support_apt::with_entry;
+use support_host::{NativeHost, pv};
 
 fn succeeded() -> Reply {
     Reply::Finished {
@@ -43,7 +48,7 @@ fn name(text: &str) -> ServiceName {
 }
 
 /// The step record of `service`, which must be there.
-fn record_of(rig: &Rig, service: &str) -> Box<hostkeeper_steps::Record> {
+fn record_of(rig: &NativeHost, service: &str) -> Box<hostkeeper_steps::Record> {
     match RecordStore::new(&rig.state.join(service))
         .load()
         .expect("load")
@@ -53,17 +58,17 @@ fn record_of(rig: &Rig, service: &str) -> Box<hostkeeper_steps::Record> {
     }
 }
 
-fn no_record(rig: &Rig, service: &str) -> bool {
+fn no_record(rig: &NativeHost, service: &str) -> bool {
     !rig.state.join(service).join(RECORD_FILE).exists()
 }
 
-/// Catches a malformed order that reaches the package store or a lock: every row is refused
+/// Catches a malformed order that reaches the package manager or a lock: every row is refused
 /// `invalid_order` with a text that names its field, before anything is asked or written.
 #[test]
 fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
-    let rig = Rig::new("malformed");
+    let rig = NativeHost::new("malformed");
     let daemon = rig.daemon();
-    let ok = d();
+    let ok = support::d();
     let long_version = "1".repeat(256);
     let long_service = "s".repeat(256);
     let upper = "AB".repeat(32);
@@ -133,6 +138,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::Install(Install {
+                target: None,
                 service: "web".to_owned(),
                 version: "2.0.0".to_owned(),
                 package_digest: short.clone(),
@@ -143,6 +149,7 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
         ),
         (
             with_verb(order::Verb::Force(Force {
+                target: None,
                 service: "web".to_owned(),
                 version: ".1".to_owned(),
                 package_digest: ok.clone(),
@@ -174,6 +181,13 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             "clear_halt.service",
             SERVICE_RULE,
         ),
+        (
+            with_verb(order::Verb::ClearRecord(ClearRecord {
+                service: "-web".to_owned(),
+            })),
+            "clear_record.service",
+            SERVICE_RULE,
+        ),
     ];
     for (order, field, rule) in rows {
         assert_eq!(
@@ -185,85 +199,25 @@ fn an_unspecified_or_malformed_order_is_refused_naming_the_field() {
             "{order:?}"
         );
     }
-    assert!(rig.store.asked().is_empty());
+    assert!(rig.tools().is_empty());
     assert!(!rig.state.exists());
 }
 
-/// Catches the daemon trusting the order or the manifest alone: a package whose manifest names
-/// another service, or another version, than the order is refused `manifest_mismatch`, and
-/// nothing runs and no record is written.
-#[test]
-fn manifest_name_or_version_that_differs_from_the_order_is_refused() {
-    let rig = Rig::new("mismatch");
-    rig.running("web", support::BASE);
-    let daemon = rig.daemon();
-    rig.store.add("web", "2.0.0", &manifest("api", "2.0.0"));
-    rig.store.add("web", "2.1.0", &manifest("web", "2.2.0"));
-    for (version, expected, found) in [("2.0.0", "web", "api"), ("2.1.0", "2.1.0", "2.2.0")] {
-        let reply = daemon.order(&update("web", version, &d(), 1));
-        assert_eq!(
-            reply.refusal(),
-            Some(Refusal::ManifestMismatch),
-            "{reply:?}"
-        );
-        let Reply::Refused { detail, .. } = reply else {
-            panic!("not refused");
-        };
-        assert!(
-            detail.contains(expected) & detail.contains(found),
-            "{detail}"
-        );
-    }
-    assert!(rig.launcher.runs().is_empty());
-    assert!(no_record(&rig, "web"));
-}
-
 /// Catches a package that needs a newer daemon being run: `min_hostkeeper` above this daemon's
-/// own version is `daemon_too_old`, and nothing runs.
+/// own version is `daemon_too_old`, and nothing runs, is staged or is written.
 #[test]
 fn min_hostkeeper_above_the_running_daemon_is_refused() {
-    let rig = Rig::new("too-old");
-    rig.running("web", support::BASE);
+    let rig = NativeHost::new("too-old");
+    rig.seeded("web", support::BASE);
     let daemon = rig.daemon();
     let text = manifest("web", "2.0.0")
         .replace("min_hostkeeper = \"0.1.0\"", "min_hostkeeper = \"0.2.0\"");
-    rig.store.add("web", "2.0.0", &text);
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    rig.manifest("web", "2.0.0", &text);
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::DaemonTooOld), "{reply:?}");
     assert!(rig.launcher.runs().is_empty());
+    assert!(rig.tools().is_empty());
     assert!(no_record(&rig, "web"));
-}
-
-/// Catches a package built for another platform being run: a manifest naming any platform but
-/// this daemon's own (`Platform::current()`) is `manifest_mismatch`, naming both platforms, and
-/// nothing runs.
-#[test]
-fn a_package_for_another_platform_is_refused() {
-    let own = hostkeeper_config::platform::Platform::current();
-    let others = hostkeeper_config::platform::Platform::ALL
-        .into_iter()
-        .filter(|platform| *platform != own);
-    for other in others {
-        let rig = Rig::new("other-platform");
-        rig.running("web", support::BASE);
-        let daemon = rig.daemon();
-        let text = manifest("web", "2.0.0").replace(
-            &format!("platform = \"{own}\""),
-            &format!("platform = \"{other}\""),
-        );
-        rig.store.add("web", "2.0.0", &text);
-        let Reply::Refused { refusal, detail } = daemon.order(&update("web", "2.0.0", &d(), 1))
-        else {
-            panic!("not refused");
-        };
-        assert_eq!(refusal, Refusal::ManifestMismatch);
-        assert_eq!(
-            detail,
-            format!("the manifest is for the platform {other}, not {own}")
-        );
-        assert!(rig.launcher.runs().is_empty());
-        assert!(no_record(&rig, "web"));
-    }
 }
 
 /// Catches a downgrade rule that ignores the verb, or compares versions as strings: with
@@ -271,20 +225,20 @@ fn a_package_for_another_platform_is_refused() {
 /// and a `force_rollback` of the same package runs.
 #[test]
 fn an_update_below_the_running_version_is_refused_but_force_rollback_is_accepted() {
-    let rig = Rig::new("below");
+    let rig = NativeHost::new("below");
     let daemon = rig.daemon();
-    rig.running("web", "1.10.0");
+    rig.seeded("web", "1.10.0");
     rig.add("web", "1.9.0");
     assert_eq!(
-        daemon.order(&update("web", "1.9.0", &d(), 1)),
+        daemon.order(&rig.update("web", "1.9.0", 1)),
         Reply::Refused {
             refusal: Refusal::BelowRunning,
             detail: "1.9.0 is below 1.10.0".to_owned(),
         }
     );
-    assert!(rig.store.asked().is_empty());
+    assert!(rig.tools().is_empty());
     assert_eq!(
-        daemon.order(&force_rollback("web", "1.9.0", &d(), 2)),
+        daemon.order(&rig.force_rollback("web", "1.9.0", 2)),
         succeeded()
     );
     assert_eq!(rig.launcher.steps("web")[0], Step::Prepare);
@@ -296,20 +250,18 @@ fn an_update_below_the_running_version_is_refused_but_force_rollback_is_accepted
 /// waits for the step lock, and both end).
 #[test]
 fn a_second_order_while_one_runs_is_busy() {
-    let rig = Rig::new("busy");
+    let rig = NativeHost::new("busy");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "3.0.0");
     rig.add("beta", "2.0.0");
     let gate = rig.launcher.hold("alpha", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
     let first = {
-        let daemon = Arc::clone(&daemon);
-        spawn("alpha's order", move || {
-            daemon.order(&update("alpha", "2.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update("alpha", "2.0.0", 1));
+        spawn("alpha's order", move || daemon.order(&order))
     };
     gate.entered(&first).expect("alpha's prepare runs");
-    let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
+    let other = daemon.order(&rig.update("alpha", "3.0.0", 2));
     assert_eq!(
         other,
         Reply::Refused {
@@ -317,16 +269,14 @@ fn a_second_order_while_one_runs_is_busy() {
             detail: "alpha is locked by an order to update it to 2.0.0".to_owned(),
         }
     );
-    let asked = rig.store.notified();
+    let asked = rig.asked();
     let second = {
-        let daemon = Arc::clone(&daemon);
-        spawn("beta's order", move || {
-            daemon.order(&update("beta", "2.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update("beta", "2.0.0", 1));
+        spawn("beta's order", move || daemon.order(&order))
     };
     assert_eq!(
         asked.wait(&second).expect("beta asks for its package"),
-        "beta 2.0.0"
+        format!("beta={}", pv("2.0.0"))
     );
     gate.release();
     assert_eq!(first.join().expect("the first order"), succeeded());
@@ -338,21 +288,17 @@ fn a_second_order_while_one_runs_is_busy() {
 /// answered `Running`, and once it ended with its recorded verdict; the hook ran once.
 #[test]
 fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
-    let rig = Rig::new("resend");
+    let rig = NativeHost::new("resend");
     rig.add("web", "2.0.0");
     let gate = rig.launcher.hold("web", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
+    let order = rig.update("web", "2.0.0", 1);
     let first = {
-        let daemon = Arc::clone(&daemon);
-        spawn("the order", move || {
-            daemon.order(&update("web", "2.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), order.clone());
+        spawn("the order", move || daemon.order(&order))
     };
     gate.entered(&first).expect("the prepare runs");
-    assert_eq!(
-        daemon.order(&update("web", "2.0.0", &d(), 1)),
-        Reply::Running
-    );
+    assert_eq!(daemon.order(&order), Reply::Running);
     gate.release();
     assert_eq!(first.join().expect("the order"), succeeded());
     let steps = [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup];
@@ -360,10 +306,7 @@ fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
     let ended = Verdict::Succeeded {
         promotion_pending: false,
     };
-    assert_eq!(
-        daemon.order(&update("web", "2.0.0", &d(), 1)),
-        resent(ended)
-    );
+    assert_eq!(daemon.order(&order), resent(ended));
     assert_eq!(rig.launcher.steps("web"), steps);
 }
 
@@ -372,15 +315,16 @@ fn a_second_order_for_the_same_package_is_a_resend_not_a_second_run() {
 /// step record, and runs nothing.
 #[test]
 fn resend_after_daemon_death_returns_the_recorded_verdict() {
-    let rig = Rig::new("death");
+    let rig = NativeHost::new("death");
     rig.add("web", "2.0.0");
+    let order = rig.update("web", "2.0.0", 4);
     rig.launcher.exits("web", Step::Prepare, &[1]);
     let first = rig.daemon();
     let failed = Verdict::Failed {
         phase: Phase::BeforeCommit,
         class: Class::Release,
     };
-    let reply = first.order(&update("web", "2.0.0", &d(), 4));
+    let reply = first.order(&order);
     assert_eq!(
         reply,
         Reply::Finished {
@@ -392,10 +336,7 @@ fn resend_after_daemon_death_returns_the_recorded_verdict() {
     drop(first);
     let runs = rig.launcher.runs().len();
     let second = rig.daemon();
-    assert_eq!(
-        second.order(&update("web", "2.0.0", &d(), 4)),
-        resent(failed)
-    );
+    assert_eq!(second.order(&order), resent(failed));
     assert_eq!(rig.launcher.runs().len(), runs);
     assert_eq!(record_of(&rig, "web").order_try, Some(4));
 }
@@ -403,59 +344,65 @@ fn resend_after_daemon_death_returns_the_recorded_verdict() {
 /// Catches a same-try order with another version being run or answered from the record.
 #[test]
 fn same_try_with_a_different_version_is_try_conflict() {
-    let rig = Rig::new("conflict-v");
+    let rig = NativeHost::new("conflict-v");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 3)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 3)), succeeded());
     assert_eq!(
-        daemon.order(&update("web", "2.1.0", &d(), 3)),
+        daemon.order(&rig.update("web", "2.1.0", 3)),
         Reply::Refused {
             refusal: Refusal::TryConflict,
             detail: "update 2.1.0 try 3 of web; the step record holds try 3".to_owned(),
         }
     );
-    assert_eq!(rig.store.asked().len(), 1);
+    assert_eq!(rig.downloads(), 1);
 }
 
 /// Catches a same-try order with another digest being taken for a resend.
 #[test]
 fn same_try_with_a_different_digest_is_try_conflict() {
-    let rig = Rig::new("conflict-d");
+    let rig = NativeHost::new("conflict-d");
     rig.add("web", "2.0.0");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 3)), succeeded());
-    let reply = daemon.order(&update("web", "2.0.0", &digest("cd"), 3));
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 3)), succeeded());
+    let other = digest("cd");
+    let entry = Target {
+        digest: other.clone(),
+        ..rig.entry("web", "2.0.0")
+    };
+    let order = with_entry(update("web", "2.0.0", &other, 3), &entry);
+    let reply = daemon.order(&order);
     assert_eq!(reply.refusal(), Some(Refusal::TryConflict));
-    assert_eq!(rig.store.asked().len(), 1);
+    assert_eq!(rig.downloads(), 1);
 }
 
 /// Catches a lower try being run (a stale resend from before a coordinator restart), for
 /// another package and for the same one.
 #[test]
 fn a_lower_try_is_stale_try() {
-    let rig = Rig::new("stale");
+    let rig = NativeHost::new("stale");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 5)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 5)), succeeded());
     for version in ["2.1.0", "2.0.0"] {
-        let reply = daemon.order(&update("web", version, &d(), 4));
+        let reply = daemon.order(&rig.update("web", version, 4));
         assert_eq!(reply.refusal(), Some(Refusal::StaleTry), "{version}");
     }
-    assert_eq!(rig.store.asked().len(), 1);
+    assert_eq!(rig.downloads(), 1);
 }
 
 /// Catches a higher try that is not run once the last order ended: it runs, and the record
 /// keeps its try.
 #[test]
 fn a_higher_try_runs_once_the_last_order_ended() {
-    let rig = Rig::new("higher");
+    let rig = NativeHost::new("higher");
     rig.add("web", "2.0.0");
     rig.add("web", "2.1.0");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 1)), succeeded());
-    assert_eq!(daemon.order(&update("web", "2.1.0", &d(), 2)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.1.0", 2)), succeeded());
     let rec = record_of(&rig, "web");
     assert_eq!(
         (rec.target_version.as_str(), rec.order_try),
@@ -469,16 +416,16 @@ fn a_higher_try_runs_once_the_last_order_ended() {
 /// try resumes the unfinished order, stopping its unit by name first.
 #[test]
 fn a_higher_try_during_an_unfinished_different_package_is_busy() {
-    let rig = Rig::new("unfinished");
+    let rig = NativeHost::new("unfinished");
     rig.add("web", "2.0.0");
     rig.add("web", "3.0.0");
     rig.launcher.lose("web", Step::Cutover);
     let daemon = rig.daemon();
-    let lost = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let lost = daemon.order(&rig.update("web", "2.0.0", 1));
     assert_eq!(lost.refusal(), Some(Refusal::LauncherFailed), "{lost:?}");
-    let reply = daemon.order(&update("web", "3.0.0", &d(), 2));
+    let reply = daemon.order(&rig.update("web", "3.0.0", 2));
     assert_eq!(reply.refusal(), Some(Refusal::Busy), "{reply:?}");
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 2)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 2)), succeeded());
     assert_eq!(rig.launcher.stops(), ["updater-web-cutover-1"]);
     assert_eq!(
         rig.launcher.steps("web"),
@@ -498,14 +445,14 @@ fn a_higher_try_during_an_unfinished_different_package_is_busy() {
 /// still runs.
 #[test]
 fn a_halt_record_holds_every_later_order_for_the_service_and_no_other() {
-    let rig = Rig::new("halt");
-    rig.running("alpha", "1.0.0");
+    let rig = NativeHost::new("halt");
+    rig.seeded("alpha", "1.0.0");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "2.1.0");
     rig.add("beta", "2.0.0");
     rig.launcher.exits("alpha", Step::Prepare, &[76]);
     let daemon = rig.daemon();
-    let halted = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let halted = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(
         halted,
         Reply::Finished {
@@ -515,10 +462,10 @@ fn a_halt_record_holds_every_later_order_for_the_service_and_no_other() {
         }
     );
     let later = [
-        update("alpha", "2.1.0", &d(), 2),
-        update("alpha", "2.0.0", &d(), 2),
-        force_rollback("alpha", "1.0.0", &d(), 3),
-        update("alpha", "2.1.0", &d(), 1),
+        rig.update("alpha", "2.1.0", 2),
+        rig.update("alpha", "2.0.0", 2),
+        rig.force_rollback("alpha", "1.0.0", 3),
+        rig.update("alpha", "2.1.0", 1),
     ];
     for order in later {
         assert_eq!(
@@ -528,25 +475,26 @@ fn a_halt_record_holds_every_later_order_for_the_service_and_no_other() {
         );
     }
     assert_eq!(
-        daemon.order(&update("alpha", "2.0.0", &d(), 1)),
+        daemon.order(&rig.update("alpha", "2.0.0", 1)),
         resent(Verdict::Halt)
     );
     assert_eq!(rig.launcher.steps("alpha"), [Step::Prepare]);
-    assert_eq!(daemon.order(&update("beta", "2.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("beta", "2.0.0", 1)), succeeded());
 }
 
 /// Catches the daemon running anything but the new package's hook, in another order, or
 /// touching the release it replaces: `prepare` (given the version directory), `cutover`,
-/// `verify`, `cleanup`, each the new package's `bin/hook`; the release it replaces keeps its
-/// digest and is the record's previous release; the verdict is in the reply and the record.
+/// `verify`, `cleanup`, each the new package's hook program in its sealed tree; the release it
+/// replaces keeps its digest and is the record's previous release; the verdict is in the reply
+/// and the record.
 #[test]
 fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
-    let rig = Rig::new("five");
-    let old = rig.running("web", "1.0.0");
+    let rig = NativeHost::new("five");
+    let old = rig.seeded("web", "1.0.0");
     let new = rig.add("web", "2.0.0");
     let old_digest = tree_digest(&old).expect("the old tree");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 1)), succeeded());
     let runs = rig.launcher.runs();
     let steps: Vec<Step> = runs.iter().map(|ran| ran.step).collect();
     assert_eq!(
@@ -554,7 +502,8 @@ fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
         [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
     );
     for ran in &runs {
-        assert_eq!(ran.executable, new.join("bin/hook"), "{ran:?}");
+        let program = new.join("tree").join(hook_path("web"));
+        assert_eq!(ran.executable, program, "{ran:?}");
         let artifact = (ran.step == Step::Prepare).then(|| new.clone());
         assert_eq!(ran.artifact, artifact, "{ran:?}");
         assert_eq!(ran.unit, format!("updater-web-{}-1", ran.step));
@@ -562,7 +511,7 @@ fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
     assert_eq!(tree_digest(&old).expect("the old tree"), old_digest);
     let rec = record_of(&rig, "web");
     assert_eq!(rec.previous_digest, Some(old_digest));
-    assert_eq!(rec.tarball_digest, d());
+    assert_eq!(rec.tarball_digest, rig.pin("web", "2.0.0"));
     let status = daemon.status().expect("status");
     let web = &status.services[0];
     assert_eq!(
@@ -577,13 +526,13 @@ fn an_update_runs_the_five_steps_of_the_new_packages_hook_in_order() {
 /// `rollback` runs, the verdict is failed before the commit.
 #[test]
 fn a_failed_prepare_reports_failed_before_commit_and_runs_rollback() {
-    let rig = Rig::new("prep-fail");
-    rig.running("web", "1.0.0");
+    let rig = NativeHost::new("prep-fail");
+    rig.seeded("web", "1.0.0");
     rig.add("web", "2.0.0");
     rig.launcher.exits("web", Step::Prepare, &[1]);
     let daemon = rig.daemon();
     assert_eq!(
-        daemon.order(&update("web", "2.0.0", &d(), 1)),
+        daemon.order(&rig.update("web", "2.0.0", 1)),
         Reply::Finished {
             verdict: Verdict::Failed {
                 phase: Phase::BeforeCommit,
@@ -600,7 +549,7 @@ fn a_failed_prepare_reports_failed_before_commit_and_runs_rollback() {
 /// `prepare` that exits 75 is rolled back and deferred, and one that exits 76 halts at once.
 #[test]
 fn exit_75_reports_deferred_and_exit_76_reports_halt() {
-    let rig = Rig::new("exits");
+    let rig = NativeHost::new("exits");
     rig.add("alpha", "2.0.0");
     rig.add("beta", "2.0.0");
     rig.launcher.exits("alpha", Step::Prepare, &[75]);
@@ -609,7 +558,7 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
     let deferred = Verdict::Deferred {
         retry_after_secs: None,
     };
-    let reply = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(
         reply,
         Reply::Finished {
@@ -619,7 +568,7 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
         }
     );
     assert_eq!(rig.launcher.steps("alpha"), [Step::Prepare, Step::Rollback]);
-    let reply = daemon.order(&update("beta", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("beta", "2.0.0", 1));
     assert_eq!(
         reply,
         Reply::Finished {
@@ -637,7 +586,7 @@ fn exit_75_reports_deferred_and_exit_76_reports_halt() {
 /// another service and the status still work.
 #[test]
 fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
-    let rig = Rig::new("unstopped");
+    let rig = NativeHost::new("unstopped");
     rig.add("alpha", "2.0.0");
     rig.add("alpha", "3.0.0");
     rig.add("beta", "2.0.0");
@@ -655,10 +604,8 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
         support::OWN,
     ));
     let first = {
-        let daemon = Arc::clone(&daemon);
-        spawn("alpha's order", move || {
-            daemon.order(&update("alpha", "2.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update("alpha", "2.0.0", 1));
+        spawn("alpha's order", move || daemon.order(&order))
     };
     gate.entered(&first).expect("alpha's prepare runs");
     // Past the bound of `prepare` (600 seconds): the dead-man tries to stop the step. It ticks,
@@ -674,11 +621,11 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
     assert_eq!(reply.refusal(), Some(Refusal::Unstopped), "{reply:?}");
     let alpha = name("alpha");
     assert!(daemon.ctx().locks.holder(&alpha).expect("held").stuck);
-    let other = daemon.order(&update("alpha", "3.0.0", &d(), 2));
+    let other = daemon.order(&rig.update("alpha", "3.0.0", 2));
     assert_eq!(other.refusal(), Some(Refusal::Busy));
-    let resend = daemon.order(&update("alpha", "2.0.0", &d(), 1));
+    let resend = daemon.order(&rig.update("alpha", "2.0.0", 1));
     assert_eq!(resend.refusal(), Some(Refusal::Busy), "{resend:?}");
-    assert_eq!(daemon.order(&update("beta", "2.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("beta", "2.0.0", 1)), succeeded());
     let status = daemon.status().expect("status");
     let names: Vec<_> = status
         .services
@@ -695,25 +642,23 @@ fn an_unstoppable_step_keeps_the_service_lock_and_the_daemon_serving() {
 /// step starts only after the held service's last step, and no two runs overlap.
 #[test]
 fn lock_order_is_service_then_step() {
-    let rig = Rig::new("lock-order");
+    let rig = NativeHost::new("lock-order");
     rig.add("alpha", "2.0.0");
     rig.add("beta", "2.0.0");
     let alpha_gate = rig.launcher.hold("alpha", Step::Verify);
     let beta_gate = rig.launcher.hold("beta", Step::Prepare);
     let daemon = Arc::new(rig.daemon());
     let order = |service: &'static str, what: &'static str| {
-        let daemon = Arc::clone(&daemon);
-        spawn(what, move || {
-            daemon.order(&update(service, "2.0.0", &d(), 1))
-        })
+        let (daemon, order) = (Arc::clone(&daemon), rig.update(service, "2.0.0", 1));
+        spawn(what, move || daemon.order(&order))
     };
     let alpha = order("alpha", "alpha's order");
     alpha_gate.entered(&alpha).expect("alpha's verify runs");
-    let asked = rig.store.notified();
+    let asked = rig.asked();
     let beta = order("beta", "beta's order");
     assert_eq!(
         asked.wait(&beta).expect("beta asks for its package"),
-        "beta 2.0.0"
+        format!("beta={}", pv("2.0.0"))
     );
     alpha_gate.release();
     beta_gate.entered(&beta).expect("beta's prepare runs");
@@ -730,50 +675,12 @@ fn lock_order_is_service_then_step() {
     assert_eq!(rig.launcher.most_running(), 1);
 }
 
-/// Catches a package failure that writes a step record or becomes a free string: each error of
-/// the package store reaches the reply as its token, with its text, and no record is written.
-#[test]
-fn package_errors_map_to_closed_reasons() {
-    let rig = Rig::new("pkg-errors");
-    rig.running("web", "1.0.0");
-    let daemon = rig.daemon();
-    let rows = [
-        (
-            PackageError::NotFound("none".to_owned()),
-            Refusal::PackageNotFound,
-        ),
-        (
-            PackageError::DigestMismatch("cd".to_owned()),
-            Refusal::DigestMismatch,
-        ),
-        (PackageError::NoSpace("full".to_owned()), Refusal::NoSpace),
-        (
-            PackageError::Other("eof".to_owned()),
-            Refusal::PackageFailed,
-        ),
-    ];
-    for (n, (error, refusal)) in rows.into_iter().enumerate() {
-        let version = format!("2.0.{n}");
-        rig.store.fail("web", &version, error.clone());
-        let reply = daemon.order(&update("web", &version, &d(), 1));
-        assert_eq!(
-            reply,
-            Reply::Refused {
-                refusal,
-                detail: error.to_string()
-            }
-        );
-    }
-    assert!(no_record(&rig, "web"));
-    assert!(rig.launcher.runs().is_empty());
-}
-
 /// Catches an order run over a step record the daemon cannot read, or one a newer daemon wrote
 /// (which must never be changed), or a record path it cannot read at all: each is refused with
 /// its token and nothing runs.
 #[test]
 fn a_record_that_cannot_be_read_stops_the_services_orders() {
-    let rig = Rig::new("records");
+    let rig = NativeHost::new("records");
     let daemon = rig.daemon();
     let rows = [
         ("corrupt", Refusal::RecordUnreadable),
@@ -790,10 +697,10 @@ fn a_record_that_cannot_be_read_stops_the_services_orders() {
             "newer" => fs::write(&path, r#"{"schema": 2}"#).expect("write"),
             _ => fs::create_dir(&path).expect("a directory"),
         }
-        let reply = daemon.order(&update(service, "2.0.0", &d(), 1));
+        let reply = daemon.order(&rig.update(service, "2.0.0", 1));
         assert_eq!(reply.refusal(), Some(refusal), "{service}: {reply:?}");
     }
-    assert!(rig.store.asked().is_empty());
+    assert!(rig.tools().is_empty());
     assert!(rig.launcher.runs().is_empty());
 }
 
@@ -803,12 +710,11 @@ fn a_record_that_cannot_be_read_stops_the_services_orders() {
 /// `release_unreadable` before anything runs.
 #[test]
 fn the_release_an_order_replaces_is_current_or_previous() {
-    let rig = Rig::new("previous");
-    let old = rig.add("web", "1.0.0");
-    rig.running("web", "2.0.0");
-    rig.store.link("web", "previous", "1.0.0");
+    let rig = NativeHost::new("previous");
+    let old = rig.seeded("web", "1.0.0");
+    rig.seeded("web", "2.0.0");
     let daemon = rig.daemon();
-    assert_eq!(daemon.order(&update("web", "2.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("web", "2.0.0", 1)), succeeded());
     let rec = record_of(&rig, "web");
     assert_eq!(
         rec.previous_digest,
@@ -817,7 +723,7 @@ fn the_release_an_order_replaces_is_current_or_previous() {
 
     rig.add("api", "2.0.0");
     rig.store.link("api", "current", "1.5.0");
-    let reply = daemon.order(&update("api", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("api", "2.0.0", 1));
     assert_eq!(
         reply.refusal(),
         Some(Refusal::ReleaseUnreadable),
@@ -831,25 +737,40 @@ fn the_release_an_order_replaces_is_current_or_previous() {
 /// nothing runs.
 #[test]
 fn a_state_directory_that_cannot_be_written_refuses_the_order() {
-    let rig = Rig::new("readonly");
+    let rig = NativeHost::new("readonly");
     rig.add("web", "2.0.0");
     fs::create_dir_all(&rig.state).expect("the state dir");
     std::os::unix::fs::symlink("nowhere", rig.state.join("web")).expect("a dangling link");
-    let reply = rig.daemon().order(&update("web", "2.0.0", &d(), 1));
+    let reply = rig.daemon().order(&rig.update("web", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::StoreFailed), "{reply:?}");
     assert!(rig.launcher.runs().is_empty());
 }
 
-/// Catches a package the store cannot seal (its directory is not there) reaching the runner:
-/// it is `package_failed`, and nothing is written.
+/// Catches a version the repository does not list reaching the runner: the order for it ends
+/// `Deferred` with the reason `not_in_repository` (the stage's own verdict), and nothing is
+/// written.
 #[test]
-fn a_package_the_store_cannot_seal_is_package_failed() {
-    let rig = Rig::new("no-seal");
-    rig.running("web", "1.0.0");
-    let reply = rig.daemon().order(&update("web", "9.9.9", &d(), 1));
-    assert_eq!(reply.refusal(), Some(Refusal::PackageFailed), "{reply:?}");
-    assert_eq!(rig.store.asked(), [("web".to_owned(), "9.9.9".to_owned())]);
+fn a_version_the_repository_does_not_list_is_deferred_and_writes_no_record() {
+    let rig = NativeHost::new("unlisted");
+    rig.seeded("web", "1.0.0");
+    let entry = Target {
+        digest: d(),
+        package_version: Some(pv("9.9.9")),
+        ..rig.entry("web", "1.0.0")
+    };
+    let order = with_entry(update("web", "9.9.9", &d(), 1), &entry);
+    let reply = rig.daemon().order(&order);
+    let Reply::Finished {
+        verdict: Verdict::Deferred { .. },
+        reason,
+        resent: false,
+    } = &reply
+    else {
+        panic!("not deferred: {reply:?}");
+    };
+    assert_eq!(reason.as_deref(), Some("not_in_repository"));
     assert!(no_record(&rig, "web"));
+    assert!(rig.launcher.runs().is_empty());
 }
 
 /// Catches a manifest table the hook's params refuse being handed to the hook: it is
@@ -868,13 +789,13 @@ fn declared_params_refuse_what_a_params_file_may_not_hold() {
 /// are refused `halt_unreadable`, and another service's run.
 #[test]
 fn a_held_halt_that_cannot_be_read_stops_that_services_orders() {
-    let rig = Rig::new("halt-garbage");
+    let rig = NativeHost::new("halt-garbage");
     rig.add("web", "2.0.0");
     rig.add("api", "2.0.0");
     fs::create_dir_all(rig.state.join("web")).expect("the service dir");
     fs::write(rig.state.join("web").join("held-halt"), "seven\n").expect("write");
     let daemon = rig.daemon();
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     assert_eq!(
         reply,
         Reply::Refused {
@@ -882,5 +803,5 @@ fn a_held_halt_that_cannot_be_read_stops_that_services_orders() {
             detail: "the held halt generation of web is not a number: \"seven\\n\"".to_owned(),
         }
     );
-    assert_eq!(daemon.order(&update("api", "2.0.0", &d(), 1)), succeeded());
+    assert_eq!(daemon.order(&rig.update("api", "2.0.0", 1)), succeeded());
 }

@@ -1,0 +1,64 @@
+#!/sbin/openrc-run
+# The hostkeeper daemon under OpenRC: the one service of an Alpine host
+# (docs/design/two-programs.md, section 4.6). Installed at /etc/init.d/hostkeeper by hostkeeper's
+# Alpine package (packaging/alpine/nfpm.yaml), which enables it in the default runlevel. It runs
+# as root, with no sandbox and no capability bound, as the systemd unit does
+# (packaging/linux/hostkeeper.service): the daemon runs the hooks and controls the services of
+# the host.
+#
+# supervise-daemon starts the binary the package installed. That binary gives the binary
+# directory of hostkeeper's own update its first binary when `current` starts none, and execs
+# `current` with these arguments (crates/hostkeeper-daemon/src/packaged.rs), whose start hands
+# over to the binary an update staged as `next` while its three tries last
+# (docs/design/two-programs.md, section 4.3). So every start, a respawn included, goes through
+# the binary of the package before it becomes the binary the update chose; the process id stays,
+# and supervise-daemon supervises the daemon itself.
+#
+# The daemon exits 0 to be started again after its own update: supervise-daemon respawns it
+# whatever its exit, a second after it ends, for good (respawn_max=0); the tries are the
+# hand-over's count, not the supervisor's.
+#
+# The readiness notice: start_pre removes /run/hostkeeper/ready, the daemon writes it, with its
+# pid, once its boot pass is over (--ready-file; docs/design/hostkeeper-design.md, section 6.5),
+# and start_post waits for it, so `rc-service hostkeeper start` returns once the daemon is
+# ready. supervise-daemon's own notice (notify=) is not used: its start waits for the notice with
+# no end, also while it respawns a daemon that exits before it is ready (a config that does not
+# load), which would hold the runlevel, and the boot with it, for good. start_post instead stops
+# waiting, with an error said, as soon as supervise-daemon has had to start the daemon a second
+# time; the daemon is still supervised, and retried every second, and the start exits 0 (a failed
+# start would have OpenRC mark the service stopped while supervise-daemon runs it).
+# supervise-daemon runs no watchdog.
+description="hostkeeper, the update daemon of this host"
+supervisor=supervise-daemon
+command=/usr/bin/hostkeeper
+command_args="daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --ready-file /run/hostkeeper/ready"
+respawn_delay=1
+respawn_max=0
+output_log=/var/log/hostkeeper.log
+error_log=/var/log/hostkeeper.log
+
+depend() {
+	after net
+}
+
+# The directories of the daemon, as packaging/linux/hostkeeper.tmpfiles.conf makes them on a
+# systemd host: root's, the run, state and hook directories closed to group and others. checkpath
+# makes a directory that is missing (not its parents, so each parent comes first) and gives one
+# that exists this mode and owner.
+start_pre() {
+	checkpath --directory --mode 0755 --owner root:root /etc/hostkeeper /var/lib/hostkeeper /var/lib/hostkeeper/packages /var/lib/updater
+	checkpath --directory --mode 0700 --owner root:root /run/hostkeeper /var/lib/updater/state /var/lib/updater/hooks
+	rm -f /run/hostkeeper/ready
+}
+
+# Waits for the readiness notice of the daemon's first start; a start count past 1 is a daemon
+# that ended before it was ready.
+start_post() {
+	while [ ! -e /run/hostkeeper/ready ]; do
+		if [ "$(service_get_value start_count)" -gt 1 ]; then
+			eerror "hostkeeper ended before it was ready; supervise-daemon starts it again (see /var/log/hostkeeper.log)"
+			return 0
+		fi
+		sleep 1
+	done
+}

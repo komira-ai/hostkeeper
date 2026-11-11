@@ -1,0 +1,70 @@
+//! Where the rpm tree of the shared repository keeps what, as object keys. Pure functions.
+//!
+//! Under `rpm/`: `pool/<product>/<file>.rpm`, written
+//! once and shared by both suites and both architectures, and for each suite and architecture
+//! `<suite>/<arch>/repodata/` with `repomd.xml`, its detached signature `repomd.xml.asc`, and the
+//! `<sha256>-{primary,filelists,other}.xml.gz` they name. Only `repomd.xml` and `repomd.xml.asc` are
+//! ever replaced, each with `If-Match` on the ETag that was read; every other object is named by its
+//! content and written once.
+//!
+//! Copied from komira-ai/tierstore at ff4777831c08fc13aa025b54e6e0531c2f350f4f
+//! (`crates/xtask/src/channels/rpm/state.rs`), adapted to this repository (see [`crate::channels`]).
+
+use crate::channels::{Error, spec};
+
+pub use crate::channels::apt::state::{ABSENT, ETAGS_FILE, etag_of, parse_etags, render_etags};
+
+/// The suites of the rpm tree: `testing` holds a release from the moment it is published, `stable`
+/// gets the same entries after the checks passed. The apt repository's suite `testing-fail`, hello's
+/// failing build alone, has no rpm counterpart: that build has no rpm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum Suite {
+    Stable,
+    Testing,
+}
+
+impl Suite {
+    /// The name: the directory below `rpm/`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Suite::Stable => "stable",
+            Suite::Testing => "testing",
+        }
+    }
+}
+
+/// The key prefix of everything the rpm tree serves.
+pub const KEY_ROOT: &str = "rpm/";
+
+/// The pool directory this product owns.
+pub const POOL_DIR: &str = spec::HOSTKEEPER.pool_dir;
+
+/// The architectures of the repositories, sorted.
+pub const ARCHS: [&str; 2] = ["aarch64", "x86_64"];
+
+pub const REPOMD: &str = "repomd.xml";
+pub const REPOMD_ASC: &str = "repomd.xml.asc";
+
+/// The path of a file of the `repodata` of `arch`, relative to the suite.
+pub fn path(arch: &str, file: &str) -> String {
+    format!("{arch}/repodata/{file}")
+}
+
+/// The object key of a file of the `repodata` of `arch` in `suite`.
+pub fn repodata_key(suite: Suite, arch: &str, file: &str) -> String {
+    format!("{KEY_ROOT}{}/{}", suite.name(), path(arch, file))
+}
+
+/// The object key of a package file in this product's pool directory.
+///
+/// # Errors
+/// A name with a separator or a leading dot, or one that is not a `.rpm`: it would leave the
+/// directory.
+pub fn pool_key(file: &str) -> Result<String, Error> {
+    if file.is_empty() || file.starts_with('.') || file.contains('/') || !file.ends_with(".rpm") {
+        return Err(Error::Failed(format!(
+            "{file:?} is not the name of a package file for the pool"
+        )));
+    }
+    Ok(format!("{KEY_ROOT}{POOL_DIR}/{file}"))
+}

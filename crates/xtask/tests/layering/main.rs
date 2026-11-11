@@ -52,6 +52,7 @@ const TLS_DEP: &str = "hostkeeper-tls = { path = \"../hostkeeper-tls\" }\n";
 const ENROLLMENT_DEP: &str = "hostkeeper-enrollment = { path = \"../hostkeeper-enrollment\" }\n";
 const PROTO_DEP: &str = "hostkeeper-proto = { path = \"../hostkeeper-proto\" }\n";
 const MDM_GATE_DEP: &str = "hostkeeper-mdm-gate = { path = \"../hostkeeper-mdm-gate\" }\n";
+const RELEASE_DEP: &str = "hostkeeper-release = { path = \"../hostkeeper-release\" }\n";
 
 const KBF_CHAIN: &str = "kbf-types is a kbf package (kbf, kbf-* or kbf_*), reached through";
 
@@ -473,53 +474,6 @@ fn steps_with_an_extra_workspace_dependency_is_refused() {
     );
 }
 
-/// Catches: the unpack crate gaining a normal dependency on a workspace crate beside its three
-/// (here the placed-path crate), or losing one (here the step runner, whose layout and seal it
-/// uses); either is refused with the set it has and the set it must have.
-#[test]
-fn unpack_with_another_set_of_workspace_dependencies_is_refused() {
-    let extra = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-unpack",
-            layered(
-                "hostkeeper-unpack",
-                &format!("{CONFIG_DEP}{HOOK_DEP}{STEPS_DEP}{PLACED_DEP}"),
-                "",
-                TESTKIT_DEP,
-            ),
-        )],
-    );
-    assert_eq!(
-        check(&extra),
-        refused(
-            "hostkeeper-unpack depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook, hostkeeper-placed, hostkeeper-steps}, \
-             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
-        )
-    );
-    let missing = fixture(
-        "clean",
-        vec![manifest_of(
-            "hostkeeper-unpack",
-            layered(
-                "hostkeeper-unpack",
-                &format!("{CONFIG_DEP}{HOOK_DEP}"),
-                "",
-                TESTKIT_DEP,
-            ),
-        )],
-    );
-    assert_eq!(
-        check(&missing),
-        refused(
-            "hostkeeper-unpack depends (normal or build) on the workspace crates \
-             {hostkeeper-config, hostkeeper-hook}, \
-             but must depend on exactly {hostkeeper-config, hostkeeper-hook, hostkeeper-steps}"
-        )
-    );
-}
-
 /// Catches: the config crate depending on a workspace crate. It holds the loaders and the
 /// grammars the other crates build on, so a dependency on one of them would turn the layers
 /// around, and one on the hook contract would tie the file formats to the hook's.
@@ -756,7 +710,7 @@ fn coordinator(deps: &str) -> (String, String) {
 fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
     let mut edits = bare_crate("vendored", "kbf-types");
     edits.push(coordinator(&format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{}",
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{}",
         vendored_dep("kbf-types")
     )));
     let dir = fixture("clean", edits);
@@ -769,16 +723,17 @@ fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
 /// The coordinator's workspace dependencies, as the layers want them.
 const COORDINATOR_DEPS: &str = "{hostkeeper-config, hostkeeper-enrollment, \
                                 hostkeeper-mdm-gate, hostkeeper-oidc, hostkeeper-proto, \
-                                hostkeeper-tls, hostkeeper-wire}";
+                                hostkeeper-release, hostkeeper-tls, hostkeeper-wire}";
 
-/// Catches: the coordinator losing one of its seven workspace dependencies (the set must be
-/// exactly wire, oidc, tls, enrollment, the MDM gate, proto and config, not a subset of them).
+/// Catches: the coordinator losing one of its eight workspace dependencies (the set must be
+/// exactly wire, oidc, tls, enrollment, the MDM gate, proto, config and release, not a subset of
+/// them).
 #[test]
 fn a_coordinator_missing_a_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}"
+            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
         ))],
     );
     assert_eq!(
@@ -786,20 +741,20 @@ fn a_coordinator_missing_a_workspace_dependency_is_refused() {
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
              {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-mdm-gate, hostkeeper-oidc, \
-             hostkeeper-proto, hostkeeper-tls}}, \
+             hostkeeper-proto, hostkeeper-release, hostkeeper-tls}}, \
              but must depend on exactly {COORDINATOR_DEPS}"
         ))
     );
 }
 
-/// Catches: the coordinator gaining an eighth workspace dependency (here the hook contract)
-/// beside wire, oidc, tls, enrollment, the MDM gate, proto and config.
+/// Catches: the coordinator gaining a ninth workspace dependency (here the hook contract)
+/// beside wire, oidc, tls, enrollment, the MDM gate, proto, config and release.
 #[test]
 fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{HOOK_DEP}"
+            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{HOOK_DEP}"
         ))],
     );
     assert_eq!(
@@ -807,7 +762,8 @@ fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
              {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-hook, hostkeeper-mdm-gate, \
-             hostkeeper-oidc, hostkeeper-proto, hostkeeper-tls, hostkeeper-wire}}, but must depend \
+             hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, hostkeeper-tls, \
+             hostkeeper-wire}}, but must depend \
              on exactly {COORDINATOR_DEPS}"
         ))
     );
@@ -818,7 +774,7 @@ fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
 #[test]
 fn a_coordinator_may_have_oidc_as_a_dev_dependency_and_no_other_layer_crate() {
     let deps = format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}"
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
     );
     let with_dev = |dev: &str| {
         manifest_of(
@@ -928,7 +884,8 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
     let without = format!("{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{PROTO_DEP}{CONFIG_DEP}");
     let seed_without = format!("{CONFIG_DEP}{WIRE_DEP}");
     let pxe_without = format!(
-        "{CONFIG_DEP}hostkeeper-package = {{ path = \"../hostkeeper-package\" }}\n{PROTO_DEP}\
+        "{CONFIG_DEP}{HOOK_DEP}hostkeeper-install = {{ path = \"../hostkeeper-install\" }}\n\
+         hostkeeper-package = {{ path = \"../hostkeeper-package\" }}\n{PROTO_DEP}\
          hostkeeper-pxe-packets = {{ path = \"../hostkeeper-pxe-packets\" }}\n\
          hostkeeper-pxe-seed = {{ path = \"../hostkeeper-pxe-seed\" }}\n{STEPS_DEP}{WIRE_DEP}"
     );
@@ -959,10 +916,14 @@ fn enrollment_depending_on_a_workspace_crate_is_refused() {
              hostkeeper-enrollment is not a workspace member\n\
              hostkeeper-mdm-gate is not a workspace member\n\
              hostkeeper-pxe depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-package, hostkeeper-proto, hostkeeper-pxe-packets, \
-             hostkeeper-pxe-seed, hostkeeper-steps, hostkeeper-wire}}, but must depend on exactly \
-             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-package, hostkeeper-proto, \
-             hostkeeper-pxe-packets, hostkeeper-pxe-seed, hostkeeper-steps, hostkeeper-wire}}\n\
+             {{hostkeeper-config, hostkeeper-hook, hostkeeper-install, hostkeeper-package, \
+             hostkeeper-proto, hostkeeper-pxe-packets, hostkeeper-pxe-seed, hostkeeper-steps, \
+             hostkeeper-wire}}, \
+             but must depend on exactly \
+             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-hook, hostkeeper-install, \
+             hostkeeper-package, \
+             hostkeeper-proto, hostkeeper-pxe-packets, hostkeeper-pxe-seed, hostkeeper-steps, \
+             hostkeeper-wire}}\n\
              hostkeeper-pxe-seed depends (normal or build) on the workspace crates \
              {{hostkeeper-config, hostkeeper-wire}}, but must depend on exactly \
              {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-wire}}"

@@ -1,0 +1,35 @@
+[package]
+name = "hostkeeper-release"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The checks of a release's targets and manifests (hostkeeper.release.v1), as pure functions the coordinator and the daemon share."
+
+# docs/design/packages.md sections 3.4, 4.4 and 7.1, build item A1. A message goes in and the
+# first rule it breaks comes out: no file, socket, clock, process or hashed collection. What the
+# daemon checks of a staged tree it asks through a function its caller gives. crates/xtask/tests/
+# layering keeps the workspace dependencies to these two; registry.rs adds only hashes.
+[dependencies]
+# The name, path and unit grammars, the refused prefixes, the health URL and boot step rules,
+# the platforms and the daemon's version: today's manifest rules, one copy of each.
+hostkeeper-config = { path = "../hostkeeper-config" }
+# The messages checked, generated from hostkeeper/release/v1/release.proto.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+prost.workspace = true
+# The fingerprints of an OpenPGP keyring (SHA-1 of a version 4 key, SHA-256 of a version 6 key) and
+# the digest of a repository set (SHA-256): registry.rs.
+sha1.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The `Target` of the release before build item A16, without its fields 7 and 8, to write an
+# entry as that release did (tests/manifest/repository.rs).
+prost-reflect.workspace = true
+prost-types.workspace = true
+
+[lints]
+workspace = true

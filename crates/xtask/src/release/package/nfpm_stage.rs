@@ -1,7 +1,9 @@
-//! `release nfpm-stage`: the two files of the deb and the rpm that the daemon's attestation check
-//! runs on, laid out where `packaging/linux/nfpm.yaml` takes them from. The daemon starts `gh` at
-//! `/usr/lib/hostkeeper/gh` and passes it `/usr/lib/hostkeeper/trusted_root.json` as
-//! `--custom-trusted-root` (`hostkeeper_daemon::cli::GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`).
+//! `release nfpm-stage`: the three files of the deb and the rpm, laid out where
+//! `packaging/linux/nfpm.yaml` takes them from: the two the daemon's attestation check runs on,
+//! and the daemon it ships. The daemon starts `gh` at `/usr/lib/hostkeeper/gh` and passes
+//! it `/usr/lib/hostkeeper/trusted_root.json` as `--custom-trusted-root`
+//! (`hostkeeper_daemon::cli::GH_BINARY` and `SIGSTORE_TRUSTED_ROOT`); the daemon is
+//! `hostkeeper`, taken from `--binaries`.
 //!
 //! What it does, in this order, writing nothing until every check has passed:
 //!
@@ -14,8 +16,11 @@
 //! 3. Reads `--trusted-root`, the Sigstore trusted root the workflow captured with
 //!    `gh attestation trusted-root`, and refuses a missing or empty file, and one with a
 //!    non-blank line that is not a JSON object whose `mediaType` is a Sigstore trusted root.
-//! 4. Writes `<out>/gh` (mode 0755) and `<out>/trusted_root.json` (mode 0644), replacing what
-//!    was there.
+//! 4. Reads `hostkeeper` from `--binaries` and refuses it unless it is a
+//!    64-bit little-endian ELF program of the architecture with no `PT_INTERP` and no
+//!    `DT_NEEDED` entry (a static build; see [`super::elf`]).
+//! 5. Writes `<out>/gh` (mode 0755), `<out>/trusted_root.json` (mode 0644) and `hostkeeper`
+//!    (mode 0755), replacing what was there.
 
 use std::fmt;
 use std::fs::{OpenOptions, Permissions};
@@ -25,6 +30,7 @@ use std::path::{Path, PathBuf};
 
 use sha2::{Digest, Sha256 as Sha};
 
+use super::elf;
 use crate::install::{self, Unpack};
 use crate::release::Error;
 use crate::release::contract::Version;
@@ -34,6 +40,9 @@ pub(crate) const GH_FILE: &str = "gh";
 
 /// The file name of the trusted root in the staging directory.
 pub(crate) const TRUSTED_ROOT_FILE: &str = "trusted_root.json";
+
+/// The file name of the daemon in the staging directory, and in the directory of `--binaries`.
+pub(crate) const HOSTKEEPER_FILE: &str = "hostkeeper";
 
 /// What every line of a trusted root names as its `mediaType`, before its `;version=` part.
 pub(crate) const TRUSTED_ROOT_MEDIA_TYPE: &str = "application/vnd.dev.sigstore.trustedroot+json";
@@ -77,6 +86,8 @@ pub(crate) struct Request {
     pub(crate) gh_sha256: install::Sha256,
     /// The trusted root `gh attestation trusted-root` printed.
     pub(crate) trusted_root: PathBuf,
+    /// The directory holding the static `hostkeeper`.
+    pub(crate) binaries: PathBuf,
     /// The staging directory; made when missing.
     pub(crate) out: PathBuf,
 }
@@ -115,6 +126,41 @@ fn check_elf(program: &[u8], arch: Arch) -> Result<(), Error> {
             "ELF machine {machine:#x}, not {:#x}",
             arch.elf_machine()
         ));
+    }
+    Ok(())
+}
+
+/// Refuses the program `file` unless it is a static 64-bit little-endian ELF program for `arch`:
+/// no interpreter and no needed library.
+pub(crate) fn check_static(file: &str, program: &[u8], arch: Arch) -> Result<(), Error> {
+    let refuse = |why: String| {
+        Err(Error::Failed(format!(
+            "{file} is not a static linux {arch} program: {why}"
+        )))
+    };
+    let elf = match elf::parse(program) {
+        Ok(elf) => elf,
+        Err(why) => return refuse(why),
+    };
+    if elf.class != 2 || !elf.little_endian {
+        return refuse(format!(
+            "ELF class {} and data {}, not 2 (64-bit) and 1 (little-endian)",
+            elf.class,
+            if elf.little_endian { 1 } else { 2 }
+        ));
+    }
+    if elf.machine != arch.elf_machine() {
+        return refuse(format!(
+            "ELF machine {:#x}, not {:#x}",
+            elf.machine,
+            arch.elf_machine()
+        ));
+    }
+    if let Some(interpreter) = elf.interpreter {
+        return refuse(format!("it asks for the interpreter {interpreter}"));
+    }
+    if let Some(library) = elf.needed.first() {
+        return refuse(format!("it is linked to {library}"));
     }
     Ok(())
 }
@@ -196,12 +242,24 @@ pub(crate) fn stage(request: &Request) -> Result<Vec<String>, Error> {
     check_elf(&gh, request.arch)?;
     let root = read(&request.trusted_root)?;
     check_trusted_root(&request.trusted_root, &root)?;
+    let program_path = request.binaries.join(HOSTKEEPER_FILE);
+    let program = read(&program_path)?;
+    check_static(&program_path.display().to_string(), &program, request.arch)?;
     std::fs::create_dir_all(&request.out)
         .map_err(Error::io(format!("create {}", request.out.display())))?;
     let gh_out = request.out.join(GH_FILE);
     let root_out = request.out.join(TRUSTED_ROOT_FILE);
     write(&gh_out, &gh, 0o755)?;
     write(&root_out, &root, 0o644)?;
+    let program_out = request.out.join(HOSTKEEPER_FILE);
+    write(&program_out, &program, 0o755)?;
+    let program_line = format!(
+        "{}: static {} program from {}, sha256 {}",
+        program_out.display(),
+        request.arch,
+        program_path.display(),
+        hex::encode(Sha::digest(&program))
+    );
     Ok(vec![
         format!(
             "{}: gh {} for {} from {}, sha256 {}",
@@ -217,6 +275,7 @@ pub(crate) fn stage(request: &Request) -> Result<Vec<String>, Error> {
             request.trusted_root.display(),
             hex::encode(Sha::digest(&root))
         ),
+        program_line,
     ])
 }
 

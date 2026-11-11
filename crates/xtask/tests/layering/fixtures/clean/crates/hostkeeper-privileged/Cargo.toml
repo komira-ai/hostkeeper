@@ -9,9 +9,12 @@ hostkeeper-config = { path = "../hostkeeper-config" }
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-daemon = { path = "../hostkeeper-daemon" }
 hostkeeper-hook = { path = "../hostkeeper-hook" }
+hostkeeper-install = { path = "../hostkeeper-install" }
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-link = { path = "../hostkeeper-link" }
 hostkeeper-placed = { path = "../hostkeeper-placed" }
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+hostkeeper-pxe = { path = "../hostkeeper-pxe" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
 
 [dev-dependencies]

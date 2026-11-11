@@ -14,14 +14,13 @@ use hostkeeper_steps::record::{
     AwaitingRestart, HookSel, Progress, REASON_SELF_UPDATE_FALLBACK, RECORD_FILE, SCHEMA,
     Settlement, State,
 };
-use hostkeeper_steps::selfupdate::{START_LIMIT_BURST, fallback_unit, main_dropin, settle_with};
+use hostkeeper_steps::selfupdate::settle_with;
 use hostkeeper_steps::{
     BAD_VERSIONS_FILE, BadVersions, BadVersionsError, CrashPoint, Finished, FollowOn, ForceRecord,
-    LaunchError, Layout, Loaded, MAX_BAD_VERSIONS, ProbeCall, Record, RecordError, RecordStore,
-    ResumeAction, SelfUpdateError, Settled, Staged, StepLauncher, follow_on, resume, resume_action,
-    settle,
+    Layout, Loaded, MAX_BAD_VERSIONS, Record, RecordError, RecordStore, ResumeAction,
+    SelfUpdateError, Settled, Staged, follow_on, resume, resume_action, settle,
 };
-use support::{FAIL, Fake, FakeClock, Rig, Scratch};
+use support::{FAIL, FakeClock, Rig, Scratch};
 
 /// The updater binary of a release, in its own staged tree.
 const UPDATER: &str = "bin/updater";
@@ -83,7 +82,20 @@ fn waiting(mut rec: Record, version: &str) -> Record {
     rec.progress.awaiting_restart = Some(AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: false,
+        order_id: None,
+        next: None,
+        starts: None,
     });
+    rec
+}
+
+/// `rec` waiting for the restart into `version` by a hand-over: `next` names it, no start yet.
+fn handed_over(mut rec: Record, version: &str) -> Record {
+    rec = waiting(rec, version);
+    if let Some(awaiting) = rec.progress.awaiting_restart.as_mut() {
+        awaiting.next = Some(version.to_owned());
+        awaiting.starts = Some(0);
+    }
     rec
 }
 
@@ -152,6 +164,7 @@ impl Host {
             "v2",
             &self.v2,
             Path::new(UPDATER),
+            None,
         )
     }
 }
@@ -175,26 +188,31 @@ fn confirmed() -> State {
     }
 }
 
-/// Catches a follow-on that switches before the record says the update waits for the restart, or
-/// that finishes the record itself: after it, the record is still `done` at `cleanup` and names
-/// the version it waits for, and `current` names the new binary.
+/// Catches a follow-on that switches `current` (the hand-over moves none), that finishes the
+/// record itself, or that writes a wait that names no hand-over: after it, the record is still
+/// `done` at `cleanup`, names the version it waits for with `next` and a start count of 0,
+/// `next` names the staged new binary, and `current` still names the old one.
 #[test]
-fn the_follow_on_writes_the_wait_before_it_switches() {
+fn the_follow_on_hands_over_and_moves_no_current() {
     let host = Host::new("su-wait");
     host.store().save(&steps_ran("v2")).unwrap();
     assert_eq!(host.follow(&host.store()).unwrap(), FollowOn::Restart);
     let rec = host.record();
-    assert_eq!(rec, waiting(steps_ran("v2"), "v2"));
-    assert_eq!(host.current().as_deref(), Some("v2"));
+    assert_eq!(rec, handed_over(steps_ran("v2"), "v2"));
+    assert_eq!(host.current().as_deref(), Some("v1"));
+    assert_eq!(host.layout.previous().unwrap(), None);
+    assert_eq!(host.layout.next().unwrap().as_deref(), Some("v2"));
+    assert!(host.layout.version_path("v2").is_file());
 }
 
-/// Catches a record written after the switch, or a crash that leaves a `Succeeded` for a binary
-/// that never ran: the updater dies before the record is written, after it, and after the switch;
-/// each time the next start, by the old binary and (separately) by the new one, settles the record
-/// `FellBack` or `Confirmed`, or finds nothing to settle with the update still unfinished, and the
-/// record says `Succeeded` only where the new binary runs and `current` names it.
+/// Catches a crash that leaves a `Succeeded` for a binary that never ran, or a link `next` that
+/// outlives its wait: the updater dies before the record is written, after it, and after the
+/// whole hand-over; each time the next start, by the old binary and (separately) by the new one,
+/// settles the record `FellBack` or `Confirmed`, or finds nothing to settle with the update still
+/// unfinished (and removes the link), and the record says `Succeeded` only where the new binary
+/// runs and `current` names it.
 #[test]
-fn a_crash_between_the_record_and_the_switch_settles_correctly() {
+fn a_crash_between_the_link_and_the_record_settles_correctly() {
     // The point, and what a start of the old binary, then of the new one, settles there.
     let points = [
         (
@@ -203,12 +221,12 @@ fn a_crash_between_the_record_and_the_switch_settles_correctly() {
             [Settled::NotPending, Settled::NotPending],
         ),
         (
-            "after the record, before the switch",
+            "after the record is written",
             Some(CrashPoint::AfterWrite(1)),
-            [Settled::FellBack, Settled::FellBack],
+            [Settled::FellBack, Settled::Confirmed],
         ),
         (
-            "after the switch, before the restart",
+            "after the hand-over, before the restart",
             None,
             [Settled::FellBack, Settled::Confirmed],
         ),
@@ -227,11 +245,11 @@ fn a_crash_between_the_record_and_the_switch_settles_correctly() {
                         matches!(followed, Err(SelfUpdateError::Record(RecordError::Crashed(p))) if p == at),
                         "{what}: {followed:?}"
                     );
-                    // The record is written before the switch: a crash at it leaves `v1`.
-                    assert_eq!(host.current().as_deref(), Some("v1"), "{what}");
                 }
                 None => assert_eq!(followed.unwrap(), FollowOn::Restart, "{what}"),
             }
+            // The follow-on moves no `current`, whatever point it stopped at.
+            assert_eq!(host.current().as_deref(), Some("v1"), "{what}");
             let settled = settle(&host.layout, &host.store(), running).unwrap();
             assert_eq!(settled, want, "{what}, {running} starts");
             let rec = host.record();
@@ -251,6 +269,7 @@ fn a_crash_between_the_record_and_the_switch_settles_correctly() {
             };
             assert_eq!(rec.state, state, "{what}, {running}");
             assert_eq!(rec.progress.awaiting_restart, None, "{what}, {running}");
+            assert_eq!(host.layout.next().unwrap(), None, "{what}, {running}");
             let bad = match want {
                 Settled::FellBack => vec!["v2".to_owned()],
                 _ => Vec::new(),
@@ -308,6 +327,9 @@ fn the_new_binary_confirms_once_after_its_hook() {
     pending.progress.awaiting_restart = Some(AwaitingRestart {
         version: "v2".to_owned(),
         verdict_promotion_pending: true,
+        order_id: None,
+        next: None,
+        starts: None,
     });
     host.store().save(&pending).unwrap();
     assert!(
@@ -424,8 +446,9 @@ fn a_garbage_list_of_bad_versions_stops_the_fallback_naming_the_file() {
     assert_eq!(host.record(), waiting(steps_ran("v2"), "v2"));
 }
 
-/// Catches a follow-on that switches with no record to wait in: no record, a finished one and an
-/// update to another version are each `NoUpdate`, and `current` and the record are as they were.
+/// Catches a follow-on that hands over with no record to wait in: no record, a finished one and
+/// an update to another version are each `NoUpdate`, and nothing is staged or linked, `current`
+/// and the record are as they were.
 #[test]
 fn the_follow_on_needs_the_unfinished_update_to_its_version() {
     let host = Host::new("su-no-update");
@@ -448,6 +471,8 @@ fn the_follow_on_needs_the_unfinished_update_to_its_version() {
             "the step record holds no unfinished update to v2"
         );
         assert_eq!(host.current().as_deref(), Some("v1"));
+        assert_eq!(host.layout.next().unwrap(), None);
+        assert!(!host.layout.version_path("v2").exists());
         match rec {
             Some(rec) => assert_eq!(host.record(), rec),
             None => assert_eq!(host.store().load().unwrap(), Loaded::Absent),
@@ -455,19 +480,20 @@ fn the_follow_on_needs_the_unfinished_update_to_its_version() {
     }
 }
 
-/// Catches a switch that fails being reported as done, or leaving a record that the next start
-/// would settle as a fallback: with the link that is replaced in the way, the follow-on fails,
-/// `current` is unchanged and the record waits for nothing again; once the way is clear, a repeat
-/// switches and the record waits for the restart.
+/// Catches a link that fails being reported as done, or leaving a record that the next start
+/// would settle as a hand-over that failed: with the name `next` is made through taken by a
+/// directory, the follow-on fails, `current` and `next` are unchanged and the record waits for
+/// nothing; once the way is clear, a repeat hands over and the record waits for the restart.
 #[test]
-fn a_failed_switch_takes_the_wait_back_and_is_repeated() {
-    let host = Host::new("su-switch-fails");
+fn a_failed_link_stops_before_the_wait_and_is_repeated() {
+    let host = Host::new("su-link-fails");
     host.store().save(&steps_ran("v2")).unwrap();
-    let blocker = host.layout.dir().join("current.tmp");
+    let blocker = host.layout.dir().join("next.tmp");
     fs::create_dir(&blocker).unwrap();
     let err = host.follow(&host.store()).unwrap_err();
     assert!(matches!(err, SelfUpdateError::Io(_)), "{err:?}");
     assert_eq!(host.current().as_deref(), Some("v1"));
+    assert_eq!(host.layout.next().unwrap(), None);
     assert_eq!(host.record(), steps_ran("v2"));
     assert_eq!(
         settle(&host.layout, &host.store(), "v1").unwrap(),
@@ -475,8 +501,29 @@ fn a_failed_switch_takes_the_wait_back_and_is_repeated() {
     );
     fs::remove_dir(&blocker).unwrap();
     assert_eq!(host.follow(&host.store()).unwrap(), FollowOn::Restart);
-    assert_eq!(host.current().as_deref(), Some("v2"));
-    assert_eq!(host.record(), waiting(steps_ran("v2"), "v2"));
+    assert_eq!(host.current().as_deref(), Some("v1"));
+    assert_eq!(host.layout.next().unwrap().as_deref(), Some("v2"));
+    assert_eq!(host.record(), handed_over(steps_ran("v2"), "v2"));
+}
+
+/// Catches a record that cannot be written leaving the link `next` standing, or the update
+/// reported as handed over: a record that is a directory fails the write after the link was made;
+/// the follow-on fails with the link removed again and `current` unmoved.
+#[test]
+fn a_record_that_cannot_be_written_takes_the_link_back() {
+    let host = Host::new("su-record-fails");
+    host.store().save(&steps_ran("v2")).unwrap();
+    let gated = host
+        .store()
+        .with_crash_gate(Arc::new(|at| at == CrashPoint::BeforeWrite(1)));
+    let err = host.follow(&gated).unwrap_err();
+    assert!(
+        matches!(err, SelfUpdateError::Record(RecordError::Crashed(_))),
+        "{err:?}"
+    );
+    assert_eq!(host.layout.next().unwrap(), None);
+    assert_eq!(host.current().as_deref(), Some("v1"));
+    assert_eq!(host.record(), steps_ran("v2"));
 }
 
 /// Catches a repeat of the follow-on writing the record again: once the record waits for the
@@ -516,6 +563,7 @@ fn an_update_to_the_running_binary_is_finished_at_once() {
             "v1",
             &host.v2,
             Path::new(UPDATER),
+            None,
         )
     };
     assert_eq!(run(&with_reason).unwrap(), FollowOn::NotNeeded);
@@ -613,28 +661,6 @@ fn a_record_that_waits_for_the_restart_is_not_an_unfinished_update() {
         resume_action(&steps_ran("v2"), false),
         ResumeAction::RecomputeNext
     );
-}
-
-/// Catches a launcher that runs no probe pretending to: its default starts nothing and says which
-/// unit did not start.
-#[test]
-fn a_launcher_runs_no_probe_by_default() {
-    let fake = Fake::new();
-    let err = fake
-        .run_probe(&ProbeCall {
-            service: "hostkeeper",
-            executable: Path::new("/nowhere"),
-            args: &["self-update-protocol"],
-            unit: "probe-unit",
-            timeout_secs: 10,
-            output_bytes: 64,
-        })
-        .unwrap_err();
-    assert!(
-        matches!(&err, LaunchError::NoStart(why) if why.contains("probe-unit") && why.contains("hostkeeper")),
-        "{err:?}"
-    );
-    assert!(fake.events().is_empty());
 }
 
 /// Catches a list of bad versions that loses a version, forgets one past the cap in the wrong
@@ -788,6 +814,9 @@ fn a_record_with_awaiting_restart_loads_in_the_old_reader_shape() {
         Some(AwaitingRestart {
             version: "1.5.0".to_owned(),
             verdict_promotion_pending: false,
+            order_id: None,
+            next: None,
+            starts: None,
         })
     );
     let written = serde_json::to_value(&*rec).unwrap();
@@ -907,21 +936,4 @@ fn only_the_deferrals_of_an_old_updater_are_cleared() {
         store.clear_updater_old(),
         Err(RecordError::Corrupt(_))
     ));
-}
-
-/// Catches any later edit of the generated unit texts the fallback depends on: the drop-in of
-/// hostkeeper's own unit and its fallback unit, for the binary directory under the default state
-/// directory, byte for byte.
-#[test]
-fn the_generated_dropin_and_fallback_unit_are_unchanged() {
-    assert_eq!(START_LIMIT_BURST, 3);
-    assert_eq!(
-        main_dropin("hostkeeper-fallback.service", START_LIMIT_BURST),
-        "[Unit]\nOnFailure=hostkeeper-fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    );
-    let layout = Layout::new(Path::new("/var/lib/updater/state/hostkeeper/bin"));
-    assert_eq!(
-        fallback_unit(&layout, "hostkeeper.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-/var/lib/updater/state/hostkeeper/bin/previous self-update-fallback --dir /var/lib/updater/state/hostkeeper/bin\nExecStartPost=/usr/bin/systemctl reset-failed hostkeeper.service\nExecStartPost=/usr/bin/systemctl start --no-block hostkeeper.service\n"
-    );
 }

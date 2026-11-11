@@ -1,7 +1,8 @@
-//! The verbs of `hostkeeper-coordinator`: `serve`, `backup` and `restore`, as the binary parses
-//! them and the exit codes of the last two, driven in-process through `config::main`. What a
-//! backup and a restore copy, check and refuse is in the crate's `backup_tests` and
-//! `backup_refusal_tests`.
+//! The verbs of `hostkeeper-coordinator`: `serve`, `backup`, `restore` and `export`, as the binary
+//! parses them and the exit codes of `backup` and `restore`, driven in-process through
+//! `config::main`. What a backup and a restore copy, check and refuse is in the crate's
+//! `backup_tests` and `backup_refusal_tests`; what an export writes and refuses, in its
+//! `transfer_tests` and the integration test `transfer.rs`.
 
 mod support;
 
@@ -26,7 +27,7 @@ fn text(path: &Path) -> &str {
 }
 
 /// The flags of a `serve`; parsing reads none of the files.
-const SERVE: [&str; 17] = [
+const SERVE: [&str; 15] = [
     "serve",
     "--heartbeat-listen",
     "192.0.2.1:1",
@@ -42,15 +43,14 @@ const SERVE: [&str; 17] = [
     "desired.json",
     "--oidc-config",
     "oidc.toml",
-    "--rollout-file",
-    "rollout.toml",
 ];
 
-/// Catches: a verb missing or one too many, or a `serve` that can start without the services
-/// it manages: the verbs are `serve`, `backup` and `restore`, any other is refused, and
-/// `serve`'s `--rollout-file` is required.
+/// Catches: a verb missing or one too many, or a `serve` that can start without the CI
+/// allow-list it admits callers by: the verbs are `serve`, `backup`, `restore` and `export`, any
+/// other is refused (`import` and `host-groups`, verbs of the release before, among them, as a
+/// usage error, exit 2), and `serve`'s `--oidc-config` is required.
 #[test]
-fn the_verbs_are_serve_backup_and_restore() {
+fn the_verbs_are_serve_backup_restore_and_export() {
     assert!(matches!(
         Cli::try_parse_from(args(&SERVE)).expect("flags").command,
         Command::Serve(_)
@@ -82,21 +82,54 @@ fn the_verbs_are_serve_backup_and_restore() {
         Some(Path::new("enr"))
     );
     assert!(flags.into_empty);
+    let export = args(&[
+        "export",
+        "--database-dsn-file",
+        "db.dsn",
+        "--state-file",
+        "s.json",
+        "--enrollment-dir",
+        "enr",
+        "--into-empty",
+    ]);
+    let Command::Export(flags) = Cli::try_parse_from(export).expect("flags").command else {
+        panic!("export")
+    };
     assert_eq!(
-        Cli::try_parse_from(args(&["run"]))
-            .expect_err("no such verb")
-            .kind(),
-        ErrorKind::InvalidSubcommand
+        flags.paths.enrollment_dir.as_deref(),
+        Some(Path::new("enr"))
     );
+    assert!(flags.into_empty);
+    for retired in [
+        &["run"][..],
+        &[
+            "import",
+            "--state-file",
+            "s.json",
+            "--database-dsn-file",
+            "db.dsn",
+        ],
+        &["host-groups", "migrate", "--rollout-file", "rollout.toml"],
+    ] {
+        assert_eq!(
+            Cli::try_parse_from(args(retired))
+                .expect_err("no such verb")
+                .kind(),
+            ErrorKind::InvalidSubcommand,
+            "{retired:?}"
+        );
+        assert_eq!(main(args(retired)), ExitCode::from(2), "{retired:?}");
+    }
     let missing = Cli::try_parse_from(args(&SERVE[..SERVE.len() - 2]))
-        .expect_err("--rollout-file is required");
+        .expect_err("--oidc-config is required");
     assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
-    assert!(missing.to_string().contains("--rollout-file"), "{missing}");
+    assert!(missing.to_string().contains("--oidc-config"), "{missing}");
 }
 
-/// Catches: a restore that runs without saying it writes only into empty targets, or a backup
-/// without its place: `restore` without `--into-empty` and `backup` without `--out` are usage
-/// errors, exit 2, and the help of both names the flags `serve` names the state by.
+/// Catches: a restore or an export that runs without saying it writes only into empty targets,
+/// or a backup without its place: `restore` and `export` without `--into-empty` and `backup`
+/// without `--out` are usage errors, exit 2, and the help of each names the flags `serve` names
+/// the state by.
 #[test]
 fn restore_requires_into_empty_and_backup_requires_out() {
     let refused = Cli::try_parse_from(args(&["restore", "--from", "s", "--state-file", "x"]))
@@ -111,7 +144,17 @@ fn restore_requires_into_empty_and_backup_requires_out() {
         main(args(&["backup", "--state-file", "x"])),
         ExitCode::from(2)
     );
-    for verb in ["backup", "restore"] {
+    let refused = Cli::try_parse_from(args(&[
+        "export",
+        "--database-dsn-file",
+        "d",
+        "--state-file",
+        "x",
+    ]))
+    .expect_err("--into-empty is required");
+    assert_eq!(refused.kind(), ErrorKind::MissingRequiredArgument);
+    assert!(refused.to_string().contains("--into-empty"), "{refused}");
+    for verb in ["backup", "restore", "export"] {
         let help = Cli::try_parse_from(args(&[verb, "--help"])).expect_err("help");
         assert_eq!(help.kind(), ErrorKind::DisplayHelp);
         for flag in ["--state-file", "--ops-file", "--enrollment-dir"] {

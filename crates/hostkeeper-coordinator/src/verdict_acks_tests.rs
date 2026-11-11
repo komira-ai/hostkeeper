@@ -56,7 +56,7 @@ fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> (ServiceReply, Vec<Verdi
     rig.at(at);
     let answer = rig
         .coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat");
     (answer.reply, answer.acks)
 }
@@ -244,6 +244,7 @@ fn web(running: &str, last: Option<&Heartbeat>) -> ServiceBeat {
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }
 }
 
@@ -302,7 +303,7 @@ fn a_legacy_service_without_a_definition_is_acknowledged() {
         .with_legacy_service(Some(LEGACY.to_owned()))
         .with_verdicts(verdicts_of(&dir));
     let answer = coordinator
-        .heartbeat(who("d1"), acking(verdict("o-1", 1)))
+        .heartbeat_native(who("d1"), acking(verdict("o-1", 1)))
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-1", 1)]);
     let mut untried = verdict("o-2", 1);
@@ -310,7 +311,7 @@ fn a_legacy_service_without_a_definition_is_acknowledged() {
         last.order_try = None;
     }
     let answer = coordinator
-        .heartbeat(who("d1"), acking(untried))
+        .heartbeat_native(who("d1"), acking(untried))
         .expect("a heartbeat");
     assert!(answer.acks.is_empty());
     assert_eq!(
@@ -334,7 +335,7 @@ async fn only_a_host_whose_word_is_taken_in_is_acknowledged() {
     rig.at(2_000);
     let answer = rig
         .coordinator
-        .heartbeat(stranger, acking(verdict("o-1", 1)))
+        .heartbeat_native(stranger, acking(verdict("o-1", 1)))
         .expect("a heartbeat");
     assert_eq!(answer.acks, []);
     crate::testutil::ops_of(&rig.dir)
@@ -369,7 +370,7 @@ async fn a_service_named_twice_is_acknowledged_once() {
     b.services = Some(vec![entry]);
     let answer = rig
         .coordinator
-        .heartbeat(who("d1"), b)
+        .heartbeat_native(who("d1"), b)
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-1", 1)]);
     let text = serde_json::to_string(&answer).expect("JSON");
@@ -383,7 +384,7 @@ async fn a_service_named_twice_is_acknowledged_once() {
     b.services = Some(vec![entry]);
     let answer = rig
         .coordinator
-        .heartbeat(who("d1"), b)
+        .heartbeat_native(who("d1"), b)
         .expect("a heartbeat");
     assert_eq!(answer.acks, [ack(LEGACY, "o-3", 1)]);
 }
@@ -401,7 +402,7 @@ fn a_coordinator_without_a_legacy_service_acknowledges_the_entries() {
         .with_services(Services::parse(text).expect("services"))
         .with_verdicts(verdicts_of(&dir));
     let answer = coordinator
-        .heartbeat(
+        .heartbeat_native(
             who("d1"),
             listing(web("1.0", Some(&verdict("o-1", 1))), None),
         )
@@ -439,4 +440,81 @@ fn the_quiet_period_keeps_the_verdicts_reloaded() {
     assert_eq!(fleet.started(), std::time::Duration::from_secs(1_000));
     assert!(fleet.is_quiet(std::time::Duration::from_secs(1_119)));
     assert!(!fleet.is_quiet(std::time::Duration::from_secs(1_120)));
+}
+
+/// The verdict a host acknowledged of the service, as the fleet reads its last heartbeat.
+fn read_as(rig: &Rig, host: &str) -> Option<hostkeeper_wire::wire::UpdateResult> {
+    rig.coordinator
+        .lock_fleet()
+        .get_in(LEGACY, &crate::testutil::id(host))
+        .and_then(|h| h.beat.last_update.clone())
+}
+
+/// A release failure of `target` that ends try 1 of `order`, from a host at 1.0.
+fn failed_at(order: &str, target: &str) -> Heartbeat {
+    let (phase, class) = release();
+    let mut b = failure(phase, class, target);
+    let last = b.last_update.as_mut().expect("a verdict");
+    last.order_id = OrderId::parse(order);
+    last.order_try = Some(1);
+    b
+}
+
+/// Catches the farm's Mac whose `lastUpdate` stayed a failure of an older release after it
+/// updated itself to the version wanted (a self-update whose verdict its binary never sent):
+/// the acknowledged failure of 1.5 stands while the host runs 1.0, which is not the version
+/// wanted (the gate reads it), but once the host runs 2.0, the version wanted, it is superseded:
+/// not read as the host's report, and gone from the file of verdicts, so a restart does not read
+/// it either; a file that cannot be written at that heartbeat keeps it on file, not read, until a
+/// later heartbeat forgets it. A verdict about the version the host runs stands.
+#[tokio::test]
+async fn a_verdict_of_an_older_target_is_superseded_once_the_host_runs_the_version_wanted() {
+    let mut rig = rig("acks-superseded", ONE_STAGE, TWO_SERIAL).await;
+    let (_, acks) = ask(&rig, "d1", acking(failed_at("o-1", "1.5")), 2_000);
+    assert_eq!(acks, [ack(LEGACY, "o-1", 1)]);
+    let older = failed_at("o-1", "1.5").last_update;
+    ask(&rig, "d1", acking(beat("1.0")), 2_015);
+    assert_eq!(read_as(&rig, "d1"), older);
+    let d1 = crate::testutil::id("d1");
+    assert_eq!(rig.coordinator.verdicts.standing(LEGACY, &d1), older);
+
+    // The file cannot be written: the verdict is not read, said in the log, and still on file.
+    let mut temp = file_of(&rig).into_os_string();
+    temp.push(".new");
+    fs::create_dir(&temp).expect("the temporary file's name taken");
+    let log = Log::default();
+    let guard = log.install();
+    ask(&rig, "d1", acking(beat("2.0")), 2_030);
+    drop(guard);
+    assert_eq!(read_as(&rig, "d1"), None);
+    assert!(
+        log.text().contains("a superseded verdict is not forgotten"),
+        "{}",
+        log.text()
+    );
+    assert_eq!(rig.coordinator.verdicts.standing(LEGACY, &d1), older);
+    fs::remove_dir(&temp).expect("out of the way");
+    ask(&rig, "d1", acking(beat("2.0")), 2_035);
+    assert_eq!(read_as(&rig, "d1"), None);
+    assert_eq!(
+        VerdictFile::open(&file_of(&rig))
+            .expect("the file")
+            .standing(LEGACY, &d1),
+        None
+    );
+    restart(&mut rig, ONE_STAGE);
+    ask(&rig, "d1", acking(beat("2.0")), 2_045);
+    assert_eq!(read_as(&rig, "d1"), None);
+
+    // A verdict about the version the host runs stands.
+    let mut done = failed_at("o-2", "2.0");
+    done.version = version("2.0");
+    let last = done.last_update.as_mut().expect("a verdict");
+    last.outcome = hostkeeper_wire::wire::Outcome::Succeeded;
+    last.phase = None;
+    last.class = None;
+    let (_, acks) = ask(&rig, "d1", acking(done.clone()), 2_060);
+    assert_eq!(acks, [ack(LEGACY, "o-2", 1)]);
+    ask(&rig, "d1", acking(beat("2.0")), 2_075);
+    assert_eq!(read_as(&rig, "d1"), done.last_update);
 }

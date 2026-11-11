@@ -1,12 +1,20 @@
 # Enrolling a node
 
-How one server becomes a host the coordinator manages: the operator records it in the host
-inventory, the node boots and asks for a certificate, and the operator checks the request and
-approves it. The coordinator's side (its flags, its CA, its state files) is
+How one server becomes a host the coordinator manages: the operator enters its record in the host
+inventory, and the node boots, asks for a certificate and is enrolled. Entering the record is the
+approval: there is no approve step for a server that matches its record
+([The record is the approval](#the-record-is-the-approval)). A request that does not match, or
+that needs a second look, waits for an operator to [approve](#approve) it by hand. The
+coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
-`hostkeeper ctl` is [ctl.md](../ctl.md).
+`hkctl` is [cli.md](../cli.md).
 
-Every `hostkeeper ctl enrollment` call takes the operator token only: a CI token is refused with
+`hkctl` is the operator's command line. It is the release asset `hkctl-<version>`, verified as
+[verify-a-release.md](../deploy/verify-a-release.md) says, and needs bash 3.2 or later and curl
+7.55 or later. Only its owner may read its `--token-file` (mode 0600): `hkctl` refuses a file its
+group or others may read.
+
+Every `hkctl enrollment` call takes the operator token only: a CI token is refused with
 `forbidden`, no token with `unauthorized`, and a refused call changes nothing. An approval and
 every change to a record is an entry of the audit log, under the name of the token that made it.
 The commands below reach the coordinator's private listener (`--private-listen`):
@@ -16,31 +24,51 @@ the tokens are in [Refusals of the operator calls](#refusals-of-the-operator-cal
 
 ## Record the server
 
-Before the server first boots, add a record of it: the host id it will have, its role, the MACs
-of its data interfaces, the MAC of its BMC, its serial and a note. A record needs at least one
+Before the server first boots, add a record of it: the host id it will have, its host group
+([hostgroups.md](hostgroups.md)), the MACs of its data interfaces, the MAC of its BMC, its serial and a note. A record needs at least one
 data MAC, or a serial; it holds at most 16 data MACs, and none of them may be the BMC MAC. MACs
 are written as six pairs of hex digits separated all by `:` or all by `-`, or as twelve hex
 digits, in either case, and are kept as lower-case `aa:bb:cc:dd:ee:ff`.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    enrollment add-record --host-id web-17 --role web \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment add-record --host-id web-17 --host-group web \
     --data-macs 00:00:5e:00:53:01 --data-macs 00:00:5e:00:53:02 \
     --bmc-mac 00:00:5e:00:53:a1 --serial SN-0042 --notes "rack 4, unit 17"
 ```
+
+`--platform linux_x86_64` or `--platform linux_arm64` names the platform the server is installed as
+by network boot ([network-install.md](network-install.md)); `pxe` in router mode needs it, and
+in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
+optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
+has none. `list-records` and the Inventory page show it.
 
 The answer is the record as kept, with `added_by` (the token's name). A second record of the same
 host id is refused `record_exists`; a record with a MAC or a serial that another record holds is
 refused `record_conflict`. To change a record, remove it and add it again. Removing a record does
 not touch a host already enrolled under it: the host keeps its certificate.
 
+A record that names a host group is the approval of the server's enrollment, for a limited time
+and once: [The record is the approval](#the-record-is-the-approval) says how, and the host is put
+in that group, which decides what it runs. Give the record a host group unless you want to approve
+its server by hand. The group must be one the coordinator holds (`unknown_host_group`).
+`--role` is read as the group's name when `--host-group` is left out, as older scripts name it; a
+`--role` beside `--host-group` must be the same name (`invalid_role`). The record keeps the
+group's name as its `role` too, and `list-records` shows it as both `role` and `hostGroup`.
+
+A coordinator that holds no host group yet refuses every `--host-group` (`unknown_host_group`)
+and orders every host nothing: put a group first (`hkctl host-groups put`,
+[hostgroups.md](hostgroups.md)), or move a fleet placed by roles to groups through the operator
+API ([hostgroups.md](hostgroups.md#moving-a-fleet-from-roles-to-host-groups)); `add-record` and
+`approve` name the group of each record and approval.
+
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list-records --limit 50
 ```
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment remove-record --host-id web-17 --reason "wrong BMC MAC"
 ```
 
@@ -54,10 +82,99 @@ the store, so the same after a coordinator restart and whether or not the host h
 heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
 `HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or
 `HOST_HELD_RETIRED` (retired, final). A coordinator without enrollment answers
-`HOST_HELD_UNSPECIFIED`. `hostkeeper-pxe` offers a network install only for a record whose
+`HOST_HELD_UNSPECIFIED`. `pxe` offers a network install only for a record whose
 `hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
 retired host's record keeps its machine from being reinstalled by accident. There is no call that
 reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
+
+## The record is the approval
+
+The flow for each server, from the operator's side:
+
+1. Note the server's data MAC and its BMC MAC, from the chassis label or the BMC.
+2. Name the host (its host id) and its host group.
+3. Enter the record:
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment add-record --host-id web-17 --host-group web \
+    --data-macs 00:00:5e:00:53:01 --bmc-mac 00:00:5e:00:53:a1 \
+    --approve-for-secs 43200 --notes "rack 4, unit 17"
+```
+
+4. Boot the server. It gets the network install ([network-install.md](network-install.md)), posts
+   its request, and is enrolled with no approve step: the coordinator approves the request itself,
+   as the record's host id, in the record's host group, and the daemon takes its certificate at
+   its next poll. A
+   server that booted before its record was entered is approved when the record is entered.
+
+A MAC is not secret: it is on the label, and every frame the server sends carries it. What keeps
+the wrong machine out is the record, its one use and its window, and nothing else: a request is
+approved by a record only while the record is open, once, and only when the request matches that
+one record exactly. After enrollment the host does not rely on its MAC at all: it proves itself by
+its key, which the approval bound to the host id.
+
+**The window.** A record that names a host group opens its window when it is added, and the coordinator
+approves a matching request only while the window is open. The window is 24 hours unless you give
+another: `--approve-for-secs` is its length from now, `--approve-until-unix` its end as a unix
+time; give at most one. No window is longer than 7 days. The defaults are the coordinator's
+flags `--record-approve-for` (24h) and `--record-approve-max` (7d), each written as digits and one
+of `s`, `m`, `h`, `d`; the coordinator refuses to start with a default longer than the maximum.
+They need no `--enrollment-dir`. A window longer than the maximum, an end that is not in the
+future, both fields at once, or a window on a record that names no host group is refused
+`invalid_window`. A record with no host group has no window and approves nothing.
+
+**One use.** A record approves one enrollment. When the coordinator approves a request by it, the
+record is used: it records the request and the time, and approves no other request, whatever its
+window. The use is audited `enrollment.auto_approved` by `inventory`, with the request id, the
+record's host id and host group (`group web`; the entry's `hostGroup` names it too), the request's
+claims and the reason `approved by its inventory record <host id>`; a manual approval is audited `enroll_approve` by the operator's token, as before.
+A coordinator that stopped between the approval and its audit line writes the entry and marks
+the record used at its next start.
+
+**What is checked.** The coordinator approves a request by a record only when all of these hold:
+
+- the request matches exactly one record and no other, by a data MAC of the record among the
+  claimed addresses; when the record holds a BMC MAC, the request must claim that same BMC MAC
+  (a request that claims none, or another, is not approved), and a Mac matches by its serial;
+- the record is open (its window is not over) and unused, and names a host group the coordinator
+  holds (a record added before the coordinator held groups names one by its role, which may be
+  no group's: that request waits for an operator);
+- the request is not a renewal and is not a `duplicate_claim`;
+- no other pending request matches the same record (`contested_by`);
+- no other key holds the record's host id.
+
+**What stays manual.** A request that fails any of those waits for an operator, as before, and
+`list` shows it: unmatched, ambiguous, outside the window, used, contested, a duplicate claim
+(approve it with `--replace true`), a renewal, a record with no host group (or whose role names
+no group the coordinator holds), and a BMC MAC the request
+does not claim or claims differently from the record's. [Approve](#approve) is for these.
+`list` shows the match's `record_state` (`RECORD_STATE_OPEN`, `RECORD_STATE_CLOSED` or
+`RECORD_STATE_USED`) and `record_approve_until_unix`, so you can see why a matched request still
+waits.
+
+**Open a record again.** A record whose window ended, a record added before windows existed, or
+one whose window you want to move is opened again from now with `open-record`, with the same two
+window fields; the end of the window is audited `record_open` with the reason. A pending request
+that matches it is approved then.
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment open-record --host-id web-17 --approve-for-secs 86400 \
+    --reason "rack delayed to Thursday"
+```
+
+`open-record` changes only the window, never the MACs. A used record is refused `record_used`:
+its one use is spent, so to enroll another machine under that record, remove the record and add it
+again. This is deliberate: it is what keeps a second request from riding a record that already
+enrolled its server.
+
+**See the state.** `list-records` says for each record `state`: `RECORD_STATE_OPEN` (the
+window is open and the record unused), `RECORD_STATE_CLOSED` (unused, with its window over or
+none) or `RECORD_STATE_USED` (with `used_by_request_id` and `used_unix`), and `approve_until_unix`.
+`pxe` serves a record's data MAC a network install only while its state is open, unless
+`reinstall` of its settings names its host id ([network-install.md](network-install.md)): a server whose window
+is over, or whose record is used, is not installed from the network.
 
 ## Bootstrap a Linux node
 
@@ -98,6 +215,59 @@ Place the config:
 4. Make it root's and closed to writes by others: `chown root:root /etc/hostkeeper/hostkeeper.toml`
    and `chmod 0600 /etc/hostkeeper/hostkeeper.toml`.
 
+The repository entries need no step here: once enrolled, the host's daemon writes
+`/etc/hostkeeper/repositories/` from the coordinator's registry at its first heartbeat, for the
+repositories its services name ([packages-repositories.md](../design/packages-repositories.md)
+section 3.2, [repository-keys.md](repository-keys.md#put-the-repository-in-the-registry)), and
+announces `apt` from the heartbeat after. Place them by hand only on a host that must install
+from the project's package repository before it reaches the coordinator; the registry's set then
+adopts the files when they are the same bytes, and replaces them otherwise. As root:
+
+1. Make the directory: `install -d -o root -g root -m 0755 /etc/hostkeeper/repositories`.
+2. Fetch the repository's keyring into it:
+
+   ```
+   curl --proto '=https' --tlsv1.2 --fail --silent --show-error --location \
+     --output /etc/hostkeeper/repositories/komira.gpg \
+     https://packages.komira.ai/apt/komira-archive-keyring.gpg
+   ```
+
+3. Write one entry per channel, `komira-testing.sources` and `komira-stable.sources`, each one
+   stanza. The testing one:
+
+   ```
+   Types: deb
+   URIs: https://packages.komira.ai/apt
+   Suites: testing
+   Components: main
+   Signed-By: /etc/hostkeeper/repositories/komira.gpg
+   ```
+
+   The stable one is the same with `Suites: stable`. The entry's name is the file's stem, the
+   name a release's entry gives as its `repository`. A host that runs hello's failing-build
+   proof ([hello.md](../hello.md), step 4) also gets `komira-testing-fail.sources`, the same with
+   `Suites: testing-fail`: the suite that lists that build alone
+   ([package-repositories.md](../deploy/package-repositories.md)). These are the bytes the
+   registry's repository `komira` is written as (with the suite `testing-fail` listed when the
+   proof runs), so the first set the coordinator sends keeps them.
+4. Make every file root's and closed to writes by others:
+   `chown root:root /etc/hostkeeper/repositories/*` and
+   `chmod 0644 /etc/hostkeeper/repositories/*`.
+5. Start the daemon. Its start refuses a defective directory, naming the file (see the journal,
+   or the log on a host without systemd): fix that file and start it again. To judge the files
+   before they are in place on a network install, `pxe serve` checks its directory at its start
+   ([network-install.md](network-install.md)).
+
+The directory holds those files and nothing else. The daemon checks it at its start and does not
+start on any defect: another file, a `.sources` whose name is not 1 to 32 bytes of `[a-z0-9-]`,
+a stanza that is not exactly one `deb` stanza with one `https://` or `file:/` URI, one suite, a
+component and `Signed-By` a keyring of the directory, a key that turns off apt's checks
+(`Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure`, `Check-Valid-Until:
+no`), a keyring over 1 MiB, empty, or not of its name's kind (armor is read only from a file
+named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. A host installed by network gets the
+same files from the boot server's `repositories` setting ([network-install.md](network-install.md)).
+Rotating the key is [repository-keys.md](repository-keys.md).
+
 Start the unit by hand, since the package does not: `systemctl start hostkeeper.service`. The unit
 is `Type=notify`, so the command returns once the daemon has finished its boot work. Its lines go
 to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper daemon: `:
@@ -110,20 +280,22 @@ to the journal (`journalctl -u hostkeeper.service`), each beginning `hostkeeper 
   (exit 3); nothing on the host changed. The loader reports one key at a time. systemd keeps
   starting the daemon again, so once the file is fixed the next start loads it; nothing needs
   resetting.
+- `/etc/hostkeeper/repositories: /etc/hostkeeper/repositories/<file>: <why>`: the repository
+  entries break a rule of the list above (exit 3); fix or remove the file named, and the next start
+  reads the directory again.
 - `the coordinator presents a CA whose SHA-256 is <hex>, not the pinned ca_sha256; nothing was
   sent`: `ca_sha256` or `coordinator` is wrong.
 - `the coordinator could not be reached: Enroll was answered with the status <code>: "<token>"`:
   the coordinator refused the request; the token is in
   [Refusals of the host's calls](#refusals-of-the-hosts-calls).
 
-On the host, as root, `hostkeeper admin status` reports its enrollment over the daemon's admin
-socket (`/run/hostkeeper/admin.sock`, [docs/admin.md](../admin.md)), and a Linux node's console
-shows it ([Check the key hash](#check-the-key-hash)).
+On the host, as root, the daemon's journal (`journalctl -u hostkeeper`; [docs/admin.md](../admin.md)) says what the enrollment loop waits for, and a Linux node's console
+shows the key hash ([Check the key hash](#check-the-key-hash)).
 
 ## The pending request and its match
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment list --limit 50
 ```
 
@@ -131,18 +303,23 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
 and `key_sha256` (the same value: the SHA-256 of the request's public key), the host's `claims`
 (machine id, DMI serial and product UUID, network addresses, BMC MAC; serial and platform UUID on
 a Mac), `image`, `first_seen_unix`, `renewal_of` for a returning host, `duplicate_claim` and
-`mac_nonce_presented`, and how it matches the inventory. `--output json` prints the field names
-in lower camel case (`keySha256`) and leaves out a field at its default (`false`, an empty
-string).
+`mac_nonce_presented`, and how it matches the inventory. `hkctl` prints the gateway's JSON body,
+with the field names in lower camel case (`keySha256`) and a field at its default (`false`, an
+empty string) left out.
 
 The match is worked out when the request is listed and again when it is approved, from the
 records as they are then. A record matches a Linux request when one of its data MACs is among the
 claimed addresses, and the request claims no BMC MAC or the record's; a BMC MAC that differs from
 the record's means no match. A record that holds only a serial never matches a Linux request.
 
-- **`INVENTORY_MATCH_MATCHED`**: exactly one record matches; `record_host_id` and `record_role`
-  are its host id and role, and `record_serial` and `record_bmc_mac` its serial and BMC MAC
-  (empty when it holds none). Check the key hash, then approve as that record (below).
+- **`INVENTORY_MATCH_MATCHED`**: exactly one record matches; `record_host_id` and
+  `record_host_group` are its host id and host group (`record_role` carries the same name, for
+  older readers), and `record_serial` and `record_bmc_mac` its serial and BMC MAC
+  (empty when it holds none), and `record_state` and `record_approve_until_unix` where its window
+  stands. A matched request is approved by the coordinator itself when its record is open and
+  the other conditions of [the record is the approval](#the-record-is-the-approval) hold; one
+  still listed is waiting for an operator. Check the key hash, then approve as that record
+  (below).
 - **`INVENTORY_MATCH_UNMATCHED`**: no record matches. Either the server has no record (add one,
   and list again) or its record has the wrong MACs (remove it, add the right one, and list
   again). An approval of an unmatched request must name the host id.
@@ -150,15 +327,18 @@ the record's means no match. A record that holds only a serial never matches a L
   none is chosen. Two records share this server's MACs between them: remove the wrong ones until
   one matches, or approve naming the host id.
 
-Matched is not proof. A request that claims a data MAC of a record, and does not contradict its
+Matched is not proof, and it is what an open record approves on. A request that claims a data MAC of a record, and does not contradict its
 BMC MAC, matches it, and the machine wrote those claims itself: anyone who read the label or the
 network can write the same. The claims that are hard to copy are the DMI serial, the BMC MAC and
 the product UUID, which are not on the data network; compare them with the record's
 (`record_serial`, `record_bmc_mac`; the record holds no product UUID). The web app's Enrollment
 page puts each beside the record's value, says "not recorded" for a value the record does not
 hold and "not claimed" for a claim the request leaves out, and warns when the record holds a BMC
-MAC the request does not claim (it matched on a data MAC alone). Approve only the key hash shown
-on the machine's own console.
+MAC the request does not claim (it matched on a data MAC alone; such a request is not approved by
+its record). Approve by hand only the key hash shown on the machine's own console. For a record
+you leave open, the safeguards are its short window and its one use: enter the record shortly
+before the server boots, and look at `list-records` afterwards, where the record should be
+`RECORD_STATE_USED` by the request you expected.
 
 `contested_by` is set on a request when another pending request matches a record it matches: it
 lists those requests' ids, and each of them lists this one. A contested request cannot be
@@ -185,9 +365,13 @@ matches a Mac request when its serial equals the claimed serial, letters compare
 MACs are not compared. Record a Mac with `--serial` and no MAC:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    enrollment add-record --host-id mac-03 --role build --serial C02XK1ABJG5J
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment add-record --host-id mac-03 --host-group build --serial C02XK1ABJG5J
 ```
+
+With a host group, that record is also the approval of the Mac, as a Linux record is
+([The record is the approval](#the-record-is-the-approval)): a Mac request whose claimed serial
+equals the record's, with the record open and unused, is approved by the coordinator.
 
 The enrollment request can carry a one-time nonce from MDM (`mac_nonce`, one hour, one use),
 which lets the coordinator approve a Mac whose serial is in `--mac-serial-allowlist` without an
@@ -216,7 +400,7 @@ gate pushes a nonce to the other at its next look.
 With `--mdm-pkg-allowlist` and `--mdm-host` the gate also sends the Mac the newest pkg on its
 allowlist, before its daemon has posted, and again an hour after the Mac's last answer until a
 request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
-`hostkeeper ctl mdm list-devices` shows the count and the last send
+`hkctl mdm list-devices` shows the count and the last send
 ([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
 posts did not install the pkg: read `/var/log/install.log` on the Mac.
 
@@ -227,12 +411,14 @@ not see enrolled and supervised, or whose serial is not on `--mac-serial-allowli
 With nonces, three things follow for an operator. A nonce approves
 only the request it was issued for: a second request presenting it (another key on the same Mac)
 stays pending and is audited `mac_auto_approve_declined` with `nonce_wrong_request`; deny it.
-A Mac approved by its nonce is assigned the services of its allowlist entry, audited `assign` by
-`mdm-nonce`, as an approval assigns the services it names. A Mac wiped and enrolled in MDM again
+A Mac approved by its nonce is put in the host group of its allowlist entry, and the approval is
+audited `enroll_approve` by `mdm-nonce` naming the group; the group decides what it runs. A Mac wiped and enrolled in MDM again
 takes its own host id over from its old key without an operator (`enroll_replace` by
 `mdm-nonce`); that does not apply to a denied host id, which stays `denied`, nor to a host id
 approved for a request that claimed another serial, which is `host_id_taken`: approve those by
-key hash with `--replace true` as below.
+key hash with `--replace true` as below. A wiped Mac that was moved to another group than its
+allowlist entry names is refused `host_group_differs` and waits: approve it by hand in its
+group.
 
 ## Check the key hash
 
@@ -266,31 +452,39 @@ openssl pkey -inform DER -in /etc/updater/pki/pending/key -pubout -outform DER |
 
 The key is a P-256 key, PKCS#8 DER; the hash is that of its public key's DER
 SubjectPublicKeyInfo, and must equal `key_sha256` of the request. Once the host is enrolled, the
-same key is `/etc/updater/pki/current/key`. `hostkeeper admin status` gives it too, as
-`enrollment.key_sha256` ([docs/admin.md](../admin.md)).
+same key is `/etc/updater/pki/current/key`. The coordinator's `hkctl enrollment list` shows it as `key_sha256` ([docs/admin.md](../admin.md)).
 
 ## Approve
 
-An approval names the request, its key hash, the host's role, the services to assign (each one
-the coordinator's rollout file defines; none is allowed) and a reason. The role is required even
-when the record names one: the record's role is shown, not applied. The certificate is not in the
-answer: the host takes it at its next poll, within seconds.
+A server that matches an open record needs no approval ([The record is the
+approval](#the-record-is-the-approval)). Approve by hand a request that waits: one that matches
+no record or several, is outside its record's window, matches a used record, is contested, a
+duplicate claim or a renewal, or whose record names no host group. Approving by hand does not
+mark a record used. An approval names the request, its key hash, the host's group and a reason.
+The group must be one the coordinator holds (`unknown_host_group`), and is required even when
+the record names one: the record's group is shown, not applied. `--role` is read as the group's
+name when `--host-group` is left out; with both, they must be the same name (`invalid_role`); with
+neither, the approval is refused `invalid_role`. An approval names no services
+(`services_retired`): the host's group decides what it runs, and the host is installed its
+group's packages from its first heartbeat. The approval's audit entry names the group (`group
+web`, and `hostGroup`). The certificate is not in the answer: the host takes it at its next poll,
+within seconds.
 
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
-    --role web --services api --reason "racked in row 4, key checked on the console"
+    --host-group web --reason "racked in row 4, key checked on the console"
 ```
 
 A request that matches no record or several, or a renewal, approved under a host id the operator
 names:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
-    --host-id web-17 --role web --reason "no record yet, key checked on the console"
+    --host-id web-17 --host-group web --reason "no record yet, key checked on the console"
 ```
 
 `--replace true` is needed, and only applies, when the approval takes something from another:
@@ -303,23 +497,21 @@ hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-
   without it);
 - the host id was denied (`denied` without it).
 
+A `--replace` keeps the group of the host it replaces: naming another group is refused
+`host_group_differs`, and changes nothing. A host changes group only by `hkctl host-groups move`
+([hostgroups.md](hostgroups.md#moving-a-host)). The group of a denied host ended with its
+retirement, so an approval that takes a denied host id puts the new key's host in the group it
+names; so does one that replaces a host approved before the coordinator held groups.
+
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
-    --host-id web-17 --role web --services api --replace true \
+    --host-id web-17 --host-group web --replace true \
     --reason "web-17 rebuilt on new disks, key checked on the console"
 ```
 
 Without `--replace` none of these is changed. For a renewal, `--replace` lifts only
 `duplicate_claim`: a renewal is approved under the host id it renews, and no other.
-
-When the approval stands but its services could not be assigned, the coordinator logs `the
-services of an approval were not assigned: assign them with Services.Assign`. Assign them:
-
-```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    services assign --node-id web-17 --service api
-```
 
 ## Reject
 
@@ -331,7 +523,7 @@ is answered `DENIED`, and a repost of the same key changes nothing. The rejectio
 rejected succeeds and audits nothing.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
 ```
 
@@ -352,7 +544,7 @@ true`, under each service assigned to it once its heartbeat names that service, 
 `live` while it heartbeats within 45 seconds:
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     releases status --service api
 ```
 
@@ -364,18 +556,24 @@ then). The first heartbeat time is kept in the enrollment store with the host, s
 restart keeps it, and each later approval of the host (a new key with `--replace`, or a renewal an
 operator approves) clears it until the host is heard again; the time to first heartbeat of an
 install is `first_heartbeat_unix - enrolled_unix`. The Host page of the operator web app shows it
-as First heartbeat ("not yet" for an enrolled host not heard since). `hosts list` answers every
-host the same way, a page at a time. [Renewal](#renewal) says what they answer of its certificate.
+as First heartbeat ("not yet" for an enrolled host not heard since). `first_serving_unix`, by the
+same clock and kept and cleared the same way, is the first heartbeat since that approval that
+reported a service the coordinator manages for the host (not hostkeeper itself) healthy, with no
+update of it under way: when the host began serving (absent until then). `hosts list` answers every
+host the same way, a page at a time, and lists with them the enrolled hosts that are not denied
+and have not been heard since the coordinator started: not live, with no heartbeat time, and with
+`running` and `running_unix` as the enrollment kept them (below). [Renewal](#renewal) says what they answer of its certificate.
 
 ## Renewal
 
-A host certificate lasts 7 days. From half its life the daemon renews it with `Renew`, over
+A host certificate lasts 7 days, or what the coordinator's `--host-cert-validity-secs` says (60
+seconds to 7 days). From half its life the daemon renews it with `Renew`, over
 mutual TLS with the certificate it holds, for the same key; no operator is involved. The node
 logs `renewed the certificate of host:<id> (generation <n>)` and the coordinator `renewed a host
 certificate`. A refused renewal is logged on the node as `renewal refused: <token>`.
 
 Every heartbeat also says when the host's certificate ends, why its last enrollment or renewal
-step failed (until a step succeeds), and the host's own clock. `hostkeeper ctl hosts get
+step failed (until a step succeeds), and the host's own clock. `hkctl hosts get
 --node-id <id>` answers the first two as `cert_not_after_unix` and `last_renew_error`, and
 `clock_skew_beats`: how many of the host's heartbeats since the coordinator started said a time
 more than `--clock-skew-secs` (120 by default) from the coordinator's clock, either way. The Host
@@ -391,7 +589,8 @@ A host that was offline until its certificate expired cannot renew it. Its daemo
 request for the key it holds, with `renewal_of` set to its host id, and waits as a new host does
 (`not enrolled; waiting for approval`). The request is listed with `renewal_of` and the same
 `key_sha256` as before; its inventory match is shown but not used. Approve it with `--host-id`
-equal to `renewal_of`, the role again and the services again: they replace the host's. The node
+equal to `renewal_of` and the host's group again: a renewal keeps the host's group, and naming
+another is refused `host_group_differs`. The node
 then logs `enrolled as host:<id> (generation <n>)`. A request whose `renewal_of` names a host that
 is unknown, denied or certified for another key is refused `renewal_not_allowed`.
 
@@ -399,14 +598,13 @@ is unknown, denied or certified for another key is refused `renewal_not_allowed`
 
 Retire a node that is lost, dead or replaced. A deny row is written for its host id: its
 heartbeats and its `Renew` are refused `denied` at once, though its certificate stays valid until
-it expires (7 days at most). Every entry of its own in the services' assignments is dropped: an
-assignment or exclusion of the host (`services assign --node-id`, `services unassign --node-id`),
-its minimum version (`services set-min-version` of the host), and an uninstall it was ordered,
-which is cancelled. What its role or the rollout file assigns is not. It is sent no `uninstall`:
-what it runs stays as it is. The reason may be left out.
+it expires (7 days at most). Every entry of its own is dropped: an exclusion of the host, its
+minimum version (`services set-min-version` of the host), and an uninstall it was ordered, which is
+cancelled. Its group's list is not changed. It is sent no `uninstall`: what it runs stays as it
+is. The reason may be left out.
 
 ```
-hostkeeper ctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     hosts retire --node-id web-17 --reason "board failed, replaced by web-23"
 ```
 
@@ -456,8 +654,8 @@ approve; a queue that still fills needs a larger `--max-pending-enrollments` or 
 ## Refusals of the operator calls
 
 The `Enrollment` service (`list`, `approve`, `reject`, `add-record`, `list-records`,
-`remove-record`)
-refuses with exactly one of these tokens; `hostkeeper ctl` exits 2 on INVALID_ARGUMENT and
+`remove-record`, `open-record`)
+refuses with exactly one of these tokens; `hkctl` exits 2 on INVALID_ARGUMENT and
 FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the others.
 
 | token | code | cause | fix |
@@ -470,19 +668,24 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `pending_full` | RESOURCE_EXHAUSTED | the pending queue is full; returned to the host's `Enroll`, never by these calls | see [the cap](#the-pending-enrollment-cap) |
 | `duplicate_claim` | FAILED_PRECONDITION | the request is flagged `duplicate_claim` | find which server it is; `--replace true` when it is yours |
 | `invalid_host_id` | INVALID_ARGUMENT | the host id breaks its rule (1 to 63 of `a-z0-9-`, not starting or ending with `-`), none is named for a request that matches no record or several or for a renewal, or a renewal is approved under another host id | name a valid host id; for a renewal, `renewal_of` |
-| `invalid_role` | INVALID_ARGUMENT | the role is missing or breaks its rule | pass `--role`: 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
-| `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule or names no service the rollout file defines | name only services of the rollout file |
-| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial or notes | correct the field; `--reason` is 1 to 256 bytes |
+| `invalid_role` | INVALID_ARGUMENT | the role breaks its rule; or `approve` names neither `--host-group` nor `--role`; or `--role` beside `--host-group` is another name | pass `--host-group` alone (or `--role` as the group's name): 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
+| `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule (a coordinator started by `serve` refuses any `--services` as `services_retired` first) | leave out `--services` |
+| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
-| `store_failed` | INTERNAL | the change could not be written; nothing changed | read the coordinator's log and ask again |
+| `store_failed` | INTERNAL | the change could not be written (on the database store, also while its session is lost: the alert `store_unreachable` stands); nothing changed | read the coordinator's log and ask again |
 | `record_exists` | ALREADY_EXISTS | `add-record` for a host id that has a record | remove the record first |
 | `record_conflict` | ALREADY_EXISTS | `add-record` with a MAC or a serial another record holds | remove or correct the other record |
-| `no_record` | NOT_FOUND | `remove-record` of a host id with no record | check the host id with `list-records` |
+| `no_record` | NOT_FOUND | `remove-record` or `open-record` of a host id with no record | check the host id with `list-records` |
 | `capacity` | RESOURCE_EXHAUSTED | `add-record` past the 10000 records the coordinator keeps | remove records no longer needed |
-| `audit_unavailable` | UNAVAILABLE | `add-record` or `remove-record` whose audit line could not be appended (a full disk); nothing changed | free the disk of the audit file, then ask again |
+| `audit_unavailable` | UNAVAILABLE | `add-record`, `remove-record` or `open-record` whose audit line could not be appended (a full disk, on the file store; the database store commits the line with the change and never answers this); nothing changed | free the disk of the audit file, then ask again |
 | `record_mismatch` | FAILED_PRECONDITION | `approve` names a host id other than that of the one record the request matches | leave out `--host-id`, or `--replace true` |
+| `invalid_window` | INVALID_ARGUMENT | `add-record` or `open-record` with both `--approve-until-unix` and `--approve-for-secs`, an end not in the future, a window longer than the coordinator's `--record-approve-max`, or a window on a record that names no host group | give one field, within the maximum, for a record with a host group |
+| `record_used` | FAILED_PRECONDITION | `open-record` of a record whose one use is spent (`RECORD_STATE_USED`) | `remove-record`, then `add-record` it again |
 | `record_contested` | FAILED_PRECONDITION | `approve` of a request that another pending request contests: they match one record (`contested_by` names the others) | compare each `key_sha256` with the machine's console, and `reject` all but the one that is it; `--replace true` does not set it aside |
+| `services_retired` | INVALID_ARGUMENT | `approve` with `--services`: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
+| `host_group_differs` | FAILED_PRECONDITION | `approve` of a renewal, or with `--replace`, that names another group than the one the host it renews or replaces is in | name the host's own group; to change it, approve in that group and then `hkctl host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
+| `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold, which is any group on a coordinator that holds none | name a group `hkctl host-groups list` shows, or make it with `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
 
 ## Refusals of the host's calls
 

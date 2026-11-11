@@ -1,31 +1,32 @@
-# The deb and the rpm of the hostkeeper daemon (docs/design/hostkeeper-design.md, section 4.6),
-# for nfpm. Run from the repository root, after the daemon is built for the architecture:
+# The deb and the rpm of the hostkeeper daemon (docs/design/hostkeeper-design.md,
+# section 4.6), for nfpm. Run from the repository root, after the programs are staged:
 #
-#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager deb --target <directory>
+#   VERSION=<version> ARCH=<amd64|arm64> nfpm package --config packaging/linux/nfpm.yaml --packager <deb|rpm> --target <directory>
 #
-# and the same with `--packager rpm`. VERSION is the release's MAJOR.MINOR.PATCH in digits, with
-# no `v` and no prerelease or build suffix. ARCH is amd64 for the platform linux-x86_64 and
-# arm64 for linux-arm64. nfpm expands ${VERSION} and ${ARCH} and names the files
-# hostkeeper_<version>_<arch>.deb (amd64, arm64) and hostkeeper-<version>-1.<arch>.rpm (x86_64,
-# aarch64). The packages carry the daemon, its unit, its tmpfiles rules, the template of its
-# config, the pinned `gh` and the Sigstore trusted root its attestation check runs on, the boot
-# server of network install, `hostkeeper-pxe` (docs/design/network-install.md, section 3), which
-# has no unit and runs only when an operator starts it in the foreground, and
-# one link, /etc/issue.d/hostkeeper.issue, to the console's issue file the daemon writes while
-# the host waits for its enrollment (/run/hostkeeper/enrollment.issue), and nothing else: no
-# key, no certificate, no token and no hostkeeper.toml, which whoever installs the package
-# places (packaging/linux/README.md). The deb and the rpm carry the same files, the same link
-# and the same scripts.
+# VERSION is the release's MAJOR.MINOR.PATCH in digits, with no `v` and no prerelease or build
+# suffix. ARCH is amd64 for the platform linux-x86_64 and arm64 for linux-arm64. nfpm expands
+# ${VERSION} and ${ARCH} and names the files hostkeeper_<version>_<arch>.deb (amd64, arm64) and
+# hostkeeper-<version>-1.<arch>.rpm (x86_64, aarch64). The packages carry the daemon, its
+# unit, its tmpfiles rules, the template of its config, the pinned `gh` and the Sigstore trusted
+# root its attestation check runs on, and one link, /etc/issue.d/hostkeeper.issue, to the console's
+# issue file the daemon writes while the host waits for its enrollment
+# (/run/hostkeeper/enrollment.issue), and nothing else: no key, no certificate, no token and no
+# hostkeeper.toml, which whoever installs the package places (packaging/linux/README.md). The
+# deb and the rpm carry the same files, the same link and the same scripts.
 #
-# `gh` and the trusted root are taken from target/nfpm/, which
+# The daemon is the static (musl) build of `hostkeeper`, so one package runs on every release of
+# its family; `gh` and the trusted root are pinned downloads. The boot server of network install
+# is not here: it is the `pxe` package (docs/design/network-install.md), built apart. All three are taken from target/nfpm/, which
 #
-#   cargo xtask release nfpm-stage --arch <amd64|arm64> --gh-version <version> --gh-archive <gh_<version>_linux_<arch>.tar.gz> --gh-sha256 <hex> --trusted-root <file> --out target/nfpm
+#   cargo xtask release nfpm-stage --arch <amd64|arm64> --gh-version <version> --gh-archive <gh_<version>_linux_<arch>.tar.gz> --gh-sha256 <hex> --trusted-root <file> --binaries <directory> --out target/nfpm
 #
-# writes, with the same ARCH, after checking the archive against its pin and the trusted root
-# (and `cargo xtask release check-linux-pkg <package> --staged target/nfpm` reads each built
-# package back and refuses it unless it installs both as staged and the issue link as above);
-# the pins and the capture are in .github/workflows/artifacts.yml (docs/deploy/verify-a-release.md,
-# "What the deb and the rpm check packages with").
+# writes, with the same ARCH, from the programs in <directory> (target/<musl target>/release),
+# after checking that each is a static ELF of the architecture and the archive against its pin
+# and the trusted root (and `cargo xtask release check-linux-pkg <package> --staged target/nfpm`
+# reads each built package back and refuses it when a program has an interpreter or a NEEDED
+# entry, when it declares a dependency, or unless it installs the files as staged and the issue
+# link as above); the pins and the capture are in .github/workflows/artifacts.yml
+# (docs/deploy/verify-a-release.md, "What the Linux packages check packages with").
 name: hostkeeper
 arch: "${ARCH}"
 platform: linux
@@ -41,14 +42,8 @@ vendor: komira-ai
 homepage: https://github.com/komira-ai/hostkeeper
 license: Apache-2.0
 contents:
-  - src: target/release/hostkeeper
+  - src: target/nfpm/hostkeeper
     dst: /usr/bin/hostkeeper
-    file_info:
-      mode: 0755
-      owner: root
-      group: root
-  - src: target/release/hostkeeper-pxe
-    dst: /usr/bin/hostkeeper-pxe
     file_info:
       mode: 0755
       owner: root

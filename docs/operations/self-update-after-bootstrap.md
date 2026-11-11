@@ -38,14 +38,12 @@ first release after 0.1.100 that `hostkeeper --version` shows with that change) 
   unit file of the same name, as it is and does not claim it: the unit is already enabled, and
   systemd starts `hostkeeper.service` from `/etc/systemd/system`, where the install links the
   release's unit. An earlier daemon refuses the install `path_conflict` before it writes anything.
-- Before it stages the new binary, the daemon asks it for its self-update protocol in a transient
-  unit. An earlier Linux daemon has no way to run that probe and refuses every self-update
-  `protocol_unreadable` (komira-ai/hostkeeper#102). A macOS daemon runs the probe as a launchd
-  job from the release that carries that change on; an earlier one refuses every self-update
-  `protocol_unreadable` the same way, even an install of the version it already runs. The probe
-  is run by the daemon that runs, not by the release, so such a Mac is brought once, by hand, to
-  that release or a later one (stage its binary in the binary directory, switch `current` to it,
-  and `launchctl kickstart -k system/dev.hostkeeper.hostkeeper`) before it is included again.
+- A daemon judges a release by its floor and asks nothing of its binary. A daemon older than the
+  floor the release's package declares (`min_hostkeeper`, 0.1.194 for the release that deleted
+  the old self-update verbs and the releases after it) defers the release `daemon_too_old`. Such
+  a host is brought to 0.1.194 or a later release first, by hand if it cannot update itself:
+  stage that release's binary in the binary directory, switch `current` to it, and restart the
+  unit (`hostkeeper.service`, or the job `dev.hostkeeper.hostkeeper` on a Mac).
 
 A verdict of a service the heartbeat does not list, such as the refusal of an install that wrote
 nothing, is sent in the next heartbeat. The service is listed `absent` at the order's target with
@@ -56,15 +54,40 @@ the host again. The entry goes once the service is listed; a restart of the daem
 it, and the coordinator may then order the install once more. An earlier daemon keeps such a
 verdict unsent until the service is listed, which a refused install never is.
 
+The daemon that runs a self-update exits before its verdict (`Deferred`, `awaiting_restart`)
+reaches a heartbeat, and the coordinator ends the order once the host runs its target, so it never
+orders it again. The next binary reports the verdict instead: the daemon that ran the order keeps
+the order's id in its step record, the settlement keeps it beside the settled verdict (the new
+binary's `Succeeded`, or after a fallback the `Failed` `self_update_fallback`, settled by
+the previous binary's start), and every start of the daemon
+sends that verdict under that id and try, from its first heartbeat until the coordinator
+acknowledges it; the record then stops keeping it. The coordinator then holds it as
+the host's last update of hostkeeper, in place of an older verdict. A daemon keeps the id from the
+release that carries that change on, so a self-update an earlier daemon ran reports no verdict,
+and the coordinator keeps showing the host's older verdict until hostkeeper's next self-update.
+That holds no rollout: the bake and the convergence read the health the running binary reports.
+From the same release on, a Mac's daemon reports its own service as its launchd job
+`dev.hostkeeper.hostkeeper`, live, healthy and at the version it runs; an earlier one reports it
+`unmonitored` and unhealthy, which keeps the host from baking, so a Mac is brought to that release
+by its last self-update from an earlier daemon (or by hand) and bakes from then on.
+
 So a Linux daemon from before that release, installed by the deb, cannot update itself to any
 release. Bring it once, by hand, to that release or a later one the way the host's packaging
 upgrade does: stage that release's binary in the binary directory, switch `current` to it, and restart
 `hostkeeper.service`. From that release on, the coordinator's install, and every update after it,
 runs as the self-update. Until then, hold or exclude the host for the service `hostkeeper`.
 
-The release's hook is its own binary, `bin/hostkeeper update-hook`, which a daemon's step
-launcher runs as `bin/hostkeeper <step> ...`; every step does nothing. Its manifest asks for a
-daemon of 0.1.53 or later, so that the daemon that runs now, older than the release, takes it.
+## Through the host's own package
+
+Each platform's list of the service `hostkeeper` holds the package the host was set up from: on
+Linux the daemon's `.deb`, an `apt` entry of the repository's `testing` suite; on a Mac the
+installer pkg, a `macos-pkg` entry of the `testing` store (docs/design/packages-native.md). A host
+whose daemon announces that installer (host setup placed its repository entry or store) is picked
+the package: the daemon stages the new version, restarts into its binary, and only once that binary
+has confirmed itself installs the package (`apt-get install` and the hold, or `installer`), so the
+unit always starts a binary that ran (section 10.4 of that design). A host whose daemon announces
+no such installer is ordered nothing (`installer_dropped`): set it up with the package's repository
+entry or store first ([move-to-native.md](move-to-native.md)).
 
 ## Daemons before this change
 
@@ -89,6 +112,44 @@ may hold that order's try in its step record. The coordinator orders the next in
 (`ORDER_AGE`) with no word, so such a host takes the next order instead of refusing it
 `try_conflict` for good.
 
+The daemon also sends the try its step record holds for each service in every heartbeat, so a
+coordinator that restarted after a self-update's install, and so never heard that install's
+verdict, orders the next update past it. A daemon of an earlier release does not send it; such a
+host may refuse the coordinator's first update `try_conflict` (or `stale_try`). The coordinator
+reads either refusal as a disagreement on the try, not as the host failing the version: it orders
+the host again past the refused try in the same answer, and the host is neither failed here nor
+holds back its stage. A host a coordinator of an earlier release left failed here on such a
+refusal is ordered again once the coordinator runs this release.
+
+## A current that starts nothing
+
+The link `current` of the binary directory (`<state-dir>/hostkeeper/bin/current`) can name a
+binary that does not start: a link to a version that is gone, or a hand edit. The package unit's
+`ExecStart=` runs `current`, so systemd then reports a failure to execute at every restart and no
+daemon runs. The unit of the release that deleted `self-update-seed` has no `ExecStartPre=` line
+that repairs it; the packaged binary does it when it is run as the daemon.
+
+As root, stop the unit and run the packaged binary once by hand with the unit's flags, copied
+from `systemctl cat hostkeeper` and without `--notify-systemd`, which needs the notify socket of
+a unit:
+
+```
+systemctl stop hostkeeper
+/usr/bin/hostkeeper daemon --config /etc/hostkeeper/hostkeeper.toml \
+    --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages
+```
+
+Started from `/usr/bin/hostkeeper`, the daemon puts that binary in the binary directory as its
+own version when `current` starts nothing, points `current` at it, and execs `current` with its
+own arguments (`hostkeeper_daemon::packaged`), so the daemon you see runs from the binary
+directory. Stop it with Ctrl-C, then `systemctl start hostkeeper`: the unit runs `current`. A Mac
+needs nothing, since its job runs the installed binary, which does this at each start (see
+[macOS](../macos.md#self-update-hand-over)).
+
+An older packaged binary has no seed in `daemon`; it answers the old verb `self-update-seed`
+instead. Run that verb (`/usr/bin/hostkeeper self-update-seed --state-dir
+/var/lib/updater/state --binary /usr/bin/hostkeeper`), or install a newer deb or rpm.
+
 ## Macs
 
 A Mac reaches the desired release of hostkeeper by itself, as a Linux host does, once two things
@@ -96,34 +157,37 @@ hold:
 
 - its daemon is 0.1.95 or later: an earlier one halts every package it installs at `prepare` as
   `artifact_changed` (`/var` is a link to `/private/var`), hostkeeper's included;
-- its launchd job is the plist of a pkg whose program is `current` of the binary directory,
+- its launchd job is the plist of a pkg whose program starts the binary the self-update chose:
+  `/usr/local/bin/hostkeeper daemon`, which seeds the binary directory and execs `current` at each
+  start, or, in a pkg before that, `current` of the binary directory itself,
   `/var/lib/updater/state/hostkeeper/bin/current` (`sudo launchctl print
-  system/dev.hostkeeper.hostkeeper` names the program). That job starts the binary the
-  self-update switched to ([macOS](../macos.md#self-update-fallback)), and the pkg's
-  `postinstall` points `current` at the installed binary on a first install. The plist of an
-  earlier pkg starts
-  `/usr/local/bin/hostkeeper` instead, so after each self-update the Mac restarts into the binary
+  system/dev.hostkeeper.hostkeeper` names the program). That job runs the binary the
+  self-update switched to ([macOS](../macos.md#self-update-hand-over)). The plist of a
+  still earlier pkg starts
+  `/usr/local/bin/hostkeeper` with no `daemon` argument, which does not exec `current`, so after each self-update the Mac restarts into the binary
   it ran, which records the update `Failed` after the commit (`self_update_fallback`) and the
   version bad. Such a failure counts against the release like any other, toward its automatic
   rollback.
 
 A self-update never changes the plist (hostkeeper's own package has no unit on a Mac), so a Mac
 installed from an earlier pkg keeps that plist until the pkg is installed again by hand. Do it
-once on each such Mac, with a pkg whose plist starts `current`; keep the Mac excluded from
-hostkeeper until it is done. Run the `ctl` lines on a workstation with an operator token for the
+once on each such Mac, with a pkg whose plist starts `/usr/local/bin/hostkeeper daemon`; keep the Mac excluded from
+hostkeeper until it is done. Run the `hkctl` lines on a workstation with an operator token for the
 coordinator, the others on the Mac as root.
 
 1. Take the Mac out of hostkeeper, if it is not out already:
 
    ```
-   hostkeeper ctl hosts exclude --service hostkeeper --node-id <node id> --reason "macOS: pkg installed by hand"
+   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+       hosts exclude --service hostkeeper --node-id <node-id> \
+       --reason "macOS: pkg installed by hand"
    ```
 
 2. Fetch the pkg of the release (`hostkeeper-<version>-macos-arm64.pkg`) and verify it as
    [Verify a release](../deploy/verify-a-release.md) says.
 
 3. Stop the daemon's job, so launchd drops the old plist and the daemon releases the state
-   directory's lock, which the pkg's `postinstall` takes:
+   directory's lock, which the daemon's seed takes:
 
    ```
    sudo launchctl bootout system/dev.hostkeeper.hostkeeper
@@ -131,16 +195,17 @@ coordinator, the others on the Mac as root.
 
 4. Remove `current` of the binary directory, if it is there. A self-update the old plist could not
    start into left it naming the version that update staged, which the Mac recorded bad; without
-   it the `postinstall` points `current` at the binary the pkg installs:
+   it the daemon's first start seeds `current` with the binary the pkg installs:
 
    ```
    sudo rm -f /var/lib/updater/state/hostkeeper/bin/current
    ```
 
-5. Install the pkg. The installer runs the `postinstall`, which seeds `current`, keeps the
-   `/etc/hostkeeper/hostkeeper.toml` the Mac has (the pkg never replaces it) and loads the job. It
-   fails the install with the message of the command that failed: the seed's if it could not give
-   `current` a binary, `mac-config`'s if the Mac has neither that file nor a managed config.
+5. Install the pkg. The installer runs the `postinstall`, which loads the job (step 3 left it not
+   loaded; the script never boots out a job that is loaded). The job's first start seeds `current` and keeps the
+   `/etc/hostkeeper/hostkeeper.toml` the Mac has (the pkg never replaces it). If the Mac has
+   neither that file nor a managed config, the install succeeds and the daemon refuses each
+   start, naming the missing file in `/var/log/hostkeeper/daemon.err.log`.
 
    ```
    sudo installer -pkg hostkeeper-<version>-macos-arm64.pkg -target /
@@ -148,14 +213,15 @@ coordinator, the others on the Mac as root.
 
 6. Check that it runs the pkg's binary through `current` and talks to the coordinator:
    `sudo launchctl print system/dev.hostkeeper.hostkeeper` names the program
-   `/var/lib/updater/state/hostkeeper/bin/current`, `readlink` of that path names
-   `versions/<version>`, `sudo hostkeeper admin status` prints
-   `link.consecutive_failures: 0` after a heartbeat period, and
-   `hostkeeper ctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
+   `/usr/local/bin/hostkeeper`, `readlink` of
+   `/var/lib/updater/state/hostkeeper/bin/current` names
+   `versions/<version>`, and, after a heartbeat period,
+   `hkctl hosts get --node-id <node id>` answers `heartbeat.agent.version` at the new
    version.
 
 7. Put the Mac back into hostkeeper; its next self-update starts the new binary:
 
    ```
-   hostkeeper ctl hosts include --service hostkeeper --node-id <node id>
+   hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+       hosts include --service hostkeeper --node-id <node-id>
    ```

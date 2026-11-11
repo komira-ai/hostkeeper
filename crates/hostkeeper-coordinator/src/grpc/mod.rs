@@ -1,23 +1,30 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Mdm}` on the private one,
+//! Mdm, Repositories, HostGroups}` on the private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
 //! [`route`] is the one entry point of a request. A call over HTTP/2 with a gRPC content type
 //! is [`grpc`]; a `POST` of a method of the operator API on the private listener is the
-//! gateway's; anything else is a JSON route. A gRPC call is served by the tonic server of its
+//! gateway's; a request for a path under `/repositories/` on the heartbeat listener is the serving of
+//! a private repository to a host (a `GET`; any other method is a 405) ([`crate::repository_serve`]), its body streamed; anything else is
+//! a JSON route. A gRPC call is served by the tonic server of its
 //! service, called in process, so a message limit and a status are tonic's. The adapters of
 //! the services ([`agent`], [`operator`]) call the same [`Coordinator`] functions the JSON
 //! routes call and have no rule of their own.
 //!
 //! The caller is checked before the request is read ([`admit`]): a heartbeat by the host its
-//! client certificate names, `SetDesired` and `Converge` by CI's token or the operator's (an
-//! operator's token is told first, so it spends no CI token), every other operator method by the
+//! client certificate names, `SetDesired`, `Converge`, `WaitConverged` and `GetRelease` by CI's
+//! token or the operator's (an operator's token is told first, so it spends no CI token), every
+//! other operator method by the
 //! operator's token, and `Enroll`, `Poll` and `Renew` by nothing here (the key a
 //! host proves, or the certificate `Renew` checks itself). What the check learns goes to the
 //! adapter as [`Admitted`] in the request's extensions, so a bearer is resolved once: a CI token
 //! is good once.
+//!
+//! Every request the router answers tells the held `WaitConverged` calls to read their
+//! convergence again ([`crate::wait`]): a heartbeat, an operator's change and CI's set all come
+//! this way.
 //!
 //! A service is served on one surface only: the agent's on the heartbeat listener (and on the
 //! LAN listener of `--lan-listen`, a second listener of the same surface), the operator's on the
@@ -35,9 +42,11 @@ use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServ
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
+use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::HostsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::MdmServer;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
@@ -54,19 +63,26 @@ use self::operator::{
     AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
     RolloutsService, ServicesService,
 };
+use self::operator_host_groups::HostGroupsService;
+use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
 use crate::http::{
-    BoxError, MAX_OPERATOR_BYTES, Peer, Surface, bearer_in, beat_caller, error, handle,
+    BoxError, MAX_HOST_GROUPS_PUT_BYTES, MAX_OPERATOR_BYTES, MAX_SET_DESIRED_BYTES, Peer, Surface,
+    bearer_in, beat_caller, error, handle,
 };
 use crate::identity::Identity;
 use crate::operator::Caller;
+use crate::repository_serve::{PREFIX, serve};
 use crate::service::{CiRefused, Coordinator, MAX_BEARER_BYTES};
+use crate::wait::CallLimit;
 
 pub(crate) mod agent;
 mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
+mod operator_host_groups;
+mod operator_repositories;
 pub(crate) mod refusal;
 pub(crate) mod report;
 
@@ -78,11 +94,12 @@ mod tests;
 pub const GRPC_FEATURE: &str = "grpc-v1";
 
 /// The gRPC path of every method of the operator API that no handler serves yet: each is
-/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. None is:
-/// a method added to a proto is listed here until its handler lands.
+/// answered `UNIMPLEMENTED`, with no message, until the coordinator has the handler. A method
+/// added to a proto is listed here until its handler lands. None is.
 pub const PENDING: &[&str] = &[];
 
-/// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response.
+/// The body of an answer: the bytes of a JSON route or the gateway, or a gRPC response or the
+/// streamed bytes of a private repository's file.
 pub type RouteBody = Either<Full<Bytes>, GrpcBody>;
 
 /// The full name of the agent's service.
@@ -103,13 +120,26 @@ const ALERTS: &str = "hostkeeper.operator.v1.Alerts";
 const ROLLOUTS: &str = "hostkeeper.operator.v1.Rollouts";
 /// The full name of the operator API's `Mdm`.
 const MDM: &str = "hostkeeper.operator.v1.Mdm";
+/// The full name of the operator API's `Repositories`.
+const REPOSITORIES: &str = "hostkeeper.operator.v1.Repositories";
+/// The full name of the operator API's `HostGroups`.
+const HOST_GROUPS: &str = "hostkeeper.operator.v1.HostGroups";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
+/// The path of `Repositories.Put`, which takes the operator's token and a keyring of up to 64 KiB.
+const REPOSITORIES_PUT: &str = "/hostkeeper.operator.v1.Repositories/Put";
+/// The path of `HostGroups.Put`, which takes the operator's token and a body of up to 64 KiB.
+const HOST_GROUPS_PUT: &str = "/hostkeeper.operator.v1.HostGroups/Put";
 /// The path of `Releases.SetDesired`, which takes CI's token or the operator's.
 const SET_DESIRED: &str = "/hostkeeper.operator.v1.Releases/SetDesired";
 /// The path of `Releases.Converge`, which takes CI's token or the operator's: it changes nothing.
 const CONVERGE: &str = "/hostkeeper.operator.v1.Releases/Converge";
+/// The path of `Releases.WaitConverged`, which takes CI's token or the operator's, as `Converge`.
+const WAIT_CONVERGED: &str = "/hostkeeper.operator.v1.Releases/WaitConverged";
+/// The path of `Releases.GetRelease`, which takes CI's token or the operator's: it changes
+/// nothing.
+const GET_RELEASE: &str = "/hostkeeper.operator.v1.Releases/GetRelease";
 
 /// What the router learned of a caller before it read the request; the adapter finds it in the
 /// request's extensions.
@@ -125,9 +155,10 @@ pub(crate) enum Admitted {
         /// Whether its heartbeat is heard for its final report only.
         retiring: bool,
     },
-    /// `SetDesired` and `Converge` with CI's token: the verified token.
+    /// `SetDesired`, `Converge` and `WaitConverged` with CI's token: the verified token.
     Ci(Verified),
-    /// An operator method with the operator's token (`SetDesired` and `Converge` among them):
+    /// An operator method with the operator's token (`SetDesired`, `Converge` and
+    /// `WaitConverged` among them):
     /// the operator, and the bearer it sent.
     Operator {
         /// Who calls.
@@ -184,7 +215,8 @@ enum Served {
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
 /// refusal of the service the path names, as a status whose message is its token: a
-/// heartbeat's `forbidden` or `denied`; for `SetDesired` and `Converge` with no operator token,
+/// heartbeat's `forbidden` or `denied`; for `SetDesired`, `Converge`, `WaitConverged` and
+/// `GetRelease` with no operator token,
 /// CI's `unauthorized` or `keys_unavailable`; the operator's `unauthorized` or `forbidden`.
 pub(crate) async fn admit(
     coordinator: &Coordinator,
@@ -197,7 +229,10 @@ pub(crate) async fn admit(
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
         (
             Surface::Control,
-            Some(HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM),
+            Some(
+                HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM
+                | REPOSITORIES | HOST_GROUPS,
+            ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
     };
@@ -210,7 +245,9 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator if path == SET_DESIRED || path == CONVERGE => {
+        Served::Operator
+            if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) =>
+        {
             // An operator's token is told before CI's is verified: it is no CI token and
             // spends none.
             if let Ok(name) = coordinator.operator(bearer(headers)) {
@@ -265,10 +302,25 @@ where
     response
 }
 
+/// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
+/// [`MAX_OPERATOR_BYTES`] for every other method.
+pub(crate) fn operator_limit(path: &str) -> usize {
+    if path == SET_DESIRED || path == REPOSITORIES_PUT {
+        MAX_SET_DESIRED_BYTES
+    } else if path == HOST_GROUPS_PUT {
+        MAX_HOST_GROUPS_PUT_BYTES
+    } else {
+        MAX_OPERATOR_BYTES
+    }
+}
+
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
-/// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 4 KiB for an
-/// operator's call. A path of a service this coordinator does not serve is `UNIMPLEMENTED`.
+/// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 4 KiB for every other
+/// operator's call. A path of a
+/// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
     admitted: Admitted,
@@ -299,7 +351,7 @@ where
         }
         Some(RELEASES) => {
             let server = ReleasesServer::new(ReleasesService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(SERVICES) => {
@@ -332,6 +384,16 @@ where
                 .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
+        Some(REPOSITORIES) => {
+            let server = RepositoriesServer::new(RepositoriesService::new(coordinator))
+                .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
+        Some(HOST_GROUPS) => {
+            let server = HostGroupsServer::new(HostGroupsService::new(coordinator))
+                .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
         _ => Status::unimplemented("").into_http(),
     }
 }
@@ -339,13 +401,14 @@ where
 /// Answers the gRPC call `request` that came in on `surface` from `peer`: the caller is
 /// checked ([`admit`]) before the request is read, then the service of the path answers. A
 /// call that has not been answered after `patience` is `DEADLINE_EXCEEDED`: the bound covers the
-/// read of the request and the adapter, whose handlers do not await, so the bound cuts only a
-/// request that has not arrived.
+/// read of the request and the adapter, whose handlers do not await but one, so the bound cuts
+/// only a request that has not arrived. That one is a held `WaitConverged`, whose bound is moved
+/// to its `wait_secs` plus one patience once it is held ([`CallLimit`]).
 pub(crate) async fn grpc<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
     peer: &Peer,
-    request: Request<B>,
+    mut request: Request<B>,
     patience: Duration,
 ) -> Response<GrpcBody>
 where
@@ -364,9 +427,14 @@ where
         Ok(admitted) => admitted,
         Err(status) => return status.into_http(),
     };
-    match tokio::time::timeout(patience, serve_admitted(coordinator, admitted, request)).await {
-        Ok(response) => response,
-        Err(_) => Status::new(Code::DeadlineExceeded, "").into_http(),
+    let limit = CallLimit::new(patience);
+    request.extensions_mut().insert(limit.clone());
+    match limit
+        .bound(serve_admitted(coordinator, admitted, request))
+        .await
+    {
+        Some(response) => response,
+        None => Status::new(Code::DeadlineExceeded, "").into_http(),
     }
 }
 
@@ -381,9 +449,10 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 ///
 /// A call over HTTP/2 with a gRPC content type is a gRPC call ([`grpc`]). Otherwise, on the
 /// private listener, a `POST` of a path that names a method of the operator API is the
-/// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. Everything
-/// else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
-/// bad request, or a deadline exceeded for gRPC.
+/// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
+/// heartbeat listener a path under `/repositories/` is a private repository's
+/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
     surface: Surface,
@@ -396,20 +465,24 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
-        return grpc(coordinator, surface, peer, request, patience)
+    let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
+        grpc(coordinator, surface, peer, request, patience)
             .await
-            .map(Either::Right);
-    }
-    if surface == Surface::Control && gateway::is_method(request.uri().path()).is_some() {
+            .map(Either::Right)
+    } else if surface == Surface::Control && gateway::is_method(request.uri().path()).is_some() {
         let answered = if request.method() == Method::POST {
             gateway::answer(coordinator, peer, request, patience).await
         } else {
             error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
         };
-        return answered.map(Either::Left);
-    }
-    handle(coordinator, surface, peer, request, patience)
-        .await
-        .map(Either::Left)
+        answered.map(Either::Left)
+    } else if surface == Surface::Heartbeat && request.uri().path().starts_with(PREFIX) {
+        serve(coordinator, peer, request).await
+    } else {
+        handle(coordinator, surface, peer, request, patience)
+            .await
+            .map(Either::Left)
+    };
+    coordinator.waits.changed();
+    answered
 }

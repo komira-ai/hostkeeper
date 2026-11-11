@@ -875,54 +875,66 @@ fn verify_refuses_a_file_or_bundle_path_that_is_not_utf8() {
     assert_eq!(calls(&api), Vec::<Vec<String>>::new());
 }
 
-#[test]
-fn the_release_source_lists_the_releases_as_the_store_does() {
-    // Catches: the sync reading another listing than the one `publish` reads.
-    let path = format!("repos/{REPO_NAME}/releases?per_page=100");
-    let reply = json!([release_json()]).to_string();
-    let api = gh(&["gh", "api", &path], &reply);
-    assert_eq!(ReleaseSource::list(&api, &repo()), api.releases(&repo()));
-    assert!(ReleaseSource::list(&api, &repo()).is_ok_and(|list| list.len() == 1));
-}
-
-#[test]
-fn download_asks_gh_for_the_one_asset_into_the_directory() {
-    // Catches: a download of every asset, of the asset of another release or repository, or
-    // into another directory; or a failed download read as done.
-    let line = [
-        "gh",
-        "release",
-        "download",
-        "v0.1.5",
-        "--repo",
-        REPO_NAME,
-        "--pattern",
-        "SHA256SUMS",
-        "--dir",
-        "/w/assets",
-    ];
-    let api = gh(&line, "");
-    assert_eq!(
-        api.download(&repo(), "v0.1.5", "SHA256SUMS", Path::new("/w/assets")),
-        Ok(())
-    );
-    assert_eq!(calls(&api), vec![words(&line)]);
-    let failed = failing(&line, "HTTP 404");
-    assert_eq!(
-        failed.download(&repo(), "v0.1.5", "SHA256SUMS", Path::new("/w/assets")),
-        Err(failure(
-            &line[1..].join(" ").replace("release", "gh release"),
-            "HTTP 404"
-        ))
-    );
-    let bad = Path::new(OsStr::from_bytes(b"/w/a\xffb"));
-    assert_eq!(
-        Gh::new(FakeExec::default()).download(&repo(), "v0.1.5", "SHA256SUMS", bad),
-        Err(failure(
-            "gh release download",
-            "the path /w/a\u{fffd}b is not UTF-8"
-        ))
-    );
-}
-
 mod signer;
+
+#[test]
+fn jobs_reads_the_jobs_of_every_page_in_order_with_their_conclusions() {
+    // Catches: only the first page read, so a run of many releases is not found by its publish
+    // job past the hundredth, and the plan leaves a failed release as it is; or a job's
+    // conclusion lost (or a job still going read as ended), so the plan cannot tell a verify job
+    // that failed from one that was cancelled or has not ended.
+    let path = format!("repos/{REPO_NAME}/actions/runs/42/jobs?per_page=100");
+    let reply = json!([
+        { "total_count": 3, "jobs": [
+            { "name": "plan", "conclusion": "success" },
+            { "name": "verify (0.1.2, v0.1.2, c)", "conclusion": "failure" }
+        ] },
+        { "total_count": 3, "jobs": [{ "name": "image (0.1.2, v0.1.2, c)", "conclusion": null }] }
+    ]);
+    let api = gh(&issues_line(&path), &reply.to_string());
+    let job = |name: &str, conclusion: Option<&str>| Job {
+        name: name.to_owned(),
+        conclusion: conclusion.map(str::to_owned),
+    };
+    assert_eq!(
+        api.jobs(&repo(), 42),
+        Ok(vec![
+            job("plan", Some("success")),
+            job("verify (0.1.2, v0.1.2, c)", Some("failure")),
+            job("image (0.1.2, v0.1.2, c)", None),
+        ])
+    );
+    assert_eq!(calls(&api), vec![words(&issues_line(&path))]);
+}
+
+#[test]
+fn jobs_refuses_a_page_without_jobs_and_a_job_without_a_name() {
+    // Catches: an error reply or a nameless job read as a run without the release's publish job,
+    // which would leave a failed release as it is instead of failing the plan.
+    let path = format!("repos/{REPO_NAME}/actions/runs/42/jobs?per_page=100");
+    let line = issues_line(&path);
+    let what = format!("gh api --paginate --slurp {path}");
+    let no_jobs = gh(&line, r#"[{"message":"Bad"}]"#);
+    assert_eq!(
+        no_jobs.jobs(&repo(), 42),
+        Err(failure(&what, "jobs is missing or not a list"))
+    );
+    let nameless = gh(&line, r#"[{"jobs":[{"id":1}]}]"#);
+    assert_eq!(
+        nameless.jobs(&repo(), 42),
+        Err(failure(&what, "name is missing or not a string"))
+    );
+    let object = gh(&line, r#"{"message":"Bad"}"#);
+    assert_eq!(
+        object.jobs(&repo(), 42),
+        Err(failure(&what, "the reply is missing or not a list"))
+    );
+    let down = failing(&line, "HTTP 502");
+    assert_eq!(
+        down.jobs(&repo(), 42),
+        Err(failure(
+            &format!("gh api --paginate --slurp {path}"),
+            "HTTP 502"
+        ))
+    );
+}

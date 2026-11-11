@@ -1,22 +1,21 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
 //! boot id, the enrollment claims read from `ioreg` and the package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
-//! root, in `.github/workflows/privileged.yml`'s job `macos-device` only. Like the Linux
+//! root, in `.github/workflows/privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). Like the Linux
 //! privileged tests these are not counted by the coverage gate; what they drive is measured
 //! against fakes in the pull-request set.
 //!
 //! Each test works in a scratch directory of its own, names its launchd jobs
 //! `dev.hostkeeper.ci-<test>-<pid>` (the step job of the launcher test is named by
-//! `Label::from_unit`, `dev.hostkeeper.hostkeeper.step.hkci.prepare.<pid>`, and a probe job by
-//! `Label::probe`, `dev.hostkeeper.hostkeeper.probe.hostkeeper-ci-<test>-<pid>`), and boots them
-//! out when it ends, failed or not. The daemon's coordinator is the loopback address, where nothing
+//! `Label::from_unit`, `dev.hostkeeper.hostkeeper.step.hkci.prepare.<pid>`), and boots them out
+//! when it ends, failed or not. The daemon's coordinator is the loopback address, where nothing
 //! answers: no test leaves the host. Waits poll a state with a bounded number of reads; no test
 //! asserts how long anything took. What a test finds about the system (the `proc_pidpath` table,
 //! the verdicts of `codesign`) it prints, for the record of the run.
 
 use std::fs;
 use std::io::Write;
-use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
+use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt, symlink};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command};
@@ -24,11 +23,9 @@ use std::time::Duration;
 
 use hostkeeper_daemon::boot::BOOT_ID_FILE;
 use hostkeeper_daemon::mac::{HostIoreg, HostMacVerify};
-use hostkeeper_daemon::selfupdate::{
-    LauncherProbe, PROBE_OUTPUT_BYTES, PROTOCOL_VERB, ProtocolProbe, SELF_UPDATE_PROTOCOL,
-};
 use hostkeeper_enroll::{Claims, ClaimsSource, MacClaims};
 use hostkeeper_hook::{Invocation, Outcome, Step};
+use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict};
 use hostkeeper_launchd::launchctl::{JobStatus, bootout_args, bootstrap_args, print};
 use hostkeeper_launchd::procid::darwin::DarwinPidInfo;
 use hostkeeper_launchd::{
@@ -37,16 +34,10 @@ use hostkeeper_launchd::{
 };
 use hostkeeper_observe::{ActiveState, ProcessProbe, ServiceManager, UnitState};
 use hostkeeper_privileged::{Mode, Rig};
-use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{
-    ArtifactError, BootId, BootIdSource, Bound, ProbeCall, ProbeExit, Staged, StepCall,
-    StepLauncher,
+    ArtifactError, BootId, BootIdSource, Bound, Staged, StepCall, StepLauncher,
 };
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict};
-use hyper_util::rt::TokioIo;
-use tonic::transport::{Endpoint, Uri};
 
 const FIXTURE: &str = env!("CARGO_BIN_EXE_hostkeeper-fixture-hook");
 const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
@@ -479,6 +470,7 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
     let _booted = Booted(step_label.clone());
     let call = StepCall {
         service: "hkci",
+        hook_args: &[],
         invocation: Invocation {
             step: Step::Prepare,
             // `prepare` is given a staged release; the fixture only reads its params.
@@ -494,81 +486,6 @@ fn a_fixture_hook_runs_as_a_launchd_job_and_is_stopped_at_its_timeout() {
     assert_eq!(exit.code, None, "stopped, not exited");
     assert_eq!(Outcome::from_exit(exit.code), Outcome::Failure);
     let status = print(&launchctl(), &step_label).expect("launchctl print");
-    assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
-}
-
-/// The unit of a probe of the test `test`, and the label of its job.
-fn probe_unit(test: &str) -> (String, Label) {
-    let unit = format!("hostkeeper-ci-{test}-{}", std::process::id());
-    let label = Label::probe(&unit).expect("a probe label");
-    (unit, label)
-}
-
-/// Catches a Mac whose launcher cannot ask a new hostkeeper binary for its self-update protocol
-/// (every Mac self-update refused `protocol_unreadable`): the daemon binary's
-/// `self-update-protocol`, run through the host's launcher as a launchd job, exits 0 and prints
-/// exactly the protocol and a newline, and its job is gone afterwards; the daemon's own probe
-/// over the same launcher reads that protocol.
-#[test]
-fn the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job() {
-    as_root();
-    let (unit, probe_label) = probe_unit("probe");
-    let _booted = Booted(probe_label.clone());
-    let args = [PROTOCOL_VERB];
-    let call = ProbeCall {
-        service: "hostkeeper",
-        executable: Path::new(DAEMON),
-        args: &args,
-        unit: &unit,
-        timeout_secs: 30,
-        output_bytes: PROBE_OUTPUT_BYTES,
-    };
-    let exit = LaunchdLauncher::system()
-        .run_probe(&call)
-        .expect("the probe ran");
-    println!("the probe: {exit:?}");
-    assert_eq!(
-        exit,
-        ProbeExit {
-            code: Some(0),
-            output: format!("{SELF_UPDATE_PROTOCOL}\n").into_bytes(),
-            truncated: false,
-        }
-    );
-    let status = print(&launchctl(), &probe_label).expect("launchctl print");
-    assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
-
-    let probe = LauncherProbe::new(std::sync::Arc::new(LaunchdLauncher::system()));
-    assert_eq!(
-        probe.protocol(Path::new(DAEMON)).expect("a protocol"),
-        SELF_UPDATE_PROTOCOL
-    );
-}
-
-/// Catches a probe job that outlives its bound or keeps an exit: `/bin/sleep 3600`, probed with a
-/// bound of 1 second through the host's launcher, is booted out at the bound, has no exit code
-/// (a probe that printed no protocol), and launchd no longer holds its job.
-#[test]
-fn a_probe_that_never_ends_is_booted_out_at_its_bound_with_no_exit_code() {
-    as_root();
-    let (unit, probe_label) = probe_unit("probe-bound");
-    let _booted = Booted(probe_label.clone());
-    let args = ["3600"];
-    let call = ProbeCall {
-        service: "hostkeeper",
-        executable: Path::new("/bin/sleep"),
-        args: &args,
-        unit: &unit,
-        timeout_secs: 1,
-        output_bytes: PROBE_OUTPUT_BYTES,
-    };
-    let exit = LaunchdLauncher::system()
-        .run_probe(&call)
-        .expect("the probe ran");
-    println!("the probe at its bound: {exit:?}");
-    assert_eq!(exit.code, None, "stopped, not exited");
-    assert!(exit.output.is_empty(), "{exit:?}");
-    let status = print(&launchctl(), &probe_label).expect("launchctl print");
     assert_eq!(status, JobStatus::NotLoaded, "the job is gone");
 }
 
@@ -622,12 +539,29 @@ fn the_mac_claims_from_the_real_ioreg_are_a_serial_and_a_platform_uuid() {
     );
 }
 
-/// Catches a daemon that does not start under launchd on a Mac, or starts under no boot id: the
-/// daemon binary, as a job of the system domain with a config, state and packages directories
-/// and admin socket of its own, is `running`, answers `Status` on its admin socket, and its start
-/// pass wrote the Mac's boot id.
+/// Every socket under `dir`, as paths (links are not followed).
+fn sockets_under(dir: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in fs::read_dir(&next).expect("a readable directory").flatten() {
+            let kind = entry.file_type().expect("an entry's type");
+            if kind.is_socket() {
+                found.push(entry.path());
+            } else if kind.is_dir() {
+                pending.push(entry.path());
+            }
+        }
+    }
+    found
+}
+
+/// Catches a daemon that does not start under launchd on a Mac, starts under no boot id, or
+/// binds a socket: the daemon binary, as a job of the system domain with a config, state and
+/// packages directories of its own, is `running`, its start pass wrote the Mac's boot id, and
+/// nothing is bound anywhere in its scratch tree.
 #[test]
-fn the_daemon_starts_under_launchd_and_answers_status() {
+fn the_daemon_starts_under_launchd_and_binds_no_socket() {
     as_root();
     let dir = scratch("device-daemon");
     let root = dir.path();
@@ -651,7 +585,6 @@ hosted_runner = true
     let state = root.join("state");
     let packages = root.join("packages");
     fs::create_dir_all(&packages).expect("the packages directory");
-    let socket = root.join("run").join("admin.sock");
     let text = |path: &Path| path.display().to_string();
     let daemon = label("daemon");
     let argv = [
@@ -663,38 +596,19 @@ hosted_runner = true
         text(&state),
         "--packages-dir".to_owned(),
         text(&packages),
-        "--admin-socket".to_owned(),
-        text(&socket),
+        "--facts-file".to_owned(),
+        text(&state.with_file_name("facts.json")),
     ];
     let argv: Vec<&str> = argv.iter().map(String::as_str).collect();
     let _booted = bootstrap(&daemon, &argv, root);
 
     let running = wait_state(&daemon, |s| s.active == ActiveState::Active);
-    let mut answered = None;
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .expect("a runtime");
+    let boot_id = state.join(BOOT_ID_FILE);
+    let mut recorded = false;
     for _ in 0..READS {
-        if socket.exists() {
-            let path = socket.clone();
-            let connector = tower::service_fn(move |_: Uri| {
-                let path = path.clone();
-                async move {
-                    tokio::net::UnixStream::connect(path)
-                        .await
-                        .map(TokioIo::new)
-                }
-            });
-            let reply = runtime.block_on(async move {
-                let channel = Endpoint::from_static("http://admin.invalid")
-                    .connect_with_connector_lazy(connector);
-                AdminClient::new(channel).status(StatusRequest {}).await
-            });
-            if let Ok(reply) = reply {
-                answered = Some(reply.into_inner());
-                break;
-            }
+        recorded = boot_id.exists();
+        if recorded {
+            break;
         }
         std::thread::sleep(PAUSE);
     }
@@ -702,11 +616,9 @@ hosted_runner = true
     println!("the daemon's job: {running:?}");
     println!("its standard error:\n{}", log("stderr"));
     assert_eq!(running.active, ActiveState::Active, "{}", log("stderr"));
-    let status = answered.unwrap_or_else(|| panic!("no Status answer: {}", log("stderr")));
-    println!("Status: {status:?}");
-    let socket_dir = fs::metadata(socket.parent().expect("a parent")).expect("its directory");
-    assert_eq!(socket_dir.permissions().mode() & 0o777, 0o700);
-    let written = fs::read_to_string(state.join(BOOT_ID_FILE)).expect("the boot id file");
+    assert!(recorded, "no boot id file: {}", log("stderr"));
+    let written = fs::read_to_string(&boot_id).expect("the boot id file");
     let id = SysctlBootId.read().expect("kern.bootsessionuuid");
     assert_eq!(written, id.as_str());
+    assert_eq!(sockets_under(root), Vec::<PathBuf>::new());
 }

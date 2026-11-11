@@ -1,0 +1,18 @@
+[package]
+name = "hostkeeper-mdm-model"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "Exhaustive model checks of the coordinator's MDM command queue and Mac enrollment (docs/design/coordinator-mdm.md, task CM4)."
+
+# A plain breadth-first search over the states of two small protocol models. It depends on no
+# crate, in or out of the workspace, and nothing depends on it: it exists to run before the code
+# of CM11a (the queue) and CM12b (enrollment) is written, and to fail when the rules those tasks
+# implement are changed to ones that break an invariant.
+[dependencies]
+
+[lints]
+workspace = true

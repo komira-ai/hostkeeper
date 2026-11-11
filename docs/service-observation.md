@@ -28,12 +28,24 @@ For each installed service, once per round:
 The unit set is read before and after the version and health probes; a unit whose activity or
 main pid changed in between discards the round.
 
+**The daemon's own service.** `hostkeeper` is observed through the unit the daemon itself runs
+as, which the platform's adapters name: `hostkeeper.service` on Linux, which its package's
+`[units] run` names too, and on a Mac the launchd job `dev.hostkeeper.hostkeeper`, which the
+installer pkg places and the macOS package does not name (`Observer::with_run_of`: units given
+for a service whose manifest names none). Its version is confirmed against the file of that
+version in the daemon's binary directory (`<state-dir>/hostkeeper/bin/versions/<version>`, the
+copy of the release's binary that the self-update staged and that the unit or the job runs through
+`bin/current`: the package unit starts it, and the bootstrap unit's and the plist's packaged binary execs it), not through the unit file, whose program is outside the package. So the daemon
+reports its own service live, healthy and at the version it runs on both platforms; while the
+package's `current` names a version the job does not run (the moment between the switch and the
+restart, or after a fallback), it is `version_mismatch`.
+
 ## States
 
 | State | When |
 |---|---|
 | `absent` | No `current`, or the service manager knows none of the run units |
-| `unmonitored` | The manifest has no `[units] run`: no unit or process to observe; its health URL, if any, is probed once |
+| `unmonitored` | The manifest has no `[units] run` and the observer was given no units for the service: no unit or process to observe; its health URL, if any, is probed once |
 | `transitioning` | A run unit is starting or stopping, even beside an active one: a hand-over under way |
 | `live` | At least one run unit is active and none is starting or stopping; an inactive standby instance beside it is not a stop |
 | `stopped` | Every run unit is inactive, failed or unknown to the manager |
@@ -75,6 +87,11 @@ service, in this order, `version_mismatch`, the health reason, `version_unknown`
 `HEALTH_UNHEALTHY` means "does not, or the daemon cannot tell"; the reason token tells the cases
 apart.
 
+The daemon's own service is the one exception to the first row: observed `absent` while its package is installed
+(the service manager finds no unit, as a unit left in `/etc/systemd/system/` that hides the package's leaves it), the
+daemon reports it `HEALTH_UNHEALTHY`, reason `own_unit_not_loaded`, running, since it is that process
+(`crates/hostkeeper-daemon/src/link_adapters.rs`); `HEALTH_ABSENT` would read as not installed to the coordinator.
+
 ## The thin modules
 
 Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`, `HealthClient`,
@@ -92,7 +109,7 @@ Everything above is pure logic over four ports (`ServiceManager`, `ProcessProbe`
 
 kbf's agent took liveness from services on a registration socket, `/run/updater/register.sock`.
 hostkeeper does not carry it. At start, before any unit is touched, the daemon calls
-`unlink_stale_registration_socket` with its run directory (`updater` beside the admin
-socket's directory, `/run/updater` by default), right after it takes the lock on the state
+`unlink_stale_registration_socket` with its run directory (`updater` in the platform's run
+directory, `/run/updater` by default), right after it takes the lock on the state
 directory: a `register.sock` left there is removed (whatever its file kind), a missing one is
 fine, and any other error stops the start.

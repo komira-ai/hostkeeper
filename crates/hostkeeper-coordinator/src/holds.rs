@@ -18,7 +18,7 @@
 //! A held host that runs a version marked bad is an alert ([`crate::alerts`]: an error-level line
 //! with `alert = "held_on_bad_version"` once when it appears), and the status flags it.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use hostkeeper_wire::HostId;
 use hostkeeper_wire::version::Version;
@@ -26,6 +26,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::fleet::{Fleet, Marks};
 use crate::ops::OpsState;
+use crate::rollouts::Rollout;
 
 /// The most holds the ops file keeps. Raise it here if a farm needs more.
 pub const MAX_HOLDS: usize = 4096;
@@ -113,7 +114,38 @@ pub fn marks_of(state: &OpsState) -> Marks {
             Some((name.clone(), hosts))
         })
         .collect();
+    let mut group_rollouts: BTreeMap<String, BTreeMap<String, Rollout>> = BTreeMap::new();
+    let mut group_halted: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut group_forced: BTreeMap<String, BTreeMap<String, BTreeSet<HostId>>> = BTreeMap::new();
+    for (group, packages) in &state.host_groups.0 {
+        for (package, marks) in packages {
+            let name = group.to_string();
+            if !marks.rollout.is_empty() {
+                group_rollouts
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(package.clone(), marks.rollout.clone());
+            }
+            if marks.halt.is_some() {
+                group_halted
+                    .entry(name.clone())
+                    .or_default()
+                    .insert(package.clone());
+            }
+            if let Some(force) = &marks.force {
+                let hosts = force.hosts.iter().filter_map(|host| host.parse().ok());
+                group_forced
+                    .entry(name)
+                    .or_default()
+                    .insert(package.clone(), hosts.collect());
+            }
+        }
+    }
     Marks {
+        group_rollouts,
+        group_halted,
+        group_forced,
+        group_mode: false,
         holds: state.holds.clone(),
         forced,
         assignments: state.assignments.clone(),

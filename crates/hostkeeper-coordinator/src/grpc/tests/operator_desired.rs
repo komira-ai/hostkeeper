@@ -232,6 +232,7 @@ async fn an_operator_set_writes_the_state_ci_would_and_one_audit_entry() {
             reason: Some("2.0".to_owned()),
             at_unix,
             by_name: Some("operator".to_owned()),
+            host_group: None,
         }]
     );
 }
@@ -471,7 +472,7 @@ async fn a_failed_audit_write_is_store_failed_and_a_resend_lands() {
     let rig = Rig::new("od-store-fails");
     let failing = Arc::new(AtomicBool::new(true));
     let switch = Arc::clone(&failing);
-    let ops = OpsStore::with_writer(
+    let ops = OpsStore::refusing(
         OpsState::default(),
         Box::new(move |_| {
             if switch.load(Ordering::SeqCst) {
@@ -626,6 +627,7 @@ async fn an_operator_converge_writes_nothing() {
         CONVERGE,
         proto::ConvergeRequest {
             service: "kbf".to_owned(),
+            host_group: String::new(),
         },
         Some(OPERATOR),
     );

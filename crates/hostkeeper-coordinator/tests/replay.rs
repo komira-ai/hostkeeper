@@ -9,16 +9,33 @@ use support::replay::{Sequence, check_changed_list, replay, sequence_files};
 /// The recorded sequences in which a rule this coordinator cut or changed decided: each records
 /// this coordinator's answer in `expect_status`/`expect_body` and kbf's beside it in
 /// `kbf_status`/`kbf_body` (in `17`, the one step whose list of nine feature names kbf's bound
-/// of 8 dropped; in `10` and `23`, the steps the update plan decided). Every other sequence is kbf's bytes, and any difference in it fails.
+/// of 8 dropped; in `23`, the steps the update plan decided; in every sequence that has a host
+/// ordered an update, the steps the JSON route carries no order for) or the fragments of kbf's
+/// answers in `kbf_contains`. Every other sequence is kbf's bytes, and any difference in it fails.
 /// `tests/fixtures/recorded/README.md` says, for each, the rule and the old and the new reason.
 const CHANGED: &[&str] = &[
-    "10-halt-generations-of-two-services",
+    "01-farm-mtls",
+    "02-farm-restart",
+    "03-golden-first-pass",
+    "04-golden-frontends-last",
+    "05-golden-one-role-behind",
+    "06-golden-order-ages-out",
+    "07-golden-rollback-order",
+    "08-halt-raise-hold-clear",
+    "11-service-order-only-to-an-updater-that-sent-services",
+    "12-bad-services-list-is-dropped-and-counted",
+    "13-kbf-status-and-convergence-bytes",
+    "14-v0018-updater-and-deploy-farm",
+    "15-features-an-agent-that-announced-nothing",
+    "16-features-the-supported-subset",
     "17-features-a-bad-announcement-is-dropped",
+    "18-features-every-new-fact-is-accepted",
+    "19-bake-holds-the-slot",
+    "20-canary-of-one",
+    "21-deferral-frees-the-slot",
+    "22-deferral-backoff-grows",
     "23-automatic-rollback-marks-the-version-bad",
-    "24-cut-never-last-does-not-delay-an-order",
-    "26-cut-role-order-does-not-delay-an-order",
     "28-cut-convergence-does-not-need-min-up",
-    "29-cut-service-order-does-not-delay-an-order",
     "30-cut-require-min-up-does-not-refuse-a-body",
 ];
 

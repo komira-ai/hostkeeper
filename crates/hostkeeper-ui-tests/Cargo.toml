@@ -6,12 +6,16 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The checks of the operator web app under ui/: every call it makes is a method of the protobuf descriptors, its sources store no token and load nothing from the network, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; and every call it lists is served by the real coordinator to an operator's token. Tests only; not shipped."
+description = "The generator of the operator web app's API client (ui/gen/client.js and its TypeScript declarations ui/gen/client.d.ts, from hostkeeper-proto's command table and descriptors), and the checks of the app under ui/: every call it makes is a method of the protobuf descriptors, its sources store no token and load nothing from the network, and its data layer and pages, run in a JavaScript engine against a fake gateway, send and show what they should; and every call it lists is served by the real coordinator to an operator's token. Tests only; not shipped."
 
-# No crate of the workspace depends on this one. Its library is the checks the tests apply to
-# the sources of ui/ (read with include_str!, so no path or working directory is needed).
+# No crate of the workspace depends on this one. Its library is the client's generator and the
+# checks the tests apply to the sources of ui/ (read with include_str!, so no path or working
+# directory is needed).
 
 [dependencies]
+# The command table and the descriptor set the generated client (`client_gen`) is made from.
+hostkeeper-proto = { path = "../hostkeeper-proto" }
+prost-reflect.workspace = true
 prost-types.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -27,15 +31,21 @@ bytes.workspace = true
 clap.workspace = true
 hostkeeper-coordinator = { path = "../hostkeeper-coordinator" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
-hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 http-body-util.workspace = true
 hyper.workspace = true
 prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
+# The fixture protos of the generator's unit tests, compiled as hostkeeper-proto's build compiles
+# the real ones.
+protox.workspace = true
 rcgen.workspace = true
 rustls.workspace = true
 sha2.workspace = true
+# `tests/client.rs` reads `ui/gen/client.d.ts` with a TypeScript parser.
+swc_common.workspace = true
+swc_ecma_ast.workspace = true
+swc_ecma_parser.workspace = true
 tokio = { workspace = true, features = ["macros", "rt"] }
 tonic.workspace = true
 

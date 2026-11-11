@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use hostkeeper_enrollment::names::MacAddress;
-use hostkeeper_proto::hostkeeper::operator::v1::HostHeld;
+use hostkeeper_proto::hostkeeper::operator::v1::{HostHeld, RecordState};
 use hostkeeper_pxe_packets::dhcp::Mode;
 use hostkeeper_pxe_seed::inputs::{LinuxPlatform, Record as MenuRecord};
 use hostkeeper_wire::{HostId, Platform};
@@ -26,6 +26,7 @@ fn record(host: &str, macs: &[&str], platform: Option<LinuxPlatform>) -> Record 
         data_macs: macs.iter().map(|m| mac(m)).collect(),
         enrolled: false,
         host_held: HostHeld::None,
+        state: RecordState::Open,
         platform,
     }
 }
@@ -84,6 +85,7 @@ fn inventory() -> Snapshot {
                 host_ids: vec!["other-1".to_owned(), "amb-1".to_owned()],
             },
         ],
+        ..Snapshot::default()
     }
 }
 
@@ -357,6 +359,7 @@ fn every_host_held_but_none_leaves_the_record_out() {
         let snapshot = Snapshot {
             records: vec![held_record],
             pending: Vec::new(),
+            ..Snapshot::default()
         };
         let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
         assert_eq!(out.dhcp, BTreeMap::new(), "{held:?}");
@@ -385,8 +388,175 @@ fn every_host_held_but_none_leaves_the_record_out() {
     let free = Snapshot {
         records: vec![record("free-1", &["02:00:00:00:00:22"], None)],
         pending: Vec::new(),
+        ..Snapshot::default()
     };
     let out = run(&free, Mode::Proxy, &BOTH, &[], &[]);
     assert_eq!(out.left_out, BTreeMap::new());
     assert_eq!(out.menus.len(), 1);
+}
+
+/// A record whose platform is one this server does not install (Darwin, or a number from a newer
+/// coordinator) is left out in both modes and with `--reinstall` naming it, each MAC with its
+/// reason; the records beside it are still answered.
+///
+/// Proves: the reasons read "states the platform PLATFORM_DARWIN_ARM64" and "states the
+/// platform the number 99". Catches a record of an unknown platform installed as a Linux one,
+/// or one odd record emptying the set.
+#[test]
+fn a_record_stating_a_platform_not_installed_is_left_out_whatever_the_mode_or_reinstall() {
+    let snapshot = Snapshot {
+        records: vec![
+            record("mac-1", &["02:00:00:00:00:31"], None),
+            record("odd-1", &["02:00:00:00:00:32"], None),
+            record("arm-1", &["02:00:00:00:00:33"], Some(LinuxPlatform::Arm64)),
+        ],
+        not_installable: BTreeMap::from([(id("mac-1"), 3), (id("odd-1"), 99)]),
+        ..Snapshot::default()
+    };
+    for (mode, reinstall) in [
+        (Mode::Proxy, &[][..]),
+        (Mode::Router, &[][..]),
+        (Mode::Proxy, &["mac-1", "odd-1"][..]),
+    ] {
+        let out = run(&snapshot, mode, &BOTH, reinstall, &[]);
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:31").octets()),
+            "the record of host mac-1 states the platform PLATFORM_DARWIN_ARM64, which is not installed"
+        );
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:32").octets()),
+            "the record of host odd-1 states the platform the number 99, which is not installed"
+        );
+        assert_eq!(
+            out.menus.keys().copied().collect::<Vec<_>>(),
+            [mac("02:00:00:00:00:33")]
+        );
+    }
+}
+
+/// `host_of` names the host id of the record in the set that holds a MAC, and none for a MAC no
+/// record in the set holds.
+///
+/// Proves: the lookup the DHCP log uses to name the record of a refused disagreement.
+#[test]
+fn host_of_names_the_record_in_the_set_that_holds_a_mac() {
+    let snapshot = Snapshot {
+        records: vec![record("free-1", &["02:00:00:00:00:41"], None)],
+        ..Snapshot::default()
+    };
+    let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
+    assert_eq!(
+        out.host_of(mac("02:00:00:00:00:41").octets()),
+        [&id("free-1")]
+    );
+    assert!(out.host_of(mac("02:00:00:00:00:42").octets()).is_empty());
+}
+
+/// A record whose window is not `OPEN` is left out with its reason, whatever the state:
+/// `CLOSED` (the window ended or never opened), `USED` (an approval used the record) and
+/// `UNSPECIFIED` (a coordinator before windows); `--reinstall` naming the record's host id puts
+/// each back; `OPEN` is in the set.
+///
+/// Catches a record installed over after its window ended or its approval was used, and a
+/// coordinator that does not say read as one that opened every record.
+#[test]
+fn only_a_record_whose_window_is_open_is_in_the_answer_set() {
+    let cases = [
+        (RecordState::Closed, "its approval window is closed"),
+        (RecordState::Used, "an approval used it"),
+        (
+            RecordState::Unspecified,
+            "the coordinator does not say whether its approval window is open",
+        ),
+    ];
+    for (state, why) in cases {
+        let mut shut = record("shut-1", &["02:00:00:00:00:31"], None);
+        shut.state = state;
+        let snapshot = Snapshot {
+            records: vec![shut],
+            ..Snapshot::default()
+        };
+        let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
+        assert_eq!(out.dhcp, BTreeMap::new(), "{state:?}");
+        assert_eq!(
+            out.left_out,
+            BTreeMap::from([(
+                mac("02:00:00:00:00:31").octets(),
+                LeftOut::Closed {
+                    host_id: id("shut-1"),
+                    state
+                }
+            )]),
+            "{state:?}"
+        );
+        assert_eq!(
+            out.why_not(mac("02:00:00:00:00:31").octets()),
+            format!("the record of host shut-1: {why}")
+        );
+        let again = run(&snapshot, Mode::Proxy, &BOTH, &["shut-1"], &[]);
+        assert_eq!(
+            again.dhcp.keys().copied().collect::<Vec<_>>(),
+            [packet_mac(mac("02:00:00:00:00:31"))],
+            "{state:?}"
+        );
+        assert_eq!(again.left_out, BTreeMap::new(), "{state:?}");
+    }
+    let open = Snapshot {
+        records: vec![record("open-1", &["02:00:00:00:00:32"], None)],
+        ..Snapshot::default()
+    };
+    let out = run(&open, Mode::Proxy, &BOTH, &[], &[]);
+    assert_eq!(out.left_out, BTreeMap::new());
+    assert_eq!(out.menus.len(), 1);
+}
+
+/// The window is checked after the enrolled and `host_held` checks: a closed record that is
+/// also enrolled, or held, is left out for the older reason, and a closed record that a pending
+/// request matches is left out as closed.
+///
+/// Catches the reasons of the older checks replaced by the window's.
+#[test]
+fn the_window_is_judged_after_the_enrolled_and_held_checks() {
+    let mut enrolled = record("enr-1", &["02:00:00:00:00:41"], None);
+    enrolled.enrolled = true;
+    enrolled.state = RecordState::Closed;
+    let mut held = record("held-1", &["02:00:00:00:00:42"], None);
+    held.host_held = HostHeld::Retired;
+    held.state = RecordState::Used;
+    let mut waiting = record("wait-1", &["02:00:00:00:00:43"], None);
+    waiting.state = RecordState::Closed;
+    let snapshot = Snapshot {
+        records: vec![enrolled, held, waiting],
+        pending: vec![Pending {
+            request_id: "req-w".to_owned(),
+            host_ids: vec!["wait-1".to_owned()],
+        }],
+        ..Snapshot::default()
+    };
+    let out = run(&snapshot, Mode::Proxy, &BOTH, &[], &[]);
+    assert_eq!(
+        out.left_out,
+        BTreeMap::from([
+            (
+                mac("02:00:00:00:00:41").octets(),
+                LeftOut::Enrolled {
+                    host_id: id("enr-1")
+                }
+            ),
+            (
+                mac("02:00:00:00:00:42").octets(),
+                LeftOut::HostHeld {
+                    host_id: id("held-1"),
+                    held: HostHeld::Retired
+                }
+            ),
+            (
+                mac("02:00:00:00:00:43").octets(),
+                LeftOut::Closed {
+                    host_id: id("wait-1"),
+                    state: RecordState::Closed
+                }
+            ),
+        ])
+    );
 }

@@ -1,14 +1,17 @@
-//! `hostkeeper-pxe serve` (docs/design/network-install.md, section 3, item N9): it serves a
-//! directory `fetch` sealed to the machines the coordinator's inventory may install, in one of
+//! `pxe serve` (docs/design/network-install.md, section 3, item N9): it serves a
+//! directory the `prepare` step sealed to the machines the coordinator's inventory may install, in one of
 //! two modes, until it is stopped. It keeps no durable state: what it learns in a run is in
 //! memory, and it reads the inventory from the coordinator for each answer.
 //!
 //! The start, in this order ([`serve_with`]):
 //!
+//! 0. With `--notify-systemd`, the socket systemd named must be known ([`ServePorts`]): a start
+//!    without it is refused before anything is bound.
 //! 1. The files the flags name are read as the starting user (root on a host): the daemon
 //!    config, with the daemon's own loader (a config the daemon would refuse is refused here,
-//!    before a seed is made), the SSH keys file, and the coordinator's CA; the token file is
-//!    opened and checked, not read.
+//!    before a seed is made), the repository directory `--repositories` names, if given, with
+//!    the daemon's loader of repository entries (see `crate::repositories`), the SSH keys file,
+//!    and the coordinator's CA; the token file is opened and checked, not read.
 //! 2. Every socket is bound ([`sockets`]): the ports are below 1024.
 //! 3. The process drops to `--user-id` and `--group-id` ([`crate::privilege`]).
 //! 4. The token is read from the descriptor opened in step 1, and the sealed directory is checked
@@ -16,7 +19,8 @@
 //! 5. The runtime starts. The coordinator is read once: a read that fails refuses the start
 //!    (the operator is there to see the token or the address is wrong), and so does a
 //!    `--reinstall` that names no record. The start is logged, with the platforms that have a
-//!    boot set.
+//!    boot set. With `--notify-systemd`, `READY=1` is then sent to systemd's notify socket
+//!    ([`notify`]); a send that fails refuses the run.
 //! 6. DHCP, TFTP and HTTP are served ([`dhcp`], [`tftp`], [`http`], over [`server`]) until the
 //!    stop.
 //!
@@ -28,13 +32,15 @@ pub mod inventory;
 mod dhcp;
 mod http;
 mod log;
-mod platforms;
+mod notify;
+pub(crate) mod platforms;
 mod sealed;
 mod server;
 mod sockets;
 mod tftp;
 
 use std::collections::BTreeSet;
+use std::ffi::OsString;
 use std::future::Future;
 use std::net::{SocketAddr, SocketAddrV4};
 use std::pin::Pin;
@@ -64,20 +70,24 @@ pub use server::{GRUB_PREFIX, Settings};
 pub type Stop = Box<dyn FnOnce() -> Pin<Box<dyn Future<Output = ()> + Send>> + Send>;
 
 /// What a run of `serve` takes from its host: the clock its log is stamped by, where its log
-/// goes, and when it stops.
+/// goes, when it stops, and the notify socket systemd named for the process (`NOTIFY_SOCKET`,
+/// read by `main`), used only with `--notify-systemd`.
 pub struct ServePorts {
     pub now: Now,
     pub sink: Sink,
     pub stop: Stop,
+    pub notify_socket: Option<OsString>,
 }
 
 impl ServePorts {
-    /// The host's: the system clock, standard error, and SIGINT or SIGTERM.
-    pub fn host() -> ServePorts {
+    /// The host's: the system clock, standard error, SIGINT or SIGTERM, and the notify socket
+    /// `main` read from the environment.
+    pub fn host(notify_socket: Option<OsString>) -> ServePorts {
         ServePorts {
             now: Arc::new(log::system_now),
-            sink: Arc::new(|line| eprintln!("hostkeeper-pxe serve: {line}")),
+            sink: Arc::new(|line| eprintln!("pxe serve: {line}")),
             stop: Box::new(|| Box::pin(signalled())),
+            notify_socket,
         }
     }
 }
@@ -104,6 +114,16 @@ async fn signalled() {
 /// # Errors
 /// Why the start was refused, or why a socket of the run failed.
 pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> Result<(), String> {
+    let notify = match (flags.notify_systemd, ports.notify_socket.clone()) {
+        (true, None) => {
+            return Err(
+                "--notify-systemd was given, but systemd set no notify socket (NOTIFY_SOCKET)"
+                    .to_owned(),
+            );
+        }
+        (true, socket) => socket,
+        (false, _) => None,
+    };
     let shown =
         |path: &std::path::Path, why: &dyn std::fmt::Display| format!("{}: {why}", path.display());
     let config = read_trusted(&flags.daemon_config, owner)
@@ -113,6 +133,11 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         })?;
     let daemon_config =
         DaemonConfigText::parse(&config).map_err(|e| shown(&flags.daemon_config, &e))?;
+    let repositories = flags
+        .repositories
+        .as_deref()
+        .map(|dir| crate::repositories::read(dir, owner))
+        .transpose()?;
     let keys = std::fs::read_to_string(&flags.ssh_authorized_keys)
         .map_err(|e| shown(&flags.ssh_authorized_keys, &e))
         .and_then(|text| {
@@ -146,6 +171,7 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         keys,
         install_disk: flags.install_disk.clone().unwrap_or_default(),
         serial_console: flags.serial_console.clone(),
+        repositories,
         reinstall: flags.reinstall.iter().cloned().collect(),
         tftp_timeout: Duration::from_millis(flags.tftp_timeout_ms),
     };
@@ -158,6 +184,7 @@ pub(crate) fn serve_with(flags: &ServeFlags, owner: u32, ports: ServePorts) -> R
         token,
         reply_to: flags.dhcp_reply_to,
         dropped: to,
+        notify,
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -177,6 +204,8 @@ struct Start {
     token: String,
     reply_to: SocketAddrV4,
     dropped: DropTo,
+    /// The notify socket to send `READY=1` to once started; none without `--notify-systemd`.
+    notify: Option<OsString>,
 }
 
 /// The address a bound socket took: its port is the one the kernel chose for a port of 0.
@@ -199,6 +228,7 @@ async fn run(
         token,
         reply_to,
         dropped,
+        notify,
     } = start;
     let http_port = bound.http.local_addr().map_or(0, |a| a.port());
     let http = BootServer::new(SocketAddrV4::new(settings.address, http_port))
@@ -245,6 +275,14 @@ async fn run(
         local(bound.tftp.local_addr()),
         local(bound.http.local_addr()),
     ));
+    if let Some(socket) = &notify {
+        notify::ready(socket).map_err(|e| {
+            format!(
+                "cannot tell systemd the start is complete, on {}: {e}",
+                socket.to_string_lossy()
+            )
+        })?;
+    }
     for key in sealed.skipped() {
         log.line(format_args!(
             "the seal names the platform {key:?}, which this release does not serve: it is not served"
@@ -315,4 +353,4 @@ async fn run(
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

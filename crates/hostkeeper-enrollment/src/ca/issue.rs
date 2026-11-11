@@ -3,7 +3,7 @@
 //! | | host client certificate | coordinator server certificate |
 //! |---|---|---|
 //! | subject | `CN=host:<id>`, the approved id | `CN=hostkeeper coordinator` |
-//! | subjectAltName | none | the DNS names and IP addresses asked for |
+//! | subjectAltName | one URI: the fixed host role, [`HOST_ROLE`] after the host-role prefix | the DNS names and IP addresses asked for |
 //! | extended key usage | `clientAuth` only | `serverAuth` only |
 //! | key usage | `digitalSignature` | `digitalSignature` |
 //! | basic constraints | `CA:FALSE` | `CA:FALSE` |
@@ -14,6 +14,13 @@
 //! The serial number is the caller's: the store hands out serials from a counter it persists
 //! ([`crate::enroll::EnrollmentStore::allocate_serial`]); 1 is the CA certificate's own and is
 //! refused, as is 0.
+//!
+//! The host role a host certificate names is always [`HOST_ROLE`]
+//! (`docs/design/hostgroups.md` section 1.2): it says nothing of the host, whose group the
+//! coordinator keeps with its enrollment record, and no reader takes a placement from it. Its
+//! URI is the coordinator's host-role prefix ([`Ca::with_host_role_uri_prefix`],
+//! [`DEFAULT_HOST_ROLE_URI_PREFIX`] unless set) followed by the role. A certificate issued before
+//! names no host role, and is read for its host id alone, as every host certificate is.
 
 use std::net::IpAddr;
 use std::sync::Arc;
@@ -28,7 +35,8 @@ use crate::ca::profile::P256Key;
 use crate::names::HostId;
 use crate::validity::{UnixClock, Window};
 
-/// The validity of a host's client certificate, and its cap: 7 days.
+/// The validity of a host's client certificate unless the store is given another
+/// ([`crate::enroll::EnrollmentStore::with_host_validity_secs`]), and its cap: 7 days.
 pub const HOST_VALIDITY_SECS: u64 = 7 * 24 * 60 * 60;
 
 /// The longest validity of the coordinator's server certificate: 90 days. The coordinator asks
@@ -47,6 +55,13 @@ pub const CA_COMMON_NAME: &str = "hostkeeper CA";
 
 /// The common name of the coordinator's server certificate.
 pub const SERVER_COMMON_NAME: &str = "hostkeeper coordinator";
+
+/// The host role every host certificate names: a fixed word that means nothing.
+pub const HOST_ROLE: &str = "host";
+
+/// The host-role URI prefix a CA writes before [`HOST_ROLE`] unless it is given another: the
+/// coordinator's default `--host-role-uri-prefix`.
+pub const DEFAULT_HOST_ROLE_URI_PREFIX: &str = "urn:hostkeeper:host-role:";
 
 /// What a certificate is for.
 #[derive(Clone, Copy, Debug)]
@@ -103,6 +118,9 @@ pub enum SignError {
     /// A serial number of 0, or the CA certificate's own.
     #[error("serial {0} is not one a certificate of this CA may carry")]
     BadSerial(u64),
+    /// The host-role URI is not ASCII ([`Ca::with_host_role_uri_prefix`]).
+    #[error("the host-role URI {0:?} is not one a certificate carries")]
+    BadHostRoleUri(String),
     /// A server certificate with no DNS name.
     #[error("a server certificate needs at least one DNS name")]
     NoDnsName,
@@ -139,6 +157,8 @@ pub struct Ca {
     issuer: Issuer<'static, KeyPair>,
     bundle: CaBundle,
     clock: Arc<dyn UnixClock>,
+    /// The URI a host certificate names its host role by.
+    host_role_uri: String,
 }
 
 impl std::fmt::Debug for Ca {
@@ -159,10 +179,21 @@ impl Ca {
             issuer: Issuer::new(ca_params(), key),
             bundle: CaBundle::of(certificate_der),
             clock,
+            host_role_uri: format!("{DEFAULT_HOST_ROLE_URI_PREFIX}{HOST_ROLE}"),
         }
     }
 
-    /// A host's client certificate for `host_id`, valid [`HOST_VALIDITY_SECS`] from now.
+    /// The same CA, naming the host role of each host certificate by `prefix` followed by
+    /// [`HOST_ROLE`]: the coordinator's `--host-role-uri-prefix`, which is visible ASCII. A prefix
+    /// that is not ASCII makes every host certificate refused ([`SignError::BadHostRoleUri`]).
+    #[must_use]
+    pub fn with_host_role_uri_prefix(mut self, prefix: &str) -> Ca {
+        self.host_role_uri = format!("{prefix}{HOST_ROLE}");
+        self
+    }
+
+    /// A host's client certificate for `host_id`, valid `validity_secs` from now (at most
+    /// [`HOST_VALIDITY_SECS`]).
     ///
     /// # Errors
     /// [`SignError`], as [`Signer::sign`].
@@ -170,12 +201,13 @@ impl Ca {
         &self,
         host_id: &HostId,
         key: &P256Key,
+        validity_secs: u64,
         serial: u64,
     ) -> Result<Certificate, SignError> {
         self.sign(&SignRequest {
             subject: Subject::Host(host_id),
             key,
-            validity_secs: HOST_VALIDITY_SECS,
+            validity_secs,
             serial,
         })
     }
@@ -204,7 +236,10 @@ impl Ca {
 impl Signer for Ca {
     fn sign(&self, request: &SignRequest<'_>) -> Result<Certificate, SignError> {
         let (cap, mut params) = match request.subject {
-            Subject::Host(host_id) => (HOST_VALIDITY_SECS, host_params(host_id)),
+            Subject::Host(host_id) => (
+                HOST_VALIDITY_SECS,
+                host_params(host_id, &self.host_role_uri)?,
+            ),
             Subject::Server(names) => (SERVER_VALIDITY_CAP_SECS, server_params(names)?),
         };
         let requested = request.validity_secs;
@@ -278,14 +313,18 @@ pub(crate) fn ca_params() -> CertificateParams {
     params
 }
 
-/// A host's client certificate: nothing of the request is copied but its key.
-fn host_params(host_id: &HostId) -> CertificateParams {
+/// A host's client certificate, naming its host role by `host_role_uri`: nothing of the request
+/// is copied but its key.
+fn host_params(host_id: &HostId, host_role_uri: &str) -> Result<CertificateParams, SignError> {
+    let uri = rcgen::string::Ia5String::try_from(host_role_uri)
+        .map_err(|_| SignError::BadHostRoleUri(host_role_uri.to_owned()))?;
     let mut params = CertificateParams::default();
     params.distinguished_name = common_name(&format!("host:{host_id}"));
     params.is_ca = IsCa::ExplicitNoCa;
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
-    params
+    params.subject_alt_names = vec![SanType::URI(uri)];
+    Ok(params)
 }
 
 /// The coordinator's server certificate: the DNS names, then the IP addresses.

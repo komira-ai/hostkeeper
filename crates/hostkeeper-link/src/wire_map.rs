@@ -12,7 +12,8 @@
 //! deferred verdict has no outcome on this wire: the service's `deferred` report says it (as
 //! kbf's agent does), so its `last_update` is left out. A service name or a version outside the
 //! wire's grammars cannot be sent, and the heartbeat is refused by name ([`Unsendable`]), never
-//! sent without it.
+//! sent without it. The route is frozen, so the daemon's trusted root, which came after it, is
+//! not sent on it: the gRPC route carries it (`proto_map`).
 //!
 //! **In.** The advertised features the daemon knows, and the halt clear generations of the
 //! services the daemon could run (a name outside its grammar names none). The `acks` are the
@@ -80,6 +81,7 @@ pub(crate) fn heartbeat(beat: &Heartbeat) -> Result<wire::Heartbeat, Unsendable>
         sent_unix: Some(beat.sent_unix),
         cert_not_after_unix: beat.renewal.cert_not_after_unix,
         last_renew_error: beat.renewal.last_renew_error.clone(),
+        record_try: None,
     })
 }
 
@@ -109,6 +111,7 @@ fn service(facts: &ServiceFacts) -> Result<ServiceBeat, Unsendable> {
         step_secs: BTreeMap::new(),
         promotion_pending: false,
         deferred,
+        record_try: facts.record_try,
     })
 }
 
@@ -272,6 +275,8 @@ pub(crate) fn reply(answer: Answer) -> Mapped {
             features,
             halt_generations,
             acknowledged,
+            repositories: None,
+            facts: None,
         },
         update,
     }
@@ -311,6 +316,7 @@ fn order(
         version: Version::new(version.as_str()).ok()?,
         digest: PackageDigest::new(digest.as_str()).ok()?,
         index_digest: None,
+        entry: None,
     };
     Some(Order {
         id: OrderId::new(id.as_str()).ok()?,

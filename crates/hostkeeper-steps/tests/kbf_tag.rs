@@ -12,7 +12,7 @@ use hostkeeper_steps::runner::{
     DEFAULT_RETRY_SECS, MAX_RETRY_SECS, REASON_ARTIFACT_CHANGED, REASON_HALT_CLEARED,
     REASON_UPDATER_OLD, ROLLBACK_ATTEMPTS, UPDATER_PROTOCOL, WATCH_POLL_SECS,
 };
-use hostkeeper_steps::selfupdate::{Layout, START_LIMIT_BURST, fallback_unit, main_dropin};
+use hostkeeper_steps::selfupdate::Layout;
 use hostkeeper_steps::systemd::unit_name;
 use hostkeeper_steps::{BootId, Loaded, Record, RecordStore, RunError, Stamp};
 use support::{Rig, Scratch};
@@ -92,6 +92,8 @@ fn expected(name: &str) -> Record {
                 watching: None,
                 reason: Some("remote_down".to_owned()),
                 awaiting_restart: None,
+                report_order_id: None,
+                activate: None,
             },
             ..base("api", "1.4.2", 12, Step::Rollback)
         },
@@ -302,6 +304,8 @@ fn kbf_ci_record() -> Record {
             watching: None,
             reason: Some("remote_down".to_owned()),
             awaiting_restart: None,
+            report_order_id: None,
+            activate: None,
         },
         order_try: None,
         forced: false,
@@ -411,7 +415,6 @@ fn constants_match_kbf_at_the_tag() {
     assert_eq!(REASON_ARTIFACT_CHANGED, "artifact_changed");
     assert_eq!(REASON_HALT_CLEARED, "halt_cleared");
     assert_eq!(REASON_UPDATER_OLD, "updater_old");
-    assert_eq!(START_LIMIT_BURST, 3);
 
     let mut record = expected("running");
     record.service = "svc".to_owned();
@@ -432,24 +435,6 @@ fn constants_match_kbf_at_the_tag() {
     let layout = Layout::new(Path::new("/opt/updater"));
     assert_eq!(layout.current_path(), Path::new("/opt/updater/current"));
     assert_eq!(layout.previous_path(), Path::new("/opt/updater/previous"));
-    // kbf's texts with three lines of hostkeeper's own, so that a daemon that cannot start is
-    // never left failed: the drop-in's `RestartMode=direct` (`OnFailure=` once the start limit is
-    // spent, not at every failed start), and the fallback unit's `StartLimitIntervalSec=0` (it
-    // runs once per spent limit, for good) and the `-` of `ExecStart=-` (a verb that puts
-    // nothing back still lets it reset and start the main unit again).
-    assert_eq!(
-        main_dropin("fallback.service", 3),
-        "[Unit]\nOnFailure=fallback.service\nStartLimitIntervalSec=300\nStartLimitBurst=3\n\n\
-         [Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    );
-    assert_eq!(
-        fallback_unit(&layout, "updater.service"),
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to \
-         start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\n\
-         ExecStart=-/opt/updater/previous self-update-fallback --dir /opt/updater\n\
-         ExecStartPost=/usr/bin/systemctl reset-failed updater.service\n\
-         ExecStartPost=/usr/bin/systemctl start --no-block updater.service\n"
-    );
 
     let dir = Scratch::new("kbf-layout");
     let bin = dir.path().join("bin");

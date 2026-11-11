@@ -2,9 +2,9 @@
 //! section 3, "Which machines may be installed: the answer set"): through the operator API on
 //! the private listener, with the operator token, the inventory (`Enrollment.ListRecords`, each
 //! record with its `host_held`, what the coordinator's durable enrollment store holds for its host
-//! id) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
-//! it lists only the hosts heard from since the coordinator started (section 3, "`host_held` is
-//! the rule").
+//! id, and its `state`, where its approval window stands) and the pending requests (`Enrollment.List`), every page of each. `Hosts.List` is not read:
+//! it lists no denied host, so after a restart a retired host's record would look free (section 3,
+//! "`host_held` is the rule").
 //!
 //! [`Coordinator::snapshot`] reads both and gives a [`Snapshot`], or a [`ReadError`] when
 //! any call fails: the listener does not answer, the token is refused (any status the call ends
@@ -16,15 +16,21 @@
 //! `--coordinator`; each call carries the token as `authorization: Bearer <token>`, and is
 //! bounded by [`READ_TIMEOUT`].
 //!
-//! The record's platform (item N14 of the design) is not yet a field of `InventoryRecord`, so
-//! every record reads as one whose platform was not recorded ([`Record::platform`] `None`): proxy
-//! mode installs the platform the firmware states, and router mode installs no record until the
-//! field exists.
+//! The record's platform (item N14 of the design) is read as `InventoryRecord.platform`:
+//! `PLATFORM_UNSPECIFIED` is a platform that was not recorded ([`Record::platform`] `None`), and
+//! the two Linux platforms are that [`LinuxPlatform`]. Any other value (`PLATFORM_DARWIN_ARM64`,
+//! which the coordinator refuses at `AddRecord`, or a number a newer coordinator sends) is not a
+//! platform this server installs: the record is read as one with no platform, and its host id
+//! is kept in [`Snapshot::not_installable`] with the value, so the answer set leaves the record
+//! out and logs why. One such record never fails the read, and never takes any other record out
+//! of the answer set.
 
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::time::Duration;
 
 use hostkeeper_enrollment::names::MacAddress;
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_client::EnrollmentClient;
 use hostkeeper_pxe_seed::inputs::LinuxPlatform;
@@ -55,6 +61,9 @@ pub struct Record {
     /// What the enrollment store holds for its host id; a value this release does not know
     /// reads as `Unspecified`, which says nothing, so the record is left out.
     pub host_held: proto::HostHeld,
+    /// Where its approval window stands; a value this release does not know reads as
+    /// `Unspecified`, which says nothing, so the record is left out unless it is `Open`.
+    pub state: proto::RecordState,
     /// Its platform; `None` when not recorded.
     pub platform: Option<LinuxPlatform>,
 }
@@ -74,6 +83,9 @@ pub struct Pending {
 pub struct Snapshot {
     pub records: Vec<Record>,
     pub pending: Vec<Pending>,
+    /// The records whose platform is a value this server does not install, by host id, with the
+    /// value as the coordinator sent it.
+    pub not_installable: BTreeMap<HostId, i32>,
 }
 
 /// Why a read of the coordinator failed.
@@ -118,7 +130,7 @@ impl Snapshot {
         records: Vec<proto::InventoryRecord>,
         pending: Vec<proto::PendingEnrollment>,
     ) -> Result<Snapshot, ReadError> {
-        let records = records
+        let read = records
             .into_iter()
             .map(record_of)
             .collect::<Result<Vec<_>, String>>()
@@ -126,8 +138,17 @@ impl Snapshot {
                 rpc: LIST_RECORDS,
                 what,
             })?;
+        let mut records = Vec::new();
+        let mut not_installable = BTreeMap::new();
+        for (record, platform) in read {
+            if let Platform::Other(value) = platform {
+                not_installable.insert(record.host_id.clone(), value);
+            }
+            records.push(record);
+        }
         Ok(Snapshot {
             records,
+            not_installable,
             pending: pending
                 .into_iter()
                 .map(|request| {
@@ -145,8 +166,16 @@ impl Snapshot {
     }
 }
 
-/// The record of `record`, or what of it is not well-formed.
-fn record_of(record: proto::InventoryRecord) -> Result<Record, String> {
+/// What a record states as its platform.
+enum Platform {
+    /// Nothing, or a Linux platform: [`Record::platform`] says which.
+    Installable,
+    /// A value this server does not install.
+    Other(i32),
+}
+
+/// The record of `record`, with the kind of its platform, or what of it is not well-formed.
+fn record_of(record: proto::InventoryRecord) -> Result<(Record, Platform), String> {
     let host_id = record
         .host_id
         .parse::<HostId>()
@@ -165,15 +194,24 @@ fn record_of(record: proto::InventoryRecord) -> Result<Record, String> {
                 .map_err(|_| format!("the record {host_id} holds {mac:?}, which is not a MAC"))
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(Record {
-        host_id,
-        role,
-        data_macs,
-        enrolled: record.enrolled,
-        host_held: record.host_held(),
-        // `InventoryRecord` has no platform until item N14: not recorded.
-        platform: None,
-    })
+    let (platform, kind) = match agent::Platform::try_from(record.platform) {
+        Ok(agent::Platform::Unspecified) => (None, Platform::Installable),
+        Ok(agent::Platform::LinuxX8664) => (Some(LinuxPlatform::X86_64), Platform::Installable),
+        Ok(agent::Platform::LinuxArm64) => (Some(LinuxPlatform::Arm64), Platform::Installable),
+        Ok(agent::Platform::DarwinArm64) | Err(_) => (None, Platform::Other(record.platform)),
+    };
+    Ok((
+        Record {
+            host_id,
+            role,
+            data_macs,
+            enrolled: record.enrolled,
+            host_held: record.host_held(),
+            state: record.state(),
+            platform,
+        },
+        kind,
+    ))
 }
 
 /// The coordinator's operator API, as `serve` reads it.

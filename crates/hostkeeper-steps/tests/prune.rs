@@ -5,10 +5,8 @@
 mod support;
 
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
 use std::fs;
 use std::io;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::{Path, PathBuf};
 
@@ -211,8 +209,8 @@ fn protected_holds_each_of_its_three_kinds() {
 /// a version, or fails on a read-only tree: of A, B and C with `current` C and `previous` B, A
 /// and its seal go, a seal with no directory X and a directory with no seal Y go, a leftover
 /// directory of a crashed prune goes, and an unpack's staging directory, a temporary seal, the
-/// links' temporary names, a file and a link named as versions, a directory named as a seal and a
-/// name that is not UTF-8 stay as they were.
+/// links' temporary names, a file and a link named as versions, a directory named as a seal stay as
+/// they were.
 #[test]
 fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     let s = Scratch::new("prune-surplus");
@@ -232,7 +230,6 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     fs::write(dir.join("W"), "a file named as a version").unwrap();
     symlink("B", dir.join("V")).unwrap();
     fs::create_dir(dir.join("U.seal")).unwrap();
-    fs::write(dir.join(OsStr::from_bytes(b"not-utf8-\xff")), "").unwrap();
 
     let report = layout.prune(&Protected::default()).unwrap();
 
@@ -258,7 +255,6 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
         "W",
         "current",
         "current.tmp",
-        "not-utf8-\u{fffd}",
         "previous",
     ];
     left.sort();
@@ -267,6 +263,38 @@ fn a_prune_deletes_each_surplus_version_whole_and_nothing_else() {
     assert_eq!(layout.previous().unwrap().as_deref(), Some("B"));
     layout.check_tree("B").unwrap();
     layout.check_tree("C").unwrap();
+}
+
+/// Catches a prune that deletes or fails on a name that is not UTF-8, which cannot be a version:
+/// the entry stays as it was and the surplus version beside it is deleted. Linux only: macOS
+/// (APFS and HFS+) refuses to create a file whose name is not UTF-8 (`EILSEQ`), so no such name
+/// can be in a package directory there.
+#[cfg(target_os = "linux")]
+#[test]
+fn a_name_that_is_not_utf8_is_left_alone() {
+    use std::ffi::OsStr;
+    use std::os::unix::ffi::OsStrExt;
+
+    let s = Scratch::new("prune-not-utf8");
+    let layout = package(&s, "web");
+    holding(&layout, &["A", "B", "C"], "C", "B");
+    fs::write(layout.dir().join(OsStr::from_bytes(b"not-utf8-\xff")), "").unwrap();
+
+    let report = layout.prune(&Protected::default()).unwrap();
+
+    assert_eq!(report.deleted, set(&["A"]));
+    assert_eq!(
+        names(layout.dir()),
+        [
+            "B",
+            "B.seal",
+            "C",
+            "C.seal",
+            "current",
+            "not-utf8-\u{fffd}",
+            "previous"
+        ]
+    );
 }
 
 /// Catches a prune that reads `current` or `previous` it cannot resolve as "everything is
@@ -495,6 +523,84 @@ fn a_prune_is_refused_for_a_binary_directory_and_fails_on_a_missing_one() {
     let missing = Layout::package(&s.path().join("missing"));
     let failed = missing.prune(&Protected::default()).unwrap_err();
     assert_eq!(failed.kind(), io::ErrorKind::NotFound);
+}
+
+/// Catches a single-version deletion that leaves part of a version behind or touches another: the
+/// named version's tree and seal are gone, every other version, link and seal is as it was, and
+/// repeating the call, or deleting a version the directory never held, changes nothing.
+#[test]
+fn delete_version_removes_the_tree_and_the_seal_of_that_version_alone() {
+    let s = Scratch::new("delete-version");
+    let layout = package(&s, "web");
+    holding(&layout, &["1", "2", "3"], "3", "2");
+    layout.delete_version("1").unwrap();
+    assert_eq!(
+        names(layout.dir()),
+        ["2", "2.seal", "3", "3.seal", "current", "previous"]
+    );
+    let kept = snapshot(layout.dir());
+    layout.delete_version("1").unwrap();
+    layout.delete_version("9").unwrap();
+    assert_eq!(snapshot(layout.dir()), kept);
+}
+
+/// Catches a deletion a crash cut short that the next call does not finish: a version whose tree
+/// was already renamed away (a crash after the rename), one whose seal is gone but whose tree is
+/// whole, and a tree left under the temporary name are each deleted whole by a repeat.
+#[test]
+fn delete_version_finishes_what_a_crash_left() {
+    let s = Scratch::new("delete-version-crash");
+    let layout = package(&s, "web");
+    holding(&layout, &["1", "2", "3"], "3", "2");
+    let mut at = |step: PruneStep<'_>| match step {
+        PruneStep::Moved { .. } => Err(io::Error::other("crash after the rename")),
+        _ => Ok(()),
+    };
+    let report = layout.prune_with(&Protected::default(), &mut at).unwrap();
+    assert_eq!(report.failed.len(), 1);
+    assert!(
+        names(layout.dir())
+            .iter()
+            .any(|n| n.starts_with(PRUNE_PREFIX))
+    );
+    layout.delete_version("1").unwrap();
+    assert_eq!(
+        names(layout.dir()),
+        ["2", "2.seal", "3", "3.seal", "current", "previous"]
+    );
+
+    fs::remove_file(layout.seal_path("2")).unwrap();
+    layout.delete_version("2").unwrap();
+    assert_eq!(names(layout.dir()), ["3", "3.seal", "current", "previous"]);
+}
+
+/// Catches a deletion that follows a link out of the tree, or accepts a name that is not a
+/// version: a link inside the tree is removed and its target is left, and a version with a path
+/// part is refused before anything is touched.
+#[test]
+fn delete_version_never_follows_a_link_and_refuses_a_bad_name_and_a_binary_directory() {
+    let s = Scratch::new("delete-version-refused");
+    let layout = package(&s, "web");
+    holding(&layout, &["1", "2"], "2", "1");
+    let outside = s.path().join("outside");
+    fs::create_dir(&outside).unwrap();
+    fs::write(outside.join("keep"), "kept").unwrap();
+    let dir = layout.version_path("1");
+    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).unwrap();
+    symlink(&outside, dir.join("escape")).unwrap();
+    layout.delete_version("1").unwrap();
+    assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "kept");
+
+    let before = snapshot(layout.dir());
+    for bad in ["../2", "", ".", "a/b"] {
+        let error = layout.delete_version(bad).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput, "{bad:?}");
+    }
+    assert_eq!(snapshot(layout.dir()), before);
+
+    let binary = Layout::new(&s.path().join("bin"));
+    let refused = binary.delete_version("1").unwrap_err();
+    assert_eq!(refused.kind(), io::ErrorKind::InvalidInput);
 }
 
 /// Catches the inputs of a prune read from names instead of what the entries are: a version is a

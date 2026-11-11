@@ -39,6 +39,10 @@
 //! rollback_after_failed = { percent = 25, min_hosts = 2 }  # the larger of the two (default)
 //! min_version = "0.0.18"         # optional: the first version with update hooks; setting the
 //!                                # desired state to it forgets the last good version
+//! repository = "komira"          # default komira: the package repository of the registry
+//!                                # (`Repositories`) a Linux host installs the service from; a
+//!                                # repository name, 1 to 32 bytes of lowercase letters, digits
+//!                                # and -
 //! defer_backoff = { initial_secs = 300, factor = 2, max_secs = 3600 }   # the defaults
 //!
 //! [service.selector]             # optional; absent: a host belongs if it announces the service,
@@ -50,6 +54,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+use hostkeeper_release::grammar::is_repository_name;
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::secret::read_secret;
 use hostkeeper_wire::version::Version;
@@ -144,12 +149,23 @@ pub struct ServiceDef {
     pub min_version: Option<Version>,
     /// How long a host that deferred an update is left alone ([`crate::defer`]).
     pub defer_backoff: DeferBackoff,
+    /// The package repository of the registry ([`crate::repositories`]) the service's hosts
+    /// install it from: the rollout file's `repository`, [`DEFAULT_REPOSITORY`] when it names
+    /// none. Whether the registry holds it is not checked here: a registry is changed while the
+    /// file stands.
+    pub repository: String,
+    /// The host group whose policy and place in the group's list this definition stands for, when
+    /// it was made for a decision by group ([`crate::group_scope`]); none for a service of the
+    /// rollout file.
+    pub(crate) scope: Option<crate::group_scope::GroupScope>,
 }
+
+/// The repository a service names when its table has no `repository`.
+pub const DEFAULT_REPOSITORY: &str = "komira";
 
 impl ServiceDef {
     /// A service named `name` that runs on the roles `roles`, with every other setting at its
     /// default.
-    #[cfg(test)]
     pub(crate) fn new(name: &str, roles: &[&str]) -> Self {
         Self {
             name: name.to_owned(),
@@ -164,6 +180,8 @@ impl ServiceDef {
             rollback_after_failed: FailThreshold::default(),
             min_version: None,
             defer_backoff: DeferBackoff::default(),
+            repository: DEFAULT_REPOSITORY.to_owned(),
+            scope: None,
         }
     }
 
@@ -226,6 +244,7 @@ struct RawService {
     min_version: Option<Version>,
     #[serde(default)]
     defer_backoff: DeferBackoff,
+    repository: Option<String>,
 }
 
 /// The `roles` key: a list of role names. Anything else, the `[service.roles.<name>]` tables of
@@ -299,6 +318,7 @@ fn service_def(
         rollback_after_failed,
         min_version,
         defer_backoff,
+        repository,
     } = raw;
     if !is_service_name(&name) {
         return invalid(format!(
@@ -350,6 +370,12 @@ fn service_def(
             "{name}: rollback_after_failed min_hosts is not 1 to {MAX_COUNT}"
         ));
     }
+    let repository = repository.unwrap_or_else(|| DEFAULT_REPOSITORY.to_owned());
+    if !is_repository_name(&repository) {
+        return invalid(format!(
+            "{name}: repository {repository:?} is not 1 to 32 bytes of lowercase letters, digits and -"
+        ));
+    }
     let selector = selector
         .map(|raw| Selector::new(raw, &roles))
         .transpose()
@@ -367,6 +393,8 @@ fn service_def(
         rollback_after_failed,
         min_version,
         defer_backoff,
+        repository,
+        scope: None,
     })
 }
 
@@ -430,7 +458,6 @@ impl Services {
     }
 
     /// The services `defs` and nothing else.
-    #[cfg(test)]
     pub(crate) fn from_defs(defs: Vec<ServiceDef>) -> Self {
         Self {
             defs: defs
@@ -438,6 +465,14 @@ impl Services {
                 .map(|def| (def.name.clone(), def))
                 .collect(),
         }
+    }
+
+    /// The host group these services were made for ([`crate::group_scope`]): none for the
+    /// services of a rollout file and for no services at all.
+    pub(crate) fn group(&self) -> Option<&crate::host_groups::GroupName> {
+        self.defs
+            .values()
+            .find_map(|def| def.scope.as_ref().map(|scope| &scope.group))
     }
 
     /// Every service the coordinator manages, by name.

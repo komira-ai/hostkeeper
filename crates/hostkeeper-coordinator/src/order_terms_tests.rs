@@ -1,29 +1,46 @@
-//! The order terms of the JSON route (`order_id`, `order_try`, `package_digest`): who is sent
-//! them, what they say, and that an agent that did not announce `order-v1` is answered with the
-//! bytes it has always read. Every time is the rig's clock; nothing sleeps.
+//! The order terms of an update (`order_id`, `order_try`, `package_digest`): who is sent them, what
+//! they say, and that the JSON route, which carries no order, sends none. The terms are those of
+//! an answer over a transport that carries typed orders, to a daemon that announces `target-v1`
+//! and lists `apt`. Every time is the rig's clock; nothing sleeps.
 
 use hostkeeper_wire::wire::{Heartbeat, ORDER_FEATURE, OrderId, Outcome, UpdateResult};
 
 use crate::marks_support::{WEB, beat_of, digest, restart, rig, runs, set, start, who};
 use crate::order_terms::{order_id_text, terms};
+use crate::picks::TARGET_FEATURE;
 use crate::registry::{Digest, Package};
 use crate::service::{FEATURES, HeartbeatRefused, sends};
-use crate::testutil::{Log, Rig, ci_token, version};
+use crate::testutil::{Rig, version};
 
 /// The order id of `web` at 2.0: `update-` and the first 32 hex characters of the SHA-256 of
 /// `web`, a newline and `2.0`.
 const WEB_ORDER: &str = "update-33e0fe2c5f9ee4b0e0ab882467d70d38";
 
-/// A heartbeat of an agent that announced `features` and runs `running` of `web`, with `last`
-/// as the last update it reports of `web`.
+/// A heartbeat of an agent that announced `features` and `target-v1` and runs `running` of `web`,
+/// with `last` as the last update it reports of `web`.
 fn agent(features: &[&str], running: &str, last: Option<UpdateResult>) -> Heartbeat {
     let mut one = runs(WEB, running);
     one.last_update = last;
-    beat_of(features, vec![one])
+    let mut features = features.to_vec();
+    features.push(TARGET_FEATURE);
+    beat_of(&features, vec![one])
+}
+
+/// The answer to `host`'s heartbeat as the bytes a transport that carries typed orders sends.
+fn bytes(rig: &Rig, host: &str, b: Heartbeat) -> String {
+    let (answer, _) = rig
+        .coordinator
+        .heartbeat_with_orders_native(
+            who(host, "daemon"),
+            b,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .expect("answered");
+    serde_json::to_string(&answer).expect("json")
 }
 
 /// The answer to `host`'s heartbeat as the bytes the JSON route sends.
-fn bytes(rig: &Rig, host: &str, b: Heartbeat) -> String {
+fn json_bytes(rig: &Rig, host: &str, b: Heartbeat) -> String {
     let answer = rig
         .coordinator
         .heartbeat(who(host, "daemon"), b)
@@ -39,13 +56,10 @@ fn legacy_rig(test: &str) -> Rig {
     rig
 }
 
-/// CI sets `service` to `to` with no package digest.
-async fn set_without_digest(rig: &Rig, service: &str, to: &str) {
+/// CI sets `service` to `to` with no release.
+async fn set_without_release(rig: &Rig, service: &str, to: &str) {
     let body = format!(r#"{{"service":"{service}","version":"{to}"}}"#);
-    rig.coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
-        .await
-        .expect("set");
+    rig.set_plain(&body).await;
 }
 
 /// A verdict of the order `id` at try `n`, which ended `Succeeded`.
@@ -59,7 +73,7 @@ fn verdict(id: &str, n: Option<u64>) -> UpdateResult {
 /// The update answer an agent that announced `order-v1` is sent for `web` at 2.0, try `n`.
 fn with_terms(n: u64) -> String {
     format!(
-        r#"{{"reply":"update","service":"web","version":"2.0","order_id":"{WEB_ORDER}","order_try":{n},"package_digest":"{}","features":["order-v1"]}}"#,
+        r#"{{"reply":"update","service":"web","version":"2.0","order_id":"{WEB_ORDER}","order_try":{n},"package_digest":"{}","features":["order-v1","target-v1"]}}"#,
         digest(1)
     )
 }
@@ -75,7 +89,7 @@ async fn an_order_v1_agent_is_sent_the_terms_of_the_order_as_exact_bytes() {
     let rig = rig("terms-bytes", "");
     assert_eq!(
         bytes(&rig, "d1", agent(&[ORDER_FEATURE], "1.0", None)),
-        r#"{"reply":"nothing","features":["order-v1"]}"#
+        r#"{"reply":"nothing","features":["order-v1","target-v1"]}"#
     );
     set(&rig, WEB, "2.0", 1).await;
     assert_eq!(
@@ -91,9 +105,11 @@ async fn an_order_v1_agent_is_sent_the_terms_of_the_order_as_exact_bytes() {
 }
 
 /// An agent that did not announce `order-v1` is answered with the bytes of the same state as
-/// before this feature: no terms, with or without other features.
+/// before this feature: no terms, with or without other features; and the JSON route, which
+/// carries no order, answers every agent `nothing`.
 ///
-/// Catches: terms sent to an agent whose strict reader refuses an unknown field.
+/// Catches: terms sent to an agent whose strict reader refuses an unknown field, and an order on
+/// the JSON route.
 #[tokio::test]
 async fn an_agent_without_order_v1_is_sent_the_bytes_it_always_was() {
     let rig = rig("terms-absent", "");
@@ -102,8 +118,8 @@ async fn an_agent_without_order_v1_is_sent_the_bytes_it_always_was() {
     }
     set(&rig, WEB, "2.0", 1).await;
     assert_eq!(
-        bytes(&rig, "d1", agent(&[], "1.0", None)),
-        r#"{"reply":"update","service":"web","version":"2.0"}"#
+        json_bytes(&rig, "d1", beat_of(&[], vec![runs(WEB, "1.0")])),
+        r#"{"reply":"nothing"}"#
     );
     // Another rig: the one slot of `web` is d1's in this one.
     let other = crate::marks_support::rig("terms-absent-featured", "");
@@ -118,34 +134,31 @@ async fn an_agent_without_order_v1_is_sent_the_bytes_it_always_was() {
     assert!(!featured.contains("package_digest"), "{featured}");
 }
 
-/// A version with no package digest registered is not ordered to an `order-v1` agent, which
-/// takes no slot: a plain agent on the same role is still ordered, and one warning names the
-/// service, the version and the host.
+/// A version with no release kept is ordered to no agent, whatever it announced, and takes no
+/// slot: a plain agent on the same role is told nothing either.
 ///
-/// Catches: an order with no digest sent to an agent that needs one; a slot taken by an order
-/// that was not sent; a refusal that is silent.
+/// Catches: an order with no entry sent to an agent that needs one; a slot taken by an order that
+/// was not sent.
 #[tokio::test]
-async fn no_registered_digest_means_no_order_for_an_order_v1_agent_and_no_slot() {
-    let rig = rig("terms-no-digest", "");
-    let log = Log::default();
-    let _guard = log.install();
+async fn no_release_means_no_order_for_any_agent_and_no_slot() {
+    let rig = rig("terms-no-release", "");
     bytes(&rig, "d1", agent(&[ORDER_FEATURE], "1.0", None));
     bytes(&rig, "d2", agent(&[], "1.0", None));
-    set_without_digest(&rig, WEB, "2.0").await;
+    set_without_release(&rig, WEB, "2.0").await;
 
     assert_eq!(
         bytes(&rig, "d1", agent(&[ORDER_FEATURE], "1.0", None)),
-        r#"{"reply":"nothing","features":["order-v1"]}"#
+        r#"{"reply":"nothing","features":["order-v1","target-v1"]}"#
     );
     assert_eq!(
         bytes(&rig, "d2", agent(&[], "1.0", None)),
-        r#"{"reply":"update","service":"web","version":"2.0"}"#
+        r#"{"reply":"nothing","features":["target-v1"]}"#
     );
-    let text = log.text();
-    assert_eq!(text.matches("no package digest is registered").count(), 1);
-    assert!(
-        text.contains("web") && text.contains("2.0") && text.contains("d1"),
-        "{text}"
+    // A release for the version orders at once: no slot was taken by the orders not sent.
+    set(&rig, WEB, "2.0", 1).await;
+    assert_eq!(
+        bytes(&rig, "d2", agent(&[], "1.0", None)),
+        r#"{"reply":"update","service":"web","version":"2.0","features":["target-v1"]}"#
     );
 }
 
@@ -224,11 +237,11 @@ async fn an_order_v1_agent_is_not_the_legacy_service_and_its_entry_naming_it_is_
 #[tokio::test]
 async fn a_plain_agent_is_still_answered_about_the_legacy_service_by_its_top_level() {
     let rig = legacy_rig("terms-legacy-plain");
-    bytes(&rig, "d2", beat_of(&[], vec![]));
+    bytes(&rig, "d2", beat_of(&[TARGET_FEATURE], vec![]));
     set(&rig, WEB, "2.0", 1).await;
     assert_eq!(
-        bytes(&rig, "d2", beat_of(&[], vec![])),
-        r#"{"reply":"update","version":"2.0"}"#
+        bytes(&rig, "d2", beat_of(&[TARGET_FEATURE], vec![])),
+        r#"{"reply":"update","version":"2.0","features":["target-v1"]}"#
     );
 }
 

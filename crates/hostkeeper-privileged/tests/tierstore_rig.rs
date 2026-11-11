@@ -1,101 +1,63 @@
 //! The parts of the end-to-end rig of `tests/tierstore_shaped.rs` that need no root, run in the
 //! pull-request set so that a privileged run after the merge is not the first place a drift
-//! shows: the fixture package has the archive shape the production unpacker accepts and a
-//! manifest the production loader loads, and the release channel logs every request and refuses
-//! connections once stopped (the witness the force test's "no fetch" depends on).
+//! shows: the fixture package is a `.deb` whose tree holds the units and the hook its entry names
+//! and whose entry the installer's own reading of an entry takes, and a port the rig holds for
+//! the fixture's instances is refused to other sockets and served by the fixture.
 
 mod e2e;
 
 use std::fs;
-use std::io::Read;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::path::Path;
+use std::process::{Child, Command};
+use std::{io, io::Write};
 
-use e2e::channel::{ReleaseChannel, archive_path};
+use e2e::aptrepo;
 use e2e::package::{FixtureVersion, PackageBuilder};
-use e2e::{FIXTURE_BINARY, SERVICE, instance};
-use hostkeeper_config::daemon::Sha256Hex;
+use e2e::{
+    FIXTURE_BINARY, HeldPort, REPOSITORY_NAME, SERVICE, UNIT_TEMPLATE, instance, served_version,
+    wait_for,
+};
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_config::platform::Platform;
+use hostkeeper_install::repository::Order;
+use hostkeeper_install::repository::apt::Apt;
+use hostkeeper_install::repository::tree;
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::{HostFs, Limits, Owner, UnpackOrder, unpack};
 
-/// A scratch directory under cargo's directory for tests; unpacked trees are mode 0555, so it is
-/// opened up before it is removed.
-struct Bench(Scratch);
-
-impl Bench {
-    fn new(name: &str) -> Bench {
-        Bench(Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch dir"))
-    }
-
-    fn path(&self) -> &Path {
-        self.0.path()
-    }
+/// A scratch directory under cargo's directory for tests.
+fn scratch(name: &str) -> Scratch {
+    Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), name).expect("a scratch dir")
 }
 
-impl Drop for Bench {
-    fn drop(&mut self) {
-        open_up(self.0.path());
-    }
+/// The files of `deb`'s `.deb` extracted by `dpkg-deb -x` into `into`, as the user running the
+/// test.
+fn extracted(deb: &Path, into: &Path) {
+    fs::create_dir(into).expect("the directory to extract into");
+    let status = Command::new("dpkg-deb")
+        .arg("-x")
+        .arg(deb)
+        .arg(into)
+        .status()
+        .expect("run dpkg-deb");
+    assert!(status.success(), "dpkg-deb -x failed: {status}");
 }
 
-/// Makes every directory under `dir` writable by its owner, so the scratch can be removed.
-fn open_up(dir: &Path) {
-    use std::os::unix::fs::PermissionsExt;
-    let Ok(entries) = fs::read_dir(dir) else {
-        return;
-    };
-    drop(fs::set_permissions(dir, fs::Permissions::from_mode(0o700)));
-    for entry in entries.flatten() {
-        if entry.file_type().is_ok_and(|kind| kind.is_dir()) {
-            open_up(&entry.path());
-        }
-    }
-}
-
-/// The unpack of `archive` as the daemon does it, as the current user, into `packages`.
-fn unpacked(
-    archive: &Path,
-    version: &str,
-    sha256: &str,
-    packages: &Path,
-) -> Result<hostkeeper_unpack::Unpacked, hostkeeper_unpack::UnpackError> {
-    let owner = Owner {
-        uid: rustix::process::geteuid().as_raw(),
-        gid: rustix::process::getegid().as_raw(),
-    };
-    let fs = HostFs::open(packages, owner).expect("the packages directory");
-    let order = UnpackOrder {
-        service: ServiceName::new(SERVICE).expect("a service name"),
-        version: Version::new(version).expect("a version"),
-        platform: Platform::current(),
-        package_digest: Sha256Hex::parse(sha256).expect("a digest"),
-    };
-    let limits = Limits {
-        max_unpacked_bytes: 2 << 30,
-        max_entries: 20_000,
-    };
-    unpack(
-        archive,
-        &order,
-        &limits,
-        &fs,
-        hostkeeper_unpack::Platform::Linux,
-    )
-}
-
-/// `PackageBuilder`'s archive passes the production unpacker's bounds and shape checks and the
-/// production manifest loader: the version directory has the fixture program, the manifest and
-/// the unit template; the manifest names the two instances on the version's ports and the
-/// fixture's hook; the seal names the archive's digest. The same builder with a link entry added
-/// is refused `bad_archive`. Fails if the fixture drifts from what the daemon accepts.
+/// `PackageBuilder`'s `.deb` has the tree and the entry the daemon accepts: the installer's reading
+/// of its entry (`Order::from_entry`) gives the package, its pin, the repository, the two run
+/// units and the hook program the manifest names; the entry carries the params the hook reads;
+/// the tree extracted from the `.deb` has every run unit as a file of the package and the hook
+/// at the path the entry names; the tree holds the fixture program as the run units' program and
+/// as the hook, and the release file of the version with the two instances on the version's
+/// ports. Fails if the fixture drifts from what the daemon accepts.
 #[test]
-fn fixture_package_builds_the_archive_shape_the_unpacker_accepts() {
-    let bench = Bench::new("fixture-package");
-    let packages = bench.path().join("packages");
-    let records = bench.path().join("hooks");
-    let built = bench.path().join("built");
-    for dir in [&packages, &records, &built] {
+fn fixture_package_builds_the_deb_shape_the_daemon_accepts() {
+    let bench = scratch("fixture-package");
+    let (records, trees, pool) = (
+        bench.path().join("hooks"),
+        bench.path().join("trees"),
+        bench.path().join("pool"),
+    );
+    for dir in [&records, &trees, &pool] {
         fs::create_dir_all(dir).expect("a directory of the bench");
     }
     let fixture = FixtureVersion {
@@ -103,128 +65,146 @@ fn fixture_package_builds_the_archive_shape_the_unpacker_accepts() {
         ports: [e2e::free_port(), e2e::free_port()],
         fail_verify: false,
     };
-    let builder = PackageBuilder::new(&packages, &records, Path::new(FIXTURE_BINARY));
-    let package = builder.build(&fixture, &built);
+    let builder = PackageBuilder::new(&records, Path::new(FIXTURE_BINARY));
+    let deb = builder.deb(&fixture);
+    let (published, _) = aptrepo::build(&deb, &trees, &pool);
+    let entry = builder.entry(&fixture, &published);
     assert_eq!(
-        package.file_name,
-        format!("{SERVICE}-1.0.0-{}.tar.zst", e2e::platform())
+        fixture.ports.map(instance),
+        [
+            format!("{SERVICE}@{}.service", fixture.ports[0]),
+            format!("{SERVICE}@{}.service", fixture.ports[1]),
+        ]
     );
-    assert_eq!(package.run_units, fixture.ports.map(instance));
 
-    let done = unpacked(&package.path, "1.0.0", &package.sha256, &packages)
-        .expect("the production unpacker accepts the fixture package");
-    assert_eq!(done.seal.package_digest(), package.sha256);
-    assert_eq!(done.manifest.run.len(), 2);
-    let dir = packages.join(SERVICE).join("1.0.0");
+    let order = Order::from_entry(
+        &Apt,
+        &ServiceName::new(SERVICE).expect("a service name"),
+        &Version::new("1.0.0").expect("a version"),
+        &entry,
+        1 << 20,
+    )
+    .expect("the installer reads the entry");
+    assert_eq!(order.package, SERVICE);
+    assert_eq!(order.package_version, "1.0.0");
+    assert_eq!(order.repository, REPOSITORY_NAME);
+    assert_eq!(order.pin, published.sha256);
+    assert_eq!(order.run, fixture.ports.map(instance));
     assert_eq!(
-        fs::read(dir.join("bin/tierstore-like")).expect("the fixture program"),
-        fs::read(FIXTURE_BINARY).expect("the built fixture program")
+        order.hook.as_deref(),
+        Some(format!("/usr/lib/{SERVICE}/hostkeeper-hook").as_str())
     );
-    assert!(dir.join("manifest.toml").is_file());
-    assert!(dir.join("units").join(e2e::UNIT_TEMPLATE).is_file());
+    assert!(
+        entry
+            .manifest
+            .as_ref()
+            .is_some_and(|manifest| !manifest.params.is_empty()),
+        "the entry has the params the hook reads"
+    );
 
-    let linked = builder
-        .clone()
-        .with_link("bin/elsewhere", "/usr/bin/true")
-        .build(
-            &FixtureVersion {
-                version: "1.0.1",
-                ..fixture
-            },
-            &built,
+    let tree_dir = bench.path().join("extracted");
+    extracted(&published.file, &tree_dir);
+    for unit in &order.run {
+        let template = format!("{SERVICE}@.service");
+        assert!(
+            tree::unit_file(&tree_dir, unit).is_some()
+                || tree::unit_file(&tree_dir, &template).is_some(),
+            "the package has the unit file of {unit}"
         );
-    let refused = unpacked(&linked.path, "1.0.1", &linked.sha256, &packages)
-        .expect_err("a link entry is refused");
-    assert_eq!(refused.outcome().2, "bad_archive", "{refused}");
+    }
+    let hook = order.hook.as_deref().expect("a hook program");
+    assert!(
+        tree_dir.join(hook.trim_start_matches('/')).is_file(),
+        "the package installs the hook the entry names"
+    );
+    let program = fs::read(FIXTURE_BINARY).expect("the built fixture program");
+    assert_eq!(
+        fs::read(tree_dir.join("usr/bin/tierstore-like")).expect("the program"),
+        program
+    );
+    assert_eq!(
+        fs::read(tree_dir.join(hook.trim_start_matches('/'))).expect("the hook"),
+        program
+    );
+    let release =
+        fs::read_to_string(tree_dir.join("usr/share/hostkeeper-ci-tierstore/release.toml"))
+            .expect("the release file");
+    assert!(release.contains("version = \"1.0.0\"\n"), "{release}");
+    for unit in &order.run {
+        assert!(release.contains(unit.as_str()), "{release}");
+    }
+    assert!(
+        tree_dir
+            .join("usr/lib/systemd/system")
+            .join(UNIT_TEMPLATE)
+            .is_file()
+    );
 }
 
-/// The release channel logs every request it answers, a missing path too, serves what was
-/// published, refuses connections once stopped, and serves the same content with the same log
-/// on a new port after `start_again`. The force test's "no fetch" reads this log and this
-/// refusal. Fails if the log misses a request or a stopped channel still answers.
+/// A [`HeldPort`] is the scenario's port of a fixture instance, held for the whole test: while it
+/// is held, a socket that does not share the address (no `SO_REUSEADDR`) is refused the port with
+/// `AddrInUse`, so the port is no one else's, and nothing answers on it; the fixture's own
+/// `serve`, run on a release file of version `1.0.0`, takes the port and serves its version, and
+/// once stopped gives it back and takes it again when started anew, as a unit of it does at a
+/// cutover and a rollback. Fails if the scenario's ports are only chosen and let go (a listener
+/// the coordinator binds to port 0 may then be given one, and the instance on it fails to start
+/// with `Address already in use`), or if holding a port keeps the fixture from serving on it.
 #[test]
-fn release_channel_logs_every_request_and_refuses_after_stop() {
-    let mut channel = ReleaseChannel::start();
-    let file = format!("{SERVICE}-1.0.0-{}.tar.zst", e2e::platform());
-    channel.publish(
-        SERVICE,
-        "1.0.0",
-        &file,
-        b"archive bytes".to_vec(),
-        b"{}".to_vec(),
-    );
-    let index = format!("/{SERVICE}/1.0.0/index.json");
-    let archive = archive_path(SERVICE, "1.0.0", &file);
-    let missing = format!("/{SERVICE}/9.9.9/index.json");
+fn a_held_port_is_refused_to_other_sockets_and_served_by_the_fixture() {
+    let bench = scratch("held-port");
+    let held = HeldPort::new();
+    let port = held.port();
+    let address = SocketAddr::from((Ipv4Addr::LOCALHOST, port));
 
-    let agent = client(&channel);
-    let get = |agent: &ureq::Agent, channel: &ReleaseChannel, path: &str| {
-        let mut response = agent
-            .get(format!("{}{path}", channel.base_url()))
-            .call()
-            .expect("an answer");
-        let status = response.status().as_u16();
-        let mut body = Vec::new();
-        response
-            .body_mut()
-            .as_reader()
-            .read_to_end(&mut body)
-            .expect("a body");
-        (status, body)
-    };
-    assert_eq!(
-        get(&agent, &channel, &archive),
-        (200, b"archive bytes".to_vec())
-    );
-    assert_eq!(get(&agent, &channel, &archive).0, 200);
-    let (status, body) = get(&agent, &channel, &index);
-    assert_eq!(status, 200);
-    let index_json: serde_json::Value = serde_json::from_slice(&body).expect("the index is JSON");
-    assert_eq!(index_json["packages"][0]["file"], file.as_str());
-    assert_eq!(index_json["packages"][0]["bytes"], 13);
-    assert_eq!(get(&agent, &channel, &missing).0, 404);
-    assert_eq!(channel.count(&archive), 2);
-    assert_eq!(channel.count(&index), 1);
-    assert_eq!(channel.count(&missing), 1);
-    assert_eq!(channel.total(), 4);
+    let unshared = socket2::Socket::new(socket2::Domain::IPV4, socket2::Type::STREAM, None)
+        .expect("a TCP socket");
+    let refused = unshared
+        .bind(&address.into())
+        .expect_err("a held port is refused to a socket that does not share it");
+    assert_eq!(refused.kind(), io::ErrorKind::AddrInUse, "{refused}");
+    assert_eq!(served_version(port), None, "nothing answers on a held port");
 
-    let old_port = channel.port();
-    channel.stop();
-    assert!(
-        !channel.reachable(),
-        "a stopped channel refuses connections"
-    );
-    assert!(
-        std::net::TcpStream::connect(("127.0.0.1", old_port)).is_err(),
-        "nothing listens on the old port"
-    );
-    assert_eq!(channel.total(), 4, "a stopped channel logs nothing");
+    let release = bench.path().join("release.toml");
+    fs::File::create(&release)
+        .and_then(|mut file| {
+            write!(
+                file,
+                "version = \"1.0.0\"\nrun = [\"{}\"]\n",
+                instance(port)
+            )
+        })
+        .expect("the release file");
 
-    channel.start_again();
-    assert!(channel.reachable());
-    let agent = client(&channel);
-    assert_eq!(get(&agent, &channel, &archive).0, 200);
-    assert_eq!(
-        channel.count(&archive),
-        3,
-        "the log goes on across a restart"
-    );
+    for start in ["first", "second"] {
+        let serving = Serving(
+            Command::new(FIXTURE_BINARY)
+                .arg("serve")
+                .arg(port.to_string())
+                .arg(&release)
+                .spawn()
+                .expect("the fixture's serve starts"),
+        );
+        wait_for(
+            &format!("the {start} serve on the held port answers 1.0.0"),
+            40,
+            || served_version(port).as_deref() == Some("1.0.0"),
+        );
+        drop(serving);
+        assert_eq!(
+            served_version(port),
+            None,
+            "a stopped serve leaves the held port answering nothing"
+        );
+    }
 }
 
-/// A ureq client that trusts only the channel's CA, as the daemon's fetch does.
-fn client(channel: &ReleaseChannel) -> ureq::Agent {
-    use ureq::tls::{Certificate, RootCerts, TlsConfig, TlsProvider};
-    let roots = vec![Certificate::from_der(&channel.ca_der()).to_owned()];
-    let tls = TlsConfig::builder()
-        .provider(TlsProvider::Rustls)
-        .root_certs(RootCerts::new_with_certs(&roots))
-        .build();
-    let config = ureq::Agent::config_builder()
-        .https_only(true)
-        .http_status_as_error(false)
-        .max_redirects(0)
-        .proxy(None)
-        .tls_config(tls)
-        .build();
-    ureq::Agent::new_with_config(config)
+/// A `serve` of the fixture, killed and reaped when dropped, so its listener is closed when the
+/// drop returns.
+struct Serving(Child);
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        drop(self.0.kill());
+        drop(self.0.wait());
+    }
 }

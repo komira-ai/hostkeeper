@@ -2,19 +2,24 @@
 //! order (design 4.1 and 5.2).
 //!
 //! An [`Order`] is a verb and typed arguments only: an order id, a try, and a [`Target`] of a
-//! service name, a version, a package digest and optionally an index digest, each a word with a grammar. No field of it, at
+//! service name, a version, a package digest, optionally an index digest and optionally the
+//! [`Entry`] the coordinator picked, each a word with a grammar. No field of it, at
 //! any depth, is a free string, so an order cannot carry a command, a path or a URL; the daemon
 //! finds everything else in its own configuration and in the manifest of the package whose
 //! digest verified. The verbs are those of the protobuf `Order` the loop runs: `update`, the
-//! forced update, `install`, `uninstall` and `abort`; `force_rollback` and `clear_halt` are added
-//! here when the loop runs them.
+//! forced update, `install`, `uninstall`, `abort` and `clear_record`; `force_rollback` and
+//! `clear_halt` are added here when the loop runs them.
 
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase};
+use hostkeeper_proto::hostkeeper::release::v1 as release;
+use prost::Message;
 use serde_json::{Value, json};
 
 use crate::beat::{Feature, Features};
+use crate::host_facts::PushedFacts;
 use crate::names::{OrderId, PackageDigest, Reason};
+use crate::repositories::PushedSet;
 
 /// The coordinator's identity for one try of an order: what a verdict names, and what an
 /// acknowledgement echoes.
@@ -45,7 +50,43 @@ pub struct Target {
     /// that hashes to another. None from a coordinator that does not send one (and on the JSON
     /// route): the index is not checked.
     pub index_digest: Option<PackageDigest>,
+    /// The entry of the version's targets the coordinator picked for this host (gRPC route
+    /// only; `target-v1`): none from a coordinator that picks none, and always none on the JSON
+    /// route. The link carries whatever entry the protobuf decoded; the daemon judges it.
+    pub entry: Option<Entry>,
 }
+
+/// The entry of a release's targets that an order carries: the protobuf `Target` of
+/// `hostkeeper.release.v1`, unchanged. Two entries are equal when their encoded bytes are, so
+/// a resent order compares equal to the one it repeats and an entry that differs in any field
+/// is another order (the message holds floating-point fields and so is not `Eq` itself).
+#[derive(Clone, Debug)]
+pub struct Entry(release::Target);
+
+impl Entry {
+    /// The entry as the protobuf decoded it.
+    pub fn new(target: release::Target) -> Entry {
+        Entry(target)
+    }
+
+    /// The protobuf entry, borrowed.
+    pub fn as_target(&self) -> &release::Target {
+        &self.0
+    }
+
+    /// The protobuf entry, owned.
+    pub fn into_target(self) -> release::Target {
+        self.0
+    }
+}
+
+impl PartialEq for Entry {
+    fn eq(&self, other: &Entry) -> bool {
+        self.0.encode_to_vec() == other.0.encode_to_vec()
+    }
+}
+
+impl Eq for Entry {}
 
 /// The verbs the loop runs.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -63,6 +104,9 @@ pub enum Verb {
     /// Stop the service's running step and end its order in the halt phase. It is not an order
     /// of its own for the verdicts: the order it stops reports how it ended.
     Abort(ServiceName),
+    /// Set aside the service's step record when it does not read. It runs no update: its
+    /// verdict names the version the service runs, and it neither waits for nor ends a deferral.
+    ClearRecord(ServiceName),
 }
 
 /// One order of the coordinator.
@@ -79,16 +123,16 @@ impl Order {
     pub fn service(&self) -> &ServiceName {
         match &self.verb {
             Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => &target.service,
-            Verb::Uninstall(service) | Verb::Abort(service) => service,
+            Verb::Uninstall(service) | Verb::Abort(service) | Verb::ClearRecord(service) => service,
         }
     }
 
-    /// The version and package the order runs; none for an `uninstall` and an `abort`, which
-    /// name only the service.
+    /// The version and package the order runs; none for an `uninstall`, an `abort` and a
+    /// `clear_record`, which name only the service.
     pub fn target(&self) -> Option<&Target> {
         match &self.verb {
             Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => Some(target),
-            Verb::Uninstall(_) | Verb::Abort(_) => None,
+            Verb::Uninstall(_) | Verb::Abort(_) | Verb::ClearRecord(_) => None,
         }
     }
 
@@ -229,7 +273,7 @@ impl DeferredReport {
 }
 
 /// The coordinator's answer to a heartbeat.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Reply {
     /// What to do now; none: nothing.
     pub order: Option<Order>,
@@ -242,4 +286,12 @@ pub struct Reply {
     /// sent again. An acknowledgement drops only the verdict of the service it names (and,
     /// from a coordinator that advertises `verdict-acks-v1`, the older ones of that service).
     pub acknowledged: Vec<Acknowledged>,
+    /// The repositories the host's services need, whole, over gRPC only; none: keep what the
+    /// host has. The loop gives it to the daemon's [`crate::RepositorySink`] only while the
+    /// coordinator advertises `repositories-v1`.
+    pub repositories: Option<PushedSet>,
+    /// The host's facts, whole, over gRPC only; none: the facts file holds the ones the
+    /// coordinator wants. The loop gives them to the daemon's [`crate::FactsSink`] only while the
+    /// coordinator advertises `facts-v1`, before the order of the same reply.
+    pub facts: Option<PushedFacts>,
 }

@@ -6,12 +6,15 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the two jobs
+//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the three jobs
 //!   of hostkeeper's own deploy, held to [`desired::problems`]; plans with the one step of
 //!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
 //!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks every shipped binary
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
-//!   has no step that builds or signs ([`build_problems`]).
+//!   has no step that builds or signs ([`build_problems`]), but the jobs of the package channels
+//!   ([`super::packages`]), which run `cargo xtask channels` (signing the indexes of the apt and
+//!   rpm repositories, never a release file) and, in the two install checks, one `docker` command
+//!   each.
 //! - `artifacts.yml` ([`artifacts_problems`]) starts only by a push to main or by hand, has its
 //!   own group per commit ([`ARTIFACTS_GROUP`]), computes the version on a whole history, builds
 //!   the coordinator's image twice, compares the two, checks that the image holds the operator
@@ -19,16 +22,20 @@
 //!   [`IMAGE_UI_CHECK`], [`IMAGE_RUN`]), and its `attest` job, under its exact
 //!   `if:`, runs no repository code: no checkout, and no `run:` but the checks of
 //!   [`ATTEST_RUNS`] and the bundle copies of [`BUNDLE_COPY`]. It attests every package of
-//!   [`PACKAGES`] for every platform of [`PLATFORMS`], each binary tarball of [`TARBALLS`] and
-//!   each file of [`ATTESTED_FILES`], and copies the bundle of each beside it
+//!   each binary tarball of [`TARBALLS`], each file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and
+//!   [`VERSIONED_FILES`], and copies the bundle of each beside it
 //!   ([`package_problems`]), and attests the SBOM of each binary tarball ([`sbom_problem`]): a
 //!   host trusts only attested packages, so a release asset list that names a bundle needs the
-//!   steps that make it.
+//!   steps that make it. Its build job makes the mdm package with the steps of [`MDM_STEPS`],
+//!   each under [`MDM_IF`] ([`mdm_problems`]), and the pxe package with [`PXE_BUILD`] and
+//!   [`PXE_RUNS`], under no `if:` ([`pxe_problems`]).
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
 use super::desired;
-use super::lint::{entries, entry, runs_on_pull_requests, triggers};
+use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
+use super::packages;
+use super::pkg_signing;
 use super::yaml::{self, Node, Value};
 
 /// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
@@ -66,9 +73,19 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
     "builds and attests one commit and never tags or publishes; its own per-commit group",
 )];
 
-/// The jobs of release.yml, sorted: the release (`plan`, `verify`, `publish`) and hostkeeper's
-/// own deploy ([`desired::CHANNEL_JOB`], [`desired::JOB`]).
-pub const RELEASE_JOBS: [&str; 5] = ["channel", "plan", "publish", "set-desired", "verify"];
+/// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
+/// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::TARGETS_JOB`],
+/// [`desired::COORDINATOR_JOB`], [`super::no_downgrade::JOB`], [`desired::JOB`]).
+pub const RELEASE_JOBS: [&str; 8] = [
+    "coordinator",
+    "image",
+    "no-downgrade",
+    "plan",
+    "publish",
+    "set-desired",
+    "targets",
+    "verify",
+];
 
 /// The triggers release.yml may have.
 pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workflow_run"];
@@ -77,7 +94,12 @@ pub const RELEASE_TRIGGERS: [&str; 3] = ["schedule", "workflow_dispatch", "workf
 pub const REQUIRED_WORKFLOWS: [&str; 3] = ["artifacts", "ci", "privileged"];
 
 /// The binaries a release ships, each of which the verify job of release.yml runs.
-pub const SHIPPED_BINARIES: [&str; 3] = ["hostkeeper", "hostkeeper-coordinator", "hostkeeper-mdm"];
+pub const SHIPPED_BINARIES: [&str; 4] = [
+    "hostkeeper",
+    "hostkeeper-coordinator",
+    "hostkeeper-mdm",
+    "hostkeeper-coordinator-update",
+];
 
 /// How each of the two builds of the coordinator's image in the image job of artifacts.yml
 /// starts; each must also pass `--no-cache`.
@@ -107,30 +129,91 @@ pub const ATTEST_RUNS: [&str; 2] = [
 /// them a file name, with no quote, no command separator and no substitution.
 pub const BUNDLE_COPY: (&str, &str) = ("cp \"$BUNDLE\" \"dist/", ".sigstore.json\"");
 
-/// The packages the release carries, each as the part of its file name before the version and the
-/// part between the version and the platform: `<prefix>-<version><middle>-<platform>.tar.zst`.
-/// They are hostkeeper's own, hello's, and hello's failing build.
-pub const PACKAGES: [(&str, &str); 3] =
-    [("hostkeeper", ""), ("hello", ""), ("hello", "-fail-ready")];
-
 /// The platforms the release ships packages for.
 pub const PLATFORMS: [&str; 3] = ["linux-x86_64", "linux-arm64", "macos-arm64"];
 
+/// The architectures of the two Linux platforms as the packages name them: the deb's, then the
+/// rpm's.
+pub const LINUX_ARCHES: [(&str, &str); 2] = [("amd64", "x86_64"), ("arm64", "aarch64")];
+
+/// The programs of the Linux packages the attest job signs: the daemon's deb and rpm
+/// (packaging/linux/nfpm.yaml) and the coordinator's (packaging/coordinator/nfpm.yaml).
+pub const LINUX_PACKAGE_PROGRAMS: [&str; 2] = ["hostkeeper", "hostkeeper-coordinator"];
+
+/// The `if:` of each step of the build job that makes the mdm package: the linux-x86_64 leg of
+/// its matrix, the one platform the package is built for.
+pub const MDM_IF: &str = "matrix.platform == 'linux-x86_64'";
+
+/// The steps of the build job that make the mdm package, in order, each under [`MDM_IF`]: its
+/// program built with the commit, its stamp checked, the pinned archives fetched and checked
+/// against their pins, and the `.deb` built from them.
+pub const MDM_STEPS: [&str; 4] = [
+    "cargo build --locked --release -p hostkeeper-mdm --bin mdm",
+    "cargo xtask release check-binary target/release/mdm \"$RELEASE_VERSION\" \"$GITHUB_SHA\"",
+    "cargo xtask release mdm-fetch --dir \"$RUNNER_TEMP/mdm-archives\"",
+    "cargo xtask release deb --service mdm --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/mdm --archives \"$RUNNER_TEMP/mdm-archives\" --out dist",
+];
+
+/// The runs of the build job that make hello's failing build's `.deb` into `dist/`, where the
+/// attest job and SHA256SUMS find it, and read it back there.
+pub const FAIL_READY_DEB_RUNS: [&str; 2] = [
+    "cargo xtask release deb --service hello --fail-ready --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary target/release/hello --out dist",
+    "cargo xtask release check-linux-pkg \"dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb\" --service hello",
+];
+
+/// The runs of the build job that make pxe's `.deb` into `dist/` on each Linux platform from the
+/// static `pxe` built for the platform's musl target, and read it back there. The build job has
+/// no `if:` on them: both Linux legs run them.
+pub const PXE_RUNS: [&str; 2] = [
+    "cargo xtask release deb --service pxe --platform \"$PLATFORM\" --version \"$RELEASE_VERSION\" --commit \"$GITHUB_SHA\" --binary \"target/$MUSL_TARGET/release/pxe\" --out dist",
+    "cargo xtask release check-linux-pkg \"dist/pxe_${RELEASE_VERSION}_$ARCH.deb\" --service pxe",
+];
+
+/// The command of the build job that builds the static `pxe` the `.deb` carries, with `hostkeeper`
+/// beside it.
+pub const PXE_BUILD: &str = "cargo build --locked --release --target \"$MUSL_TARGET\" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin pxe";
+
 /// The binary tarballs the release carries, each as its program (the stem of its file name,
 /// `<program>-<version>-<platform>.tar.gz`) and the platforms it ships for: hostkeeper's on
-/// every platform, the coordinator's and the MDM kit's on the two Linux platforms. Each has a
-/// bundle and an attested SBOM (`<program>-<version>-<platform>.cdx.json`).
-pub const TARBALLS: [(&str, &[&str]); 3] = [
+/// every platform, the coordinator's, the MDM kit's and the coordinator updater's on the two
+/// Linux platforms. Each has a bundle and an attested SBOM
+/// (`<program>-<version>-<platform>.cdx.json`).
+pub const TARBALLS: [(&str, &[&str]); 4] = [
     ("hostkeeper", &PLATFORMS),
     ("hostkeeper-coordinator", &["linux-x86_64", "linux-arm64"]),
     ("hostkeeper-mdm", &["linux-x86_64", "linux-arm64"]),
+    (
+        "hostkeeper-coordinator-update",
+        &["linux-x86_64", "linux-arm64"],
+    ),
 ];
 
 /// The release's other files that the attest job attests alone, each as its `subject-path` and
 /// its name: `netboot.json`, the boot sets of network install, whose attestation is what the
-/// design's `hostkeeper-pxe fetch` (docs/design/network-install.md, item N8) is to trust its
-/// digests by.
+/// design's `pxe` prepare step (docs/design/network-install.md) is to trust its digests by.
 pub const ATTESTED_FILES: [(&str, &str); 1] = [("dist/netboot.json", "netboot.json")];
+
+/// The native packages of the services the release ships (docs/design/packages-native.md, item
+/// A21), each as its name with `<version>` for the version: hello's `.deb` for each Linux
+/// architecture, its failing build's `.deb` for each (named by the service version,
+/// `<version>-fail-ready`) and its `.pkg`, mdm's `.deb` for amd64, pxe's `.deb` for each Linux
+/// architecture, and hostkeeper's installer `.pkg`. Each has a bundle, which the installer channel publishes beside it.
+pub const NATIVE_FILES: [&str; 9] = [
+    "hostkeeper-<version>-macos-arm64.pkg",
+    "hello_<version>_amd64.deb",
+    "hello_<version>_arm64.deb",
+    "hello_<version>-fail-ready_amd64.deb",
+    "hello_<version>-fail-ready_arm64.deb",
+    "hello-<version>-macos-arm64.pkg",
+    "mdm_<version>_amd64.deb",
+    "pxe_<version>_amd64.deb",
+    "pxe_<version>_arm64.deb",
+];
+
+/// The release's other files that the attest job attests alone and whose name carries the
+/// version, each as the stem before `-<version>`: `hkctl-<version>`, the command line of the
+/// coordinator, one script for every platform.
+pub const VERSIONED_FILES: [&str; 1] = ["hkctl"];
 
 /// Whether the attest job may run `run`: one of [`ATTEST_RUNS`], or a [`BUNDLE_COPY`].
 fn attest_may_run(run: &str) -> bool {
@@ -158,7 +241,16 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 5] = ["check", "check-binary", "locate", "plan", "publish"];
+const RELEASE_VERBS: [&str; 8] = [
+    "check",
+    "check-binary",
+    "image-layout",
+    "locate",
+    "plan",
+    "publish",
+    "push-image",
+    "targets",
+];
 
 /// Words of a `run:` that build, package or sign, refused in release.yml.
 const BUILD_WORDS: [&str; 8] = [
@@ -181,7 +273,7 @@ fn trigger_names(doc: &Node) -> Vec<String> {
 }
 
 /// The scalars of a list (or one scalar) `node`, sorted.
-fn names(node: Option<&Node>) -> Vec<String> {
+pub fn names(node: Option<&Node>) -> Vec<String> {
     let mut found: Vec<String> = match node.map(|n| &n.value) {
         Some(Value::Seq(items)) => items
             .iter()
@@ -199,7 +291,7 @@ fn names(node: Option<&Node>) -> Vec<String> {
 }
 
 /// The steps of `job`.
-fn steps(job: Option<&Node>) -> &[Node] {
+pub fn steps(job: Option<&Node>) -> &[Node] {
     match job.and_then(|j| entry(j, "steps")).map(|s| &s.value) {
         Some(Value::Seq(items)) => items,
         _ => &[],
@@ -214,11 +306,11 @@ fn step_values<'a>(job: Option<&'a Node>, key: &str) -> Vec<&'a str> {
         .collect()
 }
 
-fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
+pub fn job<'a>(doc: &'a Node, name: &str) -> Option<&'a Node> {
     entry(doc, "jobs").and_then(|jobs| entry(jobs, name))
 }
 
-fn text_of<'a>(node: Option<&'a Node>, key: &str) -> Option<&'a str> {
+pub fn text_of<'a>(node: Option<&'a Node>, key: &str) -> Option<&'a str> {
     node.and_then(|n| entry(n, key)).and_then(Node::as_str)
 }
 
@@ -308,9 +400,12 @@ fn release_problems(doc: &Node) -> Vec<String> {
         .filter_map(|(k, _)| k.as_str())
         .collect();
     jobs.sort_unstable();
-    if jobs != RELEASE_JOBS {
+    let mut want: Vec<String> = RELEASE_JOBS.iter().map(|j| (*j).to_owned()).collect();
+    want.extend(packages::job_names());
+    want.sort();
+    if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, channel and set-desired"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [
@@ -358,6 +453,15 @@ fn release_problems(doc: &Node) -> Vec<String> {
         problems.extend(build_problems(name, Some(j)));
     }
     problems.extend(desired::problems(doc));
+    problems.extend(packages::problems(doc));
+    problems.extend(packages::promote_check_problems(doc));
+    if let Some(check) = job(doc, "check-rpm") {
+        problems.extend(packages::matrix_image_problems(
+            "check-rpm",
+            check,
+            pinned_by_digest,
+        ));
+    }
     problems
 }
 
@@ -395,8 +499,10 @@ fn plan_problems(plan: Option<&Node>) -> Vec<String> {
 }
 
 /// One line per step of the release.yml job `name` that builds, packages or signs: a `cargo`
-/// that is not `cargo xtask --help` or `cargo xtask release <verb>` of [`RELEASE_VERBS`], a word
-/// of [`BUILD_WORDS`], or an action that attests or signs. Compiling xtask to run it is not a
+/// that is not `cargo xtask --help` or `cargo xtask release <verb>` of [`RELEASE_VERBS`] (nor, in
+/// a job of the package channels, `cargo xtask channels`), a word of [`BUILD_WORDS`] (but the one
+/// `docker` command of an install check, [`packages::docker_line_ok`]), or an action that attests
+/// or signs. Compiling xtask to run it is not a
 /// build of anything released.
 fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
@@ -410,8 +516,12 @@ fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
         let Some(run) = entry(step, "run").and_then(Node::as_str) else {
             continue;
         };
+        let channels_ok = packages::job_names().iter().any(|j| j == name);
         for line in run.lines() {
-            if builds(line) {
+            if packages::docker_line_ok(name, line.trim()) {
+                continue;
+            }
+            if builds(line, channels_ok) {
                 problems.push(format!(
                     "release.yml: job {name} builds (`{}`)",
                     line.trim()
@@ -422,8 +532,9 @@ fn build_problems(name: &str, job: Option<&Node>) -> Vec<String> {
     problems
 }
 
-/// Whether the shell line `line` builds, packages or signs (see [`build_problems`]).
-fn builds(line: &str) -> bool {
+/// Whether the shell line `line` builds, packages or signs (see [`build_problems`]). A job of the
+/// package channels (`channels_ok`) may run `cargo xtask channels`, which is held to its row.
+fn builds(line: &str, channels_ok: bool) -> bool {
     let words: Vec<&str> = line
         .split(|c: char| c.is_whitespace() || matches!(c, '|' | ';' | '&' | '(' | ')'))
         .filter(|w| !w.is_empty())
@@ -434,6 +545,7 @@ fn builds(line: &str) -> bool {
             "cargo" => match (after(1), after(2)) {
                 ("xtask", "--help") => false,
                 ("xtask", "release") => !RELEASE_VERBS.contains(&after(3)),
+                ("xtask", "channels") => !channels_ok,
                 _ => true,
             },
             other => BUILD_WORDS.contains(&other) && !(other == "tar" && after(1) == "-xzf"),
@@ -525,26 +637,113 @@ fn artifacts_problems(doc: &Node) -> Vec<String> {
         }
     }
     problems.extend(package_problems(attest));
+    problems.extend(mdm_problems(doc));
+    problems.extend(fail_ready_deb_problems(doc));
+    problems.extend(pxe_problems(doc));
+    problems.extend(pkg_signing::problems(doc));
     problems
 }
 
-/// One line per package of [`PACKAGES`], on each of [`PLATFORMS`], per binary tarball of
-/// [`TARBALLS`] and per file of [`ATTESTED_FILES`], that the attest job does not attest (a
+/// One line per run of [`FAIL_READY_DEB_RUNS`] that the build job does not have: the failing
+/// build's `.deb` built or checked outside `dist/` is no file the attest job signs.
+fn fail_ready_deb_problems(doc: &Node) -> Vec<String> {
+    let runs = step_values(job(doc, "build"), "run");
+    FAIL_READY_DEB_RUNS
+        .into_iter()
+        .filter(|want| !runs.contains(want))
+        .map(|want| format!("artifacts.yml: job build does not run `{want}`"))
+        .collect()
+}
+
+/// One line per way the build job does not make pxe's `.deb`: a run of [`PXE_RUNS`] missing or
+/// under an `if:` (the package would not be built on both Linux platforms), or the static `pxe`
+/// not built ([`PXE_BUILD`], which a `.deb` of another binary or a gnu build would replace).
+fn pxe_problems(doc: &Node) -> Vec<String> {
+    let build = steps(job(doc, "build"));
+    let mut problems = Vec::new();
+    for want in [PXE_BUILD, PXE_RUNS[0], PXE_RUNS[1]] {
+        match build.iter().find(|s| text_of(Some(s), "run") == Some(want)) {
+            None => problems.push(format!("artifacts.yml: job build does not run `{want}`")),
+            Some(step) if text_of(Some(step), "if").is_some() => problems.push(format!(
+                "artifacts.yml: job build runs `{want}` under an `if:`, so not on both Linux platforms"
+            )),
+            Some(_) => {}
+        }
+    }
+    problems
+}
+
+/// What is wrong with the making of the mdm package: a step of [`MDM_STEPS`] missing from the
+/// build job, out of order, or under another `if:` than [`MDM_IF`] (the program built without
+/// the commit, a package built from archives no step fetched, or a step on a platform the
+/// package is not built for).
+fn mdm_problems(doc: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    let build = steps(job(doc, "build"));
+    let mut at = 0;
+    for want in MDM_STEPS {
+        let found = build[at..]
+            .iter()
+            .position(|s| text_of(Some(s), "run") == Some(want));
+        let Some(n) = found else {
+            problems.push(format!(
+                "artifacts.yml: job build does not run `{want}` (after the mdm steps before it)"
+            ));
+            continue;
+        };
+        let step = &build[at + n];
+        at += n + 1;
+        if text_of(Some(step), "if") != Some(MDM_IF) {
+            problems.push(format!(
+                "artifacts.yml: job build runs `{want}` without the exact `if: {MDM_IF}`"
+            ));
+        }
+        let stamped = text_of(entry(step, "env"), "RELEASE_COMMIT") == Some("${{ github.sha }}");
+        if want.starts_with("cargo build") && !stamped {
+            problems.push(format!(
+                "artifacts.yml: job build runs `{want}` without RELEASE_COMMIT: ${{{{ github.sha }}}}"
+            ));
+        }
+    }
+    problems
+}
+
+/// One line per Linux package (the deb and the rpm) of each of [`LINUX_ARCHES`], per binary tarball of
+/// [`TARBALLS`], per file of [`ATTESTED_FILES`], [`NATIVE_FILES`] and [`VERSIONED_FILES`], that the
+/// attest job does not attest (a
 /// provenance step whose `subject-path` is the file) or whose bundle it does not copy to
 /// `<file>.sigstore.json` from the outputs of that same step; and one per binary tarball whose
 /// SBOM it does not attest ([`sbom_problem`]).
 fn package_problems(attest: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
-    for (prefix, middle) in PACKAGES {
-        for platform in PLATFORMS {
-            let subject = format!(
-                "dist/{prefix}-${{{{ needs.version.outputs.version }}}}{middle}-{platform}.tar.zst"
-            );
-            let file = format!("{prefix}-<version>{middle}-{platform}.tar.zst");
-            let copied = format!("{prefix}-${{V}}{middle}-{platform}.tar.zst");
+    let version = "${{ needs.version.outputs.version }}";
+    for ((deb, rpm), program) in LINUX_ARCHES
+        .into_iter()
+        .flat_map(|arches| LINUX_PACKAGE_PROGRAMS.map(|program| (arches, program)))
+    {
+        let linux_packages = [
+            (
+                format!("{program}_{version}_{deb}.deb"),
+                format!("{program}_<version>_{deb}.deb"),
+                format!("{program}_${{V}}_{deb}.deb"),
+            ),
+            (
+                format!("{program}-{version}-1.{rpm}.rpm"),
+                format!("{program}-<version>-1.{rpm}.rpm"),
+                format!("{program}-${{V}}-1.{rpm}.rpm"),
+            ),
+        ];
+        for (subject, file, copied) in linux_packages {
+            let subject = format!("dist/{subject}");
             problems.extend(attest_problem(attest, &subject, &file, &copied));
         }
     }
+    problems.extend(attest_problem(
+        attest,
+        &format!("dist/hostkeeper-coordinator-{version}.image.json"),
+        "hostkeeper-coordinator-<version>.image.json",
+        "hostkeeper-coordinator-${V}.image.json",
+    ));
     for (program, platforms) in TARBALLS {
         for platform in platforms {
             let stem = format!("{program}-${{{{ needs.version.outputs.version }}}}-{platform}");
@@ -558,6 +757,17 @@ fn package_problems(attest: Option<&Node>) -> Vec<String> {
     }
     for (subject, file) in ATTESTED_FILES {
         problems.extend(attest_problem(attest, subject, file, file));
+    }
+    for file in NATIVE_FILES {
+        let subject = format!("dist/{}", file.replace("<version>", version));
+        let copied = file.replace("<version>", "${V}");
+        problems.extend(attest_problem(attest, &subject, file, &copied));
+    }
+    for stem in VERSIONED_FILES {
+        let subject = format!("dist/{stem}-${{{{ needs.version.outputs.version }}}}");
+        let file = format!("{stem}-<version>");
+        let copied = format!("{stem}-${{V}}");
+        problems.extend(attest_problem(attest, &subject, &file, &copied));
     }
     problems
 }

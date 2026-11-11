@@ -17,6 +17,13 @@ Two points are decided and are not reopened here:
   installed with. Changing it is free while no Mac is enrolled. After the first enrollment it
   costs a re-enrollment of every Mac, because a Mac keeps one profile per identifier.
 
+**Superseded in part by [coordinator-mdm.md](coordinator-mdm.md).** The MDM server is to run inside the coordinator, not as a separate
+stack. Superseded there: section 2's rows for the server stack, TLS, ABM token, ADE profile and the kit; section 3's rows for the server
+stack and the kit, and the NanoHUB API on loopback; the source of section 6.1's "enrolled" (a call, not a webhook); section 8, the
+migration of the live stack; the Caddy and `lego` parts of section 9; section 12's tasks M2 to M5, M6a, M6b and M7. Standing: sections 4
+and 5, section 7, the gate and its record, and the Mac path as drawn. Nothing below is rewritten until the tasks of coordinator-mdm.md
+delete what it describes.
+
 The launchd label prefix, `dev.hostkeeper` (**Built**: `crates/hostkeeper-launchd/src/label.rs`),
 is a different identity: the product's, the same in every farm. It names the daemon's job, the
 pkg identifier, and the managed preference domains of this design (`dev.hostkeeper.config`,
@@ -45,9 +52,9 @@ Apple Business Manager (ABM).
    manifest names one pkg by its SHA-256, and that digest must be on the gate's allowlist. The Mac
    checks the digest itself before it installs (**Built**, task M14:
    `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, section 7.1).
-4. **The pkg's postinstall writes `hostkeeper.toml` and loads the launchd job.** It writes the
-   daemon config from the managed config profile of step 3, seeds the binary directory as it does
-   today, and bootstraps `dev.hostkeeper.hostkeeper`. The daemon starts, makes its key and posts
+4. **The pkg's postinstall loads the launchd job, and the daemon writes `hostkeeper.toml`.** The
+   postinstall bootstraps `dev.hostkeeper.hostkeeper`. At each start the daemon seeds the binary
+   directory and writes its config from the managed config profile of step 3. The daemon starts, makes its key and posts
    an enrollment request that claims the Mac's serial. The request carries no nonce yet.
 5. **The gate pushes a one-time nonce profile.** It does this only once a request from that
    Mac is pending (it claims the Mac's serial and platform UUID and was posted after this
@@ -64,7 +71,7 @@ Apple Business Manager (ABM).
    are assigned to the host as an operator's approval assigns its own (**Built**, task M9:
    `Coordinator::enroll`). The host then receives its certificate. Its services come from its
    role or host assignment, through `install` orders on the same path as a Linux host (design
-   section 5.7). The gate removes the nonce profile.
+   section 5.7). The gate removes the nonce profile. (Superseded by [hostgroups.md](hostgroups.md) section 1.2: the allowlist entry names the host's HostGroup, and `services` is refused.)
 
 The operator's single question about a Mac is whether its serial is on the allowlist. A Mac that
 fails any condition does not fail closed into a broken state. Its request waits, pending, for an
@@ -86,9 +93,9 @@ The figure follows the seven steps.
 | ADE profile | Not defined. The `depsyncer` unit is disabled. |
 | Enrolled Macs | None. NanoHUB's log has no `/mdm` check-in, and the farm's Macs report no DEP and no MDM enrollment. |
 | Policy gate | **Built**, the device side (task M8): `crates/hostkeeper-mdm-gate`, linked into the coordinator with `--mdm-api-url` (section 6.1). **Built**, the enrollment side's config profile and nonce (task M12): `crates/hostkeeper-mdm-gate/src/enroll.rs` and `profile.rs`, with `--mdm-profile-identifier` and `--mdm-daemon-config` (sections 4 and 5). **Built**, the pkg (task M14): `crates/hostkeeper-mdm-gate/src/install.rs` and `pkg.rs`, with `--mdm-pkg-allowlist` and `--mdm-host` (sections 7.1 and 5.4). It runs on no host yet. kbf has one (`kbf-mdm`, binary `kbf-mdm-gate`) that was never deployed. Its server speaks JSON over HTTP while the kbf server's client calls it as gRPC, so the two cannot talk. It also has no eligibility check. |
-| Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its nine decline tokens, the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. The gate issues and pushes nonces (task M12), through `hostkeeper_mdm_gate::Enrollments` (`crates/hostkeeper-coordinator/src/enrollment/gate_port.rs`), and the daemon posts it back (M13). |
+| Coordinator side | **Built**: the nonce store (32 bytes, one hour, one use, consumed in the approval's own write), the serial allowlist, the `DeviceState` port and its ten decline tokens (the tenth, `device_not_via_dep`, applies only when the coordinator requires ADE enrollment, off by default), the nonce's binding to its request, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval (task M9; `crates/hostkeeper-coordinator/src/enrollment/`, `crates/hostkeeper-enrollment/src/enroll/mac_nonce.rs`). With `--mdm-api-url` the `DeviceState` is the gate's (`crates/hostkeeper-coordinator/src/mdm.rs`); without it, `NoDeviceState`. The gate issues and pushes nonces (task M12), through `hostkeeper_mdm_gate::Enrollments` (`crates/hostkeeper-coordinator/src/enrollment/gate_port.rs`), and the daemon posts it back (M13). |
 | MDM kit | **Built**: its pure core, `crates/hostkeeper-mdm-core` (task M2): the settings, the enrollment and ADE profiles, the units and Caddyfile of the stack, the pins, under hostkeeper's names and with M2's fixes of komira-ai/kbf#2248. Its host-step layer is `crates/hostkeeper-mdm-step` (task M3). Its binary, `crates/hostkeeper-mdm` (task M4), has the verbs `fetch`, `install`, `tls` and `verify`, with M4's fixes of komira-ai/kbf#2248, and (task M5) `push-cert` with the enrollment profile at `/enroll`, `dep` (`get-cert`, `upload-token`, `define-profile`, `assign`), `migrate --from`, and the pkg directory and its `/pkg/<sha256>.pkg` route. The live stack is still the old kit's until `migrate --apply` runs on the MDM host (task M7). |
-| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall of the seed, `mac-config` and the load of the job (`docs/macos.md`), and the pkg writes the config (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
+| Daemon side | **Built**: the launchd daemon, the claims of serial and platform UUID, the pkg with its postinstall that loads the job (`docs/macos.md`), and the daemon's start writes the config from the managed preferences and seeds the binary directory (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`, `crates/hostkeeper-daemon/src/packaged.rs`, `crates/hostkeeper-launchd/src/postinstall.rs`). The enroller reads the nonce from the managed preferences and posts it once for its own request (**Built**, task M13: `crates/hostkeeper-enroll/src/managed.rs`, `crates/hostkeeper-enroll/src/enroller.rs`). |
 | Pkg signature | None. The pkg is attested, and the binary in it carries the linker's ad-hoc code signature (`crates/xtask/src/release/macos_pkg.rs`). |
 
 The kit's code is in three places:
@@ -106,7 +113,7 @@ The kit's code is in three places:
 | The MDM server stack | NanoHUB (NanoMDM with its command queue and the KMFDDM declarative API), `depserver` and `depsyncer` (ADE), the SCEP server, and Caddy (TLS on the LAN address only). The tools are third-party, pinned by version and SHA-256. | The MDM host |
 | `hostkeeper-mdm` kit | One binary that installs, checks and migrates that stack: `fetch`, `install`, `tls`, `verify`, `push-cert`, `dep`, `migrate`. Every verb that changes the host dry-runs by default and acts only with `--apply`. Ported from kbf (section 8). It reads its settings from a file named by a flag (`--settings`). The `MDM_*` names are keys of that file, and the environment files it writes are the third-party units' own input: no hostkeeper code reads configuration from the environment (rule S2). | The MDM host, run by the operator |
 | The policy gate | A crate linked into the coordinator. It holds the NanoHUB API key, keeps a durable record per device, implements `DeviceState`, installs the config profile and the pkg, and issues and pushes nonces. | Inside `hostkeeper-coordinator serve` |
-| The daemon's Mac additions | Reading the nonce from its managed profile, and the postinstall verb that writes `hostkeeper.toml` from the managed config | Each Mac |
+| The daemon's Mac additions | Reading the nonce from its managed profile, and the start-up step that writes `hostkeeper.toml` from the managed config | Each Mac |
 
 **The gate is linked into the coordinator, not a separate service.** `Enrollment::issue_mac_nonce`
 is a library call, and the built code says the gate is "a component linked into the coordinator,
@@ -136,8 +143,9 @@ Before this document the two disagreed, and nonce delivery depends on the answer
 - `docs/macos.md`, matching the code at that time, said: "The script starts nothing and writes no
   config. The operator's bootstrap places `hostkeeper.toml` and loads the job."
 
-**Decision: the postinstall writes the config, from a managed config profile that the gate
-installs before the pkg.** The pkg itself carries no config. The steps:
+**Decision: the config is written from a managed config profile that the gate
+installs before the pkg** (first by the pkg's postinstall; since the units and plist of
+[two-programs.md](two-programs.md) section 4.1, by the daemon's start, below). The pkg itself carries no config. The steps:
 
 1. The gate installs the farm's config profile (**Built**, task M12:
    `crates/hostkeeper-mdm-gate/src/profile.rs`; its keys come from the `hostkeeper.toml` that
@@ -148,12 +156,18 @@ installs before the pkg.** The pkg itself carries no config. The steps:
    `dev.hostkeeper.config`. The keys are those of `hostkeeper.toml` (design section 4.1):
    `coordinator`, `ca_sha256`, `release_channel`, the `trusted_signers` dictionary
    (`organisation`, `workflow`, `refs`, `hosted_runner`) and an optional `bounds` dictionary. Holds
-   no secret.
+   no secret. The same payload carries, when the coordinator has the file for it, two more domains:
+   `dev.hostkeeper.stores` (the keys of `stores.toml`, from `--mdm-stores`) and
+   `dev.hostkeeper.macos-pkg` (the key of `macos-pkg.toml`, `signers`, from `--mdm-macos-pkg`),
+   each file judged at the coordinator's start by the loader that reads it on the Mac, so a profile
+   the daemon would refuse is refused when the coordinator starts. A stores file that names a credential file
+   (`basic_auth_file`, `bearer_file`) is refused: a profile carries no secret, and the file is
+   not on the Mac. Both flags require `--mdm-profile-identifier`.
 2. On that profile's `Acknowledged`, the gate sends the pkg (section 7).
-3. The pkg's postinstall runs three commands of the installed binary, in order. Each command stops
-   the install with its message if it fails.
-   - `self-update-seed`, unchanged (**Built**).
-   - `mac-config`, a new verb (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`). It reads the managed preferences of the domain, which macOS
+3. The config is written by the code of `mac_config` (**Built**: `crates/hostkeeper-daemon/src/mac_config.rs`),
+   which the pkg's postinstall first ran as a command and which the daemon now runs at each start
+   (`mac_config::at_start`), as its first step on a Mac. The postinstall asks launchd whether the
+   job is loaded (`launchctl print`) and, only when it is not, runs `launchctl bootstrap`, below. The code reads the managed preferences of the domain, which macOS
      writes to `/Library/Managed Preferences/dev.hostkeeper.config.plist` (a binary or XML
      plist). The path, the file's owner and its mode are to verify on a device (tasks M11 and
      M16), because Apple's payload schema does not state them. The verb accepts the file only when
@@ -164,14 +178,16 @@ installs before the pkg.** The pkg itself carries no config. The steps:
      The verb then writes `/etc/hostkeeper/hostkeeper.toml` atomically, root's and mode 0600.
      - The verb writes only when no `hostkeeper.toml` exists. An existing file is kept and named
        on standard error: a reinstall never changes a Mac's trust root.
-     - When there is neither a managed config nor a file, it fails, and so does the install. The
-       gate's re-send (section 5.4) then gets another chance once the profile is in place.
-       Installing the pkg by hand without a config is an error the operator sees at once.
-   - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, only
-     when a config file exists after `mac-config`, and after any earlier copy of the job is booted
-     out.
+     - When there is neither a managed config nor a file, the start fails with exit status 3 and
+       the message in `/var/log/hostkeeper/daemon.err.log`, and launchd starts it again, which
+       fails again, until the profile is in place; the install itself succeeds. Installing the
+       pkg by hand without a config is an error the operator reads in that log.
+   - `launchctl bootstrap system /Library/LaunchDaemons/dev.hostkeeper.hostkeeper.plist`, when
+     launchd does not have the job loaded; a loaded job is left alone, so that an install the
+     daemon itself runs never boots it out (packages-native.md section 10.4). It no longer waits
+     for a config file.
 
-   The three commands are **Built** as the pkg's postinstall
+   The question and the bootstrap are **Built** as the pkg's postinstall
    (`crates/hostkeeper-launchd/src/postinstall.rs`), and `check-macos-pkg` holds the script to its
    exact bytes (`crates/xtask/src/release/macos_pkg.rs`).
 
@@ -186,19 +202,48 @@ Why the profile and not the pkg:
 
 The daemon still reads only `hostkeeper.toml`. Its Linux and Mac config paths stay one code path,
 and the file stays the host's only trust root (design section 4.1). After the first write, local
-root changes the file and the MDM does not: the gate never sends the config profile again to a Mac
-it has seen approved. A changed farm config, or a wrong first one, reaches a Mac only when local
+root changes the file and the MDM does not: a changed `hostkeeper.toml` in the profile never replaces
+the Mac's file, because the daemon writes `hostkeeper.toml` only when it is absent. A changed farm config, or a wrong first one, reaches a Mac only when local
 root replaces the file and restarts the job (`launchctl kickstart -k
 system/dev.hostkeeper.hostkeeper`), as on a Linux host.
 
-The gate sends the pkg on the config profile's `Acknowledged`. Whether macOS has written the
-managed preferences file by the time it answers is to verify in M16. If it has not, `mac-config`
-fails, and the re-send covers it.
+The gate does send the config profile again, with the same identifier so that it replaces the one
+on the Mac, when its settings change (**Built**: `crates/hostkeeper-mdm-gate/src/enroll.rs`,
+`config_resend.rs` tests). With each config profile command the gate records the SHA-256 of the
+payload's `PayloadContent` written as an XML property list (the settings alone, with no UUID;
+`ConfigProfile::settings_sha256`). At a look of a device that is enrolled, has a serial no other
+live enrollment has and is on the allowlist, approved or not, the profile is due when the device
+acknowledged the last config profile command carrying a different digest, or none (a record
+written before the field counts as different, so every Mac gets the new domains once). The
+digest counts as delivered only when the device answered `Acknowledged`; a command not yet
+answered is never sent again, so a change is sent once however many webhook events and looks
+follow; one answered with an error is sent again `CONFIG_RESEND_SECS` (an hour) after the answer,
+as before, and never sooner; one NanoHUB did not queue is sent again at the next look. A Mac
+approved in this enrollment is sent nothing else (no nonce, no pkg), and its nonce profile's
+removal goes first, the config profile at the next look; a Mac with no config profile command in
+this enrollment that is already approved is sent none. On a Mac not yet approved, the pkg waits
+for the new profile's `Acknowledged`, as it waits for the first.
+
+The gate sends the pkg on the config profile's `Acknowledged` (on a profile sent again, on its own). Whether macOS has written the
+managed preferences file by the time it answers is to verify in M16. If it has not, the daemon's
+start fails and launchd starts it again, and it starts once the file is there.
 
 **The manual path.** A Mac without MDM, or one being debugged, is installed by hand. The operator
-places `hostkeeper.toml` first, then installs the pkg. `mac-config` finds the file, keeps it, and
-the job is loaded. This is the "operator's bootstrap" of the earlier `docs/macos.md`, with the job
+places `hostkeeper.toml` first, then installs the pkg. The daemon's start finds the file, keeps it, and
+the job is loaded by the postinstall. This is the "operator's bootstrap" of the earlier `docs/macos.md`, with the job
 load moved into the pkg. The Mac is then approved by an operator, as a Linux host is.
+
+**The service installer's files.** A Mac that installs services from signed `.pkg` files
+([packages-repositories.md](packages-repositories.md) section 4.7) also needs `stores.toml` and
+`macos-pkg.toml`. The same config profile carries them as two more domains, `dev.hostkeeper.stores` and
+`dev.hostkeeper.macos-pkg`, and the daemon's start renders each with these steps, except that a file which differs
+from its managed preferences is replaced. **Built**: the daemon's step (`crates/hostkeeper-daemon/src/mac_files.rs`),
+and the gate's side: the flags `--mdm-stores` and
+`--mdm-macos-pkg` (`crates/hostkeeper-coordinator/src/mdm.rs`), the domains and the loader checks
+(`crates/hostkeeper-mdm-gate/src/profile.rs`: `StoresProfile`, `MacosPkgProfile`, `ConfigProfile`), and the profile sent
+again when its settings change, above. So a signer rotation, and the new domains on a Mac enrolled before them, reach an
+approved Mac: the coordinator is restarted with the new file, the gate sends the profile once, and the Mac's daemon
+replaces its file at its next start. `hostkeeper.toml` keeps the rule above.
 
 Design sections 4.6 and 5.9 were changed with this document. Task M10 changed `docs/macos.md`
 and the postinstall check of `check-macos-pkg` (**Built**: `docs/macos.md`,
@@ -333,7 +378,7 @@ adapter always sent `mac_nonce` empty. Now:
 - The nonce is never logged. Its type's `Debug` shows no byte of it, as the coordinator's
   `MacNonce` does.
 
-The postinstall's `mac-config` and the daemon's nonce read use the same plist reader, the
+The `mac_config` code and the daemon's nonce read use the same plist reader, the
 `plist` crate. It is already declared in the root `Cargo.toml` (rule R5) and used by xtask's
 `check-macos-pkg` and by tests. M10 added the production use (**Built**:
 `crates/hostkeeper-daemon/src/mac_config.rs`), updated the root comment that called it
@@ -345,7 +390,7 @@ test-only, and tests that it reads both binary and XML plists
 | Case | What happens |
 |---|---|
 | The pkg install is slow | No request is pending, so no nonce is issued (condition 3). Nothing expires. |
-| The pkg install fails, or never happens | The device stays enrolled with no candidate request. `InstallEnterpriseApplication` reports only that it accepted the command, never the install's end. So the gate sends it again (**Built**, M14: `crates/hostkeeper-mdm-gate/src/install.rs`) while three things hold: no candidate request has appeared, no host is approved for the serial in this enrollment, and the previous send's result (`Acknowledged` or `Error`) arrived at least an hour ago. A command that has not been answered, for instance on a Mac that is off, is never sent again, so nothing piles up in NanoHUB's queue. The hour is a constant, not a flag. Each send is audited `mdm_install_sent` with its count, and the gate's device list shows the count and the last send. Sending stops at the first candidate request, and a new enrollment starts the count again. A re-sent install is safe: the seed and `mac-config` do nothing the second time. |
+| The pkg install fails, or never happens | The device stays enrolled with no candidate request. `InstallEnterpriseApplication` reports only that it accepted the command, never the install's end. So the gate sends it again (**Built**, M14: `crates/hostkeeper-mdm-gate/src/install.rs`) while three things hold: no candidate request has appeared, no host is approved for the serial in this enrollment, and the previous send's result (`Acknowledged` or `Error`) arrived at least an hour ago. A command that has not been answered, for instance on a Mac that is off, is never sent again, so nothing piles up in NanoHUB's queue. The hour is a constant, not a flag. Each send is audited `mdm_install_sent` with its count, and the gate's device list shows the count and the last send. Sending stops at the first candidate request, and a new enrollment starts the count again. A re-sent install is safe: the postinstall boots the job out and loads it again, and the daemon's seed and config write do nothing the second time. |
 | The nonce's `InstallProfile` fails (an `Error` result) | The nonce stays issued. The gate sends the same nonce again at the next tick, at most once a minute, while it is unexpired (**Built**, M12). The bytes are held in the gate's memory only: after a coordinator restart the same nonce is not sent again, and a new one is issued once it expires. |
 | The nonce expires before use (the Mac was off, or the profile never arrived) | Condition 4 holds again, so the gate issues a new nonce, bound to the same request, and replaces the profile. The old nonce is dead by expiry. A new one is issued at most once an hour per serial. |
 | The daemon's key changes without a new enrollment (its state was removed by hand) | Two candidates, so no nonce. The operator denies the stale request or approves by key hash. A wipe is not this case: it is a new enrollment, so the old request is stale and is not a candidate (condition 3). |
@@ -359,7 +404,7 @@ test-only, and tests that it reads both binary and XML plists
 
 **Enrolled.** NanoHUB sends the gate a webhook event (to a loopback listener of the coordinator)
 for each check-in: `Authenticate`, `TokenUpdate`, `CheckOut`. A device is enrolled from its first
-`TokenUpdate` until a `CheckOut`. The serial comes from `Authenticate` when it carries one: the
+`TokenUpdate` until a `CheckOut`. The listener only reads NanoHUB's body into an event and hands it to `Gate::handle`, the one entry point for events; the gate's logic does not see HTTP or the body's JSON. The serial comes from `Authenticate` when it carries one: the
 key is optional in Apple's schema, and needs the `AllowQueryDeviceInformation` access right,
 which the kit's enrollment profile grants. Either way the gate asks `DeviceInformation` for
 `SerialNumber`, `UDID` and `IsSupervised`, and the answer decides. A device whose answer has no
@@ -382,15 +427,20 @@ authentication as `nanohub`; the answer is NanoMDM's `APIResult` JSON. Because t
 signed, the gate reads a result only for a command UUID it sent that device and is still waiting
 on. Its tests read NanoMDM's recorded payloads (`crates/hostkeeper-mdm-gate/tests/fixtures/nanohub/`).
 
-The device record is durable, one per enrollment id, behind the gate's `DeviceStore` (**Built**).
-While the coordinator's state is files, it is a file, `<--enrollment-dir>/mdm-devices/<enrollment
-id>.pb`, which the coordinator's backup copies with the enrollment store. Once the Postgres store is
-built (task C3 of [coordinator-storage.md](coordinator-storage.md)), it is a row of the table
-`mdm_devices` that M8's migration adds there, as a second `DeviceStore`; the gate does not change. It holds the enrollment id, serial,
+The device record is durable, one per enrollment id, behind the gate's `DeviceStore` (**Built**),
+and the gate runs on either store of the coordinator. On the file store it is a file,
+`<--enrollment-dir>/mdm-devices/<enrollment id>.pb`, which the coordinator's backup copies with the
+enrollment store. On the database store (`--database-dsn-file`,
+[coordinator-storage.md](coordinator-storage.md) section 3.6) it is a row of the table
+`mdm_devices`, migration `0005`, holding the same bytes as the file (**Built**:
+`crates/hostkeeper-coordinator/src/store/postgres/devices.rs`); the gate does not change, and both
+stores pass the one case list of `crates/hostkeeper-mdm-gate/src/conformance.rs`. It holds the enrollment id, serial,
 enrolled, supervised, ADE, user-approved, the times of the last check-in, and the commands sent
 and not answered. The config profile's state and the last nonce (when it was issued, for which request, its pushes
 and its removal) are fields 18 and 19 of the record, added by M12 to schema 1 so the release
 before reads it (`the_enrollment_fields_are_read_by_the_release_before_them_and_the_other_way`);
+the settings digest of the config profile is field 5 of the profile message, an optional field added the same way
+(`the_settings_digest_is_read_by_the_release_before_it_and_the_other_way`);
 the install tries are field 20, added by M14 the same way (**Built**: the digest last sent, the count NanoHUB
 queued and the last send with its answer, forgotten with the enrollment;
 `the_install_field_is_read_by_the_release_before_it_and_the_other_way`). `status(serial)`
@@ -506,10 +556,9 @@ names). What the build decides beyond the text above:
   stays a file when the coordinator's state moves to Postgres
   ([coordinator-storage.md](coordinator-storage.md) section 2); what the gate writes, the sends,
   is in the device record.
-- The pkg is sent once the device has acknowledged the config profile, because the postinstall's
-  `mac-config` reads the managed config. Whether the managed preferences file exists by then is
-  to verify (M16); if it does not, the install fails and the re-send of 5.4 an hour later repairs
-  it. Supervision is not required, as section 6.3 says.
+- The pkg is sent once the device has acknowledged the config profile, because the daemon's start
+  (`mac_config`'s code) reads the managed config. Whether the managed preferences file exists by then is
+  to verify (M16); if it does not, the daemon refuses its starts until it does, and launchd starts it again. Supervision is not required, as section 6.3 says.
 - The manifest's `bundle-identifier` is the pkg identifier `dev.hostkeeper.hostkeeper`, its
   `bundle-version` the entry's version and its `title` `hostkeeper <version>`.
 
@@ -596,8 +645,8 @@ How the kit carries out the four pkgs:
 - **Each pkg carries one marker file under its own identifier,**
   `dev.hostkeeper.signing-test.pkg<n>`, not the hostkeeper payload. "Today's pkg" in the list
   above is read as this unsigned component pkg. The marker has two purposes. First, a receipt
-  names exactly one pkg. Second, the release pkg's postinstall fails on a Mac with no managed
-  config (`mac-config`), and that failure would hide the signature's outcome. The signing is the
+  names exactly one pkg. Second, the release pkg's daemon refuses each start on a Mac with no managed
+  config, and that failure would blur the signature's outcome. The signing is the
   release pkg's: `productsign` over a `productbuild` distribution pkg.
 - **The order holds by construction.** `send` refuses pkg 3 and pkg 4 until the root's profile
   is recorded `Acknowledged`, and refuses them again after its removal.
@@ -627,8 +676,8 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
 
 - **Farm identity.** The signature is the operator's, not the release's. A new kit verb,
   `hostkeeper-mdm pkg add <release pkg>`, does four things:
-  1. verifies the release pkg's attestation against the trusted signers, as the daemon verifies a
-     package;
+  1. verifies the release pkg's attestation against the trusted signers
+     (`gh attestation verify`, as at publish time);
   2. signs a copy with `productsign` and the farm key (a 0600 file on the MDM host);
   3. puts the signed copy in the gate's pkg directory under its new digest;
   4. adds the digest to the allowlist with the release pkg's digest beside it.
@@ -641,6 +690,20 @@ names a format names that one, and `check-macos-pkg` reads both layers (**Built*
   pkg's. This changes release trust: whoever can push to `main` can then make an Apple-trusted pkg.
   It goes to the maintainers after one independent review. The workflow lint gains the job by
   name, with a negative case (rule T15).
+
+  **Built**: the Developer ID Installer identity exists (`Developer ID Installer: Komira AI, Inc.
+  (U7RTX4XD3X)`), so the release signs with it whatever M11 finds. `artifacts.yml`'s `sign-pkg`
+  (no repository code, the identity in a keychain of the job that is deleted at its end) and
+  `check-pkg` (`cargo xtask release check-pkg-signature`, then the pkg is a release file), held
+  by `crates/xtask/tests/workflows/pkg_signing.rs`; [docs/macos.md](../macos.md), "The
+  installer's signature", walks them. The farm identity's `pkg add` is then needed only if a Mac
+  refuses the Developer ID pkg.
+
+A service's `.pkg` (packages-repositories.md section 4.7) is signed by the same identity, but
+before its release is attested, so CI's pin names the signed bytes. With Developer ID that is
+the release machinery's signing above. With the farm identity, re-signing on the MDM host does not
+serve a service's package, whose digest CI has already pinned; that outcome reopens this section
+for services' packages.
 
 Notarization is not in either plan. Nothing Apple states requires it for an MDM install. The
 device test (pkg 3, or a Developer ID pkg if it comes to that) shows whether the install is
@@ -798,7 +861,7 @@ progress from explicit events. NanoHUB is a fake: an in-process HTTP server on `
 | `mac_config_writes_the_toml_the_loader_accepts` | managed plist to TOML, then the same loader: every key; each missing required key and each unknown key refused | M10 |
 | `mac_config_keeps_an_existing_file` | a reinstall never replaces the trust root; the message names the file | M10 |
 | `mac_config_fails_with_neither_a_managed_config_nor_a_file` | the install fails and loads no job | M10 |
-| `check-macos-pkg` tests | the distribution layer, the three-command postinstall by its exact bytes, and the refusal of any other script | M10 |
+| `check-macos-pkg` tests | the distribution layer, the two-command postinstall (boot-out and bootstrap) by its exact bytes, and the refusal of any other script | M10 |
 | `the_pkg_is_resent_an_hour_after_its_last_answer` | the re-send of 5.4 at 3599 and 3600 seconds after the last result | M14 |
 | `no_resend_while_the_previous_install_is_unanswered` | a Mac that is off accumulates no commands | M14 |
 | `an_approved_mac_is_not_sent_the_pkg_again` | re-sending stops at the first candidate request and after approval | M14 |
@@ -890,7 +953,7 @@ pull request.
 | M6a | komira-ai/kbf: freeze notes; delete `kbf-mdm`, `kbf-mdm-api` and their client in `kbf-server`; later, after M7, delete `mdm-core`, `host-step`, `mdm-host` and `kbf-deploy mdm` | M5 | S |
 | M6b | komira-ai/jobscheduler: after M7, delete `js-mdm-core`, `js-host-step`, `js-mdm` and their release workflow, release plan, test and coverage-baseline entries, with a pointer to hostkeeper | M7 | S |
 | M7 | Held, run by the owner of the MDM host: the read-only check of the live state, `migrate --apply`, `verify`, `dep define-profile`; the DNS record (section 9); the ABM checks (question Q2) | M5 | S |
-| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files behind `DeviceStore` until the table is | M1; C3 of coordinator-storage.md for the table | L |
+| M8 | The gate's device side: NanoHUB client (loopback, API key file), webhook listener on loopback, durable device records, `DeviceInformation` and `SecurityInfo`, the `DeviceState` implementation; coordinator flags `--mdm-api-url`, `--mdm-api-key-file`, `--mdm-webhook-listen`; `Mdm.ListDevices` in the operator API and its generated CLI verb; `docs/enrollment-coordinator.md` no longer says the gate is outside the coordinator; the table `mdm_devices` by its own migration, once C3 is built. **Built**: `crates/hostkeeper-mdm-gate`, wired in by `crates/hostkeeper-coordinator/src/mdm.rs`, its records files of the file store or rows of the table `mdm_devices` (migration `0005`) behind `DeviceStore` | M1; C3 of coordinator-storage.md for the table | L |
 | M9 | Coordinator: the nonce's `request_id` (an added store field), `nonce_wrong_request`, the replacement of a wiped Mac's own host id, and the allowlist entry's services assigned at a nonce approval as at an operator's; `docs/enrollment-coordinator.md` and `docs/operations/enrollment.md` | M1 | M |
 | M10 | Pkg: the `productbuild` distribution layer, the `mac-config` verb, the three-command postinstall, `check-macos-pkg`, the `plist` dependency comment, `docs/macos.md` | M1 | M |
 | M11 | Device test of pkg signing (section 7.2) on one enrolled Mac; the results are written into this document, and they decide M15. **Built**: the kit and its runbook (section 7.2); the run waits for the Mac | M7, M8, M10 | S |
@@ -925,7 +988,9 @@ LAN.
 
 **Asked only if task M11 fails:**
 
-**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** This arises
+**Q4. Join the Apple Developer Program for a Developer ID Installer certificate?** Answered:
+the identity exists and the release signs with it (section 7.3). The question as it was asked:
+This arises
 only if the device test shows that a Mac refuses a pkg signed by a farm identity the MDM made
 trusted. Apple requires a signature "verifiable by the device" and does not say Developer ID.
 Joining costs a yearly fee and an organisation enrollment with a D-U-N-S number, which takes days

@@ -3,11 +3,17 @@
 
 use std::sync::Arc;
 
-use hostkeeper_wire::wire::{Answer, Heartbeat};
+use std::time::Duration;
+
+use hostkeeper_wire::wire::{Answer, Health, Heartbeat};
 
 use super::{Coordinator, HeartbeatRefused};
+use crate::agent_service::runs_itself;
 use crate::enrollment::{Admission, Enrollment};
+use crate::fleet::Node;
 use crate::identity::{Identity, IdentityError, identity_of};
+use crate::membership::{Membership, membership};
+use crate::ops::OpsState;
 
 /// What a heartbeat's turn is, once it is heard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -32,8 +38,14 @@ impl Coordinator {
         beat: Heartbeat,
         machine_id: Option<&str>,
     ) -> Result<Answer, HeartbeatRefused> {
-        self.answer(who, beat, false, machine_id)
-            .map(|(answer, _)| answer)
+        self.answer(
+            who,
+            beat,
+            false,
+            machine_id,
+            crate::trusted_root::TrustedRootSaid::default(),
+        )
+        .map(|(answer, _)| answer)
     }
 
     /// The turn of a heartbeat of `host` from the daemon on `machine_id`, if the transport
@@ -54,14 +66,46 @@ impl Coordinator {
         }
     }
 
+    /// With enrollment, notes that the heartbeat `beat` of `host`, heard as `node` at `now`,
+    /// reported a service serving ([`Enrollment::note_serving`], which keeps the first since the
+    /// host's approval), when it did: a service of `services` (those the heartbeat is decided
+    /// over: the rollout file's, or the host's group's) that counts the host as present, other than
+    /// the agent itself, healthy, with no update of it under way.
+    pub(super) fn note_serving(
+        &self,
+        services: &crate::services::Services,
+        host: &hostkeeper_wire::HostId,
+        node: &Node,
+        beat: &Heartbeat,
+        ops: &OpsState,
+        now: Duration,
+    ) {
+        let Some(enrollment) = &self.enrollment else {
+            return;
+        };
+        let serving = beat.services.iter().flatten().any(|one| {
+            one.health == Health::Healthy
+                && one.updating.is_none()
+                && !runs_itself(node, &one.name)
+                && services
+                    .get(&one.name)
+                    .is_some_and(|def| membership(def, host, node, ops, now) == Membership::Present)
+        });
+        if serving {
+            enrollment.note_serving(host);
+        }
+    }
+
     /// The same coordinator with `enrollment`: it reads a client certificate its CA issued as
     /// the host it names, refuses a denied host's heartbeat, and orders a duplicate host
     /// nothing. Enrollment audits into this coordinator's ops store from now on, and an
     /// approval it recorded whose audit entry is missing there is audited now
-    /// ([`Enrollment::audit_to`]).
+    /// ([`Enrollment::audit_to`]). It places each host it approves by this coordinator's host
+    /// groups while it holds one ([`Enrollment::held_groups`]).
     #[must_use]
     pub fn with_enrollment(mut self, enrollment: Arc<Enrollment>) -> Self {
         enrollment.audit_to(Arc::clone(&self.ops));
+        enrollment.place_by(Arc::clone(&self.desired));
         self.enrollment = Some(enrollment);
         self
     }
@@ -113,12 +157,17 @@ impl Coordinator {
     /// and no order is made for it. When its update record is final (no service updating, no
     /// order outstanding: [`crate::fleet::Fleet::release_if_final`]), the host is forgotten, which frees the
     /// update slot it held, and its deny row is made final ([`Enrollment::retire`]), so its
-    /// later heartbeats are refused unread. Returns whether it was released.
+    /// later heartbeats are refused unread. What it said of its trusted root is not kept: the
+    /// host is unknown there. Returns whether it was released.
     pub fn final_report(&self, who: Identity, beat: Heartbeat) -> bool {
         let host = who.host_id.clone();
-        self.reply_to(who, beat, false, Turn::Hold);
+        let unknown = crate::trusted_root::TrustedRootSaid::default();
+        let fleet = self.lock_fleet();
+        let basis = self.basis_of(&host);
+        self.reply_to(fleet, who, beat, false, (Turn::Hold, unknown), &basis);
         let released = self.lock_fleet().release_if_final(&host, (self.clock)());
         if released {
+            self.running.forget(&host);
             tracing::info!(host_id = %host, "a retiring host reported its update final: slot freed");
             if let Some(enrollment) = &self.enrollment {
                 enrollment.retire(&host);

@@ -12,14 +12,17 @@
 // repository, workflow, ref or environment, event, runner; each token is good once), or the
 // operator token. `SetDesired` with CI's token sets only the services the admitting allow-list
 // entry names; with the operator token it sets any service the coordinator manages, audited as
-// `set_desired` under the token's name. `Releases.Converge`, which changes nothing, takes CI's
-// OIDC token or the operator token, and answers either for any service. Every other RPC takes the
-// operator token only. The token is checked
+// `set_desired` under the token's name. A set with `targets` is audited as `set_desired` whoever
+// made it, CI's under `ci`. `Releases.Converge`, `Releases.WaitConverged` and
+// `Releases.GetRelease`, which change nothing, take CI's OIDC token or the operator token, and
+// answer either for any service.
+// Every other RPC takes the operator token only. The token is checked
 // before the request is read.
 //
 // Refusals: a gRPC status whose message is exactly one token of the service's refusal enum
 // (`HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`, `EnrollmentRefusal`, `AuditRefusal`,
-// `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, and `MdmRefusal` in mdm.proto),
+// `AlertsRefusal`, `RolloutsRefusal` in rollouts.proto, `MdmRefusal` in mdm.proto, and
+// `RepositoriesRefusal` in repositories.proto, and `HostGroupsRefusal` in hostgroups.proto),
 // written as the value's name without the prefix, in lower case (for example
 // `below_min_version`); the status code is the one each value names. Nothing
 // else is ever in the message: no claim value, no path, no text of an internal error. A refused
@@ -42,7 +45,8 @@
 // `Enrollment` also keeps the host inventory: one record per server, which the operator adds
 // when building it (host id, optional role, data MACs, BMC MAC, optional serial and notes).
 // `List` shows each pending request matched against the records; a match fills in a host id
-// and a role and approves nothing. A MAC is six octets of two hex digits, separated all by `:`
+// and a role, and the coordinator approves it only for an open, unused record that names a role, an exact
+// and uncontested match, within the record's window. A MAC is six octets of two hex digits, separated all by `:`
 // or all by `-`, or twelve hex digits, in either case, and is answered as lower-case
 // `aa:bb:cc:dd:ee:ff`.
 //
@@ -55,6 +59,15 @@
 // lines with an `alert=` field, each once when its condition appears. `Alerts` takes the
 // operator token only; no CI token reaches it. Reading changes nothing.
 //
+// Host groups: every enrolled host is in one host group, which lists the packages it runs and
+// holds the rollout policy and the desired versions of its packages (`HostGroups`, in
+// hostgroups.proto, in this package). A field named `host_group` names one by its name, which is
+// a role name. The field docs say what a coordinator that holds host groups does with each. A
+// coordinator that does not hold them answers each such field empty; refuses a request that names
+// a group, since no group has the name (`not_in_host_group` of `Releases` and `Rollouts`,
+// `unknown_host_group` of `Enrollment`), rather than read it as naming none; lists no audit entry
+// for a `host_group` filter; and gives no other refusal that names a host group.
+//
 // Extending: add fields, messages, enum values, RPCs and services; never renumber, rename,
 // retype or remove one, and never reuse a number (the compatibility test in this crate refuses
 // each). A reader treats an enum value it does not know as UNSPECIFIED; none of the enums here is
@@ -65,18 +78,26 @@ syntax = "proto3";
 package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
+// The release a set with targets names, per platform (`SetDesiredRequest.targets`).
+import "hostkeeper/release/v1/release.proto";
 // `AuditEntry` and `Actor`, which every service of the package answers.
 import public "hostkeeper/operator/v1/entry.proto";
 // The `Rollouts` service and the update plan (`RolloutPlan`) that `ServiceStatus` carries.
 import public "hostkeeper/operator/v1/rollouts.proto";
+// `HostRepositories`, which `Host` carries.
+import "hostkeeper/operator/v1/repositories.proto";
+// `SetRepositoryRequest` and `SetRepositoryResponse`.
+import "hostkeeper/operator/v1/services_repository.proto";
 
-// The hosts the coordinator has heard from, and what an operator decides about them.
+// The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 service Hosts {
-  // Every host heard from since the coordinator started, by node id, a page at a time. Changes
-  // nothing.
+  // Every host heard from since the coordinator started and, when the coordinator has an
+  // enrollment, every host it enrolled that is not denied, by node id, a page at a time. A host
+  // enrolled and not heard since the coordinator started is listed as not live, with what its
+  // enrollment kept of what it runs (`Host.running`). Changes nothing.
   rpc List(ListHostsRequest) returns (ListHostsResponse);
-  // One host heard from since the coordinator started; `unknown_host` for any other. Changes
-  // nothing.
+  // One host heard from since the coordinator started; `unknown_host` for any other, an enrolled
+  // host not heard since included. Changes nothing.
   rpc Get(GetHostRequest) returns (GetHostResponse);
   // Take a host out of a service: its heartbeats do not count for the service and it is not
   // ordered. A second exclusion of the same host and service replaces the first.
@@ -84,7 +105,8 @@ service Hosts {
   // Put an excluded host back. Including a host that is not excluded changes nothing and is not
   // an error.
   rpc Include(IncludeRequest) returns (IncludeResponse);
-  // Replace a host's labels, which service selectors match. An empty set removes them.
+  // Replace a host's labels, which service selectors match and which the host's facts file
+  // carries (its daemon is sent them at its next heartbeat). An empty set removes them.
   rpc SetLabels(SetLabelsRequest) returns (SetLabelsResponse);
   // Queue an `abort` order of a service for the host's next heartbeat; it takes no slot. An
   // abort of a host that runs nothing of the service is accepted and changes nothing.
@@ -97,6 +119,12 @@ service Hosts {
   // host is sent no `uninstall`. Retiring a host already retired is answered as retired and
   // audited once.
   rpc Retire(RetireRequest) returns (RetireResponse);
+  // Order the host to set aside its step record of the service when the record does not read
+  // (the `clear_record` verb of `hostkeeper.agent.v1`), at the host's next heartbeat; it takes no
+  // slot and is sent once. Only for a host whose daemon announced `clear-record-v1` in its last
+  // heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
+  // verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
+  rpc ClearRecord(ClearRecordRequest) returns (ClearRecordResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -104,7 +132,8 @@ service Releases {
   // Set a service's desired state. The coordinator moves its hosts there by the service's update
   // plan, stage by stage (`Rollouts`), a role's `max_updating` at a time. Takes
   // CI's OIDC token (the services its allow-list entry names) or the operator token (any service
-  // the coordinator manages, audited as `set_desired` under the token's name).
+  // the coordinator manages, audited as `set_desired` under the token's name; a set with
+  // `targets` is audited by CI too). Its request is at most 256 KiB; every other method's 4 KiB.
   rpc SetDesired(SetDesiredRequest) returns (SetDesiredResponse);
   // How far a service's hosts are from its desired version. Changes nothing. Takes CI's OIDC
   // token or the operator token.
@@ -124,6 +153,15 @@ service Releases {
   // Halt a service by hand, as a host's halt report does: no host of it is ordered until the halt
   // is cleared.
   rpc Halt(HaltRequest) returns (HaltResponse);
+  // Hold the call until a service's hosts have converged on a version, or the wait ends another
+  // way (see `WaitOutcome`), for at most `wait_secs`. The coordinator answers at once when the
+  // wait is over already, and otherwise after the change that ends it. Changes nothing. Takes
+  // CI's OIDC token or the operator token, checked once, when the call is admitted.
+  rpc WaitConverged(WaitConvergedRequest) returns (WaitConvergedResponse);
+  // The release a version of a service was set with: its targets, as set, and the digest of the
+  // release index that came with them. Changes nothing. Takes CI's OIDC token or the operator
+  // token, and answers either for any service.
+  rpc GetRelease(GetReleaseRequest) returns (GetReleaseResponse);
 }
 
 // The services the coordinator manages, which hosts run them, and the operator's holds.
@@ -133,16 +171,22 @@ service Services {
   rpc List(ListServicesRequest) returns (ListServicesResponse);
   // Assign a service to a host or a role: a host that does not run it is ordered to install it
   // at its next heartbeat, unless a hold stands. Assigning a service already assigned changes
-  // nothing.
+  // nothing. Deprecated: a coordinator that holds host groups refuses it `placed_by_host_group`,
+  // since `HostGroups.Put` and `HostGroups.Move` place every package.
   rpc Assign(AssignRequest) returns (AssignResponse);
   // Take a service off a host or a role. With `uninstall`, each host that no longer has any
   // assignment of it is ordered to uninstall it; without, the coordinator stops managing it
-  // there and the host keeps running it.
+  // there and the host keeps running it. Deprecated: refused `placed_by_host_group` as `Assign`
+  // is.
   rpc Unassign(UnassignRequest) returns (UnassignResponse);
   // Set the version below which the rollout gate orders the service to no host of a role, or to
-  // one host: no update, install or automatic rollback. A host's own minimum stands before its
-  // role's, and neither goes below the rollout file's.
+  // one host: no update, install or automatic rollback. A role names a host group: the minimum of
+  // the package in that group. A host's own minimum stands before its group's.
   rpc SetMinVersion(SetMinVersionRequest) returns (SetMinVersionResponse);
+  // Set the repository of the registry the service's package comes from; empty goes back to the
+  // default, `komira`. The coordinator sends each host the repositories of its packages, and a
+  // release names channels of the package's repository. The registry must hold the repository.
+  rpc SetRepository(SetRepositoryRequest) returns (SetRepositoryResponse);
   // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
   // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
   // released. A hold carries no version, takes no slot, survives a coordinator restart, covers
@@ -190,6 +234,9 @@ enum HostsRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   HOSTS_REFUSAL_AUDIT_UNAVAILABLE = 8;
+  // FAILED_PRECONDITION: the host's daemon did not announce, in its last heartbeat, the feature
+  // the order needs (`ClearRecord`: `clear-record-v1`); nothing is ordered.
+  HOSTS_REFUSAL_DAEMON_TOO_OLD = 9;
 }
 
 // Why `Releases` refused a request. The token is the value's name without the prefix, in lower
@@ -250,6 +297,37 @@ enum ReleasesRefusal {
   // desired version (design section 5.5), or comes without `release_index_digest`, or with
   // `package_digest`.
   RELEASES_REFUSAL_INDEX_INVALID = 22;
+  // INVALID_ARGUMENT: `WaitConverged`'s `wait_secs` is 0 or above 1800.
+  RELEASES_REFUSAL_INVALID_WAIT = 23;
+  // FAILED_PRECONDITION: `WaitConverged` while 16 waits are held already; retry once one ends.
+  RELEASES_REFUSAL_TOO_MANY_WAITS = 24;
+  // INVALID_ARGUMENT: `SetDesired`'s `targets` break a rule of the release (no platform, a key
+  // that is not a platform, a list of no entry or more than 8, an installer twice in a list, an
+  // entry or its manifest that breaks its rule, or for the service `hostkeeper` a list but one
+  // `hostkeeper-archive` entry). Nothing changed.
+  RELEASES_REFUSAL_TARGET_INVALID = 25;
+  // FAILED_PRECONDITION: `SetDesired` of a version set before as another release: with other
+  // targets or another release index, with a package digest or an index where this set has
+  // targets, or with targets where this set names a package digest or an index. A release is
+  // immutable; a changed artifact, manifest or order of entries is a new version. Not retried.
+  RELEASES_REFUSAL_RELEASE_EXISTS = 26;
+  // NOT_FOUND: `GetRelease` of a version the service was never set with targets, or whose release
+  // was dropped with it from the registry.
+  RELEASES_REFUSAL_RELEASE_UNKNOWN = 27;
+  // FAILED_PRECONDITION: `SetDesired` with a repository entry while the registry
+  // (`Repositories`) does not hold the repository the service names (`repository` of its
+  // `ServiceEntry`), or of an entry whose `repository` is not `<name>-<suite>` of that
+  // repository's name and one of its suites. Nothing changed.
+  RELEASES_REFUSAL_REPOSITORY_UNKNOWN = 28;
+  // FAILED_PRECONDITION: a call that names a host group that does not list the service, or that
+  // no group has the name of; or a call that names no group, for a service no group lists.
+  RELEASES_REFUSAL_NOT_IN_HOST_GROUP = 29;
+  // FAILED_PRECONDITION: `SetDesired` with `if_generation` and no `host_group`, for a service
+  // more than one group lists: there is no one generation to compare.
+  RELEASES_REFUSAL_AMBIGUOUS_HOST_GROUP = 30;
+  // INVALID_ARGUMENT: `SetDesired` whose `desired` sets `max_updating` or `min_up`, which a
+  // group's rollout policy holds.
+  RELEASES_REFUSAL_LIMITS_IN_HOST_GROUP = 31;
 }
 
 // Why `Services` refused a request. The token is the value's name without the prefix, in lower
@@ -273,8 +351,8 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_NOT_HELD = 7;
   // INTERNAL: the change could not be written; nothing changed, and asking again is safe.
   SERVICES_REFUSAL_STORE_FAILED = 8;
-  // NOT_FOUND: no service of the rollout file runs on the role, no host heard from has it, and
-  // no assignment names it.
+  // NOT_FOUND: no service runs on the role, no host heard from has it, and no assignment names
+  // it. A coordinator that places by host group answers `unknown_host_group` instead.
   SERVICES_REFUSAL_UNKNOWN_ROLE = 9;
   // FAILED_PRECONDITION: `SetMinVersion` above the service's desired version, which would hold
   // every host of the scope below its minimum.
@@ -282,6 +360,16 @@ enum ServicesRefusal {
   // UNAVAILABLE: the change's line could not be appended to the audit file (a full disk); nothing
   // changed, and asking again is safe once the file takes lines again.
   SERVICES_REFUSAL_AUDIT_UNAVAILABLE = 11;
+  // FAILED_PRECONDITION: `Assign` or `Unassign`: host groups place every package
+  // (`HostGroups.Put`, `HostGroups.Move`).
+  SERVICES_REFUSAL_PLACED_BY_HOST_GROUP = 12;
+  // NOT_FOUND: `SetMinVersion` or `Hold` of a role scope that no host group has the name of.
+  SERVICES_REFUSAL_UNKNOWN_HOST_GROUP = 13;
+  // FAILED_PRECONDITION: `SetMinVersion` of a role scope whose host group does not list the
+  // service.
+  SERVICES_REFUSAL_NOT_IN_HOST_GROUP = 14;
+  // NOT_FOUND: `SetRepository` of a repository the registry does not hold.
+  SERVICES_REFUSAL_REPOSITORY_UNKNOWN = 15;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.
@@ -336,13 +424,16 @@ message GetHostResponse {
 message Host {
   // From the host's certificate.
   string node_id = 1;
-  // From the host's certificate.
+  // From the host's certificate; from a coordinator that holds host groups, the name of the
+  // host's group (the same name as `host_group`), for readers that predate it.
   string role = 2;
-  // It heartbeated within the last 45 seconds.
+  // It heartbeated within the last 45 seconds; false for a host not heard since the coordinator
+  // started.
   bool live = 3;
-  // When its last heartbeat arrived.
+  // When its last heartbeat arrived; 0 for a host not heard since the coordinator started.
   uint64 last_heartbeat_unix = 4;
-  // Its last heartbeat, as it sent it.
+  // Its last heartbeat, as it sent it. For a host not heard since the coordinator started, only
+  // `agent` is set, from what the host's enrollment kept of its daemon (`running`).
   hostkeeper.agent.v1.HeartbeatRequest heartbeat = 5;
   // The labels an operator set on it.
   map<string, string> labels = 6;
@@ -379,6 +470,55 @@ message Host {
   // heartbeated since that approval. It is kept with the host's enrollment, so a restart of the
   // coordinator keeps it; the next approval of the host (a new key or a renewal) clears it.
   optional uint64 first_heartbeat_unix = 17;
+  // When the coordinator accepted the host's first heartbeat since that approval that reported a
+  // service the coordinator manages for the host (one that counts the host, not the agent
+  // itself) installed and healthy, with no update of it under way, in unix seconds by the same
+  // clock; absent until then, and when the host is not enrolled. Kept with the host's enrollment
+  // as `first_heartbeat_unix` is, and cleared by the next approval of the host.
+  optional uint64 first_serving_unix = 18;
+  // The age of the host's Sigstore trusted root, in seconds, as its last heartbeat said
+  // (`HeartbeatRequest.trusted_root_age_secs`); absent when it said none (no file of the root,
+  // or an agent that predates the field).
+  optional uint64 trusted_root_age_secs = 19;
+  // Why the host's trusted root needs attention, as its last heartbeat said
+  // (`HeartbeatRequest.trusted_root_reason`). UNSPECIFIED: unknown, the host's agent predates the
+  // field or keeps no root, or its last heartbeat came by the JSON route, which carries no
+  // trusted root.
+  hostkeeper.agent.v1.TrustedRootReason trusted_root_reason = 20;
+  // The installers the host's daemon listed in its last heartbeat over gRPC
+  // (`HeartbeatRequest.installers`), which the coordinator picks the host's entry of a release
+  // by. Empty when the coordinator has read none since it started: the daemon predates the field
+  // or has beaten only over the JSON route.
+  repeated string installers = 21;
+  // Each service the host's daemon said it runs (a service it reported `absent` is left out),
+  // by service name, from the last heartbeat the coordinator took it from. For a host not heard
+  // since the coordinator started, what the host's enrollment kept of it; empty when it kept
+  // nothing. The daemon's own version is `heartbeat.agent.version`.
+  repeated RunningService running = 22;
+  // When the coordinator accepted the heartbeat `running` was taken from, in unix seconds by the
+  // same clock as `last_heartbeat_unix`; absent when nothing is known of what the host runs. For
+  // a host not heard since the coordinator started, the time of the heartbeat that last changed
+  // what its enrollment kept (a heartbeat that says the same writes nothing).
+  optional uint64 running_unix = 23;
+  // The package repositories the coordinator sends the host, and what its daemon reported of
+  // them. Absent for a host whose daemon has not announced `repositories-v1` since the
+  // coordinator started (a Mac's never does).
+  optional HostRepositories repositories = 24;
+  // The host group the host is in, kept with its enrollment; empty from a coordinator that does
+  // not hold host groups.
+  string host_group = 25;
+}
+
+// One service a host runs, as its daemon said in a heartbeat (packages-native.md section 10.6).
+message RunningService {
+  string service = 1;
+  // The version it reported.
+  string version = 2;
+  // The installer it runs it with: the name the daemon gave (`ServiceBeat.installer`);
+  // `hostkeeper-archive` when it gave none or its daemon does not announce `target-v1`. Empty
+  // when not known: a `target-v1` daemon whose installers the coordinator has not read over
+  // gRPC since it started, and nothing kept of the host.
+  string installer = 3;
 }
 
 // A host taken out of a service.
@@ -484,6 +624,33 @@ enum GateReason {
   GATE_REASON_BELOW_MIN_UP = 29;
   // Other services' rollouts are live, as many as the coordinator's `--live-rollouts` lets be.
   GATE_REASON_ROLLOUT_ELSEWHERE = 30;
+  // The desired version was set with targets and none for the host's platform: the host is not
+  // ordered the version, keeps what it runs, and this is no failed update and no missing host.
+  GATE_REASON_NO_TARGET = 31;
+  // The desired version's list for the host's platform has no entry whose installer the host's
+  // daemon lists (`Host.installers`), and the host does not run the service: no build for this
+  // host. Not ordered, not failed, not missing, and it does not hold the convergence.
+  GATE_REASON_NO_BUILD_FOR_HOST = 32;
+  // The host runs the service with an installer the desired version's list has no entry of, or
+  // that its daemon no longer lists: it is not ordered the version, since a service changes its
+  // installer on a host only by an uninstall, or by the move to native packages
+  // (docs/design/packages-native.md section 10.6: from `hostkeeper-archive` to a native entry its
+  // daemon lists, and back to the archive entry of a lower version whose list has no native
+  // entry). Not failed, and `Convergence.installer_dropped` names it.
+  GATE_REASON_INSTALLER_DROPPED = 33;
+  // From a coordinator that holds host groups: a package listed before this one in the host's
+  // group is not installed on the host yet and can be, so the install waits and takes no place in
+  // its plan (docs/design/hostgroups.md section 1.4).
+  GATE_REASON_INSTALL_ORDER = 34;
+  // From a coordinator that holds host groups: the host was moved into its group and its move has
+  // not started or is not over. Until the new group's plans admit it for every package it must
+  // install or change, it is ordered nothing; once admitted, its installs and updates wait for its
+  // uninstalls (docs/design/hostgroups.md section 5).
+  GATE_REASON_MOVING = 35;
+  // From a coordinator that holds host groups: the uninstall of a package waits while a package
+  // whose uninstall goes before it, because the group listed it after this one, is still on the
+  // host, so a config package goes before its service (docs/design/hostgroups.md section 1.4).
+  GATE_REASON_UNINSTALL_ORDER = 36;
 }
 
 // Whether a service counts a host.
@@ -550,6 +717,19 @@ message AbortResponse {
   AuditEntry entry = 2;
 }
 
+message ClearRecordRequest {
+  // The host, heard from since the coordinator started.
+  string node_id = 1;
+  // The service whose step record the host sets aside; one the coordinator manages.
+  string service = 2;
+}
+
+message ClearRecordResponse {
+  // The id of the `clear_record` order (`clear-record-<n>`, the number of its `record_cleared`
+  // audit entry), which the host's verdict names (`UpdateResult.order_id`).
+  string order_id = 1;
+}
+
 message RetireRequest {
   // The host id the host was enrolled as.
   string node_id = 1;
@@ -571,11 +751,13 @@ message DesiredState {
   string version = 1;
   // Per role, how many hosts of the role may hold an update slot of the service at once, within
   // a stage of its update plan; 0 holds the role: none of its hosts is ordered. A role not named
-  // takes its default (1; 2 for `daemon` and `mac-daemon`).
+  // takes its default (1; 2 for `daemon` and `mac-daemon`). Deprecated: a coordinator that holds
+  // host groups refuses a set with it (`limits_in_host_group`); the group's policy holds it.
   map<string, uint32> max_updating = 2;
   // The fewest live hosts of each role that must stay up while others update: a host is not
   // ordered when that would leave fewer. A role not named needs none. A service's definition may
-  // require roles here (`kbf` requires `storage` and `frontend`).
+  // require roles here (`kbf` requires `storage` and `frontend`). Deprecated: refused as
+  // `max_updating` is.
   map<string, uint32> min_up = 3;
   // The digest of the one package CI registered for this version (64 lower-case hex characters),
   // which every order of this version names, whatever the host's platform. Absent when the
@@ -600,7 +782,7 @@ message SetDesiredRequest {
   optional string write_id = 4;
   // The digest of the package CI registers for `desired.version` (64 lower-case hex characters),
   // the one package every host is ordered whatever its platform: for a fleet of one platform.
-  // Refused with `release_index` (`index_invalid`).
+  // Refused with `release_index` or with `targets` (`index_invalid`).
   optional string package_digest = 5;
   // The release index of `desired.version` (`index.json`, design section 5.5), byte for byte:
   // per platform, the package file, its size and its SHA-256. The coordinator checks that its
@@ -612,6 +794,21 @@ message SetDesiredRequest {
   // The SHA-256 of `release_index` (64 lower-case hex characters), as CI's release job wrote
   // it down when it published the index: the release this desired state names.
   optional string release_index_digest = 7;
+  // The release of `desired.version`, by platform (`linux-x86_64`, `linux-arm64`,
+  // `macos-arm64`, and no other key): for each, the artifacts in CI's order of preference, one
+  // per installer (docs/design/packages.md section 3). A platform with no list is left out; on
+  // the JSON gateway a key whose value is `null` is dropped first. Checked by the rules of the
+  // release (`target_invalid`). With `release_index`, the index lists exactly the platforms whose
+  // list holds a `hostkeeper-archive` entry, each with that entry's size and digest
+  // (`index_invalid`). The version is kept as this release, and set again only with the same
+  // targets and index (`release_exists`); the desired state is stored with neither a package
+  // digest nor an index digest. Every set with targets is audited, CI's as `ci`.
+  map<string, hostkeeper.release.v1.TargetList> targets = 8;
+  // The host group to set the version in. From a coordinator that holds host groups: the group
+  // must list the service (`not_in_host_group`); empty: in each group that lists the service (each group a token
+  // limited to groups may deploy to), one deployment and one audit entry per group, in one
+  // change; `if_generation` is then taken only when one group lists it (`ambiguous_host_group`).
+  string host_group = 9;
 }
 
 message SetDesiredResponse {
@@ -620,6 +817,7 @@ message SetDesiredResponse {
   // How the store records the service's writes now.
   WriteRecord record = 2;
   // The roles whose limits were dropped because the service does not run on them, sorted.
+  // Always empty from a coordinator that holds host groups.
   repeated string dropped_roles = 3;
 }
 
@@ -641,10 +839,65 @@ message Replaced {
 
 message ConvergeRequest {
   string service = 1;
+  // The host group. From a coordinator that holds host groups: empty for every group that lists
+  // the service and has a desired version of it, converged when all are.
+  string host_group = 2;
+}
+
+message GetReleaseRequest {
+  // The service; empty names the legacy service, as for `Converge`.
+  string service = 1;
+  // The version, as it was set.
+  string version = 2;
+  // The host group. From a coordinator that holds host groups: a named group must list the
+  // service (`not_in_host_group`); empty for none.
+  string host_group = 3;
+}
+
+message GetReleaseResponse {
+  // The targets the version was set with, each platform's entries in the order set.
+  map<string, hostkeeper.release.v1.TargetList> targets = 1;
+  // The SHA-256 of the release index set with them; absent when the set carried none.
+  optional string release_index_digest = 2;
 }
 
 message ConvergeResponse {
   Convergence convergence = 1;
+}
+
+message WaitConvergedRequest {
+  // The service; empty names the legacy service, as for `Converge`.
+  string service = 1;
+  // The version the caller set; any other desired version ends the wait as SUPERSEDED.
+  string version = 2;
+  // How long to hold the call, 1 to 1800 seconds.
+  uint32 wait_secs = 3;
+  // The host group. From a coordinator that holds host groups: empty for every group that lists
+  // the service and has a desired version of it, converged when all are (a group with no hosts
+  // is converged).
+  string host_group = 4;
+}
+
+message WaitConvergedResponse {
+  WaitOutcome outcome = 1;
+  // As `Converge` answers it at the end of the wait.
+  Convergence convergence = 2;
+}
+
+// What ended a `WaitConverged` call. A state of BLOCKED or IN_PROGRESS keeps the call waiting.
+enum WaitOutcome {
+  WAIT_OUTCOME_UNSPECIFIED = 0;
+  // The service's state is CONVERGED on the version.
+  WAIT_OUTCOME_CONVERGED = 1;
+  // The service is halted.
+  WAIT_OUTCOME_HALTED = 2;
+  // The service's desired version is not the version.
+  WAIT_OUTCOME_SUPERSEDED = 3;
+  // `wait_secs` passed first.
+  WAIT_OUTCOME_DEADLINE = 4;
+  // From a coordinator that holds host groups: no group the call reaches has a desired version
+  // of the service, answered at once.
+  WAIT_OUTCOME_NO_DESIRED = 5;
 }
 
 // How far a service's hosts are from its desired version.
@@ -667,6 +920,9 @@ message Convergence {
   WriteRecord record = 8;
   // The force that stands, if one does.
   ForceRecord force = 9;
+  // The hosts that run the service with an installer the desired version's list has no entry
+  // of, or that their daemon no longer lists (`GATE_REASON_INSTALLER_DROPPED`), by node id.
+  repeated string installer_dropped = 10;
 }
 
 enum ConvergenceState {
@@ -684,6 +940,7 @@ enum ConvergenceState {
 
 // The live hosts of one role, and the silent ones.
 message RoleCounts {
+  // The role; from a coordinator that holds host groups, the name of the hosts' group.
   string role = 1;
   // Live and running the desired version.
   uint32 at_desired = 2;
@@ -709,6 +966,13 @@ message HostCounts {
   uint32 unmanaged = 4;
   // Live, and declined the desired version for now. Also counted in `roles`.
   uint32 deferred = 5;
+  // For a desired version set with targets: the hosts of the service picked an entry of it, and
+  // those picked none, by why (`GateReason` 31 to 33). Hosts picked none are not counted in
+  // `roles`; a version no host is picked for is not converged.
+  uint32 picked = 6;
+  uint32 no_target = 7;
+  uint32 no_build_for_host = 8;
+  uint32 installer_dropped = 9;
 }
 
 // Fix a service on every targeted host at once, with no hook, because a broken hook is often
@@ -747,6 +1011,11 @@ message ForceRequest {
   }
   // Order the held pairs among the targets too, for this call only.
   bool include_held = 7;
+  // The host group whose desired version the force sets. From a coordinator that holds host
+  // groups: `hosts` must be in it (`unknown_target`), `fleet` is the whole group, and a `role`
+  // must name it; empty: one force per group, in one change (the groups of the `hosts`, or each
+  // group that lists the service, or the `role`'s).
+  string host_group = 8;
 }
 
 // Every host that runs the service.
@@ -777,7 +1046,9 @@ message ForceResponse {
 message SkippedHost {
   string node_id = 1;
   // Why, as a token: `daemon_too_old` (its daemon did not announce `forced-v1`), `held`,
-  // `unknown_target`. Open: a later coordinator adds reasons.
+  // `unknown_target`, `no_package_for_platform`, and for a version set with targets `no_target`,
+  // `no_build_for_host` and `installer_dropped` (as `GateReason` says them). Open: a later
+  // coordinator adds reasons.
   string reason = 2;
 }
 
@@ -847,6 +1118,9 @@ message ServiceStatus {
   ServiceMarks marks = 7;
   // The update plan for the desired version; absent when none was ever set.
   RolloutPlan plan = 8;
+  // The host group: one entry per (group, service) from a coordinator that holds host groups;
+  // empty from one that does not.
+  string host_group = 9;
 }
 
 // One host as one service sees it, with the host's own report of the service.
@@ -924,7 +1198,8 @@ message HoldScope {
   oneof scope {
     // One host, by node id.
     string host = 1;
-    // Every host of a role, those that join it later included.
+    // Every host of a role, those that join it later included; from a coordinator that holds
+    // host groups, the hosts of the group of that name.
     string role = 2;
     // Every host.
     WholeFleet fleet = 3;
@@ -964,15 +1239,23 @@ message ServiceEntry {
   repeated HoldMark holds = 4;
   // The desired version; absent when CI has set none.
   optional string desired_version = 5;
-  // The roles it is assigned to: the rollout file's, with the operator's role assignments on top.
+  // The roles it is assigned to, with the operator's role assignments on top. Deprecated: empty
+  // from a coordinator that places by host group (see `host_groups`).
   repeated string roles = 6;
-  // The operator's assignments of the service, by role and by host.
+  // The operator's assignments of the service, by role and by host. Deprecated: empty from a
+  // coordinator that holds host groups.
   repeated Assignment assignments = 7;
   // Each host of `hosts`, with what it last reported, the minimum version that applies to it and
   // the holds that hold it.
   repeated AssignedHost assigned = 8;
   // The hosts ordered to uninstall the service, until each reports it gone.
   repeated string uninstalling = 9;
+  // The package repository of the registry (`Repositories`) its hosts install it from, as
+  // `SetRepository` set it: `komira` when none is set.
+  string repository = 10;
+  // The host groups that list the service, by name; empty from a coordinator that does not hold
+  // host groups.
+  repeated string host_groups = 11;
 }
 
 // An operator's assignment of a service, to a role or a host, or its removal from one.
@@ -981,8 +1264,7 @@ message Assignment {
     string role = 1;
     string host = 2;
   }
-  // The service is taken off the scope (that the rollout file or a role assigns it) rather than
-  // assigned to it.
+  // The service is taken off the scope (that a role assigns it) rather than assigned to it.
   bool removed = 3;
 }
 
@@ -992,8 +1274,8 @@ message AssignedHost {
   string role = 2;
   // The version installed, as the host last reported it; absent when it does not run the service.
   optional string installed_version = 3;
-  // The minimum version that applies to the host: its own, else its role's, and never below the
-  // rollout file's; absent when there is none.
+  // The minimum version that applies to the host: its own, else its group's (its role's on a
+  // coordinator that does not place by host group); absent when there is none.
   optional string min_version = 4;
   // The operator's holds that hold the pair.
   repeated HoldMark holds = 5;
@@ -1002,6 +1284,7 @@ message AssignedHost {
 // A minimum version, for a role or a host.
 message MinVersion {
   oneof scope {
+    // A role; from a coordinator that holds host groups, the group of that name.
     string role = 1;
     string host = 2;
   }
@@ -1084,6 +1367,9 @@ message ListAuditRequest {
   // The newest `limit` matching entries after `since_seq`, oldest first, in place of the
   // oldest; `next_seq` goes on from the newest of them.
   bool newest = 8;
+  // Only entries about this host group (`AuditEntry.host_group`); a coordinator that does not
+  // hold host groups lists none.
+  optional string host_group = 9;
 }
 
 message ListAuditResponse {
@@ -1157,6 +1443,17 @@ enum AlertKind {
   // The certificate the coordinator serves its hosts expires within the coordinator's window, or
   // has expired: its renewal is failing. Log token `cert_near_expiry`.
   ALERT_KIND_CERT_NEAR_EXPIRY = 9;
+  // The coordinator's session with its database is lost: it orders nothing, refuses every change
+  // that lowers protection, and keeps the changes that raise it in memory until the session is
+  // back. Log token `store_unreachable`.
+  ALERT_KIND_STORE_UNREACHABLE = 10;
+  // The host's last heartbeat said its Sigstore trusted root needs attention: stale, missing or
+  // unparseable (`Host.trusted_root_reason`). A stale root goes on checking packages, and refuses
+  // every package signed after a Sigstore key rotation it does not hold; with a missing or
+  // unparseable one every package check fails. Listed while the host's last heartbeat says a
+  // reason; a host whose last heartbeat said nothing of its root raises none. Log token
+  // `trusted_root`.
+  ALERT_KIND_TRUSTED_ROOT = 11;
 }
 
 // How soon an `Alert` needs a person.

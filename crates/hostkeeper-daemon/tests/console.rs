@@ -25,7 +25,7 @@ use hostkeeper_enroll::{
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::StopFlag;
 use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
-use hostkeeper_placed::CommandLauncher;
+use hostkeeper_placed::{CommandLauncher, LaunchError};
 use sha2::{Digest, Sha256};
 use support::{Rig, Scratch, idle_links, open_once};
 use x509_cert::der::{Decode, Encode};
@@ -141,12 +141,12 @@ struct FakeAgetty {
 }
 
 impl CommandLauncher for FakeAgetty {
-    fn run(&self, argv: &[&str]) -> Result<(), String> {
+    fn run(&self, argv: &[&str]) -> Result<(), LaunchError> {
         let text = fs::read_to_string(&self.issue).unwrap_or_else(|e| format!("unread: {e}"));
         let argv = argv.iter().map(|arg| (*arg).to_owned()).collect();
         self.runs.lock().expect("the runs").push((argv, text));
         match self.failing.lock().expect("the failure").clone() {
-            Some(why) => Err(why),
+            Some(why) => Err(LaunchError::Failed(why)),
             None => Ok(()),
         }
     }
@@ -446,14 +446,18 @@ fn the_host_links_write_the_issue_file_and_run_the_given_agetty() {
     let root = rig.scratch.path();
     let agetty = root.join("no-agetty");
     let files = HostFiles {
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
+        repositories: None,
+        os_root: root.join("os"),
+        stores: root.join("stores.toml"),
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: Some(ConsoleFiles {
             issue: root.join("enrollment.issue"),
             agetty: agetty.clone(),
         }),
+        managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     };
     let links = host_links(
         &daemon,

@@ -382,6 +382,7 @@ fn an_unreadable_enrollment_store_is_refused_not_shown_empty() {
 /// A record as the ops file keeps it.
 fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord {
     InventoryRecord {
+        host_group: String::new(),
         host_id: host.to_owned(),
         role: String::new(),
         data_macs: data.iter().map(|m| (*m).to_owned()).collect(),
@@ -390,6 +391,9 @@ fn record(host: &str, data: &[&str], bmc: &str, serial: &str) -> InventoryRecord
         notes: String::new(),
         by: "operator".to_owned(),
         at_unix: NOW,
+        approve_until_unix: 0,
+        used: None,
+        platform: None,
     }
 }
 

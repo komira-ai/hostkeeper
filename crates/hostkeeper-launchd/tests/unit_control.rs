@@ -2,8 +2,6 @@
 //! snapshot of the placed links that `daemon_reload` compares, and that a failing `launchctl` is
 //! always an error. The launchctl behind it is the fake, and the unit directory a scratch one.
 
-use std::ffi::OsStr;
-use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 
@@ -283,8 +281,15 @@ fn regular_files_other_names_and_dangling_links_are_left_alone() {
     std::fs::write(rig.link("other-software"), "other software").expect("a regular plist");
     std::fs::write(rig.units.join("bad label.plist"), "other software").expect("a regular plist");
     symlink(rig.v1.join("notes"), rig.units.join("notes.txt")).expect("a link");
-    let odd = rig.units.join(OsStr::from_bytes(b"\xff.plist"));
-    symlink(rig.v1.join("anything"), odd).expect("a link");
+    // A name that is not UTF-8 cannot exist on macOS: APFS refuses to create it (EILSEQ).
+    #[cfg(target_os = "linux")]
+    {
+        use std::ffi::OsStr;
+        use std::os::unix::ffi::OsStrExt;
+
+        let odd = rig.units.join(OsStr::from_bytes(b"\xff.plist"));
+        symlink(rig.v1.join("anything"), odd).expect("a link");
+    }
     let ghost = "dev.hostkeeper.ghost";
     symlink(rig.v1.join("ghost-target"), rig.link(ghost)).expect("a dangling link");
     let control = rig.control(&fake);

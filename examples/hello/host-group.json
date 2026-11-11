@@ -1,0 +1,6 @@
+{ "hostGroup": { "name": "farm",
+    "packages": ["hostkeeper", "hello"],
+    "policy": { "canary": { "count": 1 },
+                "bakeBeats": 2,
+                "rollback": "ROLLBACK_MODE_AUTOMATIC",
+                "rollbackAfterFailed": { "percent": 25, "minHosts": 1 } } } }

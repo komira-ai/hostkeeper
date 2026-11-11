@@ -4,12 +4,12 @@ Status: design, for review. This document makes network install of new Linux mac
 replaces the non-goal of [hostkeeper-design.md](hostkeeper-design.md) section 2.2 ("No network boot service in
 scope") and the first item of its section 12.1 ("the operator's own, no build items here"). Both now point here. Where
 this document and hostkeeper-design.md disagree on network install, this document wins. What is built is marked
-**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9 and N12 of section 12); every other statement about
+**Built** where it is described (so far items N2, N3, N4, N5, N6, N7, N8, N9, N9b, N10, N11, N12 and N14 of section 12); every other statement about
 new code is **Designed**, and section 12 lists the build items.
 
 This revision (item N1b of section 12) amends the first: network boot early in the boot order is the expected setup, so
 a machine takes two manual steps; a router mode, in which the farm's router names the boot server, stands beside
-proxyDHCP; `linux-arm64` is in v1; and the inventory record gains an optional platform.
+proxyDHCP; `linux-arm64` is in v1; and the inventory record gains an optional platform. Where this document says `hostkeeper-pxe` as a separate binary in the deb, item N1 of [two-programs.md](two-programs.md) section 9 (section 6.1) replaces it (**Built**): the program is `pxe`, the `.deb` named `pxe` (`/usr/lib/pxe/pxe` and `pxe.service`), assigned to the boot host for the install window; its `fetch` is the `prepare` step (`pxe update-hook prepare`) and a restart is a restart of `pxe.service`.
 
 The tags are those of hostkeeper-design.md. **Built** names code on `main` with a path. **Designed** means nothing
 implements it yet. **[V]** marks a fact about software or hardware we do not own, which must be checked on the real
@@ -29,21 +29,21 @@ operator:
 1. Records the machine as an inventory record: its data MACs, its BMC MAC and serial from the chassis label, and its
    platform, `linux-x86_64` or `linux-arm64` (section 3). A Linux request is matched by its data MACs and BMC MAC; the
    serial is shown beside the claim for the person to compare, and takes no part in the match. The record is built
-   (`hostkeeper ctl enrollment add-record`, or the UI's Inventory page); its platform is a designed, additive field
-   (item N14).
+   (`hkctl enrollment add-record`, or the UI's Inventory page), its platform an additive field
+   (item N14, **Built**).
 
 The machine is then racked and powered on, as every machine is. Its firmware tries network boot, it installs Ubuntu
 24.04 and the hostkeeper deb of its platform, reboots, and its daemon posts an enrollment request. That request shows
 up in the pending list, matched to the record. The machine's console shows the key hash of the request.
 
 2. The operator compares that key hash with the one in the UI, approves the request, and the coordinator installs the
-   services assigned to the host or its role, as it does today.
+   services assigned to the host or its role, as it does today. (Superseded by [hostgroups.md](hostgroups.md): the host runs its HostGroup's packages; the record and the approval name the group.)
 
 That is two manual steps for each machine. A machine whose firmware does not try network boot before its disk needs a
 third, once: someone picks network boot in its firmware's boot menu. Three things are done once per farm: the
 coordinator runs with a LAN listener (section 7); the operator chooses how network boot is offered on the farm LAN,
-router mode or proxy mode, and sets the router up for it (section 3); and the operator runs `hostkeeper-pxe` on a host
-of the farm LAN while machines are being installed (section 3).
+router mode or proxy mode, and sets the router up for it (section 3); and the operator assigns the `pxe`
+service to a host of the farm LAN for the install window, and unassigns it after (section 3).
 
 **Why network boot first is safe.** With network boot ahead of the disk, every reboot of every machine asks the network
 first, enrolled hosts included. No enrolled, retired or pending machine is ever given an install: in proxy mode it gets
@@ -56,8 +56,9 @@ reinstall needs no one-time network boot (section 8).
 
 **What does not change.**
 
-- No Linux host is approved without a person. Q15 of hostkeeper-design.md stays at (a) in v1: an inventory match fills
-  in the host id and role, and nothing more.
+- A match approves only in one case. An exact, uncontested match of an open, unused record that names a role is approved
+  by the coordinator within the record's window, once (audited `enrollment.auto_approved`); any other match fills in the
+  form and nothing more, and a person approves it. Q15 of hostkeeper-design.md is read accordingly.
 - The image carries no secret. The host's only trust root is still `hostkeeper.toml`, and its contents are as
   hostkeeper-design.md section 4.1 gives them.
 - The six existing farm nodes are not reinstalled. They keep the bootstrap and adopt path they use today.
@@ -67,12 +68,12 @@ reinstall needs no one-time network boot (section 8).
 ## 2. The flow
 
 ```
-operator          hostkeeper-pxe          new machine                    coordinator (LAN listener)
+operator          pxe          new machine                    coordinator (LAN listener)
    | add-record (MACs, platform) --------------------------------------------> inventory
    | start ------> reads records (host_held), pending
    |                                       power on; firmware tries network boot: DHCP DISCOVER
-   |   proxy mode:  the router's DHCP gives the address; hostkeeper-pxe's proxy offer gives the boot file
-   |   router mode: the router's DHCP gives the address and names hostkeeper-pxe and its boot file
+   |   proxy mode:  the router's DHCP gives the address; pxe's proxy offer gives the boot file
+   |   router mode: the router's DHCP gives the address and names pxe and its boot file
    |              <- TFTP: shim and GRUB of the machine's architecture, grub.cfg, the menu of its MAC
    |              <- HTTP: kernel, initrd, ISO, seed, deb of its platform
    |                                       autoinstall: disk, Ubuntu, hostkeeper deb, config
@@ -86,28 +87,29 @@ operator          hostkeeper-pxe          new machine                    coordin
 
 ## 3. Who serves network boot
 
-**Recommendation: a separate, optional binary, `hostkeeper-pxe`.** It is a read-only TFTP and HTTP file server and, in
-proxy mode, a proxyDHCP server. It runs only while the operator runs it, in the foreground; its packages enable no
-unit. It installs only the machines the operator recorded. It keeps no durable state: what it learns in a run (below)
-is in memory, and it reads the inventory from the coordinator each time.
+**Recommendation: a separate, optional service, `pxe`.** It is a read-only TFTP and HTTP file server and, in
+proxy mode, a proxyDHCP server. It is the `pxe` service package (two-programs.md section 6.1): the daemon installs it
+on the boot host when the operator assigns it, `pxe.service` runs `pxe serve`, and unassigning it with an uninstall
+removes it; the deb and the rpm carry no `pxe`. It runs only for the install window. It installs only the machines the
+operator recorded. It keeps no durable state: what it learns in a run (below) is in memory, and it reads the inventory from the coordinator each time.
 
 **Two modes, one rule.** How a firmware learns the boot server's address and file name differs by network, so
-`hostkeeper-pxe` has two modes, chosen by the flag `--mode proxy|router`. It has no default: the wrong mode either
+`pxe` has two modes, chosen by the flag `--mode proxy|router`. It has no default: the wrong mode either
 answers nothing or is dropped by the switches (below), so the operator names the one the farm LAN is set up for.
 
-- **Router mode, for a farm LAN whose router the operator sets.** The router's DHCP names `hostkeeper-pxe`'s address
+- **Router mode, for a farm LAN whose router the operator sets.** The router's DHCP names `pxe`'s address
   as the boot server and one fixed file name, `hostkeeper/boot.efi`, in every answer to a network-boot client. On a
   UniFi router this is the network's "Network Boot" setting, a server address and a file name **[V]**: where it is,
   whether it fills the `siaddr` and `file` fields or options 66 and 67, and that it applies to every client of the
-  network. `hostkeeper-pxe` sends no DHCP packet in this mode. Every PXE client of the LAN then loads the signed shim
+  network. `pxe` sends no DHCP packet in this mode. Every PXE client of the LAN then loads the signed shim
   and GRUB from it, enrolled hosts and machines nobody recorded included, and GRUB reads a boot menu made for its MAC
   (section 4). The menu of a MAC that may be installed has the install entry. The menu of every other MAC has one
   entry, which boots the local disk. The safety rule therefore moves from the DHCP answer to the boot menu. This is the
   mode for the farm's new lab, whose router is UniFi.
 - **Proxy mode, for a LAN whose router is left as it is.** A proxyDHCP server (PXE specification 2.1) never gives an
   address. The router keeps its DHCP and names no boot file. When a firmware's DHCPDISCOVER says it is a network-boot
-  client (vendor class `PXEClient` or `HTTPClient`) of an architecture `hostkeeper-pxe` has a boot set for (below), and
-  its MAC may be installed, `hostkeeper-pxe` sends a second offer. That offer carries no address (`yiaddr` 0). It echoes
+  client (vendor class `PXEClient` or `HTTPClient`) of an architecture `pxe` has a boot set for (below), and
+  its MAC may be installed, `pxe` sends a second offer. That offer carries no address (`yiaddr` 0). It echoes
   the vendor class (option 60), carries the PXE vendor options (option 43, with discovery control set so the client uses
   the boot file of the offer), and names the boot file (option 67): the TFTP name of the shim of that architecture for
   `PXEClient`, an `http://` URL for `HTTPClient`. A PXE client that then sends its DHCPREQUEST to the proxy on UDP 4011
@@ -119,17 +121,18 @@ answers nothing or is dropped by the switches (below), so the operator names the
 
 **DHCP guarding.** A UniFi network can drop DHCP server messages from any address but the trusted DHCP servers ("DHCP
 Guarding") **[V]**: its name, where it is set, and that it is on by default. A proxy offer is a DHCP server message from
-UDP 67, so with guarding on it is dropped and the machine boots its disk as if `hostkeeper-pxe` were not running. The
-runbook (item N12) therefore either adds the `hostkeeper-pxe` host's address to the trusted servers, or uses router
-mode, in which `hostkeeper-pxe` sends no DHCP message for guarding to drop. Router mode needs no change to guarding.
+UDP 67, so with guarding on it is dropped and the machine boots its disk as if `pxe` were not running. The
+runbook (item N12) therefore either adds the `pxe` host's address to the trusted servers, or uses router
+mode, in which `pxe` sends no DHCP message for guarding to drop. Router mode needs no change to guarding.
 
-**Which machines may be installed: the answer set.** At start, and again before each answer, `hostkeeper-pxe` reads
+**Which machines may be installed: the answer set.** At start, and again before each answer, `pxe` reads
 through the operator API the inventory (`Enrollment.ListRecords`) and the pending requests (`Enrollment.List`). A MAC is
-in the answer set when it is a data MAC of a record that is not enrolled, whose `host_held` is `NONE`, that no pending
-request matches, and whose platform agrees with the firmware's (below). Only a MAC in the set gets the proxy offer, in
+in the answer set when it is a data MAC of a record that is not enrolled, whose `host_held` is `NONE`, whose
+approval window is open (`InventoryRecord.state` is `OPEN`: `CLOSED`, `USED` and `UNSPECIFIED`, a coordinator before
+windows, leave it out), that no pending request matches, and whose platform agrees with the firmware's (below). Only a MAC in the set gets the proxy offer, in
 proxy mode, or the install entry, in router mode. A machine that is enrolled, retired, or installed and waiting for
 approval therefore boots its disk whenever it boots the network first. Without that rule, every such machine would be
-wiped at its next reboot while `hostkeeper-pxe` runs, which matters more now that network boot early in the boot order
+wiped at its next reboot while `pxe` runs, which matters more now that network boot early in the boot order
 is the expected setup (section 1). The `enrolled` mark of a record alone is not enough: it is false for a retired host
 and for a machine whose request waits for approval. Reinstall of a known host is a separate, named opt-in (section 8).
 
@@ -138,23 +141,21 @@ coordinator's durable enrollment store holds for the record's host id, read from
 (no host by that id), `APPROVED` (a host approved as the id and not denied), `DENIED` (`Hosts.Retire` denied the id and
 its retirement is not final yet) or `RETIRED` (denied and final), and `UNSPECIFIED` from a coordinator of a release
 before the field or one without enrollment. Only `NONE` admits a record; every other value, `UNSPECIFIED` included,
-leaves it out, so a coordinator that has not said installs nothing. `Hosts.List` cannot carry the rule: it lists only
-the hosts heard from since the coordinator started, and a retired host is refused at its heartbeat, so after a
-coordinator restart a retired host, or an approved host that has not yet sent a heartbeat, is not listed, and its
-record would look free to install. `host_held` is the same before and after a restart, and the same for a host never
-heard from as for one heartbeating.
+leaves it out, so a coordinator that has not said installs nothing. `Hosts.List` cannot carry the rule: it lists the
+hosts heard from since the coordinator started and the enrolled hosts that are not denied, and a retired host is
+refused at its heartbeat, so after a coordinator restart a retired host is not listed, and its
+record would look free to install. `host_held` is the same before and after a restart, and the same for a host never heard from as for one heartbeating.
 
 **A failed read fails closed.** The answer set is made from the reads taken for that answer, never from an earlier
 run's or an earlier answer's. When either of the two reads fails (the private listener does not answer, the token is
 refused, or an answer does not parse), the answer set for that answer is empty: no proxy offer in proxy mode, the
-local-disk menu in router mode. `hostkeeper-pxe` logs the failure, and the machine's next network boot reads again. A
-coordinator that cannot be read therefore never causes an install, and an enrolled host is never installed from a
-stale list.
+local-disk menu in router mode. `pxe` logs the failure, and the machine's next network boot reads again. A
+coordinator that cannot be read therefore never causes an install, and an enrolled host is never installed from a stale list.
 
-**A MAC leaves the answer set when its install starts.** Once a machine has fetched its seed, `hostkeeper-pxe` takes
+**A MAC leaves the answer set when its install starts.** Once a machine has fetched its seed, `pxe` takes
 its MAC out of the set for the rest of the run, so the reboot after the install boots the disk: no proxy offer in proxy
 mode, the local-disk menu in router mode. Curtin also puts the installed disk first in the UEFI boot order (section 1).
-A machine whose install failed is booted again by restarting `hostkeeper-pxe`.
+A machine whose install failed is booted again by restarting `pxe.service`.
 
 **The architecture, and the record's platform.** Each sealed directory holds one boot set per platform the operator
 fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
@@ -164,30 +165,29 @@ fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
   UEFI HTTP boot. 7 is registered as EFI byte code, but x86-64 UEFI firmware commonly sends it, so it is taken as
   x86-64 **[V]**: which value each board model sends, which the runbook records (item N12). Every other value (0, legacy
   BIOS; 10, 32-bit ARM UEFI; the rest) is a platform this design does not install, and gets no proxy offer. In proxy
-  mode `hostkeeper-pxe` reads option 93 from the DISCOVER it answers. In router mode it does not answer DHCP, but it
+  mode `pxe` reads option 93 from the DISCOVER it answers. In router mode it does not answer DHCP, but it
   still listens on UDP 67. A client's DISCOVER and its DHCPREQUEST in the selecting state are broadcasts (RFC 2131
   section 4.3.2). The REQUEST carries the client's MAC (`chaddr`) and the address the router offered (option 50), and
-  PXE 2.1 has a client send option 93 in both. So `hostkeeper-pxe` learns, for each address, the MAC of the client
+  PXE 2.1 has a client send option 93 in both. So `pxe` learns, for each address, the MAC of the client
   that took it, and its architecture: from the REQUEST's option 93, or else from the option 93 of a DISCOVER with the
   same `chaddr`. Two facts here are **[V]**: that each board model's firmware sends option 93 in those packets (the
   PXE specification is not proof of a firmware), which the runbook checks with a capture (item N12); and that the
-  farm's switches pass client broadcasts to the `hostkeeper-pxe` host with guarding on. A client whose packets carry
-  no option 93 is placed by its record's platform instead (below). GRUB states its architecture too, in the path of
-  the menu it asks for (section 4).
+  farm's switches pass client broadcasts to the `pxe` host with guarding on. A client whose packets carry
+  no option 93 is placed by its record's platform instead (below). GRUB states its architecture too, in the path of the menu it asks for (section 4).
 - **The record's platform.** The record carries an optional platform (item N14): `linux-x86_64` or `linux-arm64`. It
   chooses the boot set of the install entry, and the deb the seed installs. It is additive everywhere it appears: a new
   optional field of `InventoryRecord` and `AddRecordRequest`, typed as the existing `hostkeeper.agent.v1.Platform` with
-  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hostkeeper ctl enrollment add-record` and a
+  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hkctl enrollment add-record` and a
   field of the UI's Inventory page; and a value the coordinator's store keeps for the record, behind the store's
-  interface with the rest of the inventory (`crates/hostkeeper-coordinator/src/inventory.rs`, **Built**), so the move of
+  interface with the rest of the inventory (`crates/hostkeeper-coordinator/src/inventory.rs`, **Built**; item N14), so the move of
   that state to Postgres takes it as a column with a default. In today's file store the inventory is in the ops file,
   whose reader refuses unknown keys, so a platform there would make the release before refuse the whole file. The
   platform is therefore kept as the update plan's position is: under a new key of the halts file beside the ops file, a
   map from host id to platform, which the release before reads leniently and skips, and which the store joins back to
-  the records on reading (hostkeeper-design.md, its table of stored files). A rollback past item N14 then loses
-  only the platforms. Only the Linux platforms are accepted; a Mac's record leaves it empty.
+  the records on reading (hostkeeper-design.md, its table of stored files; **Built**: the `platforms` key, in
+  `crates/hostkeeper-coordinator/src/ops_file.rs`). A rollback past item N14 then loses only the platforms. Only the Linux platforms are accepted; a Mac's record leaves it empty.
 - **Disagreement is refused.** A record whose platform disagrees with the architecture the firmware or GRUB states is
-  left out of the answer set, and `hostkeeper-pxe` logs the record's host id with both platforms. This catches a record
+  left out of the answer set, and `pxe` logs the record's host id with both platforms. This catches a record
   typed with the wrong platform before the wrong kernel is booted on a machine's disk.
 - **A record with no platform.** In proxy mode it takes the firmware's, from option 93. In router mode it is left out
   of the answer set, and logged: the router names one file for every client, so the record is where the install's
@@ -196,7 +196,7 @@ fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
   answer set, and logged. `serve` logs at start the platforms it has.
 
 **The first file in router mode.** The router names `hostkeeper/boot.efi` for every client, and that one name must load
-the shim of the client's architecture. `hostkeeper-pxe` serves it, to a TFTP read request from an address, as the shim
+the shim of the client's architecture. `pxe` serves it, to a TFTP read request from an address, as the shim
 of the architecture it learned for that address (above), or, when the client's packets stated none, of the platform of
 the record whose data MAC the client has. An address it learned no MAC for, a MAC with neither, and an architecture with
 no boot set in the sealed directory get a TFTP error, and its firmware moves on to its next
@@ -218,8 +218,8 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   protocol ports 67, 4011 and 69, and an HTTP port, by default; router mode does not use 4011), the coordinator's
   private listener and the operator token file to read with, the verified boot directory, the seed inputs (section 4),
   and `--reinstall <host id>` (section 8).
-- **Where it runs, and as whom.** It runs on a host with a NIC on the farm LAN that can also reach the coordinator's
-  private listener (Question 3). It needs the farm LAN in both modes: in proxy mode for the DISCOVER broadcasts, in
+- **Where it runs, and as whom.** It runs on the boot host, a host that runs the hostkeeper daemon, has a NIC on the farm LAN and can
+  also reach the coordinator's private listener (Question 3). It needs the farm LAN in both modes: in proxy mode for the DISCOVER broadcasts, in
   router mode for the REQUEST broadcasts it learns architectures from. It starts as root only to bind its ports, then
   drops to an unprivileged user before it reads the token file (opened before the drop and kept as a descriptor) or
   parses a packet. Sending broadcasts needs no privilege once the socket is bound.
@@ -229,21 +229,20 @@ the packet handling, `crates/hostkeeper-pxe-packets` (item N7).
   `--dhcp-reply-to`, where a proxy offer goes, by default `255.255.255.255:68`; `--coordinator`, `--ca-file` and
   `--token-file`; `--dir`; the seed inputs; `--reinstall`; `--user-id` and `--group-id`, the user to drop to, as
   numbers, so nothing reads the account database; and `--tftp-timeout-ms`, how long a TFTP transfer waits for an
-  ACK before it sends again. The start reads the coordinator once and refuses to start when that read fails, or
+  ACK before it sends again; `--settings`, the settings file the flags above may come from, and
+  `--notify-systemd`, which makes `serve` tell systemd it is ready after its whole start. The start reads the coordinator once and refuses to start when that read fails, or
   when a `--reinstall` names no record. The fixed `grub.cfg` and the menus are served under `grub/` by HTTP as
   well as by TFTP, so a GRUB loaded by UEFI HTTP boot finds them at the same path below the server. A seed is
   served only to a MAC given its install menu in the run; its first fetch reads the answer set again and is
-  refused unless the MAC is still in it. The binary ships in the hostkeeper deb and rpm as
-  `/usr/bin/hostkeeper-pxe`, with no unit of its own. It reads `Enrollment.ListRecords` and `Enrollment.List`,
-  not `Hosts.List`, and leaves out every record whose `host_held` is not `NONE`. One fact the built code holds
-  differently from the text above, until item N14 closes it: `InventoryRecord` has no platform yet, so every
-  record reads as one with no platform, and router mode installs nothing yet.
+  refused unless the MAC is still in it. The binary is `/usr/lib/pxe/pxe` of the `pxe` .deb; its
+  settings are the root-owned `/etc/pxe/pxe.toml` (two-programs.md section 6.1). It reads `Enrollment.ListRecords` and `Enrollment.List`,
+  not `Hosts.List`, and leaves out every record whose `host_held` is not `NONE`.
 
-**The L2 requirement.** A DHCPDISCOVER and a selecting DHCPREQUEST are broadcasts. `hostkeeper-pxe` sees them only on
+**The L2 requirement.** A DHCPDISCOVER and a selecting DHCPREQUEST are broadcasts. `pxe` sees them only on
 the same broadcast domain, unless a relay forwards them; this design adds no relay. Both modes rely on the router's
 DHCP on that segment for the address. The farm has two segments:
 
-- **The farm LAN** has the router's DHCP. `hostkeeper-pxe` serves this segment. A new machine must have one NIC on it,
+- **The farm LAN** has the router's DHCP. `pxe` serves this segment. A new machine must have one NIC on it,
   and that NIC must be the one the firmware boots from.
 - **The storage network** is static, with no DHCP. Neither mode has an address to give there, so a machine that is
   only on it cannot be installed this way. That would need a full DHCP server or a relay, which is not in v1 (section
@@ -251,7 +250,7 @@ DHCP on that segment for the address. The farm has two segments:
 
 **In proxy mode the router names no boot file.** If it offers one of its own (options 66 and 67, or a `file` field),
 the firmware may prefer the router's offer, and the result depends on the firmware. A next-server address with no file
-name is harmless **[V]**. In router mode the router names `hostkeeper-pxe` and `hostkeeper/boot.efi`, and nothing else.
+name is harmless **[V]**. In router mode the router names `pxe` and `hostkeeper/boot.efi`, and nothing else.
 The runbook's first step checks which of the two the router does. This is Question 4.
 
 **Alternatives considered.**
@@ -260,8 +259,7 @@ The runbook's first step checks which of the two the router does. This is Questi
   socket rights, and a TFTP server in the farm's control plane, which runs all the time. Network install is wanted for
   a few hours when machines arrive. It would also put the coordinator on the farm LAN's broadcast domain, which ties
   where the coordinator runs to where machines are racked. The coordinator stays as simple as hostkeeper-design.md
-  section 4.3 makes it. It gains one listener (section 7), and that listener serves only the host-facing API that
-  already exists.
+  section 4.3 makes it. It gains one listener (section 7), and that listener serves only the host-facing API that already exists.
 - **A documented recipe only** (dnsmasq or the router's own options, with hostkeeper shipping only the image). This
   was rejected as the primary path. Installing only recorded, unenrolled MACs is the safety rule that keeps an enrolled
   host from being wiped, and in a recipe it is a list the operator keeps by hand. A recipe also has no code that CI can
@@ -271,34 +269,33 @@ The runbook's first step checks which of the two the router does. This is Questi
   giving addresses on one segment is an outage.
 - **The router's boot options pointing at a plain TFTP server.** This was rejected: it cannot tell enrolled machines
   from new ones, so with network boot first every enrolled host would be reinstalled at its next reboot. Router mode
-  keeps the router's options and moves that decision into `hostkeeper-pxe`'s per-MAC menu. What router mode keeps of
+  keeps the router's options and moves that decision into `pxe`'s per-MAC menu. What router mode keeps of
   the earlier objection: the router points every PXE client at the boot server for as long as the setting is on, and a
-  firmware whose network boot comes first waits for its TFTP request to fail at every boot while `hostkeeper-pxe` is
+  firmware whose network boot comes first waits for its TFTP request to fail at every boot while `pxe` is
   not running **[V]**: how long each board model waits. The runbook turns the router's setting on for the install
   window where that wait matters. CI cannot test a real UniFi router; the end-to-end test's fake router DHCP names the
   boot file the way router mode needs (section 11).
 - **Choosing the first file by the router.** A router that names a file per client architecture (by option 93) would
-  make the router-mode mapping of `hostkeeper/boot.efi` unneeded. Whether UniFi can is **[V]**; the design does not
-  need it.
+  make the router-mode mapping of `hostkeeper/boot.efi` unneeded. Whether UniFi can is **[V]**; the design does not need it.
 
 ## 4. What a bare machine boots into
 
 **Recommendation: the Ubuntu 24.04 live-server installer, driven by autoinstall, with a NoCloud seed that
-`hostkeeper-pxe` generates for each machine.** The installer writes the root file system, installs the hostkeeper
+`pxe` generates for each machine.** The installer writes the root file system, installs the hostkeeper
 deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed disk and enrolls.
 
 - **The boot chain.** The firmware loads Ubuntu's signed shim of its architecture (`shimx64.efi` or `shimaa64.efi`),
-  which loads Ubuntu's signed GRUB of the same architecture. GRUB reads a fixed `grub.cfg` from `hostkeeper-pxe`, the
+  which loads Ubuntu's signed GRUB of the same architecture. GRUB reads a fixed `grub.cfg` from `pxe`, the
   same for every machine, whose one command loads the menu of the machine's MAC: `configfile` of a path naming GRUB's
   CPU (`${grub_cpu}`) and MAC (`${net_default_mac}`) **[V]**: that Ubuntu's signed network GRUB of 24.04, for both
-  architectures, sets both and reads its `grub.cfg` from the TFTP server's `grub/` directory. `hostkeeper-pxe`
+  architectures, sets both and reads its `grub.cfg` from the TFTP server's `grub/` directory. `pxe`
   generates that menu for any well-formed MAC and either architecture, at the moment GRUB asks for it, from the answer
   set (section 3). The fixed `grub.cfg` is `configfile ${prefix}/hostkeeper/${grub_cpu}/${net_default_mac}`, so the
   menus sit beside `grub.cfg` wherever GRUB's `$prefix` puts it, and a MAC is read in any spelling the inventory reads
-  (**Built**: `crates/hostkeeper-pxe-seed/src/menu.rs`, which also chooses the menu; `hostkeeper-pxe serve` gives it the
+  (**Built**: `crates/hostkeeper-pxe-seed/src/menu.rs`, which also chooses the menu; `pxe serve` gives it the
   answer set):
   - **For a MAC in the answer set,** a single install entry and no menu wait. It loads the kernel and initrd of the
-    install's platform (section 3) with `ip=dhcp`, `url=` set to that platform's ISO on `hostkeeper-pxe`, `autoinstall`,
+    install's platform (section 3) with `ip=dhcp`, `url=` set to that platform's ISO on `pxe`, `autoinstall`,
     and `ds=nocloud;s=http://<pxe>/seed/<mac>/`. GRUB loads the kernel and initrd by HTTP, from the device
     `(http,<address>)`; an HTTP port other than 80 is written `(http,<address>:<port>)`, which needs a GRUB that reads a
     port there **[V]** for Ubuntu's signed GRUB of 24.04, so the default port, 80, names none.
@@ -317,14 +314,14 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
 - **The install is offline.** The seed turns off everything that would reach the internet: the installer's own update
   (`refresh-installer: update: false`), the apt mirror and security pockets (`apt: fallback: offline-install`, with no
   mirror), updates during install, and geoip. It installs from the ISO's package pool only. "No mirror" is written as
-  one mirror candidate, `http://<pxe>/no-mirror/`, a path `hostkeeper-pxe` never serves, so whether or not the
+  one mirror candidate, `http://<pxe>/no-mirror/`, a path `pxe` never serves, so whether or not the
   installer would take an empty candidate list, no default mirror on the internet is a candidate. Two facts here are
   **[V]**: that the 24.04 installer, finding its one candidate refused, takes the offline install rather than
   stopping; and that an offline install fetches nothing from the security pocket, so that `updates` (whose values are
   `security` and `all`, with no "off") reaches nothing. The seed names no `updates` key and no `security` mirror.
   The farm LAN does have a route out, but a fetch that depends on it would make the install depend on it; in the
   end-to-end test (section 11) there is no route out at all, so a fetch that needed one fails there.
-- **The seed** is generated by `hostkeeper-pxe` from the inventory record, the platform of the install (section 3) and
+- **The seed** is generated by `pxe` from the inventory record, the platform of the install (section 3) and
   its flags. Each output is a pure function of its inputs, and goldens pin it (section 11).
   - The host name is the record's host id.
   - Storage: the disk is chosen by `--install-disk` as an autoinstall match, in the layout `direct`. The default is the
@@ -332,19 +329,18 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
     `path=<glob>` match on that field instead. Every match also takes the smallest of the disks it matches, so a glob
     that matches several still writes one. Only that disk is written. This is Question 5, answered (a). That the
     default leaves out removable disks is **[V]**: the 24.04 match has no key for it, so a removable disk that reports
-    itself not rotational and is the smallest would be taken; the runbook's board check (item N12) lists each board
-    model's disks.
+    itself not rotational and is the smallest would be taken; the runbook's board check (item N12) lists each board model's disks.
   - One local operator account, `operator`, with its password locked, the SSH public keys given by
     `--ssh-authorized-keys` (a file of public keys; a private key block in it is refused, and so is a file with none),
     and sudo without a password, which is the only way a locked password can run as root (a reinstall's `efibootmgr
     --bootnext`, section 8). The installer installs the SSH server, with password login off.
   - The hostkeeper deb of the install's platform (`amd64` or `arm64`, both **Built** by the artifacts workflow),
-    installed into the target from `hostkeeper-pxe` by two fixed `late-commands`: fetch it to a path in the target
+    installed into the target from `pxe` by two fixed `late-commands`: fetch it to a path in the target
     (with `curl`, which the live-server system has **[V]**; without it the install fails, and nothing boots
     half-installed), then `dpkg -i` it in the target. The commands hold no logic. The deb declares no dependencies
     (packaging/linux/nfpm.yaml, **Built**), so it installs offline.
   - `/etc/hostkeeper/hostkeeper.toml`, root-owned and mode 0600. It is the daemon config given by `--daemon-config`.
-    `hostkeeper-pxe` loads that file with the daemon's own loader (`crates/hostkeeper-config`, **Built**) before it
+    `pxe` loads that file with the daemon's own loader (`crates/hostkeeper-config`, **Built**) before it
     writes a single seed, so a config the daemon would refuse is refused at the start of the run, not on 20 machines.
     The installed system's cloud-init gets it through the autoinstall `user-data` section, as base64, so it is written
     byte for byte. `cloud-init.service` runs
@@ -363,14 +359,12 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
     so the pin holds whatever list that file names. This is the farm's current node shape (below).
   - `meta-data` holds the instance id, `hostkeeper-<host id>`, and nothing else. The record's role is not in the
     seed: the coordinator gives it at approval, from the record.
-  - **Built**: `crates/hostkeeper-pxe-seed/src/seed.rs`; the paths the menus and seeds name, which `hostkeeper-pxe
-    serve` serves, are in its `layout.rs`.
+  - **Built**: `crates/hostkeeper-pxe-seed/src/seed.rs`; the paths the menus and seeds name, which `pxe serve` serves, are in its `layout.rs`.
 - **The farm's current node shape is the reference.** The six existing nodes run Ubuntu 24.04. Their cloud-init is
   pinned to a NoCloud seed baked into a prebuilt root file system, and they have no installer logs. This was checked on
   2 of the 6 nodes; the other four are likely the same but were not checked. The recipe that built that root file
   system is not in this repository. It is being traced, and the seed generator's disk layout and package set follow it
-  once it is known. A new machine installed this way looks to hostkeeper like an existing node: same OS, same seed
-  mechanism, same daemon config.
+  once it is known. A new machine installed this way looks to hostkeeper like an existing node: same OS, same seed mechanism, same daemon config.
 
 **Alternatives considered.**
 
@@ -380,7 +374,7 @@ deb, writes `hostkeeper.toml`, and reboots. The daemon starts from the installed
   recipe is found, its contents become the seed's package set and layout, not a second installer.
 - **A diskless (live) image that never installs.** This was rejected. A farm node keeps state on its disk: packages
   under `/var/lib/hostkeeper`, step records, service data. It must boot without the boot server. A diskless node would
-  depend on `hostkeeper-pxe` running all the time, which is the opposite of section 3.
+  depend on `pxe` running all the time, which is the opposite of section 3.
 - **Our own iPXE build as the network boot loader.** This was rejected for v1 (section 6): it is not signed for Secure
   Boot, so every machine would need Secure Boot turned off. It is the path to a fully verified chain later.
 
@@ -415,17 +409,18 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
      The arm64 kernel and initrd there are not those of the arm64 ISO, whose live system needs its own kernel.
    `netboot.json` is attested by the release workflow, like every release asset, with a bundle of its own
    (`netboot.json.sigstore.json`, `.github/workflows/artifacts.yml`, **Built**).
-   - `hostkeeper-pxe fetch` downloads the boot set and the hostkeeper deb of each platform into a new directory: both
-     platforms by default, or those named by `--platform` (repeatable), so a farm of one architecture does not keep an
+   - `pxe update-hook prepare` (the former `fetch`, the package's `prepare` step) downloads the boot set and the hostkeeper deb of
+     each platform into a new directory, `/var/lib/pxe/<version>`: both
+     platforms by default, or those the settings' `[prepare]` `platform` names, so a farm of one architecture does not keep an
      ISO it never serves. It verifies
      `netboot.json`'s attestation and the deb's attestation against the operator's `trusted_signers`, with the same
      verifier the daemon uses for packages (hostkeeper-design.md section 5.5). It checks every file's size and
      SHA-256 against `netboot.json` in one pass while writing it, and writes a seal. **Built**:
-     `crates/hostkeeper-pxe` (item N8). Its flags: `--release`, the `https://` directory of the release's assets
-     (a GitHub release download, whose redirects to `https://` it follows); `--dir`, the new directory;
-     `--daemon-config`, loaded with the daemon's loader, whose `[trusted_signers]` is the signer and whose
-     `bounds.attestation_timeout_secs` and `bounds.max_package_bytes` bound each check and each deb; `--platform`;
-     and `--ca-bundle`, `--gh` and `--trusted-root`, by default where the hostkeeper deb puts them. In order: it
+     `crates/hostkeeper-pxe` (item N8). Its inputs: the package's `release` parameter, the `https://` directory of the release's assets
+     (a GitHub release download, whose redirects to `https://` it follows); the new directory;
+     the `daemon-config` of `[serve]`, loaded with the daemon's loader, whose `[trusted_signers]` is the signer and whose
+     `bounds.attestation_timeout_secs` and `bounds.max_package_bytes` bound each check and each deb; `platform`;
+     and `ca-bundle`, `gh` and `trusted-root` of `[prepare]`, by default where the hostkeeper deb puts them. In order: it
      downloads `netboot.json` and its bundle and checks the attestation before it reads a pin; downloads and checks
      each platform's deb (`hostkeeper_<version>_<arch>.deb` of the version `netboot.json` names), so a bad release
      is refused before an ISO is downloaded; downloads each ISO, stopped one byte past its pinned size; and only
@@ -434,8 +429,8 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
      the 24.04.5 ISOs carry them). Each file is written under its served name, the deb as
      `deb/hostkeeper_<arch>.deb`, and the seal, `seal.json`, last: every file with its size and SHA-256, and the
      commit and ref each attestation confirmed (`crates/hostkeeper-pxe/src/seal.rs`). On any refusal the directory
-     is removed.
-   - `hostkeeper-pxe serve` checks the seal at start and refuses to start on any difference. A tampered asset, a
+     is removed and `prepare` fails, so the version that is serving keeps serving.
+   - `pxe serve` checks the seal at start and refuses to start on any difference. A tampered asset, a
      stale download or a mixed set is therefore never served. **Built**: `crates/hostkeeper-pxe/src/serve/sealed.rs`
      (item N9), which keeps each checked file open and serves it from that descriptor.
 2. **The machine fetches the files over the farm LAN**, by TFTP and plain HTTP. With Secure Boot on, the firmware
@@ -451,10 +446,9 @@ The image carries only public facts: the coordinator's LAN address, `ca_sha256`,
    console (section 7). The certificate is a 7-day host certificate. Renewal works as today (**Built**).
 
 **What the trusted signers protect.** Every package the coordinator orders after enrollment is verified on the host
-against `trusted_signers` (**Built**). The boot set and the hostkeeper deb are verified by `hostkeeper-pxe fetch`
+against `trusted_signers` (**Built**). The boot set and the hostkeeper deb are verified by `pxe prepare`
 against the same signers, before they are served. Nothing on the new machine checks the deb again before `dpkg`
-installs it: the deb is on the unverified hop between `hostkeeper-pxe` and the new machine (point 2), with the rest of
-the boot set.
+installs it: the deb is on the unverified hop between `pxe` and the new machine (point 2), with the rest of the boot set.
 
 **How the release's signer is protected.** `trusted_signers` names hostkeeper's release workflow, on its refs, on a
 hosted runner (hostkeeper-design.md section 4.1). There is no long-lived signing key: the attestation is keyless, by
@@ -483,9 +477,10 @@ x86-64.
 **What it protects, and what it does not.** With Secure Boot on, a LAN attacker cannot make the machine run a boot
 loader or kernel Canonical did not sign. They can still change the kernel command line, the initrd and the ISO (point
 2 of section 5), and so still control the install. With Secure Boot off, they control everything from the first file.
-Either way, in v1 the farm LAN must be free of an active attacker while `hostkeeper-pxe` runs. Q15 of
-hostkeeper-design.md does not rely on a trusted network: it keeps approval a person's click because a MAC is only a
-claim. That defence does not reach this case, because an attacker who controls the install controls the key hash the
+Either way, in v1 the farm LAN must be free of an active attacker while `pxe` runs. Q15 of
+hostkeeper-design.md does not rely on a trusted network: it limits automatic approval to a record the operator opened
+for a window, and keeps every other approval a person's click, because a MAC is only a claim. That defence does not
+reach this case, because an attacker who controls the install controls the key hash the
 console shows too. The residual risk is stated here as a decision for the CEO (Question 2), not hidden.
 
 **Later: a fully verified chain.** Enroll a key of the farm's own in each machine's Secure Boot `db` (by the BMC, once
@@ -499,8 +494,7 @@ section 12.1), this is also what would let Q15 move to (b).
 private listener (`--private-listen`). Enrollment has no listener of its own. `Enroll` and `Poll` are calls of
 `hostkeeper.agent.v1.Coordinator` on the heartbeat listener, which with `--enrollment-dir` lets a TLS client with no
 certificate finish the handshake. `Heartbeat` and `Renew` refuse such a caller (`crates/hostkeeper-coordinator/src/
-listen.rs`, `grpc/mod.rs`). On the farm the heartbeat listener is bound to the tailnet address, and a bare machine has
-no tailscale.
+listen.rs`, `grpc/mod.rs`). On the farm the heartbeat listener is bound to the tailnet address, and a bare machine has no tailscale.
 
 **Built: `--lan-listen <address:port>`** (`crates/hostkeeper-coordinator/src/config.rs`, test
 `crates/hostkeeper-coordinator/tests/lan_listen.rs`), a third listener. It needs `--enrollment-dir`. It is a second
@@ -576,17 +570,18 @@ thing:
   by the console's key hash. This is additive: a new field on `PendingEnrollment` and a new refusal value. A request
   that matches several records contests the requests of each.
 
-**Q15 stays (a) for Linux in v1.** None of the claims above approves anything by itself, and nothing auto-approves.
+**Q15 for Linux in v1.** None of the claims above approves anything by itself. The one automatic approval is an exact,
+uncontested match of an open, unused record that names a role: the coordinator approves it within the record's window,
+once. Any other match only fills in the form.
 
 ## 8. Reinstall of a known host
 
 The host keeps its host id, role and services. Its disk is written anew, and it gets a new key.
 
-1. The operator starts `hostkeeper-pxe` with `--reinstall <host id>` (repeatable). Only for the records of those hosts
+1. The operator names the host id in `reinstall` of `[serve]` in `/etc/pxe/pxe.toml` and restarts `pxe.service`. Only for the records of those hosts
    does it set aside the rule of section 3 that a record with a host or a pending request is left out of the answer
    set. This is a named opt-in, so a reinstall is never an accident of the boot order. The rest of the answer set's
-   rule still applies: the record's platform must agree with the firmware's, and the MAC leaves the set when its
-   install starts.
+   rule still applies: the record's platform must agree with the firmware's, and the MAC leaves the set when its install starts.
 2. The machine is booted from the network, and installs as in section 4. On a board that keeps network boot first, a
    reboot does it. Where curtin's `reorder_uefi` put the disk first (section 1), the operator picks network boot once:
    in the firmware's boot menu over the BMC's remote console, or with `efibootmgr --bootnext` on the running host before
@@ -612,34 +607,34 @@ by hand. A machine that is retired instead of reinstalled is denied by host id, 
 
 | Case | Outcome |
 |---|---|
-| A recorded machine boots while `hostkeeper-pxe` is not running, proxy mode | No proxy offer. The firmware tries its next boot device, and nothing is installed. |
-| A machine boots network first while `hostkeeper-pxe` is not running, router mode | Its TFTP request gets no reply. The firmware tries its next boot device after its own wait **[V]**, and nothing is installed (section 3). |
+| A recorded machine boots while `pxe` is not running, proxy mode | No proxy offer. The firmware tries its next boot device, and nothing is installed. |
+| A machine boots network first while `pxe` is not running, router mode | Its TFTP request gets no reply. The firmware tries its next boot device after its own wait **[V]**, and nothing is installed (section 3). |
 | An enrolled host boots network first | Not in the answer set (section 3): no answer in proxy mode, the local-disk menu in router mode, so it boots from disk. With `--reinstall` naming it, it is reinstalled. |
 | A retired host whose record is still in the inventory | Not in the answer set: its record's `host_held` is `RETIRED` (or `DENIED` until the retirement is final), read from the enrollment store, also after a coordinator restart (section 3). |
-| An approved host that has not sent a heartbeat since the coordinator started | Not in the answer set: its record's `host_held` is `APPROVED`, though `Hosts.List` does not list it (section 3). |
+| An approved host that has not sent a heartbeat since the coordinator started | Not in the answer set: its record's `host_held` is `APPROVED`, read from the store (section 3). |
 | A coordinator of a release before `host_held`, or without enrollment | Every record's `host_held` is `UNSPECIFIED`, so none is in the answer set: no proxy offer, or the local-disk menu, until the coordinator says `NONE` (section 3). |
-| An installed machine waiting for approval reboots, or `hostkeeper-pxe` is restarted meanwhile | Not in the answer set: a pending request matches its record (section 3). |
-| A machine reboots after its install, with network boot still first | Its MAC left the answer set at its seed fetch, so it boots the disk; after a restart of `hostkeeper-pxe`, a pending request or its host keeps it out. |
+| An installed machine waiting for approval reboots, or `pxe` is restarted meanwhile | Not in the answer set: a pending request matches its record (section 3). |
+| A machine reboots after its install, with network boot still first | Its MAC left the answer set at its seed fetch, so it boots the disk; after a restart of `pxe.service`, a pending request or its host keeps it out. |
 | Someone posts a request matching a record before the machine boots | That machine is not installed until the operator rejects the request; the record shows a pending request that no installing machine made. |
 | An unrecorded machine | Not in the answer set: no answer in proxy mode, the local-disk menu in router mode. |
-| The record's platform disagrees with the architecture the firmware or GRUB states | Not in the answer set; `hostkeeper-pxe` logs the host id and both platforms (section 3). |
+| The record's platform disagrees with the architecture the firmware or GRUB states | Not in the answer set; `pxe` logs the host id and both platforms (section 3). |
 | A record with no platform, router mode | Not in the answer set, and logged. In proxy mode it takes the firmware's architecture. |
 | The record's platform has no boot set in the sealed directory | Not in the answer set, and logged; `serve` names at start the platforms it has. |
 | A firmware of another architecture (legacy BIOS, 32-bit ARM) | No proxy offer. In router mode it cannot run `hostkeeper/boot.efi`, and tries its next boot device **[V]**. |
-| Router mode, a TFTP read of `hostkeeper/boot.efi` from an address whose DHCPREQUEST `hostkeeper-pxe` did not see | A TFTP error, logged with the address; the firmware tries its next boot device. |
+| Router mode, a TFTP read of `hostkeeper/boot.efi` from an address whose DHCPREQUEST `pxe` did not see | A TFTP error, logged with the address; the firmware tries its next boot device. |
 | Router mode, a board whose firmware stops at its own menu after GRUB's `exit` | The machine waits at that menu. The runbook's board check finds this before router mode is used on that board (section 4). |
-| Proxy mode, the network's DHCP guarding does not trust the `hostkeeper-pxe` host | The proxy offers are dropped, and the machine boots its disk. `hostkeeper-pxe` logs each offer it sent, and no TFTP read follows. The runbook trusts the host or uses router mode (section 3). |
+| Proxy mode, the network's DHCP guarding does not trust the `pxe` host | The proxy offers are dropped, and the machine boots its disk. `pxe` logs each offer it sent, and no TFTP read follows. The runbook trusts the host or uses router mode (section 3). |
 | Proxy mode, the router also offers a boot file | Depends on the firmware (Question 4). The runbook checks this first. |
 | A board that does not try network boot before its disk | It boots its disk, empty or not, and nothing is installed. Someone picks network boot in its firmware once (section 1). |
-| The boot set on disk differs from its seal, or was never verified | `hostkeeper-pxe serve` refuses to start, naming the file. |
-| `netboot.json` or the deb is attested by another signer, workflow or ref | `hostkeeper-pxe fetch` refuses, naming the attestation, and keeps nothing. |
-| The daemon config given to `hostkeeper-pxe` does not load | Refused at start with the daemon loader's error, before any seed is written. |
-| The install fails mid-way | The machine is not installed again in this run. Its console shows the installer's error. The operator restarts `hostkeeper-pxe` to retry. |
+| The boot set on disk differs from its seal, or was never verified | `pxe serve` refuses to start, naming the file. |
+| `netboot.json` or the deb is attested by another signer, workflow or ref | `pxe prepare` refuses, naming the attestation, and keeps nothing; the update fails and the version serving keeps serving. |
+| The daemon config given to `pxe` does not load | Refused at start with the daemon loader's error, before any seed is written. |
+| The install fails mid-way | The machine is not installed again in this run. Its console shows the installer's error. The operator restarts `pxe.service` to retry. |
 | The installed host cannot reach the LAN listener | The daemon retries, as today, and the console's issue line shows the coordinator it is trying. No request appears. |
 | The coordinator's CA is not the pinned one | Nothing is sent (`UntrustedCoordinator`, **Built**), and the issue line says so. |
 | More than `--max-pending-enrollments` requests | `pending_full`, retried every 5 s (**Built**). |
 | Two pending requests match one record | Both `contested`, and approval is refused until all but one are rejected (section 7). |
-| `hostkeeper-pxe` cannot read the coordinator when a machine boots | The answer set is empty for that boot: no proxy offer, or the local-disk menu, and the failure is logged (section 3). |
+| `pxe` cannot read the coordinator when a machine boots | The answer set is empty for that boot: no proxy offer, or the local-disk menu, and the failure is logged (section 3). |
 | A machine is on the storage network only | No DHCP to give it an address, so it cannot be installed (section 3). |
 
 ## 10. v1 scope, and later
@@ -712,7 +707,8 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   `crates/hostkeeper-enrollment/tests/held.rs`, `crates/hostkeeper-proto/tests/additions_inventory.rs`): after a
   coordinator restart, `ListRecords` says `RETIRED` for a retired host's record, `DENIED` for a denied one whose
   retirement is not final, `APPROVED` for one approved and never heard from, and `NONE` only for an id no host holds,
-  while `Hosts.List` lists none of them; `AddRecord` answers the same; a coordinator without enrollment says
+  while `Hosts.List` lists neither the retired nor the denied host, and lists the approved one not live, with no
+  heartbeat time; `AddRecord` answers the same; a coordinator without enrollment says
   `UNSPECIFIED`; a deny or host file that does not decode is refused `store_failed` for the page that holds its
   record, not answered `NONE`; and a record written before the field reads `UNSPECIFIED`, not `NONE`.
 - Boot-set verification (N8, **Built**: `crates/hostkeeper-pxe/src/fetch_tests.rs` and the reader tests beside it):
@@ -760,8 +756,10 @@ time (rule T10), are Rust (rule T11), and use the repository's scratch helpers a
   (`an_enrolled_host_heartbeats_and_renews_on_the_lan_listener_until_it_is_replaced`, **Built**).
 
 **The end-to-end proof (N10).** Rust integration tests in `crates/hostkeeper-privileged`, behind its feature
-`privileged`, in new jobs of `privileged.yml`. That workflow runs only on a push to `main` and by hand, never on a pull
-request (rule B9), and the workflow lint is extended to know the jobs and their runners.
+`privileged`, in the jobs of `net-install.yml`, a workflow of their own. It runs on a push to `main` that changes the
+network-install code (a paths filter the workflow lint holds), nightly on `main`, and by hand, never on a pull request
+(rule B9), a newer run of a branch cancelling the older; no release waits for it, as an emulated install takes hours.
+The workflow lint knows the jobs and their runners.
 
 - **x86-64, both modes (job `net-install`).** The test makes a Linux bridge with no route out, and a QEMU guest with
   OVMF UEFI firmware on it. The guest has an empty scratch disk, a fixed `-uuid` and an SMBIOS serial. Its NIC is first
@@ -771,14 +769,14 @@ request (rule B9), and the workflow lint is extended to know the jobs and their 
   as the router and the boot server are separate boxes on a real LAN (so each binds UDP 67 in its own namespace; the
   namespaces are one reason the test needs root):
   - a minimal fake of the router's DHCP, inside the test, that gives addresses and, as each step sets it, either no
-    boot file (proxy mode) or `hostkeeper-pxe`'s address and `hostkeeper/boot.efi` (router mode);
-  - the real `hostkeeper-pxe`, with a boot set the job fetched by pinned URL and SHA-256 before the test;
+    boot file (proxy mode) or `pxe`'s address and `hostkeeper/boot.efi` (router mode);
+  - the real `pxe`, with a boot set the job fetched by pinned URL and SHA-256 before the test;
   - the real coordinator, with `--lan-listen` on the bridge address.
 - It waits on progress events, never on time. Each event is a line on the guest's serial console, read as a stream, a
-  line of `hostkeeper-pxe`'s log, or an answer from `hostkeeper ctl`. Each wait ends on its event or on the guest's
+  line of `pxe`'s log, or an answer from `hkctl`. Each wait ends on its event or on the guest's
   exit, and the job's `timeout-minutes` is the only bound.
 - In order, it checks that:
-  - in proxy mode: the fake DHCP saw the guest's DISCOVER, and `hostkeeper-pxe` sent its proxy offer;
+  - in proxy mode: the fake DHCP saw the guest's DISCOVER, and `pxe` sent its proxy offer;
   - the seed was fetched;
   - the reboot after the install got no proxy offer and booted the disk;
   - a pending request appears, `matched` to the record, with claims equal to the guest's UUID and serial;
@@ -786,14 +784,49 @@ request (rule B9), and the workflow lint is extended to know the jobs and their 
   - `Approve` by that hash succeeds;
   - the first heartbeat arrives;
   - an assigned fixture service reports installed.
-  It then switches the fake DHCP and `hostkeeper-pxe` to router mode and reboots the enrolled guest: `hostkeeper-pxe`
+  It then switches the fake DHCP and `pxe` to router mode and reboots the enrolled guest: `pxe`
   serves it the shim and its local-disk menu, and its heartbeat comes back from the same disk. Last, it reinstalls the
   guest in router mode with `--reinstall` and checks the install menu, the `duplicate_claim`, the `--replace`
   approval, and that the old certificate's heartbeat is refused. Then it retires the host (`Hosts.Retire`), restarts
-  the coordinator, and network-boots the guest again without `--reinstall`: `hostkeeper-pxe` sends no answer in proxy
+  the coordinator, and network-boots the guest again without `--reinstall`: `pxe` sends no answer in proxy
   mode and serves the local-disk menu in router mode, and the guest's disk is untouched.
 - It needs `/dev/kvm` on the hosted `ubuntu-24.04` runner **[V]**. Without it, the job fails with that reason; it does
   not skip.
+- **Built** (item N10): `crates/hostkeeper-privileged/tests/net_install.rs`, test
+  `an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled_and_retired`, its rig in
+  `tests/netinstall/`, and the job `net-install` of `.github/workflows/net-install.yml`. As built:
+  - **The reinstall is in router mode**, the record stating `linux-x86_64` (`add-record --platform`, item N14): the
+    guest's REQUEST is learned, `hostkeeper/boot.efi` is served as `hostkeeper/shimx64.efi`, and the install menu and
+    seed follow; the reboot after the install gets the local-disk menu, its MAC having left the answer set (reason:
+    its seed was fetched in this run).
+  - **The boot set** is fetched by the job: the ISO by its pinned URL, `netboot.json` rendered from the committed
+    pins (`cargo xtask release netboot`), and the deb of the commit under test built as the artifacts workflow
+    builds it. The test serves them as a release from a channel on its LAN, each attested by the end-to-end rig's
+    signer, with the ISO's URL moved to that channel, and the real `pxe prepare` checks every file against
+    the pins and the attestations with the job's pinned `gh` and seals the directory that `serve` then checks.
+  - **QEMU and the firmware** are Ubuntu's packages (`qemu-system-x86` and `ovmf`), from the runner's own signed
+    archive: two apt steps, the job's only other use of `sudo`, which the workflow lint allows in the two
+    network-install jobs only, for the packages it lists for each.
+  - **The LAN**: the bridge is in a network namespace of its own, so that no firewall of the runner sees its frames;
+    the router (whose DHCP is a thread of the test, moved into the router's namespace) and `pxe` are in
+    theirs; the host's own namespace holds the coordinator's private and LAN listeners and the release channel, at
+    the LAN's `.1`. The protocol ports (67, 68, 69, 80) are fixed, each inside its own namespace. `serve` drops to the
+    owner of the build directory, the runner's user.
+  - **The fixture service** is the first-boot tests' fixture package, attested by the rig's signer. The one stand-in
+    is on the installed guest: before its approval the test gives it the release channel's CA and the signer's
+    trusted root, beside its own `gh` (the deb's), by the seed's `operator` account over SSH, and restarts the daemon
+    so that it reads the CA bundle again. A Sigstore attestation of a package built by the test cannot be made
+    without the network.
+  - **The guest** has a SCSI disk that reports itself not rotational, so the seed's default `--install-disk` (the
+    smallest SSD) takes it; `serve` runs with `--serial-console ttyS0`, so the console's issue text and the login
+    prompt are on the serial line the test reads. "The disk is untouched" is checked as: no proxy offer and no seed
+    fetched after the retirement, and the same `/etc/machine-id` before and after each boot.
+  - **What it found in `serve`**: GRUB's HTTP client matches `Content-Length: ` byte for byte, and `serve` wrote its
+    header names in lower case, so GRUB took the kernel's size as unknown and its `linux` failed with "out of
+    memory". `serve` now writes title-case header names (`crates/hostkeeper-pxe/src/serve/http.rs`, test
+    `the_size_of_a_file_is_spelt_as_grub_reads_it`).
+  - **The old certificate's heartbeat** is the JSON route of the LAN listener (`POST /v1/heartbeat`), sent by the test
+    with the certificate and key the guest held before its reinstall, read over SSH: it is refused 403 `forbidden`.
 
 **arm64 in CI (job `net-install-arm64`).** Whether the end-to-end can boot an arm64 guest depends on hardware help.
 QEMU can always emulate an arm64 guest, with the AAVMF UEFI firmware, by TCG on any runner. Without KVM, TCG
@@ -816,16 +849,25 @@ request; the job never chooses at run time, and never skips. The workflow lint l
 fallback, the full arm64 install, the deb and the enrollment are proven on the first real arm64 machine (N13), by the
 runbook, and the unit tests above cover the platform choice in every component.
 
+**Built** (item N10): the fallback. The hosted arm64 runner exposes no `/dev/kvm`: the ARM64 hosted fleet does not
+surface a nested KVM device, and GitHub closed the request for it as not planned (actions/runner-images#14062). So
+the job `net-install-arm64` runs `arm64_boots_to_seed_fetch` (`crates/hostkeeper-privileged/tests/net_install_arm64.rs`)
+on `ubuntu-24.04` under TCG, and `arm64_installs_and_enrolls` is not written. It runs in router mode, the record stating
+`linux-arm64`: it checks that the guest's REQUEST stated architecture 11, that `hostkeeper/boot.efi` was served as
+`hostkeeper/shimaa64.efi` and the arm64 shim and GRUB were served, that GRUB asked for the arm64 menu of its MAC, and
+that the seed it fetched names the `arm64` deb (the test reads the same seed again, as a MAC whose install started may). The job builds no arm64 deb: its boot set holds a stand-in deb, attested like the rest,
+which nothing fetches before the seed.
+
 **The measurement for the white paper (N11).** The two numbers are the time from power-on to approved-and-serving, and
 the number of manual steps.
 
 - The time is computed from times the components already record. No test asserts it.
-  - power-on: `hostkeeper-pxe`'s log of the first DISCOVER (proxy mode) or DHCPREQUEST (router mode) from the MAC;
+  - power-on: `pxe`'s log of the first DISCOVER (proxy mode) or DHCPREQUEST (router mode) from the MAC;
   - install started: the seed fetch;
   - pending: `first_seen_unix`, **Built**;
   - approved: `enrolled_unix`, **Built**;
   - first heartbeat: `first_heartbeat_unix`, **Built**;
-  - serving: the first assigned service reported installed and healthy.
+  - serving: the first assigned service reported installed and healthy, `first_serving_unix`, **Built** (N11).
 - `cargo xtask netinstall-report` reads these and prints each interval, with the person's wait (pending to approved)
   apart from the machine's time. It is a pure function of its inputs, tested with fixed inputs, and reads no clock. An
   event that never happened is printed "not reached", never as zero.
@@ -835,6 +877,16 @@ the number of manual steps.
   board that does not boot network first, and three per farm. The first real machine records them. For comparison, the
   steps of today's hand install of a node are counted from its current runbook at the same time. No count is quoted
   before then.
+- **Built** (item N11): `cargo xtask netinstall-report` (`crates/xtask/src/netinstall_report.rs`), run by the job
+  `net-install`, which keeps the report as the artifact `net-install-report`. Its inputs are `serve`'s standard error,
+  `enrollment list --output json` taken while the request was pending (a request leaves that list at its approval),
+  and `hosts get` once the host serves. No component recorded serving, so the coordinator now does:
+  `Host.first_serving_unix`, its first heartbeat since the approval that reported a service it manages for the host
+  (present, not the agent itself) healthy with no update under way, kept with the host's enrollment behind the
+  `Records` port as `first_heartbeat_unix` is, and cleared by an approval. So every event but power-on and the
+  install's start is by the coordinator's clock; an interval that ends before it starts prints `out of order`.
+  `net_install.rs` keeps the files of the guest's first install beside `hostkeeper-pxe.log`; the runbook's "Measure
+  the first machine" is the real machine's procedure.
 
 ## 12. Tasks
 
@@ -851,14 +903,14 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N5 | `packaging/netboot/pins.toml` and `netboot.json` with a boot set for each of `linux-x86_64` and `linux-arm64` (ISO, shim, signed network GRUB, kernel, initrd), built and attested in the artifacts workflow | N1b | M |
 | N6 | Seed and menu generator: a pure crate turning a record, its platform, a daemon config and flags into the fixed `grub.cfg`, the install and local-disk menus of a MAC, autoinstall `user-data` and `meta-data`, with goldens for each platform | N1b | M |
 | N7 | proxyDHCP, router-mode learning and TFTP packet handling: a pure crate, no sockets, no inventory; architectures 7, 9, 11, 16 and 19; the router-mode `hostkeeper/boot.efi` by learned architecture. **Built**: `crates/hostkeeper-pxe-packets` | N1b | M |
-| N8 | `hostkeeper-pxe fetch`: download both platforms' boot sets and debs (or those `--platform` names), verify against the release attestation and `netboot.json`, seal | N5 | M |
-| N9 | `hostkeeper-pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records (their `host_held`, N9b) and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released as a binary with no enabled unit | N6, N7, N8, N14 | M |
+| N8 | `pxe update-hook prepare`: download both platforms' boot sets and debs (or those `--platform` names), verify against the release attestation and `netboot.json`, seal | N5 | M |
+| N9 | `pxe serve`: `--mode` (proxy or router), sockets and privilege drop, the answer set from records (their `host_held`, N9b) and pending requests and its platform rule, the MAC leaving the set at its seed fetch, `--reinstall`, the per-MAC menus, HTTP and TFTP from the sealed directory, the seal check; released in the `pxe` `.deb` with its unit | N6, N7, N8, N14 | M |
 | N9b | `InventoryRecord.host_held`: what the enrollment store holds for the record's host id (`NONE`, `APPROVED`, `DENIED`, `RETIRED`; `UNSPECIFIED` without a store), read by host id in `Enrollment.ListRecords` and `Enrollment.AddRecord`; the tests of section 11 | N1b | S |
 | N10 | Privileged end-to-end: the `net-install` job (x86-64, proxy mode then router mode) and the `net-install-arm64` job with the one arm64 test the hosted runners allow (section 11), and the workflow lint | N2, N3, N9 | M |
-| N11 | `cargo xtask netinstall-report`, and the report artifact of N10 | N10 | S |
-| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hostkeeper ctl` and `hostkeeper-pxe` lines a test parses with each program's parser | N9 | S |
+| N11 | `cargo xtask netinstall-report`, and the report artifact of N10. **Built**: `crates/xtask/src/netinstall_report.rs`, the artifact `net-install-report` | N10 | S |
+| N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hkctl` lines and settings files a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
-| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11 | N1b | S |
+| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built"). **Built**: `platform` on `InventoryRecord` and `AddRecordRequest` (`crates/hostkeeper-proto/proto/hostkeeper/operator/v1/enrollment.proto`), `crates/hostkeeper-coordinator/src/inventory.rs` and the `platforms` key of the halts file in `ops_file.rs`, the ctl's `--platform` (generated from the descriptor), `ui/pages/inventory.js`, the record platforms read by `crates/hostkeeper-pxe/src/serve/` | N1b | S |
 
 N2, N3, N4, N5, N6, N7 and N14 are independent and can be built in parallel. N10 checks a first install
 (`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged). The
@@ -889,27 +941,26 @@ API stays off the LAN.
 
 **Question 2. May the farm LAN be trusted against an active attacker during an install window?** In v1 nothing on the
 new machine verifies the initrd, the ISO or the seed (sections 5 and 6), so an attacker who can answer DHCP or
-intercept traffic on the farm LAN while `hostkeeper-pxe` runs can install a system of their choosing. The machine's
+intercept traffic on the farm LAN while `pxe` runs can install a system of their choosing. The machine's
 console then shows that system's key hash, and the person approves it. The real hardware's claims are all correct.
 
-- (a) **Accept it for v1**, with the files verified at `hostkeeper-pxe`, Canonical's signed chain under Secure Boot
-  where it is on, `hostkeeper-pxe` running only for the window, and the console key-hash check.
+- (a) **Accept it for v1**, with the files verified at `pxe`, Canonical's signed chain under Secure Boot
+  where it is on, `pxe` running only for the window, and the console key-hash check.
 - (b) Build the fully verified chain of section 6 first. That needs the farm's own Secure Boot keys enrolled in every
   machine, which needs BMC control or a person at each firmware screen.
 
 Recommendation: (a) for v1, and (b) as the item after BMC control. The same LAN already serves every node its address
-by unauthenticated DHCP, and an attacker on it can already disturb every node. Note that Q15 (a) does not cover this
-case: a person's approval protects against a forged request, not against an install the attacker controls.
+by unauthenticated DHCP, and an attacker on it can already disturb every node. Note that Q15 as built (a person's approval, or a record's one-time window) does not cover this
+case: approval protects against a forged request, not against an install the attacker controls.
 
-**Question 3. What credential does `hostkeeper-pxe` read the inventory with, and where does it run?** It needs the
+**Question 3. What credential does `pxe` read the inventory with, and where does it run?** It needs the
 records (each with its `host_held`) and pending requests (section 3), from the coordinator's private listener, and it must sit on the farm
 LAN. The coordinator's tokens either operate or do not; there are no per-token grants (hostkeeper-design.md section
 4.3).
 
-- (a) An operator token from a root-only file. `hostkeeper-pxe` runs on the coordinator's own host, which then needs a
-  NIC on the farm LAN; this is a property of that host, not of the coordinator, and the coordinator still serves no
-  boot. It may instead run on another farm-LAN host that reaches the private listener, at the cost of a copy of the
-  token there. What an attacker gains from that process: a full operator credential. It parses untrusted packets only
+- (a) An operator token from a root-only file. `pxe` runs on the boot host, which needs a NIC on the farm LAN and holds the token file;
+  the coordinator's own host may be the boot host, and the coordinator still serves no boot. On another farm-LAN host
+  that reaches the private listener, the cost is a copy of the token there. What an attacker gains from that process: a full operator credential. It parses untrusted packets only
   after dropping privileges (section 3), but the token is in its memory.
 - (b) No token: the operator passes the MACs as flags or a file. That is a second list, kept by hand, with the
   enrolled-host safety rule of section 3 left to the operator.
@@ -921,11 +972,11 @@ packet-parsing process, (c) is the fix, and it is small: one token flag for read
 
 **Question 4. Which segment, and how does the farm's router take part in network boot?** Recommendation: new machines
 are installed from a NIC on the farm LAN, not the storage network (section 3). On the new lab's UniFi router, router
-mode: the network's "Network Boot" names the `hostkeeper-pxe` host and `hostkeeper/boot.efi` **[V]**, and DHCP
+mode: the network's "Network Boot" names the `pxe` host and `hostkeeper/boot.efi` **[V]**, and DHCP
 guarding is left as it is. On a router that is not ours to set, proxy mode: the runbook's first step confirms that the
 router offers no boot file name (options 66 and 67, or the `file` field), and, with DHCP guarding on, that the
-`hostkeeper-pxe` host is a trusted DHCP server. If the router offers a boot file of its own, that is switched off on
-the router once; it is not worked around in `hostkeeper-pxe`. Only the CEO can see and change the router's settings.
+`pxe` host is a trusted DHCP server. If the router offers a boot file of its own, that is switched off on
+the router once; it is not worked around in `pxe`. Only the CEO can see and change the router's settings.
 
 **Question 5. Which disk does the installer take by default?** The installer wipes the disk it matches on any machine
 the operator recorded. Options:

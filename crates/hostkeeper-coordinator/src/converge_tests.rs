@@ -3,13 +3,13 @@ use std::time::Duration;
 use hostkeeper_wire::RoleName;
 use hostkeeper_wire::wire::{Heartbeat, Outcome};
 
-use crate::converge::{Convergence, RoleCounts, State, converge_service, role_counts};
+use crate::converge::{Convergence, RoleCounts, State};
 use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::services::{ServiceDef, Services};
 use crate::testutil::{
-    LEGACY, OPERATOR, Rig, beat, converge, desired, fleet, id, last, role, secs, unhealthy,
-    updating,
+    LEGACY, OPERATOR, Rig, beat, converge, converge_service, desired, fleet, id, last, role,
+    role_counts, secs, unhealthy, updating,
 };
 
 const NOW: u64 = 1_000;
@@ -407,7 +407,7 @@ async fn status_lists_roles_in_the_legacy_order() {
             role,
         };
         rig.coordinator
-            .heartbeat(who, beat("2.0"))
+            .heartbeat_native(who, beat("2.0"))
             .expect("answered");
     }
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");

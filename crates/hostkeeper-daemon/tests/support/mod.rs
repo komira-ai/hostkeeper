@@ -3,20 +3,24 @@
 //! pipe.
 #![allow(dead_code, reason = "each test binary uses part of the shared support")]
 
+pub mod apt;
+pub mod coordinated;
 pub mod force;
+pub mod pki;
 pub mod selfupdate;
+pub mod typed;
+pub mod versions;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
 
 use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::ServiceName;
 use hostkeeper_daemon::boot::BootReport;
-use hostkeeper_daemon::cli::DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS;
 use hostkeeper_daemon::links::{Links, MakeEnroller};
 use hostkeeper_daemon::prune::NoLockPoint;
 use hostkeeper_daemon::start::Settings;
@@ -39,14 +43,10 @@ use hostkeeper_placed::testing::{Event, FakeUnitControl, FaultFs, Log as PlacedL
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Force, ForceRollback, Install, Order, Uninstall, Update, order,
 };
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::record::{Loaded, Record, State};
 use hostkeeper_steps::{
     AdditiveCall, CrashPoint, Finished, LaunchError, RecordStore, StepCall, StepExit, StepLauncher,
 };
-use hyper_util::rt::TokioIo;
-use tokio::io::DuplexStream;
-use tonic::transport::{Channel, Endpoint, Uri};
 
 /// Links whose loops never run: both are left unstarted on a dispatcher nobody runs, for a test
 /// that serves the daemon and is not about its loops.
@@ -147,6 +147,7 @@ pub fn update(service: &str, version: &str, package_digest: &str, order_try: u64
         order_id: format!("order-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Update(Update {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -161,6 +162,7 @@ pub fn install(service: &str, version: &str, package_digest: &str, order_try: u6
         order_id: format!("install-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Install(Install {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -190,6 +192,7 @@ pub fn force_rollback(service: &str, version: &str, package_digest: &str, order_
         order_id: format!("rollback-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::ForceRollback(ForceRollback {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -210,6 +213,7 @@ pub fn force(
         order_id: format!("force-{service}-{version}"),
         r#try: order_try,
         verb: Some(order::Verb::Force(Force {
+            target: None,
             service: service.to_owned(),
             version: version.to_owned(),
             package_digest: package_digest.to_owned(),
@@ -250,10 +254,14 @@ pub struct Rig {
     pub state: PathBuf,
     pub packages: PathBuf,
     pub config: PathBuf,
-    pub socket: PathBuf,
+    /// The run directory the settings name (nothing is ever bound in it).
+    pub run_dir: PathBuf,
     pub clock: Arc<FakeClock>,
     pub launcher: Arc<ScriptedLauncher>,
-    pub store: Arc<FakePackages>,
+    /// Native version directories of the rig's packages directory.
+    pub store: Arc<versions::Versions>,
+    /// The package store the daemon fetches a `.pkg` by its pin from.
+    pub pins: Arc<FakePackages>,
     /// The service manager; its calls are in [`Rig::placed_log`].
     pub units: Arc<FakeUnitControl>,
     /// The writes of placed-path linking and the calls of the service manager, in order.
@@ -299,10 +307,11 @@ impl Rig {
         );
         Rig {
             state: root.join("state"),
-            store: FakePackages::new(&packages),
+            store: versions::Versions::new(&packages),
+            pins: FakePackages::new(&packages),
             packages,
             config,
-            socket: root.join("r").join("a.sock"),
+            run_dir: root.join("run"),
             clock: FakeClock::new(),
             launcher: ScriptedLauncher::new(),
             units: Arc::new(FakeUnitControl::new(placed_log.clone())),
@@ -319,8 +328,9 @@ impl Rig {
 
     pub fn ports(&self) -> Ports {
         Ports {
+            announcement: Default::default(),
             launcher: self.launcher.clone(),
-            packages: self.store.clone(),
+            packages: self.pins.clone(),
             clock: self.clock.clone(),
             deadman_poll_secs: None,
             units: self.units.clone(),
@@ -331,7 +341,20 @@ impl Rig {
             prune: Arc::new(NoPrune),
             force_lock_point: Arc::new(NoLockPoint),
             observer: Arc::clone(&self.observer),
+            repository: self.repository_ports(Default::default()),
         }
+    }
+
+    /// The repository installer's ports on the rig's host, with the entries `repositories`.
+    pub fn repository_ports(
+        &self,
+        repositories: hostkeeper_install::repository::Repositories,
+    ) -> Arc<hostkeeper_daemon::repository::RepositoryPorts> {
+        hostkeeper_daemon::testing::repository_ports(
+            &self.packages,
+            self.scratch.path(),
+            repositories,
+        )
     }
 
     /// A daemon on the rig's directories whose placement goes through `fs` and `units`, with no
@@ -392,7 +415,13 @@ impl Rig {
         Dirs {
             state: self.state.clone(),
             packages: self.packages.clone(),
+            facts: self.facts_file(),
         }
+    }
+
+    /// The host's facts file of the rig: beside its packages directory, as on a host.
+    pub fn facts_file(&self) -> PathBuf {
+        self.packages.with_file_name("facts.json")
     }
 
     /// A daemon on the rig's directories, with no dead-men.
@@ -405,9 +434,9 @@ impl Rig {
             config: self.config.clone(),
             state_dir: self.state.clone(),
             packages_dir: self.packages.clone(),
-            admin_socket: self.socket.clone(),
+            facts_file: self.facts_file(),
+            run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
-            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
         }
     }
 
@@ -540,6 +569,11 @@ impl Rig {
         fs::symlink_metadata(self.host(path)).is_ok()
     }
 
+    /// Where `placed.json` is on disk.
+    pub fn placed_record_path(&self) -> PathBuf {
+        self.host(roots().placed_file())
+    }
+
     /// `placed.json` as it is on disk.
     pub fn placed_record(&self) -> hostkeeper_placed::PlacedRecord {
         hostkeeper_placed::Store::new(&*self.placed_fs, roots().state_dir())
@@ -659,35 +693,6 @@ pub fn snapshot(dir: &Path) -> Vec<(PathBuf, String)> {
     }
     out.sort();
     out
-}
-
-/// Serves `daemon`'s admin service on one in-process connection from `peer`, as the admin socket
-/// does: the client's end, and the count of the bytes the server read. Needs a tokio runtime.
-pub fn admin_from(
-    daemon: Arc<Daemon>,
-    peer: hostkeeper_daemon::admin::Peer,
-) -> (AdminClient<Channel>, Arc<std::sync::atomic::AtomicUsize>) {
-    use tokio_stream::StreamExt;
-    let (near, far) = tokio::io::duplex(64 * 1024);
-    let (counted, read) = hostkeeper_daemon::testing::Counted::new(far);
-    let incoming = tokio_stream::iter([Ok((counted, peer))]).chain(tokio_stream::pending());
-    tokio::spawn(hostkeeper_daemon::admin::serve(daemon, incoming));
-    (client(near), read)
-}
-
-/// A client of the admin service over `io`, the other end of an in-process pipe.
-pub fn client(io: DuplexStream) -> AdminClient<Channel> {
-    let slot = Arc::new(Mutex::new(Some(io)));
-    let connector = tower::service_fn(move |_: Uri| {
-        let io = slot.lock().expect("the slot").take();
-        async move {
-            io.map(TokioIo::new)
-                .ok_or_else(|| std::io::Error::other("the pipe was used"))
-        }
-    });
-    let channel =
-        Endpoint::from_static("http://admin.invalid").connect_with_connector_lazy(connector);
-    AdminClient::new(channel)
 }
 
 /// A step launcher that puts a mark in the placed log for each step it runs (`run cutover`, and

@@ -148,7 +148,7 @@ fn the_host_stop_ends_at_sigterm() {
         .build()
         .expect("a runtime");
     runtime.block_on(async {
-        let mut stop = (ServePorts::host().stop)();
+        let mut stop = (ServePorts::host(None).stop)();
         assert!(futures::poll!(&mut stop).is_pending());
         rustix::process::kill_process(rustix::process::getpid(), rustix::process::Signal::TERM)
             .expect("a signal to this process");
@@ -226,7 +226,7 @@ fn a_head_of_a_seed_is_not_its_fetch() {
     run.wait("install linux-x86_64 as host new-1");
     let head = http(run.http, "HEAD", &format!("/seed/{RECORDED}/meta-data"));
     assert_eq!(head.status, 200);
-    assert!(head.head.contains("content-length: 30"), "{}", head.head);
+    assert!(head.head.contains("Content-Length: 30"), "{}", head.head);
     assert_eq!(head.body, b"");
     firmware
         .send_to(

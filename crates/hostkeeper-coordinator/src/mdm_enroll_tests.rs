@@ -14,7 +14,8 @@ use hostkeeper_enrollment::fs::RealFs;
 use hostkeeper_enrollment::names::Role;
 use hostkeeper_mdm_gate::enroll::{TICK, run};
 use hostkeeper_mdm_gate::{
-    DeviceRecord, DeviceStore, FileDeviceStore, Phase, ProfileAnswer, ProfileCommand,
+    ConfigProfile, DaemonProfile, DeviceRecord, DeviceStore, FileDeviceStore, Phase, ProfileAnswer,
+    ProfileCommand,
 };
 use hostkeeper_proto::hostkeeper::agent::v1::EnrollState;
 use hostkeeper_testkit::Scratch;
@@ -30,7 +31,7 @@ use crate::enrollment::tests::support::{
 };
 use crate::enrollment::{GATE_AUDITOR, MacAllowlist, MacPolicy, os_random};
 use crate::mdm::tests::{devices_dir, flags_in, record};
-use crate::mdm::{Mdm, MdmError, MdmFlags};
+use crate::mdm::{Devices, Mdm, MdmError, MdmFlags};
 use crate::testutil::scratch;
 
 /// The platform UUID [`mac_request`] claims: the device's UDID, and its enrollment id.
@@ -181,8 +182,16 @@ fn side_flags(dir: &Scratch, url: &str) -> MdmFlags {
     }
 }
 
-/// The Mac's device record: enrolled and supervised since `since`, its config profile
-/// acknowledged, so the next profile the gate sends it is its nonce's.
+/// The digest of the settings of the config profile [`side_flags`] gives the gate: the daemon
+/// config alone.
+fn config_digest() -> String {
+    ConfigProfile::new(DaemonProfile::from_toml(CONFIG).expect("the loader accepts it"))
+        .settings_sha256()
+}
+
+/// The Mac's device record: enrolled and supervised since `since`, its config profile with the
+/// settings of [`side_flags`] acknowledged, so the next profile the gate sends it is its
+/// nonce's.
 fn ready(since: u64, enrollment: u32) -> DeviceRecord {
     let mut record = record(PLATFORM_UUID, Some(SERIAL), Phase::Enrolled, Some(true));
     record.enrolled_since_unix = Some(since);
@@ -194,6 +203,7 @@ fn ready(since: u64, enrollment: u32) -> DeviceRecord {
             acknowledged: true,
             at_unix: since,
         }),
+        settings_sha256: Some(config_digest()),
     });
     record
 }
@@ -214,7 +224,7 @@ fn gate_and_enrollment(
     }
     let mdm = Mdm::open(
         &side_flags(dir, &hub.url),
-        dir.path(),
+        Devices::Files(dir.path()),
         Arc::clone(clock) as _,
         os_random(),
     )
@@ -368,7 +378,13 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
     let dir = scratch("mdm-enroll-flags");
     let good = side_flags(&dir, "http://127.0.0.1:9004");
     let open = |flags: &MdmFlags| {
-        Mdm::open(flags, dir.path(), FixedClock::at(NOW), os_random()).expect_err("refused")
+        Mdm::open(
+            flags,
+            Devices::Files(dir.path()),
+            FixedClock::at(NOW),
+            os_random(),
+        )
+        .expect_err("refused")
     };
 
     let flags = MdmFlags {
@@ -408,14 +424,19 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
     // nothing, and its record is unchanged. Without the side, attaching does nothing.
     let store = FileDeviceStore::open(Arc::new(RealFs), &devices_dir(&dir)).expect("a store");
     store.save(&ready(NOW, 1)).expect("saved");
-    let mdm = Mdm::open(&good, dir.path(), FixedClock::at(NOW), os_random())
-        .expect("opens")
-        .expect("a gate");
+    let mdm = Mdm::open(
+        &good,
+        Devices::Files(dir.path()),
+        FixedClock::at(NOW),
+        os_random(),
+    )
+    .expect("opens")
+    .expect("a gate");
     mdm.gate.tick().await;
     assert_eq!(mdm.gate.records(), [ready(NOW, 1)]);
     let without = Mdm::open(
         &flags_in(&dir),
-        dir.path(),
+        Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
     )
@@ -440,6 +461,7 @@ fn approve_at(rig: &Rig, key: &HostKey, host: &str, at: u64) {
                 role: Role::parse("build").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
             &ApprovalRecord {
                 approver: "operator".to_owned(),
@@ -524,5 +546,165 @@ fn the_enrollment_answers_the_gate_from_its_store() {
     assert_eq!(
         refused.to_string(),
         "a Mac serial is 1 to 64 ASCII letters and digits"
+    );
+}
+
+/// A stores file the daemon's loader accepts.
+const STORES: &str =
+    "[[store]]\nname = \"lan\"\nkind = \"https\"\nbase = \"https://mirror.example/\"\n";
+
+/// A signers file the daemon's loader accepts.
+const SIGNERS: &str =
+    "signers = [\"ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12ab12\"]\n";
+
+/// Catches: a stores or signers file that cannot be read, that the daemon's loader refuses (an
+/// unknown key, no signer), or that names a credential file taken at start; a refusal that names
+/// neither its flag nor the reason; a good pair refused.
+#[tokio::test]
+async fn the_start_refuses_a_stores_or_signers_file_the_loaders_refuse() {
+    let dir = scratch("mdm-enroll-stores-flags");
+    let good = side_flags(&dir, "http://127.0.0.1:9004");
+    let write = |name: &str, text: &str| {
+        let path = dir.path().join(name);
+        std::fs::write(&path, text).expect("written");
+        path
+    };
+    let open = |flags: &MdmFlags| {
+        Mdm::open(
+            flags,
+            Devices::Files(dir.path()),
+            FixedClock::at(NOW),
+            os_random(),
+        )
+    };
+    let stores = |text: &str| MdmFlags {
+        mdm_stores: Some(write("stores.toml", text)),
+        ..good.clone()
+    };
+    let signers = |text: &str| MdmFlags {
+        mdm_macos_pkg: Some(write("macos-pkg.toml", text)),
+        ..good.clone()
+    };
+
+    let missing = dir.path().join("no-such.toml");
+    for (flag, flags) in [
+        (
+            "--mdm-stores",
+            MdmFlags {
+                mdm_stores: Some(missing.clone()),
+                ..good.clone()
+            },
+        ),
+        (
+            "--mdm-macos-pkg",
+            MdmFlags {
+                mdm_macos_pkg: Some(missing.clone()),
+                ..good.clone()
+            },
+        ),
+    ] {
+        let error = open(&flags).expect_err("refused");
+        assert!(matches!(error, MdmError::ConfigRead { .. }), "{error}");
+        assert!(
+            error
+                .to_string()
+                .starts_with(&format!("{flag} {}: ", missing.display())),
+            "{error}"
+        );
+    }
+
+    let error = open(&stores(&STORES.replace("kind", "type"))).expect_err("refused");
+    assert!(matches!(error, MdmError::Stores(_)), "{error}");
+    assert!(error.to_string().starts_with("--mdm-stores: "), "{error}");
+    let credential = format!("{STORES}bearer_file = \"/etc/hostkeeper/stores/lan.token\"\n");
+    let error = open(&stores(&credential)).expect_err("refused");
+    assert_eq!(
+        error.to_string(),
+        "--mdm-stores: store \"lan\" names a credential file (basic_auth_file or bearer_file): a profile carries no secret, and the file is not on the Mac"
+    );
+    let error = open(&signers("signers = []\n")).expect_err("refused");
+    assert!(matches!(error, MdmError::MacosPkg(_)), "{error}");
+    assert_eq!(
+        error.to_string(),
+        "--mdm-macos-pkg: the signers names no signer"
+    );
+
+    let both = MdmFlags {
+        mdm_stores: Some(write("stores.toml", STORES)),
+        mdm_macos_pkg: Some(write("macos-pkg.toml", SIGNERS)),
+        ..good
+    };
+    assert!(open(&both).expect("the gate opens").is_some());
+}
+
+/// Catches: the stores and signers files not reaching the profile the gate sends (the flags read
+/// and checked and then dropped), a Mac whose acknowledged profile has older settings not sent
+/// the new one, or sent it again at the next look while it is unanswered.
+#[tokio::test]
+async fn a_mac_with_older_settings_is_sent_the_profile_with_the_stores_and_signers_once() {
+    let hub = Hub::start().await;
+    let dir = scratch("mdm-enroll-stores-resend");
+    let clock = FixedClock::at(NOW);
+    std::fs::write(dir.path().join("stores.toml"), STORES).expect("written");
+    std::fs::write(dir.path().join("macos-pkg.toml"), SIGNERS).expect("written");
+    let store = FileDeviceStore::open(Arc::new(RealFs), &devices_dir(&dir)).expect("a store");
+    store.save(&ready(NOW, 1)).expect("saved");
+    let mdm = Mdm::open(
+        &MdmFlags {
+            mdm_stores: Some(dir.path().join("stores.toml")),
+            mdm_macos_pkg: Some(dir.path().join("macos-pkg.toml")),
+            ..side_flags(&dir, &hub.url)
+        },
+        Devices::Files(dir.path()),
+        Arc::clone(&clock) as _,
+        os_random(),
+    )
+    .expect("the gate opens")
+    .expect("the flags name a gate");
+    let policy = MacPolicy {
+        device_state: Mdm::device_state(Some(&mdm)),
+        allowlist: MacAllowlist::parse(ALLOWED).expect("an allowlist"),
+    };
+    let rig = Rig::configured(
+        "mdm-enroll-stores-rig",
+        Arc::new(RealFs),
+        os_random(),
+        |e| e.with_mac(policy),
+    );
+    mdm.attach(&rig.enrollment);
+
+    mdm.gate.tick().await;
+    hub.heard(1).await;
+    mdm.gate.tick().await;
+    let commands = hub.commands();
+    assert_eq!(commands.len(), 1, "once, however many looks");
+    assert_eq!(
+        commands[0]["RequestType"].as_string(),
+        Some("InstallProfile")
+    );
+    let payload = commands[0]["Payload"].as_data().expect("a Payload");
+    let profile = Value::from_reader(std::io::Cursor::new(payload))
+        .expect("a profile")
+        .into_dictionary()
+        .expect("a dictionary");
+    assert_eq!(
+        profile["PayloadIdentifier"].as_string(),
+        Some("com.example.hostkeeper.mdm.config")
+    );
+    let domains = profile["PayloadContent"].as_array().expect("payloads")[0]
+        .as_dictionary()
+        .expect("a payload")["PayloadContent"]
+        .as_dictionary()
+        .expect("domains")
+        .keys()
+        .cloned()
+        .collect::<Vec<_>>();
+    assert_eq!(
+        domains,
+        [
+            "dev.hostkeeper.config",
+            "dev.hostkeeper.stores",
+            "dev.hostkeeper.macos-pkg"
+        ]
     );
 }

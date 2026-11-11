@@ -40,7 +40,7 @@ async fn ci_sets_a_defined_service_and_kbf_is_unchanged() {
     rig.at(2_000);
     let reply = rig
         .coordinator
-        .heartbeat(who("d1", role("daemon")), beat("1.0"))
+        .heartbeat_native(who("d1", role("daemon")), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(reply, update("2.0"));
     let unknown = OTHER.replace("other", "unknown");
@@ -89,6 +89,7 @@ fn service_beat(running: &str) -> hostkeeper_wire::wire::ServiceBeat {
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }
 }
 
@@ -130,23 +131,23 @@ async fn a_new_updater_is_ordered_a_service_and_its_beat_is_recorded() {
     let rig = services_rig("svc-wire-order").await;
     let c = &rig.coordinator;
     assert_eq!(
-        c.heartbeat(who("d1", role("daemon")), new_beat("2.0", "1.0"))
+        c.heartbeat_native(who("d1", role("daemon")), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         update_of("other", "3.0")
     );
     let mut busy = new_beat("2.0", "1.0");
     busy.services.as_mut().expect("services")[0].updating = Some(version("3.0"));
-    c.heartbeat(who("d1", role("daemon")), busy)
+    c.heartbeat_native(who("d1", role("daemon")), busy)
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(who("d2", role("daemon")), new_beat("2.0", "1.0"))
+        c.heartbeat_native(who("d2", role("daemon")), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         hostkeeper_wire::wire::ServiceReply::Nothing
     );
-    c.heartbeat(who("d1", role("daemon")), new_beat("2.0", "3.0"))
+    c.heartbeat_native(who("d1", role("daemon")), new_beat("2.0", "3.0"))
         .expect("a heartbeat");
     assert_eq!(
-        c.heartbeat(who("d2", role("daemon")), new_beat("2.0", "1.0"))
+        c.heartbeat_native(who("d2", role("daemon")), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         update_of("other", "3.0")
     );
@@ -161,18 +162,18 @@ async fn kbf_is_ordered_before_a_service_and_one_order_per_reply() {
     let c = &rig.coordinator;
     let host = || who("d1", role("daemon"));
     assert_eq!(
-        c.heartbeat(host(), new_beat("1.0", "1.0"))
+        c.heartbeat_native(host(), new_beat("1.0", "1.0"))
             .expect("a heartbeat"),
         update("2.0")
     );
     assert_eq!(
-        c.heartbeat(host(), new_beat("1.0", "1.0"))
+        c.heartbeat_native(host(), new_beat("1.0", "1.0"))
             .expect("a heartbeat"),
         update("2.0"),
         "asked again before it reports, it is told the same"
     );
     assert_eq!(
-        c.heartbeat(host(), new_beat("2.0", "1.0"))
+        c.heartbeat_native(host(), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         update_of("other", "3.0")
     );
@@ -188,30 +189,31 @@ async fn only_an_updater_that_announced_a_service_is_ordered_it() {
     let c = &rig.coordinator;
     let host = || who("d1", role("daemon"));
     assert_eq!(
-        c.heartbeat(host(), new_beat("2.0", "1.0"))
+        c.heartbeat_native(host(), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         update_of("other", "3.0")
     );
     assert_eq!(
-        c.heartbeat(who("d3", role("daemon")), beat("2.0"))
+        c.heartbeat_native(who("d3", role("daemon")), beat("2.0"))
             .expect("a heartbeat"),
         hostkeeper_wire::wire::ServiceReply::Nothing,
         "an old updater is a kbf-only host"
     );
     assert_eq!(
-        c.heartbeat(host(), beat("2.0")).expect("a heartbeat"),
+        c.heartbeat_native(host(), beat("2.0"))
+            .expect("a heartbeat"),
         hostkeeper_wire::wire::ServiceReply::Nothing,
         "the latest beat says what the host is: it announces nothing now"
     );
     let mut stray = new_beat("2.0", "1.0");
     stray.services.as_mut().expect("services")[0].name = "unheard-of".to_owned();
     assert_eq!(
-        c.heartbeat(who("d4", role("daemon")), stray)
+        c.heartbeat_native(who("d4", role("daemon")), stray)
             .expect("a heartbeat"),
         hostkeeper_wire::wire::ServiceReply::Nothing
     );
     assert_eq!(
-        c.heartbeat(who("s1", role("storage")), new_beat("2.0", "1.0"))
+        c.heartbeat_native(who("s1", role("storage")), new_beat("2.0", "1.0"))
             .expect("a heartbeat"),
         hostkeeper_wire::wire::ServiceReply::Nothing,
         "other does not run on storage hosts"
@@ -315,9 +317,9 @@ async fn a_second_services_convergence_and_status_come_from_its_own_hosts() {
             .await
             .expect("read")
     };
-    c.heartbeat(who("d1", role("daemon")), new_beat("2.0", "3.0"))
+    c.heartbeat_native(who("d1", role("daemon")), new_beat("2.0", "3.0"))
         .expect("a heartbeat");
-    c.heartbeat(who("d2", role("daemon")), new_beat("2.0", "1.0"))
+    c.heartbeat_native(who("d2", role("daemon")), new_beat("2.0", "1.0"))
         .expect("a heartbeat");
     let kbf = read("kbf").await;
     assert_eq!(kbf.state, State::Converged);
@@ -326,7 +328,7 @@ async fn a_second_services_convergence_and_status_come_from_its_own_hosts() {
     assert_eq!(other.state, State::InProgress);
     assert_eq!(other.desired.expect("desired").as_str(), "3.0");
     assert_eq!(other.roles[0].at_desired, 1);
-    c.heartbeat(who("d2", role("daemon")), new_beat("2.0", "3.0"))
+    c.heartbeat_native(who("d2", role("daemon")), new_beat("2.0", "3.0"))
         .expect("a heartbeat");
     assert_eq!(read("other").await.state, State::Converged);
 
@@ -444,7 +446,7 @@ fn without_a_legacy_service_a_heartbeat_listing_no_services_is_refused() {
     rig.at(2_000);
     let c = &rig.coordinator;
     assert_eq!(c.legacy_service(), None);
-    let refused = c.heartbeat(who("d1", role("daemon")), beat("1.0"));
+    let refused = c.heartbeat_native(who("d1", role("daemon")), beat("1.0"));
     assert!(matches!(refused, Err(HeartbeatRefused)));
     assert_eq!(
         HeartbeatRefused.to_string(),
@@ -457,10 +459,10 @@ fn without_a_legacy_service_a_heartbeat_listing_no_services_is_refused() {
     let mut empty = beat("1.0");
     empty.services = Some(Vec::new());
     let answer = c
-        .heartbeat(who("d1", role("daemon")), empty)
+        .heartbeat_native(who("d1", role("daemon")), empty)
         .expect("an empty list is a list");
     assert_eq!(answer.reply, hostkeeper_wire::wire::ServiceReply::Nothing);
-    c.heartbeat(who("d2", role("daemon")), lists_other("1.0"))
+    c.heartbeat_native(who("d2", role("daemon")), lists_other("1.0"))
         .expect("a heartbeat that lists a service");
     let status = c.status(Some(OPERATOR)).expect("status");
     assert!(status.hosts.is_empty(), "the top level is nobody's");
@@ -537,9 +539,9 @@ fn the_status_shows_the_agent_of_each_host() {
         name: AgentName::parse("hostkeeper-updater").expect("an agent name"),
         version: version("0.3.1"),
     });
-    c.heartbeat(who("d1", role("daemon")), beat("1.0"))
+    c.heartbeat_native(who("d1", role("daemon")), beat("1.0"))
         .expect("a heartbeat");
-    c.heartbeat(who("d2", role("daemon")), named)
+    c.heartbeat_native(who("d2", role("daemon")), named)
         .expect("a heartbeat");
     let status = c.status(Some(OPERATOR)).expect("status");
     assert_eq!(status.hosts[0].agent.name, LEGACY_AGENT_NAME);
@@ -574,9 +576,9 @@ fn the_status_follows_the_latest_agent_of_a_host() {
         name: AgentName::parse("hostkeeper-updater").expect("an agent name"),
         version: version("0.3.1"),
     });
-    c.heartbeat(who("d1", role("daemon")), named)
+    c.heartbeat_native(who("d1", role("daemon")), named)
         .expect("a heartbeat");
-    c.heartbeat(who("d1", role("daemon")), beat("1.0"))
+    c.heartbeat_native(who("d1", role("daemon")), beat("1.0"))
         .expect("a heartbeat");
     let status = c.status(Some(OPERATOR)).expect("status");
     assert_eq!(status.hosts[0].agent.name, "kbf-updater");

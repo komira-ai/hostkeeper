@@ -92,6 +92,7 @@ fn the_files_read_at_the_start_are_refused_with_their_rule() {
         now: Arc::new(|| NOW),
         sink: Arc::new(|line| panic!("logged {line}")),
         stop: Box::new(|| Box::pin(async {})),
+        notify_socket: None,
     };
     assert_eq!(
         serve_with(&flags, me + 1, ports),
@@ -310,7 +311,7 @@ fn router_mode_binds_no_proxy_socket() {
 /// Catches a log stamped with a fixed or zero time on a host.
 #[test]
 fn the_host_ports_stamp_by_the_system_clock() {
-    let ports = ServePorts::host();
+    let ports = ServePorts::host(None);
     assert!((ports.now)() > 1_788_220_800);
     (ports.sink)("a line of the host ports' test");
 }

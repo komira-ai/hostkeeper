@@ -7,8 +7,8 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostsRefusal, MdmRefusal, ReleasesRefusal,
-    RolloutsRefusal, ServicesRefusal,
+    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal, HostsRefusal, MdmRefusal,
+    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
 };
 use tonic::{Code, Status};
 
@@ -34,6 +34,7 @@ pub(crate) fn hosts(refusal: HostsRefusal) -> Status {
         HostsRefusal::UnknownService | HostsRefusal::UnknownHost => Code::NotFound,
         HostsRefusal::Capacity => Code::ResourceExhausted,
         HostsRefusal::AuditUnavailable => Code::Unavailable,
+        HostsRefusal::DaemonTooOld => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOSTS_REFUSAL_")
 }
@@ -49,8 +50,11 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::ConfirmMismatch
         | ReleasesRefusal::UnknownTarget
         | ReleasesRefusal::IndexDigestMismatch
-        | ReleasesRefusal::IndexInvalid => Code::InvalidArgument,
-        ReleasesRefusal::UnknownService => Code::NotFound,
+        | ReleasesRefusal::IndexInvalid
+        | ReleasesRefusal::InvalidWait
+        | ReleasesRefusal::TargetInvalid
+        | ReleasesRefusal::LimitsInHostGroup => Code::InvalidArgument,
+        ReleasesRefusal::UnknownService | ReleasesRefusal::ReleaseUnknown => Code::NotFound,
         ReleasesRefusal::GenerationConflict => Code::Aborted,
         ReleasesRefusal::HeldBad
         | ReleasesRefusal::BelowMinVersion
@@ -61,7 +65,12 @@ pub(crate) fn releases(refusal: ReleasesRefusal) -> Status {
         | ReleasesRefusal::AlreadyBad
         | ReleasesRefusal::AlreadyHalted
         | ReleasesRefusal::NotInChannel
-        | ReleasesRefusal::ChannelDigestMismatch => Code::FailedPrecondition,
+        | ReleasesRefusal::ChannelDigestMismatch
+        | ReleasesRefusal::TooManyWaits
+        | ReleasesRefusal::ReleaseExists
+        | ReleasesRefusal::RepositoryUnknown
+        | ReleasesRefusal::NotInHostGroup
+        | ReleasesRefusal::AmbiguousHostGroup => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "RELEASES_REFUSAL_")
 }
@@ -75,10 +84,14 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         ServicesRefusal::InvalidRequest => Code::InvalidArgument,
         ServicesRefusal::UnknownService
         | ServicesRefusal::UnknownHost
-        | ServicesRefusal::UnknownRole => Code::NotFound,
+        | ServicesRefusal::UnknownRole
+        | ServicesRefusal::UnknownHostGroup
+        | ServicesRefusal::RepositoryUnknown => Code::NotFound,
         ServicesRefusal::NotAssigned
         | ServicesRefusal::NotHeld
-        | ServicesRefusal::BelowMinVersion => Code::FailedPrecondition,
+        | ServicesRefusal::BelowMinVersion
+        | ServicesRefusal::PlacedByHostGroup
+        | ServicesRefusal::NotInHostGroup => Code::FailedPrecondition,
         ServicesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")
@@ -90,13 +103,17 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::Unspecified | EnrollmentRefusal::StoreFailed => Code::Internal,
         EnrollmentRefusal::Unauthorized => Code::Unauthenticated,
         EnrollmentRefusal::Forbidden => Code::PermissionDenied,
-        EnrollmentRefusal::UnknownRequest | EnrollmentRefusal::NoRecord => Code::NotFound,
+        EnrollmentRefusal::UnknownRequest
+        | EnrollmentRefusal::NoRecord
+        | EnrollmentRefusal::UnknownHostGroup => Code::NotFound,
         EnrollmentRefusal::KeyMismatch
         | EnrollmentRefusal::DuplicateClaim
         | EnrollmentRefusal::NotPending
         | EnrollmentRefusal::Denied
         | EnrollmentRefusal::RecordMismatch
-        | EnrollmentRefusal::RecordContested => Code::FailedPrecondition,
+        | EnrollmentRefusal::RecordContested
+        | EnrollmentRefusal::RecordUsed
+        | EnrollmentRefusal::HostGroupDiffers => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
@@ -105,7 +122,9 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::InvalidHostId
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService
-        | EnrollmentRefusal::InvalidRequest => Code::InvalidArgument,
+        | EnrollmentRefusal::InvalidWindow
+        | EnrollmentRefusal::InvalidRequest
+        | EnrollmentRefusal::ServicesRetired => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "ENROLLMENT_REFUSAL_")
 }
@@ -142,7 +161,9 @@ pub(crate) fn rollouts(refusal: RolloutsRefusal) -> Status {
         RolloutsRefusal::NoDesired
         | RolloutsRefusal::NotWaiting
         | RolloutsRefusal::AlreadyPaused
-        | RolloutsRefusal::NotPaused => Code::FailedPrecondition,
+        | RolloutsRefusal::NotPaused
+        | RolloutsRefusal::AmbiguousHostGroup
+        | RolloutsRefusal::NotInHostGroup => Code::FailedPrecondition,
         RolloutsRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "ROLLOUTS_REFUSAL_")
@@ -157,4 +178,44 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
+}
+
+/// The status of a refusal by `Repositories`.
+pub(crate) fn repositories(refusal: RepositoriesRefusal) -> Status {
+    let code = match refusal {
+        RepositoriesRefusal::Unspecified | RepositoriesRefusal::StoreFailed => Code::Internal,
+        RepositoriesRefusal::Unauthorized => Code::Unauthenticated,
+        RepositoriesRefusal::Forbidden => Code::PermissionDenied,
+        RepositoriesRefusal::InvalidRequest | RepositoriesRefusal::KeyringInvalid => {
+            Code::InvalidArgument
+        }
+        RepositoriesRefusal::UnknownRepository => Code::NotFound,
+        RepositoriesRefusal::InUse
+        | RepositoriesRefusal::Conflict
+        | RepositoriesRefusal::CredentialUnusable => Code::FailedPrecondition,
+        RepositoriesRefusal::Capacity => Code::ResourceExhausted,
+        RepositoriesRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "REPOSITORIES_REFUSAL_")
+}
+
+/// The status of a refusal by `HostGroups`.
+pub(crate) fn host_groups(refusal: HostGroupsRefusal) -> Status {
+    let code = match refusal {
+        HostGroupsRefusal::Unspecified | HostGroupsRefusal::StoreFailed => Code::Internal,
+        HostGroupsRefusal::Unauthorized => Code::Unauthenticated,
+        HostGroupsRefusal::Forbidden => Code::PermissionDenied,
+        HostGroupsRefusal::InvalidRequest
+        | HostGroupsRefusal::InvalidHostGroup
+        | HostGroupsRefusal::InvalidPackage
+        | HostGroupsRefusal::InvalidPolicy
+        | HostGroupsRefusal::TooManyPackages => Code::InvalidArgument,
+        HostGroupsRefusal::AuditUnavailable => Code::Unavailable,
+        HostGroupsRefusal::UnknownHostGroup | HostGroupsRefusal::UnknownHost => Code::NotFound,
+        HostGroupsRefusal::HostkeeperNotListed
+        | HostGroupsRefusal::GenerationMismatch
+        | HostGroupsRefusal::NotEmpty
+        | HostGroupsRefusal::SameHostGroup => Code::FailedPrecondition,
+    };
+    refused(code, refusal.as_str_name(), "HOST_GROUPS_REFUSAL_")
 }

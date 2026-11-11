@@ -13,15 +13,18 @@ use hostkeeper_wire::wire::{
 };
 
 use crate::converge::State;
-use crate::decide::{Decision, Gate, decide_marked, decide_why};
+use crate::decide::{Decision, Gate};
 use crate::desired::{DesiredStore, StoreError};
 use crate::fleet::Fleet;
 use crate::identity::Identity;
 use crate::ops::{AuditEntry, Halt, OpsError, OpsState, OpsStore, ServiceOps, Write};
 use crate::ops_tests::temp_beside;
-use crate::reconcile::{Change, plan};
+use crate::reconcile::Change;
 use crate::services::{ServiceDef, Services};
-use crate::testutil::{LEGACY, OPERATOR, Rig, beat, desired, id, ops_of, role, version};
+use crate::testutil::{
+    LEGACY, OPERATOR, Rig, beat, decide_marked, decide_why, desired, id, ops_of, plan, role,
+    version,
+};
 
 pub(crate) const AUTO: &str = "rollback = \"automatic\"";
 pub(crate) const ONE: &str = r#"{"version":"1.0","min_up":{"storage":0,"frontend":0}}"#;
@@ -531,7 +534,12 @@ pub(crate) fn services_of(extra: &str) -> Services {
 pub(crate) async fn rig(test: &str, extra: &str, body: &str) -> Rig {
     let mut rig = Rig::new(test);
     rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(services_of(extra));
-    rig.set(body).await;
+    // A body that names a package digest is a set of the digest alone, which orders nothing.
+    if body.contains("release_digest") {
+        rig.set_plain(body).await;
+    } else {
+        rig.set(body).await;
+    }
     rig.at(2_000);
     rig
 }
@@ -560,7 +568,7 @@ pub(crate) fn round(rig: &Rig, at: u64, overrides: &[(&str, Heartbeat)]) -> Vec<
                 .find(|(h, _)| h == host)
                 .map_or_else(|| beat("1.0"), |(_, b)| b.clone());
             rig.coordinator
-                .heartbeat(who(host), b)
+                .heartbeat_native(who(host), b)
                 .expect("a heartbeat")
                 .reply
         })
@@ -809,7 +817,7 @@ async fn min_version_clears_last_good_on_the_coordinator() {
 
 /// An ops store whose file cannot be written, holding `state`.
 pub(crate) fn unwritable(state: OpsState) -> OpsStore {
-    OpsStore::with_writer(
+    OpsStore::refusing(
         state,
         Box::new(|_| {
             Err(OpsError::Io(StoreError::Io {
@@ -823,10 +831,12 @@ pub(crate) fn unwritable(state: OpsState) -> OpsStore {
 /// A rig over `ops` instead of the files of its directory.
 pub(crate) async fn rig_over(test: &str, extra: &str, body: &str, ops: OpsStore) -> Rig {
     let mut rig = Rig::new(test);
+    // The set, which is audited, is made over the files before `ops` takes them over.
+    rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_services(services_of(extra));
+    rig.set(body).await;
     rig.coordinator = Rig::start(&rig.dir, &rig.clock)
         .with_services(services_of(extra))
         .with_ops(ops);
-    rig.set(body).await;
     rig.at(2_000);
     rig
 }
@@ -848,13 +858,18 @@ async fn a_last_good_that_cannot_be_written_is_not_recorded() {
 async fn a_mark_that_cannot_be_written_stays_raised_and_the_rollback_waits() {
     let mut state = OpsState::default();
     state.services.insert(LEGACY.to_owned(), good());
-    let rig = rig_over("rb-mark-fails", AUTO, ONE, unwritable(state)).await;
+    let mut rig = rig("rb-mark-fails", AUTO, ONE).await;
+    // The sets, which are audited, are made before the ops file cannot be written.
     rig.set(TWO).await;
+    rig.at(1_000);
+    rig.coordinator = Rig::start(&rig.dir, &rig.clock)
+        .with_services(services_of(AUTO))
+        .with_ops(unwritable(state));
     round(&rig, 2_000, &[]);
     let (phase, class) = release();
     let heartbeat = |host: &str, b: Heartbeat| {
         rig.coordinator
-            .heartbeat(who(host), b)
+            .heartbeat_native(who(host), b)
             .expect("a heartbeat")
             .reply
     };
@@ -873,7 +888,12 @@ async fn a_mark_that_cannot_be_written_stays_raised_and_the_rollback_waits() {
 /// either (no halts file).
 #[tokio::test]
 async fn a_manual_service_records_nothing_and_creates_no_ops_file() {
-    let rig = rig("rb-manual-quiet", "", ONE).await;
+    // CI's set with a release is audited, which makes the ops file: this farm sets a digest.
+    let digest = "1".repeat(64);
+    let body = format!(
+        r#"{{"version":"1.0","min_up":{{"storage":0,"frontend":0}},"release_digest":"{digest}"}}"#
+    );
+    let rig = rig("rb-manual-quiet", "", &body).await;
     round(&rig, 2_000, &[]);
     assert_eq!(
         plan(

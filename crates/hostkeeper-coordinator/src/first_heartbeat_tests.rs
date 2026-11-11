@@ -190,7 +190,7 @@ fn a_refused_heartbeat_is_not_the_first() {
     f.enrollment.clock.set(FIRST);
     f.rig
         .coordinator
-        .heartbeat(who("db-1", "storage"), beat("1.0"))
+        .heartbeat_native(who("db-1", "storage"), beat("1.0"))
         .expect_err("a heartbeat with no service is refused");
     f.beat("db-1", SECOND);
     assert_eq!(times(&f.get("db-1")), (APPROVED, Some(SECOND)));

@@ -3,10 +3,14 @@ use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
 use std::rc::Rc;
 
 use super::*;
-use crate::ports::{Got, NetError, Sink, Url};
+use crate::ports::{Got, NetError, Request, Sink, Url};
 use crate::testing::{
     Failing, FakeClock, FakeFetcher, deliver, listing, scratch, serve, service_dir, sha256_hex,
 };
+
+fn service(name: &str) -> ServiceName {
+    ServiceName::new(name).expect("a service name")
+}
 
 const URL: &str = "https://releases.example/svc/svc-1.tar.zst";
 
@@ -16,8 +20,7 @@ fn job<'a>(fetcher: &'a FakeFetcher, clock: &'a FakeClock, dir: &'a Path, url: &
         fetcher,
         clock,
         dir,
-        url,
-        suffix: "",
+        request: Request::plain(url),
         cap: 10,
         deadline: clock.stamp(clock.mono_secs() + 100),
     }
@@ -270,57 +273,73 @@ fn the_first_reason_to_stop_is_kept() {
     ));
 }
 
-/// Catches a read-back of the staging file that reads past its cap or follows a link: only the
-/// first `cap` bytes are returned (all of them when the file is shorter), and a link is refused
-/// with an I/O error (`ELOOP`), not read.
+/// Catches an orphan sweep that is too wide, too narrow, or follows a link: the service's
+/// `.fetch-*` files and links go (the link's target stays); a `.fetch-*` directory, a `.stage-*`
+/// directory, a version directory, `current` and another service's `.fetch-*` stay. A service
+/// with no directory has nothing to remove.
 #[test]
-fn read_back_reads_at_most_cap_bytes_and_refuses_a_link() {
-    let scratch = scratch("stage-read-back");
-    let file = scratch.path().join("staged");
-    std::fs::write(&file, b"0123456789").expect("the staged file");
-    assert_eq!(read_back(&file, 4).expect("the first bytes"), b"0123");
-    assert_eq!(read_back(&file, 100).expect("all bytes"), b"0123456789");
+fn an_orphan_fetch_file_is_removed_and_only_that() {
+    let scratch = scratch("stage-orphans");
+    let root = scratch.path();
+    let dir = root.join("tierstore");
+    let other = root.join("other");
+    service_dir(&dir);
+    for made in [
+        &dir,
+        &other,
+        &dir.join(".stage-1"),
+        &dir.join("1.4.2"),
+        &dir.join(".fetch-dir"),
+    ] {
+        std::fs::create_dir_all(made).expect("a directory");
+    }
+    let outside = root.join("outside");
+    std::fs::write(&outside, b"keep").expect("a file outside");
+    std::fs::write(dir.join(".fetch-1-0"), b"partial").expect("an orphan");
+    std::fs::write(dir.join(".fetch-1-2.json"), b"{}").expect("an orphan of an earlier release");
+    symlink(&outside, dir.join(".fetch-x")).expect("an orphan link");
+    symlink("1.4.2", dir.join("current")).expect("current");
+    std::fs::write(other.join(".fetch-9-9"), b"theirs").expect("another service's orphan");
 
-    let link = scratch.path().join("link");
-    symlink(&file, &link).expect("a link");
-    let refused = read_back(&link, 100).expect_err("a link");
-    assert_eq!(refused.raw_os_error(), Some(libc::ELOOP));
+    remove_orphan_fetches(root, &service("tierstore")).expect("swept");
+    assert_eq!(
+        listing(&dir),
+        [".fetch-dir", ".stage-1", "1.4.2", "current"]
+    );
+    assert_eq!(std::fs::read(&outside).expect("the link's target"), b"keep");
+    assert_eq!(listing(&other), [".fetch-9-9"]);
+
+    remove_orphan_fetches(root, &service("absent")).expect("no directory");
 }
 
-/// Catches a bundle staged under a name `gh` cannot read, or a suffix that loses the prefix the
-/// orphan sweep looks for: every name of `names_with(".json")` begins with `.fetch-` and ends
-/// with `.json`, none repeats, and a download whose job has the suffix is staged under such a
-/// name.
+/// Catches a service directory that is a link being swept, or one others can write being used
+/// for a sweep: each is refused with an error naming it, and the link's target is not touched.
 #[test]
-fn a_suffixed_staging_name_keeps_the_prefix_and_ends_in_the_suffix() {
-    let suffixed = names_with(".json");
-    assert_eq!(suffixed.len(), 16);
-    assert!(
-        suffixed
-            .iter()
-            .all(|name| name.starts_with(".fetch-") && name.ends_with(".json")),
-        "{suffixed:?}"
+fn a_service_directory_that_is_a_link_or_open_is_not_swept() {
+    let scratch = scratch("stage-swept-linked");
+    let elsewhere = scratch.path().join("elsewhere");
+    std::fs::create_dir(&elsewhere).expect("a directory");
+    std::fs::write(elsewhere.join(".fetch-1-1"), b"keep").expect("a file");
+    symlink(&elsewhere, scratch.path().join("tierstore")).expect("a linked service directory");
+    let swept = remove_orphan_fetches(scratch.path(), &service("tierstore")).expect_err("a link");
+    assert_eq!(
+        swept.to_string(),
+        format!(
+            "{} is not a directory",
+            scratch.path().join("tierstore").display()
+        )
     );
+    assert_eq!(listing(&elsewhere), [".fetch-1-1"]);
 
-    let scratch = scratch("stage-suffix");
-    let url = Url::new(URL.to_owned());
-    let fetcher = FakeFetcher::new().route(URL, serve(b"{}"));
-    let clock = FakeClock::at(5);
-    let mut json = job(&fetcher, &clock, scratch.path(), &url);
-    json.suffix = ".json";
-    let got = download(&json, plain).expect("downloaded");
-    let name = got
-        .file
-        .path()
-        .file_name()
-        .expect("a name")
-        .to_string_lossy()
-        .into_owned();
-    assert!(
-        name.starts_with(".fetch-") && name.ends_with(".json"),
-        "{name}"
+    let open = scratch.path().join("open");
+    service_dir(&open);
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o777)).expect("set mode");
+    let swept = remove_orphan_fetches(scratch.path(), &service("open")).expect_err("open");
+    assert_eq!(
+        swept.to_string(),
+        format!("{} is writable by group or others", open.display())
     );
-    assert_eq!(listing(scratch.path()), [name]);
+    std::fs::set_permissions(&open, std::fs::Permissions::from_mode(0o755)).expect("restore");
 }
 
 /// Catches a service directory that other accounts can write to being used: a directory

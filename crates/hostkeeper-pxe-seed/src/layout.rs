@@ -1,5 +1,5 @@
 //! Where the files a menu and a seed name are served: the contract between this crate and
-//! `hostkeeper-pxe serve`, which serves each of these paths and refuses every other.
+//! `pxe serve`, which serves each of these paths and refuses every other.
 //!
 //! By TFTP, below GRUB's `$prefix`: the fixed `grub.cfg`, and the menu of a MAC at
 //! `hostkeeper/<grub cpu>/<mac>` ([`MENU_DIR`]). By HTTP, at the names the release's

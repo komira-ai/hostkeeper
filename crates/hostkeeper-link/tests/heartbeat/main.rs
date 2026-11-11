@@ -8,18 +8,23 @@
 //! loopback address with a port the system chose; `waits` plays the loop's waits from a script.
 
 mod certs;
+mod clear_record;
 mod coordinator;
 mod deferral;
 mod dial;
 mod facts;
 mod features;
+mod fetch;
 mod grpc;
+mod grpc_reply;
 mod halts;
+mod host_facts;
 mod kbf;
 mod link;
 mod orders;
 mod pki;
 mod ports;
+mod repositories;
 mod resend;
 mod size;
 mod tls;
@@ -75,6 +80,7 @@ fn target(name: &str, to: &str) -> Target {
         version: version(to),
         digest: digest(),
         index_digest: None,
+        entry: None,
     }
 }
 
@@ -123,6 +129,15 @@ pub fn abort(id: &str, name: &str) -> Order {
     }
 }
 
+/// The `clear_record` of `name`'s step record, order `id`.
+pub fn clear_record(id: &str, name: &str) -> Order {
+    Order {
+        id: order_id(id),
+        order_try: 1,
+        verb: Verb::ClearRecord(service(name)),
+    }
+}
+
 /// A service whose record says it runs `at`, with no update running and no verdict kept.
 pub fn recorded(name: &str, at: &str) -> RecordedService {
     RecordedService {
@@ -130,6 +145,8 @@ pub fn recorded(name: &str, at: &str) -> RecordedService {
         version: version(at),
         updating: None,
         last_result: None,
+        record_try: None,
+        installer: None,
     }
 }
 

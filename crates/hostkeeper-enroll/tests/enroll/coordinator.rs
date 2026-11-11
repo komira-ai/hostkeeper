@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use hostkeeper_coordinator::enrollment::{
     DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, MacPolicy, Random,
-    RpcError, Setup, setup,
+    RpcError, Setup, StoreAt, setup,
 };
 use hostkeeper_enroll::{
     CoordinatorEnroll, EnrollAnswer, EnrollRequest, EnrollState, Enroller, Identity, Issued,
@@ -231,7 +231,7 @@ fn started(world: &World) -> Enrollment {
     );
     let names = ["coordinator.example".to_owned()];
     let files = Setup {
-        dir: &store,
+        store: StoreAt::Dir(&store),
         ca_key: &ca_key,
         ca_init: true,
         server_cert: &server_cert,
@@ -324,6 +324,7 @@ fn a_daemon_enrolls_and_renews_with_the_coordinators_own_enrollment_and_ca() {
                 services: Vec::new(),
                 replace: false,
                 reason: "new rack".to_owned(),
+                host_group: String::new(),
             },
             &|_| false,
             // No host inventory: the request is approved as the host id named.
@@ -358,6 +359,7 @@ impl DeviceState for Supervised {
             enrolled: true,
             supervised: true,
             enrolled_since_unix: None,
+            enrolled_via_dep: None,
         })
     }
 }

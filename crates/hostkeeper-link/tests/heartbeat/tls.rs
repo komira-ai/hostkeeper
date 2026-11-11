@@ -267,11 +267,13 @@ impl Write for End {
 }
 
 /// The in-process transport: each connect takes the next client end queued, and records the
-/// host and port it was asked for. With none queued, the connection is refused.
+/// host and port it was asked for, and the bound of a connection made within one. With none
+/// queued, the connection is refused.
 #[derive(Default)]
 pub struct PipeTransport {
     ends: Mutex<VecDeque<End>>,
     dialed: Mutex<Vec<(String, u16)>>,
+    bounds: Mutex<Vec<u64>>,
 }
 
 impl PipeTransport {
@@ -282,6 +284,11 @@ impl PipeTransport {
     /// The hosts and ports dialed, in order.
     pub fn dialed(&self) -> Vec<(String, u16)> {
         self.dialed.lock().expect("the dialed").clone()
+    }
+
+    /// The bounds of the connections made within one, in order.
+    pub fn bounds(&self) -> Vec<u64> {
+        self.bounds.lock().expect("the bounds").clone()
     }
 }
 
@@ -294,6 +301,11 @@ impl Transport for PipeTransport {
         let end = self.ends.lock().expect("the ends").pop_front();
         end.map(|end| Box::new(end) as Box<dyn Conn>)
             .ok_or_else(|| io::Error::from(io::ErrorKind::ConnectionRefused))
+    }
+
+    fn connect_within(&self, host: &str, port: u16, secs: u64) -> io::Result<Box<dyn Conn>> {
+        self.bounds.lock().expect("the bounds").push(secs);
+        self.connect(host, port)
     }
 }
 
@@ -338,6 +350,8 @@ pub enum Close {
     Notify,
     /// By dropping the connection, with no TLS close.
     Drop,
+    /// With a record the client cannot decrypt written under the TLS, then the drop.
+    Garbage,
 }
 
 /// Starts a server on the other end of a new connection, which it queues on `transport`: it
@@ -363,6 +377,11 @@ pub fn serve(
             tls.conn.send_close_notify();
             let _ = tls.flush();
         }
+        if close == Close::Garbage {
+            let _ = tls
+                .sock
+                .write_all(b"\x17\x03\x03\x00\x20not a record the client can open!");
+        }
         tls.sock.close();
         Some(request)
     })
@@ -379,11 +398,14 @@ fn read_request(tls: &mut StreamOwned<ServerConnection, End>) -> Option<Request>
         }
     }
     let head = String::from_utf8(raw[..raw.len() - 4].to_vec()).ok()?;
-    let length: usize = head
+    // A request with no `Content-Length` (a GET) has no body.
+    let length: usize = match head
         .lines()
-        .find_map(|line| line.strip_prefix("Content-Length: "))?
-        .parse()
-        .ok()?;
+        .find_map(|line| line.strip_prefix("Content-Length: "))
+    {
+        Some(text) => text.parse().ok()?,
+        None => 0,
+    };
     let mut body = vec![0_u8; length];
     tls.read_exact(&mut body).ok()?;
     let peer = tls.conn.peer_certificates()?.first()?.as_ref().to_vec();

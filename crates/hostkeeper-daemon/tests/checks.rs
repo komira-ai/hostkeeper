@@ -95,7 +95,9 @@ fn every_refusal_token_keeps_the_token_grammar() {
     };
     assert_eq!(Refusal::from(&too_old), Refusal::DaemonTooOld);
     assert_eq!(
-        Refusal::from(&ManifestRefusal::TooLarge),
+        Refusal::from(&ManifestRefusal::Unreadable {
+            why: "it is not UTF-8 text".to_owned()
+        }),
         Refusal::ManifestMismatch
     );
 }
@@ -289,4 +291,19 @@ fn each_way_the_runner_stops_has_its_token() {
         let detail = error.to_string();
         assert_eq!(interrupted(error), Reply::Interrupted { refusal, detail });
     }
+}
+
+/// Catches the coordinator's list of refusals for the try alone, which it orders again past and
+/// never counts as the host failing the version (`hostkeeper_wire::wire::TRY_REFUSALS`), drifting
+/// from the tokens of the two try rules that refuse an order for its try: it is exactly
+/// `try_conflict` and `stale_try`, and no other refusal's token.
+#[test]
+fn the_try_refusals_the_coordinator_passes_over_are_the_try_rules_tokens() {
+    let try_rules = [Refusal::TryConflict.token(), Refusal::StaleTry.token()];
+    assert_eq!(hostkeeper_wire::wire::TRY_REFUSALS, try_rules);
+    let listed = Refusal::ALL
+        .iter()
+        .filter(|refusal| hostkeeper_wire::wire::TRY_REFUSALS.contains(&refusal.token()))
+        .count();
+    assert_eq!(listed, 2);
 }

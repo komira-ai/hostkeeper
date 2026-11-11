@@ -98,7 +98,11 @@ async fn the_json_and_grpc_answers_acknowledge_the_same_verdicts() {
             .beat;
         let (answer, order) = typed_rig
             .coordinator
-            .heartbeat_with_orders(who(&case.host), beat)
+            .heartbeat_with_orders(
+                who(&case.host),
+                beat,
+                crate::trusted_root::TrustedRootSaid::default(),
+            )
             .expect("an answer");
         assert_eq!(order, None, "{}", case.case);
         assert_eq!(

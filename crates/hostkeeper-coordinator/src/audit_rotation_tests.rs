@@ -29,6 +29,7 @@ fn line(seq: u64) -> AuditLine {
         by: "alice".to_owned(),
         action: "exclude".to_owned(),
         detail: Detail {
+            host_group: None,
             service: Some("kbf".to_owned()),
             node_id: Some("s2".to_owned()),
             reason: None,
@@ -446,8 +447,6 @@ fn serve_args(extra: &[&str]) -> Vec<String> {
         "desired.json",
         "--oidc-config",
         "oidc.toml",
-        "--rollout-file",
-        "rollout.toml",
     ]
     .map(str::to_owned)
     .into();
@@ -475,17 +474,18 @@ fn config_rejects_zero_rotation_values() {
             panic!("serve's flags");
         };
         (
-            flags.audit_max_bytes.get(),
-            flags.audit_retained_segments.get(),
+            flags.audit_max_bytes.map(NonZeroU64::get),
+            flags.audit_retained_segments.map(NonZeroUsize::get),
         )
     };
-    assert_eq!(parsed(&[]), (16 << 20, 8));
+    // Left out, each is the file store's default, applied at start.
+    assert_eq!(parsed(&[]), (None, None));
     assert_eq!(
         (DEFAULT_MAX_BYTES.get(), DEFAULT_RETAINED.get()),
         (16 << 20, 8)
     );
     let ones = ["--audit-max-bytes", "1", "--audit-retained-segments", "1"];
-    assert_eq!(parsed(&ones), (1, 1));
+    assert_eq!(parsed(&ones), (Some(1), Some(1)));
 }
 
 /// A rig of the marks' services whose ops store rotates its audit file by `rotation`, after the

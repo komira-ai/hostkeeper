@@ -15,7 +15,9 @@
 //! standing condition anew.
 //!
 //! What each kind reads:
-//! - `halt`: a halt of a service the rollout file defines (the ops state);
+//! - `halt`: a halt of a service the rollout file defines (the ops state); once the coordinator
+//!   holds a host group, a halt of a package in a group that lists it, the groups that share a
+//!   halt named in one alert ([`crate::group_alerts`]);
 //! - `waiting_for_operator`: a pending enrollment request that is no duplicate claim;
 //! - `duplicate`: a host heard since the start whose identity two live daemons report (the
 //!   enrollment store's mark, the same the rollout gate reads);
@@ -30,7 +32,13 @@
 //! - `silent_host`: a host heard since the start whose last heartbeat is at least
 //!   `--alert-silent-host-secs` old;
 //! - `cert_near_expiry`: the certificate the coordinator serves its hosts (with an enrollment
-//!   store), when it expires within `--alert-cert-window-secs`, or has expired.
+//!   store), when it expires within `--alert-cert-window-secs`, or has expired;
+//! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
+//!   stands until the link is back. While it stands, an enrollment store that cannot be read
+//!   gives no facts rather than refusing the list, so the alert is seen;
+//! - `trusted_root`: a host heard since the start whose last heartbeat said its Sigstore trusted
+//!   root is stale, missing or unparseable ([`crate::trusted_root`]), one alert per host; a host
+//!   whose last heartbeat said nothing of the root (unknown) raises none.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
@@ -44,8 +52,9 @@ use hostkeeper_wire::HostId;
 
 use crate::fleet::Fleet;
 use crate::holds::bad_version;
+use crate::host_groups::HostGroups;
 use crate::operator::Caller;
-use crate::ops::{AuditEntry, HaltOrigin, OpsState};
+use crate::ops::{AuditEntry, Halt, HaltOrigin, OpsState};
 use crate::service::Coordinator;
 use crate::services::Services;
 
@@ -97,6 +106,10 @@ pub enum Kind {
     SilentHost,
     /// The coordinator's certificate for its hosts expires soon.
     CertNearExpiry,
+    /// The store's link to its database is lost.
+    StoreUnreachable,
+    /// A host's trusted root is stale, missing or unparseable.
+    TrustedRoot,
 }
 
 impl Kind {
@@ -115,6 +128,8 @@ impl Kind {
             Self::AbandonedWhileUpdating => "exclude_abandon",
             Self::SilentHost => "silent_host",
             Self::CertNearExpiry => "cert_near_expiry",
+            Self::StoreUnreachable => "store_unreachable",
+            Self::TrustedRoot => "trusted_root",
         }
     }
 
@@ -122,13 +137,16 @@ impl Kind {
     #[must_use]
     pub const fn severity(self) -> proto::AlertSeverity {
         match self {
-            Self::Halt | Self::Duplicate | Self::FailedCanary => proto::AlertSeverity::Critical,
+            Self::Halt | Self::Duplicate | Self::FailedCanary | Self::StoreUnreachable => {
+                proto::AlertSeverity::Critical
+            }
             Self::WaitingForOperator
             | Self::DuplicateClaimPending
             | Self::HeldOnBadVersion
             | Self::AbandonedWhileUpdating
             | Self::SilentHost
-            | Self::CertNearExpiry => proto::AlertSeverity::Warning,
+            | Self::CertNearExpiry
+            | Self::TrustedRoot => proto::AlertSeverity::Warning,
         }
     }
 
@@ -145,6 +163,8 @@ impl Kind {
             Self::AbandonedWhileUpdating => proto::AlertKind::AbandonedWhileUpdating,
             Self::SilentHost => proto::AlertKind::SilentHost,
             Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
+            Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
+            Self::TrustedRoot => proto::AlertKind::TrustedRoot,
         }
     }
 }
@@ -237,22 +257,76 @@ pub fn derive(
     at: At,
     thresholds: &Thresholds,
 ) -> Vec<Alert> {
-    let mut alerts = halts(ops, services);
+    derive_in(
+        fleet,
+        ops,
+        services,
+        &HostGroups::default(),
+        enrollment,
+        at,
+        thresholds,
+    )
+}
+
+/// [`derive`] for a coordinator that may hold the host groups `groups`: with none it is
+/// [`derive`]; with some, the halts are the groups' ([`crate::group_alerts`]) and a package a group
+/// lists is a service for the alerts that read a service's marks and hosts.
+pub(crate) fn derive_in(
+    fleet: &Fleet,
+    ops: &OpsState,
+    services: &Services,
+    groups: &HostGroups,
+    enrollment: &EnrollmentFacts,
+    at: At,
+    thresholds: &Thresholds,
+) -> Vec<Alert> {
+    let packages = managed(services, groups);
+    let mut alerts = if groups.is_empty() {
+        halts(ops, services)
+    } else {
+        group_alerts::halts_in(ops, groups)
+    };
     alerts.extend(waiting_for_operator(enrollment));
     alerts.extend(duplicates(enrollment));
     alerts.extend(duplicate_claims(enrollment));
-    alerts.extend(failed_canaries(fleet, ops, services));
-    alerts.extend(held_on_bad_versions(fleet, ops, services));
-    alerts.extend(abandoned(ops, services));
+    alerts.extend(failed_canaries(fleet, ops, &packages));
+    alerts.extend(held_on_bad_versions(fleet, ops, &packages));
+    alerts.extend(abandoned(ops, &packages));
     alerts.extend(silent_hosts(fleet, at.now, thresholds.silent_after));
     alerts.extend(cert_near_expiry(
         enrollment,
         at.unix,
         thresholds.cert_window_secs,
     ));
+    alerts.extend(store_unreachable(fleet));
+    alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
     alerts.dedup_by(|a, b| a.subject == b.subject);
     alerts
+}
+
+/// Who raised `halt`: an operator, or the host and the check that reported it.
+fn halted_by(halt: &Halt) -> String {
+    if halt.origin == HaltOrigin::Operator {
+        "an operator".to_owned()
+    } else {
+        format!("{}, check {}", halt.node_id, halt.check)
+    }
+}
+
+/// The services the alerts read the marks and hosts of: those the rollout file defines and those a
+/// host group lists.
+fn managed(services: &Services, groups: &HostGroups) -> BTreeSet<String> {
+    services
+        .names()
+        .map(str::to_owned)
+        .chain(
+            groups
+                .0
+                .values()
+                .flat_map(|group| group.packages.iter().cloned()),
+        )
+        .collect()
 }
 
 /// `halt`: each service the rollout file defines whose halt stands.
@@ -261,11 +335,7 @@ fn halts(ops: &OpsState, services: &Services) -> Vec<Alert> {
         .defs()
         .filter_map(|def| {
             let halt = ops.services.get(&def.name)?.halt.as_ref()?;
-            let by = if halt.origin == HaltOrigin::Operator {
-                "an operator".to_owned()
-            } else {
-                format!("{}, check {}", halt.node_id, halt.check)
-            };
+            let by = halted_by(halt);
             Some(Alert {
                 subject: Subject {
                     service: def.name.clone(),
@@ -356,29 +426,28 @@ fn duplicate_claims(enrollment: &EnrollmentFacts) -> Vec<Alert> {
 }
 
 /// `failed_canary`: each canary failure the fleet noted whose version is still marked bad.
-fn failed_canaries(fleet: &Fleet, ops: &OpsState, services: &Services) -> Vec<Alert> {
-    services
-        .defs()
-        .flat_map(|def| {
+fn failed_canaries(fleet: &Fleet, ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
+    packages
+        .iter()
+        .flat_map(|name| {
             let bad = ops
                 .services
-                .get(&def.name)
+                .get(name)
                 .map(|marks| marks.bad.as_slice())
                 .unwrap_or_default();
             fleet
-                .failed_canaries(&def.name)
+                .failed_canaries(name)
                 .filter(|(version, _)| bad.iter().any(|b| b.as_str() == *version))
                 .map(|(version, node)| Alert {
                     subject: Subject {
-                        service: def.name.clone(),
+                        service: name.clone(),
                         host: node.to_owned(),
                         version: version.to_owned(),
                         ..Subject::of(Kind::FailedCanary)
                     },
                     message: format!(
-                        "{node}, a canary of {}, failed {version}: it is marked bad and rolled \
-                         back",
-                        def.name
+                        "{node}, a canary of {name}, failed {version}: it is marked bad and rolled \
+                         back"
                     ),
                 })
                 .collect::<Vec<_>>()
@@ -387,25 +456,24 @@ fn failed_canaries(fleet: &Fleet, ops: &OpsState, services: &Services) -> Vec<Al
 }
 
 /// `held_on_bad_version`: each held host of a service that runs a version of it marked bad.
-fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, services: &Services) -> Vec<Alert> {
-    services
-        .defs()
-        .flat_map(|def| {
+fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
+    packages
+        .iter()
+        .flat_map(|name| {
             fleet
-                .hosts_of(&def.name)
+                .hosts_of(name)
                 .filter_map(|(id, _)| {
-                    let version = bad_version(fleet, ops, &def.name, id)?;
+                    let version = bad_version(fleet, ops, name, id)?;
                     Some(Alert {
                         subject: Subject {
-                            service: def.name.clone(),
+                            service: name.clone(),
                             host: id.to_string(),
                             version: version.to_string(),
                             ..Subject::of(Kind::HeldOnBadVersion)
                         },
                         message: format!(
-                            "an operator holds {id} on {} {version}, which is marked bad: it is \
-                             not ordered off it until the hold is released",
-                            def.name
+                            "an operator holds {id} on {name} {version}, which is marked bad: it is \
+                             not ordered off it until the hold is released"
                         ),
                     })
                 })
@@ -417,7 +485,7 @@ fn held_on_bad_versions(fleet: &Fleet, ops: &OpsState, services: &Services) -> V
 /// `abandoned_while_updating`: each pair (a service the rollout file defines and a host) whose
 /// last exclusion change the ops state keeps (`exclude`, `exclude_abandon` or `include`) is an
 /// `exclude_abandon`, while the host is still excluded from it.
-fn abandoned(ops: &OpsState, services: &Services) -> Vec<Alert> {
+fn abandoned(ops: &OpsState, packages: &BTreeSet<String>) -> Vec<Alert> {
     // The last exclusion change of each pair the ring keeps: an abandon that a later include
     // or exclude of the pair followed no longer says why the host is excluded.
     let mut last: BTreeMap<(&str, &str), &AuditEntry> = BTreeMap::new();
@@ -433,7 +501,7 @@ fn abandoned(ops: &OpsState, services: &Services) -> Vec<Alert> {
     last.into_iter()
         .filter(|(_, entry)| entry.action == "exclude_abandon")
         .filter_map(|((service, node), entry)| {
-            services.get(service)?;
+            packages.contains(service).then_some(())?;
             ops.excluded
                 .iter()
                 .any(|e| e.service == service && e.node_id == node)
@@ -469,6 +537,45 @@ fn silent_hosts(fleet: &Fleet, now: Duration, silent_after: Duration) -> Vec<Ale
                     "{id} has not heartbeated for {} s (the threshold is {} s)",
                     silent.as_secs(),
                     silent_after.as_secs()
+                ),
+            })
+        })
+        .collect()
+}
+
+/// `store_unreachable`: the store's link to its database, while it is lost.
+fn store_unreachable(fleet: &Fleet) -> Option<Alert> {
+    fleet.store_lost.then(|| Alert {
+        subject: Subject::of(Kind::StoreUnreachable),
+        message: "the session with the database is lost: nothing is ordered, a change that lowers protection is refused, and one that raises it stands in memory until the session is back".to_owned(),
+    })
+}
+
+/// `trusted_root`: each host heard since the start whose last heartbeat said its trusted root
+/// needs attention, with the reason and the age it said.
+fn trusted_roots(fleet: &Fleet) -> Vec<Alert> {
+    fleet
+        .nodes()
+        .filter_map(|(id, node)| {
+            let reason = node.trusted_root.attention()?;
+            let age = node
+                .trusted_root
+                .age_secs
+                .map_or_else(|| "no age".to_owned(), |age| format!("{age} s old"));
+            let then = if reason == "stale" {
+                "its package checks go on, and refuse every package signed after a Sigstore key \
+                 rotation the root does not hold"
+            } else {
+                "its package checks fail"
+            };
+            Some(Alert {
+                subject: Subject {
+                    host: id.to_string(),
+                    ..Subject::of(Kind::TrustedRoot)
+                },
+                message: format!(
+                    "{id} reports its Sigstore trusted root {reason} ({age}): {then}; update \
+                     hostkeeper on it, or copy a current root to it"
                 ),
             })
         })
@@ -634,16 +741,25 @@ impl Coordinator {
                 .nodes()
                 .map(|(id, _)| id.clone())
                 .collect();
-            let enrollment = self.enrollment_facts(&heard)?;
+            let enrollment = match self.enrollment_facts(&heard) {
+                Ok(facts) => facts,
+                // The alert that says the database is lost is not hidden by it.
+                Err(why) if self.lock_fleet().store_lost => {
+                    tracing::warn!(%why, "the enrollment store is not read while the database is lost");
+                    EnrollmentFacts::default()
+                }
+                Err(why) => return Err(why),
+            };
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),
             };
             let ops = self.ops.state();
-            let alerts = derive(
+            let alerts = derive_in(
                 &self.lock_fleet(),
                 &ops,
                 &self.services,
+                &self.desired.host_groups(),
                 &enrollment,
                 at,
                 &self.alerts.thresholds,
@@ -739,3 +855,6 @@ mod tests;
 #[cfg(test)]
 #[path = "alerts_coordinator_tests.rs"]
 mod coordinator_tests;
+
+#[path = "group_alerts.rs"]
+mod group_alerts;

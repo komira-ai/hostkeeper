@@ -5,6 +5,7 @@
 use std::fmt::Debug;
 use std::sync::Arc;
 
+use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as _;
 use tonic::{Code, Request, Response, Status};
@@ -105,6 +106,12 @@ async fn every_method_refuses_a_caller_that_is_not_the_operator() {
         );
         assert_refused(
             s.remove_record(caller(anonymous, proto::RemoveRecordRequest::default()))
+                .await,
+            code,
+            token,
+        );
+        assert_refused(
+            s.open_record(caller(anonymous, proto::OpenRecordRequest::default()))
                 .await,
             code,
             token,
@@ -278,5 +285,101 @@ async fn records_are_added_listed_and_removed_and_each_refusal_has_its_status() 
         s.remove_record(as_operator(c, remove("db-1")).await).await,
         Code::NotFound,
         "no_record",
+    );
+}
+
+/// Proves: the platform of `AddRecordRequest` reaches the record the call answers and the list,
+/// and a platform that is not a Linux one is `INVALID_ARGUMENT` `invalid_request`.
+#[tokio::test]
+async fn a_records_platform_is_added_listed_and_a_mac_platform_is_refused() {
+    let world = World::new("grpc-enrollment-platform");
+    let c = &world.coordinator;
+    let s = service(&world);
+    let with = |platform: agent::Platform| proto::AddRecordRequest {
+        platform: platform.into(),
+        ..add_of("db-1", "0c:c4:7a:00:00:02")
+    };
+
+    assert_refused(
+        s.add_record(as_operator(c, with(agent::Platform::DarwinArm64)).await)
+            .await,
+        Code::InvalidArgument,
+        "invalid_request",
+    );
+    let added = s
+        .add_record(as_operator(c, with(agent::Platform::LinuxArm64)).await)
+        .await
+        .expect("added")
+        .into_inner();
+    let record = added.record.expect("the record as kept");
+    assert_eq!(record.platform(), agent::Platform::LinuxArm64);
+    let listed = s
+        .list_records(as_operator(c, proto::ListRecordsRequest::default()).await)
+        .await
+        .expect("listed")
+        .into_inner();
+    assert_eq!(listed.records, vec![record]);
+}
+
+/// Proves `OpenRecord`: it opens the window of a record and answers the record with it and the
+/// audit entry (`record_open`), and each refusal has its status: a record no one holds is
+/// `NOT_FOUND` `no_record`, a window both ways `INVALID_ARGUMENT` `invalid_window`, a used record
+/// `FAILED_PRECONDITION` `record_used`.
+#[tokio::test]
+async fn open_record_opens_a_window_and_each_refusal_has_its_status() {
+    let world = World::new("grpc-enrollment-open");
+    let c = &world.coordinator;
+    let s = service(&world);
+    s.add_record(as_operator(c, add_of("db-1", "0c:c4:7a:00:00:02")).await)
+        .await
+        .expect("added");
+    let open = |host: &str, until: u64, secs: u64| proto::OpenRecordRequest {
+        host_id: host.to_owned(),
+        approve_until_unix: until,
+        approve_for_secs: secs,
+        reason: "ready".to_owned(),
+    };
+
+    let opened = s
+        .open_record(as_operator(c, open("db-1", 0, 3600)).await)
+        .await
+        .expect("opened")
+        .into_inner();
+    let record = opened.record.expect("the record");
+    assert_eq!(
+        (record.host_id.as_str(), record.state()),
+        ("db-1", proto::RecordState::Open)
+    );
+    let entry = opened.entry.expect("the open is audited");
+    assert_eq!(entry.action, "record_open");
+    assert_eq!(
+        entry.reason,
+        Some(format!("until {}; ready", record.approve_until_unix))
+    );
+
+    assert_refused(
+        s.open_record(as_operator(c, open("db-9", 0, 60)).await)
+            .await,
+        Code::NotFound,
+        "no_record",
+    );
+    assert_refused(
+        s.open_record(as_operator(c, open("db-1", 1, 60)).await)
+            .await,
+        Code::InvalidArgument,
+        "invalid_window",
+    );
+    c.ops()
+        .change(
+            crate::ops::Write::BeforeMemory,
+            crate::ops::AuditEntry::new("inventory", "enrollment.auto_approved"),
+            |state| crate::inventory::mark_used(&mut state.inventory, "db-1", "r", 1),
+        )
+        .expect("marked used");
+    assert_refused(
+        s.open_record(as_operator(c, open("db-1", 0, 60)).await)
+            .await,
+        Code::FailedPrecondition,
+        "record_used",
     );
 }

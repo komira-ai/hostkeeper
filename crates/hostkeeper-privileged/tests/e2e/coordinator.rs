@@ -1,4 +1,4 @@
-//! The real coordinator, run inside the test process, and the operator's `ctl` that drives it.
+//! The real coordinator, run inside the test process, and the operator's calls that drive it.
 //!
 //! The coordinator is the production one: [`hostkeeper_coordinator::config::build`] reads the
 //! same flags `hostkeeper-coordinator serve` takes, and [`hostkeeper_coordinator::config::run`]
@@ -6,21 +6,22 @@
 //! enrollment CA is made at start (`--ca-init`), so a daemon enrolls against it exactly as a
 //! real host does, and the private listener serves the CA-issued certificate for `localhost`.
 //!
-//! The operator side is the real `hostkeeper ctl` program, run as a child process over the
-//! private listener with the operator token, with `--output json`. Nothing here calls the
-//! coordinator's Rust API directly, so the tests exercise the surface an operator has.
+//! The operator side is the generated gRPC clients of `hostkeeper-proto` over the private
+//! listener with the operator token ([`super::operator_api`]), each reply read as proto3 canonical
+//! JSON. Nothing here calls the coordinator's Rust API directly, so the tests exercise the
+//! surface an operator has.
 //!
 //! The coordinator runs on its own thread with a current-thread tokio runtime. It stops when
 //! the handle is dropped: the serving task is aborted, which releases the lock of its state
 //! files, and the thread is joined.
 
+use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
 use std::future::poll_fn;
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::pin::{Pin, pin};
-use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
 use std::task::Poll;
 use std::thread::JoinHandle;
@@ -33,12 +34,16 @@ use hostkeeper_coordinator::config::{
 use hostkeeper_coordinator::enrollment::pem;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::operator::v1::{
+    FailThreshold, HostGroup, RollbackMode, RolloutPolicy,
+};
+use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use rcgen::KeyUsagePurpose;
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
 use rustls::pki_types::CertificateDer;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::host_root::DAEMON;
+use super::operator_api::{Approval, OperatorApi, must, shown};
 use super::wait_for;
 
 /// How many half-second looks [`CoordinatorHandle::approve_enrollment`] waits for the daemon's
@@ -53,15 +58,34 @@ struct Started {
     ca_sha256: String,
 }
 
+/// The policy of the group a coordinator is started with: the service rolls back by itself when
+/// its release fails on the one host (`rollback` automatic, threshold 100% and at least one
+/// host).
+pub fn automatic_rollback() -> RolloutPolicy {
+    RolloutPolicy {
+        rollback: RollbackMode::Automatic as i32,
+        rollback_after_failed: Some(FailThreshold {
+            percent: Some(100),
+            min_hosts: Some(1),
+        }),
+        ..RolloutPolicy::default()
+    }
+}
+
 /// A coordinator serving in this process, and the operator's way to call it.
 pub struct CoordinatorHandle {
-    /// The directory of the coordinator's files (token, rollout file, CA, state).
-    dir: PathBuf,
-    /// The role the hosts of the fixture service enroll as.
+    /// The host group the hosts of the fixture service enroll into: an approval's role is read
+    /// as its name.
     role: String,
+    /// The fixture service, which the group lists after `hostkeeper`.
+    service: String,
+    /// The group's policy, which a later put of the group keeps.
+    policy: RolloutPolicy,
     /// Where the listeners are bound.
     bound: Bound,
     started: Started,
+    /// The operator's calls to the private listener.
+    api: OperatorApi,
     /// Ends the serving task when sent to (or dropped).
     stop: Option<tokio::sync::oneshot::Sender<()>>,
     thread: Option<JoinHandle<()>>,
@@ -106,7 +130,6 @@ fn serve_flags(dir: &Path, service: &str) -> Serve {
         ("--state-file", file("desired.json")),
         ("--oidc-config", file("oidc.toml")),
         ("--operator-token-file", file("operator.token")),
-        ("--rollout-file", file("rollout.toml")),
         ("--legacy-service", OsString::from(service)),
         ("--enrollment-dir", file("enrollment")),
         ("--ca-key-file", file("ca.key")),
@@ -186,32 +209,40 @@ fn serve_until_stopped(
 }
 
 impl CoordinatorHandle {
-    /// Starts a coordinator that manages `service` for hosts of role `host_role`, with its
-    /// files in `dir` (made here, mode 0700), and waits until both listeners are bound.
+    /// Starts a coordinator that manages `service` for hosts of the host group `host_role`, with
+    /// its files in `dir` (made here, mode 0700), and waits until both listeners are bound. It
+    /// puts the group, which lists `hostkeeper` and `service`, with the policy
+    /// [`automatic_rollback`].
     ///
-    /// The service rolls back by itself when its release fails on the one host
-    /// (`rollback = "automatic"`, threshold 100% and at least one host).
+    /// The service comes from the registry's repository a test that orders `apt` entries
+    /// registers ([`CoordinatorHandle::put_repository`], which also sets it as the service's
+    /// repository); a test that orders none leaves the default, unregistered.
     ///
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
     pub fn start(dir: &Path, service: &str, host_role: &str) -> CoordinatorHandle {
+        CoordinatorHandle::start_with_policy(dir, service, host_role, automatic_rollback())
+    }
+
+    /// [`CoordinatorHandle::start`], with the group's policy `policy` instead of
+    /// [`automatic_rollback`]: the keys of a rollout that it does not set (for example
+    /// `bake_beats: 2`, a host baked for two healthy heartbeats; build it from
+    /// [`automatic_rollback`] with `..`).
+    ///
+    /// # Panics
+    /// A file cannot be written or the coordinator does not start.
+    pub fn start_with_policy(
+        dir: &Path,
+        service: &str,
+        host_role: &str,
+        policy: RolloutPolicy,
+    ) -> CoordinatorHandle {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("chmod the directory");
         // 64 hex digits: the token must be at least 32 visible ASCII characters.
         let mut random = [0u8; 32];
         getrandom::fill(&mut random).expect("random bytes");
         put(&dir.join("operator.token"), &hex::encode(random), 0o600);
-        put(
-            &dir.join("rollout.toml"),
-            &format!(
-                "[[service]]\n\
-                 name = \"{service}\"\n\
-                 roles = [\"{host_role}\"]\n\
-                 rollback = \"automatic\"\n\
-                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n"
-            ),
-            0o600,
-        );
         put(&dir.join("oidc.toml"), &config_text(STATIC_ISSUER), 0o600);
         let (client_ca_pem, client_ca_der) = throwaway_ca();
         put(&dir.join("client-ca.pem"), &client_ca_pem, 0o644);
@@ -235,20 +266,46 @@ impl CoordinatorHandle {
             .recv()
             .expect("the coordinator ended before it bound its listeners")
             .unwrap_or_else(|why| panic!("the coordinator did not bind: {why}"));
-        // The CA the daemon pins is also what `ctl` trusts for the private listener.
+        // The CA the daemon pins is also what the operator trusts for the private listener.
         put(
             &dir.join("ca.pem"),
             &pem("CERTIFICATE", &started.ca_der),
             0o644,
         );
-        CoordinatorHandle {
-            dir: dir.to_path_buf(),
+        let api = OperatorApi::open(
+            &format!("https://localhost:{}", bound.control.port()),
+            &dir.join("ca.pem"),
+            &dir.join("operator.token"),
+        );
+        let handle = CoordinatorHandle {
             role: host_role.to_owned(),
+            service: service.to_owned(),
+            policy,
             bound,
             started,
+            api,
             stop: Some(stop_tx),
             thread: Some(thread),
-        }
+        };
+        handle.put_group(&[service]);
+        handle
+    }
+
+    /// Puts the host group the hosts enroll into, listing `hostkeeper` and then `packages`
+    /// (`hostkeeper` once), with the policy of this handle.
+    fn put_group(&self, packages: &[&str]) {
+        let packages = std::iter::once("hostkeeper")
+            .chain(packages.iter().copied().filter(|p| *p != "hostkeeper"))
+            .map(str::to_owned)
+            .collect();
+        must(
+            "host-groups put",
+            self.api.put_host_group(HostGroup {
+                name: self.role.clone(),
+                packages,
+                policy: Some(self.policy.clone()),
+            }),
+        );
     }
 
     /// Where the daemon's `coordinator_url` points: the heartbeat listener. The name is
@@ -262,68 +319,25 @@ impl CoordinatorHandle {
         self.started.ca_sha256.clone()
     }
 
-    /// Runs `hostkeeper ctl <args>` against the private listener with the operator token and
-    /// `--output json`, and gives what it ended with.
-    pub fn ctl_output(&self, args: &[&str]) -> Output {
-        let endpoint = format!("https://localhost:{}", self.bound.control.port());
-        Command::new(DAEMON)
-            .arg("ctl")
-            .args(args)
-            // The global flags may follow the command.
-            .arg("--endpoint")
-            .arg(endpoint)
-            .arg("--ca-file")
-            .arg(self.dir.join("ca.pem"))
-            .arg("--token-file")
-            .arg(self.dir.join("operator.token"))
-            .args(["--output", "json"])
-            .stdin(Stdio::null())
-            .output()
-            .unwrap_or_else(|e| panic!("cannot run {DAEMON}: {e}"))
-    }
-
-    /// Runs `hostkeeper ctl <args>` ([`CoordinatorHandle::ctl_output`]) and gives the JSON it
-    /// printed (`{}` when it printed nothing: a response with every field at its default).
-    ///
-    /// # Panics
-    /// The command does not exit 0 (its output is in the message) or prints no JSON.
-    pub fn ctl(&self, args: &[&str]) -> Value {
-        let out = self.ctl_output(args);
-        let stdout = String::from_utf8_lossy(&out.stdout);
-        assert!(
-            out.status.success(),
-            "ctl {args:?} failed: {}\nstdout: {stdout}\nstderr: {}",
-            out.status,
-            String::from_utf8_lossy(&out.stderr),
-        );
-        if stdout.trim().is_empty() {
-            return json!({});
-        }
-        serde_json::from_str(&stdout)
-            .unwrap_or_else(|e| panic!("ctl {args:?} printed no JSON ({e}): {stdout}"))
-    }
-
-    /// Writes `request` as the file `name` of the coordinator's directory and gives its path.
-    fn request_file(&self, name: &str, request: &Value) -> String {
-        let path = self.dir.join(name);
-        put(&path, &request.to_string(), 0o600);
-        path.to_string_lossy().into_owned()
+    /// The operator's calls to the coordinator's private listener, for the calls this handle
+    /// has no method for.
+    pub fn api(&self) -> &OperatorApi {
+        &self.api
     }
 
     /// Waits for the daemon's enrollment request to be listed, then approves it as `host_id`
-    /// with the role the coordinator was started for and the service `service` assigned.
+    /// with the role the coordinator was started for, which is read as the name of the host
+    /// group the host goes into.
     ///
     /// # Panics
     /// No request is listed (the daemon cannot reach the coordinator, or pins another CA) or
     /// the approval is refused.
-    pub fn approve_enrollment(&self, host_id: &str, service: &str) {
+    pub fn approve_enrollment(&self, host_id: &str) {
         let mut request = None;
         wait_for("a pending enrollment request", ENROLLMENT_TRIES, || {
-            let out = self.ctl_output(&["enrollment", "list"]);
-            if !out.status.success() {
+            let Ok(listed) = self.api.pending() else {
                 return false;
-            }
-            let listed: Value = serde_json::from_slice(&out.stdout).unwrap_or(Value::Null);
+            };
             request = listed["requests"].get(0).cloned();
             request.is_some()
         });
@@ -331,72 +345,106 @@ impl CoordinatorHandle {
         let id = request["requestId"].as_str().expect("a request id");
         // The request id is the key's SHA-256 too; the listing says it in both fields.
         let key = request["keySha256"].as_str().unwrap_or(id);
-        self.ctl(&[
-            "enrollment",
-            "approve",
-            "--request-id",
-            id,
-            "--key-sha256",
-            key,
-            "--host-id",
-            host_id,
-            "--role",
-            &self.role,
-            "--services",
-            service,
-            "--reason",
-            "privileged test",
-        ]);
+        must(
+            "enrollment approve",
+            self.api.approve(&Approval {
+                request_id: id,
+                key_sha256: key,
+                host_id,
+                role: &self.role,
+                reason: "privileged test",
+                ..Approval::default()
+            }),
+        );
     }
 
-    /// Sets the desired version of `service` to `version`, whose package has the SHA-256
-    /// `digest` (64 lower-case hex digits).
-    pub fn set_desired(&self, service: &str, version: &str, digest: &str) {
-        let file = self.request_file(
-            "set-desired.json",
-            &json!({"desired": {"version": version}}),
+    /// The host `node_id` as `Hosts.Get` gives it (`Null` when the coordinator knows none): among
+    /// the rest, its last heartbeat as it sent it, `heartbeat`.
+    pub fn host(&self, node_id: &str) -> Value {
+        self.api
+            .get_host(node_id)
+            .map_or(Value::Null, |got| got["host"].clone())
+    }
+
+    /// Sets the desired version of `service` to `version` by targets alone, as CI's set of a
+    /// release whose entries are all native does: `targets` by platform, no release index and no
+    /// index digest.
+    pub fn set_desired_targets_alone(
+        &self,
+        service: &str,
+        version: &str,
+        targets: BTreeMap<String, TargetList>,
+    ) {
+        must(
+            "releases set-desired by targets alone",
+            self.api
+                .set_desired_targets_alone(service, version, targets),
         );
-        self.ctl(&[
-            "releases",
-            "set-desired",
-            "--service",
-            service,
-            "--package-digest",
-            digest,
-            "--request",
-            &file,
-        ]);
+    }
+
+    /// Registers `repository` in the coordinator's registry of package repositories and sets it
+    /// as the repository of the fixture service (a set of apt entries needs the service's
+    /// repository, with the entries' repository one of its channels).
+    pub fn put_repository(&self, repository: Repository) {
+        let name = repository.name.clone();
+        must("repositories put", self.api.put_repository(repository));
+        must(
+            "services set-repository",
+            self.api.set_repository(&self.service, &name),
+        );
     }
 
     /// Forces `service` to `version` on the host `host_id` at once, with no hook.
     pub fn force(&self, service: &str, version: &str, host_id: &str) {
-        let file = self.request_file("force.json", &json!({"hosts": {"nodeIds": [host_id]}}));
-        self.ctl(&[
-            "releases",
-            "force",
-            "--service",
-            service,
-            "--version",
-            version,
-            "--reason",
-            "privileged test",
-            "--request",
-            &file,
-        ]);
+        must(
+            "releases force",
+            self.api.force(service, version, host_id, "privileged test"),
+        );
     }
 
     /// How far the hosts of `service` are from its desired version: the `convergence` of
-    /// `releases converge`, with `state` as `CONVERGENCE_STATE_*`.
+    /// `Releases.Converge`, with `state` as `CONVERGENCE_STATE_*`.
     pub fn converge(&self, service: &str) -> Value {
-        let reply = self.ctl(&["releases", "converge", "--service", service]);
+        let reply = must("releases converge", self.api.converge(service));
         reply["convergence"].clone()
     }
 
-    /// The status of `service`: the first of `services` in `releases status`, with its hosts,
+    /// The status of `service`: the first of `services` in `Releases.Status`, with its hosts,
     /// their versions and last verdicts, and its marks.
     pub fn status(&self, service: &str) -> Value {
-        let reply = self.ctl(&["releases", "status", "--service", service]);
+        let reply = must("releases status", self.api.status(service));
         reply["services"][0].clone()
+    }
+
+    /// The services the coordinator lists, as `Services.List` gives them (`services`).
+    pub fn services(&self) -> Value {
+        must("services list", self.api.list_services())
+    }
+
+    /// Takes `service` out of the packages of the host group, which orders its hosts to
+    /// uninstall it.
+    pub fn uninstall(&self, service: &str) {
+        let packages: Vec<&str> = [self.service.as_str()]
+            .into_iter()
+            .filter(|p| *p != service)
+            .collect();
+        self.put_group(&packages);
+    }
+
+    /// The text of `Releases.Status` of `service` for a failed test's report: the JSON of the
+    /// reply, or the status the call ended with. Never panics.
+    pub fn status_text(&self, service: &str) -> String {
+        shown(self.api.status(service))
+    }
+
+    /// The text of `Releases.Converge` of `service`, as [`CoordinatorHandle::status_text`].
+    pub fn converge_text(&self, service: &str) -> String {
+        shown(self.api.converge(service))
+    }
+
+    /// The text of `Services.List`, as [`CoordinatorHandle::status_text`].
+    pub fn services_text(&self) -> String {
+        shown(self.api.list_services())
     }
 }
 

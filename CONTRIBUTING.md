@@ -43,16 +43,21 @@ no fixed port and no root, and they write only under Cargo's target directory.
 
 ## What CI checks on a pull request
 
-`.github/workflows/ci.yml` runs two jobs on GitHub-hosted runners:
+`.github/workflows/ci.yml` runs these jobs on GitHub-hosted runners; its gate is the checks `lint`
+and `test`:
 
 - `lint`: the format, `cargo deny check bans licenses sources` (the licence allow-list and the
   sources are in `deny.toml`), clippy with warnings as errors (the banned methods are in
   `clippy.toml`), the build of `hostkeeper-hook` alone without its `conformance` feature
   (`cargo check -p hostkeeper-hook --lib`), actionlint, and the workflow lint
   (`cargo test -p xtask --test workflows`).
-- `test`: every test under `cargo llvm-cov` with branch coverage, then `coverage-gate`, which
-  fails when any crate of the workspace is under 99.00% of its lines or of its branches. Every
-  crate is judged; there is no way to exclude one (rules T1 to T4).
+- `test-shard` (two jobs, `test-shard (1)` and `test-shard (2)`): every test under
+  `cargo llvm-cov` with branch coverage, split in two by `cargo nextest --partition hash:<shard>/2`
+  so that each test runs in exactly one shard.
+- `test` (the job `coverage`): fails unless both shards passed, then merges what they measured
+  and runs `coverage-gate`, which fails when any crate of the workspace is under 99.00% of its
+  lines or of its branches. Every crate is judged; there is no way to exclude one (rules T1 to
+  T4).
 
 Security advisories are not checked on a pull request: a new advisory against a crate already in
 `Cargo.lock` would fail every open pull request for something none of them did. Instead
@@ -71,9 +76,14 @@ cargo +nightly-2026-10-01 llvm-cov --workspace --locked --branch --lcov --output
 cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
-Nothing privileged and nothing for macOS runs on a pull request. The workflow lint refuses such a
-job in any workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml` (below), and it also refuses an action that is not pinned
+Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below):
+its privileged job on every pull request, its macOS jobs on every pull request that changes a path
+they build or read. The workflow lint refuses such a
+job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
+container) in any workflow but `privileged.yml`, `net-install.yml` and the three copies of
+`privileged.yml`'s jobs in `pr-device.yml`,
+refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
+also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
 `permissions: {}`, `pull_request_target` and `secrets: inherit`. It also holds
 `set-desired.yml`, the CI client services call ([docs/deploy/ci-client.md](docs/deploy/ci-client.md)),
@@ -87,9 +97,60 @@ Everything a pull request runs proves hostkeeper against fakes of the host.
 `.github/workflows/privileged.yml` is the one place where the adapters behind those fakes meet the
 real thing: it runs the tests of `crates/hostkeeper-privileged` as root against the systemd of a
 GitHub-hosted `ubuntu-24.04` runner. It runs after a merge to `main` and by hand
-(`workflow_dispatch`), never on a pull request, so a pull request cannot show these tests passing:
-the first run on `main` after the merge is their proof. A release waits for a successful run of it
-on its commit. A red run on `main` is a defect: fix it forward in a new pull request.
+(`workflow_dispatch`), never on a pull request. A release waits for a successful run of it on its
+commit. A red run on `main` is a defect: fix it forward in a new pull request.
+
+Network install end to end (below) runs as root too, in `.github/workflows/net-install.yml`, on its
+own triggers, and no release waits for it: an emulated install takes hours. It runs on a push to
+`main` that changes the network-install code (the paths the workflow lint lists:
+`crates/hostkeeper-pxe*`, `packaging/netboot`, `packaging/linux`, the network-install tests and
+their rig, the generators of `netboot.json` and of the report, and the workflow itself), nightly
+on `main` whatever changed, and by hand (`workflow_dispatch`), on `main` or on a pull request's
+branch (`gh workflow run net-install.yml --ref <branch>`); never on a pull request. A newer run of
+the same branch cancels the older, so on `main` only the newest commit's run is kept. A red run on
+`main` is a defect, as above.
+
+## The macOS and privileged jobs of a pull request
+
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its four checks are
+required of every pull request:
+
+- `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+  code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
+  check, the observer, the enrollment claims and what they use) on a GitHub-hosted `macos-15`
+  runner, as the runner's user. The rest of the workspace (the coordinator's MDM and
+  network-install servers, the release tooling) runs on Linux only and does not build for macOS;
+  the workflow lint holds the list to those binaries' path dependencies, so a crate added to
+  either joins it.
+- `macos-device`: the device tests as root under launchd.
+- `privileged`: the privileged tests as root against systemd.
+- `openrc-device`: the daemon under OpenRC in an Alpine Linux container, as root. The job builds
+  the Alpine image (`crates/hostkeeper-privileged/openrc`), the programs the container runs for
+  `x86_64-unknown-linux-musl`, and the test `openrc_device.rs`, and downloads the nfpm that
+  `artifacts.yml` pins (the workflow lint holds the version and the SHA-256 equal to its).
+
+`macos-device`, `privileged` and `openrc-device` are copies of `privileged.yml`'s jobs of those
+names, key for key (the workflow lint compares them; `macos-device` but its name, needs and
+condition), so a pull request runs what will run after its merge. `privileged` and `openrc-device`
+run on every pull request.
+
+GitHub-hosted macOS runners are few, so the two macOS jobs run only when the pull request changes
+a path they build, test or read. A Linux job, `changes`, runs `git diff` from the merge base of the
+pull request's base and its head with the exclude pathspecs of its step, the skip list: the docs
+but `docs/macos.md` and `docs/conformance.md`, the top-level guides but `README.md` and
+`MIGRATION.md` (tests of the Mac's crates read those four), the workflows with no macOS job that
+no macOS job copies, and the test targets of `crates/hostkeeper-privileged` that `macos-device`
+does not build. When every changed path is on the list, the macOS jobs are skipped; any other path,
+a new one included, and a diff that cannot be computed run them. The checks `macos-test` and
+`macos-device` are Linux jobs of those names that run after the macOS jobs whatever they did: each
+passes when its macOS job (whose own check is `macos-test on macos-15` or
+`macos-device on macos-15`) passed, or was skipped by the path rule, which it then says, and fails
+otherwise. The workflow lint (`crates/xtask/tests/workflows`, `pr_paths.rs`) refuses an entry no
+reason covers: one that matches no file, a workflow with a macOS job, a test target the device job
+builds or another file includes, or a path a source the Mac compiles, or a file of a crate whose
+tests run on macOS, names. A push to `main` runs every macOS job, with no path rule. A newer
+push to the same pull request cancels the older run. These jobs hold no write scope and name no
+secret or token, and save no cache.
 
 The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
 
@@ -127,9 +188,39 @@ bundle back as it was when it ends. The verifier is the one stand-in:
 `/usr/bin/true` in place of `gh`, since an attestation of a package the test builds cannot be made
 without the network.
 
+In the jobs `net-install` and `net-install-arm64` of `net-install.yml`, network install of a new machine end to end
+(docs/design/network-install.md section 11): a QEMU guest with UEFI firmware, an empty disk and
+its NIC first in the boot order, on a Linux bridge with no route out, each box of the LAN (the
+router, whose DHCP the test fakes, and the real `pxe`) in a network namespace of its
+own, with the real coordinator's LAN listener (`tests/netinstall/`). The job installs QEMU and the
+firmware from Ubuntu's archive (its only other use of `sudo`, which the workflow lint allows in
+these two jobs for the packages it lists), downloads the ISO by its pinned URL, and, for x86-64,
+builds this commit's deb; `pxe update-hook prepare` checks and seals the boot set from a release the
+test serves and signs. Every wait is on a line of the guest's serial console, of
+`pxe`'s log or of the router's DHCP, or on an answer of the coordinator to the test's own call; the job's
+`timeout-minutes` is the only bound. What each run kept, passed or not, is the job's artifact:
+
+- `net_install.rs` (under KVM):
+  `an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled_and_retired`
+  (proxy mode; enrollment by the console's key hash; the fixture service; router mode for the
+  enrolled host; a reinstall with `--reinstall` and `--replace`; a retired host after a coordinator
+  restart, in both modes);
+- `net_install_arm64.rs` (under TCG, as the hosted arm64 runner has no KVM): `arm64_boots_to_seed_fetch`.
+
+The one stand-in is on the installed guest: before its approval the test gives it the release
+channel's CA and the trusted root of the test's signer, by its operator account over SSH, so that
+its own `gh` checks the fixture package's attestation. `tests/net_install_rig.rs` runs the parts
+of the rig that need no root (the router's DHCP answers, the console's lines) in the pull-request
+set.
+
 The files of the job `privileged` start with `#![cfg(feature = "privileged")]`, those of
-`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`. The feature is off by default,
-so `cargo test --workspace` and CI's `test` job compile none of them, and they count toward no
+`first-boot` with `#![cfg(all(target_os = "linux", feature = "privileged"))]`, `openrc_device.rs` (the job
+`openrc-device`) with `#![cfg(all(target_os = "linux", target_env = "gnu", feature = "privileged"))]`,
+`net_install.rs` with
+`#![cfg(all(target_os = "linux", target_arch = "x86_64", feature = "privileged"))]` and
+`net_install_arm64.rs` with `#![cfg(all(target_os = "linux", feature = "privileged",
+not(target_arch = "aarch64")))]`. The feature is off by default,
+so `cargo test --workspace` and CI's test shards compile none of them, and they count toward no
 coverage gate; the crate's library (the workload fixture `hostkeeper-fixture-hook`, the host
 check, the rig) is tested without root in the pull-request set like any crate. A privileged test
 refuses to start unless it runs as root on a host whose service manager is systemd.
@@ -146,7 +237,8 @@ cargo test -p hostkeeper-privileged --features privileged --locked --config "tar
 Each test names its units `hostkeeper-ci-<test>-<pid>-<n>` and stops, unlinks and resets them when
 it ends, failed or not; `journalctl --unit 'hostkeeper-ci-*'` shows what they logged. The
 first-boot tests also add a CA to the host's CA bundle and write under `/etc`, `/usr/lib` and
-`/var/lib`: run them only on a throwaway VM, never on a host that runs hostkeeper.
+`/var/lib`, and the network-install tests make network namespaces, a bridge, veth pairs and a tap
+on the host and run QEMU: run them only on a throwaway VM, never on a host that runs hostkeeper.
 
 ### The tierstore-shaped end-to-end tests
 
@@ -156,8 +248,9 @@ test process) and the real `hostkeeper daemon` (under a `Type=notify` unit, star
 in `prepare` and starts the new release beside the old in `cutover`. The package is fetched from
 a release channel the test serves over HTTPS on loopback, its attestation is checked by the pinned
 `gh` (the job's step `Install gh` puts it at `target/privileged-tools/gh`) against a trust root
-the test makes, and it is unpacked, sealed and switched by the daemon; `hostkeeper ctl` sets the
-desired version and reads the coordinator's answer. The tests:
+the test makes, and it is unpacked, sealed and switched by the daemon; the test sets the
+desired version and reads the coordinator's answer through the generated tonic clients
+(`hostkeeper-testkit`'s `operator` helper). The tests:
 
 - `a_tierstore_shaped_package_updates_end_to_end`: from `1.0.0` to `1.1.0`, the old release
   serving while `prepare` drains, then the new one serving and the host converged;
@@ -185,6 +278,53 @@ add a `FixtureVersion` to `Scenario::start` (`tests/e2e/scenario.rs`): its versi
 (chosen at run time) and whether its `verify` fails; the scenario builds, signs and publishes it
 with the others. Nothing binary is committed.
 
+### The cross-release rig
+
+`self_update_across_releases.rs` runs hostkeeper's update of itself from a **published release** to
+this build, on Linux in the job `privileged` and on a Mac in the job `macos-device` (one target in
+both: its first line names both platforms). The release is the one
+`crates/hostkeeper-privileged/previous-release.toml` pins: its tag and version, and for each
+release platform the URL of its binary tarball (`hostkeeper-<version>-<platform>.tar.gz`) and that
+tarball's SHA-256. The jobs' steps `Download the previous release` and `Check the previous
+release (pinned checksum)` fetch the URL with `curl` and check it with `cargo xtask install-tool`
+into `target/previous-release/hostkeeper.tar.gz`; the workflow lint holds each job's
+`PREVIOUS_RELEASE_URL` and `PREVIOUS_RELEASE_SHA256` to the pin. The test checks the file against
+the pin again and fails by name when it is missing or differs; it fetches nothing itself.
+
+The released daemon runs as the host's own daemon (`hostkeeper.service` where the deb installs
+it, or the launchd job `dev.hostkeeper.hostkeeper` where the pkg puts it), on the end-to-end rig:
+the real coordinator ordering hostkeeper, the pinned `gh` against the test's trust root, which the
+released daemon reads from the host's fixed path as this build does. On Linux the coordinator
+orders hostkeeper as a release from stage 9 on does (docs/design/packages-native.md, section
+10.5): by targets alone, each list one `apt` entry of hostkeeper's `.deb` from a signed apt
+repository the test serves on loopback (`tests/across/deb.rs`), and the host starts from the
+released version's `.deb` installed and adopted; on a Mac, whose daemon announces `macos-pkg`
+only with a signers file the rig does not write (and the pinned release on no Mac), it orders the
+`hostkeeper-archive` entry from a loopback release channel, as before. This
+build is the program `hostkeeper-named-daemon` (the shipped daemon, its hand-over acted on first,
+its version the name of the file it runs from, so it runs as versions newer than the release) and
+`hostkeeper-failing-daemon` (whose `daemon` exits 1). The pin is v0.1.218, A19's own release (one
+that installs `apt` entries and updates itself through its `.deb`).
+The tests, each from the released daemon converged on its own version's package:
+
+- `the_released_daemon_updates_to_this_build_and_this_build_settles_it_succeeded`: the released
+  daemon updates to this build by the hand-over, and this build's own start finishes the switch and
+  settles the update `Succeeded`, reported to the coordinator;
+- `this_build_made_to_fail_its_start_is_fallen_back_from_to_the_released_binary`: the released
+  binary execs the failing build three times, then settles the update `Failed`,
+  `self_update_fallback`, reported to the coordinator, with `current` unchanged and `next` removed;
+- `this_build_updates_to_itself_under_a_newer_version_name`: by the hand-over;
+- `the_released_binary_put_back_on_the_packages_this_build_staged_reports_them_and_updates_again`
+  and
+  `the_released_binary_started_on_versions_of_another_installer_runs_on_and_leaves_them_untouched`:
+  the released binary on the packages this build and other installers left.
+
+To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's
+`url` and `sha256` from the release's `SHA256SUMS`, in `previous-release.toml`, and the same URL
+and SHA-256 in the `env` of the jobs `privileged` and `macos-device` of both `privileged.yml` and
+`pr-device.yml`. `cargo test -p hostkeeper-privileged --lib across` checks the pin's shape and
+`cargo test -p xtask --test workflows` checks the workflows against it.
+
 ## Tests
 
 Tests assert behaviour, cover failure and boundary cases, and are hermetic. A bug fix ships with
@@ -198,6 +338,13 @@ read (`SystemTime::now()` and its equivalents, a realtime clock id) in any non-t
 path listed, with its reason, in `crates/xtask/tests/wallclock/allowed.txt`: certificate, OIDC or
 enrollment-nonce validity, and the time stamp of the coordinator's audit file, which no decision
 reads.
+
+A command an operator doc gives is an `hkctl` command ([docs/cli.md](docs/cli.md)), written out
+in full in a fenced block: `hkctl --endpoint https://<private-listener> --ca-file <ca.pem>
+--token-file <token-file> <service> <method> [flags]`. `cargo test -p xtask --test enrollment_doc`
+reads each such line of every Markdown file but the design documents (`docs/design/`) as hkctl
+reads it, against its command table and global flags, and the method and flags an inline
+`` `hkctl ...` `` span names; it refuses a fenced `hostkeeper ctl` line.
 
 ## Small pull requests
 

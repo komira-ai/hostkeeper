@@ -21,10 +21,11 @@ use clap::Parser;
 use hostkeeper_coordinator::config::{Bound, Cli, Command, Parts, Serve, StartError, build, run};
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
 use serde_json::{Value, json};
-use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, recorded, scratch};
+use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, scratch};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// The URL of NanoHUB's API: loopback, and nothing listens there.
@@ -51,7 +52,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         files.put("mdm.key", "a-nanohub-api-key-for-the-tests\n", 0o600);
         files
     }
@@ -87,8 +87,6 @@ impl Files {
             "=oidc.toml",
             "--operator-token-file",
             "=operator.token",
-            "--rollout-file",
-            "=rollout.toml",
             "--legacy-service",
             "kbf",
         ];
@@ -318,6 +316,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-webhook-listen <MDM_WEBHOOK_LISTEN>",
         "--mdm-profile-identifier <MDM_PROFILE_IDENTIFIER>",
         "--mdm-daemon-config <MDM_DAEMON_CONFIG>",
+        "--mdm-stores <MDM_STORES>",
+        "--mdm-macos-pkg <MDM_MACOS_PKG>",
         "--mdm-pkg-allowlist <MDM_PKG_ALLOWLIST>",
         "--mdm-host <MDM_HOST>",
     ] {
@@ -527,6 +527,62 @@ fn the_enrollment_side_flags_go_together_with_the_gate() {
         .collect();
     let text = refusal(&files, &refused);
     assert!(text.starts_with("--mdm-daemon-config: "), "{text}");
+}
+
+/// Catches: `--mdm-stores` or `--mdm-macos-pkg` accepted without the profile identifier (each
+/// alone, with the gate only), or a stores file with a credential file or a signers file the
+/// daemon's loader refuses let through the start, or refused with a text that does not name the
+/// flag.
+#[test]
+fn the_stores_and_signers_flags_need_the_profile_and_are_checked_at_start() {
+    let files = Files::new("mdm-stores-flags");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    let stores = "[[store]]\nname = \"lan\"\nkind = \"https\"\nbase = \"https://m.example/\"\n";
+    files.put("stores.toml", stores, 0o644);
+    files.put(
+        "macos-pkg.toml",
+        &format!("signers = [\"{}\"]\n", "ab".repeat(32)),
+        0o644,
+    );
+    let stores_flag = ["--mdm-stores", "=stores.toml"];
+    let signers_flag = ["--mdm-macos-pkg", "=macos-pkg.toml"];
+    for alone in [stores_flag, signers_flag] {
+        let args: Vec<&str> = good().into_iter().chain(alone).collect();
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let all: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(stores_flag)
+        .chain(signers_flag)
+        .collect();
+    assert!(start(&files, &all).is_ok());
+
+    files.put(
+        "stores.toml",
+        &format!("{stores}basic_auth_file = \"/x\"\n"),
+        0o644,
+    );
+    assert_eq!(
+        refusal(&files, &all),
+        "--mdm-stores: store \"lan\" names a credential file (basic_auth_file or bearer_file): a profile carries no secret, and the file is not on the Mac"
+    );
+    files.put("stores.toml", stores, 0o644);
+    files.put("macos-pkg.toml", "signers = [\"zz\"]\n", 0o644);
+    assert_eq!(
+        refusal(&files, &all),
+        "--mdm-macos-pkg: the signers names \"zz\", which is not 64 hex digits"
+    );
 }
 
 /// Catches: a pkg flag accepted without its partner or without the enrollment side
@@ -744,14 +800,36 @@ fn device_information(uuid: &str) -> Vec<u8> {
 async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
     let hub = Hub::start().await;
     let files = Files::new("mdm-side-start");
-    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
-    let parts = build(&flags_of(side_args(&files, &hub.url)), roots).expect("started");
+    let roots = || Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    // The allowlist's entry names the host group `build`, which the state files must hold.
+    let first = build(&flags_of(files.args(&enrollment())), roots()).expect("started");
+    first
+        .coordinator
+        .host_groups_put(
+            &first.coordinator.caller(Some(OPERATOR)).await,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
+    drop(first);
+    let parts = build(&flags_of(side_args(&files, &hub.url)), roots()).expect("started");
     let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
 
-    gate.webhook(&authenticate_event()).await.expect("taken");
-    gate.webhook(&token_update()).await.expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &authenticate_event())
+        .await
+        .expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &token_update())
+        .await
+        .expect("taken");
     let uuid = hub.uuid_of("DeviceInformation");
-    gate.webhook(&device_information(&uuid))
+    hostkeeper_mdm_gate::webhook::take(&gate, &device_information(&uuid))
         .await
         .expect("taken");
 

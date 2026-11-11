@@ -1,8 +1,9 @@
 //! The executor: [`Daemon::order`] takes one order of the coordinator, decodes it into a
 //! [`Verb`] and hands it to the verb's module under `verbs/`, which answers with a [`Reply`].
-//! [`Daemon::status`] reports what the daemon holds for each service. [`Daemon::abort`] and
-//! [`Daemon::clear_record`] are also the admin socket's; [`Daemon::clear_halt`] is the
-//! coordinator's alone, and `clear_record` is never a coordinator's.
+//! [`Daemon::status`] reports what the daemon holds for each service; nothing on the host serves
+//! it. [`Daemon::abort`] runs what the coordinator's `abort` order runs. A coordinator's
+//! `clear_record` order is dispatched before anything reads the service's step record, so a
+//! record that does not read is no bar to the order that clears it.
 //!
 //! The executor only dispatches: each verb is one module with one function taking the shared
 //! [`Ctx`] and its typed arguments, so that a later verb fills one file and one arm.
@@ -16,6 +17,8 @@ use hostkeeper_config::daemon::DaemonConfig;
 use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::Verdict;
+use hostkeeper_install::Announcement;
+use hostkeeper_install::repository::Drift;
 use hostkeeper_observe::{Observation, Observer};
 use hostkeeper_placed::{Fs, PlacedError, Placer, Roots, UnitControl};
 use hostkeeper_proto::hostkeeper::agent::v1::Order;
@@ -25,7 +28,8 @@ use hostkeeper_steps::{
     StepRunner, UpdateOrder, Watch,
 };
 
-use crate::boot::{ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
+use crate::boot::{ALERT_INTERRUPTED, ALERT_JOURNAL, ALERT_UNSTOPPABLE, ALERT_WATCHER, alert_line};
+use crate::builtin::BuiltinPorts;
 use crate::checks;
 use crate::halt::HaltStore;
 use crate::installed::{self, CURRENT, Lifecycle};
@@ -35,13 +39,12 @@ use crate::observer;
 use crate::packages::Packages;
 use crate::prune::{ForceLockPoint, Prune};
 use crate::refusal::Refusal;
-use crate::selfupdate::{self, LauncherProbe, ProtocolProbe, Restart};
-use crate::trusted_root::RootReport;
+use crate::repository::{Repository, RepositoryPorts};
+use crate::selfupdate::{self, Restart};
 use crate::verb::{HookedVerb, Verb};
 use crate::verbs;
 use crate::verbs::abort::Aborted;
 use crate::verbs::clear_halt::Lifted;
-use crate::verbs::clear_record::Cleared;
 use crate::verbs::force::SELF_SERVICE;
 use crate::watchers::{STOPPED, SlicedClock, WatchEnd, Watchers, Yielding};
 
@@ -58,7 +61,7 @@ pub type AlertSink = Arc<dyn Fn(&str) + Send + Sync>;
 pub struct Ports {
     /// Runs one step of a hook.
     pub launcher: Arc<dyn StepLauncher>,
-    /// Fetches, verifies, unpacks and seals packages.
+    /// Fetches the artifact of a `macos-pkg` entry by its pin.
     pub packages: Arc<dyn Packages>,
     /// Monotonic seconds and the boot id; nothing the daemon decides reads the wall clock.
     pub clock: Arc<dyn Clock>,
@@ -68,7 +71,7 @@ pub struct Ports {
     /// The service manager: the units a `force` stops, starts and asks after, and
     /// `daemon-reload`.
     pub units: Arc<dyn UnitControl + Send + Sync>,
-    /// Where placed-path linking works, and the filesystem it goes through.
+    /// Where the daemon's links and `placed.json` are, and the filesystem they go through.
     pub placement: Placement,
     /// The prune of the versions a confirmed switch leaves behind: at the end of an update that
     /// ends `Succeeded`, and at step 18 of a `force` that moved `current`.
@@ -77,9 +80,18 @@ pub struct Ports {
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Looks at how each installed service runs: what `Status` reports of it.
     pub observer: Arc<Observer>,
+    /// The installers the daemon announces, decided once at its start
+    /// ([`hostkeeper_install::announce`]); the heartbeat lists them, and the receipt check of an
+    /// entry judges its installer against them, with the host's native installer once a set the
+    /// coordinator pushed gave it an entry ([`Ctx::installers`]).
+    pub announcement: Announcement,
+    /// What the repository installer works with: the host's repository entries, the packages
+    /// directory a repository version is staged in, the work directories and the installer
+    /// lock ([`crate::repository`]).
+    pub repository: Arc<RepositoryPorts>,
 }
 
-/// Where placed-path linking works (design section 4.7, "Placed paths"): the directories as the
+/// Where the daemon's links and `placed.json` are (design section 4.7): the directories as the
 /// host names them, and the filesystem every path is read and written through. The packages
 /// directory of `roots`, as `fs` reaches it, is [`Dirs::packages`].
 pub struct Placement {
@@ -96,6 +108,8 @@ pub struct Dirs {
     /// A directory per service with its version directories and the `current` and `previous`
     /// links.
     pub packages: PathBuf,
+    /// The host's facts file, which the heartbeat loop writes ([`crate::facts_file`]).
+    pub facts: PathBuf,
 }
 
 /// What every verb works with.
@@ -113,6 +127,15 @@ pub struct Ctx {
     pub force_lock_point: Arc<dyn ForceLockPoint>,
     /// Observes the installed services; it takes none of the daemon's locks.
     pub observer: Arc<Observer>,
+    /// The installers the daemon announced at its start ([`Ports::announcement`]);
+    /// [`Ctx::installers`] adds the native one a pushed set may have made possible since.
+    pub announcement: Announcement,
+    /// What the repository installer works with ([`Ports::repository`]).
+    pub repository_ports: Arc<RepositoryPorts>,
+    /// The drift each service's last repository `activate` repaired, until its verdict takes it.
+    repaired: Arc<Mutex<BTreeMap<String, Drift>>>,
+    /// The counter of the repository installer's tool units ([`Repository::tool_runs`]).
+    tool_runs: Arc<std::sync::atomic::AtomicU64>,
     pub locks: ServiceLocks,
     pub step_lock: StepLock,
     pub halts: HaltStore,
@@ -132,18 +155,11 @@ pub struct Ctx {
     deadman_poll_secs: Option<u64>,
     /// Ends the dead-men when the daemon is dropped.
     stop: Arc<AtomicBool>,
-    /// Asks a new hostkeeper binary for its self-update protocol.
-    probe: Arc<dyn ProtocolProbe>,
     /// The daemon's request to exit so that its unit starts a new binary.
     restart: Restart,
 }
 
 impl Ctx {
-    /// The probe a new hostkeeper binary's self-update protocol is asked with.
-    pub fn probe(&self) -> &dyn ProtocolProbe {
-        &*self.probe
-    }
-
     /// The daemon's request to exit with status 0 after the follow-on of its own update.
     pub fn restart(&self) -> &Restart {
         &self.restart
@@ -239,7 +255,42 @@ impl Ctx {
         }
     }
 
-    /// The placed-path linker of this host.
+    /// The repository installer with this daemon's ports ([`crate::repository`]).
+    pub fn repository(&self) -> Repository {
+        Repository {
+            launcher: Arc::clone(&self.launcher),
+            ports: Arc::clone(&self.repository_ports),
+            packages: Arc::clone(&self.packages),
+            clock: Arc::clone(&self.clock),
+            roots: self.placement.roots.clone(),
+            fs: Arc::clone(&self.placement.fs),
+            units: Arc::clone(&self.units),
+            max_package_bytes: self.config.bounds.max_package_bytes,
+            repaired: Arc::clone(&self.repaired),
+            tool_runs: Arc::clone(&self.tool_runs),
+            log: Arc::clone(&self.alerts),
+        }
+    }
+
+    /// The built-in steps over this daemon's ports ([`crate::builtin`]).
+    pub fn builtin_ports(&self) -> BuiltinPorts {
+        BuiltinPorts {
+            units: Arc::clone(&self.units),
+            clock: Arc::clone(&self.clock),
+            observer: Arc::clone(&self.observer),
+            packages: self.dirs.packages.clone(),
+            binaries: crate::selfupdate::binary_dir(&self.dirs.state),
+            own: self.own_version,
+        }
+    }
+
+    /// The installers the daemon announces now: those decided at its start, and the host's
+    /// native one once it has an entry in use ([`crate::repository_push::installers`]).
+    pub fn installers(&self) -> Vec<hostkeeper_release::Installer> {
+        crate::repository_push::installers(&self.announcement, &self.repository_ports)
+    }
+
+    /// The placer of this host: its `current` and `previous` links and `placed.json`.
     pub fn placer(&self) -> Placer<'_> {
         Placer::new(
             self.placement.roots.clone(),
@@ -275,18 +326,23 @@ impl Ctx {
         drop(self.watchers.stop(service));
         let mut runners = self.runners.lock().unwrap_or_else(PoisonError::into_inner);
         let made = runners.entry(service.to_string()).or_insert_with(|| {
-            let switch = crate::place::hooked_switch(
-                self.placement.roots.clone(),
-                Arc::clone(&self.placement.fs),
-                Arc::clone(&self.units),
-                self.own_version,
+            let switch = crate::place::retried(
+                crate::place::hooked_switch(
+                    self.placement.roots.clone(),
+                    Arc::clone(&self.placement.fs),
+                    Arc::clone(&self.units),
+                    self.repository(),
+                ),
+                Arc::clone(&self.clock),
+                Arc::clone(&self.alerts),
             );
             let runner = StepRunner::new(
                 Arc::clone(&self.launcher),
                 Arc::clone(&self.clock),
                 self.store(service),
             )
-            .with_switch(switch);
+            .with_switch(switch)
+            .with_builtin(crate::builtin::builtin(self.builtin_ports()));
             let runner = selfupdate::runner_for(runner, service);
             self.watch(runner.watch());
             Arc::new(runner)
@@ -533,10 +589,6 @@ pub struct DaemonStatus {
     pub version: HostkeeperVersion,
     /// Every service with a package directory, a state directory or a tombstone, by name.
     pub services: Vec<ServiceStatus>,
-    /// The Sigstore trusted root the package store checks attestations with: its age and the
-    /// reason it needs attention ([`Packages::trusted_root`]); `None` from a store that reports
-    /// none.
-    pub trusted_root: Option<RootReport>,
 }
 
 /// Why [`Daemon::status`] could not list the services.
@@ -571,7 +623,6 @@ impl Daemon {
         own_version: HostkeeperVersion,
     ) -> Daemon {
         let halts = HaltStore::new(&dirs.state);
-        let probe = Arc::new(LauncherProbe::new(Arc::clone(&ports.launcher)));
         Daemon {
             ctx: Ctx {
                 config,
@@ -585,6 +636,12 @@ impl Daemon {
                 prune: ports.prune,
                 force_lock_point: ports.force_lock_point,
                 observer: ports.observer,
+                announcement: ports.announcement,
+                repository_ports: ports.repository,
+                repaired: Arc::default(),
+                tool_runs: Arc::new(std::sync::atomic::AtomicU64::new(
+                    crate::repository::first_tool_run(),
+                )),
                 locks: ServiceLocks::default(),
                 step_lock: StepLock::default(),
                 halts,
@@ -597,18 +654,10 @@ impl Daemon {
                 alerts: Arc::new(|line: &str| eprintln!("{line}")),
                 deadman_poll_secs: ports.deadman_poll_secs,
                 stop: Arc::new(AtomicBool::new(false)),
-                probe,
                 restart: Restart::default(),
             },
             abort_tries: Mutex::default(),
         }
-    }
-
-    /// The same daemon, a new hostkeeper binary's self-update protocol asked of `probe` in place
-    /// of the step launcher: the seam of the tests of the protocol check.
-    pub fn with_probe(mut self, probe: Arc<dyn ProtocolProbe>) -> Daemon {
-        self.ctx.probe = probe;
-        self
     }
 
     /// The same daemon, every step record store it makes changed by `seam` as it is made: the
@@ -680,8 +729,8 @@ impl Daemon {
     }
 
     /// `abort` (design sections 6.3 and 8.5): stops the service's running step and ends its
-    /// update `Finished{Halt}`, taking neither the service's lock nor the step lock. The
-    /// coordinator's order and the admin socket's call both come here.
+    /// update `Finished{Halt}`, taking neither the service's lock nor the step lock, as the
+    /// coordinator's order does.
     pub fn abort(&self, service: &ServiceName) -> Result<Aborted, Refused> {
         verbs::abort::abort(&self.ctx, service)
     }
@@ -692,14 +741,12 @@ impl Daemon {
         verbs::clear_halt::clear_halt(&self.ctx, service, generation)
     }
 
-    /// `clear_record` (design sections 4.1 and 7): sets aside a step record that cannot be read.
-    pub fn clear_record(&self, service: &ServiceName) -> Result<Cleared, Refused> {
-        verbs::clear_record::clear_record(&self.ctx, service)
-    }
-
     /// One verb. A step that could not be stopped is an alert (`unstoppable_unit`): its service
     /// stays locked and its record `running`, and every hooked order of the service, the same
-    /// update's resend included, is `busy` until `abort` clears it.
+    /// update's resend included, is `busy` until `abort` clears it. Any other hooked order that
+    /// stops without a verdict, whatever its reason, is an alert too (`order_interrupted`), with
+    /// its service, its reason and what failed: the coordinator keeps only the reason, so this
+    /// line is where the host says why (a switch that could not relink, a launcher that failed).
     pub fn execute(&self, verb: Verb) -> Reply {
         let hooked = match &verb {
             Verb::Update(order) | Verb::ForceRollback(order) | Verb::Install(order) => {
@@ -709,6 +756,7 @@ impl Daemon {
             _ => None,
         };
         let stuck = hooked
+            .clone()
             .and_then(|service| self.ctx.locks.holder(&service).map(|held| (service, held)))
             .filter(|(_, held)| held.stuck);
         if let Some((service, held)) = stuck {
@@ -721,12 +769,19 @@ impl Daemon {
             );
         }
         let reply = self.dispatch(verb);
-        if let Reply::Interrupted {
-            refusal: Refusal::Unstopped,
-            detail,
-        } = &reply
-        {
-            self.ctx.alert(ALERT_UNSTOPPABLE, detail);
+        match (&reply, &hooked) {
+            (
+                Reply::Interrupted {
+                    refusal: Refusal::Unstopped,
+                    detail,
+                },
+                _,
+            ) => self.ctx.alert(ALERT_UNSTOPPABLE, detail),
+            (Reply::Interrupted { refusal, detail }, Some(service)) => self.ctx.alert(
+                ALERT_INTERRUPTED,
+                &format!("service={service}: {}: {detail}", refusal.token()),
+            ),
+            _ => {}
         }
         reply
     }
@@ -740,6 +795,9 @@ impl Daemon {
             Verb::Install(order) if order.service.as_str() == SELF_SERVICE => {
                 selfupdate::run(ctx, HookedVerb::Install, order)
             }
+            Verb::ForceRollback(order) if order.service.as_str() == SELF_SERVICE => {
+                selfupdate::run(ctx, HookedVerb::ForceRollback, order)
+            }
             Verb::Update(order) => verbs::update::run(ctx, order),
             Verb::ForceRollback(order) => verbs::force_rollback::run(ctx, order),
             Verb::Install(order) => verbs::install::run(ctx, order),
@@ -750,11 +808,7 @@ impl Daemon {
                 service,
                 halt_generation,
             } => verbs::clear_halt::run(ctx, service, halt_generation),
-            // The admin socket's alone: refused before any lock is taken or anything read.
-            Verb::ClearRecord(service) => Reply::refused(
-                Refusal::Forbidden,
-                format!("`clear_record` of {service} is the admin socket's, not an order's"),
-            ),
+            Verb::ClearRecord(service) => verbs::clear_record::run(ctx, &service),
         }
     }
 
@@ -804,6 +858,7 @@ impl Daemon {
                     observation: observer::observe(
                         &ctx.observer,
                         &ctx.dirs.packages,
+                        &selfupdate::binary_dir(&ctx.dirs.state),
                         &ctx.own_version,
                         &service,
                     ),
@@ -815,7 +870,6 @@ impl Daemon {
         Ok(DaemonStatus {
             version: ctx.own_version,
             services,
-            trusted_root: ctx.packages.trusted_root(),
         })
     }
 }

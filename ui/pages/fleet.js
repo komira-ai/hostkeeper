@@ -1,4 +1,5 @@
-// Fleet: every host the coordinator has heard from, and the conditions that need a person.
+// Fleet: every host the coordinator lists (heard from since it started, or enrolled and not heard,
+// not live), and the conditions that need a person.
 // Calls: Hosts.List, Releases.Status and Alerts.List, nothing else.
 
 import { h, allPages, describeError, enumLabel, errorView, fmtUnix, list, table } from "../view.js";
@@ -54,7 +55,7 @@ function serviceLine(view) {
 
 // Every host of Hosts.List, a page (at most 256 hosts) at a time.
 function listHosts(api) {
-  return allPages((pageToken) => api.call("hostkeeper.operator.v1.Hosts/List",
+  return allPages((pageToken) => api.hosts.list(
     pageToken === "" ? {} : { pageToken }), "hosts");
 }
 
@@ -63,14 +64,14 @@ export async function render(ctx) {
   let status;
   try {
     hosts = await listHosts(ctx.api);
-    status = await ctx.api.call("hostkeeper.operator.v1.Releases/Status", {});
+    status = await ctx.api.releases.status({});
   } catch (error) {
     return errorView("Fleet", error);
   }
   let alerts = null;
   let failure = null;
   try {
-    alerts = await ctx.api.call("hostkeeper.operator.v1.Alerts/List", {});
+    alerts = await ctx.api.alerts.list({});
   } catch (error) {
     failure = error;
   }

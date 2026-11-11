@@ -16,14 +16,13 @@ params table, the next-step table) are those of `hostkeeper-hook`.
 | `runner` | `StepRunner::run`: one update from `prepare` to its verdict. Writes the step record before and after each step, asks `hostkeeper_hook::next` what follows, resumes from the record, runs the post-success watcher for `promotion_pending` |
 | `record` | the step record (`schema`, service, target version, artifact digest, generation, step, attempt, state `pending`/`running`/`done`/`finished`, what the runner remembers between steps), written by temporary file, fsync, rename, directory fsync; a record of a newer schema is never changed. Two optional fields, written only when set: `forced`, set by a `force` that stops the update (the runner then closes it `Failed`, `forced_over`, and launches nothing more), and `force`, the journal of a `force` |
 | `force` | `ForceRecord`: the journal of a hookless `force` (target, digest, the version left, the phase reached, the order's try and halt generation, the verdict), whose phase and verdict strings are fixed |
-| `artifact` | `Staged`, `tree_digest` and `read_tree`: the staged tree and its digest at verification (the public format of docs/package-format.md: kind, name, mode, size and bytes of every entry; no owner, no times, no links), made only by `Staged::seal`; checked before every step, resumed ones included |
-| `seal` | `Seal`: the seal file `<version>.seal` of an unpacked package version (`schema`, `tree_digest`, `package_digest`), read additively |
+| `artifact` | `Staged`, `tree_digest` and `read_tree`: the staged tree and its digest at verification (the public format of docs/tree-digest.md: kind, name, mode, size and bytes of every entry; no owner, no times, no links), made only by `Staged::seal`; checked before every step, resumed ones included |
+| `seal` | `Seal`: the seal file `<version>.seal` of a staged package version (`schema`, `tree_digest`, `package_digest`), read additively |
 | `launcher` | `StepLauncher`, `StepCall` and `Bound`: what the runner needs to run one step and to stop its unit by name, a step's bound (seconds, or `Unbounded` for a `prepare` of 0), and what the launcher must do that the runner cannot check |
 | `systemd` | `SystemdLauncher`: each step as `systemd-run --system --quiet --wait --collect --pipe --unit=updater-<service>-<step>-<generation> --property=RuntimeMaxSec=<secs\|infinity> -- <hook> <args>`, run as root with no other property (no user, capability, sandbox or path property); `stop` is `systemctl stop --system <unit>`, a unit that is not loaded being stopped. The command lines are pure functions (`command`, `stop_command`, `unit_name`); `SystemdRunProcess`, the one place that starts a process, runs the programs with an empty environment and no input and reads both output streams at once |
 | `capture` | `Ring`: the last `RING_BYTES` (1 MiB) of each output stream of a step; the last line of standard output is the report only when it is at most `LAST_LINE_MAX` (64 KiB) and whole, otherwise the report is `{}` and the exit code decides |
 | `deadman` | `Watch` and `DeadMan`: the bound of the running step, enforced on a thread of its own; a stop that did not work is reported to the runner; an unbounded `prepare` is not armed |
-| `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; `previous` link and `flip_back` for the `OnFailure=` fallback; the two unit texts. `follow_on` takes the binary from a `Staged` through `Staged::check`. `Layout` is the directory of versions with `current` and `previous`: the updater's binaries (`Layout::new`, `versions/<v>`) or a package's sealed trees (`Layout::package`, `<v>/` with `<v>.seal`, checked by `check_tree`) |
-| `starts` | `StartLog` and `DaemonStart`: the start log of the daemon on macOS (`<state-dir>/hostkeeper/starts`, the last 16 starts, additive JSON), from which the fallback judges the burst with `selfupdate::should_fall_back`, the rule of systemd's `StartLimitBurst=` and `StartLimitIntervalSec=` |
+| `selfupdate` | the updater's own update: stage beside (never over what `current` or `previous` names), switch the `current` link, restart; the `previous` link. `follow_on` takes the binary from a `Staged` through `Staged::check`. `Layout` is the directory of versions with `current` and `previous`: the updater's binaries (`Layout::new`, `versions/<v>`) or a package's sealed trees (`Layout::package`, `<v>/` with `<v>.seal`, checked by `check_tree`) |
 | `clock` | `Clock`, `Stamp`, `SystemClock`: time and the boot id as inputs |
 
 ## Rules the code keeps
@@ -72,8 +71,8 @@ limit) need root and are not part of this crate's fast tests.
   window, and the dead-man bounds each boot's `verify` only.
 - `Layout` (the updater's own binary directory) must be given as a root-owned directory closed to
   group and others, in root-owned parents; the type does not check it.
-- `UpdateOrder.artifact_digest` is passed through. The unpack step must hash the tarball bytes as it
-  reads them and unpack from that same stream; this crate does not bind the digest to the tree.
+- `UpdateOrder.artifact_digest` is passed through. The step that stages the package must see that
+  the digest is of what it staged; this crate does not bind the digest to the tree.
 - The staged tree is checked by path before every step; the guarantee that it cannot be swapped
   between the check and the exec rests on the tree being root-owned and read-only in root-owned
   parents.

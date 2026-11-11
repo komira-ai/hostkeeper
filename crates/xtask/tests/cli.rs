@@ -284,184 +284,28 @@ fn release_set_version_writes_the_version_into_the_workspace_with_status_0() {
     assert!(lock.contains("version = \"0.1.9\""), "{lock}");
 }
 
-/// The package of a one-platform release of tierstore 1.5.0.
-const STAGED_PACKAGE: &str = "tierstore-1.5.0-linux-x86_64.tar.zst";
-
-/// The argv of `release channel-stage` of tierstore 1.5.0 from `from/` into `out/`, with
-/// `extra` after it.
-fn channel_stage<'a>(extra: &[&'a str]) -> Vec<&'a str> {
-    [
-        "release",
+#[test]
+fn the_removed_release_verbs_are_usage_errors_with_status_2() {
+    // Catches: a verb of the archive package, the release indexes or the release channel still
+    // taken by the binary (a workflow step calling it would run, or fail for another reason than
+    // that the verb is gone).
+    let d = dir("removed-verbs");
+    for verb in [
+        "package",
+        "index",
         "channel-stage",
-        "--service",
-        "tierstore",
-        "--version",
-        "1.5.0",
-        "--from",
-        "from",
-        "--out",
-        "out",
-    ]
-    .into_iter()
-    .chain(extra.iter().copied())
-    .collect()
-}
-
-/// Writes into `d/from` the release of tierstore 1.5.0 for linux-x86_64 alone: `package`, an
-/// unsigned bundle whose statement lists its SHA-256, and the canonical index.
-fn channel_release(d: &Path, package: &[u8]) {
-    use base64::Engine as _;
-    let from = d.join("from");
-    std::fs::create_dir_all(&from).expect("from/");
-    std::fs::write(from.join(STAGED_PACKAGE), package).expect("the package");
-    let digest = sha256(package);
-    let statement = format!(r#"{{"subject":[{{"digest":{{"sha256":"{digest}"}}}}]}}"#);
-    let payload = base64::engine::general_purpose::STANDARD.encode(statement);
-    std::fs::write(
-        from.join(format!("{STAGED_PACKAGE}.sigstore.json")),
-        format!(r#"{{"dsseEnvelope":{{"payload":"{payload}"}}}}"#),
-    )
-    .expect("the bundle");
-    let index = format!(
-        r#"{{"packages":[{{"bytes":{},"file":"{STAGED_PACKAGE}","platform":"linux-x86_64","sha256":"{digest}"}}],"schema":1,"service":"tierstore","version":"1.5.0"}}"#,
-        package.len()
-    );
-    std::fs::write(from.join("index.json"), index).expect("the index");
-}
-
-#[test]
-fn release_channel_stage_stages_a_release_once_and_then_changes_nothing_with_status_0() {
-    // Catches: a flag not reaching the verb, the tree not where the channel serves it, a rerun
-    // that is not a no-op, or a non-zero status for a staged release.
-    let d = dir("channel-stage");
-    channel_release(&d, b"a package");
-    let argv = channel_stage(&["--require-platforms", "linux-x86_64"]);
-    let o = run(&d, &argv);
-    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
-    let at = format!("tierstore/1.5.0/{STAGED_PACKAGE}");
-    assert_eq!(
-        stdout(&o),
-        format!(
-            "staged {at}\nstaged {at}.sigstore.json\nstaged tierstore/1.5.0/index.json\n\
-             out/tierstore/1.5.0: the index and the packages of linux-x86_64 with their \
-             bundles; 3 of 3 files written\n"
-        )
-    );
-    assert_eq!(
-        std::fs::read(d.join("out").join(&at)).expect("the staged package"),
-        b"a package"
-    );
-    let again = run(&d, &argv);
-    assert_eq!(again.status.code(), Some(0), "{}", stderr(&again));
-    assert!(
-        stdout(&again).ends_with("; 0 of 3 files written\n"),
-        "{}",
-        stdout(&again)
-    );
-}
-
-#[test]
-fn release_channel_sync_without_its_channel_or_trust_list_fails_with_status_1_and_bad_flags_status_2()
- {
-    // Catches: a missing channel directory made, synced into or reported as success, or a
-    // missing trust list read as an empty one (the request is refused before GitHub is asked
-    // anything), or a bad flag read as a failure.
-    let d = dir("channel-sync");
-    std::fs::write(
-        d.join("trust.toml"),
-        "[[service]]\nname = \"tierstore\"\nrepository = \"komira-ai/tierstore\"\n\
-         workflow = \".github/workflows/artifacts.yml\"\nrefs = [\"refs/heads/main\"]\n\
-         hosted_runner = true\n",
-    )
-    .expect("write the trust list");
-    let o = run(
-        &d,
-        &[
-            "release",
-            "channel-sync",
-            "--trust-list",
-            "trust.toml",
-            "--channel-dir",
-            "missing",
-        ],
-    );
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert!(
-        stderr(&o).starts_with("xtask: --channel-dir missing: "),
-        "{}",
-        stderr(&o)
-    );
-    assert!(!d.join("missing").exists());
-    let o = run(
-        &d,
-        &[
-            "release",
-            "channel-sync",
-            "--trust-list",
-            "no-such.toml",
-            "--channel-dir",
-            ".",
-        ],
-    );
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert!(
-        stderr(&o).starts_with("xtask: --trust-list no-such.toml: "),
-        "{}",
-        stderr(&o)
-    );
-    for bad in [
-        ["--repo", "komira-ai/tierstore", "--channel-dir", "."],
-        ["--since", "0.1.0", "--channel-dir", "."],
-        ["--every-secs", "0", "--channel-dir", "."],
+        "channel-sync",
+        "channel-host",
     ] {
-        let mut argv = vec!["release", "channel-sync", "--trust-list", "trust.toml"];
-        argv.extend(bad);
-        let o = run(&d, &argv);
-        assert_eq!(o.status.code(), Some(2), "{bad:?}: {}", stderr(&o));
-        assert_eq!(stdout(&o), "");
+        let o = run(&d, &["release", verb]);
+        assert_eq!(o.status.code(), Some(2), "{verb}: {}", stderr(&o));
+        assert_eq!(stdout(&o), "", "{verb}");
+        assert!(
+            stderr(&o).contains("unrecognized subcommand"),
+            "{}",
+            stderr(&o)
+        );
     }
-}
-
-#[test]
-fn release_channel_stage_refusals_are_failures_with_status_1_and_bad_names_status_2() {
-    // Catches: a rebuilt package written over a staged one, a release lacking a required
-    // platform staged, or a name outside the daemon's grammar reported as a failure (status 1)
-    // rather than a usage error.
-    let d = dir("channel-stage-refused");
-    channel_release(&d, b"a package");
-    let o = run(&d, &channel_stage(&[]));
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert_eq!(
-        stderr(&o),
-        "xtask: no_package_for_platform: the release index has no package for linux-arm64, \
-         which --require-platforms names\nno_package_for_platform: the release index has no \
-         package for macos-arm64, which --require-platforms names\n"
-    );
-    assert!(!d.join("out").exists());
-
-    let argv = channel_stage(&["--require-platforms", "linux-x86_64"]);
-    assert_eq!(run(&d, &argv).status.code(), Some(0));
-    channel_release(&d, b"a rebuilt package");
-    let o = run(&d, &argv);
-    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
-    assert!(
-        stderr(&o).starts_with(&format!(
-            "xtask: out/tierstore/1.5.0/{STAGED_PACKAGE}: already staged with other bytes"
-        )),
-        "{}",
-        stderr(&o)
-    );
-    let staged = d.join("out/tierstore/1.5.0").join(STAGED_PACKAGE);
-    assert_eq!(
-        std::fs::read(staged).expect("the staged package"),
-        b"a package"
-    );
-
-    let mut bad = channel_stage(&[]);
-    bad[3] = "tier+store";
-    let o = run(&d, &bad);
-    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
-    assert_eq!(stdout(&o), "");
 }
 
 #[test]
@@ -783,4 +627,197 @@ fn mdm_signing_test_record_writes_every_flag_to_the_send() {
         stderr(&refused),
         "xtask: pkg-1 has not been sent: `send --apply` it first\n"
     );
+}
+
+/// The flags of `netinstall-report` over the files of the directory it runs in, with `mac` as
+/// its `--mac`.
+fn netinstall_report(mac: &str) -> Vec<&str> {
+    vec![
+        "netinstall-report",
+        "--mac",
+        mac,
+        "--host-id",
+        "net-1",
+        "--mode",
+        "router",
+        "--pxe-log",
+        "serve.log",
+        "--pending",
+        "pending.json",
+        "--host",
+        "host.json",
+    ]
+}
+
+#[test]
+fn netinstall_report_prints_the_report_with_status_0() {
+    // Catches: the verb not reached from the command line, or its flags reaching other fields
+    // (router mode reads the REQUEST, not the DISCOVER).
+    let d = dir("netinstall-report");
+    std::fs::write(
+        d.join("serve.log"),
+        "hostkeeper-pxe serve: 990 dhcp: DHCPDISCOVER from 52:54:00:4e:10:01, architecture 7, \
+         PXEClient, on the DHCP port: its architecture is kept for its REQUEST\n\
+         hostkeeper-pxe serve: 1000 dhcp: DHCPREQUEST from 52:54:00:4e:10:01, architecture 7, \
+         PXEClient, on the DHCP port: it takes 192.0.2.50\n",
+    )
+    .expect("the log");
+    std::fs::write(d.join("pending.json"), "{}").expect("the list");
+    std::fs::write(
+        d.join("host.json"),
+        r#"{"host": {"nodeId": "net-1", "enrolledUnix": "1960"}}"#,
+    )
+    .expect("the host");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10:01"));
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let out = stdout(&o);
+    let lines: Vec<&str> = out.lines().collect();
+    assert_eq!(
+        lines[..6],
+        [
+            "Network install of 52:54:00:4e:10:01 as host net-1, router mode.",
+            "",
+            "| Event | Unix seconds | Recorded by |",
+            "|---|---|---|",
+            "| power-on | 1000 | pxe: the first DHCPREQUEST from the MAC |",
+            "| install started | not reached | pxe: the seed fetch |",
+        ],
+        "{out}"
+    );
+    assert_eq!(
+        lines[7],
+        "| approved | 1960 | the coordinator: the host's `enrolled_unix` |"
+    );
+}
+
+#[test]
+fn netinstall_report_of_a_missing_file_fails_with_status_1_and_a_bad_mac_with_2() {
+    // Catches: a report made without one of its files exiting 0, its words not printed, and a
+    // MAC that is not one reaching the verb.
+    let d = dir("netinstall-report-missing");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10:01"));
+    assert_eq!(o.status.code(), Some(1));
+    let err = stderr(&o);
+    assert!(err.starts_with("xtask: --pxe-log serve.log: "), "{err}");
+    assert_eq!(stdout(&o), "");
+    let o = run(&d, &netinstall_report("52:54:00:4e:10"));
+    assert_eq!(o.status.code(), Some(2));
+    assert!(
+        stderr(&o).contains(
+            "`52:54:00:4e:10` is not a MAC address: six pairs of hex digits, separated by colons"
+        ),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn channels_gate_with_no_setting_set_is_a_green_notice_and_writes_enabled_false_with_status_0() {
+    let d = dir("channels-gate");
+    let out = d.join("out");
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "gate",
+            "--label",
+            "testing-apt-read",
+            "--setting",
+            "APT_BUCKET=",
+            "--output",
+            out.to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(
+        stdout(&o).starts_with("::notice title=The testing-apt-read job is off::"),
+        "{}",
+        stdout(&o)
+    );
+    assert_eq!(
+        std::fs::read_to_string(out).expect("out"),
+        "enabled=false\n"
+    );
+}
+
+#[test]
+fn channels_with_flags_that_do_not_fit_is_a_usage_error_with_status_2_and_a_failed_step_status_1() {
+    // A session name of another product, and a gate with some but not all of its settings.
+    let d = dir("channels-exit");
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "assume",
+            "--role-arn",
+            "arn:aws:iam::123456789012:role/release",
+            "--session-name",
+            "other-product-1",
+            "--region",
+            "us-east-1",
+            "--token-url",
+            "https://token.example/request",
+            "--env-file",
+            d.join("env").to_str().expect("utf8"),
+        ],
+    );
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("--session-name does not start with \"hostkeeper-\""),
+        "{}",
+        stderr(&o)
+    );
+    let o = run(
+        &d,
+        &[
+            "channels",
+            "gate",
+            "--label",
+            "testing-apt-read",
+            "--setting",
+            "APT_BUCKET=set",
+            "--setting",
+            "APT_DISTRIBUTION_ID=",
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("set all of them or none"),
+        "{}",
+        stderr(&o)
+    );
+}
+
+#[test]
+fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
+    // Catches: the credentials step going on without the runner's token request, which only a job
+    // with `id-token: write` is offered. The variables are taken out of the environment, so the
+    // test is the same on a runner that has them.
+    let d = dir("channels-assume");
+    let o = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .current_dir(&*d)
+        .env_remove("ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+        .args([
+            "channels",
+            "assume",
+            "--role-arn",
+            "arn:aws:iam::123456789012:role/release",
+            "--session-name",
+            "hostkeeper-apt-1",
+            "--region",
+            "us-east-1",
+            "--token-url",
+            "https://token.example/request",
+            "--env-file",
+            d.join("env").to_str().expect("utf8"),
+        ])
+        .output()
+        .expect("run xtask");
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("the runner offers no OIDC token"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(!d.join("env").exists());
 }

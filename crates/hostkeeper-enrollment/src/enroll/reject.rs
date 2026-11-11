@@ -3,12 +3,13 @@
 //!
 //! A pending request has no host id, so no deny row (design 6.1) can name it; the one identity it
 //! has is its key, whose SHA-256 is its id. A rejection marks the request [`RequestState::Denied`]
-//! and keeps its file: a repost of the key is the same request, still denied
+//! and keeps its record: a repost of the key is the same request, still denied
 //! ([`EnrollmentStore::post`]), a poll of it is answered denied ([`EnrollmentStore::issue`]),
 //! and an approval of it is `not_pending`. An expired request can be rejected too: no operator
 //! decided it, and a repost of its key would make it wait again. A denied request does not count toward
 //! [`EnrollmentStore::max_pending`], so a rejection makes room in a full queue.
 
+use super::records::Record;
 use super::store::{EnrollmentStore, view};
 use super::{RequestState, RequestView, StoreError};
 use crate::names::KeyHash;
@@ -65,7 +66,7 @@ impl EnrollmentStore {
         };
         if first {
             row.set_state(RequestState::Denied);
-            self.write_request(&row)?;
+            self.commit(&[Record::Request(row.pb.clone())])?;
         }
         Ok(Rejection {
             request: view(&row)?,

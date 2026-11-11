@@ -32,9 +32,19 @@ fn rig(test: &str) -> Rig {
     rig
 }
 
+/// What the daemon agent 0.4.1 announces: [`NEW_DAEMON`]'s but `target-v1`, so that it lists no
+/// installer and runs every service from archives, as a daemon before it does.
+fn features() -> Vec<&'static str> {
+    NEW_DAEMON
+        .iter()
+        .copied()
+        .filter(|feature| *feature != crate::picks::TARGET_FEATURE)
+        .collect()
+}
+
 /// A heartbeat of the daemon agent 0.4.1 running `web` and `db` 1.0.
 fn daemon() -> Heartbeat {
-    let mut beat = beat_of(NEW_DAEMON, vec![runs(WEB, "1.0"), runs(DB, "1.0")]);
+    let mut beat = beat_of(&features(), vec![runs(WEB, "1.0"), runs(DB, "1.0")]);
     beat.agent = Some(
         serde_json::from_value::<Agent>(json!({"name": "hostkeeper-daemon", "version": "0.4.1"}))
             .expect("an agent"),
@@ -212,17 +222,20 @@ fn a_host_is_what_the_status_holds_of_it() {
         .expect("web's view of d1");
     assert_eq!(web.holds, vec![held], "the hold of d1 is in web's view");
     let expected = proto::Host {
+        installers: Vec::new(),
         node_id: "d1".to_owned(),
         role: "daemon".to_owned(),
         live: true,
         last_heartbeat_unix: UNIX + 2_000,
         heartbeat: Some(agent::HeartbeatRequest {
+            installers: Vec::new(),
+            repositories: None,
             platform: agent::Platform::LinuxX8664.into(),
             agent: Some(agent::AgentInfo {
                 name: "hostkeeper-daemon".to_owned(),
                 version: "0.4.1".to_owned(),
             }),
-            features: NEW_DAEMON.iter().map(|f| (*f).to_owned()).collect(),
+            features: features().iter().map(|f| (*f).to_owned()).collect(),
             services: vec![agent::ServiceBeat {
                 name: WEB.to_owned(),
                 version: "1.0".to_owned(),
@@ -232,6 +245,9 @@ fn a_host_is_what_the_status_holds_of_it() {
             sent_unix: None,
             cert_not_after_unix: None,
             last_renew_error: None,
+            trusted_root_age_secs: None,
+            trusted_root_reason: 0,
+            facts_generation: None,
         }),
         labels: HashMap::from([("rack".to_owned(), "r1".to_owned())]),
         exclusions: vec![proto::Exclusion {
@@ -254,9 +270,25 @@ fn a_host_is_what_the_status_holds_of_it() {
         serial: String::new(),
         enrolled_unix: 0,
         first_heartbeat_unix: None,
+        first_serving_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
         clock_skew_beats: 0,
+        // A heartbeat answered as the JSON route answers it says nothing of the trusted root: unknown.
+        trusted_root_age_secs: None,
+        trusted_root_reason: agent::TrustedRootReason::Unspecified.into(),
+        // A daemon that does not announce `target-v1` runs every service from archives.
+        running: [DB, WEB]
+            .into_iter()
+            .map(|service| proto::RunningService {
+                service: service.to_owned(),
+                version: "1.0".to_owned(),
+                installer: "hostkeeper-archive".to_owned(),
+            })
+            .collect(),
+        running_unix: Some(UNIX + 2_000),
+        repositories: None,
+        host_group: String::new(),
     };
     assert_eq!(host, expected);
     let listed = list(&rig, 0, "").expect("a page");

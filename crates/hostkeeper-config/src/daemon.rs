@@ -25,6 +25,10 @@
 //! key is required except those of `[bounds]`, which default to the values above; a missing
 //! `[trusted_signers]` is refused, because there is no unsigned mode. There is no list of
 //! services and no per-service key: a host runs what the coordinator assigns it.
+//!
+//! The daemon reads neither `release_channel` nor `[trusted_signers]` (it stages packages from its
+//! package manager's repositories and fetches no release channel); the loader still requires both,
+//! so a config written for an earlier release keeps loading.
 
 use std::path::Path;
 
@@ -268,8 +272,9 @@ pub struct DaemonConfig {
     pub coordinator: HttpsUrl,
     /// The SHA-256 of the CA certificate the coordinator's certificate chains to.
     pub ca_sha256: Sha256Hex,
-    /// Where packages are fetched from.
+    /// The release channel an earlier daemon fetched packages from; the daemon reads it no more.
     pub release_channel: HttpsUrl,
+    /// The signer an earlier daemon checked packages against; the daemon reads it no more.
     pub trusted_signers: TrustedSigners,
     pub bounds: Bounds,
 }
@@ -310,8 +315,7 @@ fn signers(top: &Fields<'_>) -> Result<TrustedSigners, Problem> {
 }
 
 /// The signer of `organisation` that the keys `workflow`, `refs` and `hosted_runner` of `fields`
-/// name: the keys of `[trusted_signers]` but its organisation, which the channel-sync trust list
-/// (`channel_trust`) reads too, so that the two read them alike.
+/// name: the keys of `[trusted_signers]` but its organisation.
 pub(crate) fn signer_keys(
     fields: &Fields<'_>,
     organisation: String,

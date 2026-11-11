@@ -18,12 +18,13 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::wire::{self, Heartbeat};
 use hostkeeper_wire::{HostId, Platform};
 
-use crate::converge::{Convergence, HaltNote, RoleCounts, State};
+use crate::converge::{Convergence, HaltNote, PickCounts, RoleCounts, State};
 use crate::decide::{Gate, Skip, Why};
 use crate::desired::{Desired, RoleLimits};
 use crate::fleet::Node;
 use crate::force::ForceRecord;
 use crate::holds::holding;
+use crate::host_groups::GroupName;
 use crate::membership::{HostCounts, Member, Membership};
 use crate::operator::{entry_proto, hold_proto};
 use crate::ops::{FailureAck, Halt, HaltAck, OpsState, ServiceOps};
@@ -36,15 +37,26 @@ fn count<T: TryInto<u32>>(n: T) -> u32 {
 }
 
 /// The status as `Releases.Status` answers it: every service in name order, or only `only` when
-/// it is not empty (none when the coordinator manages no such service).
+/// it is not empty (none when the coordinator manages no such service). A coordinator that holds
+/// host groups answers one service for each package of each group, in the order of the group's
+/// name and then the package's, `host_group` naming the group; `only` names a package then.
 pub(crate) fn status(status: &Status, only: &str) -> proto::StatusResponse {
-    proto::StatusResponse {
-        services: status
+    let wanted = |name: &str| only.is_empty() || name == only;
+    let services = match &status.groups {
+        None => status
             .per_service
             .iter()
-            .filter(|(name, _)| only.is_empty() || name.as_str() == only)
-            .map(|(name, one)| service_status(name, one, &status.ops))
+            .filter(|(name, _)| wanted(name))
+            .map(|(name, one)| service_status(name, None, one, &status.ops))
             .collect(),
+        Some(groups) => groups
+            .iter()
+            .filter(|((_, package), _)| wanted(package))
+            .map(|((group, package), one)| service_status(package, Some(group), one, &status.ops))
+            .collect(),
+    };
+    proto::StatusResponse {
+        services,
         quiet: status.quiet,
         services_dropped: status.services_dropped,
         facts_dropped: status
@@ -57,7 +69,8 @@ pub(crate) fn status(status: &Status, only: &str) -> proto::StatusResponse {
 }
 
 /// The convergence as `Releases.Converge` answers it. It names no write record and no force: the
-/// convergence report holds neither.
+/// convergence report holds neither, and `Converge` adds the write record of the desired-state
+/// store while the status adds the force.
 pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
     proto::Convergence {
         desired: convergence.desired.as_ref().map(|v| v.as_str().to_owned()),
@@ -65,16 +78,34 @@ pub(crate) fn convergence(convergence: &Convergence) -> proto::Convergence {
         state: convergence_state(convergence.state).into(),
         roles: convergence.roles.iter().map(role_counts).collect(),
         halt: convergence.halt.as_ref().map(halt_note),
-        hosts: convergence.hosts.as_ref().map(host_counts),
+        hosts: host_counts(convergence.hosts.as_ref(), convergence.picks.as_ref()),
         coordinator_commit: convergence.commit.to_owned(),
         record: None,
         force: None,
+        installer_dropped: convergence
+            .picks
+            .as_ref()
+            .map(|picks| picks.dropped.clone())
+            .unwrap_or_default(),
     }
 }
 
-/// One service of the status, with the ops state's marks and the force that stands.
-fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::ServiceStatus {
-    let marks = ops.services.get(name);
+/// One service of the status, with the ops state's marks and the force that stands: those of the
+/// package in `group`, for a service made for one.
+fn service_status(
+    name: &str,
+    group: Option<&GroupName>,
+    one: &ServiceStatus,
+    ops: &OpsState,
+) -> proto::ServiceStatus {
+    let own;
+    let marks = match group {
+        None => ops.services.get(name),
+        Some(group) => {
+            own = ops.marks_in(Some(group), name);
+            Some(&own)
+        }
+    };
     let mut converged = convergence(&one.convergence);
     converged.force = marks.and_then(|m| m.force.as_ref()).map(force_record);
     proto::ServiceStatus {
@@ -90,6 +121,7 @@ fn service_status(name: &str, one: &ServiceStatus, ops: &OpsState) -> proto::Ser
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
         plan: one.plan.clone(),
+        host_group: group.map(ToString::to_string).unwrap_or_default(),
     }
 }
 
@@ -138,15 +170,30 @@ fn role_counts(counts: &RoleCounts) -> proto::RoleCounts {
     }
 }
 
-/// The hosts a service does not count, by why.
-fn host_counts(counts: &HostCounts) -> proto::HostCounts {
-    proto::HostCounts {
+/// The hosts a service does not count, by why, with the picks of a version set with targets;
+/// none when there are neither.
+fn host_counts(
+    counts: Option<&HostCounts>,
+    picks: Option<&PickCounts>,
+) -> Option<proto::HostCounts> {
+    if counts.is_none() && picks.is_none() {
+        return None;
+    }
+    let (counts, picks) = (
+        counts.copied().unwrap_or_default(),
+        picks.cloned().unwrap_or_default(),
+    );
+    Some(proto::HostCounts {
         missing: count(counts.missing),
         absent: count(counts.absent),
         excluded: count(counts.excluded),
         unmanaged: count(counts.unmanaged),
         deferred: count(counts.deferred),
-    }
+        picked: count(picks.picked),
+        no_target: count(picks.no_target),
+        no_build_for_host: count(picks.no_build_for_host),
+        installer_dropped: count(picks.installer_dropped),
+    })
 }
 
 /// The halt a convergence names. It carries no report: the convergence keeps the host, the check
@@ -303,9 +350,9 @@ fn member_service(service: &str, member: &Member, ops: &OpsState) -> proto::Host
 /// heard it, its agent and features, and one entry per service that heard it (each as
 /// [`service_beat`] says it). The coordinator's clock is not the wall clock, so the time of the
 /// last heartbeat is `unix_now` less the seconds the host has been silent. What the last
-/// heartbeat said of the host's clock and certificate is in the host's own fields
-/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`), not in the heartbeat put
-/// back together.
+/// heartbeat said of the host's clock, certificate and trusted root is in the host's own fields
+/// (`cert_not_after_unix`, `last_renew_error`, `clock_skew_beats`, `trusted_root_age_secs`,
+/// `trusted_root_reason`), not in the heartbeat put back together.
 pub(crate) fn host(
     id: &HostId,
     node: &Node,
@@ -317,15 +364,30 @@ pub(crate) fn host(
     let mut services = Vec::new();
     let mut beats = Vec::new();
     let mut platform = None;
-    for (name, one) in &status.per_service {
+    // The packages of the host groups first (a host is in one group, so each is shown once), then
+    // the services of the coordinator's own definition that no group's entry showed already.
+    let grouped = status
+        .groups
+        .iter()
+        .flatten()
+        .map(|((_, package), one)| (package, one));
+    let mut shown = std::collections::BTreeSet::new();
+    for (name, one) in grouped.chain(&status.per_service) {
+        if shown.contains(name) {
+            continue;
+        }
         if let Some(heard) = one.hosts.iter().find(|h| h.host.node_id == node_id) {
             services.push(host_service(name, heard, one, &status.ops));
             beats.push(service_beat(name, &heard.host.beat));
             platform = platform.or(Some(heard.host.beat.platform));
+            shown.insert(name);
         } else if let Some(member) = one.members.iter().find(|m| m.node_id == node_id) {
             services.push(member_service(name, member, &status.ops));
+            shown.insert(name);
         }
     }
+    services.sort_by(|a, b| a.service.cmp(&b.service));
+    beats.sort_by(|a, b| a.name.cmp(&b.name));
     let silent = now.saturating_sub(node.seen).as_secs();
     proto::Host {
         live: node.is_live(now),
@@ -367,6 +429,8 @@ pub(crate) fn host(
         cert_not_after_unix: node.cert_not_after_unix,
         last_renew_error: node.last_renew_error.clone(),
         clock_skew_beats: node.skewed_beats,
+        trusted_root_age_secs: node.trusted_root.age_secs,
+        trusted_root_reason: node.trusted_root.reason.into(),
         role: node.role.clone(),
         node_id,
         // `Hosts.List` and `Hosts.Get` fill these in from the host inventory.
@@ -418,12 +482,17 @@ fn service_beat(service: &str, beat: &Heartbeat) -> agent::ServiceBeat {
             retry_after_secs: d.retry_after_secs,
         }),
         pinned: None,
+        record_try: beat.record_try,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        installer: None,
+        // `Hosts.List` and `Hosts.Get` fill it in from the fleet ([`crate::picks::show`]).
+        drift: None,
     }
 }
 
 /// A verdict of the host. The proto's start time, `forced` flag, detail and log lines have no
 /// source on the heartbeat wire.
-fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
+pub(crate) fn update_result(result: &wire::UpdateResult) -> agent::UpdateResult {
     agent::UpdateResult {
         target: result.target.as_str().to_owned(),
         outcome: outcome(result.outcome).into(),
@@ -518,6 +587,9 @@ fn gate_of(gate: Gate) -> proto::GateReason {
         Gate::StageWait => proto::GateReason::StageWait,
         Gate::BelowMinUp => proto::GateReason::BelowMinUp,
         Gate::RolloutElsewhere => proto::GateReason::RolloutElsewhere,
+        Gate::InstallOrder => proto::GateReason::InstallOrder,
+        Gate::UninstallOrder => proto::GateReason::UninstallOrder,
+        Gate::Moving => proto::GateReason::Moving,
     }
 }
 
@@ -530,6 +602,9 @@ fn skip_of(skip: Skip) -> proto::GateReason {
         Skip::FailedHere => proto::GateReason::FailedHere,
         Skip::Deferred => proto::GateReason::Deferred,
         Skip::NoPackageForPlatform => proto::GateReason::NoPackageForPlatform,
+        Skip::NoTarget => proto::GateReason::NoTarget,
+        Skip::NoBuildForHost => proto::GateReason::NoBuildForHost,
+        Skip::InstallerDropped => proto::GateReason::InstallerDropped,
         Skip::Unsupported | Skip::NoDigest => proto::GateReason::Unspecified,
     }
 }

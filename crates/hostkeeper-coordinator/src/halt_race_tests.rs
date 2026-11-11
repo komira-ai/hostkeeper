@@ -118,14 +118,14 @@ fn a_halt_is_raised_only_under_the_lock_every_order_is_decided_under() {
         Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(&clock))
             .with_services(kbf_services())
             .with_legacy_service(Some(LEGACY.to_owned()))
-            .with_ops(OpsStore::with_writer(OpsState::default(), writer)),
+            .with_ops(OpsStore::refusing(OpsState::default(), writer)),
     );
     me.set(Arc::downgrade(&coordinator)).expect("set once");
     coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     assert_eq!(
         *seen.lock().expect("log"),
@@ -145,17 +145,17 @@ fn a_report_that_finds_another_hosts_halt_raised_under_it_is_kept_for_the_clear(
         state.services.entry(LEGACY.to_owned()).or_default().halt = Some(halt_of("s1"));
     });
     rig.coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     let marks = kbf(&rig);
     assert_eq!(marks.halt.map(|h| h.node_id), Some("s1".to_owned()));
     assert_eq!(marks.halt_seen, [HaltAck::from(halt_of("s2"))]);
     clear(&rig).expect("cleared");
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     rig.coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     assert_eq!(kbf(&rig).halt, None, "a cleared report halted again");
 }
@@ -170,7 +170,7 @@ fn a_report_that_finds_another_hosts_halt_raised_under_it_is_kept_for_the_clear(
 fn a_clear_clears_the_halt_standing_when_it_is_written_not_one_read_before() {
     let rig = rig("halt-race-clear-new");
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     rig.coordinator.ops().interleave(|state| {
         let marks = state.services.entry(LEGACY.to_owned()).or_default();
@@ -189,7 +189,7 @@ fn a_clear_clears_the_halt_standing_when_it_is_written_not_one_read_before() {
         marks.halt_acked
     );
     rig.coordinator
-        .heartbeat(storage("s2"), halting())
+        .heartbeat_native(storage("s2"), halting())
         .expect("a heartbeat");
     assert_eq!(kbf(&rig).halt, None, "the cleared report halted again");
 }
@@ -201,7 +201,7 @@ fn a_clear_clears_the_halt_standing_when_it_is_written_not_one_read_before() {
 fn a_clear_that_finds_the_halt_cleared_under_it_is_refused_and_counts_nothing() {
     let rig = rig("halt-race-clear-gone");
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     rig.coordinator.ops().interleave(|state| {
         let marks = state.services.entry(LEGACY.to_owned()).or_default();
@@ -269,7 +269,7 @@ fn only_the_defined_services_generations_are_told_and_the_answer_reads() {
         .collect();
     let answer = rig
         .coordinator
-        .heartbeat(storage("s1"), announce)
+        .heartbeat_native(storage("s1"), announce)
         .expect("a heartbeat");
     let bytes = serde_json::to_vec(&answer).expect("bytes");
     let read: Answer = serde_json::from_slice(&bytes).expect("an agent reads the answer");
@@ -291,7 +291,7 @@ fn only_the_defined_services_generations_are_told_and_the_answer_reads() {
 fn an_acknowledgement_another_writer_ended_first_is_not_ended_again() {
     let rig = rig("halt-race-ack-gone");
     rig.coordinator
-        .heartbeat(storage("s1"), halting())
+        .heartbeat_native(storage("s1"), halting())
         .expect("a heartbeat");
     clear(&rig).expect("cleared");
     assert_eq!(kbf(&rig).halt_acked, [HaltAck::from(halt_of("s1"))]);
@@ -300,7 +300,7 @@ fn an_acknowledgement_another_writer_ended_first_is_not_ended_again() {
         marks.halt_acked.clear();
     });
     rig.coordinator
-        .heartbeat(storage("s1"), beat("1.0"))
+        .heartbeat_native(storage("s1"), beat("1.0"))
         .expect("a heartbeat");
     assert_eq!(kbf(&rig).halt_acked, Vec::<HaltAck>::new());
     let ended = rig.coordinator.ops().read(|state| {

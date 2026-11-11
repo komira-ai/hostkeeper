@@ -15,11 +15,14 @@
 //! 2. The certificate source is read. With no pair the loop says once what it waits for, and
 //!    makes no call; the first call after a pair appears is at the next period.
 //! 3. The facts are built from the step records and the observer: every installed service, its
-//!    version, health and running update, its newest verdict not yet acknowledged, and its
-//!    deferral when the last reply advertised `deferred-v1`. Step records that name a service
+//!    version, health and running update, the try its step record holds (whether or not its
+//!    verdict is sent, so a coordinator that never heard the verdict numbers past it), its
+//!    newest verdict not yet acknowledged, and its deferral when the last reply advertised
+//!    `deferred-v1`. Step records that name a service
 //!    twice send nothing. A service listed again after it was not takes the verdict its step
 //!    record kept, unless that verdict was acknowledged, so a restart resends it; a kept
-//!    deferred verdict with no deferral of its target on record starts one. A service the
+//!    deferred verdict with no deferral of its target on record starts one, and any other
+//!    hooked one ends a deferral of its target, as an order that ran here does. A service the
 //!    records do not list that has a verdict to send (an install that ended before it placed
 //!    anything, as a refusal does, or a service that left the records while its order ran) is
 //!    listed too, absent at the verdict's target, with its units absent and that verdict: the
@@ -32,9 +35,19 @@
 //! 4. [`fit`] keeps the bound; a heartbeat over it is refused and logged, never sent cut short.
 //! 5. The heartbeat goes out through [`CoordinatorLink::heartbeat`], the one outbound call.
 //! 6. From the reply: the advertised features replace the last ones; a verdict whose service,
-//!    order id and try the reply acknowledges is not sent again; with `halt-v1`, a halt
+//!    order id and try the reply acknowledges is not sent again, and the step records are told
+//!    ([`ServiceRecords::acknowledged`]), so a record that keeps it to report stops; with
+//!    `halt-v1`, a halt
 //!    generation newer than the held one is raised in [`HeldHalts`]; and the order goes to the
-//!    executor.
+//!    executor. A repository set of the reply goes to the [`RepositorySink`] first of all, when
+//!    the reply advertises `repositories-v1` and the host has a sink (the sink's own checks are
+//!    its to make); a set from a coordinator that did not advertise the feature is dropped.
+//!    The host's facts of the reply go to the [`FactsSink`] next, before anything else of the
+//!    reply is acted on, when the reply advertises `facts-v1` and the host has a sink; facts
+//!    from a coordinator that did not advertise it are dropped. When the sink cannot write them,
+//!    the order of the reply is not run (an `abort` is: it starts nothing that reads the file)
+//!    and the loop logs that it waits; the sink still reports the generation before, so the
+//!    coordinator sends the facts, and the order, again.
 //!
 //! **Verdicts.** A service may have several verdicts not yet acknowledged (an order's, then a
 //! `busy` answer, then another order's). A heartbeat carries one per service: the newest. Once
@@ -44,7 +57,8 @@
 //! it hears, and an ack also ends every verdict of the service older than the one it names (the
 //! newest, sent before the reply that advertised the feature): an older one heard after it
 //! would stand in its place. Across
-//! a restart only the step record's verdict, the last order's, comes back: the coordinator
+//! a restart only the verdict the step records give back comes back (the last order's, or the
+//! settled update of the daemon itself, which the binary that ran it never sent): the coordinator
 //! orders a host only when it has no outstanding order (design 8.1), and after its own restart
 //! it rebuilds from heartbeats before it orders (8.2), so an order's verdict has reached it
 //! before the next order of the host is issued, and an earlier completed verdict of the
@@ -76,8 +90,12 @@
 //! it ended (in the halt phase); the abort's own answer is logged, never sent as a verdict. Each
 //! abort that arrives is run, a resend too: the executor answers a resend of the same order and
 //! try from its first answer and stops nothing more. An
-//! abort of a service the loop runs no order of and does not list is not run: the abort that
-//! stops a step the daemon left running before a restart is the admin socket's.
+//! abort of a service the loop runs no order of and does not list is not run.
+//!
+//! **Clear record.** A `clear_record` is one of the orders above, one at a time, and its
+//! verdict is sent like theirs, naming the version the service runs (a service the loop does
+//! not list is not run). It runs no update, so a deferral neither holds it back nor is ended by
+//! its verdict, and its service is not reported `updating` while it runs.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -90,15 +108,17 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_wire::wire::clip_renew_error;
 
 use crate::beat::{
-    ANNOUNCED, Feature, Features, Health, Heartbeat, Liveness, Observed, Platform, Renewal,
-    ServiceFacts, fit,
+    ANNOUNCED, FACTS, Feature, Features, Health, Heartbeat, Liveness, Observed, PRIVATE_REPOSITORY,
+    Platform, REPOSITORIES, Renewal, ServiceFacts, fit,
 };
 use crate::deferral::{Book, Deferral};
+use crate::host_facts::PushedFacts;
 use crate::names::Reason;
-use crate::order::{Order, OrderRef, OrderResult, Outcome, Reply, Verb};
+use crate::order::{Acknowledged, Order, OrderRef, OrderResult, Outcome, Reply, Verb};
 use crate::ports::{
-    CertSource, CertState, CoordinatorLink, Dispatch, HeldHalts, LinkError, Log, OrderSink,
-    RecordedService, RenewalSource, ServiceObserver, ServiceRecords, Sleeper, Tick, UnixClock,
+    CertSource, CertState, CoordinatorLink, Dispatch, FactsSink, HeldHalts, LinkError, Log,
+    OrderSink, RecordedService, RenewalSource, RepositorySink, ServiceObserver, ServiceRecords,
+    Sleeper, Tick, TrustedRootSource, UnixClock,
 };
 
 /// The period when the daemon is given none: 15 seconds.
@@ -133,6 +153,13 @@ pub struct LoopConfig {
     pub state_dir: PathBuf,
     /// Seconds between two heartbeats while no order runs; never 0, so the loop always waits.
     pub period_secs: NonZeroU64,
+    /// The installers the daemon can run, by name (`hostkeeper-archive`), given once at start
+    /// and sent in every gRPC heartbeat.
+    pub installers: Vec<String>,
+    /// Whether the daemon reads private repositories without a repository sink (a Mac, through
+    /// its `coordinator` store): it then announces `private-repository-v1` all the same. A
+    /// daemon with a sink announces it whatever this says.
+    pub private_repository: bool,
 }
 
 /// Everything the loop talks to.
@@ -145,8 +172,15 @@ pub struct Ports {
     pub dispatch: Arc<dyn Dispatch>,
     pub halts: Arc<dyn HeldHalts>,
     pub renewal: Arc<dyn RenewalSource>,
+    pub trusted_root: Arc<dyn TrustedRootSource>,
     pub clock: Arc<dyn UnixClock>,
     pub log: Arc<dyn Log>,
+    /// The host's repository configuration; none on a host that has none to manage (a Mac),
+    /// which then announces no `repositories-v1`, sends no report and applies no set.
+    pub repositories: Option<Arc<dyn RepositorySink>>,
+    /// The host's facts file; none on a host that keeps none, which then announces no
+    /// `facts-v1`, reports no generation and writes no facts.
+    pub facts: Option<Arc<dyn FactsSink>>,
 }
 
 /// What one heartbeat came to.
@@ -344,9 +378,11 @@ impl Heartbeater {
                 let deferral = deferral_of(&result, now, retry_after_secs);
                 self.book.set(service, deferral, log);
             }
-            // A forced update runs no hook, so its verdict says nothing about the moment a
-            // deferral was about.
-            Outcome::Succeeded | Outcome::Failed if !result.forced => {
+            // A forced update runs no hook and a `clear_record` no update, so their verdicts say
+            // nothing about the moment a deferral was about.
+            Outcome::Succeeded | Outcome::Failed
+                if !result.forced & !matches!(order.verb, Verb::ClearRecord(_)) =>
+            {
                 self.book.end(service, &result.target, now, log);
             }
             Outcome::Succeeded | Outcome::Failed => {}
@@ -385,15 +421,23 @@ impl Heartbeater {
         if counted.is_some_and(|refs| refs.contains(&result.order)) {
             return;
         }
-        if let Outcome::Deferred { retry_after_secs } = result.outcome {
-            let log = self.ports.log.as_ref();
-            let on_record = self.book.get(service, now, log);
-            // A deferral of the same target on record, ended or not, is this verdict's: its
-            // retry time stands, and one that has passed is not started again.
-            if !on_record.is_some_and(|deferral| deferral.target == result.target) {
-                self.book
-                    .set(service, deferral_of(&result, now, retry_after_secs), log);
+        let log = self.ports.log.as_ref();
+        match result.outcome {
+            Outcome::Deferred { retry_after_secs } => {
+                let on_record = self.book.get(service, now, log);
+                // A deferral of the same target on record, ended or not, is this verdict's: its
+                // retry time stands, and one that has passed is not started again.
+                if !on_record.is_some_and(|deferral| deferral.target == result.target) {
+                    self.book
+                        .set(service, deferral_of(&result, now, retry_after_secs), log);
+                }
             }
+            // As when the order ran in this process ([`Self::finish`]): a hooked verdict ends a
+            // deferral of its target, such as one the binary before a restart wrote for it.
+            Outcome::Succeeded | Outcome::Failed if !result.forced => {
+                self.book.end(service, &result.target, now, log);
+            }
+            Outcome::Succeeded | Outcome::Failed => {}
         }
         self.push(service, result);
     }
@@ -423,6 +467,8 @@ impl Heartbeater {
                 version,
                 updating,
                 last_result,
+                record_try,
+                installer,
             } = recorded;
             if self.seen.insert(name.as_str().to_owned())
                 && let Some(result) = last_result
@@ -434,6 +480,7 @@ impl Heartbeater {
                 .running
                 .as_ref()
                 .filter(|running| running.service == name)
+                .filter(|running| !matches!(running.order.verb, Verb::ClearRecord(_)))
                 .map(|running| running.target.clone());
             let log = self.ports.log.as_ref();
             let deferred = self
@@ -453,6 +500,9 @@ impl Heartbeater {
                     liveness: observation.liveness,
                     version: observation.version,
                 }),
+                record_try,
+                installer,
+                drift: observation.drift,
                 name,
             });
         }
@@ -478,7 +528,7 @@ impl Heartbeater {
         Ok(Heartbeat {
             platform: self.config.platform,
             agent_version: self.config.agent_version.clone(),
-            features: ANNOUNCED.to_vec(),
+            features: self.announced(),
             services,
             sent_unix: now,
             renewal: Renewal {
@@ -487,7 +537,33 @@ impl Heartbeater {
                     .map(|text| clip_renew_error(&text).to_owned())
                     .filter(|text| !text.is_empty()),
             },
+            trusted_root: self.ports.trusted_root.trusted_root(),
+            installers: self
+                .ports
+                .repositories
+                .as_ref()
+                .map_or_else(|| self.config.installers.clone(), |sink| sink.installers()),
+            repositories: self.ports.repositories.as_ref().map(|sink| sink.report()),
+            facts_generation: self.ports.facts.as_ref().and_then(|sink| sink.generation()),
         })
+    }
+
+    /// The features every heartbeat announces: [`ANNOUNCED`], `repositories-v1` when the host
+    /// has a repository configuration to manage, `facts-v1` when it has a facts file, and
+    /// `private-repository-v1` when it has a repository configuration or is told it reads
+    /// private repositories.
+    fn announced(&self) -> Vec<Feature> {
+        let mut features = ANNOUNCED.to_vec();
+        if self.ports.repositories.is_some() {
+            features.push(REPOSITORIES);
+        }
+        if self.ports.facts.is_some() {
+            features.push(FACTS);
+        }
+        if self.ports.repositories.is_some() || self.config.private_repository {
+            features.push(PRIVATE_REPOSITORY);
+        }
+        features
     }
 
     /// The verdict of `name` the heartbeat carries: of those not yet acknowledged, the oldest to
@@ -533,6 +609,9 @@ impl Heartbeater {
                 liveness: Liveness::Absent,
                 version: None,
             }),
+            record_try: None,
+            installer: None,
+            drift: None,
             name,
         }
     }
@@ -544,15 +623,26 @@ impl Heartbeater {
             features,
             halt_generations,
             acknowledged,
+            repositories,
+            facts,
         } = reply;
         self.advertised = Features::of(&features);
+        let facts_held = self.write_facts(facts);
+        if let Some(set) = repositories
+            && self.advertised.has(Feature::RepositoriesV1)
+            && let Some(sink) = &self.ports.repositories
+        {
+            sink.apply(&set);
+        }
         let in_order = self.advertised.has(Feature::VerdictAcksV1);
+        let mut counted_now = Vec::new();
         for (service, queue) in &mut self.pending {
-            let acks = |result: &OrderResult| {
+            let ack_of = |result: &OrderResult| {
                 acknowledged
                     .iter()
-                    .any(|ack| ack.service.as_str() == service && ack.order == result.order)
+                    .find(|ack| ack.service.as_str() == service && ack.order == result.order)
             };
+            let acks = |result: &OrderResult| ack_of(result).is_some();
             // Oldest first: what is older than an acknowledged verdict is ended with it.
             let ended = if in_order {
                 queue.iter().rposition(acks).map_or(0, |at| at + 1)
@@ -562,25 +652,57 @@ impl Heartbeater {
             let mut at = 0;
             queue.retain(|result| {
                 at += 1;
-                let counted = acks(result);
-                if counted {
+                let counted = ack_of(result);
+                if let Some(ack) = counted {
+                    counted_now.push(ack.clone());
                     let refs = self.acked.entry(service.clone()).or_default();
                     refs.push(result.order.clone());
                     if refs.len() > ACKED_KEPT {
                         refs.remove(0);
                     }
                 }
-                !counted && at > ended
+                counted.is_none() && at > ended
             });
         }
         self.pending.retain(|_, queue| !queue.is_empty());
+        for Acknowledged { service, order } in counted_now {
+            if let Err(e) = self.ports.records.acknowledged(&service, &order) {
+                self.log(&format!(
+                    "error: the acknowledgement of order {} try {} of {service} is not kept: {e}",
+                    order.id.as_str(),
+                    order.order_try
+                ));
+            }
+        }
         if self.advertised.has(Feature::HaltV1) {
             for (service, generation) in &halt_generations {
                 self.raise_halt(service, *generation);
             }
         }
         if let Some(order) = order {
-            self.dispatch(order);
+            if facts_held || matches!(order.verb, Verb::Abort(_)) {
+                self.dispatch(order);
+            } else {
+                self.log(&format!(
+                    "order {} try {} of {} waits: the facts file does not hold the facts of its reply",
+                    order.id.as_str(),
+                    order.order_try,
+                    order.service()
+                ));
+            }
+        }
+    }
+
+    /// Gives the host's `facts` of a reply to the [`FactsSink`], when the reply advertises
+    /// `facts-v1` and the host has a sink: whether the facts file holds them, or true when there
+    /// was nothing to write. Facts from a coordinator that did not advertise the feature are
+    /// dropped.
+    fn write_facts(&self, facts: Option<PushedFacts>) -> bool {
+        match (facts, &self.ports.facts) {
+            (Some(facts), Some(sink)) if self.advertised.has(Feature::FactsV1) => {
+                sink.apply(&facts)
+            }
+            _ => true,
         }
     }
 
@@ -648,7 +770,8 @@ impl Heartbeater {
         }
         let now = self.ports.clock.unix_secs();
         let log = self.ports.log.as_ref();
-        let declined = (!order.is_forced() & self.advertised.has(Feature::DeferredV1))
+        let clears = matches!(order.verb, Verb::ClearRecord(_));
+        let declined = (!order.is_forced() & !clears & self.advertised.has(Feature::DeferredV1))
             .then(|| self.book.get(&service, now, log))
             .flatten()
             .filter(|deferral| deferral.declines(&target, now));

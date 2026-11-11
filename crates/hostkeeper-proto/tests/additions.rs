@@ -1,18 +1,18 @@
 //! The messages added since the committed baseline (`proto/compat/baseline.binpb`), with the
-//! generated types: each reads back as it was written, and a reader built from the baseline, the
-//! release before, keeps what it does not know and writes it back unchanged.
+//! generated types (the frozen `hostkeeper.local.v1` ones dynamic): each reads back as written,
+//! and a reader built from the baseline, the release before, keeps what it does not know.
 
 use prost::Message as _;
-use prost_reflect::{DescriptorPool, DynamicMessage, Value};
+use prost_reflect::{DescriptorPool, DynamicMessage, ReflectMessage as _, Value};
 
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, EnrollRequest, EnrollResponse, EnrollState, HeartbeatResponse, PollRequest,
     PollResponse, PollState, RenewRequest, RenewResponse, VerdictAck,
 };
-use hostkeeper_proto::hostkeeper::local::v1::{
-    Enrollment, EnrollmentState, Lifecycle, LinkHealth, ServiceRecord, StatusResponse, StepRecord,
-};
 use hostkeeper_proto::hostkeeper::operator::v1 as op;
+
+#[path = "support/frozen.rs"]
+mod frozen;
 
 /// The descriptor set the last release committed: what a reader of that release knows.
 fn baseline_pool() -> DescriptorPool {
@@ -37,6 +37,7 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         reason: Some("disk swap".to_owned()),
         at_unix: Some(1_800_000_000),
         by_name: Some("alice".to_owned()),
+        host_group: None,
     }
 }
 
@@ -64,6 +65,12 @@ fn record() -> op::InventoryRecord {
         added_unix: 1_800_000_000,
         enrolled: true,
         host_held: op::HostHeld::Approved.into(),
+        platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxArm64.into(),
+        approve_until_unix: 1_800_086_400,
+        state: op::RecordState::Used.into(),
+        used_by_request_id: "ab".repeat(32),
+        used_unix: 1_800_000_060,
+        host_group: String::new(),
     }
 }
 
@@ -161,6 +168,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 node_id: Some("db-1".to_owned()),
                 by_name: Some("alice".to_owned()),
                 newest: true,
+                host_group: None,
             }),
         ),
         (
@@ -212,6 +220,9 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                     contested_by: vec!["2e".repeat(32), "3d".repeat(32)],
                     record_serial: "SN-42".to_owned(),
                     record_bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
+                    record_state: op::RecordState::Open.into(),
+                    record_approve_until_unix: 1_800_086_400,
+                    record_host_group: String::new(),
                 }],
                 next_page_token: "p3".to_owned(),
             }),
@@ -226,6 +237,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 services: vec!["db".to_owned()],
                 replace: true,
                 reason: "new disk".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -256,6 +268,26 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 bmc_mac: "0c:c4:7a:00:00:01".to_owned(),
                 serial: "SN-1".to_owned(),
                 notes: "rack 4".to_owned(),
+                platform: hostkeeper_proto::hostkeeper::agent::v1::Platform::LinuxX8664.into(),
+                approve_until_unix: 1_800_086_400,
+                approve_for_secs: 3_600,
+                host_group: String::new(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.OpenRecordRequest",
+            round_trip(&op::OpenRecordRequest {
+                host_id: "db-1".to_owned(),
+                approve_until_unix: 1_800_086_400,
+                approve_for_secs: 3_600,
+                reason: "rack was late".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.OpenRecordResponse",
+            round_trip(&op::OpenRecordResponse {
+                record: Some(record()),
+                entry: Some(audit_entry("record_open")),
             }),
         ),
         (
@@ -321,26 +353,48 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         ("hostkeeper.agent.v1.VerdictAck", round_trip(&verdict_ack())),
-        ("hostkeeper.local.v1.Enrollment", round_trip(&enrolled())),
-        ("hostkeeper.local.v1.LinkHealth", round_trip(&link())),
+        (
+            "hostkeeper.local.v1.Enrollment",
+            frozen::read_back(&enrolled()).encode_to_vec(),
+        ),
+        (
+            "hostkeeper.local.v1.LinkHealth",
+            frozen::read_back(&link()).encode_to_vec(),
+        ),
     ]
 }
 
 /// An enrolled host, every field set.
-fn enrolled() -> Enrollment {
-    Enrollment {
-        state: EnrollmentState::Enrolled.into(),
-        key_sha256: "ab".repeat(32),
-        host_id: "web-17".to_owned(),
-        not_after_unix: Some(1_900_604_800),
-    }
+fn enrolled() -> DynamicMessage {
+    frozen::local(
+        "Enrollment",
+        [
+            (
+                "state",
+                frozen::variant("EnrollmentState", "ENROLLMENT_STATE_ENROLLED"),
+            ),
+            ("key_sha256", Value::String("ab".repeat(32))),
+            ("host_id", Value::String("web-17".to_owned())),
+            ("not_after_unix", Value::U64(1_900_604_800)),
+        ],
+    )
 }
 
-fn link() -> LinkHealth {
-    LinkHealth {
-        last_success_unix: Some(1_900_000_015),
-        consecutive_failures: 3,
-    }
+fn link() -> DynamicMessage {
+    frozen::local(
+        "LinkHealth",
+        [
+            ("last_success_unix", Value::U64(1_900_000_015)),
+            ("consecutive_failures", Value::U64(3)),
+        ],
+    )
+}
+
+/// A `ServiceRecord` of `service`, with `last` set to `last` when given.
+fn service_record(service: &str, last: Option<DynamicMessage>) -> DynamicMessage {
+    let mut fields = vec![("service", Value::String(service.to_owned()))];
+    fields.extend(last.map(|step| ("last", Value::Message(step))));
+    frozen::local("ServiceRecord", fields)
 }
 
 fn verdict_ack() -> VerdictAck {
@@ -441,221 +495,12 @@ fn the_new_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = new_messages();
-    assert_eq!(messages.len(), 32);
+    assert_eq!(messages.len(), 34);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
         let read = DynamicMessage::decode(blind.clone(), bytes.as_slice()).expect("decodes");
         assert_eq!(read.encode_to_vec(), bytes, "{name}");
-    }
-}
-
-/// Catches a service's lifecycle that an admin client of the release before cannot read past, or
-/// drops: a `ServiceRecord` that says `REMOVING` is read by the baseline's `ServiceRecord`, which
-/// has no `lifecycle`, with every field it knows, and written back with the lifecycle kept; a
-/// record of the release before reads with the lifecycle UNSPECIFIED.
-#[test]
-fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
-    let older = baseline_pool();
-    let message = older
-        .get_message_by_name("hostkeeper.local.v1.ServiceRecord")
-        .expect("released");
-    assert!(message.get_field_by_name("lifecycle").is_none());
-    let removing = ServiceRecord {
-        service: "web".to_owned(),
-        last: Some(StepRecord {
-            step: "uninstall".to_owned(),
-            reason: "unit_stuck".to_owned(),
-            ..StepRecord::default()
-        }),
-        lifecycle: Lifecycle::Removing.into(),
-        ..ServiceRecord::default()
-    };
-    let read = DynamicMessage::decode(message, round_trip(&removing).as_slice()).expect("decodes");
-    assert_eq!(
-        read.get_field_by_name("service").as_deref(),
-        Some(&Value::String("web".to_owned()))
-    );
-    let back = ServiceRecord::decode(read.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(back, removing);
-    assert_eq!(back.lifecycle(), Lifecycle::Removing);
-
-    let before = ServiceRecord {
-        service: "web".to_owned(),
-        ..ServiceRecord::default()
-    };
-    let read = ServiceRecord::decode(round_trip(&before).as_slice()).expect("decodes");
-    assert_eq!(read.lifecycle(), Lifecycle::Unspecified);
-}
-
-/// Catches the host's enrollment or link that an admin client of the release before cannot read
-/// past, or drops: a `StatusResponse` with a service, an enrollment and a link is read by the
-/// baseline's `StatusResponse`, which has neither, with its service, and written back with both
-/// kept; a status of the release before reads with neither, and an `Enrollment` of an enrollment
-/// state the reader does not know reads as UNSPECIFIED.
-#[test]
-fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
-    let older = baseline_pool();
-    let message = older
-        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
-        .expect("released");
-    assert!(message.get_field_by_name("enrollment").is_none());
-    assert!(message.get_field_by_name("link").is_none());
-    let status = StatusResponse {
-        services: vec![ServiceRecord {
-            service: "web".to_owned(),
-            ..ServiceRecord::default()
-        }],
-        enrollment: Some(enrolled()),
-        link: Some(link()),
-        ..StatusResponse::default()
-    };
-    let read = DynamicMessage::decode(message, round_trip(&status).as_slice()).expect("decodes");
-    let services = read.get_field_by_name("services").expect("known");
-    assert_eq!(services.as_list().map(<[Value]>::len), Some(1));
-    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(back, status);
-
-    let before = StatusResponse {
-        services: status.services.clone(),
-        ..StatusResponse::default()
-    };
-    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
-    assert_eq!((read.enrollment, read.link), (None, None));
-
-    let later = Enrollment {
-        state: 99,
-        ..Enrollment::default()
-    };
-    let read = Enrollment::decode(round_trip(&later).as_slice()).expect("decodes");
-    assert_eq!(read.state(), EnrollmentState::Unspecified);
-}
-
-/// Catches the trusted root's age and reason in `Status` that an admin client of the release
-/// before cannot read past, or drops, and a status of the release before read as a root of age
-/// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
-/// services, and written back with both kept; one without them reads with no age and no reason.
-#[test]
-fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
-    let older = baseline_pool();
-    let message = older
-        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
-        .expect("released");
-    assert!(message.get_field_by_name("trusted_root_age_secs").is_none());
-    assert!(message.get_field_by_name("trusted_root_reason").is_none());
-    let stale = StatusResponse {
-        services: vec![ServiceRecord {
-            service: "web".to_owned(),
-            ..ServiceRecord::default()
-        }],
-        trusted_root_age_secs: Some(91 * 86_400),
-        trusted_root_reason: "trusted_root_stale".to_owned(),
-        ..StatusResponse::default()
-    };
-    let read = DynamicMessage::decode(message, round_trip(&stale).as_slice()).expect("decodes");
-    let services = read.get_field_by_name("services").expect("the services");
-    assert!(matches!(services.as_ref(), Value::List(list) if list.len() == 1));
-    let back = StatusResponse::decode(read.encode_to_vec().as_slice()).expect("decodes");
-    assert_eq!(back, stale);
-
-    let before = StatusResponse {
-        services: stale.services.clone(),
-        ..StatusResponse::default()
-    };
-    let read = StatusResponse::decode(round_trip(&before).as_slice()).expect("decodes");
-    assert_eq!(
-        (
-            read.trusted_root_age_secs,
-            read.trusted_root_reason.as_str()
-        ),
-        (None, "")
-    );
-}
-
-/// Catches: a field added to a released message of `Services` that the release before drops or
-/// cannot read past: an `Assign` or an `Unassign` of a role, a refusal token it does not know,
-/// and a `List` entry with assignments, assigned hosts and the hosts ordered to uninstall are
-/// read by the baseline's messages with every field they know, and written back with the new
-/// ones kept.
-#[test]
-fn an_older_reader_keeps_the_assignments_of_services() {
-    let older = baseline_pool();
-    let assign = op::AssignRequest {
-        node_id: String::new(),
-        service: "db".to_owned(),
-        role: "storage".to_owned(),
-    };
-    let unassign = op::UnassignRequest {
-        node_id: String::new(),
-        service: "db".to_owned(),
-        uninstall: true,
-        role: "storage".to_owned(),
-    };
-    let entry = op::ServiceEntry {
-        service: "db".to_owned(),
-        hosts: vec!["db-1".to_owned()],
-        min_versions: vec![op::MinVersion {
-            scope: Some(op::min_version::Scope::Role("storage".to_owned())),
-            version: "1.5".to_owned(),
-        }],
-        holds: Vec::new(),
-        desired_version: Some("2.0".to_owned()),
-        roles: vec!["storage".to_owned()],
-        assignments: vec![op::Assignment {
-            scope: Some(op::assignment::Scope::Host("db-2".to_owned())),
-            removed: true,
-        }],
-        assigned: vec![op::AssignedHost {
-            node_id: "db-1".to_owned(),
-            role: "storage".to_owned(),
-            installed_version: Some("1.9".to_owned()),
-            min_version: Some("1.5".to_owned()),
-            holds: Vec::new(),
-        }],
-        uninstalling: vec!["db-2".to_owned()],
-    };
-    let cases: [(&str, &str, Vec<u8>); 3] = [
-        (
-            "hostkeeper.operator.v1.AssignRequest",
-            "role",
-            round_trip(&assign),
-        ),
-        (
-            "hostkeeper.operator.v1.UnassignRequest",
-            "role",
-            round_trip(&unassign),
-        ),
-        (
-            "hostkeeper.operator.v1.ServiceEntry",
-            "assigned",
-            round_trip(&entry),
-        ),
-    ];
-    for (name, added, bytes) in cases {
-        let message = older.get_message_by_name(name).expect("released");
-        assert!(message.get_field_by_name(added).is_none(), "{name}");
-        let read = DynamicMessage::decode(message, bytes.as_slice()).expect("decodes");
-        assert_eq!(
-            read.get_field_by_name("service").as_deref(),
-            Some(&Value::String("db".to_owned())),
-            "{name}"
-        );
-        assert_eq!(read.encode_to_vec(), bytes, "{name}");
-    }
-    let refusal = older
-        .get_enum_by_name("hostkeeper.operator.v1.ServicesRefusal")
-        .expect("released");
-    for added in [
-        op::ServicesRefusal::UnknownRole,
-        op::ServicesRefusal::BelowMinVersion,
-    ] {
-        assert!(refusal.get_value(added as i32).is_none(), "{added:?}");
-    }
-    for name in [
-        "hostkeeper.operator.v1.Assignment",
-        "hostkeeper.operator.v1.AssignedHost",
-    ] {
-        assert!(older.get_message_by_name(name).is_none(), "{name} is new");
     }
 }
 
@@ -768,6 +613,7 @@ fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
     assert_eq!(back, set);
 
     let update = Update {
+        target: None,
         service: "db".to_owned(),
         version: "1.4".to_owned(),
         package_digest: "ab".repeat(32),
@@ -796,6 +642,7 @@ fn a_release_index_and_its_digest_are_kept_by_an_older_reader() {
     assert_eq!(before.index_digest, "");
 
     let force = Force {
+        target: None,
         service: "db".to_owned(),
         version: "1.4".to_owned(),
         package_digest: "ab".repeat(32),
@@ -938,4 +785,135 @@ fn an_older_reader_keeps_a_hosts_first_heartbeat_time() {
         ..op::Host::default()
     };
     assert!(!round_trip(&at_zero).is_empty(), "0 is written");
+}
+
+/// Catches a service's lifecycle that an admin client of the release before cannot read past, or
+/// drops: a `ServiceRecord` that says `REMOVING` is read by the baseline's `ServiceRecord`, which
+/// has no `lifecycle`, with every field it knows, and written back with the lifecycle kept; a
+/// record of the release before reads with the lifecycle UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_lifecycle_of_a_service() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.ServiceRecord")
+        .expect("released");
+    assert!(message.get_field_by_name("lifecycle").is_none());
+    let removing = frozen::local(
+        "ServiceRecord",
+        [
+            ("service", Value::String("web".to_owned())),
+            (
+                "last",
+                Value::Message(frozen::local(
+                    "StepRecord",
+                    [
+                        ("step", Value::String("uninstall".to_owned())),
+                        ("reason", Value::String("unit_stuck".to_owned())),
+                    ],
+                )),
+            ),
+            (
+                "lifecycle",
+                frozen::variant("Lifecycle", "LIFECYCLE_REMOVING"),
+            ),
+        ],
+    );
+    let bytes = frozen::read_back(&removing).encode_to_vec();
+    let read = DynamicMessage::decode(message, bytes.as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("service").as_deref(),
+        Some(&Value::String("web".to_owned()))
+    );
+    let back = DynamicMessage::decode(removing.descriptor(), read.encode_to_vec().as_slice())
+        .expect("decodes");
+    assert_eq!(back, removing);
+    assert_eq!(frozen::enum_name(&back, "lifecycle"), "LIFECYCLE_REMOVING");
+
+    let before = service_record("web", None);
+    let read = frozen::read_back(&before);
+    assert_eq!(
+        frozen::enum_name(&read, "lifecycle"),
+        "LIFECYCLE_UNSPECIFIED"
+    );
+}
+
+/// Catches the host's enrollment or link that an admin client of the release before cannot read
+/// past, or drops: a `StatusResponse` with a service, an enrollment and a link is read by the
+/// baseline's `StatusResponse`, which has neither, with its service, and written back with both
+/// kept; a status of the release before reads with neither, and an `Enrollment` of an enrollment
+/// state the reader does not know reads as UNSPECIFIED.
+#[test]
+fn an_older_admin_reader_keeps_the_enrollment_and_link_of_a_status() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("enrollment").is_none());
+    assert!(message.get_field_by_name("link").is_none());
+    let services = Value::List(vec![Value::Message(service_record("web", None))]);
+    let status = frozen::local(
+        "StatusResponse",
+        [
+            ("services", services.clone()),
+            ("enrollment", Value::Message(enrolled())),
+            ("link", Value::Message(link())),
+        ],
+    );
+    let bytes = frozen::read_back(&status).encode_to_vec();
+    let read = DynamicMessage::decode(message, bytes.as_slice()).expect("decodes");
+    let known = read.get_field_by_name("services").expect("known");
+    assert_eq!(known.as_list().map(<[Value]>::len), Some(1));
+    let back = DynamicMessage::decode(status.descriptor(), read.encode_to_vec().as_slice())
+        .expect("decodes");
+    assert_eq!(back, status);
+
+    let before = frozen::local("StatusResponse", [("services", services)]);
+    let read = frozen::read_back(&before);
+    assert!(!read.has_field_by_name("enrollment") && !read.has_field_by_name("link"));
+    let later = frozen::local("Enrollment", [("state", Value::EnumNumber(99))]);
+    let read = frozen::read_back(&later);
+    assert_eq!(
+        frozen::enum_name(&read, "state"),
+        "ENROLLMENT_STATE_UNSPECIFIED"
+    );
+}
+
+/// Catches the trusted root's age and reason in `Status` that an admin client of the release
+/// before cannot read past, or drops, and a status of the release before read as a root of age
+/// 0: a `StatusResponse` with both is read by the baseline's, which has neither, with its
+/// services, and written back with both kept; one without them reads with no age and no reason.
+#[test]
+fn an_older_admin_reader_keeps_the_trusted_roots_age_and_reason() {
+    let older = baseline_pool();
+    let message = older
+        .get_message_by_name("hostkeeper.local.v1.StatusResponse")
+        .expect("released");
+    assert!(message.get_field_by_name("trusted_root_age_secs").is_none());
+    assert!(message.get_field_by_name("trusted_root_reason").is_none());
+    let services = Value::List(vec![Value::Message(service_record("web", None))]);
+    let stale = frozen::local(
+        "StatusResponse",
+        [
+            ("services", services.clone()),
+            ("trusted_root_age_secs", Value::U64(91 * 86_400)),
+            (
+                "trusted_root_reason",
+                Value::String("trusted_root_stale".to_owned()),
+            ),
+        ],
+    );
+    let bytes = frozen::read_back(&stale).encode_to_vec();
+    let read = DynamicMessage::decode(message, bytes.as_slice()).expect("decodes");
+    let known = read.get_field_by_name("services").expect("the services");
+    assert!(matches!(known.as_ref(), Value::List(list) if list.len() == 1));
+    let back = DynamicMessage::decode(stale.descriptor(), read.encode_to_vec().as_slice())
+        .expect("decodes");
+    assert_eq!(back, stale);
+    let before = frozen::local("StatusResponse", [("services", services)]);
+    let read = frozen::read_back(&before);
+    assert!(!read.has_field_by_name("trusted_root_age_secs"));
+    assert_eq!(
+        read.get_field_by_name("trusted_root_reason").as_deref(),
+        Some(&Value::String(String::new()))
+    );
 }

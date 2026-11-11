@@ -29,6 +29,11 @@
 //! state does not name has the default, 1, or 2 for `daemon` and `mac-daemon`) and its `min_up` (`below_min_up`: the order would leave fewer
 //! of the role's live hosts up). Across services, a service whose rollout is not live is told
 //! `rollout_elsewhere` while the coordinator's `--live-rollouts` others are ([`is_live`]).
+//!
+//! For a service made for a host group ([`crate::group_scope`]) the plan is over the group's hosts,
+//! the role of a host is its group's name, `max_updating` and `min_up` are the group's policy, and
+//! the other services whose rollouts count are the group's other packages, up to the group's
+//! `live_rollouts` or the coordinator's.
 
 use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
@@ -44,6 +49,8 @@ use crate::canary::Canary;
 use crate::decide::Gate;
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Host};
+pub use crate::live::is_live;
+use crate::live::live_elsewhere;
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::INSTALL_FEATURE;
 use crate::rollouts::{Pause, Rollout};
@@ -120,6 +127,13 @@ pub(crate) struct RawStageTable {
     percent: u32,
     #[serde(default)]
     advance: Advance,
+}
+
+impl RawStage {
+    /// The table form of a stage: `percent`, entered by `advance`.
+    pub(crate) fn table(percent: u32, advance: Advance) -> Self {
+        Self::Table(RawStageTable { percent, advance })
+    }
 }
 
 impl Plan {
@@ -364,10 +378,7 @@ impl View {
         now: Duration,
     ) -> Self {
         let view = Self::of(def, want, kept, fleet, now);
-        if view.paused.is_some()
-            || fleet.is_stopped(&def.name, &want.version)
-            || fleet.is_quiet(now)
-        {
+        if view.paused.is_some() || fleet.is_stopped_in(def, &want.version) || fleet.is_quiet(now) {
             return view;
         }
         let held = view.clone();
@@ -388,7 +399,13 @@ impl View {
         let mut members: Vec<Member> = eligible(def, want, fleet, now)
             .into_iter()
             .map(|(id, host)| {
-                let state = state_of(def, want, &done, fleet, &id, host, now);
+                let mut state = state_of(def, want, &done, fleet, &id, host, now);
+                // A host admitted to its move at this version holds a place of the plan before it
+                // is ordered ([`crate::moving`]).
+                if state == HostState::Waiting && fleet.admitted_at(def, &id) == Some(&want.version)
+                {
+                    state = HostState::Updating;
+                }
                 let deferring =
                     state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
                 Member {
@@ -567,11 +584,10 @@ fn eligible<'a>(
                 || fleet.node(id).is_some_and(|node| node.is_live(now)),
                 |h| h.is_live(now),
             );
-            let platform = fleet.platform_of(service, id);
             let installed = host.is_some_and(|h| h.beat.health != Health::Absent);
             let installable = (host.is_some() || fleet.announced(id, HEARTBEAT_V2))
                 && fleet.announced(id, INSTALL_FEATURE)
-                && platform.and_then(|p| want.package_for(p)).is_some();
+                && crate::picks::picked(fleet, service, &want.version, id);
             // A failure of the desired version an operator acknowledged (a cleared halt, a
             // version set by hand) is resolved: the host leaves the plan, as a held one does.
             let resolved = host.is_some_and(|h| {
@@ -591,8 +607,8 @@ fn eligible<'a>(
                 && fleet.is_assigned(def, id)
                 && !fleet.is_excluded(service, id)
                 && !fleet.is_held(service, id)
-                && !fleet.is_forced(service, id)
-                && !platform.is_some_and(|p| want.lacks_package_for(p))
+                && !fleet.is_forced_in(def, id)
+                && !crate::picks::unpicked(fleet, service, &want.version, id)
                 && (installed || installable);
             ok.then(|| (id.clone(), host))
         })
@@ -623,6 +639,17 @@ fn state_of(
         .last_update
         .as_ref()
         .is_some_and(|r| r.outcome == Outcome::Failed && r.target == want.version);
+    // A halted update or install leaves the version in place without a rollback: the host
+    // reports it, unhealthy (a first install: installed, never started), and is failed, not
+    // updating, until it beats healthy.
+    if at
+        && failed
+        && !ordered
+        && host.beat.updating.is_none()
+        && host.beat.health != Health::Healthy
+    {
+        return HostState::Failed;
+    }
     if at && !ordered && host.beat.updating.is_none() {
         if !fleet.is_up(service, id, host, now) {
             return HostState::Updating;
@@ -694,13 +721,20 @@ fn below_min_up(
 /// `max_updating` of the role lets: `id` itself left out, the pairs a standing force orders left
 /// out, a held pair counted only while it runs an update or has an order outstanding.
 fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
+    let cap = want
+        .max_updating
+        .max_updating_of(fleet.role_in(&def.name, id));
+    slots_full(def, cap, fleet, id, now)
+}
+
+/// Whether `cap` hosts of the role of `id` hold a slot of `def`, the host `id` not counted.
+fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let service = def.name.as_str();
     let role = fleet.role_in(service, id);
-    let cap = want.max_updating.max_updating_of(role);
     let others =
-        |o: &HostId| o != id && !fleet.is_forced(service, o) && fleet.role_in(service, o) == role;
+        |o: &HostId| o != id && !fleet.is_forced_in(def, o) && fleet.role_in(service, o) == role;
     let occupying = fleet
-        .occupants_of(service)
+        .occupants_in(def)
         .filter(|(o, _)| others(o))
         .filter(|(o, h)| {
             if fleet.is_held(service, o) {
@@ -711,37 +745,10 @@ fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Du
         })
         .count();
     let unseen = fleet
-        .ordered_unseen(service, now)
+        .ordered_unseen_in(def, now)
         .filter(|o| others(o))
         .count();
     occupying + unseen >= cap as usize
-}
-
-/// Whether the rollout of `def` is live: one of its pairs holds an update slot or bakes the
-/// desired version `want`, or its plan is under way ([`View::under_way`]) and neither halted nor
-/// at a version marked bad. The pairs a standing force orders are left out; a held pair counts
-/// only while it runs an update or has an order outstanding.
-#[must_use]
-pub fn is_live(def: &ServiceDef, want: Option<&Desired>, fleet: &Fleet, now: Duration) -> bool {
-    let service = def.name.as_str();
-    let slot = fleet
-        .ordered_unseen(service, now)
-        .any(|o| !fleet.is_forced(service, o))
-        || fleet
-            .occupants_of(service)
-            .filter(|(o, _)| !fleet.is_forced(service, o))
-            .any(|(o, h)| {
-                if fleet.is_held(service, o) {
-                    return h.beat.updating.is_some() || fleet.is_ordered(service, o, now);
-                }
-                fleet.holds_slot(service, o, h, now)
-                    || want.is_some_and(|w| {
-                        fleet.is_baking(service, o, h, &w.version, def.bake_beats, now)
-                    })
-            });
-    slot || want.is_some_and(|want| {
-        !fleet.is_stopped(service, &want.version) && current(def, want, fleet, now).under_way()
-    })
 }
 
 /// Whether `service` may not start a rollout now: its own is not live and as many other
@@ -753,43 +760,31 @@ pub(crate) fn elsewhere(
     fleet: &Fleet,
     now: Duration,
 ) -> bool {
+    let name = memo_name(services.get(service).and_then(ServiceDef::group), service);
     let kept = MEMO.with(|memo| {
         memo.borrow()
             .as_ref()
-            .map(|plans| plans.elsewhere.get(service).copied())
+            .map(|plans| plans.elsewhere.get(&name).copied())
     });
     match kept {
         Some(Some(held)) => held,
         Some(None) => {
-            let held = elsewhere_now(services, all, service, fleet, now);
+            let held = live_elsewhere(services, all, service, fleet, now).is_some();
             MEMO.with(|memo| {
                 memo.borrow_mut()
                     .as_mut()
-                    .map(|plans| plans.elsewhere.insert(service.to_owned(), held))
+                    .map(|plans| plans.elsewhere.insert(name, held))
             });
             held
         }
-        None => elsewhere_now(services, all, service, fleet, now),
+        None => live_elsewhere(services, all, service, fleet, now).is_some(),
     }
 }
 
-fn elsewhere_now(
-    services: &Services,
-    all: &BTreeMap<String, Desired>,
-    service: &str,
-    fleet: &Fleet,
-    now: Duration,
-) -> bool {
-    let live = |def: &ServiceDef| is_live(def, all.get(&def.name), fleet, now);
-    if services.get(service).is_some_and(live) {
-        return false;
-    }
-    let others = services
-        .defs()
-        .filter(|def| def.name != service)
-        .filter(|def| live(def))
-        .count();
-    others >= fleet.live_rollouts()
+/// The name a [`Memo`] keeps a service's plan under: the service's own, or, for one made for a host
+/// group, the group's name before it, so that two groups' plans of one package are two.
+fn memo_name(group: Option<&crate::host_groups::GroupName>, service: &str) -> String {
+    group.map_or_else(|| service.to_owned(), |group| format!("{group}/{service}"))
 }
 
 thread_local! {
@@ -797,8 +792,9 @@ thread_local! {
     static MEMO: RefCell<Option<Plans>> = const { RefCell::new(None) };
 }
 
-/// What a [`Memo`] keeps: each service's plan by service and desired version, and whether
-/// another service's rollout holds it ([`elsewhere`]).
+/// What a [`Memo`] keeps: each service's plan by service and desired version (the service's name
+/// is its group's before it, for a service made for a group), and whether another service's
+/// rollout holds it ([`elsewhere`]).
 #[derive(Default)]
 struct Plans {
     views: BTreeMap<(String, String), Rc<View>>,
@@ -844,7 +840,7 @@ pub(crate) fn current(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Dura
         Rc::new(View::effective(
             def,
             want,
-            fleet.rollout_of(&def.name),
+            fleet.rollout_in(def),
             fleet,
             now,
         ))
@@ -854,7 +850,10 @@ pub(crate) fn current(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Dura
         let Some(plans) = memo.as_mut() else {
             return build();
         };
-        let key = (def.name.clone(), want.version.as_str().to_owned());
+        let key = (
+            memo_name(def.group(), &def.name),
+            want.version.as_str().to_owned(),
+        );
         Rc::clone(plans.views.entry(key).or_insert_with(build))
     })
 }
@@ -913,17 +912,24 @@ pub fn gate(
     })
 }
 
-/// The gate on an uninstall of `service` ordered to a host: the service waits for the others'
-/// rollouts as an update does (`rollout_elsewhere`), and nothing else of the plan holds it.
+/// The gate on an uninstall of `def` ordered to the host `id`: the service waits for the others'
+/// rollouts as an update does (`rollout_elsewhere`), and, in a host group, for a slot of the
+/// group's `max_updating` (`no_slot`: the uninstalls of the group count with its updates); nothing
+/// else of the plan holds it.
 #[must_use]
 pub fn uninstall_gate(
     services: &Services,
     all: &BTreeMap<String, Desired>,
-    service: &str,
+    def: &ServiceDef,
     fleet: &Fleet,
+    id: &HostId,
     now: Duration,
 ) -> Option<Gate> {
-    elsewhere(services, all, service, fleet, now).then_some(Gate::RolloutElsewhere)
+    if elsewhere(services, all, &def.name, fleet, now) {
+        return Some(Gate::RolloutElsewhere);
+    }
+    let cap = def.scope.as_ref()?.max_updating;
+    slots_full(def, cap, fleet, id, now).then_some(Gate::NoSlot)
 }
 
 /// The position the plan of `def` reaches from `view` when it enters every stage it may now:

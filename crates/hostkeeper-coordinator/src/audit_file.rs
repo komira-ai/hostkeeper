@@ -6,8 +6,8 @@
 //! this order, `{"seq":1,"at_unix":1800000000,"by":"alice","action":"exclude","detail":{"service":
 //! "demo","node_id":"s2","reason":"bad disk"}}`, then a newline. `by` is who made the change (the
 //! name of the operator's token, `coordinator` or `ci`), `at_unix` the seconds since the epoch,
-//! and `detail` the change's `service`, `node_id` and `reason`, those it has, in that order (`{}`
-//! when it has none).
+//! and `detail` the change's `service`, `node_id`, `host_group` and `reason`, those it has, in
+//! that order (`{}` when it has none). A reader that does not know `host_group` passes it over.
 //!
 //! The file is opened for appending (`O_APPEND`, created with mode `0600`), each line is written
 //! in one call and fsynced, and a file that was just created has its directory fsynced; nothing
@@ -81,18 +81,20 @@ pub(crate) fn path_of(ops: &Path) -> PathBuf {
 }
 
 /// What a change concerned: the keys it has.
-#[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Detail {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) service: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) node_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) host_group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) reason: Option<String>,
 }
 
 /// One line of the audit file.
-#[derive(Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct AuditLine {
     pub(crate) seq: u64,
     pub(crate) at_unix: u64,
@@ -112,6 +114,7 @@ impl AuditLine {
             detail: Detail {
                 service: entry.service.clone(),
                 node_id: entry.node_id.clone(),
+                host_group: entry.host_group.clone(),
                 reason: entry.reason.clone(),
             },
         }
@@ -127,6 +130,7 @@ impl AuditLine {
                 action: self.action,
                 service: self.detail.service,
                 node_id: self.detail.node_id,
+                host_group: self.detail.host_group,
                 reason: self.detail.reason,
             },
         }
@@ -199,15 +203,62 @@ pub(crate) struct Logged {
     pub(crate) at_unix: Option<u64>,
 }
 
-/// Which entries a page of the audit log holds: those numbered above `since_seq` that `keep`
+/// Who made a change, by the name it was made under: the coordinator, CI, or an operator's
+/// token (any other name).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Actor {
+    /// An operator's token.
+    Operator,
+    /// CI's OIDC token.
+    Ci,
+    /// The coordinator itself.
+    Coordinator,
+}
+
+impl Actor {
+    /// The actor of a change made under the name `by`.
+    pub(crate) fn of(by: &str) -> Actor {
+        match by {
+            crate::reconcile::COORDINATOR => Actor::Coordinator,
+            crate::reconcile::CI => Actor::Ci,
+            _ => Actor::Operator,
+        }
+    }
+}
+
+/// Which entries of the audit log a page keeps: each condition given holds of it. `actions`
+/// keeps an entry whose action is any of them; an empty list keeps every action.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Filter<'a> {
+    pub(crate) actor: Option<Actor>,
+    pub(crate) by_name: Option<&'a str>,
+    pub(crate) actions: &'a [&'a str],
+    pub(crate) service: Option<&'a str>,
+    pub(crate) node_id: Option<&'a str>,
+    pub(crate) host_group: Option<&'a str>,
+}
+
+impl Filter<'_> {
+    /// Whether the filter keeps `entry`.
+    pub(crate) fn keeps(&self, entry: &AuditEntry) -> bool {
+        self.actor.is_none_or(|actor| Actor::of(&entry.by) == actor)
+            && self.by_name.is_none_or(|name| name == entry.by)
+            && (self.actions.is_empty() || self.actions.contains(&entry.action.as_str()))
+            && (self.service.is_none() || entry.service.as_deref() == self.service)
+            && (self.node_id.is_none() || entry.node_id.as_deref() == self.node_id)
+            && (self.host_group.is_none() || entry.host_group.as_deref() == self.host_group)
+    }
+}
+
+/// Which entries a page of the audit log holds: those numbered above `since_seq` that `filter`
 /// keeps, at most `limit` of them (at least 1), the oldest of them or, with `newest`, the newest;
 /// oldest first either way.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct Query<'a> {
     pub(crate) since_seq: u64,
     pub(crate) limit: usize,
     pub(crate) newest: bool,
-    pub(crate) keep: &'a dyn Fn(&AuditEntry) -> bool,
+    pub(crate) filter: Filter<'a>,
 }
 
 /// How many bytes one read of the audit file takes.
@@ -413,7 +464,7 @@ fn start_after(file: &Reader, since_seq: u64) -> io::Result<u64> {
 pub(crate) fn page_in(file: &Reader, query: &Query<'_>) -> io::Result<Vec<Logged>> {
     let mut page = Vec::new();
     let mut add = |logged: Logged| {
-        if (query.keep)(&logged.entry) {
+        if query.filter.keeps(&logged.entry) {
             page.push(logged);
         }
         if page.len() >= query.limit {
@@ -660,15 +711,25 @@ fn page(active: &Path, query: &Query<'_>) -> Result<Vec<Logged>, OpsError> {
 }
 
 /// Visits every line of the audit file at `active` and its sealed segments that parses, oldest
-/// first, a chunk at a time.
+/// first, a chunk at a time: how many lines did not parse.
 ///
 /// # Errors
 /// [`OpsError::Io`]: the directory cannot be listed, or a file of it cannot be read.
-fn each(active: &Path, visit: &mut dyn FnMut(AuditLine)) -> Result<(), OpsError> {
+fn each(active: &Path, visit: &mut dyn FnMut(AuditLine)) -> Result<usize, OpsError> {
+    let mut skipped = 0;
     for file in files_of(active)? {
-        each_in(&file, visit)?;
+        skipped += each_in(&file, visit)?;
     }
-    Ok(())
+    Ok(skipped)
+}
+
+/// The bytes of an audit file that holds `lines`, in their order, each written as an append
+/// writes it.
+pub(crate) fn history_text(lines: &[AuditLine]) -> Vec<u8> {
+    lines
+        .iter()
+        .flat_map(|line| line.text_after(false).into_bytes())
+        .collect()
 }
 
 /// The audit file of one ops file, with its sealed segments.
@@ -743,18 +804,6 @@ impl AuditLog {
         &self.path
     }
 
-    /// [`read_after`] of the files of this log, under the lock that keeps appends one at a
-    /// time: no rotation seals the active file between the listing of the files and their read,
-    /// which would leave the segment it made out of the answer.
-    ///
-    /// # Errors
-    /// [`OpsError::Io`], as [`read_after`].
-    #[cfg(test)]
-    pub(crate) fn read_after(&self, since_seq: u64) -> Result<AuditRead, OpsError> {
-        let _appends = self.lock();
-        read_after(&self.path, since_seq)
-    }
-
     /// The page `query` asks for of the files of this log ([`page`]), under the lock that keeps
     /// appends one at a time, so no rotation seals the active file between the listing of the
     /// files and their read.
@@ -772,6 +821,14 @@ impl AuditLog {
     /// # Errors
     /// [`OpsError::Io`], as [`each`].
     pub(crate) fn each(&self, visit: &mut dyn FnMut(AuditLine)) -> Result<(), OpsError> {
+        self.each_counted(visit).map(|_skipped| ())
+    }
+
+    /// [`Self::each`]: how many lines of the files did not parse, and were not visited.
+    ///
+    /// # Errors
+    /// [`OpsError::Io`], as [`each`].
+    pub(crate) fn each_counted(&self, visit: &mut dyn FnMut(AuditLine)) -> Result<usize, OpsError> {
         let _appends = self.lock();
         each(&self.path, visit)
     }

@@ -9,12 +9,16 @@
 //!    MAC is left out rather than given one record's install);
 //! 2. its machine has not fetched its seed in this run (a MAC leaves the set when its install
 //!    starts, `--reinstall` or not);
-//! 3. unless `--reinstall` names the record's host id: the record is not enrolled, its
+//! 3. the record's platform is one this server installs: a record that states another value
+//!    (`Snapshot::not_installable`) is never installed, `--reinstall` or not;
+//! 4. unless `--reinstall` names the record's host id: the record is not enrolled, its
 //!    `host_held` is `NONE` (the enrollment store holds no host by its id: any other value,
-//!    `UNSPECIFIED` included, leaves it out), and no pending request matches it;
-//! 4. in router mode, the record states a platform (the router names one file for every
+//!    `UNSPECIFIED` included, leaves it out), the record's approval window is `OPEN` (`CLOSED`,
+//!    `USED` and `UNSPECIFIED`, a coordinator before windows, leave it out), and no pending
+//!    request matches it;
+//! 5. in router mode, the record states a platform (the router names one file for every
 //!    client, so the record is where the install's platform is stated);
-//! 5. the record's platform, when it states one, has a boot set.
+//! 6. the record's platform, when it states one, has a boot set.
 //!
 //! Every MAC of a record that is left out is kept with the reason ([`LeftOut`]), which `serve`
 //! logs when that MAC asks for an answer. Whether the firmware's or GRUB's architecture agrees
@@ -26,6 +30,7 @@ use std::fmt;
 
 use hostkeeper_enrollment::names::MacAddress;
 use hostkeeper_proto::hostkeeper::operator::v1::HostHeld as HostHeldValue;
+use hostkeeper_proto::hostkeeper::operator::v1::RecordState;
 use hostkeeper_pxe_packets::Mac;
 use hostkeeper_pxe_packets::dhcp::{AnswerSet, Mode};
 use hostkeeper_pxe_packets::tftp::RecordPlatforms;
@@ -63,8 +68,13 @@ pub enum LeftOut {
         host_id: HostId,
         held: HostHeldValue,
     },
+    /// The record's approval window is not open (`state` is not `OPEN`): it ended or never
+    /// opened, an approval used the record, or the coordinator does not say.
+    Closed { host_id: HostId, state: RecordState },
     /// A pending request matches the record.
     Pending { host_id: HostId, request_id: String },
+    /// The record states a platform this server does not install.
+    PlatformNotInstalled { host_id: HostId, value: i32 },
     /// Router mode, and the record states no platform.
     NoPlatform { host_id: HostId },
     /// The record's platform has no boot set.
@@ -106,6 +116,16 @@ impl fmt::Display for LeftOut {
                 };
                 write!(f, "the record of host {host_id}: {what}")
             }
+            LeftOut::Closed { host_id, state } => {
+                let what = match state {
+                    RecordState::Closed => "its approval window is closed",
+                    RecordState::Used => "an approval used it",
+                    RecordState::Unspecified | RecordState::Open => {
+                        "the coordinator does not say whether its approval window is open"
+                    }
+                };
+                write!(f, "the record of host {host_id}: {what}")
+            }
             LeftOut::Pending {
                 host_id,
                 request_id,
@@ -113,6 +133,17 @@ impl fmt::Display for LeftOut {
                 f,
                 "the record of host {host_id}: the pending request {request_id} matches it"
             ),
+            LeftOut::PlatformNotInstalled { host_id, value } => {
+                let stated =
+                    match hostkeeper_proto::hostkeeper::agent::v1::Platform::try_from(*value) {
+                        Ok(platform) => platform.as_str_name().to_owned(),
+                        Err(_) => format!("the number {value}"),
+                    };
+                write!(
+                    f,
+                    "the record of host {host_id} states the platform {stated}, which is not installed"
+                )
+            }
             LeftOut::NoPlatform { host_id } => write!(
                 f,
                 "the record of host {host_id} has no platform, which router mode needs"
@@ -140,6 +171,15 @@ pub struct Answers {
 }
 
 impl Answers {
+    /// The host ids of the records in the set that hold the MAC of `octets`: the one, or none.
+    pub fn host_of(&self, octets: [u8; 6]) -> Vec<&HostId> {
+        self.menus
+            .iter()
+            .filter(|(mac, _)| mac.octets() == octets)
+            .map(|(_, record)| &record.host_id)
+            .collect()
+    }
+
     /// The reason the MAC of `octets` is not in the set: its record's, or that no record holds
     /// it.
     pub fn why_not(&self, octets: [u8; 6]) -> String {
@@ -208,6 +248,12 @@ fn judge<'r>(
     if facts.seeded.contains(&mac) {
         return Err(LeftOut::Seeded { host_id: host_id() });
     }
+    if let Some(&value) = snapshot.not_installable.get(&record.host_id) {
+        return Err(LeftOut::PlatformNotInstalled {
+            host_id: host_id(),
+            value,
+        });
+    }
     if !facts.reinstall.contains(&record.host_id) {
         if record.enrolled {
             return Err(LeftOut::Enrolled { host_id: host_id() });
@@ -216,6 +262,12 @@ fn judge<'r>(
             return Err(LeftOut::HostHeld {
                 host_id: host_id(),
                 held: record.host_held,
+            });
+        }
+        if record.state != RecordState::Open {
+            return Err(LeftOut::Closed {
+                host_id: host_id(),
+                state: record.state,
             });
         }
         let matching = snapshot.pending.iter().find(|pending| {

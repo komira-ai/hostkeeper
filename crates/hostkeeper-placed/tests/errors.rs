@@ -11,13 +11,12 @@ use std::io;
 use std::path::{Path, PathBuf};
 
 use hostkeeper_config::manifest::Class;
-use hostkeeper_config::names::PathError;
 use hostkeeper_placed::testing::{
     Event, FakeLauncher, FakeUnitControl, FaultFs, FsWrite, Log, UnitCall,
 };
 use hostkeeper_placed::{
-    ClaimError, FileKind, Fs, LintError, Owner, PackageDirs, PlacedError, PlacedLock, Placer,
-    Roots, Systemctl, UnitControl, UnitControlError,
+    FileKind, Fs, Owner, PackageDirs, PlacedError, PlacedLock, Placer, Roots, Systemctl,
+    UnitControl, UnitControlError,
 };
 use support::World;
 
@@ -32,40 +31,17 @@ fn units_error() -> UnitControlError {
 /// each variant is asked its class, reason and full text.
 #[test]
 fn every_placed_error_has_its_class_and_reason() {
-    let place = PathBuf::from("/etc/tierstore/tierstore.conf");
+    let place = PathBuf::from("/var/lib/hostkeeper/packages/tierstore/current");
     let record = PathBuf::from("/var/lib/hostkeeper/placed.json");
     let cases = [
         (
             PlacedError::PathConflict {
                 path: place.clone(),
-                owner: Owner::Service("other".to_owned()),
+                owner: Owner::File,
             },
             Class::Release,
             "path_conflict",
-            "/etc/tierstore/tierstore.conf is held by the service other".to_owned(),
-        ),
-        (
-            PlacedError::Claim(ClaimError::EmptyPath),
-            Class::Release,
-            "manifest_mismatch",
-            "a [[files]] path is empty".to_owned(),
-        ),
-        (
-            PlacedError::Lint(LintError::RunUnit {
-                unit: "a.service".to_owned(),
-            }),
-            Class::Release,
-            "manifest_mismatch",
-            "the [units] run entry \"a.service\" is neither a file of units/ nor an instance of a template there"
-                .to_owned(),
-        ),
-        (
-            PlacedError::Tombstoned {
-                service: "tierstore".to_owned(),
-            },
-            Class::Environment,
-            "uninstalling",
-            "the service tierstore is being uninstalled; its paths are not linked".to_owned(),
+            "/var/lib/hostkeeper/packages/tierstore/current is held by a regular file".to_owned(),
         ),
         (
             PlacedError::Corrupt {
@@ -140,115 +116,13 @@ fn io_and_locked_errors_keep_their_source() {
 /// Catches an owner described wrongly in a path_conflict message: every variant's exact text.
 #[test]
 fn every_owner_has_its_text() {
-    assert_eq!(
-        Owner::Service("other".to_owned()).to_string(),
-        "the service other"
-    );
-    assert_eq!(
-        Owner::File.to_string(),
-        "a regular file placed.json does not list"
-    );
-    assert_eq!(
-        Owner::Directory.to_string(),
-        "a directory placed.json does not list"
-    );
+    assert_eq!(Owner::File.to_string(), "a regular file");
+    assert_eq!(Owner::Directory.to_string(), "a directory");
     assert_eq!(
         Owner::Link(PathBuf::from("/srv/elsewhere")).to_string(),
-        "a link to /srv/elsewhere that placed.json does not list"
+        "a link to /srv/elsewhere"
     );
-    assert_eq!(
-        Owner::Other.to_string(),
-        "a socket, pipe or device placed.json does not list"
-    );
-}
-
-/// Catches a changed claim refusal text: every variant's exact message.
-#[test]
-fn every_claim_error_has_its_text() {
-    assert_eq!(
-        ClaimError::UnitName {
-            service: "tierstore".to_owned(),
-            file: "other.service".to_owned(),
-        }
-        .to_string(),
-        "the unit file units/other.service does not start with the service name tierstore"
-    );
-    assert_eq!(
-        ClaimError::EmptyPath.to_string(),
-        "a [[files]] path is empty"
-    );
-    assert_eq!(
-        ClaimError::BadPath {
-            path: "etc/x".to_owned(),
-            why: PathError::NotAbsolute,
-        }
-        .to_string(),
-        "the [[files]] path \"etc/x\" is not absolute"
-    );
-    assert_eq!(
-        ClaimError::Refused {
-            path: "/usr/bin/x".to_owned(),
-            prefix: "/usr",
-        }
-        .to_string(),
-        "the [[files]] path \"/usr/bin/x\" is /usr or below it, where a package may not place a file"
-    );
-    assert_eq!(
-        ClaimError::Duplicate {
-            path: PathBuf::from("/etc/x"),
-        }
-        .to_string(),
-        "two entries of the package claim the path /etc/x"
-    );
-}
-
-/// Catches a lint refusal that is not a release/manifest_mismatch one, and a changed text.
-#[test]
-fn every_lint_error_is_a_manifest_mismatch() {
-    let errors = [
-        (
-            LintError::RunUnit {
-                unit: "a.service".to_owned(),
-            },
-            "the [units] run entry \"a.service\" is neither a file of units/ nor an instance of a template there",
-        ),
-        (
-            LintError::PackagePath {
-                file: "a.service".to_owned(),
-                key: "ExecStart".to_owned(),
-                path: "/var/lib/hostkeeper/packages/a/1.0.0/bin/a".to_owned(),
-                packages: "/var/lib/hostkeeper/packages".to_owned(),
-                service: "a".to_owned(),
-            },
-            "units/a.service ExecStart names \"/var/lib/hostkeeper/packages/a/1.0.0/bin/a\", which is under /var/lib/hostkeeper/packages/ but not /var/lib/hostkeeper/packages/a/current/",
-        ),
-        (
-            LintError::NoWantedBy {
-                unit: "a.service".to_owned(),
-                file: "a.service".to_owned(),
-            },
-            "the run unit a.service has no [Install] WantedBy= in units/a.service, so the daemon cannot enable it",
-        ),
-        (
-            LintError::BadTarget {
-                file: "a.service".to_owned(),
-                target: "x y".to_owned(),
-            },
-            "units/a.service has WantedBy=\"x y\", which is not a unit name of a known type of at most 249 bytes",
-        ),
-        (
-            LintError::Unreadable {
-                file: "a.service".to_owned(),
-                why: "not utf-8".to_owned(),
-            },
-            "units/a.service cannot be read as text: not utf-8",
-        ),
-    ];
-    for (error, text) in errors {
-        assert_eq!(error.class(), Class::Release, "{text}");
-        assert_eq!(error.reason(), "manifest_mismatch", "{text}");
-        assert_eq!(error.to_string(), text);
-    }
+    assert_eq!(Owner::Other.to_string(), "a socket, pipe or device");
 }
 
 /// Catches a changed systemctl argument vector, a stop that lets the unit name act as an option,
@@ -371,7 +245,7 @@ fn log_is_shared_and_clearable() {
 /// Catches a launcher fake that forgets runs or fails when it should not.
 #[test]
 fn fake_launcher_records_every_run() {
-    use hostkeeper_placed::CommandLauncher;
+    use hostkeeper_placed::{CommandLauncher, LaunchError};
     let launcher = FakeLauncher::new();
     assert!(launcher.runs().is_empty());
     assert_eq!(launcher.run(&["a", "b"]), Ok(()));
@@ -381,8 +255,14 @@ fn fake_launcher_records_every_run() {
         vec![vec!["a".to_owned(), "b".to_owned()], vec!["c".to_owned()]]
     );
     let failing = FakeLauncher::failing();
-    assert_eq!(failing.run(&["a"]), Err("exit status 1".to_owned()));
+    assert_eq!(failing.run(&["a"]), Err(LaunchError::Exit(1)));
     assert_eq!(failing.runs(), vec![vec!["a".to_owned()]]);
+    let signalled = FakeLauncher::failing_with(LaunchError::Failed("ended by a signal".to_owned()));
+    assert_eq!(
+        signalled.run(&["b"]),
+        Err(LaunchError::Failed("ended by a signal".to_owned()))
+    );
+    assert_eq!(signalled.runs(), vec![vec!["b".to_owned()]]);
 }
 
 /// Catches a FaultFs that does not pass each operation through to disk under the root, or
@@ -606,63 +486,10 @@ fn package_dirs_name_the_service_links_and_versions() {
     );
 }
 
-/// Catches a `PackagePath` text that names a fixed packages directory instead of the field: with
-/// another packages directory the text carries it twice, and the refusal is a release one.
+/// Catches a wrong class, reason or text for a record written under the lock of another state
+/// directory.
 #[test]
-fn a_package_path_refusal_names_the_packages_directory_it_was_given() {
-    let error = LintError::PackagePath {
-        file: "a.service".to_owned(),
-        key: "ExecStart".to_owned(),
-        path: "/srv/pk/a/1.0.0/bin/a".to_owned(),
-        packages: "/srv/pk".to_owned(),
-        service: "a".to_owned(),
-    };
-    assert_eq!(
-        error.to_string(),
-        "units/a.service ExecStart names \"/srv/pk/a/1.0.0/bin/a\", which is under /srv/pk/ but not /srv/pk/a/current/"
-    );
-    assert_eq!(error.class(), Class::Release);
-    assert_eq!(error.reason(), "manifest_mismatch");
-}
-
-/// Catches a wrong class, reason or text for the refusals that came with the overlap rule, the
-/// source rule and the conflicting switch intents.
-#[test]
-fn overlap_bad_source_and_conflicting_intents_have_class_reason_and_text() {
-    let overlap = ClaimError::Overlap {
-        path: PathBuf::from("/etc/x"),
-        other: PathBuf::from("/etc/x/y.conf"),
-    };
-    assert_eq!(
-        overlap.to_string(),
-        "the package claims /etc/x and /etc/x/y.conf, one below the other"
-    );
-    let bad_source = ClaimError::BadSource {
-        entry: "../x".to_owned(),
-        why: "is not below files/".to_owned(),
-    };
-    assert_eq!(
-        bad_source.to_string(),
-        "the [[files]] source \"../x\" is not below files/"
-    );
-    for claim in [overlap, bad_source] {
-        let text = claim.to_string();
-        let error = PlacedError::Claim(claim);
-        assert_eq!(error.class(), Class::Release, "{text}");
-        assert_eq!(error.reason(), "manifest_mismatch", "{text}");
-        assert_eq!(error.to_string(), text);
-    }
-
-    let conflicting = PlacedError::ConflictingIntents {
-        service: "tierstore".to_owned(),
-    };
-    assert_eq!(
-        conflicting.to_string(),
-        "two different switch intents name the service tierstore"
-    );
-    assert_eq!(conflicting.class(), Class::Environment);
-    assert_eq!(conflicting.reason(), "link_failed");
-
+fn a_foreign_lock_has_its_class_reason_and_text() {
     let foreign = PlacedError::ForeignLock {
         lock: PathBuf::from("/var/lib/other/placed.lock"),
         record: PathBuf::from("/var/lib/hostkeeper/placed.json"),

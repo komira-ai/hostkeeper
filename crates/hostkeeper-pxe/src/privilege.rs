@@ -1,4 +1,4 @@
-//! The privilege drop of `hostkeeper-pxe serve` (docs/design/network-install.md, section 3,
+//! The privilege drop of `pxe serve` (docs/design/network-install.md, section 3,
 //! "Where it runs, and as whom"): it starts as root only to bind its ports, then becomes the
 //! unprivileged user `--user-id` and `--group-id` name before it reads the token file (opened
 //! before the drop and kept as a descriptor) or parses a packet.

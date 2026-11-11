@@ -38,7 +38,7 @@ fn publish_to(fakes: &Fakes, dir: &Path, commit: &Commit) -> Result<Vec<String>,
 
 fn check_line(commit: &Commit) -> String {
     format!(
-        "release check: the 68 assets of v0.1.5 match SHA256SUMS, and 48 attestations of commit \
+        "release check: the 72 assets of v0.1.5 match SHA256SUMS, and 62 attestations of commit \
          {commit} verified online and from their bundles"
     )
 }
@@ -88,7 +88,7 @@ fn publish_is_idempotent_for_identical_assets() {
         publish_to(&fakes, &dir, &commit),
         Ok(vec![
             check_line(&commit),
-            format!("published {TAG} at {commit} with 68 assets"),
+            format!("published {TAG} at {commit} with 72 assets"),
         ])
     );
     assert_eq!(*fakes.store.writes.borrow(), all_writes());
@@ -148,7 +148,7 @@ fn a_partial_draft_is_completed_from_the_same_runs_assets() {
         publish_to(&fakes, &dir, &commit),
         Ok(vec![
             check_line(&commit),
-            format!("published {TAG} at {commit} with 68 assets"),
+            format!("published {TAG} at {commit} with 72 assets"),
         ])
     );
     assert_eq!(*fakes.store.writes.borrow(), all_writes());
@@ -334,11 +334,13 @@ fn misread(tamper: fn(&mut Release), detail: &str) {
         git: &fakes.git,
         runs: &fakes.runs,
         store: &store,
-        source: &fakes.source,
         verifier: &fakes.verifier,
         run_version: &fakes.run_version,
         pkgbuild: &fakes.pkgbuild,
         advisories: &fakes.advisories,
+        download: &fakes.download,
+        registry: &fakes.registry,
+        wait: &fakes.wait,
     };
     let detail = detail.replace("SUMS_DIGEST", &digest(&dir, "SHA256SUMS"));
     assert_eq!(
@@ -404,18 +406,20 @@ fn a_directory_that_fails_the_attestation_check_publishes_nothing() {
     fakes.verifier = Fakes::over(FakeHistory::default()).verifier;
     let result = publish_to(&fakes, &dir, &commit);
     assert_eq!(
-        result.map_err(|e| matches!(e, Error::Refused(lines) if lines.len() == 48)),
+        result.map_err(|e| matches!(e, Error::Refused(lines) if lines.len() == 62)),
         Err(true)
     );
     assert!(fakes.store.writes.borrow().is_empty());
 }
 
 #[test]
-fn the_notes_name_the_release_the_commit_the_signer_and_the_verify_command() {
-    // Catches: release notes that omit the pin a reader needs to verify a file.
+fn the_notes_name_the_release_the_commit_the_signer_the_verify_command_and_the_image() {
+    // Catches: release notes that omit the pin a reader needs to verify a file, or name the
+    // coordinator's image by a tag rather than by the digest of its image index.
     let commit = nth_commit(7);
+    let image = "ab".repeat(32);
     assert_eq!(
-        notes(&version(), &commit),
+        notes(&version(), &commit, &image),
         format!(
             "hostkeeper v0.1.5, built from commit {commit}. Each binary was built with \
              RELEASE_COMMIT set to that commit and prints `hostkeeper 0.1.5+{}` for --version.\n\
@@ -425,8 +429,29 @@ fn the_notes_name_the_release_the_commit_the_signer_and_the_verify_command() {
              \n\
              gh attestation verify <file> --repo komira-ai/hostkeeper --signer-workflow \
              komira-ai/hostkeeper/.github/workflows/artifacts.yml --source-ref refs/heads/main \
-             --source-digest {commit}\n",
+             --source-digest {commit}\n\
+             \n\
+             The coordinator's image, for linux/amd64 and linux/arm64 (tagged 0.1.5; pin the \
+             digest, which is the SHA-256 of the asset hostkeeper-coordinator-0.1.5.image.json, \
+             attested like every file):\n\
+             \n\
+             docker pull ghcr.io/komira-ai/hostkeeper-coordinator@sha256:{image}\n",
             commit.short()
         )
+    );
+}
+
+#[test]
+fn the_draft_names_the_digest_of_the_checked_image_index() {
+    // Catches: notes naming an image other than the one of the image index being published.
+    let (fakes, dir, commit) = setup("publish-image-digest", "x");
+    publish_to(&fakes, &dir, &commit).expect("published");
+    let digest = file_sha256(&dir.join("hostkeeper-coordinator-0.1.5.image.json")).expect("hash");
+    let notes = fakes.store.notes.borrow();
+    assert!(
+        notes.iter().any(|n| n.contains(&format!(
+            "docker pull ghcr.io/komira-ai/hostkeeper-coordinator@sha256:{digest}\n"
+        ))),
+        "{notes:?}"
     );
 }

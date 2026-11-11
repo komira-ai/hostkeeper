@@ -164,11 +164,11 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <circle cx="910" cy="472" r="10" fill="#FFFFFF" stroke="#0B0B0A" stroke-width="1.4"/>
 <text x="910" y="476" class="b" font-size="12" text-anchor="middle">4</text>
 <text x="1040" y="494" class="b" text-anchor="middle">Pkg postinstall</text>
-<text x="1040" y="510" class="t-m" text-anchor="middle">self-update-seed;</text>
-<text x="1040" y="526" class="t-m" text-anchor="middle">mac-config writes hostkeeper.toml</text>
-<text x="1040" y="542" class="t-m" text-anchor="middle">from the managed config;</text>
-<text x="1040" y="558" class="t-m" text-anchor="middle">launchctl bootstrap of</text>
-<text x="1040" y="574" class="t-m" text-anchor="middle">dev.hostkeeper.hostkeeper</text>
+<text x="1040" y="510" class="t-m" text-anchor="middle">launchctl bootstrap of</text>
+<text x="1040" y="526" class="t-m" text-anchor="middle">dev.hostkeeper.hostkeeper; each</text>
+<text x="1040" y="542" class="t-m" text-anchor="middle">start seeds current, writes</text>
+<text x="1040" y="558" class="t-m" text-anchor="middle">hostkeeper.toml from the</text>
+<text x="1040" y="574" class="t-m" text-anchor="middle">managed config, execs current</text>
 <rect x="910" y="605" width="260" height="120" rx="5" class="box-o dash"/>
 <text x="1040" y="627" class="b" text-anchor="middle">launchd daemon: hostkeeper</text>
 <text x="1040" y="643" class="t-m" text-anchor="middle">user root, one process</text>

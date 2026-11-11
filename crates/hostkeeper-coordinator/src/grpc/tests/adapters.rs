@@ -46,7 +46,7 @@ fn as_ci_caller<T>(message: T) -> Request<T> {
 /// A store whose every write fails.
 fn unwritable() -> OpsStore {
     let writer = Box::new(|_: &OpsState| Err(disk_full()));
-    OpsStore::with_writer(OpsState::default(), writer)
+    OpsStore::refusing(OpsState::default(), writer)
 }
 
 /// A world that manages kbf, `other` and `floor`; CI's token may set the services `allowed`
@@ -491,6 +491,7 @@ async fn converge_answers_the_operator_and_refuses_a_call_admitted_as_neither_ci
     let world = world_of("adapters-converge-callers", None);
     let request = || proto::ConvergeRequest {
         service: "kbf".to_owned(),
+        host_group: String::new(),
     };
     assert_refused(
         releases(&world).converge(Request::new(request())).await,
@@ -527,6 +528,7 @@ async fn converge_reports_the_service_named_or_the_legacy_one_and_refuses_an_unk
     for service in ["kbf", ""] {
         let request = proto::ConvergeRequest {
             service: service.to_owned(),
+            host_group: String::new(),
         };
         let reply = releases(&world)
             .converge(as_ci(&world.coordinator, request).await)
@@ -538,6 +540,7 @@ async fn converge_reports_the_service_named_or_the_legacy_one_and_refuses_an_unk
     }
     let unknown = proto::ConvergeRequest {
         service: "nope".to_owned(),
+        host_group: String::new(),
     };
     assert_refused(
         releases(&world)

@@ -1,0 +1,13 @@
+# Starts hostkeeper-db-backup.service every six hours, at 00:00, 06:00, 12:00 and 18:00; a time
+# missed while the machine was off is run at the next boot. The service keeps the newest 28 dumps,
+# one week. Run it by hand (`systemctl start hostkeeper-db-backup.service`) for a dump at once,
+# before the restore drill for example.
+[Unit]
+Description=Dump the coordinator's database every six hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:00:00
+Persistent=true
+
+[Install]
+WantedBy=timers.target

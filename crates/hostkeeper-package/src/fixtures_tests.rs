@@ -11,23 +11,18 @@ use std::rc::Rc;
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use hostkeeper_config::daemon::Bounds;
 use hostkeeper_config::trust::TrustError;
 use regex::Regex;
 use serde_json::Value;
 
 use crate::bundle::{self, Facts};
 use crate::der;
-use crate::fetch::{FetchEnv, fetch_package};
 use crate::gh::{FileTrust, GhVerifier, Ran, Runner, Spawn};
 use crate::ports::{Attest, Verifier};
-use crate::prove::{ProveEnv, prove};
 use crate::testing::{
-    BUILD_SIGNER_URI, BundleSpec, CHANNEL, FakeClock, HOST, RUNNER_ENVIRONMENT,
-    SOURCE_REPOSITORY_DIGEST, SOURCE_REPOSITORY_OWNER_URI, bundle_json, config, digest, listing,
-    order, package_at, published, scratch, serve, sha256_hex, signers,
+    BUILD_SIGNER_URI, BundleSpec, FakeClock, RUNNER_ENVIRONMENT, SOURCE_REPOSITORY_DIGEST,
+    SOURCE_REPOSITORY_OWNER_URI, bundle_json, digest, listing, scratch, sha256_hex, signers,
 };
-use crate::{NOT_ATTESTED, PackageFailure};
 
 /// The bytes of `good.tar.zst`, and their SHA-256.
 const ARCHIVE: &[u8] = b"the archive the fixture bundles attest\n";
@@ -274,11 +269,18 @@ fn gh() -> Gh {
     }
 }
 
-/// The reason one bundle is accepted or refused, and how many times `gh` ran: the prove step's
-/// digest check first, then the real verifier with the fake `gh`.
+/// The reason one bundle is accepted or refused, and how many times `gh` ran: the digest check
+/// first (`pxe update-hook prepare` makes it before it asks the verifier), then the real verifier
+/// with the fake `gh`.
 fn verdict(archive: &Path, bundle: &Path, facts: &Facts) -> (String, u32) {
+    let (reason, runs, _) = verdict_with_args(archive, bundle, facts);
+    (reason, runs)
+}
+
+/// [`verdict`], and the arguments `gh` got.
+fn verdict_with_args(archive: &Path, bundle: &Path, facts: &Facts) -> (String, u32, Vec<String>) {
     if !facts.lists(ARCHIVE_SHA256) {
-        return ("the digest check before gh".to_owned(), 0);
+        return ("the digest check before gh".to_owned(), 0, Vec::new());
     }
     let gh = gh();
     let signers = configured();
@@ -302,7 +304,8 @@ fn verdict(archive: &Path, bundle: &Path, facts: &Facts) -> (String, u32) {
         .unwrap_or(&said)
         .to_owned();
     let ran = *gh.runs.borrow();
-    (reason, ran)
+    let args = gh.args.borrow().clone();
+    (reason, ran, args)
 }
 
 /// The rows of the fixtures' README table: each file and its last column.
@@ -364,41 +367,6 @@ fn fixture_bundles_parse_and_the_bad_ones_are_rejected_for_the_reason_the_readme
     assert_eq!(on_disk, named);
 }
 
-/// Fetches and proves the archive of `service` 1.2.3 whose bundle is the fixture `file`, with
-/// the real verifier and the fake `gh`; returns the result and the arguments `gh` got.
-fn prove_fixture(file: &str, service: &str) -> (Result<String, PackageFailure>, Vec<String>) {
-    let scratch = scratch("fixture-prove");
-    let bundle = std::fs::read(fixtures_dir().join(file)).expect("the fixture");
-    let fetcher = published(service, "1.2.3", ARCHIVE).route(
-        &format!("{}.sigstore.json", package_at(service, "1.2.3")),
-        serve(&bundle),
-    );
-    let clock = FakeClock::at(1);
-    let bounds = Bounds::default();
-    let channel = config(CHANNEL, &"0".repeat(64)).release_channel;
-    let fetch_env = FetchEnv {
-        fetcher: &fetcher,
-        clock: &clock,
-        bounds: &bounds,
-        release_channel: &channel,
-        packages_root: scratch.path(),
-        platform: HOST,
-    };
-    let staged = fetch_package(&fetch_env, &order(service, "1.2.3")).expect("fetched");
-    let gh = gh();
-    let signers = configured();
-    let env = ProveEnv {
-        fetcher: &fetcher,
-        verifier: &gh.verifier,
-        clock: &clock,
-        bounds: &bounds,
-        signers: &signers,
-    };
-    let proven = prove(&env, staged).map(|verified| verified.source_ref().as_str().to_owned());
-    let args = gh.args.borrow().clone();
-    (proven, args)
-}
-
 /// A bundle path whose extension is neither `json` nor `jsonl` is refused by `gh` before the
 /// bundle is read, with `gh`'s message (shown as the reason); the same bundle under a `.json` or
 /// `.jsonl` name is accepted.
@@ -425,22 +393,30 @@ fn gh_refuses_a_bundle_path_without_a_json_extension() {
 }
 
 /// Catches design Q12 option (b) built by mistake: the good bundle, from the repository
-/// `tool-a`, is accepted for the service `service-b`, and `gh` is asked for the organisation,
-/// never for a repository or the service.
+/// `tool-a`, is accepted, and `gh` is asked for the organisation, never for a repository or a
+/// service; a bundle of another organisation is refused.
 #[test]
 fn no_repository_to_service_comparison_exists() {
-    let (proven, args) = prove_fixture("good.sigstore.json", "service-b");
-    assert_eq!(proven, Ok("refs/heads/main".to_owned()));
+    let archive = fixtures_dir().join("good.tar.zst");
+    let ask = |file: &str| {
+        let path = fixtures_dir().join(file);
+        let text = std::fs::read(&path).expect("the fixture");
+        let facts = bundle::read(&text).expect("it parses");
+        verdict_with_args(&archive, &path, &facts)
+    };
+    let (reason, _, args) = ask("good.sigstore.json");
+    assert_eq!(reason, "accepted");
     assert!(args.iter().any(|arg| arg == "--owner"), "{args:?}");
     let named = args
         .iter()
         .filter(|arg| {
             ["--repo", "--signer-repo"].contains(&arg.as_str())
-                | (arg.contains("service-b") & !arg.starts_with('/'))
+                | (arg.contains("tool-a") & !arg.starts_with('/'))
         })
         .count();
     assert_eq!(named, 0, "{args:?}");
 
-    let (refused, _) = prove_fixture("other-organisation.sigstore.json", "service-b");
-    assert_eq!(refused, Err(PackageFailure::release(NOT_ATTESTED)));
+    let (refused, runs, _) = ask("other-organisation.sigstore.json");
+    assert_ne!(refused, "accepted");
+    assert_eq!(runs, 1);
 }

@@ -1,7 +1,9 @@
-//! Start-up: the config before anything else, one daemon per state directory, the admin socket
-//! and its modes, the real socket's peer check, and the command line.
+//! Start-up: the config before anything else, one daemon per state directory, the modes of the
+//! state directory and the lock, and the command line.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
@@ -11,19 +13,15 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_ADMIN_SOCKET, DEFAULT_CONFIG, DEFAULT_PACKAGES_DIR,
-    DEFAULT_STATE_DIR, DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS, DaemonFlags, EXIT_CONFIG, EXIT_FAILED,
-    EXIT_LOCKED, UNWIRED, Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGES_DIR,
+    DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
 use hostkeeper_placed::{UnitControl, UnitControlError};
-use hostkeeper_proto::hostkeeper::local::v1::StatusRequest;
-use hostkeeper_proto::hostkeeper::local::v1::admin_client::AdminClient;
 use hostkeeper_steps::{LaunchError, StepLauncher};
-use hyper_util::rt::TokioIo;
-use support::{CONFIG, OWN, Rig, my_uid, snapshot};
-use tonic::transport::{Endpoint, Uri};
+use support::{CONFIG, OWN, Rig, snapshot};
+use support_host::NativeHost;
 
 fn mode(path: &Path) -> u32 {
     fs::symlink_metadata(path)
@@ -33,11 +31,36 @@ fn mode(path: &Path) -> u32 {
         & 0o7777
 }
 
+/// The unwired launcher for everything but the tools of the repository installer, which the
+/// rig's launcher answers: the version is staged from the repository, and each step of it
+/// meets the unwired launcher.
+struct ToolsOnly(Arc<hostkeeper_daemon::testing::ScriptedLauncher>);
+
+impl StepLauncher for ToolsOnly {
+    fn run(
+        &self,
+        call: &hostkeeper_steps::StepCall<'_>,
+    ) -> Result<hostkeeper_steps::StepExit, LaunchError> {
+        Unwired.run(call)
+    }
+
+    fn stop(&self, unit: &str) -> Result<(), LaunchError> {
+        Unwired.stop(unit)
+    }
+
+    fn run_tool(
+        &self,
+        call: &hostkeeper_steps::ToolCall<'_>,
+    ) -> Result<hostkeeper_steps::ToolExit, LaunchError> {
+        self.0.run_tool(call)
+    }
+}
+
 fn start(rig: &Rig) -> Result<Started, StartError> {
     start::startup(&rig.settings(), rig.ports(), OWN)
 }
 
-/// Catches a lock file, a socket or a directory made before the config loaded: a config with a
+/// Catches a lock file or a directory made before the config loaded: a config with a
 /// key no table has, and one with a bad `ca_sha256`, each stop start-up with an error naming the
 /// key and the exit status of a config error, and the scratch directory is as it was.
 #[test]
@@ -66,109 +89,55 @@ fn a_config_that_fails_to_load_stops_the_daemon_naming_the_key_and_changes_nothi
         assert_eq!(snapshot(rig.scratch.path()), before);
     }
     assert!(!rig.state.exists());
-    assert!(!rig.socket.parent().expect("the socket dir").exists());
+    assert!(!rig.run_dir.exists());
 }
 
 /// Catches a lock that only holds within one daemon, or that the second daemon breaks: a second
 /// start on the same state directory is `Locked` (its exit status) and touches nothing of the
-/// first, which still answers.
+/// first, which still reports its status.
 #[test]
 fn a_second_daemon_on_the_same_state_dir_exits_locked() {
     let rig = Rig::new("locked");
     let first = start(&rig).expect("the first daemon");
-    let socket = fs::symlink_metadata(&rig.socket).expect("the socket").ino();
+    let lock = fs::symlink_metadata(rig.state.join(LOCK_FILE))
+        .expect("the lock file")
+        .ino();
     let error = start(&rig).err().expect("the second is refused");
     assert!(matches!(error, StartError::Locked { .. }), "{error}");
     assert_eq!(error.exit_code(), EXIT_LOCKED);
     assert!(error.to_string().contains(LOCK_FILE), "{error}");
     assert_eq!(
-        fs::symlink_metadata(&rig.socket)
+        fs::symlink_metadata(rig.state.join(LOCK_FILE))
             .expect("still there")
             .ino(),
-        socket
+        lock
     );
     assert!(first.daemon().status().is_ok());
 }
 
-/// Catches a lock that is never released: once the first daemon is gone, a third starts, and
-/// binds the socket again over the stale one the first left.
+/// Catches a lock that is never released: once the first daemon is gone, a third starts on the
+/// same state directory, and the lock file is as private as before.
 #[test]
 fn the_lock_is_released_when_the_first_daemon_ends() {
     let rig = Rig::new("released");
     let first = start(&rig).expect("the first daemon");
     drop(first);
-    assert!(
-        rig.socket.exists(),
-        "the first daemon leaves its socket file"
-    );
-    // Binding over the stale socket file works only because it is removed first.
     let third = start(&rig).expect("a daemon after the first ended");
-    assert_eq!(mode(&rig.socket), 0o600);
+    assert_eq!(mode(&rig.state.join(LOCK_FILE)), 0o600);
     drop(third);
 }
 
-/// Catches an admin socket or directory others can reach: the socket is 0600 in a 0700
-/// directory, and an existing directory of looser mode is closed to 0700.
+/// Catches a state directory or lock file others can reach: the state directory is 0700 and the
+/// lock file 0600, and a state directory of looser mode is closed to 0700.
 #[test]
-fn the_admin_socket_is_0600_in_a_0700_directory() {
+fn the_state_dir_is_0700_and_the_lock_0600() {
     let rig = Rig::new("modes");
-    let dir = rig.socket.parent().expect("the socket dir").to_path_buf();
-    fs::create_dir_all(&dir).expect("the dir");
-    fs::set_permissions(&dir, fs::Permissions::from_mode(0o755)).expect("loose");
+    fs::create_dir_all(&rig.state).expect("the dir");
+    fs::set_permissions(&rig.state, fs::Permissions::from_mode(0o755)).expect("loose");
     let started = start(&rig).expect("started");
-    assert_eq!(mode(&rig.socket), 0o600);
-    assert_eq!(mode(&dir), 0o700);
     assert_eq!(mode(&rig.state), 0o700);
     assert_eq!(mode(&rig.state.join(LOCK_FILE)), 0o600);
     drop(started);
-}
-
-/// Catches a file that is not a socket removed or overwritten at the socket's path, a socket
-/// directory that is a file taken for a directory, and a path the kernel refuses: each stops
-/// start-up, and the file in the way is as it was.
-#[test]
-fn what_is_in_the_way_of_the_socket_stops_start_up_and_is_left_alone() {
-    let rig = Rig::new("in-the-way");
-    let dir = rig.socket.parent().expect("the socket dir").to_path_buf();
-    fs::create_dir_all(&dir).expect("the dir");
-    fs::write(&rig.socket, "keep me").expect("a file");
-    let error = start(&rig).err().expect("refused");
-    assert!(error.to_string().contains("is not a socket"), "{error}");
-    assert_eq!(error.exit_code(), EXIT_FAILED);
-    assert_eq!(fs::read_to_string(&rig.socket).expect("kept"), "keep me");
-
-    let rig = Rig::new("dir-file");
-    fs::write(rig.socket.parent().expect("the socket dir"), "a file").expect("a file");
-    let error = start(&rig).err().expect("refused");
-    assert!(error.to_string().contains("is not a directory"), "{error}");
-
-    let mut rig = Rig::new("too-long");
-    rig.socket = rig.socket.with_file_name("s".repeat(300));
-    let error = start(&rig).err().expect("refused");
-    assert!(matches!(error, StartError::Io { .. }), "{error}");
-}
-
-/// Catches the real socket serving a connection whose peer is not root: a client of the bound
-/// socket, connecting as the uid the tests run as (not root), is closed unanswered.
-#[tokio::test]
-async fn a_real_connection_from_a_non_root_uid_is_closed() {
-    let rig = Rig::new("real-sock");
-    let started = start(&rig).expect("started");
-    let served = tokio::spawn(start::serve(started, support::idle_links()));
-    let path = rig.socket.clone();
-    let connector = tower::service_fn(move |_: Uri| {
-        let path = path.clone();
-        async move {
-            tokio::net::UnixStream::connect(path)
-                .await
-                .map(TokioIo::new)
-        }
-    });
-    let channel =
-        Endpoint::from_static("http://admin.invalid").connect_with_connector_lazy(connector);
-    let answered = AdminClient::new(channel).status(StatusRequest {}).await;
-    assert_eq!(answered.is_ok(), my_uid() == 0, "{answered:?}");
-    served.abort();
 }
 
 /// Catches a start-up error of the command line that exits 0 or with another error's status:
@@ -186,8 +155,6 @@ fn the_command_line_exits_with_the_config_errors_status() {
         rig.state.clone().into(),
         "--packages-dir".into(),
         rig.packages.clone().into(),
-        "--admin-socket".into(),
-        rig.socket.clone().into(),
     ];
     let code = cli::run(Cli::parse_from(args));
     assert_eq!(
@@ -202,38 +169,31 @@ fn the_command_line_exits_with_the_config_errors_status() {
 /// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
-    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command else {
-        panic!("`hostkeeper daemon` parses as the daemon command");
-    };
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
     assert_eq!(
         flags,
         DaemonFlags {
             config: DEFAULT_CONFIG.into(),
             state_dir: DEFAULT_STATE_DIR.into(),
             packages_dir: DEFAULT_PACKAGES_DIR.into(),
-            admin_socket: DEFAULT_ADMIN_SOCKET.into(),
+            facts_file: DEFAULT_FACTS_FILE.into(),
             notify_systemd: false,
-            trusted_root_max_age_days: DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS,
+            ready_file: None,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
-    assert_eq!(
-        flags.settings().trusted_root_max_age_days,
-        DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS
-    );
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
         format!("`--config` | `{DEFAULT_CONFIG}`"),
         format!("`--state-dir` | `{DEFAULT_STATE_DIR}`"),
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
-        format!("`--admin-socket` | `{DEFAULT_ADMIN_SOCKET}`"),
+        format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
-        format!("`--trusted-root-max-age-days` | `{DEFAULT_TRUSTED_ROOT_MAX_AGE_DAYS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
         format!("| {EXIT_CONFIG} |"),
@@ -242,6 +202,22 @@ fn daemon_flag_defaults_are_the_documented_ones() {
     for line in documented {
         assert!(readme.contains(&line), "the README does not state {line}");
     }
+}
+
+/// Proves `--facts-file` reaches the settings, and from them the daemon's directories, as given.
+#[test]
+fn the_facts_file_flag_reaches_the_settings() {
+    let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--facts-file", "/srv/facts.json"]);
+    let Ok(Cli {
+        command: Command::Daemon(flags),
+    }) = parsed
+    else {
+        panic!("the flag parses: {parsed:?}");
+    };
+    assert_eq!(
+        flags.settings().facts_file,
+        std::path::PathBuf::from("/srv/facts.json")
+    );
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage
@@ -281,12 +257,13 @@ fn the_unwired_ports_refuse_everything() {
     assert_eq!(Unwired.stop_unit("u"), Err(unwired("stop u")));
     assert_eq!(Unwired.start_unit("u"), Err(unwired("start u")));
     assert_eq!(Unwired.is_active("u"), Err(unwired("is-active u")));
-    let rig = Rig::new("unwired");
-    rig.add("web", "2.0.0");
+    let rig = NativeHost::new("unwired");
+    rig.add_staged("web", "2.0.0");
+    let order = rig.update("web", "2.0.0", 1);
     let mut ports = rig.ports();
-    ports.launcher = Arc::new(Unwired);
+    ports.launcher = Arc::new(ToolsOnly(Arc::clone(&rig.launcher)));
     let daemon = hostkeeper_daemon::Daemon::new(support::config(), rig.dirs(), ports, OWN);
-    let reply = daemon.order(&support::update("web", "2.0.0", &support::d(), 1));
+    let reply = daemon.order(&order);
     assert!(
         matches!(reply, hostkeeper_daemon::Reply::Finished { .. }),
         "{reply:?}"
@@ -294,55 +271,13 @@ fn the_unwired_ports_refuse_everything() {
     assert!(rig.launcher.runs().is_empty());
 }
 
-/// Catches `hostkeeper ci` missing from the binary, or run as the daemon: the CI client's
-/// subcommand parses and runs the client, which refuses a malformed service name with a usage
-/// error (exit 2) before it requests any token or reads any file.
+/// Catches the flag of the trusted root's report still being taken: the daemon checks no
+/// attestation, so `--trusted-root-max-age-days` is a flag it does not have, a usage error.
 #[test]
-fn hostkeeper_ci_runs_the_ci_client() {
-    let digest = "0".repeat(64);
-    let args = [
-        "hostkeeper",
-        "ci",
-        "set-desired",
-        "--service",
-        "not a service",
-        "--version",
-        "1.0.0",
-        "--package-digest",
-        &digest,
-        "--endpoint",
-        "https://coordinator.example",
-        "--ca-file",
-        "ca.pem",
-        "--audience",
-        "my-service-release",
-        "--work-dir",
-        "work",
-        "--web-roots",
-        "roots.pem",
-    ];
-    let cli = Cli::try_parse_from(args).expect("`hostkeeper ci set-desired` parses");
-    assert!(matches!(cli.command, Command::Ci(_)), "{cli:?}");
-    let code = cli::run(cli);
-    assert_eq!(format!("{code:?}"), format!("{:?}", ExitCode::from(2)));
-}
-
-/// Catches `--trusted-root-max-age-days` not reaching the daemon's settings, or a limit of 0
-/// accepted (every root would be reported stale the second after it is written): 30 is the
-/// settings' limit, and 0 is a usage error.
-#[test]
-fn the_trusted_root_age_limit_flag_reaches_the_settings_and_is_at_least_one() {
+fn the_trusted_root_age_limit_flag_is_a_usage_error() {
     let parsed = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "30"]);
-    let Ok(Cli {
-        command: Command::Daemon(flags),
-    }) = parsed
-    else {
-        panic!("the flag parses: {parsed:?}");
-    };
-    assert_eq!(flags.settings().trusted_root_max_age_days.get(), 30);
-    let zero = Cli::try_parse_from(["hostkeeper", "daemon", "--trusted-root-max-age-days", "0"]);
     assert_eq!(
-        zero.map(|_| ()).map_err(|error| error.kind()),
-        Err(clap::error::ErrorKind::ValueValidation)
+        parsed.map(|_| ()).map_err(|error| error.kind()),
+        Err(clap::error::ErrorKind::UnknownArgument)
     );
 }

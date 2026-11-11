@@ -7,7 +7,9 @@
 use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::min_version::Scope as MinScope;
-use hostkeeper_wire::wire::{OrderId, Outcome, ServiceBeat, ServiceReply, UpdateResult};
+use hostkeeper_wire::wire::{
+    OrderId, Outcome, PackageDigest, ServiceBeat, ServiceReply, UpdateResult,
+};
 use serde_json::json;
 
 use crate::assign_support::{
@@ -15,11 +17,13 @@ use crate::assign_support::{
 };
 use crate::decide::{Gate, Skip, Why};
 use crate::marks_support::{
-    DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_typed, beat_of, digest, hold, operator, restart, rig,
-    runs, scope_host, set, unhold, update,
+    DB, INSTALLER, NEW_DAEMON, WEB, ask, ask_json, ask_typed, beat_of, digest, hold, native_target,
+    operator, restart, rig, runs, scope_host, set, unhold, update,
 };
+use crate::order_terms::order_id_text;
 use crate::orders::{INSTALL_FEATURE, Order};
-use crate::testutil::{Rig, beat, ci_token, id, version};
+use crate::releases_tests::apt_entry;
+use crate::testutil::{Rig, beat, id, version};
 
 /// The rollout file line that rolls a service in one stage, whatever the number of hosts.
 pub(crate) const ONE_STAGE: &str = "stages = [100]";
@@ -31,10 +35,7 @@ pub(crate) async fn set_one_slot(rig: &Rig, service: &str, version: &str, n: u8)
         r#"{{"service":"{service}","version":"{version}","release_digest":"{}","max_updating":{{"daemon":1}}}}"#,
         digest(n)
     );
-    rig.coordinator
-        .set_desired(Some(&ci_token()), body.as_bytes())
-        .await
-        .expect("set");
+    rig.set(&body).await;
 }
 
 /// Catches: the old `absent` rule still in force (an absent copy skipped, or ordered `update`
@@ -49,6 +50,10 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
         ask(&rig, "d1", "daemon", beat_of(INSTALLER, vec![])),
         ServiceReply::Nothing
     );
+    assert_eq!(
+        ask_json(&rig, "d1", "daemon", beat_of(INSTALLER, vec![])),
+        ServiceReply::Nothing
+    );
     let order = order_to(&rig, "d1", vec![]).expect("an install");
     assert_eq!(order, install("2.0", 7));
     let typed = order.to_proto();
@@ -57,6 +62,7 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
     assert_eq!(
         typed.verb,
         Some(agent::order::Verb::Install(agent::Install {
+            target: Some(apt_entry(WEB, 7)),
             service: WEB.to_owned(),
             version: "2.0".to_owned(),
             package_digest: digest(7),
@@ -84,14 +90,18 @@ async fn an_assigned_service_not_installed_gets_an_install_order() {
 
 /// Catches: an install ordered to a daemon that cannot take it, of a version with no digest, or
 /// a try that does not follow the verdicts: a daemon that did not announce `install-v1` is told
-/// nothing and the gate says `unsupported`; a desired version CI set without a digest is
-/// `no_digest`; a verdict of the install raises the try of the next.
+/// nothing and the gate says `unsupported`; a desired version CI set without a release picks no
+/// host an entry, so the gate says `no_build_for_host`; a verdict of the install raises the try of
+/// the next.
 #[tokio::test]
 async fn an_install_needs_a_daemon_that_takes_it_and_a_digest() {
     let rig = rig("install-needs", "");
-    rig.set(r#"{"service":"web","version":"2.0"}"#).await;
+    rig.set_plain(r#"{"service":"web","version":"2.0"}"#).await;
     assert_eq!(order_to(&rig, "d1", vec![absent(WEB, "1.0")]), None);
-    assert_eq!(why_of(&rig, WEB, "d1"), Some(Why::Skip(Skip::NoDigest)));
+    assert_eq!(
+        why_of(&rig, WEB, "d1"),
+        Some(Why::Skip(Skip::NoBuildForHost))
+    );
     set(&rig, WEB, "2.1", 3).await;
     assert_eq!(
         ask_typed(
@@ -349,7 +359,19 @@ async fn an_install_takes_and_frees_the_roles_update_slot() {
         "daemon",
         beat_of(INSTALLER, vec![runs(WEB, "1.0"), runs(DB, "2.0")]),
     );
-    assert_eq!(order, None);
+    assert_eq!(
+        order,
+        Some(Order::Update {
+            service: WEB.to_owned(),
+            version: version("2.0"),
+            digest: PackageDigest::parse(&digest(1)).expect("a digest"),
+            index_digest: None,
+            order_id: order_id_text(WEB, &version("2.0")),
+            order_try: 1,
+            target: Some(native_target(WEB, 1)),
+        }),
+        "the typed transport carries the update the reply names"
+    );
     assert_eq!(reply, update(WEB, "2.0"));
 }
 

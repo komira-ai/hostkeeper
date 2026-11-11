@@ -51,6 +51,8 @@ fn request(
     services: Vec<proto::ServiceBeat>,
 ) -> proto::HeartbeatRequest {
     proto::HeartbeatRequest {
+        installers: Vec::new(),
+        repositories: None,
         platform: proto::Platform::LinuxArm64 as i32,
         agent,
         features: features.iter().map(|name| (*name).to_owned()).collect(),
@@ -58,6 +60,9 @@ fn request(
         sent_unix: None,
         cert_not_after_unix: None,
         last_renew_error: None,
+        trusted_root_age_secs: None,
+        trusted_root_reason: 0,
+        facts_generation: None,
     }
 }
 
@@ -182,7 +187,7 @@ fn each_platform_has_its_json_name_and_an_unknown_one_has_none() {
 /// Proves a service entry with nothing but a name and a version is those two keys, and one with
 /// every fact is every key the JSON route has for it: a health, the last update (its outcome,
 /// phase, class, reason and order), the update running, its step, commit state and step
-/// timings, the promotion, and a deferral. The facts that have no JSON key (a pin, an update's
+/// timings, the promotion, a deferral, and the try the step record holds. The facts that have no JSON key (a pin, an update's
 /// start, force, detail and log tail) are left out.
 #[test]
 fn a_service_entry_is_the_json_entry_of_its_facts() {
@@ -191,6 +196,8 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         json!({"name": "svc", "version": "1.0"})
     );
     let full = proto::ServiceBeat {
+        installer: None,
+        drift: None,
         name: "svc".to_owned(),
         version: "3.1".to_owned(),
         health: proto::Health::Absent as i32,
@@ -223,6 +230,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         pinned: Some(proto::PinReport {
             commit: Some("abc".to_owned()),
         }),
+        record_try: Some(2),
     };
     let want = json!({
         "name": "svc", "version": "3.1", "health": "absent",
@@ -237,6 +245,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         "step_secs": {"cutover": 41},
         "promotion_pending": true,
         "deferred": {"target": "3.0", "reason": "drain_bound", "retry_after_secs": 300},
+        "record_try": 2,
     });
     assert_eq!(service_json(full.clone()), want);
 
@@ -254,6 +263,7 @@ fn a_service_entry_is_the_json_entry_of_its_facts() {
         listed[0].last_update.as_ref().and_then(|u| u.order_try),
         Some(2)
     );
+    assert_eq!(listed[0].record_try, Some(2));
 }
 
 /// Proves every enum reaches its JSON word, and an unset one or one the proto does not know
@@ -412,14 +422,16 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
     let who = updater("d1", "daemon");
     let mut running = entry("kbf", "1.0");
     running.health = proto::Health::Healthy as i32;
-    let announced = request(
+    running.installer = Some("apt".to_owned());
+    let mut announced = request(
         agent("hostkeeper-daemon", "1.0"),
-        &["order-v1", "unknown-v9"],
+        &["order-v1", "unknown-v9", "target-v1"],
         vec![running],
     );
+    announced.installers = vec!["apt".to_owned()];
     let reply = beat(&farm.coordinator, &who, &announced).await;
     let response: proto::HeartbeatResponse = reply.decode();
-    assert_eq!(response.features, ["order-v1"]);
+    assert_eq!(response.features, ["order-v1", "target-v1"]);
     let order = response.order.expect("an update order");
     assert_eq!(order.r#try, 1);
     assert!(order.order_id.starts_with("update-"));
@@ -430,6 +442,8 @@ async fn a_heartbeat_is_answered_with_the_order_and_the_features_the_decision_na
                 ("kbf", "2.0")
             );
             assert_eq!(update.package_digest, "1".repeat(64));
+            let target = update.target.expect("the entry picked for the host");
+            assert_eq!(target.installer, "apt");
         }
         other => panic!("not an update: {other:?}"),
     }
@@ -630,6 +644,7 @@ async fn an_enroll_approved_by_its_nonce_assigns_the_entry_services() {
             enrolled: true,
             supervised: true,
             enrolled_since_unix: None,
+            enrolled_via_dep: None,
         }),
     );
     let policy = MacPolicy {

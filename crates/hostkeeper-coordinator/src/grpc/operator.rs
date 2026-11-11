@@ -3,16 +3,22 @@
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
-//! method has a handler ([`super::PENDING`] is empty). The caller was settled before the request
-//! was read ([`super::admit`]) and arrives in the request's extensions; a request without one is
-//! an anonymous caller, and is refused as such.
+//! method has a handler. The caller was settled before the request was read ([`super::admit`])
+//! and arrives in the request's extensions; a request without one is an anonymous caller, and is
+//! refused as such. `HostGroups` is in [`super::operator_host_groups`].
+//!
+//! Every call that takes a `host_group` reads it in its handler: with no host group held a
+//! request that names one is refused (`not_in_host_group` of `Releases` and `Rollouts`,
+//! `unknown_host_group` of `Enrollment.Approve` and `Enrollment.AddRecord`), never read as naming
+//! none, and `Audit.List` with a `host_group` filter lists no entry ([`crate::operator`]).
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsApi;
@@ -27,11 +33,13 @@ use serde_json::{Value, json};
 use tonic::{Request, Response, Status};
 
 use super::{Admitted, refusal, report};
-use crate::channel::ChannelRefusal;
 use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
+use crate::service::ci_calls::{ReleaseError, Setter};
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
+use crate::write_record::{WriteAsk, WriteId, WriteRecord};
 
 /// What `operate` says of a service the coordinator does not manage.
 const UNKNOWN_SERVICE: &str = "service is not one this coordinator manages";
@@ -104,20 +112,34 @@ pub(crate) fn set_refusal(why: SetError) -> proto::ReleasesRefusal {
         SetError::Invalid(DesiredError::IndexDigestMismatch) => {
             proto::ReleasesRefusal::IndexDigestMismatch
         }
+        SetError::Invalid(DesiredError::GenerationConflict { .. }) => {
+            proto::ReleasesRefusal::GenerationConflict
+        }
         SetError::Invalid(_) | SetError::UnparseableVersion | SetError::DigestConflict => {
             proto::ReleasesRefusal::InvalidRequest
         }
+        SetError::TargetInvalid(_) => proto::ReleasesRefusal::TargetInvalid,
+        SetError::ReleaseExists => proto::ReleasesRefusal::ReleaseExists,
+        SetError::RepositoryUnknown => proto::ReleasesRefusal::RepositoryUnknown,
         SetError::BelowMinVersion => proto::ReleasesRefusal::BelowMinVersion,
         SetError::BadVersion => proto::ReleasesRefusal::HeldBad,
-        SetError::Channel(ChannelRefusal::NotInChannel) => proto::ReleasesRefusal::NotInChannel,
-        SetError::Channel(ChannelRefusal::DigestMismatch) => {
-            proto::ReleasesRefusal::ChannelDigestMismatch
-        }
+        SetError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
+        SetError::AmbiguousHostGroup => proto::ReleasesRefusal::AmbiguousHostGroup,
+        SetError::LimitsInHostGroup => proto::ReleasesRefusal::LimitsInHostGroup,
         SetError::Ops(why) => why.into(),
         SetError::Store(_) => {
             tracing::error!(%why, "the desired state could not be stored");
             proto::ReleasesRefusal::StoreFailed
         }
+    }
+}
+
+/// The refusal of `Releases` for a wait that was not held.
+pub(crate) fn wait_refusal(why: WaitRefused) -> proto::ReleasesRefusal {
+    match why {
+        WaitRefused::UnknownService => proto::ReleasesRefusal::UnknownService,
+        WaitRefused::TooMany => proto::ReleasesRefusal::TooManyWaits,
+        WaitRefused::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
     }
 }
 
@@ -131,25 +153,33 @@ pub(crate) fn converge_refusal(why: ConvergenceError) -> proto::ReleasesRefusal 
             proto::ReleasesRefusal::KeysUnavailable
         }
         ConvergenceError::UnknownService => proto::ReleasesRefusal::UnknownService,
+        ConvergenceError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
     }
 }
 
-/// The JSON body `POST /v1/desired` reads for `request`.
+/// The JSON body `POST /v1/desired` reads for `request`, and what the request asks of the store
+/// beside it: its `if_generation` and its write id, which the JSON body does not carry
+/// ([`WriteAsk`]; a store that keeps no write records refuses a request that names either).
 ///
 /// # Errors
-/// `invalid_request`: no desired state; a precondition (`if_generation`) or a write id, which
-/// the desired-state store keeps no generation or id for and so cannot honour; or two package
-/// digests that differ. An empty `service` names none, which the JSON route reads as the legacy
-/// service. A release index and its digest are passed as the keys `release_index` and
-/// `release_index_digest`, which the route checks (an index beside a package digest, or one of
-/// the pair alone, is its `index_invalid`).
+/// `invalid_request`: no desired state; a write id that is not 1 to 128 visible ASCII
+/// characters; or two package digests that differ. An empty `service` names none, which the JSON
+/// route reads as the legacy service. A release index and its digest are passed as the keys
+/// `release_index` and `release_index_digest`, which the route checks (an index beside a package
+/// digest, or one of the pair alone, is its `index_invalid`).
 pub(crate) fn desired_body(
     request: proto::SetDesiredRequest,
-) -> Result<Vec<u8>, proto::ReleasesRefusal> {
+) -> Result<(Vec<u8>, WriteAsk), proto::ReleasesRefusal> {
     let invalid = proto::ReleasesRefusal::InvalidRequest;
-    if request.if_generation.is_some() || request.write_id.is_some() {
-        return Err(invalid);
-    }
+    let ask = WriteAsk {
+        if_generation: request.if_generation,
+        write_id: request
+            .write_id
+            .as_deref()
+            .map(WriteId::parse)
+            .transpose()
+            .map_err(|_| invalid)?,
+    };
     let desired = request.desired.ok_or(invalid)?;
     let digest = match (desired.package_digest, request.package_digest) {
         (Some(inside), Some(beside)) if inside != beside => return Err(invalid),
@@ -172,7 +202,25 @@ pub(crate) fn desired_body(
     if let Some(digest) = request.release_index_digest {
         body["release_index_digest"] = digest.into();
     }
-    Ok(serde_json::to_vec(&body).unwrap_or_default())
+    Ok((serde_json::to_vec(&body).unwrap_or_default(), ask))
+}
+
+/// `record` as `hostkeeper.operator.v1` says it, the replaced minimums as the desired state's
+/// are written (the format's `storage` and `frontend` named).
+pub(crate) fn record_proto(record: &WriteRecord) -> proto::WriteRecord {
+    proto::WriteRecord {
+        generation: record.generation,
+        replaced: record.replaced.as_ref().map(|replaced| proto::Replaced {
+            version: replaced.version.as_str().to_owned(),
+            min_up: replaced
+                .min_up
+                .min_up_written()
+                .iter()
+                .map(|(role, n)| (role.to_owned(), n))
+                .collect(),
+        }),
+        write_id: record.write_id.as_ref().map(|id| id.as_str().to_owned()),
+    }
 }
 
 /// `desired` as `hostkeeper.operator.v1` says it, with the limits as the JSON route writes them.
@@ -297,6 +345,17 @@ impl HostsApi for HostsService {
             .map(Response::new)
             .map_err(refusal::hosts)
     }
+
+    async fn clear_record(
+        &self,
+        request: Request<proto::ClearRecordRequest>,
+    ) -> Result<Response<proto::ClearRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .clear_record(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
 }
 
 /// The service of `Releases`.
@@ -308,6 +367,14 @@ impl ReleasesService {
     /// The service over `coordinator`.
     pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
         Self { coordinator }
+    }
+
+    /// `not_in_host_group` for a request that names a host group while the coordinator holds none.
+    fn no_group_held(&self, named: &str) -> Result<(), Status> {
+        if named.is_empty() || self.coordinator.desired.in_group_mode() {
+            return Ok(());
+        }
+        Err(refusal::releases(proto::ReleasesRefusal::NotInHostGroup))
     }
 }
 
@@ -328,20 +395,62 @@ impl ReleasesApi for ReleasesService {
                 return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
             }
         };
-        let body = desired_body(request.into_inner()).map_err(refusal::releases)?;
-        let set = match &ci {
-            Some(verified) => self.coordinator.set_desired_verified(verified, &body).await,
-            None => {
-                self.coordinator
-                    .set_desired_operator(&operator, &body)
-                    .await
-            }
-        }
-        .map_err(|why| refusal::releases(set_refusal(why)))?;
+        let mut message = request.into_inner();
+        self.no_group_held(&message.host_group)?;
+        // A map left empty is a set without targets: proto3 sends no empty map.
+        let targets = std::mem::take(&mut message.targets);
+        let targets = (!targets.is_empty()).then_some(targets);
+        let host_group = std::mem::take(&mut message.host_group);
+        let (body, ask) = desired_body(message).map_err(refusal::releases)?;
+        let setter = match &ci {
+            Some(verified) => Setter::Ci(verified),
+            None => Setter::Operator(&operator),
+        };
+        let (set, record) = self
+            .coordinator
+            .set_desired_in(&setter, &body, &ask, targets, &host_group)
+            .await
+            .map_err(|why| refusal::releases(set_refusal(why)))?;
         Ok(Response::new(proto::SetDesiredResponse {
             desired: Some(desired_proto(&set.desired)),
-            record: None,
+            record: record.as_ref().map(record_proto),
             dropped_roles: set.dropped_roles,
+        }))
+    }
+
+    async fn get_release(
+        &self,
+        request: Request<proto::GetReleaseRequest>,
+    ) -> Result<Response<proto::GetReleaseResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: a read, which changes nothing.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let message = request.into_inner();
+        self.no_group_held(&message.host_group)?;
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service =
+            service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let release = self
+            .coordinator
+            .release_verified_in(&message.host_group, service, &message.version)
+            .map_err(|why| {
+                refusal::releases(match why {
+                    ReleaseError::UnknownService => proto::ReleasesRefusal::UnknownService,
+                    ReleaseError::Unknown => proto::ReleasesRefusal::ReleaseUnknown,
+                    ReleaseError::NotInHostGroup => proto::ReleasesRefusal::NotInHostGroup,
+                })
+            })?;
+        Ok(Response::new(proto::GetReleaseResponse {
+            targets: release.targets().clone(),
+            release_index_digest: release.index_digest().map(ToString::to_string),
         }))
     }
 
@@ -359,6 +468,7 @@ impl ReleasesApi for ReleasesService {
         }
         // No service names the legacy service, as the JSON route's query does.
         let message = request.into_inner();
+        self.no_group_held(&message.host_group)?;
         let service = match message.service.as_str() {
             "" => self.coordinator.legacy_service(),
             name => Some(name),
@@ -366,13 +476,71 @@ impl ReleasesApi for ReleasesService {
         let service =
             service.ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
         self.coordinator
-            .convergence_verified(service)
+            .convergence_in(&message.host_group, service)
             .map(|convergence| {
+                let mut convergence = report::convergence(&convergence);
+                convergence.record = self
+                    .coordinator
+                    .write_record_in(&message.host_group, service)
+                    .as_ref()
+                    .map(record_proto);
                 Response::new(proto::ConvergeResponse {
-                    convergence: Some(report::convergence(&convergence)),
+                    convergence: Some(convergence),
                 })
             })
             .map_err(|why| refusal::releases(converge_refusal(why)))
+    }
+
+    async fn wait_converged(
+        &self,
+        request: Request<proto::WaitConvergedRequest>,
+    ) -> Result<Response<proto::WaitConvergedResponse>, Status> {
+        // CI's token or the operator's, as for `Converge`: checked once, when the call was
+        // admitted, and never again while it is held.
+        let ci = matches!(
+            request.extensions().get::<Admitted>(),
+            Some(Admitted::Ci(_))
+        );
+        if !ci && caller_of(&request).operator().is_err() {
+            return Err(refusal::releases(proto::ReleasesRefusal::Unauthorized));
+        }
+        let limit = request.extensions().get::<CallLimit>().cloned();
+        let connection = request.extensions().get::<ConnectionWaits>().cloned();
+        let message = request.into_inner();
+        self.no_group_held(&message.host_group)?;
+        if message.wait_secs == 0 || message.wait_secs > MAX_WAIT_SECS {
+            return Err(refusal::releases(proto::ReleasesRefusal::InvalidWait));
+        }
+        let service = match message.service.as_str() {
+            "" => self.coordinator.legacy_service(),
+            name => Some(name),
+        };
+        let service = service
+            .filter(|_| !message.version.is_empty())
+            .ok_or_else(|| refusal::releases(proto::ReleasesRefusal::InvalidRequest))?;
+        let held = self
+            .coordinator
+            .hold_wait(service, &message.host_group)
+            .map_err(|why| refusal::releases(wait_refusal(why)))?;
+        let wait = Duration::from_secs(message.wait_secs.into());
+        if let Some(limit) = limit {
+            limit.hold_for(wait);
+        }
+        let _connection = connection.as_ref().map(ConnectionWaits::hold);
+        let (outcome, convergence) = self
+            .coordinator
+            .wait_converged(&held, &message.version, wait)
+            .await;
+        let mut convergence = report::convergence(&convergence);
+        convergence.record = self
+            .coordinator
+            .write_record_in(&message.host_group, service)
+            .as_ref()
+            .map(record_proto);
+        Ok(Response::new(proto::WaitConvergedResponse {
+            outcome: outcome.into(),
+            convergence: Some(convergence),
+        }))
     }
 
     async fn force(
@@ -506,6 +674,17 @@ impl ServicesApi for ServicesService {
             .map_err(refusal::services)
     }
 
+    async fn set_repository(
+        &self,
+        request: Request<proto::SetRepositoryRequest>,
+    ) -> Result<Response<proto::SetRepositoryResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .set_repository(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
     async fn hold(
         &self,
         request: Request<proto::HoldRequest>,
@@ -605,6 +784,17 @@ impl EnrollmentApi for EnrollmentService {
         let caller = caller_of(&request);
         self.coordinator
             .remove_record(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
+    async fn open_record(
+        &self,
+        request: Request<proto::OpenRecordRequest>,
+    ) -> Result<Response<proto::OpenRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .open_record(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::enrollment)
     }

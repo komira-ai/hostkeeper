@@ -35,7 +35,7 @@ use hostkeeper_wire::secret::{SecretError, read_secret};
 use serde::Deserialize;
 use subtle::ConstantTimeEq;
 
-use crate::enrollment::{GATE_AUDITOR, MAC_APPROVER};
+use crate::enrollment::{GATE_AUDITOR, INVENTORY_APPROVER, MAC_APPROVER};
 use crate::ops::label;
 use crate::ops_file::digest;
 use crate::reconcile::{CI, COORDINATOR};
@@ -60,7 +60,8 @@ pub enum TokenNameError {
     /// Not 1 to 32 bytes of `a-z`, `0-9` and `-`.
     #[error("a token name is 1 to 32 bytes of a-z, 0-9 and -")]
     Grammar,
-    /// A name the audit uses for the coordinator's own changes, CI's, or the MDM gate's.
+    /// A name the audit uses for the coordinator's own changes, CI's, an automatic approval's
+    /// (a Mac's nonce or an inventory record), or the MDM gate's.
     #[error(
         "a token may not be named {0}: the audit uses that name for changes that are not an operator's"
     )]
@@ -74,9 +75,15 @@ impl FromStr for TokenName {
         if !label(text) {
             return Err(TokenNameError::Grammar);
         }
-        if let Some(reserved) = [COORDINATOR, CI, MAC_APPROVER, GATE_AUDITOR]
-            .into_iter()
-            .find(|name| *name == text)
+        if let Some(reserved) = [
+            COORDINATOR,
+            CI,
+            MAC_APPROVER,
+            INVENTORY_APPROVER,
+            GATE_AUDITOR,
+        ]
+        .into_iter()
+        .find(|name| *name == text)
         {
             return Err(TokenNameError::Reserved(reserved));
         }

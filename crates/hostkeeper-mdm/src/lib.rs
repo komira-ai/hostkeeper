@@ -1,11 +1,15 @@
 //! `hostkeeper-mdm`: the MDM kit's binary, which applies [`hostkeeper_mdm_core`]'s rendered
 //! output to the Linux host of the MDM server stack (docs/design/hostkeeper-mdm.md, tasks M4 and
-//! M5).
+//! M5), and `mdm`, the program of the `mdm` service package that replaces the kit
+//! (docs/design/two-programs.md section 6.2): its update hook ([`hook`]) and the same
+//! `push-cert` and `dep` verbs on the package's layout ([`program`]). Both programs are built
+//! from this library; the verbs below are `hostkeeper-mdm`'s.
 //!
 //! The stack is NanoHUB, a SCEP server, NanoDEP and Caddy as capped systemd services on one
 //! Linux host, which enrolls the farm's Macs. This crate links no other crate of the workspace
-//! but `hostkeeper-mdm-core`, the pure half (settings, units, profiles and pins), and
-//! `hostkeeper-mdm-step`, the host-step layer (crates/xtask/tests/layering keeps it so). Every
+//! but `hostkeeper-mdm-core`, the pure half (settings, units, profiles and pins),
+//! `hostkeeper-mdm-step`, the host-step layer, and `hostkeeper-hook`, the hook contract
+//! (crates/xtask/tests/layering keeps it so). Every
 //! verb checks the host read only, makes a plan of the steps that would change it, prints the
 //! plan by default, and carries it out with `--apply`. It is the port of komira-ai/kbf's
 //! `mdm-host`, with the fixes of komira-ai/kbf#2248 that the design gives task M4, and of the
@@ -101,9 +105,11 @@ mod cli;
 pub mod dep;
 mod error;
 pub mod fetch;
+pub mod hook;
 pub mod install;
 pub mod migrate;
 pub mod net;
+pub mod program;
 pub mod push_cert;
 mod repo;
 pub mod secret;

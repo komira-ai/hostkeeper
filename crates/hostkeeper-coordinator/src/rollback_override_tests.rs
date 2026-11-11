@@ -12,12 +12,12 @@ use hostkeeper_wire::wire::{Class, Outcome, Phase, ServiceReply, Token, UpdateRe
 use crate::fleet::Fleet;
 use crate::ops::{FailureAck, OpsState, ServiceOps};
 use crate::ops_tests::temp_beside;
-use crate::reconcile::{Change, plan};
+use crate::reconcile::Change;
 use crate::rollback_tests::{
     AUTO, HOSTS, ONE, THREE, TWO, def, failure, farm, good, marks, persisted, plan_for, release,
     restart, rig, rig_over, round, secs, seed, two_failed, unwritable, wanted,
 };
-use crate::testutil::{LEGACY, beat, desired, id, role, version};
+use crate::testutil::{LEGACY, beat, desired, id, plan, role, version};
 
 /// A directory the test owns, under the unit-test base beside the test binary.
 fn scratch(name: &str) -> Scratch {
@@ -392,11 +392,12 @@ async fn an_order_is_not_sent_when_its_ack_cannot_be_dropped() {
 #[tokio::test]
 async fn a_blocked_ack_drop_holds_the_order_across_a_restart() {
     let mut rig = rig("ov-blocked", AUTO, TWO).await;
+    // The set, which is audited, comes first: the coordinator writes the ops file it holds.
+    rig.set(THREE).await;
     seed(&rig, |m| {
         m.last_good = Some(version("1.0"));
         m.failure_acked = vec![ack("d1", "2.0")];
     });
-    rig.set(THREE).await;
     restart(&mut rig, AUTO);
     let blocker = temp_beside(&rig.dir.path().join("desired.json.ops"));
     std::fs::create_dir(&blocker).expect("blocked");

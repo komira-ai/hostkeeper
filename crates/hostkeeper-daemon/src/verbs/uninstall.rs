@@ -1,5 +1,5 @@
 //! `uninstall`: stop the service's units, run its `uninstall` hook step, unlink and remove its
-//! package, its placed paths and its step records, in the order of design section 4.7
+//! package and its step records, in the order of design section 4.7
 //! ([`crate::uninstall`]). It runs under the service's lock, never waited for: another order of
 //! the service is `busy`, and a resend while the uninstall runs answers that it runs. How it
 //! ended is kept for `Status` while the daemon runs ([`Ctx::record_uninstall`]).

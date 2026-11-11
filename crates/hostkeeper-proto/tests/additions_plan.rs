@@ -30,6 +30,7 @@ fn audit_entry(action: &str) -> op::AuditEntry {
         reason: Some("disk swap".to_owned()),
         at_unix: Some(1_800_000_000),
         by_name: Some("alice".to_owned()),
+        host_group: None,
     }
 }
 
@@ -70,6 +71,13 @@ fn plan() -> op::RolloutPlan {
         paused_by: Some("alice".to_owned()),
         pause_reason: Some("watching the first host".to_owned()),
         finished: false,
+        waiting_on: vec!["js-agent".to_owned()],
+        host_group: String::new(),
+        waiting_on_why: vec![op::LiveRollout {
+            service: "js-agent".to_owned(),
+            reason: op::LiveReason::Baking.into(),
+            node_id: "db-5".to_owned(),
+        }],
     }
 }
 
@@ -90,6 +98,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::AdvanceRequest {
                 service: "db".to_owned(),
                 reason: "first host looks fine".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -104,6 +113,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::PauseRequest {
                 service: "db".to_owned(),
                 reason: "watching the first host".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -118,6 +128,7 @@ fn plan_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::ResumeRequest {
                 service: "db".to_owned(),
                 reason: "the first host is fine".to_owned(),
+                host_group: String::new(),
             }),
         ),
         (
@@ -260,4 +271,111 @@ fn an_older_reader_keeps_the_plan_the_stage_and_the_new_gate_reasons() {
             .get_service_by_name("hostkeeper.operator.v1.Rollouts")
             .is_none()
     );
+}
+
+/// Catches: `RolloutPlan.waiting_on` (field 10, added after the plan) that a reader built before
+/// it drops or cannot read past, and a plan written before it read as naming a service. A plan of
+/// the release before, which carries fields 1 to 9 only, reads with every field it set and no
+/// service named; a reader that knows fields 1 to 9 only keeps the names as an unknown field and
+/// writes them back unchanged.
+#[test]
+fn waiting_on_is_read_as_empty_from_an_older_plan_and_kept_by_an_older_reader() {
+    let older = op::RolloutPlan {
+        waiting_on: Vec::new(),
+        ..plan()
+    };
+    let read = op::RolloutPlan::decode(round_trip(&older).as_slice()).expect("decodes");
+    assert_eq!((read.waiting_on.len(), read), (0, older));
+
+    let current = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let plan_message = current
+        .get_message_by_name("hostkeeper.operator.v1.RolloutPlan")
+        .expect("the plan");
+    let field = plan_message
+        .get_field_by_name("waiting_on")
+        .expect("the field");
+    assert_eq!((field.number(), field.is_list()), (10, true));
+    let mut file = current
+        .get_file_by_name("hostkeeper/operator/v1/rollouts.proto")
+        .expect("the file")
+        .file_descriptor_proto()
+        .clone();
+    let message = file
+        .message_type
+        .iter_mut()
+        .find(|m| m.name() == "RolloutPlan")
+        .expect("the plan");
+    message.field.retain(|f| f.number() != 10);
+    let set = prost_reflect::prost_types::FileDescriptorSet {
+        file: current
+            .file_descriptor_protos()
+            .map(|f| match f.name() == file.name() {
+                true => file.clone(),
+                false => f.clone(),
+            })
+            .collect(),
+    };
+    let before = DescriptorPool::from_file_descriptor_set(set).expect("the plan before");
+    let before = before
+        .get_message_by_name("hostkeeper.operator.v1.RolloutPlan")
+        .expect("the plan");
+    assert!(before.get_field_by_name("waiting_on").is_none());
+    let bytes = round_trip(&plan());
+    let read = DynamicMessage::decode(before, bytes.as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("version").as_deref(),
+        Some(&Value::String("2.0".to_owned()))
+    );
+    let back = op::RolloutPlan::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, plan());
+}
+
+/// Catches: `RolloutPlan.waiting_on_why` (field 12, with `LiveRollout` and `LiveReason`, added
+/// after `waiting_on`) that a reader built before it drops or cannot read past, and a plan
+/// written before it read as giving a reason. A plan of the release before, which carries fields
+/// 1 to 11 only, reads with every field it set and no reason; a reader that knows fields 1 to 11
+/// only keeps the reasons as an unknown field and writes them back unchanged.
+#[test]
+fn waiting_on_why_is_read_as_empty_from_an_older_plan_and_kept_by_an_older_reader() {
+    let older = op::RolloutPlan {
+        waiting_on_why: Vec::new(),
+        ..plan()
+    };
+    let read = op::RolloutPlan::decode(round_trip(&older).as_slice()).expect("decodes");
+    assert_eq!((read.waiting_on_why.len(), read), (0, older));
+
+    let current = DescriptorPool::decode(hostkeeper_proto::FILE_DESCRIPTOR_SET).expect("decodes");
+    let mut file = current
+        .get_file_by_name("hostkeeper/operator/v1/rollouts.proto")
+        .expect("the file")
+        .file_descriptor_proto()
+        .clone();
+    let message = file
+        .message_type
+        .iter_mut()
+        .find(|m| m.name() == "RolloutPlan")
+        .expect("the plan");
+    message.field.retain(|f| f.number() != 12);
+    let set = prost_reflect::prost_types::FileDescriptorSet {
+        file: current
+            .file_descriptor_protos()
+            .map(|f| match f.name() == file.name() {
+                true => file.clone(),
+                false => f.clone(),
+            })
+            .collect(),
+    };
+    let before = DescriptorPool::from_file_descriptor_set(set).expect("the plan before");
+    let before = before
+        .get_message_by_name("hostkeeper.operator.v1.RolloutPlan")
+        .expect("the plan");
+    assert!(before.get_field_by_name("waiting_on_why").is_none());
+    let bytes = round_trip(&plan());
+    let read = DynamicMessage::decode(before, bytes.as_slice()).expect("decodes");
+    assert_eq!(
+        read.get_field_by_name("waiting_on").as_deref(),
+        Some(&Value::List(vec![Value::String("js-agent".to_owned())]))
+    );
+    let back = op::RolloutPlan::decode(read.encode_to_vec().as_slice()).expect("decodes");
+    assert_eq!(back, plan());
 }

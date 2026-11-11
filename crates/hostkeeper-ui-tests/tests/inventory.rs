@@ -132,6 +132,80 @@ await click(tree, "next-page");
 }
 
 #[test]
+fn inventory_page_records_and_shows_a_platform() {
+    // Proves: the platform choice is sent as the enum name the gateway takes
+    // (`PLATFORM_LINUX_ARM64`, `PLATFORM_LINUX_X86_64`) and left out while "none" is chosen, a
+    // choice kept by the form for the next add, and each record's platform shown in its own
+    // column (a record with none, or one the page does not know, as "-").
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/ListRecords"),
+        json!({"records": [
+            {"hostId": "arm-1", "serial": "SN-1", "platform": "PLATFORM_LINUX_ARM64"},
+            {"hostId": "x86-1", "serial": "SN-2", "platform": "PLATFORM_LINUX_X86_64"},
+            {"hostId": "none-1", "serial": "SN-3"},
+            {"hostId": "odd-1", "serial": "SN-4", "platform": "PLATFORM_DARWIN_ARM64"},
+        ]}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "arm-2"}}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "x86-2"}}),
+    );
+    ui.reply(
+        &m("Enrollment/AddRecord"),
+        json!({"record": {"hostId": "none-2"}}),
+    );
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+for (const [host, platform] of [["arm-2", "linux-arm64"], ["x86-2", "linux-x86_64"], ["none-2", ""]]) {
+  type(tree, "record-host-id", host);
+  type(tree, "record-serial", host);
+  choose(tree, "record-platform", platform);
+  await click(tree, "add-record");
+}
+return { rows: rows(tree).map((row) => row.slice(0, 1).concat(row.slice(5, 6))) };
+"#,
+    ));
+    let sent = |host: &str, platform: Option<&str>| {
+        let mut body = json!({"hostId": host, "role": "", "dataMacs": [], "bmcMac": "",
+            "serial": host, "notes": ""});
+        if let Some(platform) = platform {
+            body["platform"] = json!(platform);
+        }
+        (m("Enrollment/AddRecord"), body)
+    };
+    assert_eq!(
+        bodies(&ui),
+        [
+            (
+                m("Enrollment/ListRecords"),
+                json!({"limit": 50, "pageToken": ""})
+            ),
+            sent("arm-2", Some("PLATFORM_LINUX_ARM64")),
+            sent("x86-2", Some("PLATFORM_LINUX_X86_64")),
+            sent("none-2", None),
+        ]
+    );
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            ["Host id", "Platform"],
+            ["arm-1", "linux-arm64"],
+            ["x86-1", "linux-x86_64"],
+            ["none-1", "-"],
+            ["odd-1", "-"],
+        ])
+    );
+}
+
+#[test]
 fn inventory_page_removes_a_record_only_with_a_reason_and_pages_back() {
     // Catches: a remove sent without a reason or with one off its rule, a remove of another
     // record than the row's, an empty list shown as a table, and a first page that keeps the
@@ -245,10 +319,16 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
                 "Data MACs",
                 "BMC MAC",
                 "Serial",
+                "Platform",
                 "Notes",
                 "Added by",
                 "Added at",
                 "Enrolled",
+                "Window ends",
+                "State",
+                "Used by",
+                "Used at",
+                "",
                 ""
             ],
             [
@@ -260,10 +340,19 @@ return { rows: rows(tree), marked: marked.map((row) => text(row.children[0])) };
                 "-",
                 "-",
                 "-",
+                "-",
                 "yes",
+                "-",
+                "-",
+                "-",
+                "-",
+                "",
                 "Remove"
             ],
-            ["db-2", "-", "-", "-", "SN-2", "-", "-", "-", "no", "Remove"],
+            [
+                "db-2", "-", "-", "-", "SN-2", "-", "-", "-", "-", "no", "-", "-", "-", "-", "",
+                "Remove"
+            ],
         ])
     );
     assert_eq!(out["out"]["marked"], json!(["db-2"]));
@@ -542,4 +631,238 @@ return filled;
             "Approved db-4: the host gets its certificate at its next poll.",
         ])
     );
+}
+
+/// Four records, one in each state a record shows, and one closed without a role.
+fn windows_reply() -> Value {
+    json!({"records": [
+        {"hostId": "open-1", "role": "storage", "dataMacs": ["0c:c4:7a:00:00:02"],
+         "approveUntilUnix": "1800003600", "state": "RECORD_STATE_OPEN"},
+        {"hostId": "closed-1", "role": "storage", "dataMacs": ["0c:c4:7a:00:00:03"],
+         "approveUntilUnix": "1799990000", "state": "RECORD_STATE_CLOSED"},
+        {"hostId": "used-1", "role": "storage", "dataMacs": ["0c:c4:7a:00:00:04"],
+         "approveUntilUnix": "1800003600", "state": "RECORD_STATE_USED",
+         "usedByRequestId": "ab".repeat(32), "usedUnix": "1800000100"},
+        {"hostId": "bare-1", "dataMacs": ["0c:c4:7a:00:00:05"], "state": "RECORD_STATE_CLOSED"},
+    ]})
+}
+
+#[test]
+fn inventory_page_shows_each_records_window_and_state() {
+    // Proves: a row shows the end of its window, its state in a word (open, closed or used), and
+    // for a used record the request and the time; a record with no state or window reads "-";
+    // only a closed record that names a role has an Open window button.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), windows_reply());
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+return { rows: rows(tree).slice(1).map((r) => r.slice(0, 1).concat(r.slice(10))),
+         opens: named(tree, "open-record").length };
+"#,
+    ));
+    let used = "ab".repeat(32);
+    assert_eq!(
+        out["out"]["rows"],
+        json!([
+            [
+                "open-1",
+                "2027-01-15 09:00:00 UTC",
+                "open",
+                "-",
+                "-",
+                "",
+                "Remove"
+            ],
+            [
+                "closed-1",
+                "2027-01-15 05:13:20 UTC",
+                "closed",
+                "-",
+                "-",
+                "Open window",
+                "Remove"
+            ],
+            [
+                "used-1",
+                "2027-01-15 09:00:00 UTC",
+                "used",
+                used,
+                "2027-01-15 08:01:40 UTC",
+                "",
+                "Remove"
+            ],
+            ["bare-1", "-", "closed", "-", "-", "", "Remove"],
+        ])
+    );
+    assert_eq!(out["out"]["opens"], 1);
+}
+
+#[test]
+fn inventory_page_opens_a_closed_records_window() {
+    // Proves: Open window sends OpenRecord for its own row's host id with the window typed
+    // (hours as approveForSecs, an end time in UTC as approveUntilUnix, none as neither) and the
+    // trimmed reason, refuses a window that is neither and a reason off its rule before sending,
+    // and says until when the record is open.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), windows_reply());
+    ui.reply(
+        &m("Enrollment/OpenRecord"),
+        json!({"record": {"hostId": "closed-1", "approveUntilUnix": "1800007200"}}),
+    );
+    ui.reply(
+        &m("Enrollment/OpenRecord"),
+        json!({"record": {"hostId": "closed-1", "approveUntilUnix": "1800007200"}}),
+    );
+    ui.reply(&m("Enrollment/OpenRecord"), json!({}));
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+for (const [window, reason] of [["soon", ""], ["0", ""], ["2", "x".repeat(257)], ["2", " rebuilt "],
+    ["2027-01-15 10:00", ""], ["", ""]]) {
+  type(tree, "open-window", window);
+  type(tree, "open-reason", reason);
+  await click(tree, "open-record");
+}
+"#,
+    ));
+    assert_eq!(
+        bodies(&ui)[1..],
+        [
+            (
+                m("Enrollment/OpenRecord"),
+                json!({"hostId": "closed-1", "reason": "rebuilt", "approveForSecs": "7200"})
+            ),
+            (
+                m("Enrollment/OpenRecord"),
+                json!({"hostId": "closed-1", "reason": "", "approveUntilUnix": "1800007200"})
+            ),
+            (
+                m("Enrollment/OpenRecord"),
+                json!({"hostId": "closed-1", "reason": ""})
+            ),
+        ]
+    );
+    let problem = "A window is a number of hours (2 or 1.5), or an end time in UTC (2027-01-15 08:00 or 2027-01-15T08:00:00Z).";
+    assert_eq!(
+        out["seen"]["reports"],
+        json!([
+            problem,
+            problem,
+            "A reason is at most 256 bytes; this one is 257.",
+            "Opened the record of closed-1 until 2027-01-15 10:00:00 UTC.",
+            "Opened the record of closed-1 until 2027-01-15 10:00:00 UTC.",
+            "Opened the record of closed-1 until -.",
+        ])
+    );
+    assert_eq!(out["seen"]["refreshes"], 3);
+}
+
+#[test]
+fn inventory_page_sends_the_window_of_a_new_record() {
+    // Proves: the Record form's window is sent as approveForSecs for hours (fractions
+    // rounded to the second), as approveUntilUnix for an end time in UTC (also in the spelling
+    // the page shows times in), and not at all when empty; an input that is neither, an end time
+    // that is not a date or a time of day (a minute or second past 59), and a window for a record with no role are refused before sending.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), json!({}));
+    for _ in 0..4 {
+        ui.reply(
+            &m("Enrollment/AddRecord"),
+            json!({"record": {"hostId": "db-2"}}),
+        );
+    }
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+for (const [role, window] of [["storage", "1.5"], ["storage", "2027-01-15T08:00:00Z"],
+    ["storage", "2027-01-15 08:00:30 UTC"], ["storage", ""], ["storage", "tomorrow"],
+    ["storage", "2027-02-30 08:00"], ["storage", "2027-01-15 08:60"],
+    ["storage", "2027-01-15 08:00:60"], ["storage", "0"], ["", "4"]]) {
+  type(tree, "record-host-id", "db-2");
+  type(tree, "record-role", role);
+  type(tree, "record-data-macs", "0c:c4:7a:00:00:12");
+  type(tree, "record-window", window);
+  await click(tree, "add-record");
+}
+"#,
+    ));
+    let base = json!({"hostId": "db-2", "role": "storage", "dataMacs": ["0c:c4:7a:00:00:12"],
+        "bmcMac": "", "serial": "", "notes": ""});
+    let with = |extra: Value| {
+        let mut body = base.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        body
+    };
+    let sent: Vec<Value> = bodies(&ui)[1..]
+        .iter()
+        .map(|(_, body)| body.clone())
+        .collect();
+    assert_eq!(
+        sent,
+        [
+            with(json!({"approveForSecs": "5400"})),
+            with(json!({"approveUntilUnix": "1800000000"})),
+            with(json!({"approveUntilUnix": "1800000030"})),
+            with(json!({})),
+        ]
+    );
+    let problem = "A window is a number of hours (2 or 1.5), or an end time in UTC (2027-01-15 08:00 or 2027-01-15T08:00:00Z).";
+    let reports = out["seen"]["reports"].as_array().unwrap();
+    assert_eq!(reports.len(), 10);
+    assert_eq!(
+        reports[4..],
+        [
+            json!(problem),
+            json!(problem),
+            json!(problem),
+            json!(problem),
+            json!(problem),
+            json!("A window needs a role: a record with no role approves nothing."),
+        ]
+    );
+}
+
+#[test]
+fn enrollment_page_shows_the_window_and_state_of_a_matched_record() {
+    // Proves: a request matched to one record says whether that record is open, closed or used
+    // and when its window ends (or that it has none); a request that matches no record, or whose
+    // coordinator says no state, gets no such line.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/List"),
+        json!({"requests": [
+            {"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
+             "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-1",
+             "recordState": "RECORD_STATE_CLOSED", "recordApproveUntilUnix": "1799990000"},
+            {"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32),
+             "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-2",
+             "recordState": "RECORD_STATE_USED", "recordApproveUntilUnix": "1800003600"},
+            {"requestId": "3d".repeat(32), "keySha256": "ef".repeat(32),
+             "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-3",
+             "recordState": "RECORD_STATE_CLOSED"},
+            {"requestId": "4c".repeat(32), "keySha256": "12".repeat(32),
+             "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-4"},
+            {"requestId": "5b".repeat(32), "keySha256": "34".repeat(32),
+             "inventoryMatch": "INVENTORY_MATCH_UNMATCHED", "recordState": "RECORD_STATE_OPEN"},
+        ]}),
+    );
+    let out = ui.run(&page_driver("enrollment", "{}", "[]", ""));
+    assert_shows(
+        &out,
+        &[
+            "The record is closed: its window ends 2027-01-15 05:13:20 UTC.",
+            "The record is used: its window ends 2027-01-15 09:00:00 UTC.",
+            "The record is closed (it has no window).",
+        ],
+    );
+    assert_eq!(shown(&out).matches("The record is").count(), 3);
 }

@@ -7,7 +7,7 @@ use crate::verdict;
 use clap::Parser;
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_link::{
-    DEFAULT_HEARTBEAT_SECS, DeferredReport, Feature, Health, Heartbeat, LinkError, Liveness,
+    DEFAULT_HEARTBEAT_SECS, DeferredReport, Entry, Feature, Health, Heartbeat, LinkError, Liveness,
     LoopFlags, Observed, Order, OrderId, OrderRef, Outcome, Oversize, PackageDigest, Platform,
     Reason, ReplyFault, ServiceFacts, Target, Verb, WordError,
 };
@@ -40,7 +40,7 @@ fn an_order_cannot_carry_a_command_path_or_url() {
     let _: u64 = order_try;
     let target = match verb {
         Verb::Update(target) | Verb::Force(target) | Verb::Install(target) => target,
-        Verb::Uninstall(service) | Verb::Abort(service) => {
+        Verb::Uninstall(service) | Verb::Abort(service) | Verb::ClearRecord(service) => {
             let _: ServiceName = service;
             return;
         }
@@ -50,7 +50,9 @@ fn an_order_cannot_carry_a_command_path_or_url() {
         version: to,
         digest: package,
         index_digest: index,
+        entry,
     } = target;
+    let _: Option<Entry> = entry;
     let _: ServiceName = name;
     let _: Version = to;
     let _: PackageDigest = package;
@@ -194,11 +196,18 @@ fn the_heartbeat_json_has_the_wire_names() {
                 liveness: Liveness::Transitioning,
                 version: None,
             }),
+            record_try: Some(3),
+            installer: None,
+            drift: None,
         }],
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     };
-    let expected = serde_json::json!({
+    let mut expected = serde_json::json!({
         "platform": "darwin-arm64",
         "agent": { "name": "hostkeeper", "version": "0.9.0" },
         "agent_features": ["deferred-v1"],
@@ -222,11 +231,37 @@ fn the_heartbeat_json_has_the_wire_names() {
             "deferred": { "target": "2.0", "reason": "drain_bound", "retry_after_secs": 5 },
             "health_detail": "refused",
             "observed": { "liveness": "transitioning", "version": null },
+            "record_try": 3,
+            "installer": null,
         }],
         "sent_unix": 0,
     });
     assert_eq!(beat.to_json(), expected);
     assert_eq!(beat.encoded_len(), expected.to_string().len());
+
+    // The trusted root counts toward the bound: its age when there is one, and its reason,
+    // `none` for a root that needs no attention.
+    let mut with_root = beat.clone();
+    with_root.trusted_root = Some(hostkeeper_link::TrustedRootFacts {
+        age_secs: Some(7),
+        reason: None,
+    });
+    expected["trusted_root_age_secs"] = serde_json::json!(7);
+    expected["trusted_root_reason"] = serde_json::json!("none");
+    assert_eq!(with_root.to_json(), expected);
+    for (reason, word) in [
+        (hostkeeper_link::RootReason::Stale, "stale"),
+        (hostkeeper_link::RootReason::Missing, "missing"),
+        (hostkeeper_link::RootReason::Unparseable, "unparseable"),
+    ] {
+        with_root.trusted_root = Some(hostkeeper_link::TrustedRootFacts {
+            age_secs: None,
+            reason: Some(reason),
+        });
+        let json = with_root.to_json();
+        assert_eq!(json["trusted_root_reason"], word);
+        assert!(json.get("trusted_root_age_secs").is_none(), "{word}");
+    }
     let deferred = verdict(
         &update("o-1", 1, "x", "2.0"),
         Outcome::Deferred {
@@ -260,4 +295,47 @@ fn the_heartbeat_period_flag_defaults_to_15_seconds_and_refuses_0() {
     assert!(Daemon::try_parse_from(["daemon", "--heartbeat-secs", "x"]).is_err());
     // `LoopConfig::period_secs` is a `NonZeroU64`: a period of 0 cannot be built.
     assert_eq!(NonZeroU64::new(0), None);
+}
+
+/// An entry of the release message with `installer` and one location, for the tests of equality.
+fn entry(installer: &str, bytes: u64) -> Entry {
+    use hostkeeper_proto::hostkeeper::release::v1 as release;
+    Entry::new(release::Target {
+        installer: installer.to_owned(),
+        locations: vec![release::Location {
+            store: "lan".to_owned(),
+            locator: "releases/web/2.0/web.tar".to_owned(),
+        }],
+        digest: "ab".repeat(32),
+        bytes,
+        attestation: None,
+        manifest: None,
+        repository: None,
+        package_version: None,
+    })
+}
+
+/// `entry` on the update of `web` to 2.0, order `o-1` try 1.
+fn update_with(entry: Option<Entry>) -> Order {
+    let mut order = update("o-1", 1, "web", "2.0");
+    if let Verb::Update(target) = &mut order.verb {
+        target.entry = entry;
+    }
+    order
+}
+
+/// Proves an order carrying an entry equals its resend (an entry of the same bytes), and an
+/// entry that differs in one field (the installer, or the size) is another order, as is an
+/// order with no entry or an order with an entry against one with none.
+///
+/// Catches: orders compared without their entry, so a re-picked entry reads as the order
+/// already run; or compared by identity, so a resend reads as new.
+#[test]
+fn equal_entries_are_equal_orders_and_an_entry_differing_in_one_field_is_another_order() {
+    let resend = update_with(Some(entry("hostkeeper-archive", 4096)));
+    assert_eq!(resend, update_with(Some(entry("hostkeeper-archive", 4096))));
+    assert_ne!(resend, update_with(Some(entry("tarball", 4096))));
+    assert_ne!(resend, update_with(Some(entry("hostkeeper-archive", 4097))));
+    assert_ne!(resend, update_with(None));
+    assert_eq!(update_with(None), update_with(None));
 }

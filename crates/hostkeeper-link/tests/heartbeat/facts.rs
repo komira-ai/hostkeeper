@@ -3,6 +3,7 @@
 use std::io;
 use std::sync::Arc;
 
+use hostkeeper_link::DEFAULT_HEARTBEAT_SECS;
 use hostkeeper_link::testing::{FakeClock, ScriptedSleeper};
 use hostkeeper_link::{
     ANNOUNCED, Acknowledged, BeatOutcome, ClockSleeper, Health, Heartbeat, LinkError, Liveness,
@@ -16,8 +17,9 @@ use crate::{Rig, recorded, service, update, version};
 
 /// Catches a heartbeat whose list of services comes from anywhere but the step records (a
 /// configuration, a list of file names), that omits an installed service, or that takes a fact
-/// from the wrong source: the version from the record, the health and its detail and the
-/// observer's detail from the observer.
+/// from the wrong source: the version and the try the record holds from the record (none for a
+/// record that holds none), the health and its detail and the observer's detail from the
+/// observer.
 #[test]
 fn heartbeat_lists_installed_services_from_records_and_observer() {
     let rig = Rig::new("facts-list");
@@ -27,6 +29,8 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
         RecordedService {
             updating: Some(version("2.1")),
             last_result: Some(kept.clone()),
+            record_try: Some(1),
+            installer: Some("tarball".to_owned()),
             ..recorded("y", "2.0")
         },
     ]);
@@ -37,6 +41,7 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
             version: Some(version("1.0")),
             health: Health::Unhealthy,
             health_detail: Some("probe refused".to_owned()),
+            drift: None,
         },
     );
     let mut heartbeater = rig.heartbeater();
@@ -58,6 +63,9 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     liveness: Liveness::Stopped,
                     version: Some(version("1.0")),
                 }),
+                record_try: None,
+                installer: None,
+                drift: None,
             },
             ServiceFacts {
                 name: service("y"),
@@ -71,10 +79,17 @@ fn heartbeat_lists_installed_services_from_records_and_observer() {
                     liveness: Liveness::Running,
                     version: None,
                 }),
+                record_try: Some(1),
+                installer: Some("tarball".to_owned()),
+                drift: None,
             },
         ],
         sent_unix: hostkeeper_link::testing::START_UNIX,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     };
     assert_eq!(rig.world.link.beats(), vec![expected]);
 
@@ -292,4 +307,113 @@ fn a_heartbeat_says_the_host_clock_and_the_enrollment_loops_word_on_the_certific
             ),
         ]
     );
+}
+
+/// Catches a heartbeat whose trusted root is read once and kept, read from anywhere but its
+/// source, or left out: each beat carries what the source says at that beat, none while it says
+/// none.
+#[test]
+fn a_heartbeat_carries_the_trusted_root_its_source_says_at_each_beat() {
+    use hostkeeper_link::{RootReason, TrustedRootFacts};
+
+    let rig = Rig::new("facts-trusted-root");
+    rig.install(Vec::new());
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let stale = TrustedRootFacts {
+        age_secs: Some(91 * 86_400),
+        reason: Some(RootReason::Stale),
+    };
+    rig.world.trusted_root.set(Some(stale));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let fresh = TrustedRootFacts {
+        age_secs: Some(60),
+        reason: None,
+    };
+    rig.world.trusted_root.set(Some(fresh));
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+
+    let said: Vec<Option<TrustedRootFacts>> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| beat.trusted_root)
+        .collect();
+    assert_eq!(said, [None, Some(stale), Some(fresh)]);
+}
+
+/// Proves the installers the loop was given at start go out in every heartbeat it makes, and a
+/// loop given none sends none.
+///
+/// Catches: installers read once and sent in the first heartbeat only, or never copied from
+/// the loop's configuration into the heartbeat.
+#[test]
+fn every_heartbeat_lists_the_installers_the_loop_was_given() {
+    use hostkeeper_link::{Heartbeater, LoopConfig};
+
+    let rig = Rig::new("facts-installers");
+    rig.install(Vec::new());
+    let mut heartbeater = Heartbeater::new(
+        LoopConfig {
+            platform: Platform::LinuxX86_64,
+            agent_version: version("0.9.0"),
+            state_dir: rig.state().to_path_buf(),
+            period_secs: DEFAULT_HEARTBEAT_SECS,
+            installers: vec!["hostkeeper-archive".to_owned()],
+            private_repository: false,
+        },
+        rig.world.ports(),
+    );
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let said: Vec<Vec<String>> = rig
+        .world
+        .link
+        .beats()
+        .into_iter()
+        .map(|beat| beat.installers)
+        .collect();
+    assert_eq!(said, [["hostkeeper-archive"], ["hostkeeper-archive"]]);
+
+    let plain = Rig::new("facts-no-installers");
+    plain.install(Vec::new());
+    assert_eq!(plain.heartbeater().beat_once(), BeatOutcome::Sent);
+    assert_eq!(plain.world.link.beats()[0].installers, Vec::<String>::new());
+}
+
+/// Proves the drift the observer answered for a service is in that service's facts, and a
+/// service whose observation has none has none.
+///
+/// Catches: a drift lost between the observation and the heartbeat, or carried to another
+/// service.
+#[test]
+fn the_drift_the_observer_found_is_in_the_services_facts() {
+    use hostkeeper_link::Drift;
+
+    let rig = Rig::new("facts-drift");
+    rig.install(vec![recorded("x", "1.0"), recorded("y", "1.0")]);
+    let found = Drift {
+        found: Some("2.0-1".to_owned()),
+        recorded: None,
+    };
+    rig.world.observer.set(
+        &service("x"),
+        Observation {
+            liveness: Liveness::Running,
+            version: Some(version("1.0")),
+            health: Health::Healthy,
+            health_detail: None,
+            drift: Some(found.clone()),
+        },
+    );
+    let mut heartbeater = rig.heartbeater();
+    assert_eq!(heartbeater.beat_once(), BeatOutcome::Sent);
+    let beat = rig.world.link.beats().remove(0);
+    let drifts: Vec<(&str, Option<Drift>)> = beat
+        .services
+        .iter()
+        .map(|facts| (facts.name.as_str(), facts.drift.clone()))
+        .collect();
+    assert_eq!(drifts, [("x", Some(found)), ("y", None)]);
 }

@@ -3,26 +3,32 @@
 //! the loop reports, and the halt generations the loop raises are the ones the executor reads.
 
 mod support;
+mod support_apt;
 
 use std::fs;
 use std::num::NonZeroU64;
+use std::os::unix::fs::PermissionsExt;
 use std::sync::Arc;
 
 use hostkeeper_config::names::Version;
 use hostkeeper_daemon::link_adapters::{
-    DaemonHalts, DaemonOrders, MAX_DETAIL, order_result, wire_order,
+    DaemonHalts, DaemonOrders, MAX_DETAIL, blamed, order_result, wire_order,
 };
-use hostkeeper_daemon::packages::PackageError;
 use hostkeeper_daemon::testing::spawn;
 use hostkeeper_daemon::verb::{Forced, Hooked, NO_TRY, PackageDigest as WireDigest, Unhooked};
 use hostkeeper_daemon::{Refusal, Reply, Verb as Decoded};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_link::{
-    HeldHalts, Order, OrderId, OrderResult, OrderSink, Outcome, PackageDigest, Reason, Target, Verb,
+    Entry, HeldHalts, Order, OrderId, OrderResult, OrderSink, Outcome, PackageDigest, Reason,
+    Target, Verb,
 };
+use hostkeeper_proto::hostkeeper::agent::v1 as wire;
+use hostkeeper_proto::hostkeeper::release::v1 as release;
 use hostkeeper_steps::runner::DEFAULT_RETRY_SECS;
-use support::force::{WEB, link_of, succeeded, web};
+use support::force::{WEB, link_of, succeeded};
 use support::{Rig, d, force, name};
+use support_apt::services;
+use support_apt::{AptRig, with_entry};
 
 fn target(service: &str, version: &str) -> Target {
     Target {
@@ -30,6 +36,7 @@ fn target(service: &str, version: &str) -> Target {
         version: Version::new(version).expect("a version"),
         digest: PackageDigest::new(&d()).expect("a package digest"),
         index_digest: None,
+        entry: None,
     }
 }
 
@@ -53,6 +60,57 @@ fn force_order(service: &str, version: &str, order_try: u64) -> Order {
         order_try,
         verb: Verb::Force(target(service, version)),
     }
+}
+
+/// `service` at `version` published in the repository of `apt`, as the target the loop carries
+/// for it: its package digest is the pin of the package, and its entry names the package.
+fn published(apt: &AptRig, service: &str, version: &str) -> Target {
+    let entry = services::publish(apt, service, version);
+    Target {
+        digest: PackageDigest::new(&entry.digest).expect("a package digest"),
+        entry: Some(Entry::new(entry)),
+        ..target(service, version)
+    }
+}
+
+/// An update of `service` to `version` as the loop carries it, its package published in `apt`'s
+/// repository; a service that runs nothing yet runs the base version first.
+fn update_of(apt: &AptRig, service: &str, version: &str, order_try: u64) -> Order {
+    services::based(apt, service);
+    Order {
+        id: order_id(&format!("order-{service}-{version}")),
+        order_try,
+        verb: Verb::Update(published(apt, service, version)),
+    }
+}
+
+/// A forced update of `service` to `version` as the loop carries it, its package published in
+/// `apt`'s repository.
+fn force_of(apt: &AptRig, service: &str, version: &str, order_try: u64) -> Order {
+    Order {
+        id: order_id(&format!("force-{service}-{version}")),
+        order_try,
+        verb: Verb::Force(published(apt, service, version)),
+    }
+}
+
+/// A daemon of `apt` whose start pass ran.
+fn booted(apt: &AptRig) -> hostkeeper_daemon::Daemon {
+    fs::create_dir_all(&apt.rig.state).expect("the state dir");
+    fs::set_permissions(&apt.rig.state, fs::Permissions::from_mode(0o700)).expect("its mode");
+    let daemon = apt.daemon();
+    daemon.boot_pass().expect("the start pass");
+    daemon
+}
+
+/// The wire order forcing `web` to `version` with `halt_generation`, its package published in
+/// `apt`'s repository.
+fn forced(apt: &AptRig, version: &str, order_try: u64, halt_generation: u64) -> wire::Order {
+    let entry = services::publish(apt, WEB, version);
+    with_entry(
+        force(WEB, version, &entry.digest, order_try, halt_generation),
+        &entry,
+    )
 }
 
 /// The version the loop gives the executor with `order`, which names one: its own.
@@ -88,19 +146,23 @@ fn plain(order: &Order, outcome: Outcome) -> OrderResult {
 /// id, try, service, version and digest as they were, and a `force` with no halt generation.
 #[test]
 fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
-    let hooked = |order_try: u64| Hooked {
+    let hooked = |order_try: u64, id: &str| Hooked {
         service: name("web"),
         version: Version::new("2.0.0").expect("a version"),
         digest: WireDigest::new(&d()).expect("a digest"),
-        index_digest: None,
         order_try: NonZeroU64::new(order_try).expect("a try from 1"),
+        order_id: Some(id.to_owned()),
+        entry: None,
     };
     let update = wire_order(&update_order("web", "2.0.0", 3));
     assert_eq!(
         (update.order_id.as_str(), update.r#try),
         ("order-web-2.0.0", 3)
     );
-    assert_eq!(Decoded::try_from(&update), Ok(Decoded::Update(hooked(3))));
+    assert_eq!(
+        Decoded::try_from(&update),
+        Ok(Decoded::Update(hooked(3, "order-web-2.0.0")))
+    );
     let forced = wire_order(&force_order("web", "2.0.0", 4));
     assert_eq!(
         (forced.order_id.as_str(), forced.r#try),
@@ -109,44 +171,46 @@ fn a_link_order_is_decoded_by_the_daemon_as_the_verb_and_target_it_names() {
     assert_eq!(
         Decoded::try_from(&forced),
         Ok(Decoded::Force(Forced {
-            package: hooked(4),
+            package: hooked(4, "force-web-2.0.0"),
             halt_generation: 0,
-            order_id: Some("force-web-2.0.0".to_owned()),
         }))
     );
 }
 
-/// Catches an index digest of the loop's order that is dropped on its way to the daemon, or
+/// Catches an index digest of the loop's order that is dropped on its way onto the wire order, or
 /// given to the wrong verb: an update, a forced update and an install whose target holds an index
-/// digest are decoded by the daemon with that digest beside the package digest.
+/// digest are put on the wire with that digest beside the package digest, and one whose target
+/// holds none leaves the field empty. (The daemon reads no index; the field stays on the wire.)
 #[test]
-fn the_index_digest_of_a_link_order_reaches_the_daemons_order() {
+fn the_index_digest_of_a_link_order_is_put_on_the_wire_order() {
     let index = PackageDigest::new(&"cd".repeat(32)).expect("an index digest");
     let indexed = |service: &str| Target {
         index_digest: Some(index.clone()),
+        entry: None,
         ..target(service, "2.0.0")
     };
-    let wanted = Some(WireDigest::new(&"cd".repeat(32)).expect("an index digest"));
+    let wanted = "cd".repeat(32);
     let order = |verb: Verb| Order {
         id: order_id("o-1"),
         order_try: 1,
         verb,
     };
-    let update = wire_order(&order(Verb::Update(indexed("web"))));
-    let Ok(Decoded::Update(hooked)) = Decoded::try_from(&update) else {
-        panic!("not an update: {update:?}");
+    let index_of = |order: &Order| match wire_order(order).verb {
+        Some(wire::order::Verb::Update(a)) => (a.package_digest, a.index_digest),
+        Some(wire::order::Verb::Force(a)) => (a.package_digest, a.index_digest),
+        Some(wire::order::Verb::Install(a)) => (a.package_digest, a.index_digest),
+        other => panic!("not a verb with a target: {other:?}"),
     };
-    assert_eq!(hooked.index_digest, wanted);
-    let forced = wire_order(&order(Verb::Force(indexed("web"))));
-    let Ok(Decoded::Force(forced)) = Decoded::try_from(&forced) else {
-        panic!("not a force");
-    };
-    assert_eq!(forced.package.index_digest, wanted);
-    let install = wire_order(&order(Verb::Install(indexed("web"))));
-    let Ok(Decoded::Install(hooked)) = Decoded::try_from(&install) else {
-        panic!("not an install");
-    };
-    assert_eq!(hooked.index_digest, wanted);
+    for verb in [Verb::Update, Verb::Force, Verb::Install] {
+        assert_eq!(
+            index_of(&order(verb(indexed("web")))),
+            (d(), wanted.clone())
+        );
+        assert_eq!(
+            index_of(&order(verb(target("web", "2.0.0")))),
+            (d(), String::new())
+        );
+    }
 }
 
 /// Catches an install, an uninstall or an abort of the loop that the daemon decodes as another
@@ -167,8 +231,9 @@ fn an_install_uninstall_and_abort_are_decoded_as_the_verbs_they_name() {
             service: name("web"),
             version: Version::new("2.0.0").expect("a version"),
             digest: WireDigest::new(&d()).expect("a digest"),
-            index_digest: None,
             order_try: NonZeroU64::new(2).expect("a try from 1"),
+            order_id: Some("install-1".to_owned()),
+            entry: None,
         }))
     );
     let uninstall = wire_order(&order("uninstall-1", Verb::Uninstall(name("web"))));
@@ -211,23 +276,28 @@ fn an_uninstalls_verdict_names_the_version_the_loop_gave() {
 }
 
 /// Catches an order that does not reach `Daemon::order`, or a reply that is not the verdict of
-/// the order: an update through the adapter makes the daemon fetch the package and run the five
-/// steps, writes the order's try and digest in the step record, and is reported `succeeded` with
-/// the order's id, try and version; the same order again is answered from the record, not run
-/// twice.
+/// the order: an update through the adapter makes the daemon stage the package from the
+/// repository and run the four steps, writes the order's try and digest in the step record, and
+/// is reported `succeeded` with the order's id, try and version; the same order again is answered
+/// from the record, not run twice.
 #[test]
 fn an_order_in_the_reply_reaches_daemon_order_and_its_reply_is_the_next_last_update() {
-    let rig = Rig::new("link-update");
-    rig.add("web", "2.0.0");
-    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
-    let order = update_order("web", "2.0.0", 3);
+    let apt = AptRig::new("link-update");
+    let rig = &apt.rig;
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let order = update_of(&apt, "web", "2.0.0", 3);
     let result = orders.execute(&order, &version_of(&order));
     assert_eq!(result, plain(&order, Outcome::Succeeded));
     assert_eq!(result.order.id.as_str(), "order-web-2.0.0");
     assert_eq!(result.order.order_try, 3);
-    assert_eq!(rig.store.asked(), [("web".to_owned(), "2.0.0".to_owned())]);
+    assert!(apt.version_dir("2.0.0").join("target.json").exists());
+    assert_eq!(
+        apt.host.installed("web"),
+        support_apt::seen::held("2.0.0-1")
+    );
     let steps = [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup];
     assert_eq!(rig.launcher.steps("web"), steps);
+    let pin = order.target().expect("a target").digest.as_str().to_owned();
     let rec = rig.record("web").expect("the step record");
     assert_eq!(
         (
@@ -236,10 +306,12 @@ fn an_order_in_the_reply_reaches_daemon_order_and_its_reply_is_the_next_last_upd
             rec.tarball_digest.as_str(),
             rec.order_try
         ),
-        ("web", "2.0.0", d().as_str(), Some(3))
+        ("web", "2.0.0", pin.as_str(), Some(3))
     );
+    let calls = apt.host.calls().len();
     assert_eq!(orders.execute(&order, &version_of(&order)), result);
     assert_eq!(rig.launcher.steps("web"), steps);
+    assert_eq!(apt.host.calls().len(), calls);
 }
 
 /// Catches a refusal that loses its token, its text or the order's try, and a resend of the
@@ -249,12 +321,10 @@ fn an_order_in_the_reply_reaches_daemon_order_and_its_reply_is_the_next_last_upd
 /// that arrives while another runs; and the first order still ends `succeeded`.
 #[test]
 fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_and_try() {
-    let rig = Rig::new("link-busy");
-    rig.add("alpha", "2.0.0");
-    rig.add("alpha", "3.0.0");
-    let gate = rig.launcher.hold("alpha", Step::Prepare);
-    let orders = Arc::new(DaemonOrders::new(Arc::new(rig.daemon())));
-    let first = update_order("alpha", "2.0.0", 1);
+    let apt = AptRig::new("link-busy");
+    let gate = apt.rig.launcher.hold("alpha", Step::Prepare);
+    let orders = Arc::new(DaemonOrders::new(Arc::new(apt.daemon())));
+    let first = update_of(&apt, "alpha", "2.0.0", 1);
     let running = {
         let (orders, first) = (Arc::clone(&orders), first.clone());
         spawn("the order", move || {
@@ -262,7 +332,7 @@ fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_an
         })
     };
     gate.entered(&running).expect("the held step is entered");
-    let other = update_order("alpha", "3.0.0", 2);
+    let other = update_of(&apt, "alpha", "3.0.0", 2);
     assert_eq!(
         orders.execute(&other, &version_of(&other)),
         OrderResult {
@@ -288,13 +358,12 @@ fn a_busy_order_and_a_running_one_are_reported_failed_busy_under_their_own_id_an
 /// no phase with the reason `halted`, the daemon's text and its own id and try.
 #[test]
 fn a_halt_is_reported_in_the_halt_phase_and_the_orders_it_refuses_are_not() {
-    let rig = Rig::new("link-halted");
-    rig.running("web", "1.0.0");
-    rig.add("web", "2.0.0");
-    rig.add("web", "2.1.0");
+    let apt = AptRig::new("link-halted");
+    let rig = &apt.rig;
+    services::installed(&apt, "web", "1.0.0");
     rig.launcher.exits("web", Step::Prepare, &[76]);
-    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
-    let first = update_order("web", "2.0.0", 1);
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let first = update_of(&apt, "web", "2.0.0", 1);
     assert_eq!(
         orders.execute(&first, &version_of(&first)),
         OrderResult {
@@ -302,7 +371,7 @@ fn a_halt_is_reported_in_the_halt_phase_and_the_orders_it_refuses_are_not() {
             ..plain(&first, Outcome::Failed)
         }
     );
-    let second = update_order("web", "2.1.0", 2);
+    let second = update_of(&apt, "web", "2.1.0", 2);
     assert_eq!(
         orders.execute(&second, &version_of(&second)),
         OrderResult {
@@ -319,13 +388,12 @@ fn a_halt_is_reported_in_the_halt_phase_and_the_orders_it_refuses_are_not() {
 /// exits 1 is reported `failed` before the commit, blamed on the release.
 #[test]
 fn a_deferral_and_a_failure_keep_their_outcome_phase_and_class() {
-    let rig = Rig::new("link-verdicts");
-    rig.add("alpha", "2.0.0");
-    rig.add("beta", "2.0.0");
+    let apt = AptRig::new("link-verdicts");
+    let rig = &apt.rig;
     rig.launcher.exits("alpha", Step::Prepare, &[75]);
     rig.launcher.exits("beta", Step::Prepare, &[1]);
-    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
-    let deferred = update_order("alpha", "2.0.0", 1);
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let deferred = update_of(&apt, "alpha", "2.0.0", 1);
     assert_eq!(
         orders.execute(&deferred, &version_of(&deferred)),
         plain(
@@ -335,7 +403,7 @@ fn a_deferral_and_a_failure_keep_their_outcome_phase_and_class() {
             }
         )
     );
-    let failed = update_order("beta", "2.0.0", 1);
+    let failed = update_of(&apt, "beta", "2.0.0", 1);
     assert_eq!(
         orders.execute(&failed, &version_of(&failed)),
         OrderResult {
@@ -351,11 +419,10 @@ fn a_deferral_and_a_failure_keep_their_outcome_phase_and_class() {
 /// daemon's text, in no phase and of no class.
 #[test]
 fn an_order_the_runner_stopped_without_a_verdict_is_reported_failed_with_its_token() {
-    let rig = Rig::new("link-interrupted");
-    rig.add("web", "2.0.0");
-    rig.launcher.lose("web", Step::Prepare);
-    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
-    let order = update_order("web", "2.0.0", 1);
+    let apt = AptRig::new("link-interrupted");
+    apt.rig.launcher.lose("web", Step::Prepare);
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let order = update_of(&apt, "web", "2.0.0", 1);
     let result = orders.execute(&order, &version_of(&order));
     let detail = result.detail.clone().expect("the daemon's text");
     assert!(!detail.is_empty());
@@ -394,11 +461,10 @@ fn an_order_the_daemon_cannot_decode_is_reported_failed_invalid_order() {
 /// is `succeeded` and forced.
 #[test]
 fn a_forced_order_reaches_the_daemon_as_a_force_and_its_verdict_is_forced() {
-    let rig = Rig::new("link-force");
-    web(&rig, "2.0.0");
-    let (daemon, _) = rig.booted();
-    let orders = DaemonOrders::new(Arc::new(daemon));
-    let order = force_order(WEB, "2.0.0", 4);
+    let apt = AptRig::new("link-force");
+    let rig = &apt.rig;
+    let orders = DaemonOrders::new(Arc::new(booted(&apt)));
+    let order = force_of(&apt, WEB, "2.0.0", 4);
     let result = orders.execute(&order, &version_of(&order));
     assert_eq!(result, plain(&order, Outcome::Succeeded));
     assert!(result.forced);
@@ -414,25 +480,37 @@ fn a_forced_order_reaches_the_daemon_as_a_force_and_its_verdict_is_forced() {
             force.target_digest.as_str(),
             force.halt_generation
         ),
-        (Some("force-web-2.0.0"), 4, "2.0.0", d().as_str(), 0)
+        (
+            Some("force-web-2.0.0"),
+            4,
+            "2.0.0",
+            order.target().expect("a target").digest.as_str(),
+            0
+        )
     );
-    assert_eq!(link_of(&rig, WEB, "current").as_deref(), Some("2.0.0"));
+    assert_eq!(link_of(rig, WEB, "current").as_deref(), Some("2.0.0"));
     assert!(rig.launcher.runs().is_empty());
 }
 
-/// Catches a failed force reported as a hooked failure: a package the store refuses fails the
-/// force before the commit, blamed on the release, with the store's reason `digest_mismatch`;
-/// the verdict is forced.
+/// Catches a failed force reported as a hooked failure: a package the repository holds under
+/// another digest than the entry pins fails the force before the commit, blamed on the release,
+/// with the installer's reason `package_digest_mismatch`; the verdict is forced.
 #[test]
 fn a_forced_order_that_fails_before_the_switch_is_reported_failed_and_forced() {
-    let rig = Rig::new("link-force-failed");
-    rig.store.fail(
-        WEB,
-        "2.0.0",
-        PackageError::DigestMismatch("other bytes".to_owned()),
-    );
-    let orders = DaemonOrders::new(Arc::new(rig.daemon()));
-    let order = force_order(WEB, "2.0.0", 1);
+    let apt = AptRig::new("link-force-failed");
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let mut order = force_of(&apt, WEB, "2.0.0", 1);
+    let Verb::Force(target) = &mut order.verb else {
+        panic!("a force");
+    };
+    let other = PackageDigest::new(&"ee".repeat(32)).expect("a digest");
+    let mut entry = target.entry.take().expect("an entry").into_target();
+    entry.digest = other.as_str().to_owned();
+    *target = Target {
+        digest: other,
+        entry: Some(Entry::new(entry)),
+        ..target.clone()
+    };
     let result = orders.execute(&order, &version_of(&order));
     assert!(result.forced);
     assert_eq!(
@@ -440,7 +518,7 @@ fn a_forced_order_that_fails_before_the_switch_is_reported_failed_and_forced() {
         OrderResult {
             phase: Some(Phase::BeforeCommit),
             class: Some(Class::Release),
-            reason: Some(token("digest_mismatch")),
+            reason: Some(token("package_digest_mismatch")),
             ..plain(&order, Outcome::Failed)
         }
     );
@@ -448,7 +526,8 @@ fn a_forced_order_that_fails_before_the_switch_is_reported_failed_and_forced() {
 
 /// Catches a refusal reported under another token, or with another phase: every refusal of the
 /// daemon, refused or interrupted, is reported `failed` with its own token as the reason and its
-/// text as the detail, in no phase, whether the order is hooked or forced.
+/// text as the detail, whether the order is hooked or forced: in no phase and with no class, but
+/// for the refusals of an entry that carry their class before the commit point (`blamed`).
 #[test]
 fn every_refusal_is_reported_under_its_own_token() {
     for order in [
@@ -464,9 +543,12 @@ fn every_refusal_is_reported_under_its_own_token() {
                 },
             ];
             for reply in replies {
+                let class = blamed(refusal);
                 let expected = OrderResult {
                     reason: Some(token(refusal.token())),
                     detail: Some("why".to_owned()),
+                    phase: class.map(|_| Phase::BeforeCommit),
+                    class,
                     ..plain(&order, Outcome::Failed)
                 };
                 assert_eq!(
@@ -676,17 +758,14 @@ fn a_running_order_is_answered_busy() {
 /// adapter reads back.
 #[test]
 fn a_halt_generation_in_a_reply_is_the_one_a_force_reads() {
-    let rig = Rig::new("link-halts");
-    rig.add(WEB, "1.0.0");
-    rig.add_units(WEB, "3.0.0", &[], &[], &[]);
-    rig.add_units(WEB, "4.0.0", &[], &[], &[]);
+    let apt = AptRig::new("link-halts");
+    let rig = &apt.rig;
     rig.launcher.exits(WEB, Step::Prepare, &[76]);
-    let (daemon, _) = rig.booted();
-    let daemon = Arc::new(daemon);
+    let daemon = Arc::new(booted(&apt));
     let orders = DaemonOrders::new(Arc::clone(&daemon));
     let halts = DaemonHalts::new(Arc::clone(&daemon));
     let service = name(WEB);
-    let halted = update_order(WEB, "1.0.0", 1);
+    let halted = update_of(&apt, WEB, "1.0.0", 1);
     assert_eq!(
         orders.execute(&halted, &version_of(&halted)),
         OrderResult {
@@ -709,9 +788,9 @@ fn a_halt_generation_in_a_reply_is_the_one_a_force_reads() {
     let file = rig.state.join(WEB).join("held-halt");
     assert_eq!(fs::read_to_string(file).expect("the file"), "5\n");
 
-    assert_eq!(daemon.order(&force(WEB, "3.0.0", &d(), 2, 4)), succeeded());
+    assert_eq!(daemon.order(&forced(&apt, "3.0.0", 2, 4)), succeeded());
     assert_eq!(halts.held(&service), 5);
-    assert_eq!(daemon.order(&force(WEB, "4.0.0", &d(), 3, 6)), succeeded());
+    assert_eq!(daemon.order(&forced(&apt, "4.0.0", 3, 6)), succeeded());
     assert_eq!(daemon.ctx().halts.get(&service).ok(), Some(6));
     assert_eq!(halts.held(&service), 6);
 }
@@ -759,4 +838,135 @@ fn a_store_that_cannot_be_read_or_written_holds_every_generation_and_refuses_a_r
         "{error}"
     );
     assert_eq!(halts.held(&name("other")), 0);
+}
+
+/// An entry of the release message with every field of the artifact set.
+fn picked() -> release::Target {
+    release::Target {
+        installer: "hostkeeper-archive".to_owned(),
+        locations: vec![release::Location {
+            store: "lan".to_owned(),
+            locator: "releases/web/2.0.0/web.tar".to_owned(),
+        }],
+        digest: d(),
+        bytes: 4096,
+        attestation: Some(release::Blob {
+            digest: "cd".repeat(32),
+            bytes: 512,
+            locations: vec![release::Location {
+                store: "github".to_owned(),
+                locator: "web/web.tar.sigstore.json".to_owned(),
+            }],
+        }),
+        manifest: None,
+        repository: None,
+        package_version: None,
+    }
+}
+
+/// Proves the entry an order of the loop carries goes back on the wire `Order` unchanged, on
+/// the `target` of its own verb (`update`, `force` and `install`), and that an order with no
+/// entry leaves `target` unset.
+///
+/// Catches: an entry dropped on the way to the daemon, so that the daemon refuses the order for
+/// having none instead of staging the package the coordinator picked, or put on the wrong verb.
+#[test]
+fn the_entry_of_a_link_order_is_put_back_on_the_wire_order_unchanged() {
+    let carrying = |verb: fn(Target) -> Verb| Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: verb(Target {
+            entry: Some(Entry::new(picked())),
+            ..target("web", "2.0.0")
+        }),
+    };
+    let bare = |verb: fn(Target) -> Verb| Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: verb(target("web", "2.0.0")),
+    };
+    let target_of = |order: &Order| match wire_order(order).verb {
+        Some(wire::order::Verb::Update(a)) => a.target,
+        Some(wire::order::Verb::Force(a)) => a.target,
+        Some(wire::order::Verb::Install(a)) => a.target,
+        other => panic!("not a verb with a target: {other:?}"),
+    };
+    for verb in [Verb::Update, Verb::Force, Verb::Install] {
+        assert_eq!(target_of(&carrying(verb)), Some(picked()));
+        assert_eq!(target_of(&bare(verb)), None);
+    }
+}
+
+/// Proves an order whose entry names an installer the daemon does not list reaches the heartbeat
+/// as a deferral with the reason `installer_not_listed` and a retry time of one second, not as a
+/// failure, and that nothing is staged.
+///
+/// Catches: an unlisted installer reported `failed`, which the coordinator would not pick again,
+/// or with the runner's default retry time, which would keep the version's next entry declined.
+#[test]
+fn an_entry_of_an_installer_the_daemon_does_not_list_is_reported_deferred_with_its_reason() {
+    let apt = AptRig::new("link-not-listed");
+    services::installed(&apt, "web", "1.0.0");
+    let orders = DaemonOrders::new(Arc::new(apt.daemon()));
+    let unlisted = release::Target {
+        installer: "tarball".to_owned(),
+        manifest: Some(release::Manifest {
+            min_hostkeeper: "0.1.0".to_owned(),
+            ..release::Manifest::default()
+        }),
+        ..picked()
+    };
+    let order = Order {
+        id: order_id("o-1"),
+        order_try: 1,
+        verb: Verb::Update(Target {
+            entry: Some(Entry::new(unlisted)),
+            ..target("web", "2.0.0")
+        }),
+    };
+    assert_eq!(
+        orders.execute(&order, &version_of(&order)),
+        OrderResult {
+            reason: Some(token("installer_not_listed")),
+            ..plain(
+                &order,
+                Outcome::Deferred {
+                    retry_after_secs: 1
+                }
+            )
+        }
+    );
+    assert!(!apt.version_dir("2.0.0").exists());
+}
+
+/// Proves the refusals of an order's entry that the design names with a class reach the
+/// heartbeat with it, before the commit point and with the daemon's text: `order_invalid` and
+/// `manifest_invalid` are blamed on the release, `no_store` on the host's environment; every
+/// other refusal (here `busy`) still names no class and no phase.
+///
+/// Catches: an entry the daemon cannot accept reported with no class, which the coordinator
+/// and CI could not tell from a refusal about the host's moment.
+#[test]
+fn the_refusals_of_an_entry_carry_the_class_the_design_names() {
+    let order = update_order("web", "2.0.0", 1);
+    let cases = [
+        (Refusal::OrderInvalid, Some(Class::Release)),
+        (Refusal::ManifestInvalid, Some(Class::Release)),
+        (Refusal::NoStore, Some(Class::Environment)),
+        (Refusal::Busy, None),
+    ];
+    for (refusal, class) in cases {
+        let reply = Reply::refused(refusal, "why");
+        assert_eq!(
+            order_result(&order, &version_of(&order), &reply),
+            OrderResult {
+                reason: Some(token(refusal.token())),
+                detail: Some("why".to_owned()),
+                phase: class.map(|_| Phase::BeforeCommit),
+                class,
+                ..plain(&order, Outcome::Failed)
+            },
+            "{refusal:?}"
+        );
+    }
 }

@@ -90,6 +90,7 @@ fn audit_list_returns_time_and_token_name() {
             reason: Some("1.0: crashes".to_owned()),
             at_unix: Some(AT),
             by_name: Some("alice".to_owned()),
+            host_group: None,
         }]
     );
 }
@@ -150,8 +151,8 @@ fn audit_list_filters_by_name() {
 }
 
 /// Proves: `newest` answers the newest `limit` entries after `since_seq`, oldest first, with
-/// `next_seq` the newest of them, from the audit file and from the ring of a store with none;
-/// with `since_seq` past every entry it answers none.
+/// `next_seq` the newest of them, from the audit file and from a store with no file (in memory,
+/// each entry with the time it was made); with `since_seq` past every entry it answers none.
 ///
 /// Catches: a newest page answered newest first, from the start of the log, past `since_seq`,
 /// or only from the file.
@@ -159,7 +160,8 @@ fn audit_list_filters_by_name() {
 fn audit_list_newest_pages_from_the_end() {
     let file = timed("audit-newest");
     let mut ring = rig("audit-newest-ring", "");
-    ring.coordinator = start(&ring.dir, &ring.clock, "").with_ops(OpsStore::volatile());
+    ring.coordinator = start(&ring.dir, &ring.clock, "")
+        .with_ops(OpsStore::volatile().with_unix(Arc::new(|| AT + 1)));
     for rig in [&file, &ring] {
         for _ in 0..20 {
             record(rig, "alice", "exclude");
@@ -198,7 +200,7 @@ fn audit_list_newest_pages_from_the_end() {
             .collect()
     };
     assert_eq!(times(&file), vec![Some(AT); 20]);
-    assert_eq!(times(&ring), vec![None; 20], "the ring holds no time");
+    assert_eq!(times(&ring), vec![Some(AT + 1); 20]);
 }
 
 /// Proves: an audit file in the format a released coordinator wrote (the same five keys, no

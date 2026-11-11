@@ -13,7 +13,7 @@
 //!   receives nothing; the tonic client then speaks HTTP/2 over the established stream.
 //! - **What it sends and takes back.** The heartbeat as the protobuf request (the private
 //!   module `proto_map`), refused when it is over [`MAX_HEARTBEAT_BYTES`] encoded. A reply is
-//!   read at most [`REPLY_MAX`] bytes long. A refusal is a gRPC status whose message is one
+//!   read at most [`GRPC_REPLY_MAX`] bytes long (the JSON route's is [`crate::REPLY_MAX`]). A refusal is a gRPC status whose message is one
 //!   token ([`LinkError::Refused`]); an order the daemon does not run is logged once with why,
 //!   and again when it changes.
 //! - **The bound.** The whole call (dial, handshake, request and reply) takes at most
@@ -46,12 +46,19 @@ use tonic::transport::Endpoint as ChannelEndpoint;
 
 use crate::beat::{Heartbeat, MAX_HEARTBEAT_BYTES};
 use crate::dial::CALL_SECS;
-use crate::mtls::{Endpoint, EndpointError, REPLY_MAX, client_config, failed};
+use crate::mtls::{Endpoint, EndpointError, client_config, failed};
 use crate::names::Reason;
 use crate::order::Reply;
 use crate::pki::{CA, CURRENT};
 use crate::ports::{ClientIdentity, CoordinatorLink, LinkError, Log, ReplyFault, Unsendable};
 use crate::proto_map::{self, Dropped};
+
+/// The most bytes of a gRPC reply that are read: 1 MiB. An order may carry the entry of a
+/// release's targets, at most 24 KiB encoded (`docs/design/packages.md` section 3.5), and a
+/// reply may carry a repository set, at most 8 repositories of at most 64 KiB of keyring each
+/// (`hostkeeper_release::registry`). The JSON route keeps its 16 KiB ([`crate::REPLY_MAX`]): its
+/// reply never carries either.
+pub const GRPC_REPLY_MAX: usize = 1024 * 1024;
 
 /// The protocol the link offers in ALPN: HTTP/2.
 const H2: &[u8] = b"h2";
@@ -165,7 +172,7 @@ impl GrpcMtlsLink {
             .connect_with_connector(connector)
             .await
             .map_err(|e| LinkError::Transport(io_kind(&e).unwrap_or(io::ErrorKind::Other)))?;
-        let mut client = CoordinatorClient::new(channel).max_decoding_message_size(REPLY_MAX);
+        let mut client = CoordinatorClient::new(channel).max_decoding_message_size(GRPC_REPLY_MAX);
         client
             .heartbeat(request)
             .await

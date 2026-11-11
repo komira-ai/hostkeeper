@@ -20,19 +20,20 @@
 //!
 //! The operator's holds, the hosts a standing force orders and where each service's update plan
 //! stands are kept here as a copy of the ops store's ([`Marks`]), refreshed under the fleet's
-//! lock, so the decisions read them with the beats; the `abort` orders an operator queued are kept in memory only, like the other orders.
+//! lock, so the decisions read them with the beats; the `abort` and `clear_record` orders an
+//! operator queued are kept in memory only, like the other orders.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::time::Duration;
 
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Agent, Health, Heartbeat, Outcome, UpdateResult};
 use hostkeeper_wire::{HostId, Platform, RoleName};
 
-use crate::assignment::{Placement, ServiceAssignments, assigned, effective_min_version};
-use crate::bake::Bake;
+use crate::assignment::{Placement, assigned, effective_min_version};
+use crate::bake::{Bake, Found};
 use crate::defer::{DeferBackoff, Defers};
-use crate::holds::{HoldMark, holding};
+use crate::holds::holding;
 use crate::rollouts::Rollout;
 use crate::services::ServiceDef;
 use crate::verdicts::Verdicts;
@@ -103,10 +104,10 @@ impl Host {
             && !self.beat.promotion_pending
     }
 
-    /// Whether the host holds an update slot (a service's plan counts them against the role's
-    /// `max_updating`, [`crate::stages`]): it is updating, its promotion is pending, or its last
-    /// update failed and it has not yet heartbeated healthy. A failed install that left the service absent
-    /// (staged, never run) holds none: like a failed update rolled back, nothing of it runs.
+    /// Whether the host holds an update slot of its service, counted against its role's
+    /// `max_updating` ([`crate::stages`]): updating, promotion pending, or failed and not yet
+    /// healthy. A failed install rolled back to nothing (reported absent) holds none; one halted
+    /// after its switch is installed, unhealthy, and does. Neither makes a rollout live.
     #[must_use]
     pub fn holds_slot(&self) -> bool {
         let failed = self
@@ -144,6 +145,9 @@ pub struct Node {
     pub cert_not_after_unix: Option<u64>,
     /// Why the host's last step of enrollment or renewal failed, as its last heartbeat said it.
     pub last_renew_error: Option<String>,
+    /// The host's Sigstore trusted root, as its last heartbeat said it: unknown after one that
+    /// said nothing of it.
+    pub trusted_root: crate::trusted_root::TrustedRootSaid,
     /// How many of its heartbeats since the coordinator started were skewed: counted by the
     /// fleet ([`Fleet::note_node`]), which replaces what the node given to it says.
     pub skewed_beats: u64,
@@ -157,34 +161,9 @@ impl Node {
     }
 }
 
-/// What the fleet keeps of the operator's marks for its decisions: a copy of the holds, of the
-/// hosts each standing force orders, of the assignments, the labels and the exclusions, of where
-/// each service's update plan stands (`rollouts`), of the services that are halted, of the
-/// versions marked bad and of the failures an operator acknowledged (`acked`), as the ops store
-/// holds them ([`crate::holds::marks_of`]), refreshed under the fleet's lock
-/// ([`Fleet::set_marks`]).
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Marks {
-    /// The holds that stand.
-    pub holds: Vec<HoldMark>,
-    /// Per service, the hosts its standing force orders ([`crate::force`]).
-    pub forced: BTreeMap<String, BTreeSet<HostId>>,
-    /// Per service, the operator's assignments ([`crate::assignment`]).
-    pub assignments: BTreeMap<String, ServiceAssignments>,
-    /// Per node id, the labels an operator gave the host.
-    pub labels: BTreeMap<String, BTreeMap<String, String>>,
-    /// The (service, node id) pairs an operator excluded.
-    pub excluded: BTreeSet<(String, String)>,
-    /// Per service, where its update plan stands ([`crate::rollouts`]).
-    pub rollouts: BTreeMap<String, Rollout>,
-    /// The services that are halted.
-    pub halted: BTreeSet<String>,
-    /// Per service, the versions marked bad.
-    pub bad: BTreeMap<String, Vec<Version>>,
-    /// Per service, the failures an operator acknowledged, each a node id and the version it
-    /// failed, by its text: a cleared halt's, and those a version set by hand or forced acknowledged.
-    pub acked: BTreeMap<String, BTreeSet<(String, String)>>,
-}
+#[path = "fleet_groups.rs"]
+mod groups;
+pub use groups::Marks;
 
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
@@ -205,6 +184,8 @@ pub struct Fleet {
     orders: BTreeMap<(HostId, String), Order>,
     /// Healthy beats in a row at one version, per service and host ([`Bake`]).
     bake: BTreeMap<(String, HostId), Bake>,
+    /// The hosts first heard settled at a version and not seen to move since ([`Found`]).
+    pub(crate) found: Found,
     defers: Defers,
     /// The release failures heard, each counted once ([`crate::verdicts`]).
     verdicts: Verdicts,
@@ -213,11 +194,14 @@ pub struct Fleet {
     /// The `abort` orders an operator queued, per host and service, each with its order id: sent
     /// once, at the host's next heartbeat ([`crate::orders`]).
     aborts: BTreeMap<(HostId, String), String>,
+    /// The `clear_record` orders an operator queued ([`crate::clear_record`]).
+    pub(crate) clear_records: crate::clear_record::Queue,
     /// The canaries that failed a release, per service and version, by node id
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
     /// The highest order try heard of each host and service, from every verdict its heartbeats
-    /// carried (an acknowledged one read back from the verdicts file among them): what
+    /// carried (an acknowledged one read back from the verdicts file among them, and a refusal
+    /// for the try) and from the try its step record holds (`record_try`): what
     /// [`Self::next_try`] numbers past. Kept in memory only, never lowered.
     tries: BTreeMap<(HostId, String), u64>,
     /// The highest try of an order of each host and service the coordinator gave and no longer
@@ -226,6 +210,15 @@ pub struct Fleet {
     /// install of a service its heartbeat does not list) may hold that try in its step record
     /// all the same. Kept in memory only, never lowered.
     sent: BTreeMap<(HostId, String), u64>,
+    /// Whether the store's link to its database is lost (`docs/design/coordinator-storage.md`,
+    /// section 5), read from the backend at each take of the fleet's lock: nothing is ordered.
+    pub(crate) store_lost: bool,
+    /// The installers daemons said over gRPC and the releases the picks read ([`crate::picks`]).
+    pub(crate) picks: crate::picks::Picks,
+    /// The hosts whose move into a host group is under way ([`crate::moving`]).
+    pub(crate) moves: crate::moving::Moves,
+    /// The facts generations daemons reported over gRPC ([`crate::facts`]).
+    pub(crate) facts: crate::facts::Reported,
 }
 
 impl Fleet {
@@ -243,13 +236,19 @@ impl Fleet {
             outside: BTreeMap::new(),
             orders: BTreeMap::new(),
             bake: BTreeMap::new(),
+            found: Found::default(),
             defers: Defers::default(),
             verdicts: Verdicts::default(),
             marks: Marks::default(),
             aborts: BTreeMap::new(),
+            clear_records: crate::clear_record::Queue::default(),
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
+            store_lost: false,
+            picks: crate::picks::Picks::default(),
+            moves: crate::moving::Moves::default(),
+            facts: crate::facts::Reported::default(),
         }
     }
 
@@ -302,23 +301,27 @@ impl Fleet {
         })
     }
 
-    /// Whether `now` is still within the quiet start: the `quiet` of [`Self::new`] after the
-    /// coordinator's start.
+    /// Whether the coordinator orders nothing at `now`: within the quiet start (the `quiet` of
+    /// [`Self::new`] after the coordinator's start), or while the store's link is lost.
     #[must_use]
     pub fn is_quiet(&self, now: Duration) -> bool {
-        now < self.started.saturating_add(self.quiet)
+        self.store_lost || now < self.started.saturating_add(self.quiet)
     }
 
     /// The try of the next order of `service` for the host `id`: one past the highest try any
-    /// heartbeat of the host has carried for the service, whatever order its verdict ended, or
-    /// of any order of it the coordinator gave that is no longer outstanding ([`Self::order_try`]),
-    /// and 1 when there is none. The daemon keys tries per service (design 8.3): its step record
-    /// holds the try of the service's last order and refuses the same try of another package
-    /// (`try_conflict`) and a lower one (`stale_try`). The highest is kept, not the last heard,
+    /// heartbeat of the host has carried for the service, whatever order its verdict ended, the
+    /// try its step record holds among them, or of any order of it the coordinator gave that is
+    /// no longer outstanding ([`Self::order_try`]), and 1 when there is none. The daemon keys
+    /// tries per service (design 8.3): its step record holds the try of the service's last order
+    /// and refuses the same try of another package (`try_conflict`) and a lower one
+    /// (`stale_try`). The highest is kept, not the last heard,
     /// so a verdict that stops being sent once acknowledged, one that names no try, or an older
     /// one heard after a newer never lowers it. A resend before the host reports keeps the try;
     /// a restarted coordinator rebuilds it from the heartbeats, an acknowledged verdict read back
-    /// from the verdicts file among them (design 8.2).
+    /// from the verdicts file and the step record's try among them (design 8.2), so its first
+    /// order of a host starts past a try the host ran across its own restart and never reported
+    /// (the install of a self-update). A refusal for the try (`try_conflict`, `stale_try`) moves
+    /// it past the refused try, and past the record's when the host sends it.
     #[must_use]
     pub fn next_try(&self, service: &str, id: &HostId) -> u64 {
         let key = (id.clone(), service.to_owned());
@@ -473,7 +476,9 @@ impl Fleet {
         }
         self.orders.retain(|(o, _), _| o != id);
         self.bake.retain(|(_, o), _| o != id);
+        self.found.forget_host(id);
         self.nodes.remove(id);
+        self.picks.forget(id);
         true
     }
 
@@ -484,7 +489,10 @@ impl Fleet {
     /// counts from then), or reports that it declined it ([`crate::defer`]: a deferral holds no
     /// slot, so the order must not hold it for [`ORDER_AGE`] either); an update or an install
     /// also ends when the host runs the ordered version (not as an `absent` copy) or reports
-    /// that it failed it, and an uninstall when the host reports a verdict of its order id.
+    /// that it failed it, and an uninstall when the host reports a verdict of its order id. A
+    /// refusal for the try ([`UpdateResult::is_try_refusal`]) ends the order of the try it
+    /// refused, moves the try, and is not kept as the host's report: the host is ordered again
+    /// past the try, and never counted as failing the version.
     pub fn record_in(
         &mut self,
         service: &str,
@@ -516,11 +524,11 @@ impl Fleet {
         &mut self,
         service: &str,
         id: HostId,
-        role: &RoleName,
+        role: &str,
         beat: Heartbeat,
         now: Duration,
     ) {
-        self.note(service, id, role.name(), beat, now, false);
+        self.note(service, id, role, beat, now, false);
     }
 
     /// The one place a role enters the fleet: the beat ends an order, counts a bake and a
@@ -535,6 +543,12 @@ impl Fleet {
         counted: bool,
     ) {
         let key = (id, service.to_owned());
+        // A refusal of an order for its try alone is no word on the release: it is taken out of
+        // the beat, so no rule reads it as the host failing the version (the gate's
+        // `failed_here`, the plan's failed host, a force's verdict), and it only moves the try.
+        let mut beat = beat;
+        let refusal = beat.last_update.take_if(|r| r.is_try_refusal());
+        let had_order = self.orders.contains_key(&key);
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
             deferred_order = beat
@@ -556,13 +570,31 @@ impl Fleet {
                     .and_then(|r| r.order_id.as_ref())
                     .is_some_and(|reported| reported.as_str() == order_id),
             };
-            if (beat.updating.is_some() || ended || deferred_order)
+            // The refusal ends the order of the try it refused, and no later one: one read back
+            // from the verdicts file after the order was given again names the older try. One
+            // that names no try is taken as the outstanding order's.
+            let refused = refusal
+                .as_ref()
+                .is_some_and(|r| r.order_try.is_none_or(|t| t == order.order_try));
+            if (beat.updating.is_some() || ended || deferred_order || refused)
                 && let Some(order) = self.orders.remove(&key)
             {
+                if refused {
+                    tracing::warn!(
+                        %service,
+                        node_id = %key.0,
+                        order_try = order.order_try,
+                        record_try = ?beat.record_try,
+                        "the host refused the order for its try; it is ordered again past it"
+                    );
+                }
                 self.no_longer_outstanding(key.clone(), &order);
             }
         }
         let baking = (key.1.clone(), key.0.clone());
+        // A beat that ends an order is the host's move, even its first: it is never found.
+        let first = self.occupant(&key.1, &key.0).is_none() && !had_order;
+        self.found.observe(baking.clone(), &beat, first);
         match Bake::after(self.bake.get(&baking), &beat, now) {
             Some(bake) => {
                 self.bake.insert(baking, bake);
@@ -573,7 +605,15 @@ impl Fleet {
         }
         self.defers.observe(&key, &beat, deferred_order, now);
         self.verdicts.observe(&key.1, &key.0, &beat);
-        if let Some(heard) = beat.last_update.as_ref().and_then(|r| r.order_try) {
+        // The try of the verdict, of the refusal (whose order the step record holds a try at
+        // or past), and the one the step record holds, which the host sends whether or not a
+        // verdict reached the coordinator.
+        let heard = [
+            beat.last_update.as_ref().and_then(|r| r.order_try),
+            refusal.as_ref().and_then(|r| r.order_try),
+            beat.record_try,
+        ];
+        if let Some(heard) = heard.into_iter().flatten().max() {
             let highest = self.tries.entry(key.clone()).or_default();
             *highest = (*highest).max(heard);
         }
@@ -627,6 +667,7 @@ impl Fleet {
         now: Duration,
     ) {
         let key = (id, service.to_owned());
+        self.found.forget(&(service.to_owned(), key.0.clone()));
         if self.is_ordered(service, &key.0, now)
             && self
                 .orders
@@ -691,12 +732,15 @@ impl Fleet {
 
     /// Whether the host `id` is busy with a service other than `service`: one of its other
     /// services is updating, or has an order outstanding for it. A host does one update at a
-    /// time.
+    /// time. A host that is moving ([`crate::moving`]) is also busy with an update of a package it
+    /// is leaving, which no service counts it for.
     #[must_use]
     pub fn is_busy_besides(&self, service: &str, id: &HostId, now: Duration) -> bool {
+        let leaving = self.outside.iter().filter(|_| self.is_moving(id));
         let updating = self
             .hosts
             .iter()
+            .chain(leaving)
             .filter(|(s, _)| s.as_str() != service)
             .any(|(_, hosts)| hosts.get(id).is_some_and(|h| h.beat.updating.is_some()));
         updating
@@ -706,10 +750,20 @@ impl Fleet {
     }
 
     /// Whether the host `id` holds an update slot of `service`: [`Host::holds_slot`], or an
-    /// order is outstanding for it.
+    /// order is outstanding for it. A host an operator excluded from `service` holds one only
+    /// while it runs an update (updating, or its promotion pending) or has an order outstanding,
+    /// so a host excluded mid-update keeps its slot until that update ends; one whose last update
+    /// failed and that is not healthy holds none, since the service no longer orders it and
+    /// nothing of an update of it runs: it would keep its role's `max_updating` taken for as long
+    /// as it stays excluded.
     #[must_use]
     pub fn holds_slot(&self, service: &str, id: &HostId, host: &Host, now: Duration) -> bool {
-        host.holds_slot() || self.is_ordered(service, id, now)
+        let running = host.beat.updating.is_some() || host.beat.promotion_pending;
+        let held = match self.is_excluded(service, id) {
+            true => running,
+            false => host.holds_slot(),
+        };
+        held || self.is_ordered(service, id, now)
     }
 
     /// How many healthy beats in a row the host `id` has sent `service` at `version`.
@@ -767,7 +821,7 @@ impl Fleet {
 
     /// Replaces the operator's marks the fleet decides by with `marks`.
     pub fn set_marks(&mut self, marks: Marks) {
-        self.marks = marks;
+        self.marks = marks.in_mode_of(&self.marks);
     }
 
     /// What the fleet keeps of the host `id` for `service`, counted or not.
@@ -868,6 +922,7 @@ impl Fleet {
         }
         self.orders.remove(&(id.clone(), service.to_owned()));
         self.bake.remove(&(service.to_owned(), id.clone()));
+        self.found.forget(&(service.to_owned(), id.clone()));
     }
 
     /// Whether the standing force of `service` orders the host `id`.

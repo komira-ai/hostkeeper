@@ -10,40 +10,68 @@
 //!   followed on the same line by a version comment (`# v1.2.3`; the value may be quoted, and
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
-//! - a job has no `runs-on` (but a job of [`callers::CALLERS`] that calls the CI client), or a
-//!   runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a custom label (a
+//! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
+//!   calls the CI client), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
 //!   or an `include` the lint cannot read, such as an expression, is refused);
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
-//!   [`ID_TOKEN_ALLOWED`] and [`callers::CALLERS`];
+//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`];
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
-//!   `merge_group`) and a job of it is privileged or macOS, whatever its `if:` says, or what
-//!   sits beside `jobs` (`env`, `defaults`, ...) is, so that nothing of the kind runs on a pull
-//!   request, as a gate or not.
-//!   Privileged: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
-//!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options), or the
-//!   job holds a `write` scope. macOS: a value of the job names `macos` or `darwin`, in any case
-//!   (a runner, a matrix value, a `--target aarch64-apple-darwin`);
-//! - it is not [`PRIVILEGED_WORKFLOW`], it does not run for a pull request, and a job of it, or
-//!   what sits beside `jobs`, names root as above (`sudo` as a word, `--privileged`,
-//!   `--cap-add`), whatever its trigger: root runs in that one workflow or nowhere. (A pull-request
-//!   workflow is refused for the same values by the rule above, with its own message. A write
-//!   scope is not root; outside a pull request it is held to [`WRITE_ALLOWED`].)
+//!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
+//!   `if:` says, and is not a job of [`pr_device::JOBS`] that may be (`root`, `macos`); or what
+//!   sits beside `jobs` (`env`, `defaults`, ...) is root or macOS, which no job may take from
+//!   there. Root: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
+//!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options). macOS:
+//!   a value of the job names `macos` or `darwin`, in any case (a runner, a matrix value, a
+//!   `--target aarch64-apple-darwin`). The job names a job's `needs` lists are not its values;
+//! - the workflow runs for a pull request and a job of it, or what sits beside `jobs`, names a
+//!   secret or the token: a key or value `secrets`, or an expression (`${{ ... }}`) that names
+//!   `secrets` or `github.token` as a word (or the token as `github['token']`, or the whole
+//!   context through `toJSON(github)`), in any case and spacing. The token's rights are those of the
+//!   job's `permissions`; naming it hands them to a step of pull-request code;
+//! - a job's service (`services.<name>.image`) or job container (`container`, a string or its
+//!   `image`) is not an image pinned by digest, `<name>[:<tag>]@sha256:<64 lowercase hex>`, or
+//!   a service has no image;
+//! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
+//! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
+//!   request, and a job of it, or what sits beside `jobs`, names root as above (`sudo` as a word,
+//!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, and on
+//!   a pull request in the copies of the privileged workflow's jobs in [`pr_device::FILE`], or
+//!   nowhere. (A pull-request workflow is refused for the same values by the rule above, with its
+//!   own message. A write scope is not root; outside a pull request it is held to
+//!   [`WRITE_ALLOWED`].)
 //! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
 //!   nothing else, and `workflow_dispatch` with no inputs (no other trigger, no `tags`, `paths` or
 //!   other filter of `push`), or a job of it runs on a runner that is not in its list
 //!   ([`privileged_runners`]: [`MACOS_DEVICE_RUNNERS`] for [`MACOS_DEVICE_JOB`], the one macOS
 //!   job, and [`PRIVILEGED_RUNNERS`] for every other). Every other rule holds for it as for any
 //!   file; [`WRITE_ALLOWED`] has no entry for it, so no job of it holds a write scope.
+//! - it is [`net_install::FILE`] and breaks a rule of its own ([`net_install::problems`]: its
+//!   triggers, the paths of its push, its concurrency and its two jobs), or a job of it runs on a
+//!   runner outside [`PRIVILEGED_RUNNERS`]. [`WRITE_ALLOWED`] has no entry for it either.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]).
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]; for its
+//!   package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
+//!   exact `if:`, [`super::packages`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
+//!
+//! In `release.yml` every `run:` is one command on one line ([`one_command`]).
+//!
+//! Every `curl` of a `run:` carries the HTTPS and failure guards and the retry options, and no
+//! `run:` downloads with `wget` or `gh release download` ([`downloads`]). Every pinned download
+//! is restored from the actions cache first, checked against its pin whichever way it came, and
+//! cached once checked ([`pinned_cache`]). Every `cargo xtask`
+//! call of a `run:` is one the binary's own command line accepts: its verb, its flags, and every
+//! required flag and argument given ([`xtask_calls`]); and one that runs from a checkout of
+//! another commit than the workflow's own (a release's) is one the command line of a published
+//! release accepts too, since that commit may be older than the workflow ([`release_ref`]).
 //!
 //! `set-desired.yml` is also held to the rules of [`set_desired`], which fix the order of its
 //! steps. Every workflow is held to the rules of [`callers`]: which jobs may call it, and how.
@@ -54,8 +82,18 @@
 
 use super::advisories;
 use super::callers;
+use super::desired;
+
+use super::downloads;
+use super::net_install;
+use super::one_command;
+use super::packages;
+use super::pinned_cache;
+use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
+use super::release_ref;
 use super::set_desired;
+use super::xtask_calls;
 use super::yaml::{self, Node, Value};
 
 /// A write permission a job may hold: the workflow file, the job, the scope, and the `if:` of
@@ -74,6 +112,11 @@ pub struct Allowed {
 /// - `release.yml` / `publish`: `contents`, to create the release and its tag.
 /// - `release.yml` / `plan`: `issues`, to open or update the one issue that tracks a release
 ///   held by a failed privileged run.
+/// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
+///   the release, to this repository's package in the registry.
+/// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
+///   nothing and holds no other scope), under the `if:` of the deploy
+///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -102,6 +145,18 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         condition: PLAN_IF,
     },
     Allowed {
+        file: "release.yml",
+        job: "image",
+        scope: "packages",
+        condition: RELEASE_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: desired::COORDINATOR_JOB,
+        scope: "id-token",
+        condition: desired::SET_IF,
+    },
+    Allowed {
         file: advisories::FILE,
         job: advisories::JOB,
         scope: "issues",
@@ -110,12 +165,15 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
 ];
 
 /// The jobs that may hold `id-token: write`, by workflow file and job. The scope writes nothing
-/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the
-/// CI client's, whose order of steps [`set_desired`] holds.
+/// to the repository: it lets the job's steps ask GitHub for an OIDC token. The one job is the CI
+/// client's, whose order of steps [`set_desired`] holds; hostkeeper's own deploy waits for no
+/// release channel and so joins no tailnet before its call ([`desired`]).
 pub const ID_TOKEN_ALLOWED: &[(&str, &str)] = &[(set_desired::FILE, set_desired::JOB)];
 
-/// The one workflow that may run a job as root (`sudo`, a privileged container): the privileged
-/// tests, after a merge to main and by hand, never on a pull request.
+/// The workflow of the privileged tests, after a merge to main and by hand: with
+/// [`net_install::FILE`], one of the two workflows that may run a job as root (`sudo`, a
+/// privileged container) but on a pull request, and the one a release waits for. On a pull
+/// request, the copies of its jobs in [`pr_device::FILE`] may.
 pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 
 /// The runners a job of [`PRIVILEGED_WORKFLOW`] may run on, but [`MACOS_DEVICE_JOB`]:
@@ -125,9 +183,14 @@ pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 
 /// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
-/// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), and
-/// hostkeeper's update of itself under launchd (`device_mac_selfupdate.rs`).
+/// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), hostkeeper's
+/// update of itself under launchd (`device_mac_selfupdate.rs`), and the macos-pkg installer with
+/// the Mac's real `installer` and `pkgutil` (`install_macos_pkg.rs`).
 pub const MACOS_DEVICE_JOB: &str = "macos-device";
+
+/// The job of [`PRIVILEGED_WORKFLOW`] that runs the daemon under OpenRC in an Alpine container
+/// (`crates/hostkeeper-privileged/tests/openrc_device.rs`), on a [`PRIVILEGED_RUNNERS`] runner.
+pub const OPENRC_DEVICE_JOB: &str = "openrc-device";
 
 /// The runners [`MACOS_DEVICE_JOB`] may run on: GitHub's standard hosted arm64 macOS image of a
 /// named version (passwordless `sudo`, launchd), free for a public repository. No `-latest`
@@ -221,6 +284,23 @@ fn uses<'a>(node: &'a Node, out: &mut Vec<(usize, &'a str)>) {
     }
 }
 
+/// The comment after the `uses:` value `value` on the line `line` of `text` it is written on (for
+/// an alias, the line of its anchor), without its `#` and the blanks after it: past a closing
+/// quote, one or more spaces or tabs, then `#`. `None` when the line has no such comment.
+pub fn version_comment<'a>(text: &'a str, line: usize, value: &str) -> Option<&'a str> {
+    let source = text.lines().nth(line - 1).unwrap_or_default();
+    let after = source
+        .find(value)
+        .map(|at| &source[at + value.len()..])
+        .unwrap_or_default();
+    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
+    let spaced = after.trim_start_matches([' ', '\t']);
+    (spaced.len() < after.len())
+        .then(|| spaced.strip_prefix('#'))
+        .flatten()
+        .map(|c| c.trim_start_matches([' ', '\t']))
+}
+
 /// What is wrong with the `uses:` value `value` on `line` of `text`, if anything.
 fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
     if value.starts_with('.') {
@@ -237,20 +317,7 @@ fn pin_problem(text: &str, line: usize, value: &str) -> Option<String> {
             "line {line}: `uses: {value}` is not pinned to a 40-digit lowercase commit SHA"
         ));
     }
-    // The comment after the value on the line the value is written on (for an alias, the line
-    // of its anchor): past a closing quote, one or more spaces or tabs, `#`, then `v<digit>`.
-    let source = text.lines().nth(line - 1).unwrap_or_default();
-    let after = source
-        .find(value)
-        .map(|at| &source[at + value.len()..])
-        .unwrap_or_default();
-    let after = after.strip_prefix(['\'', '"']).unwrap_or(after);
-    let spaced = after.trim_start_matches([' ', '\t']);
-    let comment = (spaced.len() < after.len())
-        .then(|| spaced.strip_prefix('#'))
-        .flatten()
-        .map(|c| c.trim_start_matches([' ', '\t']));
-    let versioned = comment.is_some_and(|c| {
+    let versioned = version_comment(text, line, value).is_some_and(|c| {
         c.strip_prefix('v')
             .is_some_and(|v| v.starts_with(|ch: char| ch.is_ascii_digit()))
     });
@@ -282,6 +349,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.push("`on` names pull_request_target".to_owned());
     }
     let privileged_file = file == PRIVILEGED_WORKFLOW;
+    let net_install_file = file == net_install::FILE;
     if privileged_file && !push_to_main_and_dispatch_only(entry(&doc, "on")) {
         problems.push(PRIVILEGED_ON.to_owned());
     }
@@ -302,9 +370,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(pin_problem(text, line, value));
     }
     let on_pull_request = on.iter().any(|t| runs_on_pull_requests(t));
-    // Root anywhere but in the privileged workflow; a pull-request workflow is refused for it by
-    // the pull-request rule.
-    let root_refused = !privileged_file && !on_pull_request;
+    // Root anywhere but in the privileged and the network-install workflows; a pull-request
+    // workflow is refused for it by the pull-request rule.
+    let root_refused = !privileged_file && !net_install_file && !on_pull_request;
     // What sits beside `jobs` (`env`, `defaults`, ...) applies to every job.
     let mut beside_jobs = Vec::new();
     for (k, v) in entries(&doc)
@@ -315,7 +383,8 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         scalars(v, &mut beside_jobs);
     }
     if on_pull_request {
-        problems.extend(word_problems("workflow", &beside_jobs));
+        problems.extend(word_problems("workflow", &beside_jobs, false, false));
+        problems.extend(secret_problems("workflow", &beside_jobs));
     }
     if root_refused {
         problems.extend(root_problems("workflow", &beside_jobs));
@@ -324,22 +393,24 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     for (name, job) in jobs {
         let name = name.as_str().unwrap_or_default();
         problems.extend(permission_problems(file, name, job));
-        // A job of `callers::CALLERS` that calls the CI client runs on that workflow's runner,
-        // which its own rules hold; every other job that calls a reusable workflow is refused.
+        problems.extend(image_problems(name, job));
+        // A job of `callers::CALLERS` (or the template's) that calls the CI client runs on that
+        // workflow's runner, which its own rules hold; every other job that calls a reusable
+        // workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
         if !calls_client {
             problems.extend(runner_problems(name, job));
         }
         if on_pull_request {
-            problems.extend(pull_request_problems(name, job));
+            problems.extend(pull_request_problems(file, name, job));
         }
         if root_refused {
             let mut values = Vec::new();
             scalars(job, &mut values);
             problems.extend(root_problems(&format!("job {name}"), &values));
         }
-        if privileged_file {
+        if privileged_file || net_install_file {
             problems.extend(privileged_runner_problems(name, job));
         }
     }
@@ -347,7 +418,20 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
     if file == set_desired::FILE {
         problems.extend(set_desired::problems(&doc));
     }
-    problems.extend(callers::problems(file, &doc));
+    if file == pr_device::FILE {
+        problems.extend(pr_device::problems(&doc));
+    }
+    if net_install_file {
+        problems.extend(net_install::problems(&doc));
+    }
+    problems.extend(callers::problems(file, text, &doc));
+    problems.extend(downloads::problems(&doc));
+    problems.extend(pinned_cache::problems(&doc));
+    if file == one_command::FILE {
+        problems.extend(one_command::problems(&doc));
+    }
+    problems.extend(xtask_calls::problems(&doc));
+    problems.extend(release_ref::problems(file, &doc));
     problems
 }
 
@@ -370,6 +454,45 @@ fn inherited_secrets(node: &Node) -> Vec<String> {
     }
 }
 
+/// True for `<name>[:<tag>]@sha256:<64 lowercase hex>`.
+pub fn pinned_by_digest(image: &str) -> bool {
+    let Some((name, digest)) = image.split_once('@') else {
+        return false;
+    };
+    let hex = digest.strip_prefix("sha256:").unwrap_or_default();
+    !name.is_empty()
+        && hex.len() == 64
+        && hex.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
+}
+
+/// The services and the container of `job` whose image is missing or not pinned by digest.
+fn image_problems(name: &str, job: &Node) -> Vec<String> {
+    let mut problems = Vec::new();
+    let mut check = |who: String, image: Option<&str>| match image {
+        None => problems.push(format!("job {name}: {who} has no image")),
+        Some(image) if !pinned_by_digest(image) => problems.push(format!(
+            "job {name}: {who}: image {image} is not pinned by digest (name@sha256:<64 hex>)"
+        )),
+        Some(_) => {}
+    };
+    if let Some(services) = entry(job, "services") {
+        for (service, config) in entries(services) {
+            let service = service.as_str().unwrap_or_default();
+            check(
+                format!("service {service}"),
+                entry(config, "image").and_then(Node::as_str),
+            );
+        }
+    }
+    if let Some(container) = entry(job, "container") {
+        let image = container
+            .as_str()
+            .or_else(|| entry(container, "image").and_then(Node::as_str));
+        check("container".to_owned(), image);
+    }
+    problems
+}
+
 fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let Some(permissions) = entry(job, "permissions") else {
         return Vec::new();
@@ -390,6 +513,18 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
             && level == Some("write")
             && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
+            continue;
+        }
+        // The jobs of the package channels that assume the cloud role, each under its exact `if:`.
+        if let (true, Some(want)) = (
+            scope == "id-token" && level == Some("write"),
+            packages::id_token_condition(file, name),
+        ) {
+            if condition != Some(want.as_str()) {
+                problems.push(format!(
+                    "job {name}: `id-token: write` needs the exact `if: {want}`"
+                ));
+            }
             continue;
         }
         let allowed = WRITE_ALLOWED
@@ -517,12 +652,25 @@ pub fn runs_on_pull_requests(name: &str) -> bool {
     name.starts_with("pull_request") || name == "merge_group"
 }
 
-/// What a job of a workflow that runs on pull requests may not be: privileged or macOS.
-fn pull_request_problems(name: &str, job: &Node) -> Vec<String> {
+/// What the job `name` of `file`, a workflow that runs on pull requests, may not be: holding a
+/// write scope, naming a secret or the token, and, unless [`pr_device`] lets it, root or macOS.
+fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let mut values = Vec::new();
-    scalars(job, &mut values);
+    for (k, v) in entries(job)
+        .iter()
+        .filter(|(k, _)| k.as_str() != Some("needs"))
+    {
+        scalars(k, &mut values);
+        scalars(v, &mut values);
+    }
     let who = format!("job {name}");
-    let mut problems = word_problems(&who, &values);
+    let mut problems = word_problems(
+        &who,
+        &values,
+        pr_device::root_allowed(file, name),
+        pr_device::macos_allowed(file, name),
+    );
+    problems.extend(secret_problems(&who, &values));
     let writes = entry(job, "permissions")
         .map_or(&[][..], entries)
         .iter()
@@ -544,11 +692,16 @@ pub fn root_line<'a>(values: &[&'a str]) -> Option<&'a str> {
     })
 }
 
-/// Root among `values`, the values of `who` (a job or the workflow) of a workflow that is not
-/// [`PRIVILEGED_WORKFLOW`].
+/// Root among `values`, the values of `who` (a job or the workflow) of a workflow that is neither
+/// [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`].
 fn root_problems(who: &str, values: &[&str]) -> Vec<String> {
     root_line(values)
-        .map(|line| format!("{who}: privileged outside {PRIVILEGED_WORKFLOW} (`{line}`)"))
+        .map(|line| {
+            format!(
+                "{who}: privileged outside {PRIVILEGED_WORKFLOW} and {} (`{line}`)",
+                net_install::FILE
+            )
+        })
         .into_iter()
         .collect()
 }
@@ -574,11 +727,6 @@ fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
         }
         _ => false,
     };
-    let no_inputs = |dispatch: &Node| match &dispatch.value {
-        Value::Scalar { .. } => dispatch.as_str().is_none(),
-        Value::Map(entries) => entries.is_empty(),
-        Value::Seq(_) => false,
-    };
     let has = |name: &str, holds: &dyn Fn(&Node) -> bool| {
         triggers
             .iter()
@@ -587,7 +735,17 @@ fn push_to_main_and_dispatch_only(on: Option<&Node>) -> bool {
     triggers.len() == 2 && has("push", &push_to_main) && has("workflow_dispatch", &no_inputs)
 }
 
-/// A job of [`PRIVILEGED_WORKFLOW`] on a runner that is not in its list ([`privileged_runners`]).
+/// Whether the `workflow_dispatch` trigger `dispatch` has no inputs: no value, or `{}`.
+pub fn no_inputs(dispatch: &Node) -> bool {
+    match &dispatch.value {
+        Value::Scalar { .. } => dispatch.as_str().is_none(),
+        Value::Map(entries) => entries.is_empty(),
+        Value::Seq(_) => false,
+    }
+}
+
+/// A job of [`PRIVILEGED_WORKFLOW`] or [`net_install::FILE`] on a runner that is not in its list
+/// ([`privileged_runners`]; the network-install jobs are on [`PRIVILEGED_RUNNERS`]).
 /// Labels that cannot be read are refused by [`runner_problems`] already.
 fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
     let listed = privileged_runners(name);
@@ -599,18 +757,53 @@ fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
     }
 }
 
-/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow).
-fn word_problems(who: &str, values: &[&str]) -> Vec<String> {
+/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow),
+/// but root when `root_ok` and macOS when `macos_ok`.
+fn word_problems(who: &str, values: &[&str], root_ok: bool, macos_ok: bool) -> Vec<String> {
     let mut problems = Vec::new();
-    if let Some(line) = root_line(values) {
+    if let Some(line) = root_line(values).filter(|_| !root_ok) {
         problems.push(format!("{who}: privileged on pull_request (`{line}`)"));
     }
     let macos = first_line(values, |line| {
         let lower = line.to_ascii_lowercase();
         lower.contains("macos") || lower.contains("darwin")
     });
-    if let Some(line) = macos {
+    if let Some(line) = macos.filter(|_| !macos_ok) {
         problems.push(format!("{who}: macOS on pull_request (`{line}`)"));
     }
     problems
+}
+
+/// The expressions of `text`: what stands between each `${{` and the `}}` after it.
+fn expressions(text: &str) -> Vec<&str> {
+    let mut found = Vec::new();
+    let mut rest = text;
+    while let Some((_, after)) = rest.split_once("${{") {
+        let (inside, tail) = after.split_once("}}").unwrap_or((after, ""));
+        found.push(inside);
+        rest = tail;
+    }
+    found
+}
+
+/// The first line of `values`, the values of `who` (a job or the workflow) of a workflow that
+/// runs for a pull request, that names a secret or the token.
+fn secret_problems(who: &str, values: &[&str]) -> Vec<String> {
+    first_line(values, |line| {
+        let lower = line.to_ascii_lowercase();
+        lower.trim() == "secrets"
+            || expressions(&lower).iter().any(|e| {
+                // `github['token']` and `github [ "token" ]` read as `github.token`.
+                let e = e
+                    .replace([' ', '\t'], "")
+                    .replace(['\'', '"'], "")
+                    .replace("[token]", ".token");
+                has_word(&e, "secrets")
+                    || has_word(&e, "github.token")
+                    || e.contains("tojson(github)")
+            })
+    })
+    .map(|line| format!("{who}: a secret on pull_request (`{line}`)"))
+    .into_iter()
+    .collect()
 }

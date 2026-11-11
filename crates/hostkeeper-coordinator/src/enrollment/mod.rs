@@ -18,6 +18,13 @@
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
+//! - `groups`: the host group an approval or an inventory record names, read from its
+//!   `host_group` or else its `role`, checked against the groups the coordinator holds
+//!   ([`Enrollment::held_groups`]): from a coordinator that holds one, every approval puts its
+//!   host in a group (`docs/design/hostgroups.md` section 1.2);
+//! - `by_record`: a pending request that matches an open inventory record exactly is approved by
+//!   the coordinator itself ([`Enrollment::approve_by_record`]), audited
+//!   `enrollment.auto_approved` and marking the record used;
 //! - `reject`: `Enrollment.Reject` ([`Enrollment::reject`]), and the deny row `Hosts.Retire`
 //!   writes ([`Enrollment::deny_host`]);
 //! - `expiry`: a request no operator approved within the request TTL expires
@@ -32,13 +39,16 @@
 //! The heartbeat path asks [`Enrollment::identity_of`] who a certificate the CA issued names,
 //! [`Enrollment::admission`] whether its host is denied, retiring or neither,
 //! [`Enrollment::note_heartbeat`] to keep the first heartbeat since its approval,
+//! [`Enrollment::note_serving`] to keep the first that reported a managed service serving,
 //! [`Enrollment::report_live`] which machine speaks for it, and [`Enrollment::is_duplicate`]
 //! whether it is ordered nothing ([`crate::service::Coordinator`]).
 
 mod approve;
+mod by_record;
 mod device_state;
 mod expiry;
 mod gate_port;
+pub(crate) mod groups;
 mod list;
 mod mac_nonce;
 mod nonce;
@@ -50,12 +60,13 @@ mod setup;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use hostkeeper_enrollment::ca::{Ca, CaBundle, Signer};
-use hostkeeper_enrollment::enroll::EnrollmentStore;
+use hostkeeper_enrollment::enroll::{EnrollmentStore, HostRunning};
 use hostkeeper_enrollment::names::HostId;
 use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
+pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
 #[cfg(test)]
 pub use device_state::FakeDeviceState;
 pub use device_state::{DeviceState, DeviceStateError, DeviceStatus, NoDeviceState};
@@ -71,10 +82,12 @@ pub use refusal::{RpcError, refusal_of};
 pub use reject::ACTION_REJECT;
 pub use rpc::{Enrolled, MAX_MESSAGE_BYTES, Method, call};
 pub use setup::{
-    CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, ca_certificate_path, pem, server_due,
-    setup,
+    CA_CERT_SUFFIX, Kept, ServerFile, Setup, SetupError, StoreAt, ca_certificate_path, pem,
+    server_due, setup,
 };
 
+use crate::desired::DesiredStore;
+use crate::host_groups::HostGroups;
 use crate::identity::Identity;
 use crate::ops::OpsStore;
 
@@ -114,10 +127,16 @@ pub struct Enrollment {
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
     mac: MacPolicy,
+    /// A Mac is approved only when the gate says it enrolled through ADE (`device_not_via_dep`
+    /// otherwise); off by default.
+    mac_require_dep: bool,
     /// How long a request waits for an operator before it expires, in seconds.
     request_ttl_secs: u64,
     /// Set when a coordinator takes this enrollment ([`Enrollment::audit_to`]).
     audit: Mutex<Option<Arc<OpsStore>>>,
+    /// The desired state of the coordinator that took this enrollment, whose host groups an
+    /// approval places its host in ([`Enrollment::place_by`]); `None` until one does.
+    desired: Mutex<Option<Arc<DesiredStore>>>,
     /// Called after each new request is recorded ([`Enrollment::with_posted`]).
     posted: Option<Posted>,
 }
@@ -163,10 +182,38 @@ impl Enrollment {
             clock,
             nonces: Nonces::new(random),
             mac: MacPolicy::default(),
+            mac_require_dep: false,
             request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
             audit: Mutex::new(None),
+            desired: Mutex::new(None),
             posted: None,
         }
+    }
+
+    /// From now on, places each approved host by the host groups of `desired`, the desired state
+    /// of the coordinator that takes this enrollment: while it holds a group, by group
+    /// ([`Enrollment::held_groups`]). Called when a coordinator takes this enrollment.
+    pub(crate) fn place_by(&self, desired: Arc<DesiredStore>) {
+        *self.desired.lock().unwrap_or_else(PoisonError::into_inner) = Some(desired);
+    }
+
+    /// The host groups an approval puts its host in, as the coordinator holds them now; `None`
+    /// when it holds none (or no coordinator took this enrollment), and an approval places its
+    /// host by role, as before groups.
+    pub(crate) fn held_groups(&self) -> Option<HostGroups> {
+        self.desired
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|desired| groups::held_in(desired))
+    }
+
+    /// The same enrollment, its CA naming the fixed host role of each host certificate after
+    /// `prefix`, the coordinator's `--host-role-uri-prefix` ([`Ca::with_host_role_uri_prefix`]).
+    #[must_use]
+    pub fn with_host_role_uri_prefix(mut self, prefix: &str) -> Self {
+        self.ca = self.ca.with_host_role_uri_prefix(prefix);
+        self
     }
 
     /// The same enrollment, calling `posted` after each new request is recorded (a repost of a
@@ -186,11 +233,28 @@ impl Enrollment {
         self
     }
 
+    /// The same enrollment, issuing and renewing host certificates valid `secs` from their
+    /// signing (`--host-cert-validity-secs`); the daemon renews at half that.
+    #[must_use]
+    pub fn with_host_validity_secs(mut self, secs: u64) -> Self {
+        self.store = self.store.with_host_validity_secs(secs);
+        self
+    }
+
     /// The same enrollment, approving a Mac by its nonce as `mac` says. Without it no Mac is
     /// ([`MacPolicy::default`]).
     #[must_use]
     pub fn with_mac(mut self, mac: MacPolicy) -> Self {
         self.mac = mac;
+        self
+    }
+
+    /// The same enrollment, declining `device_not_via_dep` a Mac whose `SecurityInfo` did not say
+    /// `EnrolledViaDEP` true (also one that has not answered). Off by default, so an allowlisted
+    /// Mac enrolled by hand is approved as before.
+    #[must_use]
+    pub fn with_mac_require_dep(mut self, require: bool) -> Self {
+        self.mac_require_dep = require;
         self
     }
 
@@ -319,6 +383,31 @@ impl Enrollment {
         let now = self.clock.now_unix();
         if let Some(Err(why)) = store_host(host).map(|host| self.store.note_heartbeat(&host, now)) {
             tracing::warn!(%why, host_id = %host, "a first heartbeat was not recorded");
+        }
+    }
+
+    /// Records that a heartbeat of `host` accepted now, by the enrollment's clock, reported a
+    /// service the coordinator manages for the host installed and healthy: the first since its
+    /// approval is kept with the host ([`EnrollmentStore::note_serving`]) and answered as its
+    /// `first_serving_unix`. A host the store never approved is not tracked; a store that cannot
+    /// be written is logged, and the next such heartbeat tries again.
+    pub fn note_serving(&self, host: &hostkeeper_wire::HostId) {
+        let now = self.clock.now_unix();
+        if let Some(Err(why)) = store_host(host).map(|host| self.store.note_serving(&host, now)) {
+            tracing::warn!(%why, host_id = %host, "a first serving heartbeat was not recorded");
+        }
+    }
+
+    /// Records that a heartbeat of `host` accepted now, by the enrollment's clock, said the host
+    /// runs `running`: it is kept with the host ([`EnrollmentStore::note_running`]) when it
+    /// differs from what the host record holds. A host the store never approved is not tracked;
+    /// a store that cannot be written is logged, and the next heartbeat tries again.
+    pub fn note_running(&self, host: &hostkeeper_wire::HostId, running: &HostRunning) {
+        let now = self.clock.now_unix();
+        if let Some(Err(why)) =
+            store_host(host).map(|host| self.store.note_running(&host, running, now))
+        {
+            tracing::warn!(%why, host_id = %host, "what a host runs was not recorded");
         }
     }
 

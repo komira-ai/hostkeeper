@@ -1,21 +1,23 @@
 //! The fakes the release tests run the verbs against: a git history held in memory, GitHub runs
-//! and issues, a release store, a source of published releases and their asset bytes, a
-//! verifier, a binary's `--version`, `pkgbuild`, the advisory check and a scripted [`Exec`]. Each
-//! records the writes it was asked for, so a test can assert that nothing was written.
+//! and issues, a release store, a
+//! verifier, a binary's `--version`, `pkgbuild`, the advisory check, downloads and a scripted
+//! [`Exec`]. Each records the writes it was asked for, so a test can assert that nothing was
+//! written.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::path::Path;
 
 use super::contract::{
-    Commit, DIGEST_SUFFIX, Package, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer,
-    Version, attested_names, bundle_of, summed_names,
+    Commit, Platform, Repo, SIGNER_REF, SIGNER_WORKFLOW, SUMS, Signer, Version, attested_names,
+    bundle_of, hkctl_name, summed_names,
 };
 use super::file_sha256;
-use super::index::ReleaseIndex;
+use super::image_index;
 use super::ports::{
-    Adapters, AdvisoryCheck, Attestation, BuildPkg, Exec, GitHistory, GitHubRuns, Issue, PortError,
-    Ports, Ran, Release, ReleaseSource, ReleaseStore, Run, RunVersion, Said, StoredAsset, Verifier,
+    Adapters, AdvisoryCheck, Attestation, BuildPkg, Download, Exec, GitHistory, GitHubRuns, Issue,
+    Job, PortError, Ports, Ran, Release, ReleaseStore, Run, RunVersion, Said, StoredAsset,
+    Verifier,
 };
 use crate::testdir::TestDir;
 use std::path::PathBuf;
@@ -30,31 +32,37 @@ pub(crate) fn scratch(name: &str) -> TestDir {
 }
 
 /// Writes into `dir` every asset of the release of `version`, as a run of the artifacts workflow
-/// leaves them: each file holds its own name and `marker`, the `.sha256` of each package holds
-/// the package's digest, `SHA256SUMS` lists every summed asset and each bundle holds `{}`.
+/// leaves them: each file holds its own name and `marker`, `SHA256SUMS` lists every summed asset and each bundle holds `{}`.
 pub(crate) fn write_assets(dir: &Path, version: &Version, marker: &str) {
     let write = |name: &str, text: String| {
         std::fs::write(dir.join(name), text).expect("write an asset");
     };
     let summed = summed_names(version);
     for name in &summed {
-        if name.ends_with(DIGEST_SUFFIX) | Package::ALL.iter().any(|p| name == p.index_name()) {
+        if *name == image_index::index_name(version) {
+            continue;
+        }
+        if let Some((_, arch)) = [
+            (Platform::LinuxX86_64, "amd64"),
+            (Platform::LinuxArm64, "arm64"),
+        ]
+        .into_iter()
+        .find(|(p, _)| *name == image_index::image_name(version, *p))
+        {
+            std::fs::write(dir.join(name), image_index::fake_image(arch, marker))
+                .expect("write an image");
             continue;
         }
         write(name, format!("{name} {marker}\n"));
     }
-    for package in Package::ALL {
-        let (service, text) = (package.service().name(), package.version_text(version));
-        let index = ReleaseIndex::of_dir(dir, service, &text, &Platform::RELEASED)
-            .expect("index the packages");
-        write(package.index_name(), index.to_json());
-    }
-    for name in &summed {
-        if let Some(package) = name.strip_suffix(DIGEST_SUFFIX) {
-            let digest = file_sha256(&dir.join(package)).expect("hash the package");
-            write(name, format!("{digest}  {package}\n"));
-        }
-    }
+    let image = image_index::index_bytes(dir, version).expect("the image index");
+    std::fs::write(dir.join(image_index::index_name(version)), image).expect("write the index");
+    // The command line passes `release check` as the script `release hkctl` writes, stamped with
+    // the 12 digits every commit of [`nth_commit`] below 2^32 starts with.
+    write(
+        &hkctl_name(version),
+        format!("#!/usr/bin/env bash\n# {marker}\n_hk_version='hkctl {version}+000000000000'\n"),
+    );
     let mut sums = String::new();
     for name in &summed {
         let digest = file_sha256(&dir.join(name)).expect("hash an asset");
@@ -197,6 +205,8 @@ pub(crate) struct FakeRuns {
     /// The commits `on_main` says are on `main`.
     pub(crate) on_main: RefCell<Vec<Commit>>,
     issues: RefCell<Vec<Issue>>,
+    /// The jobs of each run, by its id; a run with none listed has no jobs.
+    pub(crate) jobs: RefCell<BTreeMap<u64, Vec<Job>>>,
     /// The writes asked for, in order: `open #<n>`, `edit #<n>` and `close #<n>: <comment>`.
     pub(crate) writes: RefCell<Vec<String>>,
 }
@@ -256,6 +266,10 @@ impl GitHubRuns for FakeRuns {
             .collect())
     }
 
+    fn jobs(&self, _repo: &Repo, run: u64) -> Result<Vec<Job>, PortError> {
+        Ok(self.jobs.borrow().get(&run).cloned().unwrap_or_default())
+    }
+
     fn on_main(&self, _repo: &Repo, commit: &Commit) -> Result<bool, PortError> {
         Ok(self.on_main.borrow().contains(commit))
     }
@@ -307,6 +321,8 @@ pub(crate) struct FakeStore {
     pub(crate) writes: RefCell<Vec<String>>,
     /// When set, uploads fail once this many have succeeded (a run cut short).
     pub(crate) uploads_left: Cell<Option<usize>>,
+    /// The notes of each draft created, in order.
+    pub(crate) notes: RefCell<Vec<String>>,
 }
 
 impl FakeStore {
@@ -346,9 +362,10 @@ impl ReleaseStore for FakeStore {
         _repo: &Repo,
         tag: &str,
         commit: &Commit,
-        _notes: &str,
+        notes: &str,
     ) -> Result<(), PortError> {
         self.write(format!("create {tag}"));
+        self.notes.borrow_mut().push(notes.to_owned());
         self.insert(Release {
             tag: tag.to_owned(),
             commit: commit.to_string(),
@@ -388,98 +405,6 @@ impl ReleaseStore for FakeStore {
     }
 }
 
-/// The published releases of each repository and the bytes of their assets, in memory. A
-/// download writes the bytes to the directory it is given; it fails, writing nothing, once
-/// `downloads_left` downloads have succeeded (a transfer cut short), and for a release, asset or
-/// repository the source does not hold. Each download is recorded as `<repo> <tag> <name>`.
-#[derive(Default)]
-pub(crate) struct FakeSource {
-    releases: RefCell<BTreeMap<String, Vec<Release>>>,
-    bytes: RefCell<BTreeMap<(String, String, String), Vec<u8>>>,
-    /// When set, downloads fail once this many have succeeded.
-    pub(crate) downloads_left: Cell<Option<usize>>,
-    pub(crate) downloads: RefCell<Vec<String>>,
-}
-
-impl FakeSource {
-    /// Publishes the release `tag` of `repo` at `commit` with `assets`, each a name and its
-    /// bytes.
-    pub(crate) fn publish(
-        &self,
-        repo: &str,
-        tag: &str,
-        commit: &str,
-        assets: Vec<(String, Vec<u8>)>,
-    ) {
-        self.add(repo, tag, commit, false, assets);
-    }
-
-    /// Adds a release, a draft when `draft` is set.
-    pub(crate) fn add(
-        &self,
-        repo: &str,
-        tag: &str,
-        commit: &str,
-        draft: bool,
-        assets: Vec<(String, Vec<u8>)>,
-    ) {
-        let mut stored = Vec::new();
-        for (name, bytes) in assets {
-            stored.push(StoredAsset {
-                name: name.clone(),
-                sha256: None,
-            });
-            self.bytes
-                .borrow_mut()
-                .insert((repo.to_owned(), tag.to_owned(), name), bytes);
-        }
-        self.releases
-            .borrow_mut()
-            .entry(repo.to_owned())
-            .or_default()
-            .push(Release {
-                tag: tag.to_owned(),
-                commit: commit.to_owned(),
-                draft,
-                assets: stored,
-            });
-    }
-}
-
-impl ReleaseSource for FakeSource {
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
-        self.releases
-            .borrow()
-            .get(repo.as_str())
-            .cloned()
-            .ok_or_else(|| PortError::new(format!("list the releases of {repo}"), "HTTP 404"))
-    }
-
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
-        let what = format!("download {name} of {repo} {tag}");
-        if let Some(left) = self.downloads_left.get() {
-            if left == 0 {
-                return Err(PortError::new(what, "the connection was reset"));
-            }
-            self.downloads_left.set(Some(left - 1));
-        }
-        let key = (repo.as_str().to_owned(), tag.to_owned(), name.to_owned());
-        let bytes = self.bytes.borrow().get(&key).cloned();
-        let bytes = bytes.ok_or_else(|| PortError::new(what, "no such asset"))?;
-        let path = dir.join(name);
-        assert!(
-            !path.exists(),
-            "a download never overwrites: {}",
-            path.display()
-        );
-        std::fs::write(&path, bytes).expect("write a downloaded asset");
-        self.downloads
-            .borrow_mut()
-            .push(format!("{repo} {tag} {name}"));
-        Ok(())
-    }
-}
-
 /// What a fake verifier answers for one file and bundle.
 pub(crate) type Answer = Box<dyn Fn(&Path, Option<&Path>) -> Result<Vec<Attestation>, PortError>>;
 
@@ -488,8 +413,6 @@ pub(crate) type Answer = Box<dyn Fn(&Path, Option<&Path>) -> Result<Vec<Attestat
 /// for in `signers`.
 pub(crate) struct FakeVerifier {
     answer: Answer,
-    /// Set by [`FakeVerifier::attests_as_asked`].
-    as_asked: bool,
     pub(crate) calls: RefCell<Vec<String>>,
     pub(crate) signers: RefCell<Vec<String>>,
 }
@@ -510,19 +433,8 @@ impl FakeVerifier {
     pub(crate) fn with(answer: Answer) -> FakeVerifier {
         FakeVerifier {
             answer,
-            as_asked: false,
             calls: RefCell::new(Vec::new()),
             signers: RefCell::new(Vec::new()),
-        }
-    }
-
-    /// A verifier for which every file is attested, online and in its bundle, by the signer the
-    /// caller asks for and for the commit it asks about: each attestation names the file's
-    /// SHA-256. `answer` is not called.
-    pub(crate) fn attests_as_asked() -> FakeVerifier {
-        FakeVerifier {
-            as_asked: true,
-            ..FakeVerifier::with(Box::new(|_, _| Ok(Vec::new())))
         }
     }
 
@@ -548,7 +460,7 @@ impl Verifier for FakeVerifier {
         signer: &Signer,
         file: &Path,
         bundle: Option<&Path>,
-        commit: &Commit,
+        _commit: &Commit,
     ) -> Result<Vec<Attestation>, PortError> {
         let call = match bundle {
             Some(b) => format!("offline {} {}", name_of(file), name_of(b)),
@@ -556,14 +468,6 @@ impl Verifier for FakeVerifier {
         };
         self.calls.borrow_mut().push(call);
         self.signers.borrow_mut().push(signer.workflow.clone());
-        if self.as_asked {
-            return Ok(vec![Attestation {
-                signer_workflow: signer.workflow.clone(),
-                source_ref: signer.signers.refs[0].clone(),
-                source_commit: commit.to_string(),
-                subjects: vec![file_sha256(file).expect("hash the attested file")],
-            }]);
-        }
         (self.answer)(file, bundle)
     }
 }
@@ -594,9 +498,9 @@ impl AdvisoryCheck for FakeAdvisories {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct PkgCall {
     pub(crate) root: PathBuf,
-    pub(crate) scripts: PathBuf,
+    pub(crate) scripts: Option<PathBuf>,
     pub(crate) identifier: String,
-    pub(crate) version: Version,
+    pub(crate) version: String,
     pub(crate) pkg: PathBuf,
 }
 
@@ -606,7 +510,7 @@ pub(crate) struct PkgCall {
 pub(crate) struct ProductCall {
     pub(crate) component: PathBuf,
     pub(crate) identifier: String,
-    pub(crate) version: Version,
+    pub(crate) version: String,
     pub(crate) product: PathBuf,
 }
 
@@ -622,6 +526,9 @@ pub(crate) struct FakePkgbuild {
     pub(crate) calls: RefCell<Vec<PkgCall>>,
     pub(crate) product_calls: RefCell<Vec<ProductCall>>,
     pub(crate) trees: RefCell<Vec<Vec<String>>>,
+    /// What `check_signature` answers: the report `pkgutil` prints, or its failure.
+    pub(crate) signature: Option<Result<String, PortError>>,
+    pub(crate) signature_calls: RefCell<Vec<PathBuf>>,
 }
 
 impl FakePkgbuild {
@@ -660,16 +567,16 @@ impl BuildPkg for FakePkgbuild {
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError> {
         self.calls.borrow_mut().push(PkgCall {
             root: root.to_owned(),
-            scripts: scripts.to_owned(),
+            scripts: scripts.map(Path::to_owned),
             identifier: identifier.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             pkg: pkg.to_owned(),
         });
         self.trees.borrow_mut().push(tree_of(root));
@@ -686,13 +593,13 @@ impl BuildPkg for FakePkgbuild {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError> {
         self.product_calls.borrow_mut().push(ProductCall {
             component: component.to_owned(),
             identifier: identifier.to_owned(),
-            version: *version,
+            version: version.to_owned(),
             product: product.to_owned(),
         });
         match &self.fail_product {
@@ -702,6 +609,13 @@ impl BuildPkg for FakePkgbuild {
                 Ok(())
             }
         }
+    }
+
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError> {
+        self.signature_calls.borrow_mut().push(pkg.to_owned());
+        self.signature
+            .clone()
+            .unwrap_or_else(|| Err(PortError::new("pkgutil", "not scripted")))
     }
 }
 
@@ -748,16 +662,87 @@ impl Exec for FakeExec {
     }
 }
 
+/// A [`Download`] that answers from a map of URL to bytes: a URL it holds is written to the
+/// file, any other fails. Each call is recorded as `(url, file)`.
+#[derive(Default)]
+pub(crate) struct FakeDownload {
+    pub(crate) served: BTreeMap<String, Vec<u8>>,
+    pub(crate) calls: RefCell<Vec<(String, PathBuf)>>,
+}
+
+impl Download for FakeDownload {
+    fn download(&self, url: &str, file: &Path) -> Result<(), PortError> {
+        self.calls
+            .borrow_mut()
+            .push((url.to_owned(), file.to_path_buf()));
+        let bytes = self
+            .served
+            .get(url)
+            .ok_or_else(|| PortError::new(format!("curl {url}"), "exit status 22"))?;
+        std::fs::write(file, bytes).map_err(|e| PortError::new("write", e.to_string()))
+    }
+}
+
+/// A registry whose answers are scripted, one per call in order: each `copy` takes the next of
+/// `copies` and each `served` the next of `served` (none left: the call fails). Each call is
+/// recorded as `copy <layout> <tag> <repository>` or `served <repository>@<digest>`.
+#[derive(Default)]
+pub(crate) struct FakeRegistry {
+    pub(crate) copies: RefCell<Vec<Result<(), PortError>>>,
+    pub(crate) served: RefCell<Vec<Result<Vec<u8>, PortError>>>,
+    pub(crate) calls: RefCell<Vec<String>>,
+}
+
+impl FakeRegistry {
+    fn next<T>(answers: &RefCell<Vec<Result<T, PortError>>>, what: &str) -> Result<T, PortError> {
+        let mut answers = answers.borrow_mut();
+        if answers.is_empty() {
+            return Err(PortError::new(what, "not scripted"));
+        }
+        answers.remove(0)
+    }
+}
+
+impl super::ports::Registry for FakeRegistry {
+    fn copy(&self, layout: &Path, tag: &str, repository: &str) -> Result<(), PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("copy {} {tag} {repository}", layout.display()));
+        Self::next(&self.copies, "copy")
+    }
+
+    fn served(&self, repository: &str, digest: &str) -> Result<Vec<u8>, PortError> {
+        self.calls
+            .borrow_mut()
+            .push(format!("served {repository}@{digest}"));
+        Self::next(&self.served, "served")
+    }
+}
+
+/// A wait that returns at once and records each `(secs, why)` it was asked for.
+#[derive(Default)]
+pub(crate) struct FakeWait {
+    pub(crate) waits: RefCell<Vec<(u64, String)>>,
+}
+
+impl super::ports::Wait for FakeWait {
+    fn wait(&self, secs: u64, why: &str) {
+        self.waits.borrow_mut().push((secs, why.to_owned()));
+    }
+}
+
 /// Every fake, as the adapters of a verb.
 pub(crate) struct Fakes {
     pub(crate) git: FakeHistory,
     pub(crate) runs: FakeRuns,
     pub(crate) store: FakeStore,
-    pub(crate) source: FakeSource,
     pub(crate) verifier: FakeVerifier,
     pub(crate) run_version: FakeRunVersion,
     pub(crate) pkgbuild: FakePkgbuild,
     pub(crate) advisories: FakeAdvisories,
+    pub(crate) download: FakeDownload,
+    pub(crate) registry: FakeRegistry,
+    pub(crate) wait: FakeWait,
 }
 
 impl Fakes {
@@ -768,7 +753,6 @@ impl Fakes {
             git,
             runs: FakeRuns::default(),
             store: FakeStore::default(),
-            source: FakeSource::default(),
             verifier: FakeVerifier::with(Box::new(|_, _| {
                 Err(PortError::new("verify", "no attestation"))
             })),
@@ -787,6 +771,9 @@ impl Fakes {
                     stderr: String::new(),
                 },
             },
+            download: FakeDownload::default(),
+            registry: FakeRegistry::default(),
+            wait: FakeWait::default(),
         }
     }
 }
@@ -797,11 +784,13 @@ impl Adapters for Fakes {
             git: &self.git,
             runs: &self.runs,
             store: &self.store,
-            source: &self.source,
             verifier: &self.verifier,
             run_version: &self.run_version,
             pkgbuild: &self.pkgbuild,
             advisories: &self.advisories,
+            download: &self.download,
+            registry: &self.registry,
+            wait: &self.wait,
         }
     }
 }

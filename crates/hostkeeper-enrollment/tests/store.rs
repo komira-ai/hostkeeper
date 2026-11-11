@@ -6,7 +6,7 @@ mod support;
 use std::path::Path;
 use std::sync::{Arc, Barrier};
 
-use hostkeeper_enrollment::ca::{HOST_VALIDITY_SECS, ProfileError, Signer};
+use hostkeeper_enrollment::ca::{HOST_VALIDITY_SECS, ProfileError, SignError, Signer};
 use hostkeeper_enrollment::enroll::{
     ApproveError, EnrollmentStore, IssueError, IssuedCertificate, LIVE_WINDOW_SECS,
     MAX_NONCE_BYTES, MIN_NONCE_BYTES, NewRequest, POLL_DOMAIN, PollError, PostError, RequestState,
@@ -476,6 +476,72 @@ fn a_poll_after_issue_returns_the_same_certificate() {
         "{gone}"
     );
     assert_eq!(gone.token(), None);
+}
+
+/// Catches a store that issues for another time than the validity it was given (or than 7
+/// days when given none), and a store given a validity the CA refuses (0, or a second over its
+/// cap) that writes a certificate anyway; such a request stays approved, and a store given a
+/// validity the CA takes issues it.
+#[test]
+fn a_store_issues_host_certificates_for_the_validity_it_was_given() {
+    let f = Fixture::new("host-validity");
+    assert_eq!(f.store.host_validity_secs(), HOST_VALIDITY_SECS);
+    // A request of `host`, posted and approved.
+    let approved = |host: &str| {
+        let id = f
+            .store
+            .post(request(&HostKey::new(), host), NOW)
+            .expect("post")
+            .request_id;
+        f.store
+            .approve(&id, &id, &decision(host, false))
+            .expect("approve");
+        id
+    };
+    let issue = |secs: u64, id: &KeyHash| {
+        let store = f.reopen().with_host_validity_secs(secs);
+        assert_eq!(store.host_validity_secs(), secs);
+        store.issue(&f.ca.ca, id)
+    };
+    for (secs, host) in [(60, "web-1"), (HOST_VALIDITY_SECS, "web-2")] {
+        let issued = issue(secs, &approved(host)).expect("issued");
+        assert_eq!(issued.not_after, NOW + secs, "{secs}");
+        let (_, parsed) =
+            x509_parser::parse_x509_certificate(&issued.certificate_der).expect("a certificate");
+        let validity = parsed.validity();
+        assert_eq!(
+            (
+                validity.not_before.timestamp(),
+                validity.not_after.timestamp()
+            ),
+            (NOW as i64, (NOW + secs) as i64),
+            "{secs}"
+        );
+    }
+    let id = approved("web-3");
+    for (secs, refusal) in [
+        (0, SignError::EmptyValidity),
+        (
+            HOST_VALIDITY_SECS + 1,
+            SignError::ValidityOverCap {
+                requested: HOST_VALIDITY_SECS + 1,
+                cap: HOST_VALIDITY_SECS,
+            },
+        ),
+    ] {
+        match issue(secs, &id) {
+            Err(IssueError::Sign(why)) => assert_eq!(why, refusal, "{secs}"),
+            other => panic!("{secs}: {other:?}"),
+        }
+        let view = f.store.request(&id).expect("read").expect("held");
+        assert_eq!(view.state, RequestState::Approved, "{secs}");
+    }
+    assert_eq!(
+        f.files_in("issued"),
+        2,
+        "no certificate of a refused validity"
+    );
+    assert_eq!(issue(60, &id).expect("issued at last").not_after, NOW + 60);
 }
 
 /// Catches a host whose certificate expired being given a new host id, a renewal approved

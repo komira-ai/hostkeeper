@@ -9,13 +9,21 @@
 //! observer's detail), and is refused when that is not enough. The service, its version, its
 //! health, the update running and the last verdict are never dropped, nor are the host's clock
 //! and certificate facts ([`Heartbeat::sent_unix`], [`Heartbeat::renewal`]), whose one text is
-//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes.
+//! at most [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes, nor its trusted root
+//! ([`Heartbeat::trusted_root`]). The trusted root goes out on the gRPC route only (the JSON
+//! route is frozen), but counts toward the bound on both, as `trusted_root_age_secs` and
+//! `trusted_root_reason`. The installers ([`Heartbeat::installers`]) are counted the same way, as
+//! `installers`; a service's `installer` ([`ServiceFacts::installer`]), the repositories report
+//! ([`Heartbeat::repositories`]) and the facts generation ([`Heartbeat::facts_generation`])
+//! likewise.
 
 use hostkeeper_config::names::{ServiceName, Version};
 pub use hostkeeper_proto::MAX_SERVICES_PER_HEARTBEAT;
 use serde_json::{Map, Value, json};
 
 use crate::order::{DeferredReport, OrderResult};
+use crate::ports::Drift;
+use crate::repositories::RepositoriesReport;
 
 /// The most bytes of a heartbeat: its JSON on the JSON route, its encoded message on the gRPC one.
 pub const MAX_HEARTBEAT_BYTES: usize = 16 * 1024;
@@ -52,12 +60,36 @@ pub enum Feature {
     /// `abort-v1`: the daemon runs the `abort` order of the gRPC route ([`crate::Verb::Abort`]),
     /// beside the order it stops. Like `install-v1`, it says what the loop takes.
     AbortV1,
+    /// `clear-record-v1`: the daemon runs the `clear_record` order of the gRPC route
+    /// ([`crate::Verb::ClearRecord`]) and reports its verdict. Like `install-v1`, it says what
+    /// the loop takes.
+    ClearRecordV1,
+    /// `target-v1`: the daemon takes the `target` entry of an `update`, `force` or `install` of
+    /// the gRPC route ([`crate::Entry`]) and lists its `installers` in the heartbeat. Like
+    /// `install-v1`, it says what the loop takes.
+    TargetV1,
+    /// `repositories-v1`: the daemon writes the repository sets the coordinator sends
+    /// ([`crate::PushedSet`]) and reports what it holds ([`crate::RepositoriesReport`]). Unlike
+    /// the others it is announced only by a daemon with a repository configuration to manage
+    /// (not a Mac): it is not in [`ANNOUNCED`], and the loop adds it ([`REPOSITORIES`]).
+    RepositoriesV1,
+    /// `facts-v1`: the daemon writes the host's facts the coordinator sends
+    /// ([`crate::PushedFacts`]) to its facts file before it acts on the order of the same reply,
+    /// and reports the generation the file holds ([`Heartbeat::facts_generation`]). Like
+    /// `repositories-v1` it is announced only by a daemon with a facts file ([`crate::FactsSink`]):
+    /// the loop adds it ([`FACTS`]).
+    FactsV1,
+    /// `private-repository-v1`: the daemon reads the files of a private repository from the
+    /// coordinator ([`crate::CoordinatorGet`]), so the coordinator may send it a private
+    /// repository entry and a package of one. Announced by a daemon with a repository sink and
+    /// by one the wiring says reads them another way (a Mac); not in [`ANNOUNCED`].
+    PrivateRepositoryV1,
 }
 
 /// The features every heartbeat announces, in this order. Each names something the loop does:
-/// `install-v1` and `abort-v1` are here because [`crate::Heartbeater`] hands those orders to the
-/// executor.
-pub const ANNOUNCED: [Feature; 9] = [
+/// `install-v1`, `abort-v1`, `clear-record-v1` and `target-v1` are here because [`crate::Heartbeater`] hands
+/// those orders to the executor.
+pub const ANNOUNCED: [Feature; 11] = [
     Feature::DeferredV1,
     Feature::HaltV1,
     Feature::HeartbeatV2,
@@ -67,7 +99,18 @@ pub const ANNOUNCED: [Feature; 9] = [
     Feature::GrpcV1,
     Feature::InstallV1,
     Feature::AbortV1,
+    Feature::ClearRecordV1,
+    Feature::TargetV1,
 ];
+
+/// The feature a daemon with a [`crate::RepositorySink`] announces after [`ANNOUNCED`].
+pub const REPOSITORIES: Feature = Feature::RepositoriesV1;
+
+/// The feature a daemon with a [`crate::FactsSink`] announces after [`ANNOUNCED`] (and
+/// [`REPOSITORIES`], when it announces that).
+pub const FACTS: Feature = Feature::FactsV1;
+/// The feature a daemon that reads private repositories announces after [`REPOSITORIES`].
+pub const PRIVATE_REPOSITORY: Feature = Feature::PrivateRepositoryV1;
 
 impl Feature {
     /// Its wire name.
@@ -82,6 +125,11 @@ impl Feature {
             Feature::GrpcV1 => "grpc-v1",
             Feature::InstallV1 => "install-v1",
             Feature::AbortV1 => "abort-v1",
+            Feature::ClearRecordV1 => "clear-record-v1",
+            Feature::TargetV1 => "target-v1",
+            Feature::RepositoriesV1 => "repositories-v1",
+            Feature::FactsV1 => "facts-v1",
+            Feature::PrivateRepositoryV1 => "private-repository-v1",
         }
     }
 
@@ -89,6 +137,7 @@ impl Feature {
     pub fn parse(name: &str) -> Option<Feature> {
         ANNOUNCED
             .into_iter()
+            .chain([REPOSITORIES, FACTS, PRIVATE_REPOSITORY])
             .find(|feature| feature.as_str() == name)
     }
 }
@@ -211,12 +260,23 @@ pub struct ServiceFacts {
     pub health_detail: Option<String>,
     /// Optional: the observer's detail.
     pub observed: Option<Observed>,
+    /// The try the service's step record holds, sent in every heartbeat; none when the service
+    /// has no step record, or its record names no try.
+    pub record_try: Option<u64>,
+    /// The installer the service's installed release came through; none for
+    /// `hostkeeper-archive`, and for a service with no step record. Sent as `installer` on the
+    /// gRPC route only, and counted toward the bound on both.
+    pub installer: Option<String>,
+    /// The drift the installer found at this heartbeat; none when it found none. Sent over gRPC
+    /// only (`ServiceBeat.drift`): the JSON route is frozen and has no field for it, but the bound
+    /// counts it on both, as it counts the installers.
+    pub drift: Option<Drift>,
 }
 
 impl ServiceFacts {
     /// The facts as JSON, with the wire's names.
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut facts = json!({
             "name": self.name.as_str(),
             "version": self.version.as_str(),
             "health": self.health.as_str(),
@@ -225,7 +285,16 @@ impl ServiceFacts {
             "deferred": self.deferred.as_ref().map(DeferredReport::to_json),
             "health_detail": self.health_detail,
             "observed": self.observed.as_ref().map(Observed::to_json),
-        })
+            "record_try": self.record_try,
+            "installer": self.installer,
+        });
+        if let (Some(drift), Some(map)) = (&self.drift, facts.as_object_mut()) {
+            map.insert(
+                "drift".to_owned(),
+                json!({ "found": drift.found, "recorded": drift.recorded }),
+            );
+        }
+        facts
     }
 }
 
@@ -239,6 +308,38 @@ pub struct Renewal {
     /// Why the last step of enrollment or renewal failed, at most
     /// [`hostkeeper_wire::wire::MAX_RENEW_ERROR`] bytes; none once a step succeeds.
     pub last_renew_error: Option<String>,
+}
+
+/// Why the host's Sigstore trusted root needs attention, as the daemon's report of it says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RootReason {
+    /// Older than the daemon's limit.
+    Stale,
+    /// No file of the root is present.
+    Missing,
+    /// The file cannot be read, or is not trusted roots.
+    Unparseable,
+}
+
+impl RootReason {
+    /// Its word in a heartbeat's bound: the reason's name in lowercase.
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            RootReason::Stale => "stale",
+            RootReason::Missing => "missing",
+            RootReason::Unparseable => "unparseable",
+        }
+    }
+}
+
+/// What the daemon's report says of the Sigstore trusted root it checks packages with, which
+/// every gRPC heartbeat carries ([`crate::TrustedRootSource`]).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TrustedRootFacts {
+    /// The seconds since the root's file was last written; none when no file is present.
+    pub age_secs: Option<u64>,
+    /// Why the root needs attention; none when it needs none.
+    pub reason: Option<RootReason>,
 }
 
 /// One heartbeat.
@@ -256,10 +357,26 @@ pub struct Heartbeat {
     pub sent_unix: u64,
     /// The host's certificate, as the enrollment loop last said it.
     pub renewal: Renewal,
+    /// The trusted root, as the daemon reported it when the heartbeat was made; none from a
+    /// daemon that keeps no root to report, which the coordinator reads as unknown.
+    pub trusted_root: Option<TrustedRootFacts>,
+    /// The installers the daemon can run, by name, as given at start, or as the daemon's
+    /// [`crate::RepositorySink`] lists them at this heartbeat: sent as `installers`
+    /// on the gRPC route only. The JSON route is frozen and sends none, but the bound counts
+    /// them on both, as the trusted root is counted.
+    pub installers: Vec<String>,
+    /// What the daemon's repository configuration holds; none from a daemon that has none to
+    /// manage. Sent over gRPC only, and counted toward the bound on both.
+    pub repositories: Option<RepositoriesReport>,
+    /// The generation of the facts the daemon's facts file holds; none from a daemon that has
+    /// no facts file or has written none yet. Sent over gRPC only, and counted toward the bound
+    /// on both.
+    pub facts_generation: Option<u64>,
 }
 
 impl Heartbeat {
-    /// The heartbeat as JSON, with the wire's names.
+    /// The heartbeat as JSON, with the wire's names: what the bound measures. The trusted root
+    /// is in it, though the JSON route sends none (`wire_map`).
     pub fn to_json(&self) -> Value {
         let features: Vec<&str> = self.features.iter().map(|f| f.as_str()).collect();
         let services: Vec<Value> = self.services.iter().map(ServiceFacts::to_json).collect();
@@ -277,6 +394,36 @@ impl Heartbeat {
         }
         if let Some(error) = &self.renewal.last_renew_error {
             beat.insert("last_renew_error".to_owned(), error.clone().into());
+        }
+        if let Some(root) = &self.trusted_root {
+            if let Some(age) = root.age_secs {
+                beat.insert("trusted_root_age_secs".to_owned(), age.into());
+            }
+            let reason = root.reason.map_or("none", RootReason::as_str);
+            beat.insert("trusted_root_reason".to_owned(), reason.into());
+        }
+        if !self.installers.is_empty() {
+            beat.insert("installers".to_owned(), self.installers.clone().into());
+        }
+        if let Some(report) = &self.repositories {
+            let refused = report.refused.as_ref().map(|refusal| {
+                json!({
+                    "generation": refusal.generation,
+                    "digest": refusal.digest,
+                    "reason": refusal.reason,
+                })
+            });
+            beat.insert(
+                "repositories".to_owned(),
+                json!({
+                    "generation": report.generation,
+                    "digest": report.digest,
+                    "refused": refused,
+                }),
+            );
+        }
+        if let Some(generation) = self.facts_generation {
+            beat.insert("facts_generation".to_owned(), generation.into());
         }
         Value::Object(beat)
     }

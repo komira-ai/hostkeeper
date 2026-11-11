@@ -12,7 +12,6 @@ use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
     CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, InstallRecord,
     NonceRecord, Phase, PkgDigest, ProfileAnswer, ProfileCommand, SCHEMA, Sent, StoreError,
-    WebhookError,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -415,6 +414,7 @@ fn full(id_text: &str) -> DeviceRecord {
             acknowledged: true,
             at_unix: 19,
         }),
+        settings_sha256: Some("d".repeat(64)),
     });
     record.nonce = Some(NonceRecord {
         serial: "C02SERIAL".to_owned(),
@@ -429,6 +429,7 @@ fn full(id_text: &str) -> DeviceRecord {
                 acknowledged: false,
                 at_unix: 22,
             }),
+            settings_sha256: None,
         }),
         removal: Some(ProfileCommand::new(CommandUuid::from_random([5; 16]), 23)),
     });
@@ -442,6 +443,7 @@ fn full(id_text: &str) -> DeviceRecord {
                 acknowledged: true,
                 at_unix: 25,
             }),
+            settings_sha256: None,
         },
     });
     record
@@ -677,6 +679,49 @@ fn the_install_field_is_read_by_the_release_before_it_and_the_other_way() {
     assert_eq!((install.last.sent_unix, install.last.answer), (30, None));
 }
 
+/// Catches: the config profile's settings digest (field 5 of its message) made a change the
+/// release before it cannot read (a reader of the profile's first two fields reads a record that
+/// has it, with the same command), a record written without it not read as one with no digest
+/// (which counts as different settings), or the digest lost or changed in the file.
+#[test]
+fn the_settings_digest_is_read_by_the_release_before_it_and_the_other_way() {
+    let scratch = scratch("store-settings-digest");
+    let dir = scratch.path().join("devices");
+    let record = full(UDID);
+    store_in(&dir).save(&record).expect("saved");
+    let bytes = std::fs::read(dir.join(format!("{UDID}.pb"))).expect("the file");
+    let file = FilePb::decode(bytes.as_slice()).expect("a file");
+    let before = EnrollFieldsPb::decode(file.record.as_slice()).expect("the release before");
+    let command = before.config_profile.expect("a config profile");
+    assert_eq!(
+        (command.uuid.as_str(), command.sent_unix),
+        (CommandUuid::from_random([3; 16]).as_str(), 18)
+    );
+    let loaded = store_in(&dir).load().expect("loads").remove(0);
+    let digest = loaded.config_profile.and_then(|c| c.settings_sha256);
+    assert_eq!(digest, Some("d".repeat(64)));
+
+    // A record the release before wrote: a config profile of two fields.
+    let mut old = good(UDID).encode_to_vec();
+    old.extend(
+        EnrollFieldsPb {
+            config_profile: Some(ProfilePb {
+                uuid: GOOD_UUID.to_owned(),
+                sent_unix: 40,
+            }),
+            nonce: None,
+        }
+        .encode_to_vec(),
+    );
+    let (_, loaded) = load_file("store-no-digest", &format!("{UDID}.pb"), &file_of(&old));
+    let command = loaded
+        .expect("read")
+        .remove(0)
+        .config_profile
+        .expect("sent");
+    assert_eq!((command.sent_unix, command.settings_sha256), (40, None));
+}
+
 /// Catches: a field lost in the file (any of the twenty, and those of the profile commands), an unset optional read back as set
 /// or the other way round, a phase changed; a rewrite that leaves two files or a mode wider
 /// than 0600.
@@ -793,22 +838,17 @@ async fn a_record_that_cannot_be_written_is_not_taken() {
         let clock = Clock::at(1_000);
         let store = Box::new(FileDeviceStore::open(fs.clone(), &dir).expect("opens"));
         let gate = Gate::open(store, hub.client(), Arc::new(clock), counting()).expect("opens");
-        gate.webhook(&support::authenticate(OTHER_UDID, None))
-            .await
-            .expect("taken");
+        support::handle(&gate, &support::authenticate(OTHER_UDID, None)).await;
         let before = gate.records();
         let heard = hub.heard().len();
 
         let n = fs.count() + step;
         fs.fail_at(n);
         let error = gate
-            .webhook(&token_update(UDID, 1))
+            .handle(support::event_of(&token_update(UDID, 1)))
             .await
             .expect_err("not taken");
-        assert!(
-            matches!(error, WebhookError::Store(StoreError::Io { .. })),
-            "{error}"
-        );
+        assert!(matches!(error, StoreError::Io { .. }), "{error}");
         assert_eq!(
             error.to_string(),
             format!(
@@ -825,7 +865,7 @@ async fn a_record_that_cannot_be_written_is_not_taken() {
 
         // The next event is taken.
         assert_eq!(
-            gate.webhook(&token_update(UDID, 1)).await.expect("taken"),
+            support::handle(&gate, &token_update(UDID, 1)).await,
             Handled::Recorded
         );
         assert_eq!(gate.records().len(), 2);

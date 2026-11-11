@@ -15,7 +15,7 @@ use crate::marks_support::{
 };
 use crate::orders::Order;
 use crate::services::Services;
-use crate::testutil::{OPERATOR, Rig, ci_token};
+use crate::testutil::{OPERATOR, Rig};
 
 /// A host's copy of one service, as the fake updater runs it.
 #[derive(Clone, Debug)]
@@ -82,11 +82,7 @@ impl Farm {
             "release_digest": digest(1),
             "max_updating": {"daemon": max},
         });
-        self.rig
-            .coordinator
-            .set_desired(Some(&ci_token()), body.to_string().as_bytes())
-            .await
-            .expect("set");
+        self.rig.set(&body.to_string()).await;
     }
 
     fn beat(&self, host: &str) -> Heartbeat {
@@ -269,6 +265,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let advance = proto::AdvanceRequest {
         service: "web".to_owned(),
         reason: "canaries look fine".to_owned(),
+        host_group: String::new(),
     };
     let done = farm
         .rig
@@ -289,6 +286,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let pause = proto::PauseRequest {
         service: "web".to_owned(),
         reason: "night".to_owned(),
+        host_group: String::new(),
     };
     farm.rig
         .coordinator
@@ -303,6 +301,7 @@ async fn a_manual_stage_waits_for_advance_and_a_pause_stops_new_orders() {
     let resume = proto::ResumeRequest {
         service: "web".to_owned(),
         reason: "morning".to_owned(),
+        host_group: String::new(),
     };
     farm.rig
         .coordinator

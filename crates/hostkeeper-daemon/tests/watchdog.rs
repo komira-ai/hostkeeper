@@ -193,8 +193,7 @@ fn each_heartbeat_is_followed_by_one_watchdog_notice_and_nothing_else_sends_one(
     assert_eq!(lines(&events), want);
 
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     assert_eq!(lines(&events), want, "stopping sends no watchdog notice");
     assert_eq!(
         log.lines(),
@@ -355,9 +354,7 @@ fn without_watchdog_usec_the_systemd_watchdog_sends_nothing() {
 
 fn daemon_flags(args: &[&str]) -> hostkeeper_daemon::cli::DaemonFlags {
     let all = ["hostkeeper", "daemon"].iter().chain(args);
-    let Command::Daemon(flags) = Cli::parse_from(all).command else {
-        panic!("`hostkeeper daemon` parses as the daemon command");
-    };
+    let Command::Daemon(flags) = Cli::parse_from(all).command;
     flags
 }
 

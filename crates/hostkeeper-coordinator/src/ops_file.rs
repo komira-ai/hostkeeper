@@ -11,7 +11,12 @@
 //! ([`crate::rollouts`]: the version it is for, the stages entered, the hosts done, an operator's
 //! pause) lives there too, under `rollouts`, read like the rest: a position this release cannot
 //! read is passed over and counted, and costs only that position (the plan reads as if none
-//! was kept, as it does for a new desired version).
+//! was kept, as it does for a new desired version). So does the platform of each inventory
+//! record that states one ([`crate::inventory::InventoryRecord::platform`]), under `platforms`,
+//! by host id: a platform this release cannot read is passed over and counted, and the record
+//! reads as one that states none. On reading, a platform joins to the record of its host id in
+//! the ops file; one whose record is not there (the release before removed it) is dropped. A
+//! rollback to the release before loses only the platforms.
 //!
 //! The reader of the halts file skips a key it does not know. A record whose report it cannot
 //! read (an outcome a later release added, say) is passed over as a whole and counted, and the
@@ -63,6 +68,7 @@ use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use hostkeeper_wire::Platform;
 use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::UpdateResult;
 use serde::{Deserialize, Serialize};
@@ -81,8 +87,8 @@ pub(crate) fn halts_path(ops: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
-/// The marker of a halt being written to the ops file at `ops` ([`crate::ops::Write::Halt`]):
-/// the halts file's name with `.unfinished` added.
+/// The marker of the changes in memory and not yet written to the ops file at `ops`
+/// ([`crate::ops::Marker`]): the halts file's name with `.unfinished` added.
 #[must_use]
 pub(crate) fn unfinished_path(ops: &Path) -> PathBuf {
     let mut path = halts_path(ops).into_os_string();
@@ -175,6 +181,10 @@ struct HaltsFile {
     /// listed.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     rollouts: BTreeMap<String, Rollout>,
+    /// The platform of each inventory record that states one, by host id, spelled as
+    /// [`Platform::as_str`] names it; a record with none is not listed.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    platforms: BTreeMap<String, String>,
 }
 
 /// [`ServiceHalts`] as read: each record is read on its own, so that one this release cannot
@@ -200,6 +210,19 @@ struct ReadHalts {
     ops: Option<String>,
     #[serde(default)]
     rollouts: BTreeMap<String, Value>,
+    #[serde(default)]
+    platforms: BTreeMap<String, Value>,
+}
+
+/// The Linux platform `value` names; none, counted in `skipped`, for anything else (a platform
+/// a later release added, or one that is not a Linux platform).
+fn platform(value: &Value, skipped: &mut usize) -> Option<Platform> {
+    let read = value
+        .as_str()
+        .and_then(Platform::parse)
+        .filter(|p| matches!(p, Platform::LinuxX86_64 | Platform::LinuxArm64));
+    *skipped += usize::from(read.is_none());
+    read
 }
 
 /// The record `value` holds; none, counted in `skipped`, when this release cannot read it.
@@ -259,10 +282,16 @@ impl ReadHalts {
             .into_iter()
             .filter_map(|(name, v)| Some((name, kept(v, &mut skipped)?)))
             .collect();
+        let platforms = self
+            .platforms
+            .into_iter()
+            .filter_map(|(host, v)| Some((host, platform(&v, &mut skipped)?.as_str().to_owned())))
+            .collect();
         let file = HaltsFile {
             services,
             ops: self.ops,
             rollouts,
+            platforms,
         };
         (file, skipped)
     }
@@ -302,12 +331,23 @@ fn split(state: &OpsState) -> (OpsState, HaltsFile) {
         }
     }
     halts.rollouts = std::mem::take(&mut ops.rollouts);
+    halts.platforms = ops
+        .inventory
+        .iter()
+        .filter_map(|r| Some((r.host_id.clone(), r.platform?.as_str().to_owned())))
+        .collect();
     (ops, halts)
 }
 
 /// `ops`, read from the ops file, with what `halts` keeps for it joined to it.
 fn join(mut ops: OpsState, halts: HaltsFile) -> OpsState {
     ops.rollouts = halts.rollouts;
+    for record in &mut ops.inventory {
+        record.platform = halts
+            .platforms
+            .get(&record.host_id)
+            .and_then(|name| Platform::parse(name));
+    }
     for (name, kept) in halts.services {
         if kept.halt_generation == 0 && !ops.services.contains_key(&name) {
             continue;
@@ -363,10 +403,16 @@ fn read_if_any(path: &Path) -> Result<Option<Vec<u8>>, OpsError> {
 /// The halts file at `path` (nothing if there is none), and how many records of it this
 /// release passed over.
 fn read_halts(path: &Path) -> Result<(HaltsFile, usize), OpsError> {
-    let Some(bytes) = read_if_any(path)? else {
-        return Ok((HaltsFile::default(), 0));
-    };
-    let read: ReadHalts = serde_json::from_slice(&bytes).map_err(|e| OpsError::Invalid {
+    match read_if_any(path)? {
+        Some(bytes) => parse_halts(path, &bytes),
+        None => Ok((HaltsFile::default(), 0)),
+    }
+}
+
+/// The halts file `bytes`, read from `path`, and how many records of it this release passed
+/// over.
+fn parse_halts(path: &Path, bytes: &[u8]) -> Result<(HaltsFile, usize), OpsError> {
+    let read: ReadHalts = serde_json::from_slice(bytes).map_err(|e| OpsError::Invalid {
         path: path.to_owned(),
         why: e.to_string(),
     })?;
@@ -436,6 +482,24 @@ pub(crate) fn joined(path: &Path, ops: OpsState) -> Result<(OpsState, usize), Op
     Ok((join(ops, file), skipped))
 }
 
+/// The bytes [`write`] puts into the ops file at `path` and into its halts file for `state`: the
+/// halts file's are none when [`write`] writes none, on an ops file with no halts file beside it.
+///
+/// # Errors
+/// [`OpsError`]: the state cannot be serialised.
+pub(crate) fn texts(path: &Path, state: &OpsState) -> Result<(Vec<u8>, Option<Vec<u8>>), OpsError> {
+    let (ops, mut halts) = split(state);
+    let text = pretty(path, &ops)?;
+    // A state that keeps nothing in the halts file has none, as `write` writes it beside an ops
+    // file with no halts file.
+    if halts == HaltsFile::default() {
+        return Ok((text, None));
+    }
+    halts.ops = Some(digest(&text));
+    let halts_text = pretty(&halts_path(path), &halts)?;
+    Ok((text, Some(halts_text)))
+}
+
 fn pretty<T: Serialize>(path: &Path, value: &T) -> Result<Vec<u8>, OpsError> {
     let mut text = serde_json::to_vec_pretty(value)
         .map_err(io::Error::from)
@@ -477,7 +541,8 @@ pub(crate) fn write_with(
     let (ops, mut halts) = split(state);
     let text = pretty(path, &ops)?;
     let halts_path = halts_path(path);
-    if halts.services.is_empty() && halts.rollouts.is_empty() && !halts_path.exists() {
+    let nothing = halts.services.is_empty() && halts.rollouts.is_empty();
+    if nothing && halts.platforms.is_empty() && !halts_path.exists() {
         return Ok(write_whole(path, &text)?);
     }
     halts.ops = Some(digest(&text));

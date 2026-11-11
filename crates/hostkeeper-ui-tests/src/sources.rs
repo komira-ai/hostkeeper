@@ -40,12 +40,16 @@ ui_files![
     "main.js",
     "session.js",
     "view.js",
+    "gen/client.js",
+    "gen/client.d.ts",
     "pages/audit.js",
     "pages/enrollment.js",
     "pages/fleet.js",
     "pages/holds.js",
+    "pages/hostgroups.js",
     "pages/host.js",
     "pages/inventory.js",
+    "pages/release.js",
     "pages/rollout.js",
 ];
 

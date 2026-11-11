@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "The hostkeeper binary: `hostkeeper daemon`, the one root process of a host, and `hostkeeper ctl`."
+description = "The hostkeeper binary: `hostkeeper daemon`, the one root process of a host."
 
 # The binary only forwards to `hostkeeper_daemon::cli::main`: everything it does is in the
 # library, where coverage measures it (AGENTS.md T4).
@@ -28,13 +28,9 @@ test-support = []
 [dev-dependencies]
 # Its own tests turn on `test-support`.
 hostkeeper = { path = ".", features = ["test-support"] }
-# The command table the `ctl --help` test reads the services from.
-hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The macOS pkg's postinstall script, which tests/postinstall.rs runs against this binary.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The effective uid: the postinstall test skips its uid 0 refusal case when it runs as root.
-rustix = { workspace = true, features = ["process"] }
 
 [lints]
 workspace = true

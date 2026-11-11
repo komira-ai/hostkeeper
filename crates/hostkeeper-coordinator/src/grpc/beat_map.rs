@@ -106,6 +106,9 @@ fn facts(entry: &proto::ServiceBeat) -> Map<String, Value> {
     if entry.promotion_pending {
         object.insert("promotion_pending".to_owned(), true.into());
     }
+    if let Some(record_try) = entry.record_try {
+        object.insert("record_try".to_owned(), record_try.into());
+    }
     if let Some(deferred) = &entry.deferred {
         object.insert(
             "deferred".to_owned(),

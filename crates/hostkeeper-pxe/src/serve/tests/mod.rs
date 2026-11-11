@@ -4,15 +4,18 @@
 //! firmware, GRUB and installer would, by DHCP, TFTP and HTTP.
 
 mod fake;
-mod kit;
+pub(crate) mod kit;
 
 mod answers;
 mod edges;
 mod http;
 mod inventory;
+mod notify;
 mod proxy;
 mod reads;
+mod repositories;
 mod router;
 mod sealed;
+mod sockets;
 mod start;
 mod tftp;

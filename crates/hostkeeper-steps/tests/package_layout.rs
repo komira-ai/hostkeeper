@@ -187,9 +187,6 @@ fn a_switch_remembers_the_previous_tree_and_is_idempotent() {
         layout.switch("../v1").unwrap_err().kind(),
         io::ErrorKind::InvalidInput
     );
-    assert!(layout.flip_back().unwrap());
-    assert_eq!(links(&layout), (Some("v1".into()), Some("v1".into())));
-    assert!(!layout.flip_back().unwrap());
 }
 
 /// Catches a version the host runs, or would fall back to, being staged over: staging the
@@ -253,11 +250,11 @@ fn staging_one_version_never_writes_over_another() {
     assert_eq!(text(&layout, "v3"), "c");
 }
 
-/// Catches a flip back, or a switch, to a tree that is gone or no longer what was sealed: with
-/// `previous` removed, or a byte of it changed, `flip_back` is an error and `current` stays.
+/// Catches a switch to a tree that is gone or no longer what was sealed: with `previous` removed,
+/// or a byte of it changed, switching to it is an error and `current` stays.
 #[test]
-fn flipping_back_to_a_missing_or_changed_tree_is_refused() {
-    let s = Scratch::new("pl-flip");
+fn switching_to_a_missing_or_changed_tree_is_refused() {
+    let s = Scratch::new("pl-switch-changed");
     let layout = package(&s);
     stage(&layout, "v1", "a");
     stage(&layout, "v2", "b");
@@ -267,17 +264,16 @@ fn flipping_back_to_a_missing_or_changed_tree_is_refused() {
     fs::set_permissions(&x, fs::Permissions::from_mode(0o755)).unwrap();
     fs::write(&x, "A").unwrap();
     fs::set_permissions(&x, fs::Permissions::from_mode(0o555)).unwrap();
-    let err = layout.flip_back().unwrap_err();
+    let err = layout.switch("v1").unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     assert!(
         err.to_string().contains("changed after it was sealed"),
         "{err}"
     );
     assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
-    assert!(layout.switch("v1").is_err());
     fs::remove_dir_all(layout.version_path("v1")).unwrap();
     assert_eq!(
-        layout.flip_back().unwrap_err().kind(),
+        layout.switch("v1").unwrap_err().kind(),
         io::ErrorKind::NotFound
     );
     assert_eq!(links(&layout), (Some("v2".into()), Some("v1".into())));
@@ -594,14 +590,7 @@ fn a_seal_that_is_a_link_a_fifo_or_too_large_is_refused() {
         io::ErrorKind::InvalidData
     );
     fs::remove_file(&seal).unwrap();
-    rustix::fs::mknodat(
-        rustix::fs::CWD,
-        &seal,
-        rustix::fs::FileType::Fifo,
-        rustix::fs::Mode::from_raw_mode(0o644),
-        0,
-    )
-    .unwrap();
+    hostkeeper_testkit::fifo(&seal, 0o644).unwrap();
     let err = hostkeeper_steps::read_seal(&seal).unwrap_err();
     assert_eq!(err.to_string(), "the seal is not a regular file");
     assert_eq!(

@@ -21,7 +21,13 @@
 //!   change. With a UI directory (`--ui-dir`, or the binary's default,
 //!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
 //!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
-//!   are not found. The heartbeat surface never serves them.
+//!   are not found. The heartbeat surface never serves them. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
+//!   CI waits on it before it sets a release a coordinator older than the release would refuse.
+//!
+//! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
+//! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
+//! before a request comes here ([`crate::repository_serve`]).
 //!
 //! No answer, on either surface, carries an `Access-Control-*` header: the operator web app is
 //! served from the private listener itself, so its calls are same-origin, and a cross-origin
@@ -32,15 +38,14 @@
 //! of an internal error. A desired state may name the digest of its version's package
 //! (`release_digest`, 64 lowercase hex characters); a version the coordinator refuses is
 //! answered with its reason as the code: `unparseable_version` (400), and
-//! `below_min_version`, `bad_version` and `digest_conflict` (409), and, with
-//! `--release-channel`, `not_in_channel` and `channel_digest_mismatch` (409,
-//! [`crate::channel`]). A desired state may instead name the release index of its version
-//! (`release_index`, the text of its `index.json`, with `release_index_digest`, its SHA-256),
-//! from which each host is ordered the package of its own platform; one the coordinator refuses
-//! is answered `index_invalid` or `index_digest_mismatch` (400). A heartbeat that lists no
-//! services, at a coordinator with no legacy service, is a bad request. An agent that announces
-//! `order-v1` is answered with the order terms of [`crate::order_terms`] on an update, and its
-//! heartbeat's top level is never read as the legacy service.
+//! `below_min_version`, `bad_version` and `digest_conflict` (409). A desired state may instead
+//! name the release index of its version (`release_index`, the text of its `index.json`, with
+//! `release_index_digest`, its SHA-256); one the coordinator refuses is answered `index_invalid`
+//! or `index_digest_mismatch` (400). A set with a package digest or a release index is accepted
+//! and orders nothing ([`crate::picks`]). A heartbeat that lists no services, at a coordinator
+//! with no legacy service, is a bad request. The answer to a heartbeat carries no order: an
+//! update is ordered over gRPC alone, and its heartbeat's top level is never read as the legacy
+//! service.
 //!
 //! These are the frozen JSON routes. [`crate::grpc`] routes a request first: a gRPC call, and
 //! the JSON gateway of the operator API, are answered there, and every other request comes here.
@@ -65,6 +70,7 @@ use crate::identity::Identity;
 use crate::ops::OperateError;
 use crate::orders::Order;
 use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::trusted_root::TrustedRootSaid;
 
 /// The path CI posts the desired state to.
 pub const DESIRED_PATH: &str = "/v1/desired";
@@ -78,11 +84,25 @@ pub const CONVERGENCE_PATH: &str = "/v1/convergence";
 /// The path an operator posts an action to.
 pub const OPERATOR_PATH: &str = "/v1/operator";
 
+/// The path anyone that reaches the private listener reads the coordinator's own version from.
+pub const VERSION_PATH: &str = "/v1/version";
+
 /// The most bytes of a desired state read.
 pub const MAX_DESIRED_BYTES: usize = 4096;
 
 /// The most bytes of an operator action read.
 pub const MAX_OPERATOR_BYTES: usize = 4096;
+
+/// The most bytes of a `Releases.SetDesired` or a `Repositories.Put` request read, on the gRPC
+/// route and the JSON gateway: a set with targets carries up to eight entries of 24 KiB on each
+/// platform (docs/design/packages.md, section 3.5), and a repository a keyring of up to 64 KiB,
+/// which the JSON gateway reads as base64. Every other operator method reads
+/// [`MAX_OPERATOR_BYTES`].
+pub const MAX_SET_DESIRED_BYTES: usize = 256 * 1024;
+
+/// The most bytes of a `HostGroups.Put` request read, on the gRPC route and the JSON gateway: a
+/// group lists up to 64 packages of up to 255 bytes and names a policy.
+pub const MAX_HOST_GROUPS_PUT_BYTES: usize = 64 * 1024;
 
 /// The error code of a heartbeat from a host an operator denied (`COORDINATOR_REFUSAL_DENIED`).
 pub const DENIED: &str = "denied";
@@ -105,7 +125,7 @@ type Answer = Response<Full<Bytes>>;
 /// The error of a request body.
 pub(crate) type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
+pub(crate) fn json<T: Serialize>(status: StatusCode, value: &T) -> Answer {
     let body = serde_json::to_vec(value).unwrap_or_default();
     Response::builder()
         .status(status)
@@ -193,6 +213,9 @@ where
                 Err(_) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
             }
         }
+        (Surface::Control, Method::GET, VERSION_PATH) => {
+            crate::version_route::answer(request.uri().query())
+        }
         (Surface::Control, Method::GET, CONVERGENCE_PATH) => {
             let Some(service) = service_of(request.uri().query(), coordinator.legacy_service())
             else {
@@ -206,13 +229,17 @@ where
                 Err(ConvergenceError::Refused(CiRefused::Unavailable)) => {
                     error(StatusCode::SERVICE_UNAVAILABLE, "unavailable")
                 }
-                Err(ConvergenceError::UnknownService) => error(StatusCode::NOT_FOUND, "not_found"),
+                Err(ConvergenceError::UnknownService | ConvergenceError::NotInHostGroup) => {
+                    error(StatusCode::NOT_FOUND, "not_found")
+                }
             }
         }
         (Surface::Heartbeat, _, HEARTBEAT_PATH)
-        | (Surface::Control, _, DESIRED_PATH | OPERATOR_PATH | STATUS_PATH | CONVERGENCE_PATH) => {
-            error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed")
-        }
+        | (
+            Surface::Control,
+            _,
+            DESIRED_PATH | OPERATOR_PATH | STATUS_PATH | CONVERGENCE_PATH | VERSION_PATH,
+        ) => error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed"),
         _ => error(StatusCode::NOT_FOUND, "not_found"),
     }
 }
@@ -282,8 +309,9 @@ pub(crate) fn beat_caller(
 /// answers it: the one path both the JSON route and the gRPC `Heartbeat` take once the body is
 /// read. The optional facts and the `services` list that were bad are counted and logged and
 /// the rest is answered. A retiring host is heard for its final report and then refused. With
-/// `typed`, the operator's order for the host, or the update as a typed order, comes beside the
-/// answer ([`Coordinator::heartbeat_with_orders`]).
+/// `typed`, what the gRPC heartbeat said of the host's trusted root, the operator's order for the
+/// host, or the update as a typed order, comes beside the answer
+/// ([`Coordinator::heartbeat_with_orders`]); the JSON route passes none.
 ///
 /// # Errors
 /// [`BeatRefused::BadRequest`] for bytes that are no heartbeat, or one that lists no service
@@ -292,7 +320,7 @@ pub(crate) fn beat(
     coordinator: &Coordinator,
     caller: BeatCaller,
     bytes: &[u8],
-    typed: bool,
+    typed: Option<TrustedRootSaid>,
 ) -> Result<(WireAnswer, Option<Order>), BeatRefused> {
     let BeatCaller { identity, retiring } = caller;
     let HeartbeatRead {
@@ -313,8 +341,8 @@ pub(crate) fn beat(
         coordinator.final_report(identity, beat);
         return Err(BeatRefused::Denied);
     }
-    let answered = if typed {
-        coordinator.heartbeat_with_orders(identity, beat)
+    let answered = if let Some(root) = typed {
+        coordinator.heartbeat_with_orders(identity, beat, root)
     } else {
         coordinator
             .heartbeat(identity, beat)
@@ -352,7 +380,7 @@ where
     let Some(bytes) = read(request, MAX_HEARTBEAT_BYTES, patience).await else {
         return beat_refusal(BeatRefused::BadRequest);
     };
-    match beat(coordinator, caller, &bytes, false) {
+    match beat(coordinator, caller, &bytes, None) {
         Ok((answer, _)) => json(StatusCode::OK, &answer),
         Err(why) => beat_refusal(why),
     }
@@ -375,7 +403,12 @@ where
         Err(SetError::Unauthorized(_)) => error(StatusCode::UNAUTHORIZED, "unauthorized"),
         Err(SetError::Unavailable) => error(StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
         Err(SetError::Forbidden) => error(StatusCode::FORBIDDEN, "forbidden"),
-        Err(why @ (SetError::Invalid(_) | SetError::UnparseableVersion)) => error(
+        Err(
+            why @ (SetError::Invalid(_)
+            | SetError::UnparseableVersion
+            | SetError::TargetInvalid(_)
+            | SetError::LimitsInHostGroup),
+        ) => error(
             StatusCode::BAD_REQUEST,
             why.reason().unwrap_or("bad_request"),
         ),
@@ -383,7 +416,10 @@ where
             why @ (SetError::BelowMinVersion
             | SetError::BadVersion
             | SetError::DigestConflict
-            | SetError::Channel(_)),
+            | SetError::ReleaseExists
+            | SetError::RepositoryUnknown
+            | SetError::NotInHostGroup
+            | SetError::AmbiguousHostGroup),
         ) => {
             tracing::warn!(%why, "refused a desired state");
             error(StatusCode::CONFLICT, why.reason().unwrap_or("conflict"))

@@ -1,23 +1,27 @@
 //! `tierstore-like`, the service of the tierstore-shaped end-to-end test: a program that is both
 //! the workload and its own update hook, as the production service `tierstore` is.
 //!
-//! It is built by cargo with the crate's tests and packed by the test into a real package
-//! (`tests/e2e/package.rs`); nothing of it is checked in as a binary. It depends on std and on
-//! `hostkeeper_hook` (the params file reader and the step line) only.
+//! It is built by cargo with the crate's tests and put by the test into a real `.deb`
+//! (`tests/e2e/package.rs`), as the program of its run units and as its hook; nothing of it is
+//! checked in as a binary. It depends on std and on `hostkeeper_hook` (the params file reader and
+//! the step line) only.
 //!
 //! ```text
-//! tierstore-like serve <port>
+//! tierstore-like serve <port> [<release file>]
 //! tierstore-like [update-hook] <step> [<staged release>] --params <file>
 //! ```
 //!
 //! `serve` is the run unit's `ExecStart`: a tiny HTTP server on `127.0.0.1:<port>` that answers
 //! `GET /healthz` with `version=<version>` and everything else with 404. The version is the one
-//! in the manifest of the version directory the executable lives in (`<exe>/../../manifest.toml`),
-//! so two releases answer differently. It never exits on its own: systemd's `SIGTERM` (whose
-//! default action ends the process) stops it.
+//! in the release file of the package installed on the host ([`RELEASE_FILE`], or the file the
+//! second argument names), so two releases answer differently. It never exits on its own:
+//! systemd's `SIGTERM` (whose default action ends the process) stops it.
 //!
-//! The five steps behave as the production hook does in outline, and leave files in the record
-//! directory (the manifest's `tierstore_like_record_dir` param) for the test to read:
+//! The hook is this program run from the tree of the staged version
+//! (`<version directory>/tree/usr/lib/hostkeeper-ci-tierstore/hostkeeper-hook`), which reads the
+//! release file of the staged and of the previous version directory ([`TREE_RELEASE`]). The five
+//! steps behave as the production hook does in outline, and leave files in the record directory
+//! (the entry's `tierstore_like_record_dir` param) for the test to read:
 //!
 //! - `prepare` waits while `drain-gate` holds `busy` (writing `prepare-<v>.waiting` once), then
 //!   writes `staged-<v>`.
@@ -45,6 +49,11 @@ use hostkeeper_hook::{Invocation, Outcome, Params, Scalar, Step};
 
 type Fallible<T> = Result<T, Box<dyn Error>>;
 
+/// The release file of the package installed on the host, which `serve` reads.
+const RELEASE_FILE: &str = "/usr/share/hostkeeper-ci-tierstore/release.toml";
+/// The release file in a version directory, which the hook reads of the staged and of the previous
+/// version.
+const TREE_RELEASE: &str = "tree/usr/share/hostkeeper-ci-tierstore/release.toml";
 /// The param naming the directory the hook records into (an absolute path).
 const RECORD_DIR_KEY: &str = "tierstore_like_record_dir";
 /// The param that makes `verify` fail.
@@ -87,22 +96,21 @@ fn main() -> ExitCode {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The release: a version directory's manifest, read the way this fixture needs it.
+// The release: a release file, read the way this fixture needs it.
 
-/// One version directory of the service: its version and its run units.
+/// One release of the service: its version and its run units.
 struct Release {
     version: String,
-    /// The `[units] run` entries, `hostkeeper-ci-tierstore@<port>.service`.
+    /// The `run` entries, `hostkeeper-ci-tierstore@<port>.service`.
     units: Vec<String>,
 }
 
 impl Release {
-    /// Reads `<dir>/manifest.toml`: the line `version = "<v>"` and the line `run = [...]`. The
-    /// manifest is the fixture's own template, so a line reader is enough.
-    fn load(dir: &Path) -> Fallible<Release> {
-        let path = dir.join("manifest.toml");
-        let text = fs::read_to_string(&path)
-            .map_err(|e| format!("cannot read {}: {e}", path.display()))?;
+    /// Reads the release file `path`: the line `version = "<v>"` and the line `run = [...]`. The
+    /// file is the fixture's own template, so a line reader is enough.
+    fn load(path: &Path) -> Fallible<Release> {
+        let text =
+            fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
         let mut version = None;
         let mut units = None;
         for line in text.lines() {
@@ -148,21 +156,18 @@ fn quoted(text: &str) -> Vec<&str> {
 // ---------------------------------------------------------------------------------------------
 // serve
 
-/// Runs the HTTP server of one run unit: `serve <port>`.
+/// Runs the HTTP server of one run unit: `serve <port> [<release file>]`.
 fn serve(args: &[OsString]) -> Fallible<Infallible> {
-    let port: u16 = match args {
-        [port] => port
-            .to_str()
-            .and_then(|port| port.parse().ok())
-            .ok_or("the port is not a number")?,
-        _ => return Err("usage: tierstore-like serve <port>".into()),
+    let (port, release) = match args {
+        [port] => (port, Path::new(RELEASE_FILE)),
+        [port, release] => (port, Path::new(release)),
+        _ => return Err("usage: tierstore-like serve <port> [<release file>]".into()),
     };
-    let exe = std::env::current_exe()?.canonicalize()?;
-    let version_dir = exe
-        .parent()
-        .and_then(Path::parent)
-        .ok_or("the executable is not inside a version directory")?;
-    let body = format!("version={}", Release::load(version_dir)?.version);
+    let port: u16 = port
+        .to_str()
+        .and_then(|port| port.parse().ok())
+        .ok_or("the port is not a number")?;
+    let body = format!("version={}", Release::load(release)?.version);
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, port))?;
     loop {
         let (stream, _) = listener.accept()?;
@@ -238,8 +243,8 @@ struct Ctx {
 }
 
 impl Ctx {
-    /// Reads the params file and the manifests of the staged and the previous release, and
-    /// refuses a params file whose versions do not match the manifests it points at.
+    /// Reads the params file and the release files of the staged and the previous version, and
+    /// refuses a params file whose versions do not match the release files it points at.
     fn read(params_file: &Path) -> Fallible<Ctx> {
         let params = Params::read(params_file)?;
         let record_dir = match params.get(RECORD_DIR_KEY) {
@@ -247,13 +252,13 @@ impl Ctx {
             _ => return Err(format!("{RECORD_DIR_KEY} is not an absolute path").into()),
         };
         let staged = params.staged_release().ok_or("no updater.staged_release")?;
-        let own = Release::load(&staged)?;
+        let own = Release::load(&staged.join(TREE_RELEASE))?;
         if params.target_version() != Some(own.version.as_str()) {
             return Err("updater.target_version is not the staged release's version".into());
         }
         let previous = match params.previous_release() {
             Some(dir) => {
-                let previous = Release::load(&dir)?;
+                let previous = Release::load(&dir.join(TREE_RELEASE))?;
                 if params.previous_version() != Some(previous.version.as_str()) {
                     return Err("updater.previous_version is not the previous release's".into());
                 }

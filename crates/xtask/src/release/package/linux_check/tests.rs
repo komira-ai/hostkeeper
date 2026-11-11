@@ -1,14 +1,18 @@
-//! The check of a built deb or rpm, on packages laid out here as nfpm 2.48.0 lays them out (an
+//! The check of a built deb or rpm against the staged files, on packages laid out here as nfpm 2.48.0 lays them out (an
 //! `ar` with `data.tar.gz`; a lead, a signature header, a header and a gzip newc `cpio`), each
 //! changed in the one way a case names.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use super::rpm::*;
 use super::*;
 use crate::testdir::TestDir;
 
-const GH: &[u8] = b"\x7fELF a staged gh";
+mod coordinator;
+mod elf_and_depends;
+
+const GH: &[u8] = b"a staged gh";
 const ROOT: &[u8] = b"{\"mediaType\":\"application/vnd.dev.sigstore.trustedroot+json\"}\n";
 
 fn scratch(name: &str) -> TestDir {
@@ -123,12 +127,32 @@ fn ar(members: &[(&str, Vec<u8>)]) -> Vec<u8> {
     out
 }
 
-fn deb_of(files: &[File]) -> Vec<u8> {
+/// The `control` of a deb that declares nothing.
+const CONTROL: &str = "Package: hostkeeper\nVersion: 1.0.0\nArchitecture: amd64\n";
+
+fn control_tar(control: &str) -> Vec<u8> {
+    tar(&[File {
+        path: "./control",
+        mode: 0o644,
+        owner: "root",
+        uid: 0,
+        group: "root",
+        directory: false,
+        data: control.as_bytes().to_vec(),
+        link: None,
+    }])
+}
+
+fn deb_with_control(files: &[File], control: &str) -> Vec<u8> {
     ar(&[
         ("debian-binary", b"2.0\n".to_vec()),
-        ("control.tar.gz", gzip(&tar(&[]))),
+        ("control.tar.gz", gzip(&control_tar(control))),
         ("data.tar.gz", gzip(&tar(files))),
     ])
+}
+
+fn deb_of(files: &[File]) -> Vec<u8> {
+    deb_with_control(files, CONTROL)
 }
 
 /// A newc `cpio` of the regular files and links of `files` (a link's data is its target, as
@@ -275,6 +299,7 @@ impl Case {
         std::fs::create_dir(dir.join("staged")).expect("staged");
         std::fs::write(dir.join("staged/gh"), GH).expect("gh");
         std::fs::write(dir.join("staged/trusted_root.json"), ROOT).expect("root");
+        std::fs::write(dir.join("staged/hostkeeper"), b"the daemon").expect("hostkeeper");
         std::fs::write(dir.join("pkg"), package).expect("pkg");
         Case { dir }
     }
@@ -284,7 +309,10 @@ impl Case {
     }
 
     fn check(&self) -> Result<Vec<String>, Error> {
-        check(&self.package(), &self.dir.join("staged"))
+        check(
+            &self.package(),
+            Some(Staged::Daemon(&self.dir.join("staged"))),
+        )
     }
 
     /// The problems a refusal lists, without the package's name in front.
@@ -324,9 +352,12 @@ fn a_deb_and_an_rpm_that_install_the_staged_files_pass() {
                 format!(
                     "{name}: /usr/lib/hostkeeper/trusted_root.json is 644 root:root and the staged bytes"
                 ),
+                format!("{name}: /usr/bin/hostkeeper is 755 root:root and the staged bytes"),
                 format!(
                     "{name}: /etc/issue.d/hostkeeper.issue is a link to /run/hostkeeper/enrollment.issue"
                 ),
+                format!("{name}: holds no ELF program"),
+                format!("{name}: declares no dependency"),
             ])
         );
     }
@@ -442,7 +473,7 @@ fn a_file_that_is_neither_a_deb_nor_an_rpm_is_refused() {
     assert_eq!(
         case.unreadable(),
         format!(
-            "not a package this check reads: {} is neither a deb nor an rpm",
+            "not a package this check reads: {} is neither a deb, an rpm nor a tarball",
             case.package().display()
         )
     );
@@ -607,7 +638,7 @@ fn an_rpm_whose_payload_lacks_a_file_is_refused() {
 fn a_missing_package_or_staged_file_is_an_error() {
     let case = Case::new(&deb_of(&files()));
     let absent = case.dir.join("absent.deb");
-    let message = check(&absent, &case.dir.join("staged"))
+    let message = check(&absent, Some(Staged::Daemon(&case.dir.join("staged"))))
         .expect_err("absent")
         .to_string();
     assert!(

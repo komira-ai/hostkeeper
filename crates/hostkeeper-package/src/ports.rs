@@ -2,16 +2,18 @@
 //! URL into a [`Sink`], and [`Verifier`], which checks one attestation offline. [`crate::net`] and
 //! [`crate::gh`] are their real adapters; the tests use fakes.
 
+use std::fmt;
 use std::path::Path;
 use std::time::Duration;
+
+use ureq::http::Uri;
 
 use hostkeeper_config::daemon::{Sha256Hex, TrustedSigners};
 use hostkeeper_steps::{Clock, Stamp};
 
-/// A URL on the release channel, made by [`crate::index::index_url`] or
-/// [`crate::index::package_url`] from the daemon config's channel, an order's service and version,
-/// and the host's platform (the bundle's adds a suffix to the package's). Nothing else makes one,
-/// so a fetch can only reach the configured channel.
+/// A URL of a blob in one of the host's stores, made by the store ([`crate::stores::Store`]) from
+/// its base and the blob's locator or digest. Nothing else makes one, so a fetch can only reach a
+/// store the host defines.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Url(String);
 
@@ -22,11 +24,6 @@ impl Url {
 
     pub fn as_str(&self) -> &str {
         &self.0
-    }
-
-    /// This URL with `suffix` appended to its last segment.
-    pub(crate) fn with_suffix(&self, suffix: &str) -> Url {
-        Url(format!("{}{suffix}", self.0))
     }
 }
 
@@ -97,6 +94,62 @@ pub enum NetError {
     Io,
 }
 
+/// The origin of an `https://` URL: `https://<host>:<port>`, the host in lower case and the port
+/// written out (443 when the URL names none), so two spellings of one origin are equal. `None`
+/// for any other scheme, a URL with a user name, or text that is not a URL.
+pub fn origin_of(url: &str) -> Option<String> {
+    let uri: Uri = url.parse().ok()?;
+    let authority = uri.authority().filter(|a| !a.as_str().contains('@'))?;
+    (uri.scheme_str() == Some("https")).then(|| {
+        let port = authority.port_u16().unwrap_or(443);
+        format!("https://{}:{port}", authority.host().to_ascii_lowercase())
+    })
+}
+
+/// One request of a store: a URL, the credential it may carry, and what the fetcher may do on
+/// the way. A credential is for `origin` only.
+#[derive(Clone, Copy)]
+pub struct Request<'a> {
+    pub url: &'a Url,
+    /// The value of the `Authorization` header to send, if any. Dropped for good at the first
+    /// redirect to an origin other than `origin`. Never shown by `Debug`.
+    pub authorization: Option<&'a str>,
+    /// The origin (see [`origin_of`]) the credential may be sent to and a token challenge may be
+    /// answered for: the store's base origin.
+    pub origin: &'a str,
+    /// How many redirects may be followed, each to an `https://` URL. One more is a status error.
+    pub redirects: u32,
+    /// Whether a `401` with a `Bearer` challenge whose realm is on `origin` may be answered with
+    /// one token request (carrying the `Basic` credential if there is one) and a retry.
+    pub answer_challenge: bool,
+}
+
+impl<'a> Request<'a> {
+    /// A request for `url` with no credential, no redirect and no challenge answered: what
+    /// [`Fetcher::get`] is.
+    pub fn plain(url: &'a Url) -> Request<'a> {
+        Request {
+            url,
+            authorization: None,
+            origin: "",
+            redirects: 0,
+            answer_challenge: false,
+        }
+    }
+}
+
+impl fmt::Debug for Request<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("Request")
+            .field("url", &self.url)
+            .field("authorization", &self.authorization.map(|_| "<redacted>"))
+            .field("origin", &self.origin)
+            .field("redirects", &self.redirects)
+            .field("answer_challenge", &self.answer_challenge)
+            .finish()
+    }
+}
+
 /// Downloads one URL.
 pub trait Fetcher {
     /// Sends one request for `url` and gives the body to `sink`: [`Sink::begin`] once, then
@@ -104,6 +157,19 @@ pub trait Fetcher {
     /// [`Got::Complete`] only when the whole body was delivered, and never waits past
     /// `limit.deadline`.
     fn get(&self, url: &Url, sink: &mut dyn Sink, limit: Limit) -> Result<Got, NetError>;
+
+    /// [`Fetcher::get`] for a store's `request`. The default asks for the request's URL alone and
+    /// ignores the rest, so a fetcher that knows no credential or redirect keeps working;
+    /// [`crate::net::NetFetcher`] follows the redirects, sends the credential and answers the
+    /// challenge as the request allows.
+    fn get_request(
+        &self,
+        request: &Request<'_>,
+        sink: &mut dyn Sink,
+        limit: Limit,
+    ) -> Result<Got, NetError> {
+        self.get(request.url, sink, limit)
+    }
 }
 
 /// A commit, as a source digest: 40 or 64 lower-case hex digits.

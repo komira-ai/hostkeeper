@@ -86,7 +86,8 @@ const FULL: &str = r#"{
       "last_good": "1.0",
       "bad": [
         "1.9"
-      ]
+      ],
+      "repository": "private"
     }
   },
   "audit": [
@@ -192,6 +193,7 @@ fn the_file_reads_and_writes_every_field_of_the_schema() {
             force: None,
             force_generation: 0,
             bad_by_force: Vec::new(),
+            repository: Some("private".to_owned()),
         },
     );
     let mut seven = entry("exclude");
@@ -435,7 +437,7 @@ fn spy(fails: bool) -> Spy {
             Ok(())
         }
     });
-    let store = Arc::new(OpsStore::with_writer(OpsState::default(), writer));
+    let store = Arc::new(OpsStore::refusing(OpsState::default(), writer));
     assert!(cell.set(Arc::clone(&store)).is_ok());
     Spy { store, seen }
 }

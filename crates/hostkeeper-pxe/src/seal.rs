@@ -1,4 +1,4 @@
-//! The seal: the last file `fetch` writes, `seal.json` in the fetched directory. It names every
+//! The seal: the last file the fetch writes, `seal.json` in the fetched directory. It names every
 //! file `serve` may serve from that directory, with the size and SHA-256 measured as `fetch`
 //! wrote it, and what the attestations of `netboot.json` and of each deb confirmed. `serve`
 //! (item N9 of docs/design/network-install.md) checks it at start and refuses to start on any

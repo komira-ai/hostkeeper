@@ -15,13 +15,15 @@ use serde_json::json;
 use crate::audit_file::{self, Appender, AuditLog, DEFAULT_ROTATION};
 use crate::grpc::operator::set_refusal;
 use crate::marks_support::{
-    DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, digest, fleet_target, force_request, hold,
-    operator, rig, runs, scope_fleet, scope_host, set, start, unhold,
+    DB, NEW_DAEMON, WEB, ask, ask_typed, beat_of, fleet_target, force_request, hold,
+    native_targets, operator, rig, runs, scope_fleet, scope_host, set, start, unhold,
 };
 use crate::ops::{AuditEntry, OpsError, OpsState, OpsStore, Write};
 use crate::orders::Order;
 use crate::service::SetError;
-use crate::testutil::{Log, Rig, ops_of, scratch};
+use crate::service::ci_calls::Setter;
+use crate::testutil::{Log, Rig, ops_of, scratch, version};
+use crate::write_record::WriteAsk;
 
 /// The role of every host of these tests.
 const DAEMON: &str = "daemon";
@@ -63,7 +65,7 @@ fn d1_beat() -> hostkeeper_wire::wire::Heartbeat {
 /// A rig whose coordinator cannot append to its audit file while the flag answered is set (it
 /// starts set): `d1` heard, 1.0 and 2.0 of `web` registered and 2.0 desired, and one hold of
 /// `db` on `d1` made, audited, before the disk filled.
-async fn full_disk(test: &str) -> (Rig, Arc<AtomicBool>) {
+pub(crate) async fn full_disk(test: &str) -> (Rig, Arc<AtomicBool>) {
     let mut rig = rig(test, "");
     ask(&rig, "d1", DAEMON, d1_beat());
     set(&rig, WEB, "1.0", 1).await;
@@ -87,11 +89,16 @@ fn snapshot(rig: &Rig) -> (Vec<Option<Vec<u8>>>, OpsState, Option<String>) {
     (files(rig), rig.coordinator.ops().state(), desired)
 }
 
-/// The operator's set of `web` to `version`, with the digest registered for it.
+/// The operator's set of `web` to `version`, with the release [`native_targets`] `n`.
 async fn operator_set(rig: &Rig, version: &str, n: u8) -> Result<(), SetError> {
-    let body = json!({"service": WEB, "version": version, "release_digest": digest(n)});
+    let body = json!({"service": WEB, "version": version});
     rig.coordinator
-        .set_desired_operator("operator", body.to_string().as_bytes())
+        .set_desired_with(
+            &Setter::Operator("operator"),
+            body.to_string().as_bytes(),
+            &WriteAsk::default(),
+            Some(native_targets(WEB, n)),
+        )
         .await
         .map(drop)
 }
@@ -151,8 +158,12 @@ async fn force_hold_set_desired_refuse_when_append_fails() {
         .into_iter()
         .map(|entry| entry.action)
         .collect();
-    assert_eq!(actions.first().map(String::as_str), Some("hold"));
-    assert!(actions.contains(&"set_desired".to_owned()), "{actions:?}");
+    // CI's two sets, with their releases, and the hold made before the disk filled come first.
+    assert_eq!(actions[..3], ["set_desired", "set_desired", "hold"]);
+    assert!(
+        actions[3..].contains(&"set_desired".to_owned()),
+        "{actions:?}"
+    );
     assert!(actions.contains(&"force".to_owned()), "{actions:?}");
 }
 
@@ -206,8 +217,8 @@ async fn every_other_changing_verb_refuses_when_append_fails() {
 
 /// Proves: with the audit file taking no lines, `Hosts.Abort` and `Releases.Halt` succeed and
 /// take effect: the abort is sent on `d1`'s next typed heartbeat and `web` is halted; the ring
-/// holds both entries as answered, the audit file holds neither, and each failed append is
-/// logged at error as a change that stands.
+/// holds both entries as answered, the audit file holds neither, both are pending, and each
+/// failed commit is logged at error as a change that stands.
 ///
 /// Catches: the operator's way out refused on a full disk, or an abort or a halt that stands
 /// with no record anywhere.
@@ -254,8 +265,8 @@ async fn abort_and_halt_proceed_when_append_fails() {
         "{ring:?}"
     );
     assert_eq!(files(&rig)[2], audit_before, "the audit file took no line");
-    let stands =
-        "the audit file could not be appended to: the change stands, and the ring holds it";
+    assert!(rig.coordinator.ops().halt_unwritten(), "both are pending");
+    let stands = "a change stands in memory and is not yet written";
     assert_eq!(log.text().matches(stands).count(), 2, "{}", log.text());
 
     rig.at(2_100);
@@ -281,8 +292,9 @@ async fn audit_list_unaffected_by_append_failure() {
         .audit_list(&operator(), proto::ListAuditRequest::default())
         .expect("answered");
     let actions: Vec<&str> = listed.entries.iter().map(|e| e.action.as_str()).collect();
-    assert_eq!(actions, ["hold"]);
-    assert_eq!(listed.next_seq, listed.entries[0].seq);
+    // CI's two sets, with their releases, are audited before the hold.
+    assert_eq!(actions, ["set_desired", "set_desired", "hold"]);
+    assert_eq!(listed.next_seq, listed.entries[2].seq);
     let by_service = proto::ListAuditRequest {
         service: Some(DB.to_owned()),
         ..proto::ListAuditRequest::default()
@@ -291,7 +303,7 @@ async fn audit_list_unaffected_by_append_failure() {
         .coordinator
         .audit_list(&operator(), by_service)
         .expect("answered");
-    assert_eq!(filtered.entries, listed.entries);
+    assert_eq!(filtered.entries, listed.entries[2..]);
 }
 
 /// Proves: in the ops store, a change written before memory is refused
@@ -366,8 +378,8 @@ fn the_store_appends_the_audit_line_before_it_writes_the_ops_file() {
 }
 
 /// Proves: a force refused for its audit whose desired state cannot be put back (the desired
-/// file can no longer be replaced) is still `audit_unavailable`, with no force recorded, and the
-/// failed put-back is logged at error.
+/// file can no longer be replaced) is still `audit_unavailable`, with no force recorded and the
+/// desired version in memory as it was, and the failed put-back is logged at error.
 ///
 /// Catches: a put-back failure that goes unsaid, or one that turns the refusal into a success.
 #[tokio::test]
@@ -392,7 +404,11 @@ async fn a_force_whose_desired_state_cannot_be_put_back_is_refused_and_logged() 
     );
     assert_eq!(forced, Err(proto::ReleasesRefusal::AuditUnavailable));
     assert_eq!(rig.coordinator.ops().marks(WEB).force, None);
+    assert_eq!(
+        rig.coordinator.desired.get(WEB).map(|d| d.version),
+        Some(version("2.0"))
+    );
     let text = log.text();
-    let error = "a force refused for its audit could not put the desired state back";
+    let error = "a change failed after its desired state was written, and the desired state could not be put back";
     assert_eq!(text.matches(error).count(), 1, "{text}");
 }

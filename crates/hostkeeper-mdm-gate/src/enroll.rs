@@ -16,14 +16,22 @@
 //! allowlist (anything else: nothing):
 //!
 //! 1. If a request claiming the serial was approved in this enrollment (at or after its first
-//!    `TokenUpdate`), the gate sends nothing more to it in this enrollment, and removes the
-//!    nonce profile it pushed in this enrollment (`RemoveProfile`, once).
-//! 2. The config profile is installed, once per enrollment. One the device answered with an
-//!    error is sent again [`CONFIG_RESEND_SECS`] after that answer; one NanoHUB never queued is
-//!    sent again at the next look.
+//!    `TokenUpdate`), the gate sends it no nonce and no pkg in this enrollment, and removes the
+//!    nonce profile it pushed in this enrollment (`RemoveProfile`, once); the look that removes
+//!    it does nothing else. Otherwise, and at a later look, only the config profile of step 2
+//!    is sent to it, and only one it has been sent in this enrollment.
+//! 2. The config profile is installed once per enrollment, and again once per change of its
+//!    settings: the record keeps, with the command, the SHA-256 of the settings it carried
+//!    ([`ConfigProfile::settings_sha256`]), and a command the device acknowledged carrying
+//!    other settings, or none recorded, is replaced by a new one, with the same identifier.
+//!    A command the device has not answered is not sent again, so a change is sent once however
+//!    many looks follow. One the device answered with an error is sent again
+//!    [`CONFIG_RESEND_SECS`] after that answer; one NanoHUB never queued is sent again at the
+//!    next look. The digest counts as delivered only when the answer is `Acknowledged`.
 //! 3. With the pkg install ([`crate::install`]), once the config profile is acknowledged and
 //!    while no request is a candidate (below), the pkg is sent, and sent again an hour after
-//!    the device's last answer to it.
+//!    the device's last answer to it. A config profile sent again for new settings and not yet
+//!    acknowledged holds the pkg back until it is.
 //! 4. A nonce is issued only when every condition of design 5.1 holds: the device is
 //!    supervised (and enrolled, as above); the serial is on the allowlist (as above); no nonce
 //!    issued for the serial is still good: unexpired ([`NONCE_VALID_SECS`] from its issue: at
@@ -58,7 +66,7 @@ use hostkeeper_enrollment::names::KeyHash;
 use crate::command::{Command, INSTALL_PROFILE};
 use crate::gate::Gate;
 use crate::ids::CommandUuid;
-use crate::profile::{DaemonProfile, ProfileIdentifier, nonce_profile};
+use crate::profile::{ConfigProfile, ProfileIdentifier, nonce_profile};
 use crate::record::{DeviceRecord, NonceRecord, ProfileCommand, Sent};
 
 /// How often every device is looked at.
@@ -151,8 +159,8 @@ pub trait Enrollments: Send + Sync {
 pub struct EnrollSide {
     /// The farm's profile identifier.
     pub identifier: ProfileIdentifier,
-    /// The daemon config of the config profile.
-    pub config: DaemonProfile,
+    /// The config profile: the daemon config, and the stores and signers when given.
+    pub config: ConfigProfile,
     /// The coordinator's enrollment.
     pub enrollments: Arc<dyn Enrollments>,
 }
@@ -232,6 +240,18 @@ fn again(record: &DeviceRecord, command: &ProfileCommand, now: u64, after: u64) 
     }
 }
 
+/// Whether the config profile `command` (of `record`) is to be sent now, when the profile the
+/// gate would send has the settings with the digest `digest`: not when the device acknowledged
+/// it carrying those settings; when it acknowledged it carrying others (or, on a record written
+/// before the digest, none), at once; otherwise by [`again`]: never queued, or answered with an
+/// error [`CONFIG_RESEND_SECS`] ago. A command the device has not answered is never sent again.
+fn config_due(record: &DeviceRecord, command: &ProfileCommand, digest: &str, now: u64) -> bool {
+    match command.answer {
+        Some(answer) if answer.acknowledged => command.settings_sha256.as_deref() != Some(digest),
+        _ => again(record, command, now, CONFIG_RESEND_SECS),
+    }
+}
+
 impl Gate {
     /// Every device, looked at once.
     pub async fn tick(&self) {
@@ -263,11 +283,16 @@ impl Gate {
             }
         };
         if last_approval.is_some_and(|at| at >= since) {
-            return self.remove_nonce(side, record, now).await;
+            // The nonce's removal first; the config profile follows at the next look. An
+            // approved Mac is sent nothing else, but a config profile whose settings changed.
+            if !self.remove_nonce(side, record.clone(), now).await {
+                self.send_config(side, record, now, true).await;
+            }
+            return;
         }
         // One profile command a look: a config profile sent now is followed by the nonce at
         // the next look, which the daemon, not yet installed, cannot have asked for anyway.
-        if self.send_config(side, record.clone(), now).await {
+        if self.send_config(side, record.clone(), now, false).await {
             return;
         }
         // The pkg, while no candidate request has appeared (design 5.4); a look that sent it,
@@ -298,19 +323,27 @@ impl Gate {
         (unique && side.enrollments.allowed(&serial)).then_some((serial, since))
     }
 
-    /// The config profile, when it is due; whether it was.
-    async fn send_config(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) -> bool {
-        let due = record
-            .config_profile
-            .as_ref()
-            .is_none_or(|command| again(&record, command, now, CONFIG_RESEND_SECS));
+    /// The config profile, when it is due; whether it was. `approved`: a request claiming the
+    /// serial was approved in this enrollment, so a device with no config profile of this
+    /// enrollment is sent none.
+    async fn send_config(
+        &self,
+        side: &EnrollSide,
+        mut record: DeviceRecord,
+        now: u64,
+        approved: bool,
+    ) -> bool {
+        let digest = side.config.settings_sha256();
+        let due = record.config_profile.as_ref().map_or(!approved, |command| {
+            config_due(&record, command, &digest, now)
+        });
         if !due {
             return false;
         }
         let Some([uuid, profile, payload]) = self.uuids(&mut record) else {
             return true;
         };
-        record.config_profile = Some(ProfileCommand::new(uuid.clone(), now));
+        record.config_profile = Some(ProfileCommand::new(uuid.clone(), now).with_settings(digest));
         let bytes = side.config.profile(&side.identifier, [&profile, &payload]);
         let command = Command::install_profile(uuid, bytes);
         if self.dispatch(&mut record, &command, now).await {
@@ -499,21 +532,21 @@ impl Gate {
         self.kept(&record);
     }
 
-    /// The nonce profile pushed in this enrollment, removed once.
-    async fn remove_nonce(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) {
+    /// The nonce profile pushed in this enrollment, removed once; whether it was due.
+    async fn remove_nonce(&self, side: &EnrollSide, mut record: DeviceRecord, now: u64) -> bool {
         let Some(nonce) = record.nonce.clone() else {
-            return;
+            return false;
         };
         let due = nonce.enrollment == record.enrollment
             && nonce.removal.as_ref().is_none_or(|removal| {
                 removal.answer.is_none() && !record.is_unanswered(&removal.uuid)
             });
         if !due {
-            return;
+            return false;
         }
         self.forget_held(&record.enrollment_id);
         let Some([uuid]) = self.uuids(&mut record) else {
-            return;
+            return true;
         };
         record.nonce = Some(NonceRecord {
             removal: Some(ProfileCommand::new(uuid.clone(), now)),
@@ -523,6 +556,7 @@ impl Gate {
         if self.dispatch(&mut record, &command, now).await {
             tracing::info!(enrollment_id = %record.enrollment_id, "removed the nonce profile: the Mac is approved");
         }
+        true
     }
 
     /// `N` new UUIDs; `None`, with the reason kept in `record`, when no random bytes could be

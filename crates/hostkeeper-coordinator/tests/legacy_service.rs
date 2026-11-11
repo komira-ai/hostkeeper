@@ -61,10 +61,9 @@ async fn legacy_single_service_heartbeat_belongs_to_the_named_service() {
 
         let (code, body) = rig.heartbeat("d1", "daemon", BEAT).await;
         assert_eq!(code, 200);
-        assert_eq!(
-            body, r#"{"reply":"update","version":"2.0"}"#,
-            "no service named: {legacy}"
-        );
+        // The JSON route carries no order: the host is answered `nothing`, and noted as the legacy
+        // service's.
+        assert_eq!(body, r#"{"reply":"nothing"}"#, "no service named: {legacy}");
         let status = rig.status().await;
         assert_eq!(hosts_of(&status, legacy), ["d1"], "{legacy}");
         assert!(hosts_of(&status, other).is_empty(), "{legacy}");
@@ -89,10 +88,10 @@ async fn legacy_single_service_heartbeat_belongs_to_the_named_service() {
             .heartbeat("d2", "daemon", &beat_listing("2.0", other))
             .await;
         assert_eq!(code, 200);
+        // The JSON route carries no order, so the other service's update is not named in it.
         assert_eq!(
-            named,
-            format!(r#"{{"reply":"update","service":"{other}","version":"3.0"}}"#),
-            "{legacy}: the other service is named"
+            named, r#"{"reply":"nothing"}"#,
+            "{legacy}: the other service is not ordered"
         );
     }
 }
@@ -156,10 +155,8 @@ async fn without_legacy_service_such_a_heartbeat_is_refused() {
         .heartbeat("d1", "daemon", &beat_listing("1.0", "alpha"))
         .await;
     assert_eq!(code, 200);
-    assert_eq!(
-        body,
-        r#"{"reply":"update","service":"alpha","version":"2.0"}"#
-    );
+    // The JSON route carries no order: the host is answered `nothing`, and noted as alpha's.
+    assert_eq!(body, r#"{"reply":"nothing"}"#);
     let status = rig.status().await;
     assert_eq!(hosts_of(&status, "alpha"), ["d1"]);
     assert!(hosts_of(&status, "beta").is_empty());

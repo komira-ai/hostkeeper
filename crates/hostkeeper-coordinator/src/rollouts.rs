@@ -2,7 +2,8 @@
 //! the coordinator entering a stage by itself ([`advance`]), and the operator's
 //! `Rollouts.Advance`, `Rollouts.Pause` and `Rollouts.Resume`.
 //!
-//! The position of a plan ([`Rollout`]) is kept per service in the ops store and written in the
+//! The position of a plan ([`Rollout`]) is kept per service in the ops store (per package of a host
+//! group in the group's marks, [`crate::group_scope`]) and written in the
 //! halts file beside the ops file ([`crate::ops_file`]), whose reader skips a key it does not
 //! know, so the release before still reads both files. It is the desired version it is for, how
 //! far the plan has entered (one past the first stage of the rollout file of its last stage),
@@ -15,6 +16,9 @@
 //! operator's call is one audit entry under the token's name: `rollout_advance`,
 //! `rollout_pause` (written memory first: a pause raises protection and stands without its
 //! audit line), `rollout_resume`.
+//!
+//! Once the coordinator holds a host group the plans are the groups' (`group_rollouts.rs`): each
+//! call names a group in `host_group`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::PoisonError;
@@ -27,12 +31,13 @@ use serde::{Deserialize, Serialize};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::live::{Live, Why, live_elsewhere};
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{OpsError, OpsState, OpsStore, Write};
 use crate::reconcile::{COORDINATOR, entry};
 use crate::service::Coordinator;
 use crate::services::ServiceDef;
-use crate::stages::{Advance, HostState, PlanStage, View, Wait, elsewhere, first_entered, reach};
+use crate::stages::{Advance, HostState, PlanStage, View, Wait, first_entered, reach};
 
 /// Where the update plan of a service stands, as the ops store keeps it. Every field is left out
 /// when it holds nothing.
@@ -126,17 +131,18 @@ pub(crate) fn advance(
     // Every host heard runs the version and none is to install it: nothing is left to order,
     // and the plan is not built at all.
     let service = def.name.as_str();
+    let group = def.group();
     let rolled = fleet
-        .hosts_of(service)
+        .hosts_in(def)
         .all(|(_, h)| h.beat.version == want.version && h.beat.updating.is_none())
         && fleet
             .nodes()
             .all(|(id, node)| node.announced.contains_key(service) || !fleet.is_assigned(def, id));
-    let marks = ops.marks(service);
+    let marks = ops.read(|state| state.marks_in(group, service));
     if rolled || marks.halt.is_some() || marks.bad.contains(&want.version) || fleet.is_quiet(now) {
         return;
     }
-    let kept_now = ops.read(|state| state.rollouts.get(service).cloned());
+    let kept_now = ops.read(|state| state.rollout_in(group, service));
     let view = View::of(def, want, kept_now.as_ref(), fleet, now);
     if view.paused.is_some() {
         return;
@@ -148,14 +154,15 @@ pub(crate) fn advance(
         return;
     };
     let record = kept(&view);
-    let audit = entry(
+    let mut audit = entry(
         COORDINATOR,
         "rollout_advance",
         &def.name,
         entered(&def.name, &view),
     );
+    audit.host_group = group.map(ToString::to_string);
     match ops.change(Write::BeforeMemory, audit, |state| {
-        state.rollouts.insert(def.name.clone(), record);
+        state.set_rollout_in(group, &def.name, record);
     }) {
         Ok(_) => fleet.set_marks(ops.read(marks_of)),
         Err(why) => {
@@ -210,9 +217,14 @@ impl Coordinator {
 
     /// The plan of `def` for its desired state `want` (none without one) at `now`, as the status
     /// answers it, over every service's desired state `all` and the ops state `ops`.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the inputs of one plan, read under the fleet's lock"
+    )]
     pub(crate) fn plan_in(
         &self,
         def: &ServiceDef,
+        services: &crate::services::Services,
         want: Option<&Desired>,
         all: &BTreeMap<String, Desired>,
         ops: &OpsState,
@@ -220,19 +232,12 @@ impl Coordinator {
         now: Duration,
     ) -> Option<proto::RolloutPlan> {
         let want = want?;
-        let halted = ops
-            .services
-            .get(&def.name)
-            .is_some_and(|marks| marks.halt.is_some() || marks.bad.contains(&want.version));
-        Some(plan_proto(
-            &self.services,
-            all,
-            def,
-            want,
-            halted,
-            fleet,
-            now,
-        ))
+        let halted = crate::halt::standing(ops, def.group(), &def.name).is_some()
+            || ops
+                .services
+                .get(&def.name)
+                .is_some_and(|marks| marks.bad.contains(&want.version));
+        Some(plan_proto(services, all, def, want, halted, fleet, now))
     }
 
     /// The plan of `def` as it stands now, for an answer; none when the service has no desired
@@ -241,7 +246,15 @@ impl Coordinator {
         let want = self.desired.get(&def.name);
         let all = self.desired.all();
         let ops = self.ops.state();
-        self.plan_in(def, want.as_ref(), &all, &ops, fleet, (self.clock)())
+        self.plan_in(
+            def,
+            &self.services,
+            want.as_ref(),
+            &all,
+            &ops,
+            fleet,
+            (self.clock)(),
+        )
     }
 
     /// `Rollouts.Advance`: enters the next stage of a plan that waits for an operator, and every
@@ -257,6 +270,12 @@ impl Coordinator {
         request: proto::AdvanceRequest,
     ) -> Result<proto::AdvanceResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.advance_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -313,6 +332,12 @@ impl Coordinator {
         request: proto::PauseRequest,
     ) -> Result<proto::PauseResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.pause_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -351,6 +376,12 @@ impl Coordinator {
         request: proto::ResumeRequest,
     ) -> Result<proto::ResumeResponse, proto::RolloutsRefusal> {
         let by = caller.operator()?;
+        if self.desired.in_group_mode() {
+            return self.resume_in_groups(by, request);
+        }
+        if !request.host_group.is_empty() {
+            return Err(proto::RolloutsRefusal::NotInHostGroup);
+        }
         let def = self
             .services
             .get(&request.service)
@@ -380,7 +411,9 @@ impl Coordinator {
 
 /// The plan of `def` for its desired state `want` at `now` as `hostkeeper.operator.v1` says it,
 /// with why it waits: a halt or a bad version (`halted`), the pause, the quiet start and the other
-/// services' rollouts first, then what the plan holds ([`View::wait`]).
+/// services' rollouts first (naming the services whose live rollouts hold it, `waiting_on`, and
+/// why each is live, `waiting_on_why`), then
+/// what the plan holds ([`View::wait`]).
 pub(crate) fn plan_proto(
     services: &crate::services::Services,
     all: &BTreeMap<String, Desired>,
@@ -391,6 +424,7 @@ pub(crate) fn plan_proto(
     now: Duration,
 ) -> proto::RolloutPlan {
     let view = crate::stages::current(def, want, fleet, now);
+    let mut live_on = Vec::new();
     let waiting = if view.finished() {
         None
     } else if halted {
@@ -399,7 +433,8 @@ pub(crate) fn plan_proto(
         Some(Wait::Paused)
     } else if fleet.is_quiet(now) {
         Some(Wait::Quiet)
-    } else if elsewhere(services, all, &def.name, fleet, now) {
+    } else if let Some(live) = live_elsewhere(services, all, &def.name, fleet, now) {
+        live_on = live;
         Some(Wait::RolloutElsewhere)
     } else {
         view.wait(def, want, fleet, now)
@@ -420,6 +455,28 @@ pub(crate) fn plan_proto(
         paused_by: view.paused.as_ref().map(|p| p.by.clone()),
         pause_reason: view.paused.as_ref().map(|p| p.reason.clone()),
         finished: view.finished(),
+        waiting_on: live_on.iter().map(|(name, _)| name.clone()).collect(),
+        host_group: def.group().map(ToString::to_string).unwrap_or_default(),
+        waiting_on_why: live_on.into_iter().map(live_proto).collect(),
+    }
+}
+
+/// Why the service `name` is live, as `hostkeeper.operator.v1` says it.
+fn live_proto((name, live): (String, Live)) -> proto::LiveRollout {
+    let reason = match live.why {
+        Why::Updating => proto::LiveReason::Updating,
+        Why::PromotionPending => proto::LiveReason::PromotionPending,
+        Why::Ordered => proto::LiveReason::Ordered,
+        Why::Baking => proto::LiveReason::Baking,
+        Why::PlanUnderWay => proto::LiveReason::PlanUnderWay,
+    };
+    proto::LiveRollout {
+        service: name,
+        reason: reason.into(),
+        node_id: live
+            .host
+            .map(|id| id.as_str().to_owned())
+            .unwrap_or_default(),
     }
 }
 
@@ -469,3 +526,6 @@ fn wait_proto(wait: Option<Wait>) -> proto::PlanWait {
         Some(Wait::Baking) => proto::PlanWait::Baking,
     }
 }
+
+#[path = "group_rollouts.rs"]
+mod groups;

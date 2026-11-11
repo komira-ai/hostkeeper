@@ -3,6 +3,8 @@
 //! this boot, one per service, and stopped by a new order of the service.
 
 mod support;
+mod support_apt;
+mod support_host;
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -18,16 +20,17 @@ use hostkeeper_hook::{Class, Phase, Step, Verdict};
 use hostkeeper_steps::record::RECORD_FILE;
 use hostkeeper_steps::{BootId, Finished, LaunchError, ResumeAction, RunError};
 use support::{
-    PENDING_LINE, Rig, alerting, crash_after_writing, d, finished, lines, manifest_with, name, ok,
-    update,
+    PENDING_LINE, alerting, crash_after_writing, finished, lines, manifest_with, name, ok,
 };
+use support_apt::open_up;
+use support_host::NativeHost;
 
 /// `web`'s update to 2.0.0, whose promotion ceiling is 100 seconds, reached the post-success
 /// watcher when the daemon died: its record is in the watcher.
-fn watched(rig: &Rig) {
+fn watched(rig: &NativeHost) {
     let ceiling = manifest_with("web", "2.0.0", "promotion_ceiling_secs = 100");
     rig.running("web", support::BASE);
-    rig.store.add("web", "2.0.0", &ceiling);
+    rig.publish_manifest("web", "2.0.0", &ceiling);
     let (_, _) = rig.booted();
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE)]);
@@ -35,7 +38,7 @@ fn watched(rig: &Rig) {
     let dying = rig
         .daemon()
         .with_stores(crash_after_writing(record, r#""watching": {"#));
-    let reply = dying.order(&update("web", "2.0.0", &d(), 1));
+    let reply = dying.order(&rig.update("web", "2.0.0", 1));
     assert!(matches!(reply, Reply::Interrupted { .. }), "{reply:?}");
     let rec = rig.record("web").expect("a record");
     assert!(rec.progress.watching.is_some());
@@ -44,7 +47,7 @@ fn watched(rig: &Rig) {
 
 /// What [`Rig::booted`] makes, and the party of the watcher of `web`: over once that watcher ends.
 /// It is set before the start pass, since only ends after it is set are seen.
-fn booted_watched(rig: &Rig) -> (Daemon, BootReport, Ending) {
+fn booted_watched(rig: &NativeHost) -> (Daemon, BootReport, Ending) {
     fs::create_dir_all(&rig.state).expect("the state dir");
     fs::set_permissions(&rig.state, fs::Permissions::from_mode(0o700)).expect("its mode");
     let daemon = rig.daemon();
@@ -64,7 +67,7 @@ fn after_commit() -> Finished {
 }
 
 /// The steps the launcher ran for `web` after its first four.
-fn later_steps(rig: &Rig) -> Vec<Step> {
+fn later_steps(rig: &NativeHost) -> Vec<Step> {
     rig.launcher.steps("web")[4..].to_vec()
 }
 
@@ -74,7 +77,7 @@ fn later_steps(rig: &Rig) -> Vec<Step> {
 #[test]
 fn the_watcher_never_runs_rollback() {
     for (code, want) in [(1, after_commit()), (76, finished(Verdict::Halt, None))] {
-        let rig = Rig::new("watch-never-rolls-back");
+        let rig = NativeHost::new("watch-never-rolls-back");
         watched(&rig);
         rig.launcher.exits("web", Step::Verify, &[code]);
         let (daemon, report) = rig.booted();
@@ -95,7 +98,7 @@ fn the_watcher_never_runs_rollback() {
 /// itself, a wait that names the watcher's party fails at once, saying whose watcher ended.
 #[test]
 fn a_wait_on_a_watcher_that_has_ended_fails_naming_it() {
-    let rig = Rig::new("watch-ends");
+    let rig = NativeHost::new("watch-ends");
     watched(&rig);
     rig.launcher.exits("web", Step::Verify, &[1]);
     let (daemon, report, ends) = booted_watched(&rig);
@@ -115,7 +118,7 @@ fn a_wait_on_a_watcher_that_has_ended_fails_naming_it() {
 /// update ends `Failed(after_commit)` with no `rollback`.
 #[test]
 fn the_watcher_restarts_after_a_reboot_and_never_runs_rollback() {
-    let rig = Rig::new("watch-reboot");
+    let rig = NativeHost::new("watch-reboot");
     watched(&rig);
     rig.clock.advance(10_000);
     rig.reboot();
@@ -136,7 +139,7 @@ fn the_watcher_restarts_after_a_reboot_and_never_runs_rollback() {
 /// pending, and once the ceiling of 100 seconds has passed the watcher ends `Failed(after_commit)`.
 #[test]
 fn the_watcher_ceiling_ends_failed_after_commit() {
-    let rig = Rig::new("watch-ceiling");
+    let rig = NativeHost::new("watch-ceiling");
     watched(&rig);
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE); 10]);
@@ -154,9 +157,9 @@ fn the_watcher_ceiling_ends_failed_after_commit() {
 /// that `verify` by name, and runs to its verdict; no two steps ever ran at once.
 #[test]
 fn a_new_order_stops_the_watcher_and_only_one_watcher_runs_per_service() {
-    let rig = Rig::new("watch-new-order");
+    let rig = NativeHost::new("watch-new-order");
     watched(&rig);
-    rig.add("web", "3.0.0");
+    rig.add_staged("web", "3.0.0");
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE)]);
     let gate = rig.launcher.hold("web", Step::Verify);
@@ -171,11 +174,10 @@ fn a_new_order_stops_the_watcher_and_only_one_watcher_runs_per_service() {
     assert_eq!(later_steps(&rig), [Step::Verify]);
     let daemon = Arc::new(daemon);
     let stops = watcher_stops(&daemon.ctx().watchers);
+    let third = rig.update("web", "3.0.0", 2);
     let order = {
         let daemon = Arc::clone(&daemon);
-        spawn("the order", move || {
-            daemon.order(&update("web", "3.0.0", &d(), 2))
-        })
+        spawn("the order", move || daemon.order(&third))
     };
     // The order has told the watcher to stop and waits for it.
     assert_eq!(
@@ -209,7 +211,7 @@ fn a_new_order_stops_the_watcher_and_only_one_watcher_runs_per_service() {
 /// once, no other `verify` starts, and the watcher says why it ended.
 #[test]
 fn a_watcher_stopped_while_it_waits_runs_nothing_more() {
-    let rig = Rig::new("watch-stopped");
+    let rig = NativeHost::new("watch-stopped");
     watched(&rig);
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE); 3]);
@@ -243,8 +245,9 @@ fn a_watcher_stopped_while_it_waits_runs_nothing_more() {
 /// longer the one the record verified halts the update; with the params file gone, it is held.
 #[test]
 fn a_watcher_that_cannot_be_rebuilt_is_not_restarted() {
-    let rig = Rig::new("watch-changed");
+    let rig = NativeHost::new("watch-changed");
     watched(&rig);
+    open_up(&rig.packages.join("web/2.0.0"));
     std::fs::write(rig.packages.join("web/2.0.0/extra"), "x").expect("change the tree");
     let (daemon, report) = rig.booted();
     assert_eq!(
@@ -253,7 +256,7 @@ fn a_watcher_that_cannot_be_rebuilt_is_not_restarted() {
     );
     assert!(daemon.ctx().watchers.wait(&name("web")).is_none());
 
-    let rig = Rig::new("watch-no-params");
+    let rig = NativeHost::new("watch-no-params");
     watched(&rig);
     std::fs::remove_file(rig.state.join("web/params.toml")).expect("remove the params");
     let (_, report) = rig.booted();
@@ -269,13 +272,13 @@ fn a_watcher_that_cannot_be_rebuilt_is_not_restarted() {
 /// the watcher, the start pass goes on, and the watcher on its thread ends the update.
 #[test]
 fn an_update_that_reaches_its_watcher_at_the_start_is_watched_on_its_thread() {
-    let rig = Rig::new("watch-handoff");
-    rig.add("web", "2.0.0");
+    let rig = NativeHost::new("watch-handoff");
+    rig.add_staged("web", "2.0.0");
     let (daemon, _) = rig.booted();
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE), (0, "")]);
     rig.launcher.lose("web", Step::Cleanup);
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     assert!(matches!(reply, Reply::Interrupted { .. }), "{reply:?}");
     drop(daemon);
     let (daemon, report) = rig.booted();
@@ -300,7 +303,7 @@ fn alert(kind: &str, why: &str) -> String {
 /// locked for good, the status says why, an order of it is `busy`, and the alert names the unit.
 #[test]
 fn a_watcher_that_cannot_stop_its_verify_locks_the_service_and_alerts() {
-    let rig = Rig::new("watch-unstopped");
+    let rig = NativeHost::new("watch-unstopped");
     watched(&rig);
     rig.launcher.fail_stops("web");
     let stops = rig.launcher.stops_seen();
@@ -343,7 +346,7 @@ fn a_watcher_that_cannot_stop_its_verify_locks_the_service_and_alerts() {
             "the dead-man could not stop updater-web-verify-1 at its bound (the launcher failed: updater-web-verify-1 could not be stopped); the step is left running"
         )]
     );
-    let reply = daemon.order(&update("web", "2.0.0", &d(), 1));
+    let reply = daemon.order(&rig.update("web", "2.0.0", 1));
     assert_eq!(reply.refusal(), Some(Refusal::Busy), "{reply:?}");
 }
 
@@ -352,7 +355,7 @@ fn a_watcher_that_cannot_stop_its_verify_locks_the_service_and_alerts() {
 /// `watcher_interrupted`; neither locks the service.
 #[test]
 fn a_watcher_that_stops_without_a_verdict_alerts() {
-    let rig = Rig::new("watch-journal");
+    let rig = NativeHost::new("watch-journal");
     watched(&rig);
     let full = Arc::new(|_: u64| Some(std::io::Error::from_raw_os_error(28)));
     let (daemon, alerts) = alerting(rig.daemon().with_stores(Arc::new(
@@ -372,7 +375,7 @@ fn a_watcher_that_stops_without_a_verdict_alerts() {
     );
     assert!(daemon.ctx().locks.holder(&name("web")).is_none());
 
-    let rig = Rig::new("watch-lost");
+    let rig = NativeHost::new("watch-lost");
     watched(&rig);
     rig.launcher.lose("web", Step::Verify);
     let (daemon, alerts) = alerting(rig.daemon());
@@ -393,7 +396,7 @@ fn a_watcher_that_stops_without_a_verdict_alerts() {
 /// runs of `verify`, it ends as soon as the wait sees the stop, and starts no other `verify`.
 #[test]
 fn a_watcher_stopped_in_its_wait_ends_at_once() {
-    let rig = Rig::new("watch-stopped-waiting");
+    let rig = NativeHost::new("watch-stopped-waiting");
     watched(&rig);
     rig.launcher
         .replies("web", Step::Verify, &[(0, PENDING_LINE); 3]);
@@ -427,7 +430,7 @@ fn a_watcher_stopped_in_its_wait_ends_at_once() {
 #[test]
 fn the_daemon_ends_its_watchers_when_it_ends() {
     for in_verify in [true, false] {
-        let rig = Rig::new("watch-shutdown");
+        let rig = NativeHost::new("watch-shutdown");
         watched(&rig);
         rig.launcher
             .replies("web", Step::Verify, &[(0, PENDING_LINE); 10]);
@@ -451,9 +454,9 @@ fn the_daemon_ends_its_watchers_when_it_ends() {
 /// holds the step lock), `web`'s watcher runs its `verify` and ends the update.
 #[test]
 fn a_watcher_runs_while_another_service_holds_a_long_step() {
-    let rig = Rig::new("watch-beside");
+    let rig = NativeHost::new("watch-beside");
     watched(&rig);
-    rig.add("beta", "2.0.0");
+    rig.add_staged("beta", "2.0.0");
     rig.launcher.exits("web", Step::Verify, &[1]);
     let watcher_verify = rig.launcher.hold("web", Step::Verify);
     let (daemon, _, ends) = booted_watched(&rig);
@@ -467,7 +470,7 @@ fn a_watcher_runs_while_another_service_holds_a_long_step() {
     let beta = {
         let daemon = Arc::clone(&daemon);
         spawn("beta's order", move || {
-            daemon.order(&update("beta", "2.0.0", &d(), 1))
+            daemon.order(&rig.update("beta", "2.0.0", 1))
         })
     };
     beta_prepare.entered(&beta).expect("beta's prepare runs");

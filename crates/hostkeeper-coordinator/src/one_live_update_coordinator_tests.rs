@@ -69,7 +69,7 @@ fn beat_of(entries: &[Value]) -> Heartbeat {
 fn send(rig: &Rig, at: u64, host: &str, entries: &[Value]) -> ServiceReply {
     rig.at(at);
     rig.coordinator
-        .heartbeat(who(host), beat_of(entries))
+        .heartbeat_native(who(host), beat_of(entries))
         .expect("a heartbeat")
         .reply
 }
@@ -214,62 +214,82 @@ async fn an_update_of_a_halted_service_still_holds_the_slot() {
 
 /// Behaviour: after a restart, a holder that reports in the quiet start holds the slot as
 /// before, and frees it under its own rule only: a pending promotion when it is done and the
-/// two beats of `other`'s bake follow, a failed unhealthy host when it beats healthy, a host
-/// baking when it has beaten twice since the restart (the count starts again). Catches a
-/// restarted coordinator ordering past a holder it heard in the quiet start.
+/// two beats of `other`'s bake follow. A host baking `other` after an update the coordinator saw
+/// holds `second` before the restart; after it, the coordinator first hears that host already
+/// at the version and cannot tell it updated, so its bake holds nothing: `second` is ordered
+/// after the quiet start. A failed unhealthy host of `other` holds nothing of `second`, before
+/// the restart or after the quiet start. Catches a restarted coordinator ordering past a
+/// holder it heard in the quiet start, a restart that makes a converged service live again for
+/// its bake, and a failure that holds another service after one.
 #[tokio::test]
 async fn a_restart_resumes_the_rule_for_every_kind_of_holder() {
+    let holder = entry("other", "3.0", &json!({"promotion_pending": true}));
+    let release = [other_at("3.0"), other_at("3.0")];
+    let mut pend = rig("one-live-restart-pending", PLAIN).await;
+    send(&pend, 2_000, "d1", std::slice::from_ref(&holder));
+    assert_eq!(
+        send(&pend, 2_000, "d2", &[second_behind()]),
+        ServiceReply::Nothing,
+        "pending before"
+    );
+    pend.at(2_020);
+    pend.coordinator = start(&pend, PLAIN);
+    send(&pend, 2_035, "d1", std::slice::from_ref(&holder));
+    assert_eq!(
+        send(&pend, 2_050, "d2", &[second_behind()]),
+        ServiceReply::Nothing,
+        "pending after the quiet start"
+    );
+    let mut at = 2_050;
+    for (n, word) in release.iter().enumerate() {
+        at += 15;
+        assert_eq!(
+            send(&pend, at, "d2", &[second_behind()]),
+            ServiceReply::Nothing,
+            "pending: before release beat {n}"
+        );
+        send(&pend, at, "d1", std::slice::from_ref(word));
+    }
+    assert_eq!(
+        send(&pend, at, "d2", &[second_behind()]),
+        order("second"),
+        "pending released"
+    );
+
+    let mut bake = rig("one-live-restart-baking", PLAIN).await;
+    send(&bake, 1_990, "d1", &[other_updating()]);
+    send(&bake, 2_000, "d1", &[other_at("3.0")]);
+    assert_eq!(
+        send(&bake, 2_000, "d2", &[second_behind()]),
+        ServiceReply::Nothing,
+        "baking before"
+    );
+    bake.at(2_020);
+    bake.coordinator = start(&bake, PLAIN);
+    send(&bake, 2_035, "d1", &[other_at("3.0")]);
+    assert_eq!(
+        send(&bake, 2_050, "d2", &[second_behind()]),
+        order("second"),
+        "baking after the quiet start"
+    );
+
     let failed =
         json!({"health": "unhealthy", "last_update": {"target": "3.0", "outcome": "failed"}});
-    let cases = [
-        (
-            "pending",
-            entry("other", "3.0", &json!({"promotion_pending": true})),
-            vec![other_at("3.0"), other_at("3.0")],
-        ),
-        (
-            "failed",
-            entry("other", "1.0", &failed),
-            vec![entry(
-                "other",
-                "1.0",
-                &json!({"last_update": {"target": "3.0", "outcome": "failed"}}),
-            )],
-        ),
-        ("baking", other_at("3.0"), vec![other_at("3.0")]),
-    ];
-    for (case, holder, release) in cases {
-        let mut rig = rig(&format!("one-live-restart-{case}"), PLAIN).await;
-        send(&rig, 2_000, "d1", std::slice::from_ref(&holder));
-        assert_eq!(
-            send(&rig, 2_000, "d2", &[second_behind()]),
-            ServiceReply::Nothing,
-            "{case} before"
-        );
-        rig.at(2_020);
-        rig.coordinator = start(&rig, PLAIN);
-        send(&rig, 2_035, "d1", std::slice::from_ref(&holder));
-        assert_eq!(
-            send(&rig, 2_050, "d2", &[second_behind()]),
-            ServiceReply::Nothing,
-            "{case} after the quiet start"
-        );
-        let mut at = 2_050;
-        for (n, word) in release.iter().enumerate() {
-            at += 15;
-            assert_eq!(
-                send(&rig, at, "d2", &[second_behind()]),
-                ServiceReply::Nothing,
-                "{case}: before release beat {n}"
-            );
-            send(&rig, at, "d1", std::slice::from_ref(word));
-        }
-        assert_eq!(
-            send(&rig, at, "d2", &[second_behind()]),
-            order("second"),
-            "{case} released"
-        );
-    }
+    let mut rig = rig("one-live-restart-failed", PLAIN).await;
+    send(&rig, 2_000, "d1", &[entry("other", "1.0", &failed)]);
+    assert_eq!(
+        send(&rig, 2_000, "d2", &[second_behind()]),
+        order("second"),
+        "failed before"
+    );
+    rig.at(2_020);
+    rig.coordinator = start(&rig, PLAIN);
+    send(&rig, 2_035, "d1", &[entry("other", "1.0", &failed)]);
+    assert_eq!(
+        send(&rig, 2_050, "d2", &[second_behind()]),
+        order("second"),
+        "failed after the quiet start"
+    );
 }
 
 /// Behaviour, the limit of a restart: orders are not stored, so a host ordered before the
@@ -304,14 +324,14 @@ async fn racing_heartbeats_for_two_services_get_one_order() {
             let a = s.spawn(|| {
                 barrier.wait();
                 rig.coordinator
-                    .heartbeat(who("d1"), beat_of(&[other_at("1.0")]))
+                    .heartbeat_native(who("d1"), beat_of(&[other_at("1.0")]))
                     .expect("a heartbeat")
                     .reply
             });
             let b = s.spawn(|| {
                 barrier.wait();
                 rig.coordinator
-                    .heartbeat(who("d2"), beat_of(&[second_behind()]))
+                    .heartbeat_native(who("d2"), beat_of(&[second_behind()]))
                     .expect("a heartbeat")
                     .reply
             });

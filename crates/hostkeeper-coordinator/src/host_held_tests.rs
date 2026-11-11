@@ -2,7 +2,8 @@
 //! each record, what the enrollment store holds for its host id (no host, an approved host, a
 //! denied one or a retired one), read from the store by host id. It holds after a coordinator
 //! restart and for a host never heard from, which `Hosts.List` (the hosts heard from since the
-//! coordinator started) does not show; a coordinator without enrollment says nothing
+//! coordinator started, and the enrolled hosts not denied that it has not heard, not live) does
+//! not show for a denied or retired host; a coordinator without enrollment says nothing
 //! (`UNSPECIFIED`); and a store that cannot be read is refused, never answered as "no host".
 
 use std::sync::Arc;
@@ -144,8 +145,8 @@ fn row(host: &str, enrolled: bool, held: Held) -> (String, bool, Held) {
 /// Proves: after a coordinator restart, `ListRecords` says `RETIRED` for the record of a host
 /// retired before it, `DENIED` for one denied whose retirement is not final, `APPROVED` for
 /// one approved and never heard from, and `NONE` only for the record no host id holds; each
-/// answer is the one given before the restart; and none of those hosts is in `Hosts.List`
-/// after the restart, nor `enrolled` (their claims match no record).
+/// answer is the one given before the restart; and only the approved hosts are in `Hosts.List`
+/// after the restart, not live, with no `enrolled` record (their claims match none).
 ///
 /// Catches: `host_held` read from the hosts heard from since start (the fleet, `Hosts.List`),
 /// which after a restart would answer `NONE` for a retired, a denied and a silent approved
@@ -185,7 +186,8 @@ fn list_records_says_what_the_store_holds_for_each_host_id_after_a_restart() {
     assert_eq!(fixture.held(), want, "before the restart");
 
     fixture.restart();
-    assert_eq!(fixture.listed_hosts(), Vec::<String>::new());
+    // Hosts enrolled and not denied are listed though none was heard since the restart.
+    assert_eq!(fixture.listed_hosts(), ["db-1", "db-2"]);
     assert_eq!(fixture.held(), want, "after the restart");
 }
 

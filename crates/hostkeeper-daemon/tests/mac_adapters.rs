@@ -10,8 +10,9 @@ use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use hostkeeper_daemon::adapters::{Adapters, host_boot_id, host_claims, host_clock, host_managed};
-use hostkeeper_daemon::cli::{DEFAULT_ADMIN_SOCKET, UNWIRED, Unwired};
+use clap::Parser;
+use hostkeeper_daemon::adapters::{Adapters, host_claims, host_managed};
+use hostkeeper_daemon::cli::{Cli, Command, UNWIRED, Unwired};
 use hostkeeper_daemon::ipmi::DevIpmi;
 use hostkeeper_daemon::mac::{
     CODESIGN, HostIoreg, HostMacVerify, IOREG, NOT_SIGNED, QUARANTINE_ATTRIBUTE, TOOL_DEADLINE,
@@ -19,15 +20,14 @@ use hostkeeper_daemon::mac::{
 };
 use hostkeeper_daemon::start::StartError;
 use hostkeeper_enroll::{Claims, Ioreg, LinuxClaims, ManagedFile};
+use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict, VerifyIoError};
 use hostkeeper_launchd::launchctl::print_args;
 use hostkeeper_launchd::{
     FakeLaunchctl, Label, LaunchctlError, LaunchctlOutput, PidInfo, PidInfoError, Platform,
     PlatformKind,
 };
 use hostkeeper_observe::{ActiveState, ObserveError, ProcessIdentity};
-use hostkeeper_steps::{BootId, Clock, Stamp};
 use hostkeeper_testkit::Scratch;
-use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use rustix::fs::XattrFlags;
 
 /// An attribute a test may set on Linux, where `com.apple.quarantine` is not a name a file can
@@ -391,19 +391,6 @@ impl PidInfo for FakePids {
     }
 }
 
-/// A package check that marks one path.
-struct OnePath(PathBuf);
-
-impl MacVerify for OnePath {
-    fn quarantine(&self, path: &Path) -> Result<bool, VerifyIoError> {
-        Ok(path == self.0)
-    }
-
-    fn signature(&self, _binary: &Path) -> Result<SignatureVerdict, VerifyIoError> {
-        Ok(SignatureVerdict::Unsigned)
-    }
-}
-
 fn running(label: &str, pid: u32) -> LaunchctlOutput {
     LaunchctlOutput::success(&format!(
         "system/{label} = {{\n\tstate = running\n\tpid = {pid}\n}}\n"
@@ -413,7 +400,7 @@ fn running(label: &str, pid: u32) -> LaunchctlOutput {
 /// Catches a macOS set wired to the wrong ports: the unit control asks the `launchctl` it was
 /// given (with the long deadline) and the observer's service manager the other (`print`), the
 /// process probe asks the pid lookup, the steps run on the launcher given, the units are linked
-/// in the platform's directory, and every package is judged by the check given.
+/// in the platform's directory.
 #[test]
 fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
     let dir = scratch("adapters-macos");
@@ -427,7 +414,6 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
     launchctl.always(&printed, Ok(running(label, 300)));
     let print = FakeLaunchctl::new();
     print.always(&printed, Ok(running(label, 301)));
-    let marked = dir.path().join("marked");
 
     let adapters = Adapters::macos(
         &platform,
@@ -435,7 +421,6 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
         launchctl.clone(),
         print.clone(),
         FakePids,
-        Arc::new(OnePath(marked.clone())),
     )
     .expect("the macOS set");
 
@@ -469,9 +454,6 @@ fn the_macos_adapters_ask_launchd_through_the_ports_they_are_given() {
         refused.to_string(),
         format!("the launcher failed: {UNWIRED}")
     );
-    let check = adapters.package_check.expect("a Mac checks its packages");
-    assert!(check.quarantine(&marked).expect("a verdict"));
-    assert!(!check.quarantine(dir.path()).expect("a verdict"));
 }
 
 /// Catches a Mac daemon that starts without its unit directory, or a Linux build that starts as
@@ -491,7 +473,6 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
         FakeLaunchctl::new(),
         FakeLaunchctl::new(),
         FakePids,
-        Arc::new(OnePath(PathBuf::new())),
     )
     .err()
     .expect("no unit directory");
@@ -500,13 +481,22 @@ fn a_macos_set_that_cannot_be_built_stops_the_start() {
         "{error}"
     );
 
-    let error = Adapters::for_platform(&Platform::macos())
-        .err()
-        .expect("this is a Linux build");
-    assert!(matches!(
-        error,
-        StartError::NoAdapters { platform: "macOS" }
-    ));
+    // A Linux build has no macOS adapters to give; a Mac's build gives its host set.
+    #[cfg(not(target_os = "macos"))]
+    {
+        let error = Adapters::for_platform(&Platform::macos())
+            .err()
+            .expect("this is a Linux build");
+        assert!(matches!(
+            error,
+            StartError::NoAdapters { platform: "macOS" }
+        ));
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let adapters = Adapters::for_platform(&Platform::macos()).expect("this is a Mac build");
+        assert_eq!(adapters.kind, PlatformKind::Macos);
+    }
 }
 
 /// Catches a Linux set that is not the systemd set: the systemd unit directory and no package
@@ -517,17 +507,15 @@ fn the_linux_adapters_are_the_systemd_set() {
     let adapters = Adapters::for_platform(&Platform::linux()).expect("the Linux set");
     assert_eq!(adapters.kind, PlatformKind::Linux);
     assert_eq!(adapters.unit_dir, Path::new("/etc/systemd/system"));
-    assert!(adapters.package_check.is_none());
 }
 
-/// Catches an admin socket default that is not the host platform's: the flag's default is where
-/// the platform keeps the socket (`/var/run/hostkeeper/admin.sock` on a Mac).
+/// Catches a run directory that is not the host platform's: the flags' settings name where the
+/// platform keeps its run directory (`/var/run` on a Mac), which the registration socket's
+/// directory is under.
 #[test]
-fn the_admin_socket_default_is_the_host_platforms() {
-    assert_eq!(
-        Path::new(DEFAULT_ADMIN_SOCKET),
-        Platform::host().admin_socket
-    );
+fn the_run_directory_of_the_settings_is_the_host_platforms() {
+    let Command::Daemon(flags) = Cli::parse_from(["hostkeeper", "daemon"]).command;
+    assert_eq!(flags.settings().run_dir, Platform::host().run_dir);
 }
 
 /// Catches a daemon built for Linux whose clock has no boot id, or one that is not the kernel's:
@@ -536,6 +524,10 @@ fn the_admin_socket_default_is_the_host_platforms() {
 #[cfg(target_os = "linux")]
 #[test]
 fn the_host_clock_of_a_linux_build_reads_the_kernels_boot_id() {
+    // Imported here, not at the top: on a Mac, which runs none of this test, they would be unused.
+    use hostkeeper_daemon::adapters::{host_boot_id, host_clock};
+    use hostkeeper_steps::{BootId, Clock, Stamp};
+
     let clock = host_clock();
     let id = clock.boot_id().expect("the host's boot id");
     assert!(BootId::uuid("the host", id.as_str()).is_ok(), "{id}");

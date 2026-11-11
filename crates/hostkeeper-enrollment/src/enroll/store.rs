@@ -1,26 +1,22 @@
-//! The store itself: its directory, its lock, reading and writing its files, the two steps a
+//! The store itself: its records, its lock, reading and checking each record, the two steps a
 //! request takes before issuance: [`EnrollmentStore::post`] and [`EnrollmentStore::approve`]
 //! (or [`EnrollmentStore::approve_recorded`]), and the one it takes when no operator approves
 //! it in time: [`EnrollmentStore::expire`].
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use prost::Message;
-
-use super::files::{
-    DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, pb, read_deny, read_issued,
-    read_serial,
+use super::records::{FileRecords, Record, RecordKey, Records, RecordsLock, pb};
+use super::rows::{
+    DenyState, HostRow, RequestRow, SCHEMA, claims_of_pb, claims_to_pb, corrupt, deny_state,
 };
-use super::mac_nonce::{MAC_NONCES, MacNonceHash};
 use super::{
-    Approval, ApprovalRecord, ApproveError, Claims, Decision, NewRequest, PostError, PostOutcome,
-    RecordedApproval, RequestState, RequestView, StoreError,
+    Approval, ApprovalRecord, ApproveError, Claims, Decision, HostRunning, NewRequest, PostError,
+    PostOutcome, RecordedApproval, RequestState, RequestView, StoreError,
 };
-use crate::ca::check_request;
-use crate::fs::{FileLock, Fs, write_atomic};
+use crate::ca::{HOST_VALIDITY_SECS, check_request};
+use crate::fs::Fs;
 use crate::names::{HostId, KeyHash, MacAddress};
 
 /// Two daemons reporting one host id with different machine ids within this many seconds of
@@ -34,76 +30,68 @@ pub const FIRST_SERIAL: u64 = 2;
 /// says otherwise (the coordinator's `--max-pending-enrollments`).
 pub const DEFAULT_MAX_PENDING: usize = 256;
 
-const REQUESTS: &str = "requests";
-const ISSUED: &str = "issued";
-const HOSTS: &str = "hosts";
-const DENY: &str = "deny";
-const SERIAL_FILE: &str = "serial.pb";
-const LOCK_FILE: &str = "lock";
-
-/// Every file is written owner-only.
-const FILE_MODE: u32 = 0o600;
-
-/// The enrollment store over one state directory (the coordinator's `--enrollment-dir`).
+/// The enrollment store over its [`Records`]: the files of one state directory (the
+/// coordinator's `--enrollment-dir`, [`EnrollmentStore::open`]), or any other
+/// ([`EnrollmentStore::new`]).
 pub struct EnrollmentStore {
-    fs: Arc<dyn Fs>,
-    dir: PathBuf,
+    records: Arc<dyn Records>,
     mutex: Mutex<()>,
     /// Per host id, the machine ids that reported it live and when, within the window.
     pub(super) live: Mutex<BTreeMap<HostId, BTreeMap<String, u64>>>,
     /// The most requests that may wait for an operator.
     max_pending: usize,
-    /// The Mac nonces an approval consumed: read from the approvals at open and added to by
-    /// each approval, so a nonce whose own file was not yet marked is still used.
-    pub(super) consumed: Mutex<BTreeSet<MacNonceHash>>,
-    /// The hosts whose host file is known to hold a first heartbeat since its approval, so a
+    /// How long a host certificate the store issues is valid, in seconds.
+    host_validity_secs: u64,
+    /// The hosts whose host record is known to hold a first heartbeat since its approval, so a
     /// later heartbeat takes neither the lock nor a read ([`EnrollmentStore::note_heartbeat`]).
     /// An approval of the host takes it out.
     pub(super) heard: Mutex<BTreeSet<HostId>>,
+    /// The hosts whose host record is known to hold the first heartbeat that reported a
+    /// managed service installed and healthy ([`EnrollmentStore::note_serving`]); an approval
+    /// of the host takes it out.
+    pub(super) served: Mutex<BTreeSet<HostId>>,
+    /// Per host, what its host record is known to hold of what it runs, so a heartbeat that says
+    /// the same takes neither the lock nor a read ([`EnrollmentStore::note_running`]); an
+    /// approval of the host takes it out.
+    pub(super) running: Mutex<BTreeMap<HostId, HostRunning>>,
 }
 
 impl std::fmt::Debug for EnrollmentStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "EnrollmentStore({})", self.dir.display())
+        write!(f, "EnrollmentStore({:?})", self.records)
     }
 }
 
-/// The store's lock, held: the file lock is released before the mutex.
+/// The store's lock, held: the records' lock is released before the mutex.
 pub(super) struct Held<'a> {
-    _file: FileLock,
+    _records: RecordsLock,
     _guard: MutexGuard<'a, ()>,
 }
 
-pub(super) fn io_at(path: &Path) -> impl FnOnce(io::Error) -> StoreError + '_ {
-    move |source| StoreError::Io {
-        path: path.to_path_buf(),
-        source,
-    }
-}
-
 impl EnrollmentStore {
-    /// The store in `dir`, which is made (mode 0700) with its subdirectories when missing. A
-    /// Mac nonce an approval consumed whose own file was not yet marked is marked now.
+    /// The store over the files in `dir` ([`FileRecords::open`]), which is made (mode 0700)
+    /// with its subdirectories when missing. A Mac nonce an approval consumed whose own file was
+    /// not yet marked is marked now.
     ///
     /// # Errors
     /// [`StoreError::Io`] when a directory cannot be made; [`StoreError`] when a request or
     /// nonce file cannot be read or written.
     pub fn open(fs: Arc<dyn Fs>, dir: &Path) -> Result<EnrollmentStore, StoreError> {
-        for sub in [REQUESTS, ISSUED, HOSTS, DENY, MAC_NONCES] {
-            let path = dir.join(sub);
-            fs.create_dir(&path).map_err(io_at(&path))?;
-        }
-        let store = EnrollmentStore {
-            fs,
-            dir: dir.to_path_buf(),
+        Ok(EnrollmentStore::new(Arc::new(FileRecords::open(fs, dir)?)))
+    }
+
+    /// The store over `records`.
+    pub fn new(records: Arc<dyn Records>) -> EnrollmentStore {
+        EnrollmentStore {
+            records,
             mutex: Mutex::new(()),
             live: Mutex::new(BTreeMap::new()),
             max_pending: DEFAULT_MAX_PENDING,
-            consumed: Mutex::new(BTreeSet::new()),
+            host_validity_secs: HOST_VALIDITY_SECS,
             heard: Mutex::new(BTreeSet::new()),
-        };
-        store.reconcile_mac_nonces()?;
-        Ok(store)
+            served: Mutex::new(BTreeSet::new()),
+            running: Mutex::new(BTreeMap::new()),
+        }
     }
 
     /// The same store, letting at most `max` requests wait for an operator.
@@ -118,141 +106,91 @@ impl EnrollmentStore {
         self.max_pending
     }
 
-    /// Takes the store's mutex, then the `flock` on its lock file.
+    /// The same store, issuing host certificates valid `secs` from their signing (the
+    /// coordinator's `--host-cert-validity-secs`). The CA refuses a value of 0 or over
+    /// [`HOST_VALIDITY_SECS`] when it signs ([`crate::ca::SignError`]).
+    #[must_use]
+    pub fn with_host_validity_secs(mut self, secs: u64) -> EnrollmentStore {
+        self.host_validity_secs = secs;
+        self
+    }
+
+    /// How long a host certificate the store issues is valid, in seconds: [`HOST_VALIDITY_SECS`]
+    /// unless [`EnrollmentStore::with_host_validity_secs`] says otherwise.
+    pub fn host_validity_secs(&self) -> u64 {
+        self.host_validity_secs
+    }
+
+    /// Takes the store's mutex, then the records' lock.
     pub(super) fn lock(&self) -> Result<Held<'_>, StoreError> {
         let guard = self.mutex.lock().unwrap_or_else(PoisonError::into_inner);
-        let path = self.dir.join(LOCK_FILE);
-        let file = self.fs.lock(&path).map_err(io_at(&path))?;
         Ok(Held {
-            _file: file,
+            _records: self.records.lock()?,
             _guard: guard,
         })
     }
 
-    pub(super) fn read(&self, path: &Path) -> Result<Option<Vec<u8>>, StoreError> {
-        self.fs.read(path).map_err(io_at(path))
+    pub(super) fn records(&self) -> &dyn Records {
+        &*self.records
     }
 
-    /// The path of `name` in the store's subdirectory `sub`.
-    pub(super) fn path_in(&self, sub: &str, name: &str) -> PathBuf {
-        self.dir.join(sub).join(name)
-    }
-
-    pub(super) fn write(&self, sub: &str, name: &str, bytes: &[u8]) -> Result<(), StoreError> {
-        let dir = self.dir.join(sub);
-        let path = dir.join(name);
-        write_atomic(&*self.fs, &dir, name, bytes, FILE_MODE).map_err(io_at(&path))
-    }
-
-    fn request_path(&self, id: &KeyHash) -> PathBuf {
-        self.dir.join(REQUESTS).join(format!("{id}.pb"))
+    /// Writes `records` in one commit.
+    pub(super) fn commit(&self, records: &[Record]) -> Result<(), StoreError> {
+        self.records.commit(records)
     }
 
     pub(super) fn load_request(&self, id: &KeyHash) -> Result<Option<RequestRow>, StoreError> {
-        let path = self.request_path(id);
-        self.read(&path)?
-            .map(|bytes| RequestRow::read(&path, &bytes, id))
+        self.records
+            .request(id)?
+            .map(|pb| RequestRow::check(self.records.place(&RecordKey::Request(*id)), pb, id))
             .transpose()
     }
 
-    pub(super) fn write_request(&self, row: &RequestRow) -> Result<(), StoreError> {
-        let name = format!("{}.pb", row.id);
-        self.write(REQUESTS, &name, &row.pb.encode_to_vec())
-    }
-
-    /// Every request, in the order of their ids.
+    /// Every request, checked, in the order of their ids.
     pub(super) fn all_requests(&self) -> Result<Vec<RequestRow>, StoreError> {
-        let dir = self.dir.join(REQUESTS);
-        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
-        names
-            .iter()
-            .filter_map(|name| name.strip_suffix(".pb").and_then(KeyHash::from_hex))
-            .map(|id| self.load_request(&id))
-            .filter_map(Result::transpose)
+        self.records
+            .requests()?
+            .into_iter()
+            .map(|(id, pb)| RequestRow::check(self.records.place(&RecordKey::Request(id)), pb, &id))
             .collect()
     }
 
-    pub(super) fn host_path(&self, host: &HostId) -> PathBuf {
-        self.dir.join(HOSTS).join(format!("{host}.pb"))
+    pub(super) fn host_path(&self, host: &HostId) -> std::path::PathBuf {
+        self.records.place(&RecordKey::Host(host.clone()))
     }
 
     pub(super) fn load_host(&self, host: &HostId) -> Result<Option<HostRow>, StoreError> {
-        let path = self.host_path(host);
-        self.read(&path)?
-            .map(|bytes| HostRow::read(&path, &bytes))
+        self.records
+            .host(host)?
+            .map(|pb| HostRow::check(&self.host_path(host), pb))
             .transpose()
     }
 
-    /// The host ids of every host file, sorted; a file whose name is no host id is left out.
+    /// The host ids of every host record, sorted.
     pub(super) fn host_ids(&self) -> Result<Vec<HostId>, StoreError> {
-        let dir = self.dir.join(HOSTS);
-        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
-        let mut ids: Vec<HostId> = names
-            .iter()
-            .filter_map(|name| name.strip_suffix(".pb"))
-            .filter_map(|name| HostId::parse(name).ok())
-            .collect();
-        ids.sort();
-        Ok(ids)
-    }
-
-    pub(super) fn write_host(&self, host: &pb::Host) -> Result<(), StoreError> {
-        let name = format!("{}.pb", host.host_id);
-        self.write(HOSTS, &name, &host.encode_to_vec())
+        self.records.host_ids()
     }
 
     pub(super) fn load_deny(&self, host: &HostId) -> Result<Option<DenyState>, StoreError> {
-        let path = self.dir.join(DENY).join(format!("{host}.pb"));
-        self.read(&path)?
-            .map(|bytes| read_deny(&path, &bytes))
+        self.records
+            .deny(host)?
+            .map(|pb| deny_state(&self.records.place(&RecordKey::Deny(host.clone())), &pb))
             .transpose()
     }
 
-    pub(super) fn write_deny(
-        &self,
-        host: &HostId,
-        state: DenyState,
-        cleared_by: &[u8],
-    ) -> Result<(), StoreError> {
-        let message = pb::Deny {
+    /// The deny row of `host` in `state`, cleared by the request `cleared_by` (none: empty).
+    pub(super) fn deny_record(host: &HostId, state: DenyState, cleared_by: &[u8]) -> Record {
+        Record::Deny(pb::Deny {
             schema: SCHEMA,
             host_id: host.to_string(),
             state: state as i32,
             cleared_by: cleared_by.to_vec(),
-        };
-        self.write(DENY, &format!("{host}.pb"), &message.encode_to_vec())
+        })
     }
 
     /// The host id is denied: retiring or retired.
     pub(super) fn denied(&self, host: &HostId) -> Result<bool, StoreError> {
         Ok(self.load_deny(host)?.is_some_and(DenyState::is_active))
-    }
-
-    pub(super) fn load_issued(&self, id: &KeyHash) -> Result<Option<pb::Issued>, StoreError> {
-        let path = self.dir.join(ISSUED).join(format!("{id}.pb"));
-        self.read(&path)?
-            .map(|bytes| read_issued(&path, &bytes))
-            .transpose()
-    }
-
-    pub(super) fn write_issued(&self, issued: &pb::Issued, id: &KeyHash) -> Result<(), StoreError> {
-        self.write(ISSUED, &format!("{id}.pb"), &issued.encode_to_vec())
-    }
-
-    /// Hands out the next serial and records the one after it. The caller holds the lock.
-    pub(super) fn next_serial(&self) -> Result<u64, StoreError> {
-        let path = self.dir.join(SERIAL_FILE);
-        let next = self
-            .read(&path)?
-            .map(|bytes| read_serial(&path, &bytes))
-            .transpose()?
-            .unwrap_or(FIRST_SERIAL);
-        let counter = pb::SerialCounter {
-            schema: SCHEMA,
-            next: next + 1,
-        };
-        self.write("", SERIAL_FILE, &counter.encode_to_vec())?;
-        Ok(next)
     }
 
     /// A serial number no certificate of this store carries yet, for a certificate the
@@ -263,13 +201,13 @@ impl EnrollmentStore {
     /// [`StoreError`] when the counter cannot be read or written.
     pub fn allocate_serial(&self) -> Result<u64, StoreError> {
         let _held = self.lock()?;
-        self.next_serial()
+        self.records.take_serial(None)
     }
 
     /// The request `id`, as the store holds it.
     ///
     /// # Errors
-    /// [`StoreError`] when its file cannot be read.
+    /// [`StoreError`] when its record cannot be read.
     pub fn request(&self, id: &KeyHash) -> Result<Option<RequestView>, StoreError> {
         self.load_request(id)?.map(|row| view(&row)).transpose()
     }
@@ -278,7 +216,7 @@ impl EnrollmentStore {
     /// ids.
     ///
     /// # Errors
-    /// [`StoreError`] when a file cannot be read.
+    /// [`StoreError`] when a record cannot be read.
     pub fn pending(&self) -> Result<Vec<RequestView>, StoreError> {
         self.all_requests()?
             .iter()
@@ -290,7 +228,7 @@ impl EnrollmentStore {
     /// The requests that expired ([`Self::expire`]), in the order of their ids.
     ///
     /// # Errors
-    /// [`StoreError`] when a file cannot be read.
+    /// [`StoreError`] when a record cannot be read.
     pub fn expired(&self) -> Result<Vec<RequestView>, StoreError> {
         self.all_requests()?
             .iter()
@@ -307,18 +245,21 @@ impl EnrollmentStore {
     /// their ids, as the store now holds them.
     ///
     /// # Errors
-    /// [`StoreError`] when a file cannot be read or written; the requests expired before the
-    /// failure stay expired.
+    /// [`StoreError`] when a record cannot be read or written. Every request it expires is
+    /// written in one commit: over the files, the ones written before a failure stay expired;
+    /// over records that commit all or nothing, none does.
     pub fn expire(&self, now: u64, ttl_secs: u64) -> Result<Vec<RequestView>, StoreError> {
         let _held = self.lock()?;
         let mut expired = Vec::new();
+        let mut records = Vec::new();
         for mut row in self.all_requests()? {
             if row.state.is_pending() && now.saturating_sub(row.pb.posted_unix) > ttl_secs {
                 row.expire(now, ttl_secs);
-                self.write_request(&row)?;
                 expired.push(view(&row)?);
+                records.push(Record::Request(row.pb));
             }
         }
+        self.commit(&records)?;
         Ok(expired)
     }
 
@@ -376,7 +317,7 @@ impl EnrollmentStore {
         };
         let state = reason.map_or(RequestState::Pending, |_| RequestState::DuplicateClaim);
         let row = RequestRow {
-            path: self.request_path(&id),
+            path: self.records.place(&RecordKey::Request(id)),
             pb: pb::Request {
                 schema: SCHEMA,
                 request_id: id.as_bytes().to_vec(),
@@ -402,7 +343,7 @@ impl EnrollmentStore {
             key: verified.key().clone(),
             state,
         };
-        self.write_request(&row)?;
+        self.commit(&[Record::Request(row.pb)])?;
         if let Some(reason) = reason {
             alert(&id, &request.claims.machine_id, reason);
         }
@@ -445,25 +386,19 @@ impl EnrollmentStore {
     /// not denied.
     ///
     /// # Errors
-    /// [`StoreError`] when a file cannot be read, or a host's request is missing.
+    /// [`StoreError`] when a record cannot be read, or a host's request is missing.
     pub fn bound_macs(&self) -> Result<BTreeSet<MacAddress>, StoreError> {
-        let dir = self.dir.join(HOSTS);
-        let names = self.fs.list(&dir).map_err(io_at(&dir))?;
         let mut rows = Vec::new();
-        for host in names
-            .iter()
-            .filter_map(|name| name.strip_suffix(".pb"))
-            .filter_map(|name| HostId::parse(name).ok())
-        {
+        for host in self.host_ids()? {
             if !self.denied(&host)? {
                 rows.extend(self.load_host(&host)?.map(|row| (host, row)));
             }
         }
         let mut bound = BTreeSet::new();
         for (host, row) in rows {
-            let request = self.load_request(&row.key)?.ok_or_else(|| {
-                super::files::corrupt(&self.host_path(&host), "the host's request is missing")
-            })?;
+            let request = self
+                .load_request(&row.key)?
+                .ok_or_else(|| corrupt(&self.host_path(&host), "the host's request is missing"))?;
             let claims = claims_of_pb(request.pb.claims.as_ref());
             bound.extend(
                 claims
@@ -489,7 +424,7 @@ impl EnrollmentStore {
             row.pb.mac_nonce_presented = true;
         }
         if flag || presented {
-            self.write_request(&row)?;
+            self.commit(&[Record::Request(row.pb.clone())])?;
         }
         if changed {
             alert(
@@ -512,8 +447,11 @@ impl EnrollmentStore {
     /// `key_hash` is the SHA-256 of the key the operator saw; it must be the request's. Under
     /// the store lock, in this order: the host id must not be denied and must not be held by
     /// another key, unless `decision.replace` (not for a renewal, which must name the host it
-    /// renews); then a deny row it clears is marked cleared by this request, the host row is
-    /// written (host id, key hash, machine id, role, services), and the request is marked
+    /// renews); a host group the decision names must be the one of the host a renewal renews or
+    /// a `replace` takes the id of, when that host is in one and not denied
+    /// ([`ApproveError::HostGroupDiffers`]); then a deny row it clears is marked cleared by this
+    /// request, the host row is written (host id, key hash, machine id, role, services, host
+    /// group), and the request is marked
     /// approved. A crash between those writes leaves a host row of this key, which a retry
     /// accepts as its own. It does not issue. The key hash is compared in constant time.
     ///
@@ -534,9 +472,10 @@ impl EnrollmentStore {
     /// `duplicate_claim` unless `decision.replace` ([`ApproveError::DuplicateClaim`]), and
     /// checks the Mac nonce of `record`, if any, at `record.approved_unix`: issued, unexpired,
     /// unused, for the serial the request claims, and for this request when the nonce names one
-    /// ([`ApproveError::MacNonce`]). The request file that marks the request approved is the one
-    /// write that commits the approval and consumes the nonce; the nonce's own file is marked
-    /// after it (and at the next [`Self::open`], should that write not land).
+    /// ([`ApproveError::MacNonce`]). The commit that marks the request approved consumes the
+    /// nonce and marks its record consumed (over the files the request's file is the commit
+    /// point, and the nonce's own file is marked
+    /// after it, and at the next [`Self::open`] should that write not land).
     ///
     /// An approval with a Mac nonce takes over a host id another key holds, as `replace` would,
     /// when the Mac enrolled in MDM anew since that key was approved: `record` says when its
@@ -563,7 +502,7 @@ impl EnrollmentStore {
     /// entry is missing.
     ///
     /// # Errors
-    /// [`StoreError`] when a request file cannot be read.
+    /// [`StoreError`] when a request record cannot be read.
     pub fn recorded_approvals(&self) -> Result<Vec<RecordedApproval>, StoreError> {
         Ok(self
             .all_requests()?
@@ -574,6 +513,7 @@ impl EnrollmentStore {
                     request_id: row.id,
                     host_id: approved.host_id.clone(),
                     role: approved.role.clone(),
+                    host_group: approved.host_group.clone(),
                     services: approved.services.clone(),
                     replace: approved.replace,
                     approver: approved.approver.clone(),
@@ -636,16 +576,45 @@ impl EnrollmentStore {
         if holder.is_some() && !replace && !rejoined {
             return Err(ApproveError::HostIdTaken);
         }
+        // The host a renewal renews, or a replace (or a Mac rejoining) takes the id of, keeps
+        // its group: a denied host's ended with its retirement.
+        let kept = current
+            .as_ref()
+            .filter(|_| (renewal.is_some() || replace || rejoined) && !denied)
+            .map(|h| h.pb.host_group.as_str())
+            .filter(|held| !held.is_empty());
+        if let (Some(held), Some(named)) = (kept, decision.host_group.as_deref())
+            && held != named
+        {
+            return Err(ApproveError::HostGroupDiffers {
+                held: held.to_owned(),
+                named: named.to_owned(),
+            });
+        }
         let replaced = decision.replace || rejoined;
+        let mut records = Vec::new();
         if denied {
-            self.write_deny(host, DenyState::Cleared, request_id.as_bytes())?;
+            records.push(Self::deny_record(
+                host,
+                DenyState::Cleared,
+                request_id.as_bytes(),
+            ));
         }
         let services: Vec<String> = decision
             .services
             .iter()
             .map(|s| s.as_str().to_owned())
             .collect();
-        self.write_host(&pb::Host {
+        // What a renewal keeps of the host it renews; a new key starts the host anew.
+        let renewed = current
+            .as_ref()
+            .filter(|_| renewal.is_some())
+            .map(|h| &h.pb);
+        let host_group = match &decision.host_group {
+            Some(named) => named.clone(),
+            None => renewed.map(|h| h.host_group.clone()).unwrap_or_default(),
+        };
+        records.push(Record::Host(pb::Host {
             schema: SCHEMA,
             host_id: host.to_string(),
             key_hash: request_id.as_bytes().to_vec(),
@@ -653,18 +622,19 @@ impl EnrollmentStore {
             role: decision.role.as_str().to_owned(),
             services: services.clone(),
             // Only a new key clears a duplicate mark; a renewal keeps the host's.
-            duplicate: renewal.is_some() && current.is_some_and(|h| h.pb.duplicate),
-            // Every approval, a renewal's too, waits for its own first heartbeat.
+            duplicate: renewed.is_some_and(|h| h.duplicate),
+            // Every approval, a renewal's too, waits for its own first heartbeat, and for its own
+            // first heartbeat that reports a managed service serving.
             first_heartbeat_unix: None,
-        })?;
-        self.live
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(host);
-        self.heard
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .remove(host);
+            first_serving_unix: None,
+            // ... and for what its daemon says it runs.
+            running: None,
+            // A renewal keeps the host's group (the one it names, which is the same), the move
+            // under way and its facts' generation.
+            host_group: host_group.clone(),
+            moving_from: renewed.and_then(|h| h.moving_from.clone()),
+            facts_generation: renewed.and_then(|h| h.facts_generation),
+        }));
         row.set_state(RequestState::Approved);
         row.pb.approved = Some(pb::Approval {
             host_id: host.to_string(),
@@ -678,15 +648,38 @@ impl EnrollmentStore {
                 .as_ref()
                 .map(|(hash, _)| hash.as_bytes().to_vec())
                 .unwrap_or_default(),
+            host_group: host_group.clone(),
         });
-        self.write_request(&row)?;
-        if let Some((hash, file)) = nonce {
-            self.consume_mac_nonce(&hash, file, request_id);
+        records.push(Record::Request(row.pb));
+        if let Some((_, mut file)) = nonce {
+            // The approval above commits the consumption; the nonce's own record says so too.
+            file.consumed_by = request_id.as_bytes().to_vec();
+            records.push(Record::MacNonce(file));
         }
+        // Forgotten before the commit: a host written again with no first heartbeat must not be
+        // answered from memory, whether or not the rest of the commit lands.
+        self.live
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.heard
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.served
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.running
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .remove(host);
+        self.commit(&records)?;
         Ok(Approval {
             request_id: *request_id,
             host_id: host.clone(),
             role: decision.role.clone(),
+            host_group,
             services: decision.services.clone(),
             renewal: renewal.is_some(),
             cleared_deny: denied,

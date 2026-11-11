@@ -31,15 +31,22 @@
 //! - [`EnrollmentStore::held`] says what the store holds for a host id ([`HostHeld`]): nothing,
 //!   an approved host, or a deny row, whether or not the host was heard from since start.
 //!
-//! Every mutation takes one mutex and an exclusive `flock` on the store's lock file. The files
-//! and their messages are listed in `proto/hostkeeper/enrollment/store/v1/store.proto`.
+//! The store keeps its state through the [`records::Records`] port: the files of one directory
+//! ([`records::FileRecords`], [`EnrollmentStore::open`]) or a fake ([`records::MemoryRecords`]);
+//! the coordinator's database is to be a third (not built yet). Every record it reads is checked, whatever keeps it. Every
+//! mutation takes one mutex and the records' lock (for the files, an exclusive `flock` on the
+//! store's lock file). The records are the messages of
+//! `proto/hostkeeper/enrollment/store/v1/store.proto` ([`records::pb`]).
 
-mod files;
+mod groups;
 mod hosts;
 mod issue;
 mod mac_nonce;
 mod poll;
+pub mod records;
 mod reject;
+mod rows;
+mod running;
 mod store;
 
 use std::io;
@@ -49,6 +56,7 @@ pub use issue::IssuedCertificate;
 pub use mac_nonce::{MAC_NONCE_VALID_SECS, MacNonceHash, MacNonceRefusal};
 pub use poll::{MAX_NONCE_BYTES, MIN_NONCE_BYTES, POLL_DOMAIN, poll_message};
 pub use reject::{RejectError, Rejection};
+pub use running::{HostRunning, RunningService};
 pub use store::{DEFAULT_MAX_PENDING, EnrollmentStore, FIRST_SERIAL, LIVE_WINDOW_SECS};
 
 use crate::ca::{ProfileError, SignError};
@@ -132,7 +140,7 @@ pub enum RequestState {
     Denied = 5,
     /// It waited for an operator longer than the coordinator's request TTL
     /// ([`EnrollmentStore::expire`]): its host is unenrolled, and it is never approved. Not a
-    /// state the file's `state` field holds: the file keeps the waiting state it expired in and
+    /// state the record's `state` field holds: the record keeps the waiting state it expired in and
     /// sets `expired_unix`, which a release before expiry ignores.
     Expired = 6,
 }
@@ -210,6 +218,12 @@ pub struct Decision {
     /// Take the host id over from the key that holds it, or out of its deny row (re-enrollment
     /// of a host). Ignored for a renewal, which keeps its host's key.
     pub replace: bool,
+    /// The host group the host is in, from a coordinator that holds host groups: a renewal, or
+    /// a `replace` of a host that is not denied (a Mac taking its own host id over too), must
+    /// name the group that host is in, unless it is in none ([`ApproveError::HostGroupDiffers`]).
+    /// `None` from a coordinator that holds none: a new key's host is in no group, and a renewal
+    /// keeps its host's.
+    pub host_group: Option<String>,
 }
 
 /// Who made an approval, when and why, and the Mac nonce it consumes: what
@@ -238,6 +252,8 @@ pub struct RecordedApproval {
     pub request_id: KeyHash,
     pub host_id: String,
     pub role: String,
+    /// The host group the approval put the host in; empty for none.
+    pub host_group: String,
     pub services: Vec<String>,
     /// The approval was asked to take the host id over (`replace`), or a Mac's request took
     /// its own host id over from its earlier key.
@@ -264,16 +280,53 @@ pub struct EnrolledHost {
     /// When the coordinator accepted the host's first heartbeat since that approval, unix
     /// seconds ([`EnrollmentStore::note_heartbeat`]); `None` until it does.
     pub first_heartbeat_unix: Option<u64>,
+    /// When the coordinator accepted the host's first heartbeat since that approval that
+    /// reported a service it manages for the host installed and healthy, unix seconds
+    /// ([`EnrollmentStore::note_serving`]); `None` until it does.
+    pub first_serving_unix: Option<u64>,
+    /// The role the host was approved for.
+    pub role: Role,
+    /// The host group the host is in; empty for a host in none ([`Membership`]).
+    pub host_group: String,
+    /// The group the host moves from while a move runs; `None` when it is not moving.
+    pub moving_from: Option<String>,
+    /// What the host's daemon last said it runs, as far as the store kept it
+    /// ([`EnrollmentStore::note_running`]); `None` until a heartbeat after the approval.
+    pub running: Option<HostRunning>,
+    /// When the coordinator accepted the heartbeat `running` was last written from, unix
+    /// seconds; `None` with it.
+    pub running_unix: Option<u64>,
+}
+
+/// The host group of an enrolled host, as its host record keeps it ([`EnrollmentStore::membership`],
+/// [`EnrollmentStore::set_membership`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Membership {
+    /// The group the host is in; empty for a host in none.
+    pub host_group: String,
+    /// The group the host moves from while a move runs (empty when it was in none); `None` when
+    /// it is not moving.
+    pub moving_from: Option<String>,
+}
+
+impl Membership {
+    /// What the host record `pb` holds.
+    fn of(pb: &records::pb::Host) -> Membership {
+        Membership {
+            host_group: pb.host_group.clone(),
+            moving_from: pb.moving_from.clone(),
+        }
+    }
 }
 
 /// What the store holds for a host id ([`EnrollmentStore::held`]). It is read from the store's
-/// files alone, so it is the same before and after a restart, and the same for a host never
+/// records alone, so it is the same before and after a restart, and the same for a host never
 /// heard from as for one heartbeating.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HostHeld {
     /// No host: the id was never approved, and is not denied.
     None,
-    /// A host was approved as the id (its host file names its key), and the id is not denied.
+    /// A host was approved as the id (its host record names its key), and the id is not denied.
     Approved,
     /// The id is denied (`Hosts.Retire`) and its deny row is retiring: an update may still be
     /// in flight on it ([`EnrollmentStore::is_retiring`]).
@@ -288,6 +341,8 @@ pub struct Approval {
     pub request_id: KeyHash,
     pub host_id: HostId,
     pub role: Role,
+    /// The host group the host is in after the approval; empty for none.
+    pub host_group: String,
     pub services: Vec<ServiceName>,
     /// The request renews its host: no new host id was minted.
     pub renewal: bool,
@@ -298,23 +353,28 @@ pub struct Approval {
     pub replace: bool,
 }
 
-/// The store could not read or write its files.
+/// The store could not read or write its records. `path` is where the record is kept
+/// ([`records::Records::place`]): a file's path, or the name of a record not kept in a file.
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
     #[error("cannot use {path}: {source}")]
     Io { path: PathBuf, source: io::Error },
-    /// A file this release cannot read: not protobuf, no schema, or inconsistent.
+    /// A record this release cannot read: not protobuf, no schema, or inconsistent.
     #[error("{path} is not a store file this release reads: {reason}")]
     Corrupt { path: PathBuf, reason: String },
-    /// A file written by a newer release.
+    /// A record written by a newer release.
     #[error("{path} has schema {schema}; this release reads schema 1")]
     NewerSchema { path: PathBuf, schema: u32 },
-    /// A file holding a state this release does not know.
+    /// A record holding a state this release does not know.
     #[error("{path} holds state {value}, which this release does not know")]
     UnknownState { path: PathBuf, value: i32 },
     /// No host of this id was ever approved.
     #[error("no host {0} was approved")]
     UnknownHost(HostId),
+    /// A record given to a commit whose key does not parse ([`records::Record::key`]); its kind
+    /// is named. Nothing of the commit is written.
+    #[error("a {0} record whose key does not parse is not kept")]
+    Unkeyed(&'static str),
 }
 
 /// Why a post was refused.
@@ -367,6 +427,11 @@ pub enum ApproveError {
     /// The request is flagged a duplicate claim and the recorded decision does not replace.
     #[error("duplicate_claim: the request is a duplicate claim and replace was not asked for")]
     DuplicateClaim,
+    /// A renewal, or a `replace` of a host that is not denied (a Mac taking its own host id
+    /// over too), names another host group than the one that host is in: only a move changes a
+    /// host's group.
+    #[error("host_group_differs: the host is in host group {held}, not {named}")]
+    HostGroupDiffers { held: String, named: String },
     /// The Mac nonce of a recorded approval is refused.
     #[error(transparent)]
     MacNonce(#[from] MacNonceRefusal),
@@ -385,6 +450,7 @@ impl ApproveError {
             ApproveError::Denied => Some("denied"),
             ApproveError::RenewalOfOtherHost => Some("renewal_of_other_host"),
             ApproveError::DuplicateClaim => Some("duplicate_claim"),
+            ApproveError::HostGroupDiffers { .. } => Some("host_group_differs"),
             ApproveError::MacNonce(refusal) => Some(refusal.token()),
             ApproveError::Store(_) => None,
         }

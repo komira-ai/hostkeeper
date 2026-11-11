@@ -1,43 +1,61 @@
 # The release files of one commit: for linux-x86_64, linux-arm64 and macos-arm64, the `hostkeeper`
-# binary as a tarball with its CycloneDX SBOM and hostkeeper's own package (`.tar.zst` with its
-# `.sha256`), and the package of `hello`, the example service of examples/hello, and of its failing
-# build (the same package started with `--fail-ready`, which a host can be rolled back from), each
-# with its `.sha256`; for each Linux platform the deb and the rpm, the `hostkeeper-coordinator`
-# binary as a tarball with its SBOM and its container image (`.image.tar`, an OCI image layout),
-# and the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM;
-# for macos-arm64 the installer pkg of a Mac's first install; the release indexes `index.json`,
-# `hello-index.json` and `hello-fail-ready-index.json` over the three packages each;
+# binary as a tarball with its CycloneDX SBOM; for each Linux platform the deb and the rpm of
+# hostkeeper and of `hello`, the example service of examples/hello, the `hostkeeper-coordinator`
+# binary as a tarball with its SBOM, its container image (`.image.tar`, an OCI image layout) and
+# its deb and rpm (packaging/coordinator/nfpm.yaml, the static build with a systemd unit),
+# the `hostkeeper-mdm` binary (the MDM kit's, Linux-only) as a tarball with its SBOM, and the
+# `hostkeeper-coordinator-update` binary (the coordinator updater, Linux-only, a static build) as
+# a tarball with its SBOM; for each Linux platform the deb of `pxe`, the boot server of network
+# install as a service package (docs/design/two-programs.md section 6.1), whose program is the
+# static build; for linux-x86_64 the deb of `mdm`, the MDM server stack as a service package
+# (docs/design/two-programs.md section 6.2), whose pinned tools are fetched and checked against
+# crates/hostkeeper-mdm-core/pins.txt here (`cargo xtask release mdm-fetch`);
+# for macos-arm64 the installer pkg of a Mac's first install and hello's .pkg, each signed on a
+# push to main with the Developer ID Installer identity (sign-pkg, then check-pkg); the
+# coordinator's image index over its two images
+# (`cargo xtask release image-index`), whose SHA-256 is the digest release.yml pushes the
+# multi-platform image under;
 # `netboot.json`, the boot sets of network install for both Linux platforms, rendered from
-# packaging/netboot/pins.toml; one SHA256SUMS over them; and, on a push to main, the
+# packaging/netboot/pins.toml; `hkctl-<version>`, the command line of the coordinator, one bash
+# script for every platform generated from the protos (`cargo xtask release hkctl`); one
+# SHA256SUMS over them; and, on a push to main, the
 # build-provenance and SBOM attestations of this repository with a bundle per signed file. A
 # host trusts only packages this workflow attested, so hello's packages are signed like
 # hostkeeper's. The names are the release contract
 # (docs/deploy/verify-a-release.md, "Every name"):
 #
 #   hostkeeper-<version>-<platform>.tar.gz          hostkeeper-<version>-<platform>.cdx.json
-#   hostkeeper-<version>-<platform>.tar.zst         hostkeeper-<version>-<platform>.tar.zst.sha256
-#   hello-<version>-<platform>.tar.zst              hello-<version>-<platform>.tar.zst.sha256
-#   hello-<version>-fail-ready-<platform>.tar.zst   hello-<version>-fail-ready-<platform>.tar.zst.sha256
 #   hostkeeper_<version>_<deb-arch>.deb             hostkeeper-<version>-1.<rpm-arch>.rpm
 #   hostkeeper-coordinator-<version>-<linux-platform>.tar.gz
 #   hostkeeper-coordinator-<version>-<linux-platform>.cdx.json
 #   hostkeeper-coordinator-<version>-<linux-platform>.image.tar
+#   hostkeeper-coordinator_<version>_<deb-arch>.deb  hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm
+#   hostkeeper-coordinator-<version>.image.json
 #   hostkeeper-mdm-<version>-<linux-platform>.tar.gz
 #   hostkeeper-mdm-<version>-<linux-platform>.cdx.json
+#   hostkeeper-coordinator-update-<version>-<linux-platform>.tar.gz
+#   hostkeeper-coordinator-update-<version>-<linux-platform>.cdx.json
 #   hostkeeper-<version>-macos-arm64.pkg
-#   index.json   hello-index.json   hello-fail-ready-index.json   netboot.json   SHA256SUMS
+#   hello_<version>_<deb-arch>.deb   hello-<version>-macos-arm64.pkg   mdm_<version>_amd64.deb
+#   pxe_<version>_<deb-arch>.deb
+#   hello_<version>-fail-ready_<deb-arch>.deb       (the failing build's deb; its pkg is no asset)
+#   netboot.json
+#   SHA256SUMS
+#   hkctl-<version>
 #   <signed file>.sigstore.json
 #
 # `<version>` is X.Y.Z (`cargo xtask release version`: X.Y from the VERSION file, Z the number of
 # first-parent commits of main since the commit that last changed it). Every build job writes it
 # into the workspace (`release set-version`) and builds with RELEASE_COMMIT set to the commit, so
 # `hostkeeper --version` prints `hostkeeper X.Y.Z+<12 hex>`, `hostkeeper-coordinator --version`
-# prints `hostkeeper-coordinator X.Y.Z+<12 hex>` and `hostkeeper-mdm --version` prints
-# `hostkeeper-mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything
-# else. `hello` is built from the same workspace, so it carries the
-# release version (`hello --version` prints `hello X.Y.Z`); its failing build is named
-# `<version>-fail-ready` in its manifest and index, and its server, started with `--fail-ready`,
-# answers `/version` with that name.
+# prints `hostkeeper-coordinator X.Y.Z+<12 hex>`, `hostkeeper-mdm --version` prints
+# `hostkeeper-mdm X.Y.Z+<12 hex>` and `hostkeeper-coordinator-update --version` prints
+# `hostkeeper-coordinator-update X.Y.Z+<12 hex>`, and `mdm --version`, the mdm package's program, prints
+# `mdm X.Y.Z+<12 hex>`; `release check-binary` refuses a binary that prints anything else. `hello` and `pxe` are built from the same workspace, so they carry the
+# release version (`hello --version` prints `hello X.Y.Z`, `pxe --version` prints `pxe X.Y.Z`); hello's failing build, started with
+# `--fail-ready`, is named `<version>-fail-ready`, and its server answers `/version` with that
+# name: `release deb` writes its .deb into dist/ (a release file, Debian version
+# `<version>~fail.ready`), and `release macos-pkg` its .pkg under `native/`, which is not released.
 #
 # The image job builds the coordinator's image twice, each time with a new BuildKit builder from
 # a context that holds the released binary and the operator web app (`ui/` of the commit, files
@@ -83,16 +101,16 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release binaries, checked
-  # against their published SHA-256 by `cargo xtask install-tool` before use (the digest of
-  # each platform's archive is in the build job's matrix).
+  # cargo-cyclonedx makes the SBOMs, nfpm the deb and the rpm: release
+  # binaries, checked against their published SHA-256 by `cargo xtask install-tool` before use
+  # (the digest of each platform's archive is in the build job's matrix).
   CYCLONEDX_VERSION: 0.5.9
   NFPM_VERSION: 2.48.0
-  # The gh the deb and the rpm install as /usr/lib/hostkeeper/gh, the one a host checks every
-  # package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
+  # The gh the deb and the rpm install as /usr/lib/hostkeeper/gh, the one a
+  # host checks every package's attestation with (Ubuntu 24.04's own gh has no `gh attestation`). The SHA-256 of
   # each architecture's release archive is in the build job's matrix (`gh-sha256`), the one
   # cli/cli publishes in gh_<version>_checksums.txt; to bump it, change the version here and
-  # both digests together (docs/deploy/verify-a-release.md, "What the deb and the rpm check
+  # both digests together (docs/deploy/verify-a-release.md, "What the Linux packages check
   # packages with").
   GH_VERSION: 2.102.1
   # The BuildKit the image job builds with, by the digest of its multi-platform index.
@@ -124,8 +142,12 @@ jobs:
 
 
   # One job per Linux platform, each on a GitHub-hosted runner of its own architecture, so each
-  # binary runs where it is built. glibc: the binary needs the glibc of the runner image it was
-  # built on (Ubuntu 24.04) or newer.
+  # binary runs where it is built. hostkeeper, the program of hostkeeper's Linux packages and of
+  # its binary tarball, and pxe, the program of the pxe package, are built for the platform's musl
+  # target (static-pie: no interpreter and no shared library, so they run on any Linux; the C
+  # compiler is named in .cargo/config.toml). hostkeeper-coordinator and hostkeeper-mdm stay
+  # builds for the gnu target: they need the glibc of the runner image they were built on
+  # (Ubuntu 24.04) or newer.
   build:
     name: ${{ matrix.platform }}
     needs: [version]
@@ -140,6 +162,7 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-24.04
             rust-target: x86_64-unknown-linux-gnu
+            musl-target: x86_64-unknown-linux-musl
             deb-arch: amd64
             rpm-arch: x86_64
             cyclonedx-sha256: fb8dbee9f182173e062a64a387b21a0badc6fab8b2abf9294973f012972bf6d8
@@ -149,6 +172,7 @@ jobs:
           - platform: linux-arm64
             runner: ubuntu-24.04-arm
             rust-target: aarch64-unknown-linux-gnu
+            musl-target: aarch64-unknown-linux-musl
             deb-arch: arm64
             rpm-arch: aarch64
             cyclonedx-sha256: 7bf131ca5389b07a4f10c182bcf8a5ad339d64408b6f0d8f6834a0bd6120a06a
@@ -158,6 +182,7 @@ jobs:
     env:
       PLATFORM: ${{ matrix.platform }}
       TARGET: ${{ matrix.rust-target }}
+      MUSL_TARGET: ${{ matrix.musl-target }}
       RELEASE_VERSION: ${{ needs.version.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -165,25 +190,63 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: rustup toolchain install
-      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: The static target
+        run: rustup target add "$MUSL_TARGET"
       # install-tool unpacks gzip tars only: it checks the xz archive and copies it, and tar
       # unpacks the checked copy.
+      - name: Restore the pinned cyclonedx.tar.xz from the cache
+        id: cyclonedx-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: pinned-cyclonedx-${{ env.CYCLONEDX_VERSION }}-${{ matrix.cyclonedx-sha256 }}
+      - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
+        id: cyclonedx-download
+        if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
+        run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check cargo-cyclonedx (pinned checksum)
+        id: cyclonedx-check
         env:
           SHA256: ${{ matrix.cyclonedx-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      - name: Save the checked cyclonedx.tar.xz to the cache
+        if: ${{ !cancelled() && steps.cyclonedx-check.outcome == 'success' && steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: ${{ steps.cyclonedx-cache.outputs.cache-primary-key }}
       - name: Install cargo-cyclonedx
         run: tar -xJf "$RUNNER_TEMP/cyclonedx-checked.tar.xz" -C "$HOME/.cargo/bin" --strip-components 1 "cargo-cyclonedx-$TARGET/cargo-cyclonedx"
       - run: cargo cyclonedx --version
-      - name: Download nfpm (HTTPS only, redirects included)
+      - name: Restore the pinned nfpm.tar.gz from the cache
+        id: nfpm-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: pinned-nfpm-${{ env.NFPM_VERSION }}-${{ matrix.nfpm-sha256 }}
+      - name: Download nfpm on a cache miss (HTTPS only, redirects included)
+        id: nfpm-download
+        if: ${{ steps.nfpm-cache.outputs.cache-hit != 'true' }}
         env:
           ARCHIVE: ${{ matrix.nfpm-archive }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/nfpm.tar.gz" "https://github.com/goreleaser/nfpm/releases/download/v$NFPM_VERSION/nfpm_${NFPM_VERSION}_$ARCHIVE.tar.gz"
+      - name: Say why the job stops when nfpm.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.nfpm-download.outcome == 'failure' }}
+        run: echo "::error::nfpm.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install nfpm (pinned checksum)
+        id: nfpm-check
         env:
           SHA256: ${{ matrix.nfpm-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/nfpm.tar.gz" --sha256 "$SHA256" --out "$HOME/.cargo/bin/nfpm" --extract tar.gz --member nfpm
+      - name: Save the checked nfpm.tar.gz to the cache
+        if: ${{ !cancelled() && steps.nfpm-check.outcome == 'success' && steps.nfpm-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/nfpm.tar.gz
+          key: ${{ steps.nfpm-cache.outputs.cache-primary-key }}
       - run: nfpm --version
       # The workspace's version is the release's; `Cargo.lock` gets it too, so the `--locked`
       # build accepts it. The SBOM step must leave the lock file exactly as written here.
@@ -192,22 +255,45 @@ jobs:
       - name: Keep the lock file as written
         run: cp Cargo.lock "$RUNNER_TEMP/Cargo.lock.release"
       # RELEASE_COMMIT is a build input of the binaries (crates/hostkeeper-daemon/src/stamp.rs,
-      # crates/hostkeeper-coordinator/src/stamp.rs, crates/hostkeeper-mdm/src/stamp.rs), not
-      # configuration they read when they run. hostkeeper-pxe, which the deb and the rpm carry,
-      # has no stamp: its --version is the workspace's version alone.
-      - name: Build hostkeeper, hostkeeper-coordinator, hostkeeper-mdm and hostkeeper-pxe
+      # crates/hostkeeper-coordinator/src/stamp.rs, crates/hostkeeper-mdm/src/stamp.rs,
+      # crates/xtask/src/stamp.rs), not configuration they read when they run. pxe, which the
+      # pxe package carries, has no stamp: its --version is `pxe X.Y.Z`, the workspace's version
+      # alone. The coordinator and the MDM kit's binary are built for the runner's gnu target into
+      # target/release; hostkeeper, pxe and hostkeeper-coordinator-update for the musl
+      # target into target/$MUSL_TARGET/release.
+      - name: Build hostkeeper-coordinator and hostkeeper-mdm
         env:
           RELEASE_COMMIT: ${{ github.sha }}
-        run: cargo build --locked --release -p hostkeeper --bin hostkeeper -p hostkeeper-coordinator --bin hostkeeper-coordinator -p hostkeeper-mdm --bin hostkeeper-mdm -p hostkeeper-pxe --bin hostkeeper-pxe
+        run: cargo build --locked --release -p hostkeeper-coordinator --bin hostkeeper-coordinator -p hostkeeper-mdm --bin hostkeeper-mdm
+      - name: Build hostkeeper and pxe (static)
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper --bin hostkeeper -p hostkeeper-pxe --bin pxe
+      # The coordinator updater is static, so it runs on whatever Linux the coordinator's machine
+      # is.
+      - name: Build hostkeeper-coordinator-update (static)
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p xtask --bin hostkeeper-coordinator-update
+      # The coordinator's deb and rpm carry its static build, so one package runs on every
+      # release of its family; the tarball and the image keep the gnu build above.
+      - name: Build hostkeeper-coordinator (static, for its Linux packages)
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release --target "$MUSL_TARGET" -p hostkeeper-coordinator --bin hostkeeper-coordinator
       # hello takes its version from the workspace, so it needs no RELEASE_COMMIT.
       - name: Build hello
         run: cargo build --locked --release -p hello --bin hello
       - name: hostkeeper says the version and the commit
-        run: cargo xtask release check-binary target/release/hostkeeper "$RELEASE_VERSION" "$GITHUB_SHA"
+        run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hostkeeper-coordinator says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper-coordinator "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: The static hostkeeper-coordinator says the version and the commit
+        run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper-coordinator" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary target/release/hostkeeper-mdm "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: hostkeeper-coordinator-update says the version and the commit
+        run: cargo xtask release check-binary "target/$MUSL_TARGET/release/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$GITHUB_SHA"
       - name: SBOM
         run: cargo cyclonedx --format json --spec-version 1.5 --describe binaries --target "$TARGET"
       - name: The SBOM step left Cargo.lock unchanged
@@ -219,40 +305,63 @@ jobs:
         run: cp crates/hostkeeper-coordinator/hostkeeper-coordinator_bin.cdx.json "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.cdx.json"
       - name: Name the SBOM of hostkeeper-mdm
         run: cp crates/hostkeeper-mdm/hostkeeper-mdm_bin.cdx.json "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.cdx.json"
+      - name: Name the SBOM of hostkeeper-coordinator-update
+        run: cp crates/xtask/hostkeeper-coordinator-update_bin.cdx.json "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.cdx.json"
       # The commit time is the one time the tarball holds, so its bytes depend on its inputs.
       - name: The commit time
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: Tarball of hostkeeper
-        run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+        run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C "target/$MUSL_TARGET/release" -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
       - name: Tarball of hostkeeper-coordinator
         run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper-coordinator | gzip -n > "dist/hostkeeper-coordinator-$RELEASE_VERSION-$PLATFORM.tar.gz"
       - name: Tarball of hostkeeper-mdm
         run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper-mdm | gzip -n > "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: Tarball of hostkeeper-coordinator-update
+        run: tar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C "target/$MUSL_TARGET/release" -cf - hostkeeper-coordinator-update | gzip -n > "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz"
       # The pinned gh of this architecture, checked against its pin and installed for this job,
       # and the Sigstore trusted root as it prints it. `gh attestation trusted-root` fetches the
       # roots of the Sigstore public-good instance and of GitHub's instance through their TUF
       # repositories, verified from the TUF root gh embeds; it needs no token. The packages
       # carry the root of their build, so each release carries a fresh one.
-      - name: Download gh (HTTPS only, redirects included)
+      - name: Restore the pinned gh.tar.gz from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ matrix.gh-sha256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
         env:
           ARCH: ${{ matrix.deb-arch }}
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.tar.gz" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_linux_$ARCH.tar.gz"
+      - name: Say why the job stops when gh.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Install gh (pinned checksum)
+        id: gh-check
         env:
           ARCH: ${{ matrix.deb-arch }}
           SHA256: ${{ matrix.gh-sha256 }}
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.tar.gz" --sha256 "$SHA256" --out "$RUNNER_TEMP/gh/gh" --extract tar.gz --member "gh_${GH_VERSION}_linux_$ARCH/bin/gh"
+      - name: Save the checked gh.tar.gz to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.tar.gz
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - run: '"$RUNNER_TEMP/gh/gh" --version'
       - name: The Sigstore trusted root
         run: '"$RUNNER_TEMP/gh/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.json"'
       # The packages' gh and trusted root, where nfpm.yaml takes them from: gh out of the same
       # archive, checked against the pin again, refused unless it is a program of this
-      # architecture; the trusted root refused unless every line of it is one.
-      - name: Stage gh and the trusted root for the deb and the rpm
+      # architecture; the trusted root refused unless every line of it is one; hostkeeper
+      # out of the static build, refused unless it is a static ELF of this architecture.
+      - name: Stage gh, the trusted root and the static daemon for the Linux packages
         env:
           ARCH: ${{ matrix.deb-arch }}
           SHA256: ${{ matrix.gh-sha256 }}
-        run: cargo xtask release nfpm-stage --arch "$ARCH" --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --out target/nfpm
+        run: cargo xtask release nfpm-stage --arch "$ARCH" --gh-version "$GH_VERSION" --gh-archive "$RUNNER_TEMP/gh.tar.gz" --gh-sha256 "$SHA256" --trusted-root "$RUNNER_TEMP/trusted_root.json" --binaries "target/$MUSL_TARGET/release" --out target/nfpm
       # nfpm reads VERSION and ARCH into packaging/linux/nfpm.yaml and names the files
       # hostkeeper_<version>_<deb-arch>.deb and hostkeeper-<version>-1.<rpm-arch>.rpm.
       - name: The deb
@@ -266,29 +375,71 @@ jobs:
           ARCH: ${{ matrix.deb-arch }}
         run: nfpm package --config packaging/linux/nfpm.yaml --packager rpm --target dist
       # Each package read back: it installs the staged gh and trusted root at the daemon's paths,
-      # 0755 and 0644, root's, with the staged bytes, and the console's issue link
-      # /etc/issue.d/hostkeeper.issue pointing at /run/hostkeeper/enrollment.issue.
-      - name: The deb installs the staged gh and trusted root
+      # 0755 and 0644, root's, with the staged bytes, hostkeeper in
+      # /usr/bin, 0755, root's, with the staged bytes, and the console's issue link
+      # /etc/issue.d/hostkeeper.issue pointing at /run/hostkeeper/enrollment.issue; and it holds
+      # no ELF file with an interpreter or a needed library and declares no dependency.
+      - name: The deb installs the staged files
         env:
           ARCH: ${{ matrix.deb-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper_${RELEASE_VERSION}_$ARCH.deb" --staged target/nfpm
-      - name: The rpm installs the staged gh and trusted root
+      - name: The rpm installs the staged files
         env:
           RPM_ARCH: ${{ matrix.rpm-arch }}
         run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --staged target/nfpm
-      # The package carries the unit the deb and the rpm install (packaging/linux/hostkeeper.service),
-      # the one unit file of the daemon: it starts the binary the self-update switches. It also
-      # carries the committed Sigstore trusted root, which the daemon checks every package against,
-      # so each update of hostkeeper brings the root of its release (trusted-root.yml says when the
-      # committed root is no longer the live one).
-      - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --unit packaging/linux/hostkeeper.service --trusted-root packaging/sigstore/trusted_root.json --out dist
-      - name: hello's package and its SHA-256
-        run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      # The same binary and units, started with --fail-ready: a build whose verify fails, so that
-      # a host can be rolled back from it. It is released and attested like the others.
-      - name: hello's failing build and its SHA-256
-        run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: The binary tarball holds no dynamically linked program
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      - name: The coordinator updater's tarball holds no dynamically linked program
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz"
+      # The coordinator's deb and rpm (packaging/coordinator/nfpm.yaml) take the static program
+      # and the operator web app from target/nfpm-coordinator/: ui/ with every directory 0755
+      # and every file 0644, as the image holds it.
+      - run: mkdir target/nfpm-coordinator
+      - name: Stage the static hostkeeper-coordinator
+        run: cp "target/$MUSL_TARGET/release/hostkeeper-coordinator" target/nfpm-coordinator/hostkeeper-coordinator
+      - name: Stage the operator web app
+        run: cp -R ui target/nfpm-coordinator/ui
+      - name: The web app's modes
+        run: chmod -R u=rwX,go=rX target/nfpm-coordinator/ui
+      # nfpm names the files hostkeeper-coordinator_<version>_<deb-arch>.deb and
+      # hostkeeper-coordinator-<version>-1.<rpm-arch>.rpm.
+      - name: The coordinator's deb
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/coordinator/nfpm.yaml --packager deb --target dist
+      - name: The coordinator's rpm
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          ARCH: ${{ matrix.deb-arch }}
+        run: nfpm package --config packaging/coordinator/nfpm.yaml --packager rpm --target dist
+      # Each read back: the staged program at /usr/bin/hostkeeper-coordinator, 0755, root's, a
+      # static ELF; the web app file for file, 0644, root's; the unit, the sysusers.d entry, the
+      # tmpfiles rules and the template, 0644, root's; no dependency but systemd.
+      - name: The coordinator's deb installs the staged files
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator_${RELEASE_VERSION}_$ARCH.deb" --coordinator-staged target/nfpm-coordinator
+      - name: The coordinator's rpm installs the staged files
+        env:
+          RPM_ARCH: ${{ matrix.rpm-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hostkeeper-coordinator-$RELEASE_VERSION-1.$RPM_ARCH.rpm" --coordinator-staged target/nfpm-coordinator
+      # The mdm package, for linux-x86_64 only (its pinned tools are linux-amd64 builds): its
+      # program bin/mdm, stamped like the binaries, and the pinned servers and lego, each archive
+      # downloaded over HTTPS and checked against its pin in crates/hostkeeper-mdm-core/pins.txt
+      # by mdm-fetch, which `release deb --service mdm` then takes the binaries out of.
+      # Nothing downloaded is run here.
+      - name: Build mdm, the program of the mdm package
+        if: matrix.platform == 'linux-x86_64'
+        env:
+          RELEASE_COMMIT: ${{ github.sha }}
+        run: cargo build --locked --release -p hostkeeper-mdm --bin mdm
+      - name: mdm says the version and the commit
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release check-binary target/release/mdm "$RELEASE_VERSION" "$GITHUB_SHA"
+      - name: The pinned archives of the mdm package
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release mdm-fetch --dir "$RUNNER_TEMP/mdm-archives"
       # The tarballs as a host takes them: unpacked with this runner's tar, the binary in each says
       # the version and the commit, as the built one did.
       - run: mkdir "$RUNNER_TEMP/unpacked"
@@ -301,6 +452,43 @@ jobs:
       - run: tar -xzf "dist/hostkeeper-mdm-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper-mdm
       - name: The packaged hostkeeper-mdm says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-mdm" "$RELEASE_VERSION" "$GITHUB_SHA"
+      - run: tar -xzf "dist/hostkeeper-coordinator-update-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper-coordinator-update
+      - name: The packaged hostkeeper-coordinator-update says the version and the commit
+        run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper-coordinator-update" "$RELEASE_VERSION" "$GITHUB_SHA"
+      # The native packages of the services (docs/design/packages-native.md, items A20 and A21):
+      # hello's .deb and its failing build's, on linux-x86_64 mdm's, and pxe's on both Linux
+      # platforms, read back by check-linux-pkg --service: the package named for the service, every entry root's and not
+      # writable by others, each unit starting a file of the package, no dependency. The release
+      # manifest names each one's hook command. All go to dist/: release assets, summed and
+      # attested. The release publishes hello's, mdm's and pxe's to the repository's testing suite, and
+      # the failing build's, whose Debian version is <version>~fail.ready (the file keeps the
+      # service version, <version>-fail-ready, in its name), to its testing-fail suite.
+      - name: hello's .deb
+        run: cargo xtask release deb --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: hello's failing build's .deb
+        run: cargo xtask release deb --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
+      - name: hello's .deb is named for hello, root's, and its units start its own files
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}_$ARCH.deb" --service hello
+      - name: hello's failing build's .deb is named for hello, root's, and its units start its own files
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/hello_${RELEASE_VERSION}-fail-ready_$ARCH.deb" --service hello
+      - name: mdm's .deb
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release deb --service mdm --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/mdm --archives "$RUNNER_TEMP/mdm-archives" --out dist
+      - name: mdm's .deb is named for mdm, root's, and its units start its own files
+        if: matrix.platform == 'linux-x86_64'
+        run: cargo xtask release check-linux-pkg "dist/mdm_${RELEASE_VERSION}_amd64.deb" --service mdm
+      # pxe's .deb, on both Linux platforms: the static pxe built above at /usr/lib/pxe/pxe and
+      # its unit (packaging/pxe/deb/pxe.service), read back like the others.
+      - name: pxe's .deb
+        run: cargo xtask release deb --service pxe --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary "target/$MUSL_TARGET/release/pxe" --out dist
+      - name: pxe's .deb is named for pxe, root's, and its unit starts its own file
+        env:
+          ARCH: ${{ matrix.deb-arch }}
+        run: cargo xtask release check-linux-pkg "dist/pxe_${RELEASE_VERSION}_$ARCH.deb" --service pxe
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-${{ matrix.platform }}
@@ -314,8 +502,10 @@ jobs:
   # are the plists of its two slots), and the installer pkg of a Mac's first
   # install (a distribution pkg: productbuild around the component pkgbuild makes), read back from
   # the built pkg and checked here. No deb, rpm, coordinator or hostkeeper-mdm on macOS.
-  # The pkg is not signed (that needs an Apple Developer ID Installer identity); it is attested
-  # with every other file. The runner's `gtar` is GNU tar, so the tarball is made as on Linux.
+  # The pkgs built here, the installer and hello's .pkg, are unsigned and are not release files:
+  # they go to their own artifact, `pkg-unsigned-macos-arm64`, which sign-pkg signs and check-pkg
+  # checks and publishes, so each pkg SHA256SUMS lists and attest attests is the signed one. The runner's `gtar` is GNU tar, so
+  # the tarball is made as on Linux.
   build-macos:
     name: macos-arm64
     needs: [version]
@@ -343,10 +533,28 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - run: rustup toolchain install
-      - name: Download cargo-cyclonedx (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Restore the pinned cyclonedx.tar.xz from the cache
+        id: cyclonedx-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: pinned-cyclonedx-${{ env.CYCLONEDX_VERSION }}-${{ env.CYCLONEDX_SHA256 }}
+      - name: Download cargo-cyclonedx on a cache miss (HTTPS only, redirects included)
+        id: cyclonedx-download
+        if: ${{ steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/cyclonedx.tar.xz" "https://github.com/CycloneDX/cyclonedx-rust-cargo/releases/download/cargo-cyclonedx-$CYCLONEDX_VERSION/cargo-cyclonedx-$TARGET.tar.xz"
+      - name: Say why the job stops when cyclonedx.tar.xz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.cyclonedx-download.outcome == 'failure' }}
+        run: echo "::error::cyclonedx.tar.xz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check cargo-cyclonedx (pinned checksum)
+        id: cyclonedx-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/cyclonedx.tar.xz" --sha256 "$CYCLONEDX_SHA256" --out "$RUNNER_TEMP/cyclonedx-checked.tar.xz"
+      - name: Save the checked cyclonedx.tar.xz to the cache
+        if: ${{ !cancelled() && steps.cyclonedx-check.outcome == 'success' && steps.cyclonedx-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/cyclonedx.tar.xz
+          key: ${{ steps.cyclonedx-cache.outputs.cache-primary-key }}
       # The macOS image keeps cargo outside $HOME/.cargo/bin, so the tool goes into a directory of
       # its own on the PATH.
       - run: mkdir "$RUNNER_TEMP/bin"
@@ -387,18 +595,28 @@ jobs:
         run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$GITHUB_SHA")" >> "$GITHUB_ENV"
       - name: Tarball of the binary
         run: gtar --sort=name --owner=0 --group=0 --numeric-owner --mode=0555 --mtime="@$SOURCE_DATE_EPOCH" -C target/release -cf - hostkeeper | gzip -n > "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz"
-      # The package carries the committed trusted root (see the Linux build job).
-      - name: hostkeeper's own package and its SHA-256
-        run: cargo xtask release package --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hostkeeper --trusted-root packaging/sigstore/trusted_root.json --out dist
-      - name: hello's package and its SHA-256
-        run: cargo xtask release package --service hello --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      # The same binary and plists, started with --fail-ready (see the Linux build job).
-      - name: hello's failing build and its SHA-256
-        run: cargo xtask release package --service hello --fail-ready --platform "$PLATFORM" --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --binary target/release/hello --out dist
-      - name: Download gh (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Restore the pinned gh.zip from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Say why the job stops when gh.zip is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
       - name: Check gh (pinned checksum)
+        id: gh-check
         run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Save the checked gh.zip to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
       - name: Unpack gh
         run: unzip -j -q "$RUNNER_TEMP/gh-checked.zip" "gh_${GH_VERSION}_macOS_arm64/bin/gh" -d "$RUNNER_TEMP/gh-pinned"
       # gh fetches both roots through TUF and checks their signatures; no token is needed.
@@ -406,27 +624,182 @@ jobs:
         run: '"$RUNNER_TEMP/gh-pinned/gh" attestation trusted-root > "$RUNNER_TEMP/trusted_root.download"'
       - name: Check the trusted root (pinned checksum)
         run: cargo xtask install-tool --download "$RUNNER_TEMP/trusted_root.download" --sha256 "$TRUSTED_ROOT_SHA256" --out "$RUNNER_TEMP/trusted_root.json"
+      # Into pkg/, not dist/: the unsigned pkg is never a release file.
+      - run: mkdir pkg
       - name: The installer pkg (component by pkgbuild, distribution by productbuild)
-        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out dist
+        run: cargo xtask release macos-pkg --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json" --stage "$RUNNER_TEMP/pkg-root" --out pkg
       # Read back from the built pkg, expanded into its Distribution and its component: the
       # Distribution names the one component under the pkg's identifier and version and runs no
       # installer script, and the component's payload holds exactly the binary, the daemon's plist,
       # the log directory and the newsyslog file, gh and the trusted root, with their paths, modes,
-      # owners and bytes, the plist names the daemon's label, `current` of the self-update binary
-      # directory as its program and its output files, the newsyslog file rotates exactly those
-      # files, and the pkg's one script is the postinstall that seeds that binary directory, writes
-      # the config with mac-config and loads the job, byte for byte.
+      # owners and bytes, the plist names the daemon's label, the installed binary
+      # /usr/local/bin/hostkeeper as its program and its output files, the newsyslog file rotates
+      # exactly those files, and the pkg's one script is the postinstall that boots out and loads
+      # the job, byte for byte.
       - name: Expand the distribution pkg
-        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
+        run: pkgutil --expand "pkg/hostkeeper-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/pkg-expanded"
       - name: The distribution pkg holds one component that installs exactly the binary, the plist, the log directory and its newsyslog file, gh and the trusted root
         run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/pkg-expanded" --version "$RELEASE_VERSION" --binary target/release/hostkeeper --gh "$RUNNER_TEMP/gh-pinned/gh" --trusted-root "$RUNNER_TEMP/trusted_root.json"
       - run: mkdir "$RUNNER_TEMP/unpacked"
       - run: tar -xzf "dist/hostkeeper-$RELEASE_VERSION-$PLATFORM.tar.gz" -C "$RUNNER_TEMP/unpacked" hostkeeper
       - name: The packaged hostkeeper says the version and the commit
         run: cargo xtask release check-binary "$RUNNER_TEMP/unpacked/hostkeeper" "$RELEASE_VERSION" "$GITHUB_SHA"
+      # hello's .pkg and its failing build's (docs/design/packages-native.md, items A20 and A21):
+      # one component with no script, the program under /Library/Application Support/hello/ and
+      # the two slots' plists, Disabled, in /Library/LaunchDaemons/, read back from the expanded
+      # product: what hello's builder writes, not a rule of the daemon's. hello's goes to pkg/, unsigned,
+      # beside the installer: sign-pkg signs it and check-pkg publishes it, a release asset the
+      # release puts in the testing directory of the installers. The failing build's goes to
+      # native/, an artifact of its own, and is never signed or released.
+      - name: hello's .pkg (component by pkgbuild with no scripts, distribution by productbuild)
+        run: cargo xtask release macos-pkg --service hello --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-pkg-root" --out pkg
+      - name: hello's failing build's .pkg
+        run: cargo xtask release macos-pkg --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello --stage "$RUNNER_TEMP/hello-fail-ready-pkg-root" --out native
+      - name: Expand hello's .pkg
+        run: pkgutil --expand "pkg/hello-$RELEASE_VERSION-$PLATFORM.pkg" "$RUNNER_TEMP/hello-pkg-expanded"
+      - name: Expand hello's failing build's .pkg
+        run: pkgutil --expand "native/hello-$RELEASE_VERSION-fail-ready-$PLATFORM.pkg" "$RUNNER_TEMP/hello-fail-ready-pkg-expanded"
+      - name: hello's .pkg is exactly what its builder writes
+        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-pkg-expanded" --service hello --version "$RELEASE_VERSION" --binary target/release/hello
+      - name: hello's failing build's .pkg is exactly what its builder writes
+        run: cargo xtask release check-macos-pkg "$RUNNER_TEMP/hello-fail-ready-pkg-expanded" --service hello --fail-ready --version "$RELEASE_VERSION" --binary target/release/hello
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: assets-${{ env.PLATFORM }}
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: native-${{ env.PLATFORM }}
+          path: native/
+          retention-days: 90
+          if-no-files-found: error
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pkg-unsigned-${{ env.PLATFORM }}
+          path: pkg/
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only: the installer pkg signed with the Developer ID Installer identity, for the
+  # MDM's InstallEnterpriseApplication, which installs only a signed pkg, and hello's .pkg with
+  # the same identity, for a host's macos-pkg installer, which stages only a signed pkg. Not
+  # notarized: a pkg an MDM or a host's installer installs needs no notarization. This job runs no repository code (no checkout, no
+  # cargo), so no build script or dependency runs on the machine that holds the key: the
+  # workflow lint holds it to the exact steps of SIGN_PKG_STEPS (crates/xtask/tests/workflows).
+  # The identity (the PKCS#12 with its key and Apple's Developer ID G2 intermediate) goes into
+  # a keychain of this job in $RUNNER_TEMP, never the login keychain, which is the user's only
+  # keychain while productsign runs; the keychain and the PKCS#12 file are deleted whether or
+  # not the signing worked. The keychain's password is the PKCS#12's, a secret the log masks.
+  # The signed pkgs go to `pkg-signed-macos-arm64`, which check-pkg checks.
+  sign-pkg:
+    needs: [version, build-macos]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 15
+    environment: pkg-signing
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      IDENTITY: "Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)"
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-unsigned-macos-arm64
+          path: unsigned
+      - name: The identity, from its secret into a file of the job
+        env:
+          P12: ${{ secrets.MACOS_INSTALLER_P12 }}
+        run: base64 --decode -o "$RUNNER_TEMP/installer.p12" <<< "$P12"
+      - name: A keychain of the job
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security create-keychain -p "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: The keychain stays unlocked for the job
+        run: security set-keychain-settings -lut 21600 "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Unlock the keychain
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security unlock-keychain -p "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Import the identity, its key usable by productsign only
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security import "$RUNNER_TEMP/installer.p12" -k "$RUNNER_TEMP/pkg-signing.keychain-db" -f pkcs12 -P "$PASSWORD" -T /usr/bin/productsign
+      - name: Let Apple's tools use the key without a prompt
+        env:
+          PASSWORD: ${{ secrets.MACOS_INSTALLER_P12_PASSWORD }}
+        run: security set-key-partition-list -S "apple-tool:,apple:" -s -k "$PASSWORD" "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: The job's keychain is the user's only keychain
+        run: security list-keychains -d user -s "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - run: mkdir dist
+      - name: Sign the pkg, with a trusted timestamp
+        run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg"
+      - name: Sign hello's pkg, with a trusted timestamp
+        run: productsign --sign "$IDENTITY" --keychain "$RUNNER_TEMP/pkg-signing.keychain-db" --timestamp "unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg" "dist/hello-$RELEASE_VERSION-macos-arm64.pkg"
+      - name: Delete the keychain, whether the signing worked or not
+        if: ${{ always() }}
+        run: security delete-keychain "$RUNNER_TEMP/pkg-signing.keychain-db"
+      - name: Delete the identity's file, whether the signing worked or not
+        if: ${{ always() }}
+        run: rm -f "$RUNNER_TEMP/installer.p12"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: pkg-signed-macos-arm64
+          path: dist/
+          retention-days: 90
+          if-no-files-found: error
+
+  # Push to main only, with no secret: each signed pkg, the installer and hello's, is checked and
+  # only then becomes a release file. `release check-pkg-signature` refuses it unless pkgutil
+  # says the Mac trusts its signature, signed with a trusted timestamp by exactly the identity
+  # under Apple's Developer ID intermediate and root; each signed and unsigned pkg must expand to
+  # the same files, so signing changed nothing that check-macos-pkg checked in build-macos. The
+  # pkgs are uploaded as `assets-pkg-macos-arm64`, the one `assets-*` artifact that holds them,
+  # so SHA256SUMS, the attestation and the release name the signed bytes.
+  check-pkg:
+    needs: [version, sign-pkg]
+    if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    env:
+      RELEASE_VERSION: ${{ needs.version.outputs.version }}
+      IDENTITY: "Developer ID Installer: Komira AI, Inc. (U7RTX4XD3X)"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-unsigned-macos-arm64
+          path: unsigned
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: pkg-signed-macos-arm64
+          path: dist
+      - name: The signature is the identity's, under Apple's chain, with a trusted timestamp
+        run: cargo xtask release check-pkg-signature "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
+      - name: Expand the unsigned pkg
+        run: pkgutil --expand "unsigned/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/unsigned-expanded"
+      - name: Expand the signed pkg
+        run: pkgutil --expand "dist/hostkeeper-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/signed-expanded"
+      - name: Signing changed no file of the pkg
+        run: diff -r "$RUNNER_TEMP/unsigned-expanded" "$RUNNER_TEMP/signed-expanded"
+      - name: hello's signature is the identity's, under Apple's chain, with a trusted timestamp
+        run: cargo xtask release check-pkg-signature "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" --identity "$IDENTITY"
+      - name: Expand hello's unsigned pkg
+        run: pkgutil --expand "unsigned/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-unsigned-expanded"
+      - name: Expand hello's signed pkg
+        run: pkgutil --expand "dist/hello-$RELEASE_VERSION-macos-arm64.pkg" "$RUNNER_TEMP/hello-signed-expanded"
+      - name: Signing changed no file of hello's pkg
+        run: diff -r "$RUNNER_TEMP/hello-unsigned-expanded" "$RUNNER_TEMP/hello-signed-expanded"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: assets-pkg-macos-arm64
           path: dist/
           retention-days: 90
           if-no-files-found: error
@@ -518,12 +891,16 @@ jobs:
           retention-days: 90
           if-no-files-found: error
 
-  # index.json over the packages of both platforms, netboot.json from the committed pins of the
+  # netboot.json from the committed pins of the
   # boot sets of network install (it reads no network), then SHA256SUMS over every file but itself
   # (the bundles come later, from attest). The attest job signs these sums, so they are the one
   # list of what a release holds.
+  # On a push to main it waits for check-pkg, which publishes the signed pkgs (the installer and
+  # hello's); on a run by hand, which signs nothing, check-pkg is skipped and the sums are made
+  # without them.
   sums:
-    needs: [version, build, build-macos, image]
+    needs: [version, build, build-macos, image, check-pkg]
+    if: ${{ !cancelled() && !failure() }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
@@ -544,14 +921,14 @@ jobs:
           pattern: assets-*
           path: dist
           merge-multiple: true
-      - name: The release index
-        run: cargo xtask release index --version "$RELEASE_VERSION" --dir dist
-      - name: The release index of hello
-        run: cargo xtask release index --service hello --version "$RELEASE_VERSION" --dir dist
-      - name: The release index of hello's failing build
-        run: cargo xtask release index --service hello --fail-ready --version "$RELEASE_VERSION" --dir dist
       - name: The boot sets of network install
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$RELEASE_VERSION" --dir dist
+      - name: The command line, hkctl
+        run: cargo xtask release hkctl --version "$RELEASE_VERSION" --commit "$GITHUB_SHA" --out dist
+      # The OCI image index of the two image tarballs: its SHA-256 is the digest of the
+      # multi-platform image release.yml pushes to the registry.
+      - name: The coordinator's image index
+        run: cargo xtask release image-index dist --version "$RELEASE_VERSION"
       # In the C locale, so the lines are in the byte order of the names; written outside dist,
       # so that SHA256SUMS does not list itself.
       - name: SHA256SUMS
@@ -568,16 +945,16 @@ jobs:
           name: sha256sums
           path: |
             dist/SHA256SUMS
-            dist/index.json
-            dist/hello-index.json
-            dist/hello-fail-ready-index.json
             dist/netboot.json
+            dist/hkctl-${{ needs.version.outputs.version }}
+            dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}.image.json
           retention-days: 90
           if-no-files-found: error
 
   # Push to main only: build provenance for every summed file, an SBOM attestation for each
-  # binary tarball (hostkeeper's, the coordinator's and hostkeeper-mdm's), and a provenance
-  # attestation of each attested file alone (each binary tarball, package, deb, rpm, image and pkg, and netboot.json), whose bundle is copied beside
+  # binary tarball (hostkeeper's, the coordinator's, hostkeeper-mdm's and
+  # hostkeeper-coordinator-update's), and a provenance
+  # attestation of each attested file alone (each binary tarball, package, deb, rpm, image and pkg, netboot.json and hkctl), whose bundle is copied beside
   # it as `<file>.sigstore.json` for a host that verifies without GitHub.
   attest:
     needs: [version, sums]
@@ -624,6 +1001,10 @@ jobs:
           sbom-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-x86_64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+          sbom-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
           subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
@@ -634,6 +1015,10 @@ jobs:
         with:
           subject-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
           sbom-path: dist/hostkeeper-mdm-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
+      - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
+        with:
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+          sbom-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.cdx.json
       - uses: actions/attest-sbom@c604332985a26aa8cf1bdc465b92731239ec6b9e # v4.1.0
         with:
           subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.gz
@@ -662,30 +1047,46 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-x86_64.tar.gz.sigstore.json"
-      - id: package-linux-x86_64
+      - id: coordinator-update-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
-      - name: Name the bundle of the package for linux-x86_64
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+      - name: Name the bundle of the tarball of hostkeeper-coordinator-update for linux-x86_64
         env:
-          BUNDLE: ${{ steps.package-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-x86_64.tar.zst.sigstore.json"
-      - id: hello-linux-x86_64
+          BUNDLE: ${{ steps.coordinator-update-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-update-${V}-linux-x86_64.tar.gz.sigstore.json"
+      - id: hello-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-x86_64.tar.zst
-      - name: Name the bundle of the hello package for linux-x86_64
+          subject-path: dist/hello_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of hello's .deb for linux-x86_64
         env:
-          BUNDLE: ${{ steps.hello-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-linux-x86_64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-linux-x86_64
+          BUNDLE: ${{ steps.hello-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}_amd64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-linux-x86_64.tar.zst
-      - name: Name the bundle of the failing build of hello for linux-x86_64
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_amd64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-x86_64
         env:
-          BUNDLE: ${{ steps.hello-fail-ready-linux-x86_64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-linux-x86_64.tar.zst.sigstore.json"
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_amd64.deb.sigstore.json"
+      - id: mdm-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/mdm_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of mdm's .deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.mdm-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/mdm_${V}_amd64.deb.sigstore.json"
+      - id: pxe-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/pxe_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of pxe's .deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.pxe-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/pxe_${V}_amd64.deb.sigstore.json"
       - id: deb-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -702,6 +1103,22 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-x86_64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.x86_64.rpm.sigstore.json"
+      - id: coordinator-deb-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator_${{ needs.version.outputs.version }}_amd64.deb
+      - name: Name the bundle of the coordinator's deb for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.coordinator-deb-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator_${V}_amd64.deb.sigstore.json"
+      - id: coordinator-rpm-linux-x86_64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-1.x86_64.rpm
+      - name: Name the bundle of the coordinator's rpm for linux-x86_64
+        env:
+          BUNDLE: ${{ steps.coordinator-rpm-linux-x86_64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}-1.x86_64.rpm.sigstore.json"
       - id: image-linux-x86_64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -734,30 +1151,38 @@ jobs:
         env:
           BUNDLE: ${{ steps.mdm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-mdm-${V}-linux-arm64.tar.gz.sigstore.json"
-      - id: package-linux-arm64
+      - id: coordinator-update-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-linux-arm64.tar.zst
-      - name: Name the bundle of the package for linux-arm64
+          subject-path: dist/hostkeeper-coordinator-update-${{ needs.version.outputs.version }}-linux-arm64.tar.gz
+      - name: Name the bundle of the tarball of hostkeeper-coordinator-update for linux-arm64
         env:
-          BUNDLE: ${{ steps.package-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-linux-arm64.tar.zst.sigstore.json"
-      - id: hello-linux-arm64
+          BUNDLE: ${{ steps.coordinator-update-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-update-${V}-linux-arm64.tar.gz.sigstore.json"
+      - id: hello-deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-linux-arm64.tar.zst
-      - name: Name the bundle of the hello package for linux-arm64
+          subject-path: dist/hello_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of hello's .deb for linux-arm64
         env:
-          BUNDLE: ${{ steps.hello-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-linux-arm64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-linux-arm64
+          BUNDLE: ${{ steps.hello-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}_arm64.deb.sigstore.json"
+      - id: hello-fail-ready-deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-linux-arm64.tar.zst
-      - name: Name the bundle of the failing build of hello for linux-arm64
+          subject-path: dist/hello_${{ needs.version.outputs.version }}-fail-ready_arm64.deb
+      - name: Name the bundle of the failing build of hello's .deb for linux-arm64
         env:
-          BUNDLE: ${{ steps.hello-fail-ready-linux-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-linux-arm64.tar.zst.sigstore.json"
+          BUNDLE: ${{ steps.hello-fail-ready-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello_${V}-fail-ready_arm64.deb.sigstore.json"
+      - id: pxe-deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/pxe_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of pxe's .deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.pxe-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/pxe_${V}_arm64.deb.sigstore.json"
       - id: deb-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -774,6 +1199,22 @@ jobs:
         env:
           BUNDLE: ${{ steps.rpm-linux-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-1.aarch64.rpm.sigstore.json"
+      - id: coordinator-deb-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator_${{ needs.version.outputs.version }}_arm64.deb
+      - name: Name the bundle of the coordinator's deb for linux-arm64
+        env:
+          BUNDLE: ${{ steps.coordinator-deb-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator_${V}_arm64.deb.sigstore.json"
+      - id: coordinator-rpm-linux-arm64
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}-1.aarch64.rpm
+      - name: Name the bundle of the coordinator's rpm for linux-arm64
+        env:
+          BUNDLE: ${{ steps.coordinator-rpm-linux-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}-1.aarch64.rpm.sigstore.json"
       - id: image-linux-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -790,30 +1231,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.tarball-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.gz.sigstore.json"
-      - id: package-macos-arm64
+      - id: hello-pkg-macos-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: dist/hostkeeper-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
-      - name: Name the bundle of the package for macos-arm64
+          subject-path: dist/hello-${{ needs.version.outputs.version }}-macos-arm64.pkg
+      - name: Name the bundle of hello's .pkg for macos-arm64
         env:
-          BUNDLE: ${{ steps.package-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.tar.zst.sigstore.json"
-      - id: hello-macos-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-macos-arm64.tar.zst
-      - name: Name the bundle of the hello package for macos-arm64
-        env:
-          BUNDLE: ${{ steps.hello-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-macos-arm64.tar.zst.sigstore.json"
-      - id: hello-fail-ready-macos-arm64
-        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
-        with:
-          subject-path: dist/hello-${{ needs.version.outputs.version }}-fail-ready-macos-arm64.tar.zst
-      - name: Name the bundle of the failing build of hello for macos-arm64
-        env:
-          BUNDLE: ${{ steps.hello-fail-ready-macos-arm64.outputs.bundle-path }}
-        run: cp "$BUNDLE" "dist/hello-${V}-fail-ready-macos-arm64.tar.zst.sigstore.json"
+          BUNDLE: ${{ steps.hello-pkg-macos-arm64.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hello-${V}-macos-arm64.pkg.sigstore.json"
       - id: pkg-macos-arm64
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -822,6 +1247,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.pkg-macos-arm64.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/hostkeeper-${V}-macos-arm64.pkg.sigstore.json"
+      - id: image-index
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hostkeeper-coordinator-${{ needs.version.outputs.version }}.image.json
+      - name: Name the bundle of the coordinator's image index
+        env:
+          BUNDLE: ${{ steps.image-index.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hostkeeper-coordinator-${V}.image.json.sigstore.json"
       - id: netboot
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
@@ -830,6 +1263,14 @@ jobs:
         env:
           BUNDLE: ${{ steps.netboot.outputs.bundle-path }}
         run: cp "$BUNDLE" "dist/netboot.json.sigstore.json"
+      - id: hkctl
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
+        with:
+          subject-path: dist/hkctl-${{ needs.version.outputs.version }}
+      - name: Name the bundle of the command line
+        env:
+          BUNDLE: ${{ steps.hkctl.outputs.bundle-path }}
+        run: cp "$BUNDLE" "dist/hkctl-${V}.sigstore.json"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: bundles

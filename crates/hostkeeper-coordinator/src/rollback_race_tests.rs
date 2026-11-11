@@ -49,26 +49,20 @@ async fn a_rollback_paused_at_its_mark_does_not_overwrite_the_version_ci_sets_me
     });
     let mut state = OpsState::default();
     state.services.insert(LEGACY.to_owned(), good());
-    let rig = rig_over(
-        "rb-race-ci",
-        AUTO,
-        ONE,
-        OpsStore::with_writer(state, writer),
-    )
-    .await;
+    let rig = rig_over("rb-race-ci", AUTO, ONE, OpsStore::refusing(state, writer)).await;
     rig.set(TWO).await;
     round(&rig, 2_000, &[]);
     rig.at(2_015);
     let (phase, class) = release();
     let coordinator = &rig.coordinator;
     coordinator
-        .heartbeat(who("d1"), failure(phase, class, "2.0"))
+        .heartbeat_native(who("d1"), failure(phase, class, "2.0"))
         .expect("a heartbeat");
     let token = ci_token();
     std::thread::scope(|scope| {
         let beat = scope.spawn(|| {
             coordinator
-                .heartbeat(who("d2"), failure(phase, class, "2.0"))
+                .heartbeat_native(who("d2"), failure(phase, class, "2.0"))
                 .expect("a heartbeat")
         });
         paused_rx.recv().expect("the rollback paused at its mark");

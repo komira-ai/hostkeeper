@@ -1,0 +1,8 @@
+[package]
+name = "hostkeeper-measure"
+version = "0.1.0"
+edition = "2024"
+
+[dev-dependencies]
+hostkeeper-measure = { path = "." }
+hostkeeper-testkit = { path = "../hostkeeper-testkit" }

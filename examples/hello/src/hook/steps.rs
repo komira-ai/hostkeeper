@@ -1,7 +1,7 @@
 //! The six steps over the record, the units and the server.
 
 use std::io::Write;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use super::args::Step;
 use super::settings::{Settings, Units};
@@ -13,6 +13,31 @@ use crate::report::{Failure, Report};
 const RETRY_AFTER_SECS: u64 = 2;
 /// The exit status of a step that is deferred.
 const EXIT_DEFERRED: i32 = 75;
+
+/// The program of the staged release `artifact`, the release argument of `prepare`: `bin/hello`
+/// of an unpacked archive; in the daemon's version directory of a native package, which holds
+/// the package's tree in `tree/` (an archive has no top-level `tree`), the program where the
+/// platform's package installs it: [`DEB_PROGRAM`] for the `.deb` (systemd units),
+/// [`PKG_PROGRAM`] for the `.pkg` (launchd jobs).
+pub fn staged_program(artifact: &Path, units: Units) -> PathBuf {
+    let tree = artifact.join("tree");
+    if tree.is_dir() {
+        tree.join(match units {
+            Units::Systemd => DEB_PROGRAM,
+            Units::Launchd => PKG_PROGRAM,
+        })
+    } else {
+        artifact.join("bin").join("hello")
+    }
+}
+
+/// Where hello's `.deb` installs its program, from `/`: a program no one types, under
+/// `/usr/lib/<package>/` (docs/design/packages-native.md section 10.2).
+pub const DEB_PROGRAM: &str = "usr/lib/hello/hello";
+
+/// Where hello's `.pkg` installs its program, from `/`: under the service's own directory of
+/// `/Library/Application Support/`.
+pub const PKG_PROGRAM: &str = "Library/Application Support/hello/bin/hello";
 
 /// Everything a step works with.
 pub struct Steps<'a> {
@@ -36,7 +61,7 @@ impl Steps<'_> {
 
     /// Chooses the idle slot and records it. Nothing a client sees changes.
     fn prepare(&mut self, artifact: PathBuf) -> Result<Report, Failure> {
-        let program = artifact.join("bin").join("hello");
+        let program = staged_program(&artifact, self.settings.units);
         if !program.is_file() {
             return Err(Failure::release(format!(
                 "{} is not a file: the staged release has no program",

@@ -9,6 +9,7 @@ use clap::{Parser, Subcommand};
 use hostkeeper_mdm_core::acme::Acme;
 use hostkeeper_mdm_core::config::MdmConfig;
 use hostkeeper_mdm_core::migrate::{NEW_STATE, NEW_USER, Old, Target};
+use hostkeeper_mdm_core::package;
 use hostkeeper_mdm_core::pins::{BUILT_IN, Pins, Tool};
 use hostkeeper_mdm_core::profile::Topic;
 use hostkeeper_mdm_step::{Host, Mode, Trustee};
@@ -87,26 +88,7 @@ enum Verb {
     },
     /// Give NanoHUB the APNs push certificate and its key, and write the enrollment profile the
     /// proxy serves at /enroll (root). With --profile-only, the profile alone.
-    PushCert {
-        /// The settings file.
-        #[arg(long)]
-        settings: String,
-        /// The push certificate (PEM), from the Apple Push Certificates Portal.
-        #[arg(long, requires = "key", conflicts_with = "profile_only")]
-        cert: Option<String>,
-        /// Its private key (PEM, unencrypted, mode 0600).
-        #[arg(long, requires = "cert")]
-        key: Option<String>,
-        /// Write the enrollment profile only, for the recorded topic or --topic.
-        #[arg(long, required_unless_present = "cert")]
-        profile_only: bool,
-        /// The push topic (com.apple.mgmt.External.<uuid>), in place of the recorded one.
-        #[arg(long, requires = "profile_only", value_parser = topic)]
-        topic: Option<Topic>,
-        /// Act; without it the plan is printed.
-        #[arg(long)]
-        apply: bool,
-    },
+    PushCert(PushCertArgs),
     /// Link NanoDEP to Apple Business Manager and define the ADE profile (root).
     Dep {
         #[command(subcommand)]
@@ -142,9 +124,32 @@ enum Verb {
     },
 }
 
+/// The flags of `push-cert`, the same in both programs.
+#[derive(clap::Args)]
+pub(crate) struct PushCertArgs {
+    /// The settings file.
+    #[arg(long)]
+    settings: String,
+    /// The push certificate (PEM), from the Apple Push Certificates Portal.
+    #[arg(long, requires = "key", conflicts_with = "profile_only")]
+    cert: Option<String>,
+    /// Its private key (PEM, unencrypted, mode 0600).
+    #[arg(long, requires = "cert")]
+    key: Option<String>,
+    /// Write the enrollment profile only, for the recorded topic or --topic.
+    #[arg(long, required_unless_present = "cert")]
+    profile_only: bool,
+    /// The push topic (com.apple.mgmt.External.<uuid>), in place of the recorded one.
+    #[arg(long, requires = "profile_only", value_parser = topic)]
+    topic: Option<Topic>,
+    /// Act; without it the plan is printed.
+    #[arg(long)]
+    apply: bool,
+}
+
 /// The `dep` verbs, one per ABM step, in the order an operator takes them.
 #[derive(Subcommand)]
-enum DepVerb {
+pub(crate) enum DepVerb {
     /// NanoDEP's token certificate, written to --out, to upload in ABM.
     GetCert {
         /// The settings file.
@@ -314,15 +319,94 @@ pub fn run_with(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
-    let cli = match Cli::try_parse_from(args) {
+    let cli = match parse::<Cli>(args, out, err) {
         Ok(cli) => cli,
-        Err(e) => {
-            let sink: &mut dyn Write = if e.use_stderr() { err } else { out };
-            let _ = write!(sink, "{}", e.render());
-            return u8::try_from(e.exit_code()).unwrap_or(2);
-        }
+        Err(code) => return code,
     };
-    match dispatch(cli.verb, system, pins, out) {
+    exit(dispatch(cli.verb, system, pins, out), err)
+}
+
+/// The verb's [`Env`] over `host`.
+pub(crate) fn env<'a>(system: &System<'a>, host: &'a dyn Host) -> Env<'a> {
+    Env {
+        host,
+        net: system.net,
+        api: system.api,
+        random: system.random,
+        now: system.now,
+    }
+}
+
+/// Whose settings a verb reads: the kit's file as it is, or the `mdm` package's, with the keys
+/// the package's build fixes added ([`hostkeeper_mdm_core::package::settings_of`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Layout {
+    /// `hostkeeper-mdm`: the file names every directory and port.
+    Kit,
+    /// `mdm`, the package's program: the package's build fixes the layout.
+    Package(package::Layout),
+}
+
+/// The text the settings parsers read from the file `path`, for `layout`.
+pub(crate) fn settings_text(
+    host: &dyn Host,
+    path: &str,
+    layout: Layout,
+) -> Result<String, MdmError> {
+    let text = read_settings(host, path)?;
+    match layout {
+        Layout::Kit => Ok(text),
+        Layout::Package(build) => Ok(package::settings_of(&text, build)?),
+    }
+}
+
+/// `push-cert`: the grants of the state and of the operator's files, then the verb.
+pub(crate) fn push_cert(
+    system: &System<'_>,
+    a: PushCertArgs,
+    layout: Layout,
+    out: &mut dyn Write,
+) -> Result<bool, MdmError> {
+    let base = system.machine.host(&[]);
+    let config = MdmConfig::parse(&settings_text(base.as_ref(), &a.settings, layout)?)?;
+    let mut grants = state_grant(&config);
+    let with = match (a.cert, a.key) {
+        (Some(cert), Some(key)) => {
+            grants.extend(file_grant(system, &cert)?);
+            grants.extend(file_grant(system, &key)?);
+            With::Pair { cert, key }
+        }
+        _ => With::ProfileOnly(a.topic),
+    };
+    let host = system.machine.host(&grants);
+    let p = PushCert { config, with };
+    push_cert::run(&env(system, host.as_ref()), &p, mode(a.apply), out)?;
+    Ok(true)
+}
+
+/// `dep <verb>`: the grants of the state and of the operator's file, then the verb.
+pub(crate) fn dep(
+    system: &System<'_>,
+    verb: DepVerb,
+    layout: Layout,
+    out: &mut dyn Write,
+) -> Result<bool, MdmError> {
+    let base = system.machine.host(&[]);
+    let (settings, d, apply) = verb.split();
+    let config = MdmConfig::parse(&settings_text(base.as_ref(), &settings, layout)?)?;
+    let mut grants = state_grant(&config);
+    match &d {
+        Dep::GetCert { out: file } => grants.extend(file_grant(system, file)?),
+        Dep::UploadToken { token } => grants.extend(file_grant(system, token)?),
+        Dep::DefineProfile | Dep::Assign { .. } => {}
+    }
+    let host = system.machine.host(&grants);
+    dep::run(&env(system, host.as_ref()), &config, &d, mode(apply), out)
+}
+
+/// The exit code of a verb's result, with `REFUSED: ...` or `FAILED: ...` on `err`.
+pub(crate) fn exit(result: Result<bool, MdmError>, err: &mut dyn Write) -> u8 {
+    match result {
         Ok(true) => 0,
         Ok(false) => 1,
         Err(e) => {
@@ -337,15 +421,18 @@ pub fn run_with(
     }
 }
 
-/// The verb's [`Env`] over `host`.
-fn env<'a>(system: &System<'a>, host: &'a dyn Host) -> Env<'a> {
-    Env {
-        host,
-        net: system.net,
-        api: system.api,
-        random: system.random,
-        now: system.now,
-    }
+/// The command line `args` parsed as `C`, or the exit code of clap's answer (help and the
+/// version on `out`, an error on `err`).
+pub(crate) fn parse<C: Parser>(
+    args: &[String],
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<C, u8> {
+    C::try_parse_from(args).map_err(|e| {
+        let sink: &mut dyn Write = if e.use_stderr() { err } else { out };
+        let _ = write!(sink, "{}", e.render());
+        u8::try_from(e.exit_code()).unwrap_or(2)
+    })
 }
 
 /// Carries the verb out; false when a check failed.
@@ -423,40 +510,8 @@ fn dispatch(
             };
             return verify::run(&env(system, host.as_ref()), &v, out);
         }
-        Verb::PushCert {
-            settings,
-            cert,
-            key,
-            profile_only: _,
-            topic,
-            apply,
-        } => {
-            let config = MdmConfig::parse(&read_settings(base.as_ref(), &settings)?)?;
-            let mut grants = state_grant(&config);
-            let with = match (cert, key) {
-                (Some(cert), Some(key)) => {
-                    grants.extend(file_grant(system, &cert)?);
-                    grants.extend(file_grant(system, &key)?);
-                    With::Pair { cert, key }
-                }
-                _ => With::ProfileOnly(topic),
-            };
-            let host = system.machine.host(&grants);
-            let a = PushCert { config, with };
-            push_cert::run(&env(system, host.as_ref()), &a, mode(apply), out)?;
-        }
-        Verb::Dep { verb } => {
-            let (settings, d, apply) = verb.split();
-            let config = MdmConfig::parse(&read_settings(base.as_ref(), &settings)?)?;
-            let mut grants = state_grant(&config);
-            match &d {
-                Dep::GetCert { out: file } => grants.extend(file_grant(system, file)?),
-                Dep::UploadToken { token } => grants.extend(file_grant(system, token)?),
-                Dep::DefineProfile | Dep::Assign { .. } => {}
-            }
-            let host = system.machine.host(&grants);
-            return dep::run(&env(system, host.as_ref()), &config, &d, mode(apply), out);
-        }
+        Verb::PushCert(a) => return push_cert(system, a, Layout::Kit, out),
+        Verb::Dep { verb } => return dep(system, verb, Layout::Kit, out),
         Verb::Migrate {
             from,
             settings,

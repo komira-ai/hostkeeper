@@ -13,7 +13,7 @@ use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use hostkeeper_wire::wire::{Heartbeat, ServiceReply, UpdateResult};
 use serde_json::{Value, json};
 
-use crate::config::{StartError, refuse_unfinished_halt};
+use crate::config::{StartError, refuse_unfinished_halt, settle_unfinished};
 use crate::halt::{Lifted, UPDATER_HALT_REASONS, lift_by_ci, origin_of};
 use crate::ops::{HaltOrigin, OpsError, OpsState, OpsStore, ServiceOps};
 use crate::ops_file::unfinished_path;
@@ -40,7 +40,7 @@ fn halting(reason: &str) -> Heartbeat {
 fn ask(rig: &Rig, host: &str, b: Heartbeat, at: u64) -> ServiceReply {
     rig.at(at);
     rig.coordinator
-        .heartbeat(who(host), b)
+        .heartbeat_native(who(host), b)
         .expect("a heartbeat")
         .reply
 }
@@ -76,8 +76,9 @@ async fn rig_with(test: &str, ops: impl FnOnce(&Path) -> OpsStore) -> (Rig, Path
 /// Catches: a halt whose failed write is dropped from memory or not retried, a retry that logs
 /// on every beat, or a marker that is ignored: the halt stands in memory and holds every order;
 /// each heartbeat writes it again, a failure logged at most once a minute; while it is not
-/// written its marker stops a start; once a write lands the marker is gone, the file holds the
-/// halt and a start goes on.
+/// written its marker, listing the halt's audit number, stops a start against the file that does
+/// not hold it; once a write lands the marker is gone, the file holds the halt and a start goes
+/// on.
 #[tokio::test]
 async fn an_unwritten_halt_is_retried_and_blocks_start() {
     let failing = Arc::new(AtomicBool::new(true));
@@ -104,9 +105,20 @@ async fn an_unwritten_halt_is_retried_and_blocks_start() {
             .is_none(),
         "not in the file"
     );
+    let halt_seq = rig
+        .coordinator
+        .ops()
+        .state()
+        .audit
+        .last()
+        .expect("the halt")
+        .seq;
+    let listed = refuse_unfinished_halt(&path).expect("a marker this build reads");
+    assert_eq!(listed, Some(vec![halt_seq]));
+    let on_disk = OpsStore::open(&path).expect("the file").state();
     assert!(matches!(
-        refuse_unfinished_halt(&path),
-        Err(StartError::HaltWriteUnfinished { path: p }) if p == marker
+        settle_unfinished(&path, &[halt_seq], &on_disk),
+        Err(StartError::ChangesUnwritten { path: p, numbers }) if p == marker && numbers == [halt_seq]
     ));
     let tried = writes.load(Ordering::SeqCst);
 
@@ -125,7 +137,7 @@ async fn an_unwritten_halt_is_retried_and_blocks_start() {
     let shown = serde_json::to_value(status(&rig)).expect("json");
     assert_eq!(shown["per_service"][LEGACY]["hosts"][1]["hold"], "halted");
     drop(installed);
-    let still = "a halt is still not written to the ops file";
+    let still = "a change is still not written";
     assert_eq!(log.text().matches(still).count(), 2, "{}", log.text());
 
     failing.store(false, Ordering::SeqCst);
@@ -134,7 +146,38 @@ async fn an_unwritten_halt_is_retried_and_blocks_start() {
     assert!(!marker.exists());
     let on_disk = OpsStore::open(&path).expect("the file").marks(LEGACY);
     assert_eq!(on_disk.halt.map(|h| h.node_id), Some("d1".to_owned()));
-    refuse_unfinished_halt(&path).expect("a start goes on");
+    assert_eq!(
+        refuse_unfinished_halt(&path).expect("a start goes on"),
+        None
+    );
+}
+
+/// Catches: a marker whose every change the ops file holds kept, or removed without a word: it
+/// is removed and the start logs that the changes landed.
+#[test]
+fn a_marker_whose_changes_landed_is_removed_and_logged() {
+    let dir = scratch("halt-marker-settled");
+    let path = dir.path().join("desired.json.ops");
+    let store = OpsStore::open(&path).expect("an ops store");
+    let entry = store
+        .change(
+            crate::ops::Write::BeforeMemory,
+            crate::ops::AuditEntry::new("operator", "exclude"),
+            |_| {},
+        )
+        .expect("written");
+    let marker = unfinished_path(&path);
+    fs::write(&marker, format!("{{\"unwritten\":[{}]}}\n", entry.seq)).expect("a marker");
+    let log = Log::default();
+    let installed = log.install();
+    let listed = refuse_unfinished_halt(&path)
+        .expect("a marker this build reads")
+        .expect("a marker");
+    settle_unfinished(&path, &listed, &store.state()).expect("settled");
+    drop(installed);
+    assert!(!marker.exists());
+    let said = "the changes the marker listed landed before the coordinator stopped";
+    assert_eq!(log.text().matches(said).count(), 1, "{}", log.text());
 }
 
 /// Catches: a halt that holds no order once its write failed, and a store without a file (no
@@ -145,7 +188,7 @@ async fn a_halt_that_cannot_be_written_still_blocks_orders() {
     let failing = Arc::new(AtomicBool::new(true));
     let gate = Arc::clone(&failing);
     let (rig, _) = rig_with("halt-unwritable", move |_| {
-        OpsStore::with_writer(
+        OpsStore::refusing(
             OpsState::default(),
             Box::new(move |_| {
                 if gate.load(Ordering::SeqCst) {
@@ -186,7 +229,8 @@ async fn a_halt_that_cannot_be_written_still_blocks_orders() {
 }
 
 /// Catches: a marker that cannot be made, or one removed by hand, stopping the write or the
-/// end of the pending state; and one that cannot be removed taken for removed.
+/// end of the pending state; one that cannot be removed taken for removed; and a marker removed
+/// by hand while a change is pending not made again before the next try.
 #[tokio::test]
 async fn a_marker_that_cannot_be_made_or_is_gone_is_logged_and_the_write_goes_on() {
     let failing = Arc::new(AtomicBool::new(true));
@@ -207,17 +251,30 @@ async fn a_marker_that_cannot_be_made_or_is_gone_is_logged_and_the_write_goes_on
     drop(installed);
     let text = log.text();
     assert!(
-        text.contains("the marker of a halt being written could not be made"),
+        text.contains("the marker of changes not yet written could not be made"),
         "{text}"
     );
     assert!(
-        text.contains("the marker of a halt written could not be removed"),
+        text.contains("the marker of changes written could not be removed"),
         "{text}"
     );
 
+    // The halt is written: once the marker is gone, nothing is pending, whatever the disk does.
     fs::remove_dir(&marker).expect("removed by hand");
     failing.store(true, Ordering::SeqCst);
     ask(&rig, "d2", beat("1.0"), 2_030);
+    assert!(
+        !rig.coordinator.ops().halt_unwritten(),
+        "a marker gone is no error"
+    );
+    assert!(!marker.exists(), "no marker is made for a change written");
+
+    // A report kept while halted, whose write fails: its marker removed by hand is made again by
+    // the next try, and an operator's change lands it.
+    ask(&rig, "d3", halting("disk_tainted"), 2_045);
+    assert!(rig.coordinator.ops().halt_unwritten());
+    fs::remove_file(&marker).expect("removed by hand");
+    ask(&rig, "d2", beat("1.0"), 2_060);
     assert!(marker.is_file(), "the retry made it");
     fs::remove_file(&marker).expect("removed by hand");
     failing.store(false, Ordering::SeqCst);
@@ -226,12 +283,18 @@ async fn a_marker_that_cannot_be_made_or_is_gone_is_logged_and_the_write_goes_on
             Some(OPERATOR),
             br#"{"action":"set_labels","node_id":"d1","labels":{"zone":"a"}}"#,
         )
-        .expect("an operator's change lands, the halt with it");
-    assert!(
-        !rig.coordinator.ops().halt_unwritten(),
-        "a marker gone is no error"
-    );
+        .expect("an operator's change lands, the report with it");
+    assert!(!rig.coordinator.ops().halt_unwritten());
     assert!(!marker.exists());
+    let on_disk = OpsStore::open(&path).expect("the file").marks(LEGACY);
+    assert_eq!(
+        on_disk
+            .halt_seen
+            .iter()
+            .map(|seen| seen.node_id.as_str())
+            .collect::<Vec<_>>(),
+        ["d3"]
+    );
 }
 
 /// The rig's halt, as the ops store holds it now.

@@ -1,27 +1,23 @@
-//! The command line: what parses, the exit status and the one line of each outcome, and the
-//! host's ports made from the flags and reaching the release. The release is a TLS-less
-//! listener on a free loopback port that closes each connection, so the real HTTPS client is
-//! refused at once; nothing leaves the machine.
+//! The command line: what parses, the exit status and the one line of each outcome, the
+//! settings file expanded into the flags of `serve`, and each step verb reaching its step.
 
-use std::collections::BTreeMap;
+use std::cell::RefCell;
 use std::fs;
-use std::net::TcpListener;
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
-use std::thread;
 
-use hostkeeper_testkit::Scratch;
+use hostkeeper_hook::Step;
 
 use super::*;
-use crate::seal::{SealedNetboot, SealedSet};
-use crate::testing::scratch;
+use crate::hook::tests::kit::{FakeSystemctl, Setup, unreached};
+use crate::hook::{FetchJob, Host};
+use crate::seal::Seal;
 
-/// Runs the command line `args` (after the program name) through `fetch`; the exit status,
-/// standard output and standard error.
-fn run_with(args: &[&str], fetch: Fetch<'_>) -> (u8, String, String) {
-    let mut argv: Vec<OsString> = vec!["hostkeeper-pxe".into()];
+/// Runs the command line `args` (after the program name) through `serve` and the hook `host`;
+/// the exit status, standard output and standard error.
+fn run_with(args: &[&str], serve: Serve<'_>, host: &Host<'_>) -> (u8, String, String) {
+    let mut argv: Vec<OsString> = vec!["pxe".into()];
     argv.extend(args.iter().map(OsString::from));
     let (mut out, mut err) = (Vec::new(), Vec::new());
-    let status = run(argv, fetch, &unreached_serve, &mut out, &mut err);
+    let status = run(argv, serve, host, &mut out, &mut err);
     (
         status,
         String::from_utf8(out).expect("UTF-8"),
@@ -29,512 +25,148 @@ fn run_with(args: &[&str], fetch: Fetch<'_>) -> (u8, String, String) {
     )
 }
 
-/// A serve the fetch tests do not expect to be reached.
+/// A serve the test does not expect to be reached.
 fn unreached_serve(_: &ServeFlags) -> Result<(), String> {
     panic!("serve is not reached")
 }
 
-/// A fetch the tests do not expect to be reached.
-fn unreached(_: &FetchFlags) -> Result<Seal, String> {
-    panic!("the fetch is not reached")
+/// Runs `args` where `serve` is not reached and a step uses the fake `systemctl` of `codes`.
+fn run_step(args: &[&str], owner: u32, codes: &[i32]) -> (u8, String, String) {
+    let systemctl = FakeSystemctl::answering(codes);
+    let fetch: &dyn Fn(&FetchJob, u32) -> Result<Seal, String> = &unreached;
+    let host = Host {
+        owner,
+        systemctl: &systemctl,
+        fetch,
+    };
+    run_with(args, &unreached_serve, &host)
 }
 
-/// The files of a command run: a daemon config owned by the test's own user, a CA bundle, and
-/// the path of the new directory.
-struct Files {
-    scratch: Scratch,
-    owner: u32,
-}
-
-impl Files {
-    fn new(name: &str) -> Files {
-        let scratch = scratch(name);
-        let config = scratch.path().join("hostkeeper.toml");
-        fs::write(
-            &config,
-            "coordinator = \"https://coordinator.example:8443\"\n\
-             ca_sha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
-             release_channel = \"https://releases.example\"\n\
-             [trusted_signers]\n\
-             organisation = \"example-org\"\n\
-             workflow = \".github/workflows/artifacts.yml\"\n\
-             refs = [\"refs/heads/main\"]\n\
-             hosted_runner = true\n",
-        )
-        .expect("write the config");
-        fs::set_permissions(&config, fs::Permissions::from_mode(0o600)).expect("mode 0600");
-        let owner = fs::metadata(&config).expect("the config").uid();
-        let ca = rcgen::generate_simple_self_signed(vec!["ca.example".to_owned()])
-            .expect("a CA certificate");
-        fs::write(scratch.path().join("ca.pem"), ca.cert.pem()).expect("write the CA bundle");
-        Files { scratch, owner }
-    }
-
-    fn path(&self, name: &str) -> String {
-        self.scratch.path().join(name).display().to_string()
-    }
-}
-
-/// A command line that does not parse exits 2 and says why on standard error: no verb, no
-/// `--release`, a release that is not `https://` or has a query, a platform that has no boot
-/// set, an unknown flag. The fetch is never reached.
+/// A command line that does not parse exits 2 and says why on standard error: no verb, the
+/// verb `fetch` that is gone, the bare step verbs that are gone (a step is `update-hook <step>`),
+/// a mode that is not one. Nothing is reached.
 ///
-/// Catches a fetch started from a plain-HTTP release or for a Mac.
+/// Catches the old `fetch` verb or a bare step verb still answering.
 #[test]
 fn a_command_line_that_does_not_parse_exits_2() {
-    let fetch = ["fetch", "--dir", "d", "--daemon-config", "c"];
-    let cases: [(Vec<&str>, &str); 6] = [
-        (vec![], "Usage: hostkeeper-pxe <COMMAND>"),
-        (fetch.to_vec(), "--release <RELEASE>"),
+    let cases: [(Vec<&str>, &str); 5] = [
+        (vec![], "Usage: pxe <COMMAND>"),
         (
-            [&fetch[..], &["--release", "http://releases.example/v1"]].concat(),
-            "not an https:// URL without a query or fragment",
+            vec!["fetch", "--release", "https://r.example"],
+            "unrecognized subcommand 'fetch'",
         ),
         (
-            [
-                &fetch[..],
-                &["--release", "https://releases.example/v1?x=1"],
-            ]
-            .concat(),
-            "not an https:// URL without a query or fragment",
+            vec!["prepare", "/staged", "--params", "p"],
+            "unrecognized subcommand 'prepare'",
         ),
         (
-            [
-                &fetch[..],
-                &[
-                    "--release",
-                    "https://r.example",
-                    "--platform",
-                    "macos-arm64",
-                ],
-            ]
-            .concat(),
-            "\"macos-arm64\" is not a platform with a boot set: linux-x86_64 or linux-arm64",
+            vec!["uninstall", "--params", "p"],
+            "unrecognized subcommand 'uninstall'",
         ),
         (
-            [
-                &fetch[..],
-                &["--release", "https://r.example", "--mode", "proxy"],
-            ]
-            .concat(),
-            "unexpected argument '--mode'",
+            vec!["serve", "--mode", "both"],
+            "invalid value 'both' for '--mode <MODE>'",
         ),
     ];
     for (args, text) in cases {
-        let (status, out, err) = run_with(&args, &unreached);
+        let (status, out, err) = run_step(&args, 0, &[]);
         assert_eq!(status, 2, "{args:?}");
         assert!(out.is_empty(), "{args:?}");
         assert!(err.contains(text), "{args:?}: {err}");
     }
 }
 
-/// `--help` and `--version` go to standard output and exit 0; the help names the verb.
+/// An `update-hook` command line the hook contract cannot read exits 2 with the one line
+/// `pxe update-hook: <why>` on standard error and nothing on standard output; no step runs.
 ///
-/// Catches help printed as an error.
+/// Catches a step run without its params file, a prepare without its staged release, and a
+/// parse refusal that exits 1 or prints the contract's report.
 #[test]
-fn help_goes_to_standard_output() {
-    let (status, out, err) = run_with(&["--help"], &unreached);
-    assert_eq!((status, err.as_str()), (0, ""));
-    assert!(out.contains("fetch"), "{out}");
-    let (status, out, _) = run_with(&["fetch", "--help"], &unreached);
-    assert_eq!(status, 0);
-    for flag in [
-        "--release",
-        "--dir",
-        "--daemon-config",
-        "--platform",
-        "--ca-bundle",
-        "--gh",
-        "--trusted-root",
-        "--download-timeout-secs",
-    ] {
-        assert!(out.contains(flag), "{flag}: {out}");
+fn an_update_hook_command_line_that_cannot_be_read_exits_2() {
+    let cases: [(Vec<&str>, &str); 7] = [
+        (vec!["update-hook"], "pxe update-hook: no step given\n"),
+        (
+            vec!["update-hook", "fetch", "--params", "p"],
+            "pxe update-hook: unknown step \"fetch\"\n",
+        ),
+        (
+            vec!["update-hook", "prepare", "--params", "p"],
+            "pxe update-hook: prepare needs the staged release directory\n",
+        ),
+        (
+            vec!["update-hook", "cutover"],
+            "pxe update-hook: the step needs --params <file>\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--params"],
+            "pxe update-hook: --params needs a file\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--params", "p", "--params", "q"],
+            "pxe update-hook: --params given twice\n",
+        ),
+        (
+            vec!["update-hook", "verify", "--mode", "proxy", "--params", "p"],
+            "pxe update-hook: unexpected argument \"--mode\"\n",
+        ),
+    ];
+    for (args, line) in cases {
+        let (status, out, err) = run_step(&args, 0, &[]);
+        assert_eq!(
+            (status, out.as_str(), err.as_str()),
+            (2, "", line),
+            "{args:?}"
+        );
     }
-    let _ = main(vec!["hostkeeper-pxe".into(), "--version".into()]);
 }
 
-/// The program itself runs the fetch with root as the owner it trusts; a daemon config that is
-/// not there is refused before anything is made. (Its exit status and line are asserted on the
-/// binary, in `tests/binary.rs`.)
+/// `--help` and `--version` go to standard output and exit 0; the help names every verb and not
+/// `fetch`, and the version is `pxe <version>`.
+///
+/// Catches help printed as an error and a program that still calls itself hostkeeper-pxe.
+#[test]
+fn help_and_version_go_to_standard_output() {
+    let (status, out, err) = run_step(&["--help"], 0, &[]);
+    assert_eq!((status, err.as_str()), (0, ""));
+    for verb in ["serve", "update-hook"] {
+        assert!(out.contains(&format!("  {verb} ")), "{verb}: {out}");
+    }
+    assert!(!out.contains("fetch"), "{out}");
+    let (status, out, err) = run_step(&["--version"], 0, &[]);
+    assert_eq!(
+        (status, out, err.as_str()),
+        (0, format!("pxe {}\n", env!("CARGO_PKG_VERSION")), "")
+    );
+}
+
+/// The program itself runs a step with root as the owner it trusts and `/usr/bin/systemctl`:
+/// a params file that is not there is refused before anything is touched. (Its exit status and
+/// line are asserted on the binary, in `tests/binary.rs`.)
+///
+/// Catches a `main` that returns success without running the step.
 #[test]
 fn the_program_runs_the_verb() {
-    let files = Files::new("main");
-    let dir = files.path("boot");
-    let missing = files.path("missing.toml");
-    let args = [
-        "hostkeeper-pxe",
-        "fetch",
-        "--release",
-        "https://r.example",
-        "--dir",
-        &dir,
-    ];
-    let mut argv: Vec<OsString> = args.iter().map(OsString::from).collect();
-    argv.extend(["--daemon-config".into(), missing.into()]);
-    let _ = main(argv);
-    assert!(!std::path::Path::new(&dir).exists());
-}
-
-/// A sealed directory is one line on standard output naming it, the release, the Ubuntu release
-/// and the platforms sealed.
-///
-/// Catches a success that prints nothing to say where the boot files are.
-#[test]
-fn a_sealed_fetch_prints_one_line_naming_the_directory() {
-    let seal = |flags: &FetchFlags| {
-        let platforms: BTreeMap<String, SealedSet> = BTreeMap::new();
-        let names: Vec<String> = flags.platforms.iter().map(|p| p.to_string()).collect();
-        let mut seal = Seal {
-            netboot: SealedNetboot {
-                commit: String::new(),
-                sha256: String::new(),
-                source_ref: String::new(),
-            },
-            platforms,
-            seal: 1,
-            ubuntu: "24.04.5".to_owned(),
-            version: "1.2.3".to_owned(),
-        };
-        let listed = match names.is_empty() {
-            true => vec!["linux-arm64".to_owned(), "linux-x86_64".to_owned()],
-            false => names,
-        };
-        for name in listed {
-            seal.platforms.insert(name, fake_set());
-        }
-        Ok(seal)
-    };
-    let base = [
-        "fetch",
-        "--release",
-        "https://r.example/v1.2.3",
-        "--dir",
-        "/srv/boot",
-        "--daemon-config",
-        "c",
-    ];
-    let (status, out, err) = run_with(&base, &seal);
-    assert_eq!((status, err.as_str()), (0, ""));
-    assert_eq!(
-        out,
-        "sealed /srv/boot: hostkeeper 1.2.3, Ubuntu 24.04.5, linux-arm64 and linux-x86_64\n"
-    );
-    let (status, out, _) = run_with(
-        &[&base[..], &["--platform", "linux-x86_64"]].concat(),
-        &seal,
-    );
-    assert_eq!(status, 0);
-    assert_eq!(
-        out,
-        "sealed /srv/boot: hostkeeper 1.2.3, Ubuntu 24.04.5, linux-x86_64\n"
-    );
-}
-
-fn fake_set() -> SealedSet {
-    let file = crate::seal::SealedFile {
-        bytes: 1,
-        name: String::new(),
-        sha256: String::new(),
-    };
-    SealedSet {
-        deb: crate::seal::SealedDeb {
-            bytes: 1,
-            commit: String::new(),
-            name: String::new(),
-            sha256: String::new(),
-            source_ref: String::new(),
-        },
-        grub: file.clone(),
-        initrd: file.clone(),
-        iso: file.clone(),
-        kernel: file.clone(),
-        shim: file,
-    }
-}
-
-/// A daemon config the daemon's loader refuses (here: none at the path) is refused with the
-/// loader's error, exit 1; so is a CA bundle with no certificate. Nothing is made.
-///
-/// Catches a fetch run without the operator's trusted signer, or with no root to trust.
-#[test]
-fn a_config_or_ca_bundle_that_does_not_load_is_refused() {
-    let files = Files::new("config");
-    let dir = files.path("boot");
-    let missing = files.path("missing.toml");
-    let (status, _, err) = run_with(
-        &[
-            "fetch",
-            "--release",
-            "https://r.example",
-            "--dir",
-            &dir,
-            "--daemon-config",
-            &missing,
-        ],
-        &|flags| fetch_with(flags, files.owner),
-    );
-    assert_eq!(status, 1);
-    assert!(
-        err.starts_with(&format!("hostkeeper-pxe fetch: {missing}: ")),
-        "{err}"
-    );
-    let config = files.path("hostkeeper.toml");
-    let empty = files.path("empty.pem");
-    fs::write(&empty, "").expect("an empty bundle");
-    let (status, _, err) = run_with(
-        &[
-            "fetch",
-            "--release",
-            "https://r.example",
-            "--dir",
-            &dir,
-            "--daemon-config",
-            &config,
-            "--ca-bundle",
-            &empty,
-        ],
-        &|flags| fetch_with(flags, files.owner),
-    );
-    assert_eq!(status, 1);
-    assert_eq!(
-        err,
-        format!("hostkeeper-pxe fetch: --ca-bundle {empty}: no certificate could be read\n")
-    );
-    assert!(!std::path::Path::new(&dir).exists());
-}
-
-/// With a loadable config and CA bundle, the host's ports are made and the fetch asks the
-/// release for `netboot.json` over HTTPS; a release that closes the connection is refused
-/// naming the URL, exit 1, and the new directory is gone; with and without `--platform`.
-///
-/// Catches flags that never reach the real HTTPS client, and a refused run that leaves a
-/// half-made directory.
-#[test]
-fn the_host_ports_ask_the_release_and_a_refusal_keeps_nothing() {
-    let files = Files::new("ports");
-    let listener = TcpListener::bind("127.0.0.1:0").expect("a loopback listener");
-    let port = listener.local_addr().expect("its address").port();
-    let closer = thread::spawn(move || {
-        for stream in listener.incoming().take(2) {
-            drop(stream);
-        }
-    });
-    let release = format!("https://127.0.0.1:{port}/v1.2.3");
-    let dir = files.path("boot");
-    let config = files.path("hostkeeper.toml");
-    let ca = files.path("ca.pem");
-    for extra in [&[][..], &["--platform", "linux-arm64"][..]] {
-        let mut args = vec![
-            "fetch",
-            "--release",
-            &release,
-            "--dir",
-            &dir,
-            "--daemon-config",
-            &config,
-            "--ca-bundle",
-            &ca,
-        ];
-        args.extend_from_slice(extra);
-        let (status, out, err) = run_with(&args, &|flags| fetch_with(flags, files.owner));
-        assert_eq!((status, out.as_str()), (1, ""));
-        assert_eq!(
-            err,
-            format!(
-                "hostkeeper-pxe fetch: {release}/netboot.json: could not connect, or the request \
-                 was not answered\n"
-            )
-        );
-        assert!(!std::path::Path::new(&dir).exists());
-    }
-    closer.join().expect("the listener");
-}
-
-/// No `--platform` fetches both platforms; each `--platform` named is fetched, and only those;
-/// a platform named twice is fetched once.
-///
-/// Catches a farm of one architecture made to download both, and a default of one platform.
-#[test]
-fn both_platforms_unless_platform_names_some() {
-    let (arm, x86) = (BootPlatform::LinuxArm64, BootPlatform::LinuxX86_64);
-    assert_eq!(platforms_of(&[]), BTreeSet::from([arm, x86]));
-    assert_eq!(platforms_of(&[x86]), BTreeSet::from([x86]));
-    assert_eq!(platforms_of(&[arm, arm]), BTreeSet::from([arm]));
-    let parsed = Cli::try_parse_from([
-        "hostkeeper-pxe",
-        "fetch",
-        "--release",
-        "https://r.example",
-        "--dir",
-        "d",
-        "--daemon-config",
-        "c",
-        "--platform",
-        "linux-arm64",
-        "--platform",
-        "linux-x86_64",
-    ])
-    .expect("parses");
-    let Verb::Fetch(flags) = parsed.verb else {
-        panic!("a fetch")
-    };
-    assert_eq!(flags.platforms, [arm, x86]);
-}
-
-/// A `gh` that records the one run it is asked for and answers yes.
-struct Recording(std::rc::Rc<std::cell::RefCell<Vec<hostkeeper_package::gh::Spawn>>>);
-
-impl Runner for Recording {
-    fn run(
-        &self,
-        spawn: &hostkeeper_package::gh::Spawn,
-    ) -> io::Result<hostkeeper_package::gh::Ran> {
-        self.0.borrow_mut().push(spawn.clone());
-        Ok(hostkeeper_package::gh::Ran {
-            code: Some(0),
-            ..Default::default()
-        })
-    }
-}
-
-/// The flags of a `fetch` with `extra` after the required ones.
-fn fetch_flags(extra: &[&str]) -> FetchFlags {
-    let mut args = vec![
-        "hostkeeper-pxe",
-        "fetch",
-        "--release",
-        "https://r.example/v1.2.3",
-        "--dir",
-        "/srv/boot",
-        "--daemon-config",
-        "c",
-    ];
-    args.extend_from_slice(extra);
-    let Verb::Fetch(flags) = Cli::try_parse_from(args).expect("parses").verb else {
-        panic!("a fetch")
-    };
-    flags
-}
-
-/// The verifier the flags make runs the `gh` of `--gh`, passes the root of `--trusted-root` as
-/// `--custom-trusted-root`, and runs in `gh`'s home under `--dir`; without the flags, the paths
-/// the hostkeeper deb installs.
-///
-/// Catches a `--gh` or `--trusted-root` that is parsed and then ignored, so the attestations
-/// would be checked by another `gh` or against another root than the operator named.
-#[test]
-fn the_verifier_runs_the_gh_and_trusted_root_the_flags_name() {
-    use hostkeeper_package::ports::{Attest, CommitId, SourceRef, Verifier};
-    for (extra, gh, root) in [
-        (
-            vec![
-                "--gh",
-                "/opt/pinned/gh",
-                "--trusted-root",
-                "/opt/pinned/root.json",
-            ],
-            "/opt/pinned/gh",
-            "/opt/pinned/root.json",
-        ),
-        (vec![], GH, TRUSTED_ROOT),
-    ] {
-        let flags = fetch_flags(&extra);
-        let runs = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
-        let verifier = verifier_of(
-            &flags,
-            Box::new(Recording(std::rc::Rc::clone(&runs))),
-            Box::new(crate::testing::bundle::TrustAll),
-        );
-        let clock = crate::testing::FakeClock::at(5);
-        let signers = crate::testing::bundle::signers();
-        let sha = hostkeeper_config::daemon::Sha256Hex::parse(&"a".repeat(64)).expect("a digest");
-        let commit = CommitId::new(crate::testing::bundle::COMMIT).expect("a commit");
-        let source_ref = SourceRef::new("refs/heads/main").expect("a ref");
-        let deadline = hostkeeper_steps::Stamp::now(&clock);
-        let request = Attest {
-            archive: Path::new("/srv/boot/netboot.json"),
-            bundle: Path::new("/srv/boot/.verify/netboot.json.sigstore.json"),
-            sha256: &sha,
-            commit: &commit,
-            source_ref: &source_ref,
-            signers: &signers,
-            deadline: &deadline,
-        };
-        verifier
-            .verify(&request)
-            .expect("the recording gh says yes");
-        let runs = runs.borrow();
-        let spawn = runs.first().expect("gh ran once");
-        assert_eq!(runs.len(), 1);
-        assert_eq!(spawn.program, Path::new(gh));
-        assert_eq!(spawn.cwd, Path::new("/srv/boot/.verify/gh"));
-        let args: Vec<String> = spawn
-            .args
-            .iter()
-            .map(|a| a.to_string_lossy().into_owned())
-            .collect();
-        let at = args
-            .iter()
-            .position(|a| a == "--custom-trusted-root")
-            .expect("the root flag");
-        assert_eq!(args[at + 1], root);
-    }
-}
-
-/// The request the flags and the daemon config make: `--download-timeout-secs` is the total
-/// bound of each download (four hours without it) beside the 30 s connect bound, and the
-/// config's trusted signer, attestation bound and package bound are passed as they are.
-///
-/// Catches a `--download-timeout-secs` that is parsed and then ignored, and a config bound
-/// passed to the wrong field.
-#[test]
-fn the_request_carries_the_flags_and_the_config_bounds() {
-    let config = DaemonConfig::parse(
-        "coordinator = \"https://coordinator.example:8443\"\n\
-         ca_sha256 = \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"\n\
-         release_channel = \"https://releases.example\"\n\
-         [trusted_signers]\n\
-         organisation = \"example-org\"\n\
-         workflow = \".github/workflows/artifacts.yml\"\n\
-         refs = [\"refs/heads/main\"]\n\
-         hosted_runner = true\n\
-         [bounds]\n\
-         max_package_bytes = 1048576\n\
-         fetch_timeout_secs = 2100\n\
-         attestation_timeout_secs = 45\n",
-    )
-    .expect("a config");
-    for (extra, total) in [
-        (vec!["--download-timeout-secs", "123"], 123),
-        (vec![], DOWNLOAD_TIMEOUT_SECS),
-    ] {
-        let request = request_of(&fetch_flags(&extra), config.clone());
-        assert_eq!(
-            request,
-            Request {
-                release: "https://r.example/v1.2.3".to_owned(),
-                dir: PathBuf::from("/srv/boot"),
-                platforms: BTreeSet::from([BootPlatform::LinuxArm64, BootPlatform::LinuxX86_64]),
-                signers: crate::testing::bundle::signers(),
-                attestation_timeout_secs: 45,
-                max_deb_bytes: 1_048_576,
-                timeouts: Timeouts {
-                    connect: Duration::from_secs(30),
-                    total: Duration::from_secs(total),
-                },
-            }
-        );
-    }
+    let setup = Setup::new("main");
+    let missing = setup.path("missing.toml");
+    let code = main(vec![
+        "pxe".into(),
+        "update-hook".into(),
+        "uninstall".into(),
+        "--params".into(),
+        missing.into(),
+    ]);
+    assert_eq!(code, ExitCode::FAILURE);
+    assert!(!setup.boot.exists());
 }
 
 /// `serve --help` lists every flag of `serve`; `serve` without `--mode` exits 2 naming it, and
-/// the serve is not reached; a refused serve prints one line, `hostkeeper-pxe serve: <why>`,
-/// and exits 1; a serve that stops prints nothing and exits 0.
+/// the serve is not reached; a refused serve prints one line, `pxe serve: <why>`, and exits 1;
+/// a serve that stops prints nothing and exits 0.
 ///
 /// Catches a serve that starts in a mode the operator did not name, and a refusal that exits 0.
 #[test]
 fn serve_takes_its_flags_and_reports_its_refusal() {
-    let (status, out, _) = run_with(&["serve", "--help"], &unreached);
+    let (status, out, _) = run_step(&["serve", "--help"], 0, &[]);
     assert_eq!(status, 0);
     for flag in [
         "--mode",
@@ -553,10 +185,13 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         "--ssh-authorized-keys",
         "--install-disk",
         "--serial-console",
+        "--repositories",
         "--reinstall",
         "--user-id",
         "--group-id",
         "--tftp-timeout-ms",
+        "--settings",
+        "--notify-systemd",
     ] {
         assert!(out.contains(flag), "{flag}: {out}");
     }
@@ -581,34 +216,406 @@ fn serve_takes_its_flags_and_reports_its_refusal() {
         "--group-id",
         "1000",
     ];
-    let (status, out, err) = run_with(&required, &unreached);
+    let (status, out, err) = run_step(&required, 0, &[]);
     assert_eq!((status, out.as_str()), (2, ""));
     assert!(err.contains("--mode <MODE>"), "{err}");
     let with_mode = [&required[..], &["--mode", "router"]].concat();
-    let argv = |args: &[&str]| {
-        let mut argv: Vec<OsString> = vec!["hostkeeper-pxe".into()];
-        argv.extend(args.iter().map(OsString::from));
-        argv
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: 0,
+        systemctl: &systemctl,
+        fetch: &unreached,
     };
-    let (mut out, mut err) = (Vec::new(), Vec::new());
     let refused = |flags: &ServeFlags| {
         assert_eq!(flags.mode, ModeFlag::Router);
+        assert!(!flags.notify_systemd);
+        assert_eq!(flags.settings, None);
+        assert_eq!(flags.repositories, None);
         Err("the coordinator could not be read".to_owned())
     };
-    let status = run(argv(&with_mode), &unreached, &refused, &mut out, &mut err);
-    assert_eq!(status, 1);
-    assert!(out.is_empty());
+    let (status, out, err) = run_with(&with_mode, &refused, &host);
+    assert_eq!((status, out.as_str()), (1, ""));
+    assert_eq!(err, "pxe serve: the coordinator could not be read\n");
+    let (status, out, err) = run_with(&with_mode, &|_| Ok(()), &host);
+    assert_eq!((status, out.as_str(), err.as_str()), (0, "", ""));
+}
+
+/// `serve --settings <file>` reads the `[serve]` table as flags after the command line's: the
+/// file may hold every flag, the command line adds `--dir`, `--settings=<file>` is the same,
+/// a `[prepare]` table in the file is accepted, and a flag given in both the line and the file is
+/// refused by the parser (exit 2).
+///
+/// Catches a settings file read but not obeyed, and a flag in two places silently taking one.
+#[test]
+fn serve_reads_its_flags_from_the_settings_file() {
+    let setup = Setup::new("serve-settings");
+    let settings = setup.settings.display().to_string();
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: setup.owner,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    let seen = RefCell::new(Vec::new());
+    let record = |flags: &ServeFlags| {
+        seen.borrow_mut().push((
+            flags.mode,
+            flags.address,
+            flags.user_id,
+            flags.dir.clone(),
+            flags.settings.clone(),
+            flags.notify_systemd,
+        ));
+        Ok(())
+    };
+    let (status, out, err) = run_with(
+        &[
+            "serve",
+            "--notify-systemd",
+            "--settings",
+            &settings,
+            "--dir",
+            "/var/lib/pxe/current",
+        ],
+        &record,
+        &host,
+    );
+    assert_eq!((status, out.as_str(), err.as_str()), (0, "", ""));
+    let equals = format!("--settings={settings}");
+    let (status, _, _) = run_with(&["serve", &equals, "--dir", "d"], &record, &host);
+    assert_eq!(status, 0);
+    let wanted = |settings: &str, notify: bool, dir: &str| {
+        (
+            ModeFlag::Router,
+            Ipv4Addr::new(192, 0, 2, 10),
+            65534,
+            PathBuf::from(dir),
+            Some(PathBuf::from(settings)),
+            notify,
+        )
+    };
     assert_eq!(
-        String::from_utf8(err).expect("UTF-8"),
-        "hostkeeper-pxe serve: the coordinator could not be read\n"
+        *seen.borrow(),
+        [
+            wanted(&settings, true, "/var/lib/pxe/current"),
+            wanted(&settings, false, "d")
+        ]
     );
-    let (mut out, mut err) = (Vec::new(), Vec::new());
-    let status = run(
-        argv(&with_mode),
-        &unreached,
-        &|_| Ok(()),
-        &mut out,
-        &mut err,
+    for twice in [
+        vec![
+            "serve",
+            "--settings",
+            &settings,
+            "--mode",
+            "proxy",
+            "--dir",
+            "d",
+        ],
+        vec![
+            "serve",
+            "--settings",
+            &settings,
+            "--dir",
+            "d",
+            "--user-id",
+            "1",
+        ],
+    ] {
+        let (status, out, err) = run_with(&twice, &unreached_serve, &host);
+        assert_eq!((status, out.as_str()), (2, ""), "{twice:?}");
+        assert!(err.contains("cannot be used multiple times"), "{err}");
+    }
+    let (status, _, err) = run_with(
+        &["serve", "--dir", "d", "--settings"],
+        &unreached_serve,
+        &host,
     );
-    assert_eq!((status, out.len(), err.len()), (0, 0, 0));
+    assert_eq!(status, 2, "{err}");
+    let (status, _, err) = run_with(
+        &[
+            "update-hook",
+            "verify",
+            "--params",
+            "p",
+            "--settings",
+            &settings,
+        ],
+        &unreached_serve,
+        &host,
+    );
+    assert_eq!(status, 2, "{err}");
+    assert_eq!(err, "pxe update-hook: unexpected argument \"--settings\"\n");
+}
+
+/// A settings file that cannot be read, is not the owner's, or is not a settings file refuses
+/// the `serve` with one line `pxe serve: <path>: <why>` and exit 1; `serve` is not reached.
+///
+/// Catches a serve that starts on settings anyone could have written.
+#[test]
+fn serve_refuses_a_settings_file_it_cannot_trust() {
+    let setup = Setup::new("serve-bad-settings");
+    let settings = setup.settings.display().to_string();
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: setup.owner + 1,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    let (status, out, err) = run_with(
+        &["serve", "--settings", &settings, "--dir", "d"],
+        &unreached_serve,
+        &host,
+    );
+    assert_eq!((status, out.as_str()), (1, ""));
+    assert!(
+        err.starts_with(&format!("pxe serve: {settings}: ")),
+        "{err}"
+    );
+    let host = Host {
+        owner: setup.owner,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    setup.write_settings("[prepare]\n");
+    let (status, _, err) = run_with(
+        &["serve", "--settings", &settings, "--dir", "d"],
+        &unreached_serve,
+        &host,
+    );
+    assert_eq!(status, 1);
+    assert_eq!(
+        err,
+        format!("pxe serve: {settings}: there is no [serve] table\n")
+    );
+}
+
+/// Each step reaches its code through `update-hook`: the step's name is on its refusal,
+/// `pxe <step>: <text>`; `prepare` takes the staged release first; a deferred step exits 75 with
+/// its report on standard output; a step that succeeds prints nothing.
+///
+/// Catches a step wired to another step's code.
+#[test]
+fn each_update_hook_step_reaches_its_step() {
+    let setup = Setup::new("verbs");
+    let missing = setup.path("missing.toml").display().to_string();
+    for (args, step) in [
+        (
+            vec!["update-hook", "prepare", "/staged", "--params", &missing],
+            Step::Prepare,
+        ),
+        (
+            vec!["update-hook", "cutover", "--params", &missing],
+            Step::Cutover,
+        ),
+        (
+            vec!["update-hook", "verify", "--params", &missing],
+            Step::Verify,
+        ),
+        (
+            vec!["update-hook", "rollback", "--params", &missing],
+            Step::Rollback,
+        ),
+        (
+            vec!["update-hook", "cleanup", "--params", &missing],
+            Step::Cleanup,
+        ),
+        (
+            vec!["update-hook", "uninstall", "--params", &missing],
+            Step::Uninstall,
+        ),
+    ] {
+        let (status, out, err) = run_step(&args, setup.owner, &[]);
+        assert_eq!(status, 1, "{args:?}");
+        assert!(
+            err.starts_with(&format!("pxe {step}: {missing}: ")),
+            "{err}"
+        );
+        assert!(out.contains("\"reason\":\"bad_params\""), "{out}");
+    }
+    let params = setup.params(None, None, "").display().to_string();
+    let verify = ["update-hook", "verify", "--params", &params];
+    let (status, out, err) = run_step(&verify, setup.owner, &[]);
+    assert_eq!((status, out.as_str(), err.as_str()), (0, "", ""));
+    let (status, out, err) = run_step(&verify, setup.owner, &[3]);
+    assert_eq!(status, 75);
+    assert_eq!(err, "pxe verify: pxe.service is not active\n");
+    assert_eq!(
+        out,
+        "{\"class\":\"environment\",\"detail\":\"pxe.service is not active\",\"promotion_pending\":false,\"reason\":\"not_active\",\"retry_after_secs\":2}\n"
+    );
+    fs::remove_file(setup.path("params.toml")).expect("remove");
+}
+
+/// `prepare`'s staged release must be the params' `updater.staged_release` byte for byte: one
+/// that differs, or a params file without the key, is refused as `bad_params` before anything is
+/// done, and the one that equals it goes on to the step (here to the settings, which are the
+/// owner's alone).
+///
+/// Catches a prepare that runs from a directory the updater did not stage.
+#[test]
+fn prepare_must_be_given_the_params_staged_release() {
+    let setup = Setup::new("staged");
+    let staged = "/var/lib/hostkeeper/packages/pxe/1.2.3";
+    let named = || {
+        setup
+            .params(
+                Some("1.2.3"),
+                None,
+                &format!("\"updater.staged_release\" = \"{staged}\"\n"),
+            )
+            .display()
+            .to_string()
+    };
+    let run = |given: &str, params: &str, owner: u32| {
+        run_step(
+            &["update-hook", "prepare", given, "--params", params],
+            owner,
+            &[],
+        )
+    };
+    let (status, out, err) = run(
+        "/var/lib/hostkeeper/packages/pxe/9.9.9",
+        &named(),
+        setup.owner,
+    );
+    assert_eq!(status, 1);
+    assert_eq!(
+        err,
+        "pxe prepare: prepare was given /var/lib/hostkeeper/packages/pxe/9.9.9, which is not the params' updater.staged_release\n"
+    );
+    assert!(out.contains("\"reason\":\"bad_params\""), "{out}");
+    let bare = setup.params(Some("1.2.3"), None, "").display().to_string();
+    let (status, _, err) = run(staged, &bare, setup.owner);
+    assert_eq!(status, 1);
+    assert!(
+        err.contains("which is not the params' updater.staged_release"),
+        "{err}"
+    );
+    let (status, _, err) = run(staged, &named(), setup.owner + 1);
+    assert_eq!(status, 1);
+    assert!(
+        err.starts_with(&format!("pxe prepare: {}: ", setup.settings.display())),
+        "{err}"
+    );
+}
+
+/// A `[serve]` key `repositories` is main's `--repositories` flag: the directory of the
+/// installed hosts' repository entries, given once in the settings file, reaches `serve`.
+///
+/// Catches a settings file whose `repositories` is dropped or refused as an unknown flag.
+#[test]
+fn serve_reads_repositories_from_the_settings_file() {
+    let setup = Setup::new("serve-repositories");
+    let settings = setup.settings.display().to_string();
+    let text = fs::read_to_string(&setup.settings).expect("the settings");
+    setup.write_settings(&text.replace(
+        "[prepare]",
+        "repositories = \"/etc/pxe/repositories\"\n[prepare]",
+    ));
+    let systemctl = FakeSystemctl::default();
+    let host = Host {
+        owner: setup.owner,
+        systemctl: &systemctl,
+        fetch: &unreached,
+    };
+    let seen = RefCell::new(None);
+    let record = |flags: &ServeFlags| {
+        *seen.borrow_mut() = Some(flags.repositories.clone());
+        Ok(())
+    };
+    let (status, _, err) = run_with(
+        &["serve", "--settings", &settings, "--dir", "d"],
+        &record,
+        &host,
+    );
+    assert_eq!((status, err.as_str()), (0, ""));
+    assert_eq!(
+        *seen.borrow(),
+        Some(Some(PathBuf::from("/etc/pxe/repositories")))
+    );
+}
+
+/// `parse_serve_line` reads a `serve` line with the program's parser: the settings file, the
+/// directory and the readiness flag come back, a line the parser refuses is its refusal on one
+/// line, and a line of another verb is not a `serve` line.
+///
+/// Catches a unit check that accepts a line the program would refuse.
+#[test]
+fn a_serve_line_is_read_with_the_programs_parser() {
+    let words = |line: &[&str]| line.iter().map(OsString::from).collect::<Vec<_>>();
+    let all = [
+        "--mode",
+        "router",
+        "--address",
+        "192.0.2.10",
+        "--coordinator",
+        "https://192.0.2.1:8444",
+        "--ca-file",
+        "ca",
+        "--token-file",
+        "token",
+        "--daemon-config",
+        "config",
+        "--ssh-authorized-keys",
+        "keys",
+        "--user-id",
+        "1",
+        "--group-id",
+        "1",
+    ];
+    assert_eq!(
+        parse_serve_line(
+            &words(&[
+                "serve",
+                "--notify-systemd",
+                "--settings",
+                "s.toml",
+                "--dir",
+                "d"
+            ]),
+            &all
+        ),
+        Ok(ServeLine {
+            settings: Some(PathBuf::from("s.toml")),
+            dir: PathBuf::from("d"),
+            notify_systemd: true,
+        })
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["serve", "--dir", "d", "--archive", "x"]), &all),
+        Err("unexpected argument '--archive' found".to_owned())
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["serve", "--dir", "d"]), &[]).map(|l| l.dir),
+        Err("the following required arguments were not provided: --mode <MODE> --address <ADDRESS> --coordinator <COORDINATOR> --ca-file <CA_FILE> --token-file <TOKEN_FILE> --daemon-config <DAEMON_CONFIG> --ssh-authorized-keys <SSH_AUTHORIZED_KEYS> --user-id <USER_ID> --group-id <GROUP_ID>".to_owned())
+    );
+    assert_eq!(
+        parse_serve_line(&words(&["update-hook", "verify"]), &[]),
+        Err("not a serve line".to_owned())
+    );
+}
+
+/// The release URL of the params is `https://` with no query or fragment.
+///
+/// Catches a release URL that could carry a query into the downloads.
+#[test]
+fn the_release_url_is_https_without_query_or_fragment() {
+    assert_eq!(
+        release_url("https://r.example/v1"),
+        Ok("https://r.example/v1".to_owned())
+    );
+    for bad in [
+        "",
+        "https://",
+        "http://r.example",
+        "https://r.example/v1?x=1",
+        "https://r.example/#f",
+        "https://r.example/a b",
+    ] {
+        assert_eq!(
+            release_url(bad),
+            Err("not an https:// URL without a query or fragment".to_owned()),
+            "{bad}"
+        );
+    }
 }

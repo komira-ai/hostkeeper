@@ -2,34 +2,30 @@
 //!
 //! The updater is updated like any service, but never inside the trial it guards. After the
 //! update of the release has run its steps and `verify` has succeeded, a follow-on step
-//! ([`follow_on`]) stages the new updater binary beside the old, writes in the step record that
-//! the update waits for the restart ([`AwaitingRestart`]), points `current` at it and tells the
-//! caller to reply and exit cleanly. The unit (hostkeeper's `packaging/linux/hostkeeper.service`)
-//! starts `current` of the binary directory and has `Restart=always`, so that clean exit starts
-//! the new binary. If the new binary cannot start, systemd gives up after `StartLimitBurst`
-//! starts, the unit fails, and the `OnFailure=` unit of its drop-in ([`main_dropin`], which
-//! the daemon writes with [`fallback_unit`] at its start) runs the *previous* binary's
-//! `self-update-fallback` verb, which calls [`Layout::flip_back`] while the update waits for the
-//! restart: `current` points at the previous binary again and the unit is started.
+//! ([`follow_on`]) hands over to the new updater binary (docs/design/two-programs.md, 4.3): it
+//! stages the binary beside the old, points the link `next` at it, writes in the step record
+//! that the update waits for the restart ([`AwaitingRestart`], with its `next` and a start count
+//! of 0), and tells the caller to reply and exit cleanly. `current` is not moved. The unit
+//! (hostkeeper's `packaging/linux/units/hostkeeper.service`) starts `current` of the binary
+//! directory and has `Restart=always`, so that clean exit starts the old binary again, which
+//! execs the new one while the start count lasts ([`crate::handover`]); three starts of the new
+//! binary that do not reach its settlement settle the update `Failed`, and the old binary runs.
+//! Nothing is switched before the new binary has run, so nothing is switched back.
 //!
 //! The record says `Succeeded` only once the new binary has run (design section 6.6): the step
 //! runner of the update holds its success back ([`crate::StepRunner::with_held_success`]), the
 //! record waits for the restart (`done` at `cleanup`, with [`AwaitingRestart`]), and the binary
-//! that starts next settles it ([`settle`]): the new one confirms it `Succeeded`, and any other
-//! (the fallback, or a hand switch, put the previous binary back) closes it `Failed` after the
-//! commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the version to the local
-//! list of bad versions ([`crate::bad`]).
+//! that starts next settles it ([`settle`]): the new one finishes the switch (`previous` to the
+//! old `current`, then `current` to itself) and confirms it `Succeeded`, and any other closes it
+//! `Failed` after the commit, of class release, [`REASON_SELF_UPDATE_FALLBACK`], and adds the
+//! version to the local list of bad versions ([`crate::bad`]). A wait without
+//! [`AwaitingRestart::next`], the record shape of the releases before the hand-over, is settled
+//! by the same function: the new binary confirms it when `current` names it, and any other
+//! binary closes it `Failed`.
 //!
 //! On macOS the daemon runs from its LaunchDaemons plist, which `hostkeeper-launchd` renders
 //! (`hostkeeper_launchd::plist::daemon_plist`: `KeepAlive` plain `true`, the counterpart of
-//! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the new binary), and
-//! the fallback is a timer job ([`launchd_fallback_job`]) that runs the previous binary's
-//! `self-update-fallback` verb every interval, since launchd has neither a start limit nor
-//! `OnFailure=`. There the verb decides the burst itself: each start of the daemon is written to
-//! the start log ([`crate::starts`]), and the verb falls back only once the version the record
-//! waits for has started [`START_LIMIT_BURST`] times within [`START_LIMIT_WINDOW_SECS`]
-//! ([`should_fall_back`], the rule `StartLimitBurst=` and `StartLimitIntervalSec=` give systemd
-//! in [`main_dropin`]).
+//! `Restart=always`, so the clean exit that [`follow_on`] asks for starts the binary again).
 //!
 //! Two kinds of [`Layout`] share the switch:
 //!
@@ -43,7 +39,7 @@
 //! ```
 //!
 //! A package directory, `/var/lib/hostkeeper/packages/<service>` ([`Layout::package`]; the
-//! format is public, docs/package-format.md):
+//! format is public, docs/tree-digest.md):
 //!
 //! ```text
 //! <dir>/<version>/        the unpacked tree of a version, root-owned, read-only
@@ -66,43 +62,16 @@ use hostkeeper_hook::Verdict;
 
 use crate::artifact::{ArtifactError, Staged, host_owner, trusted_owners, walk};
 use crate::bad::{BadVersions, BadVersionsError};
-use crate::clock::Stamp;
 pub use crate::record::{AwaitingRestart, REASON_SELF_UPDATE_FALLBACK};
 use crate::record::{Loaded, Record, RecordError, RecordStore, Settlement, State};
 use crate::runner::Finished;
 use crate::seal::{Seal, read_seal};
 
-/// The failed starts after which the fallback runs.
-pub const START_LIMIT_BURST: u32 = 3;
-
-/// The window, in seconds, within which [`START_LIMIT_BURST`] starts make the fallback run
-/// (systemd's `StartLimitIntervalSec=`).
-pub const START_LIMIT_WINDOW_SECS: u64 = 300;
-
-/// Whether `starts`, the starts of one binary in the order they were made, are `burst` starts
-/// within `window_secs`: the one decision of the burst, systemd's start limit
-/// (`StartLimitBurst=`, `StartLimitIntervalSec=`) as a function. A start counts when it was made
-/// in the boot of the latest start, not after it, and less than `window_secs` before it; a
-/// `burst` of 0 never falls back.
-pub fn should_fall_back(starts: &[Stamp], burst: u32, window_secs: u64) -> bool {
-    let Some(latest) = starts.last() else {
-        return false;
-    };
-    let within = starts
-        .iter()
-        .filter(|start| start.same_boot(latest))
-        .filter(|start| start.mono_secs <= latest.mono_secs)
-        .filter(|start| latest.mono_secs - start.mono_secs < window_secs)
-        .count();
-    (burst > 0) & (within >= burst as usize)
-}
-
 /// A directory of versions with a `current` and a `previous` link: the updater's own binaries
 /// ([`Layout::new`]) or the unpacked versions of one package ([`Layout::package`]).
 ///
 /// **The caller gives a directory that is root-owned and closed to group and others, in
-/// root-owned parents**: this type does not check it, and the fallback unit runs what `previous`
-/// points at as root.
+/// root-owned parents**: this type does not check it.
 #[derive(Clone, Debug)]
 pub struct Layout {
     dir: PathBuf,
@@ -121,8 +90,8 @@ enum Kind {
 /// What the caller does after [`follow_on`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FollowOn {
-    /// The new binary is staged, the record waits for the restart and `current` points at the
-    /// new binary: reply, then exit with status 0.
+    /// The new binary is staged, `next` points at it and the record waits for the restart:
+    /// reply, then exit with status 0.
     Restart,
     /// This updater already is that version, or the update did not succeed: carry on.
     NotNeeded,
@@ -192,6 +161,11 @@ impl Layout {
         self.dir.join("previous")
     }
 
+    /// The link to the binary a hand-over waits to start ([`crate::handover`]).
+    pub fn next_path(&self) -> PathBuf {
+        self.dir.join(crate::handover::NEXT)
+    }
+
     /// Where version `version` is: `versions/<version>` for the binary directory,
     /// `<version>` for a package directory. `version` is not checked here.
     pub fn version_path(&self, version: &str) -> PathBuf {
@@ -222,15 +196,40 @@ impl Layout {
         link_version(&self.previous_path())
     }
 
+    /// The version `next` points at, `None` when no hand-over put it there.
+    pub fn next(&self) -> io::Result<Option<String>> {
+        link_version(&self.next_path())
+    }
+
+    /// Points `next` at the staged `version`, the link a hand-over starts the binary of
+    /// ([`crate::handover`]). The version must be an executable file ([`Layout::check_binary`]).
+    /// Running it again changes nothing. For the binary directory only.
+    pub fn set_next(&self, version: &str) -> io::Result<()> {
+        self.expect_kind(Kind::Binary)?;
+        self.check(version)?;
+        self.set_link(crate::handover::NEXT, version)
+    }
+
+    /// Removes the link `next`; none there is fine. The directory is synced, so that a removal
+    /// is not undone by a crash.
+    pub fn remove_next(&self) -> io::Result<()> {
+        match fs::remove_file(self.next_path()) {
+            Ok(()) => File::open(&self.dir)?.sync_all(),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
+
     /// Puts `binary` beside the others as version `version`, mode 0755, durably. Changes no link.
     /// For the binary directory only ([`io::ErrorKind::InvalidInput`] for a package directory,
     /// whose versions are trees: [`Layout::stage_tree`]).
     ///
     /// The version `current` or `previous` points at is refused
     /// ([`io::ErrorKind::AlreadyExists`]) and left as it is: a crash between staging over it and
-    /// the switch would leave the unit, or its fallback, running a binary that was never the one
-    /// it switched to. The copy is made under a name no version can have (`.<version>.stage`),
-    /// created afresh, so that staging one version never writes over the file of another.
+    /// the switch would leave the unit, or the binary it falls back to, running a binary that was
+    /// never the one it switched to. The copy is made under a name no version can have
+    /// (`.<version>.stage`), created afresh, so that staging one version never writes over the
+    /// file of another.
     pub fn stage(&self, version: &str, binary: &Path) -> io::Result<()> {
         self.expect_kind(Kind::Binary)?;
         self.check_stageable(version)?;
@@ -365,22 +364,6 @@ impl Layout {
         self.set_link("current", version)
     }
 
-    /// Points `current` at `previous` again. `false` when there is no `previous` or `current`
-    /// already points at it; an error, with `current` unchanged, when what `previous` names is
-    /// not an executable file or a sealed tree with its seal's digest, whichever `current`
-    /// points at: the fallback reports a fallback it cannot run.
-    pub fn flip_back(&self) -> io::Result<bool> {
-        let Some(previous) = self.previous()? else {
-            return Ok(false);
-        };
-        self.check(&previous)?;
-        if self.current()?.as_deref() == Some(previous.as_str()) {
-            return Ok(false);
-        }
-        self.set_link("current", &previous)?;
-        Ok(true)
-    }
-
     /// What a switch to `version` requires, by the kind of layout.
     fn check(&self, version: &str) -> io::Result<()> {
         match self.kind {
@@ -392,7 +375,7 @@ impl Layout {
     /// `versions/<version>` is a regular file with an execute bit, not a link (dangling or not)
     /// and not a directory: what staging makes. [`io::ErrorKind::NotFound`] when there is
     /// nothing, [`io::ErrorKind::InvalidData`] when it is something else.
-    fn check_binary(&self, version: &str) -> io::Result<()> {
+    pub(crate) fn check_binary(&self, version: &str) -> io::Result<()> {
         check_version(version)?;
         let meta = fs::symlink_metadata(self.version_path(version))?;
         if !meta.is_file() || meta.permissions().mode() & 0o111 == 0 {
@@ -508,7 +491,7 @@ fn link_version(link: &Path) -> io::Result<Option<String>> {
 }
 
 /// What the longest name a package directory derives from a version adds to it:
-/// `.<version>.seal.tmp`, the seal `hostkeeper-unpack` writes beside a package version before
+/// `.<version>.seal.tmp`, the seal `hostkeeper-install` writes beside a package version before
 /// renaming it into place (`<version>.seal` is shorter).
 const PACKAGE_AFFIX: usize = ".".len() + ".seal.tmp".len();
 /// What the longest name the binary directory derives from a version adds to it:
@@ -527,28 +510,38 @@ fn check_version(version: &str) -> io::Result<()> {
 }
 
 /// The follow-on step of an update whose steps ended: when it succeeded and this updater
-/// (version `running`) is not `version`, stages the updater binary of the verified release
-/// `release` as `version`, writes in the record of `store` that the update waits for the restart
-/// ([`AwaitingRestart`]), and only then switches to it. When this updater already is `version`,
-/// the binary that runs is the new one, and an unfinished record of the update to it is finished
-/// `Succeeded` here.
+/// (version `running`) is not `version`, hands over to the updater binary of the verified release
+/// `release` (docs/design/two-programs.md, 4.3): stages it as `version`, points the link `next` at
+/// it, and only then writes in the record of `store` that the update waits for the restart
+/// ([`AwaitingRestart`], [`AwaitingRestart::next`] set, a start count of 0). `current` is not
+/// moved: the unit starts the binary it names, which execs `next` while the count lasts
+/// ([`crate::handover`]), and the new binary's start finishes the switch and confirms. When this
+/// updater already is `version`, the binary that runs is the new one, and an unfinished record of
+/// the update to it is finished `Succeeded` here.
 ///
 /// `binary` is the binary's path inside the release, relative and of plain names; it is taken
 /// only through [`Staged::check`], so a release that changed since it was sealed, or a path that
-/// leaves it, stages nothing, writes nothing and moves no link. There is no way to give this a
+/// leaves it, stages nothing, writes nothing and points no link. There is no way to give this a
 /// file of no verified release.
 ///
-/// A version `current` or `previous` already names (a repeat after a crash between the switch
-/// and the restart, or a return to the binary before) is not staged again: it is switched to
-/// when its file holds the bytes of the verified binary, and refused, with nothing changed,
-/// when it does not.
+/// `order_id` is the coordinator's id of the order the update runs for, kept in the wait
+/// ([`AwaitingRestart::order_id`]) so that the binary that settles it can report its verdict.
+///
+/// A version `current` or `previous` already names (a return to the binary before) is not staged
+/// again: it is handed over to when its file holds the bytes of the verified binary, and
+/// refused, with nothing changed, when it does not.
 ///
 /// The record must hold the update to `version` unfinished: the step runner held its success
 /// back ([`crate::StepRunner::with_held_success`]), so the restart interrupts nothing and no
 /// binary reads the update as succeeded before the new one has run
-/// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing switched). The record is written before
-/// the switch, so that a crash between the two leaves a record the next start settles
-/// ([`settle`]); a switch that fails takes the wait back. It is safe to call again after a crash.
+/// ([`SelfUpdateError::NoUpdate`] otherwise, with nothing handed over). The link is made before
+/// the record is written, so that a crash between the two leaves a link and no wait, which the
+/// next start removes ([`settle_with`]); a record that cannot be written takes the link back. It
+/// is safe to call again after a crash.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "each is a separate input of the one step that stages, links and writes the wait; the order id joins them so the wait is written once, and a struct for the eight would have this one caller"
+)]
 pub fn follow_on(
     finished: &Finished,
     store: &RecordStore,
@@ -557,6 +550,7 @@ pub fn follow_on(
     version: &str,
     release: &Staged,
     binary: &Path,
+    order_id: Option<&str>,
 ) -> Result<FollowOn, SelfUpdateError> {
     let Verdict::Succeeded { promotion_pending } = finished.verdict else {
         return Ok(FollowOn::NotNeeded);
@@ -566,6 +560,7 @@ pub fn follow_on(
         return Ok(FollowOn::NotNeeded);
     }
     let new_binary = release.check(binary)?;
+    unfinished_update(store, version)?;
     if layout.in_place(version)? {
         let same = fs::read(layout.version_path(version))? == fs::read(&new_binary)?;
         if !same {
@@ -578,28 +573,21 @@ pub fn follow_on(
     } else {
         layout.stage(version, &new_binary)?;
     }
+    layout.set_next(version)?;
     let awaiting = AwaitingRestart {
         version: version.to_owned(),
         verdict_promotion_pending: promotion_pending,
+        order_id: order_id.map(str::to_owned),
+        next: Some(version.to_owned()),
+        starts: Some(0),
     };
-    await_restart(store, awaiting.clone())?;
-    if let Err(error) = layout.switch(version) {
-        // The switch did not happen: the record waits for nothing, so that a start of this
-        // binary does not read it as a fallback, and a resend runs the follow-on again. Should
-        // that write fail too, the record waits, and the next start settles it as a fallback.
-        drop(stop_waiting(store, &awaiting));
-        return Err(error.into());
+    if let Err(error) = await_restart(store, awaiting) {
+        // The record waits for nothing, so that a resend runs the follow-on again; the link
+        // goes, as the next start would remove it.
+        drop(layout.remove_next());
+        return Err(error);
     }
     Ok(FollowOn::Restart)
-}
-
-/// Under the record lock, takes back the wait for the restart [`await_restart`] wrote.
-fn stop_waiting(store: &RecordStore, awaiting: &AwaitingRestart) -> Result<(), SelfUpdateError> {
-    let _held = store.hold();
-    let mut rec = unfinished_update(store, &awaiting.version)?;
-    rec.progress.awaiting_restart = None;
-    store.save(&rec)?;
-    Ok(())
 }
 
 /// Under the record lock, marks the unfinished update to `awaiting.version` as waiting for the
@@ -666,10 +654,21 @@ pub fn settle(
 /// At the start of a binary of version `running`: settles the update of the record of `store`
 /// that waits for the restart (design section 6.6).
 ///
-/// - No update waits ([`Settled::NotPending`]): nothing is written.
-/// - The version it waits for is `running`, and `current` of `layout` names it: the new binary
-///   runs. `before_confirm` runs first, then the record is rewritten `Succeeded` in one write
-///   ([`Settled::Confirmed`]). A crash between the two leaves the record waiting, and the next
+/// - No update waits ([`Settled::NotPending`]): a link `next` of `layout` is removed (a
+///   hand-over that crashed between the link and the wait, or a confirmation between its write
+///   and the removal), and nothing else is written. A record a newer binary wrote is left as it
+///   is, and so is `next`.
+/// - A hand-over waits ([`AwaitingRestart::next`] set, docs/design/two-programs.md, 4.3), and
+///   its version is `running`: the switch is finished ([`Layout::switch`]: `previous` to the old
+///   `current`, then `current` to `running`, nothing when `current` names it already), then
+///   `before_confirm` runs, the record is rewritten `Succeeded` in one write, and only then is
+///   `next` removed ([`Settled::Confirmed`]). A crash at any point leaves the wait, and the next
+///   start of this binary does the rest.
+/// - A hand-over waits for another version: the hand-over's step 3 ([`crate::handover`]): the
+///   version is bad here, the record `Failed`, `next` removed ([`Settled::FellBack`]).
+/// - A wait written the old way (no `next`), whose version is `running`, with `current` of
+///   `layout` naming it: the new binary runs. `before_confirm` runs first, then the record is
+///   rewritten `Succeeded` in one write ([`Settled::Confirmed`]). A crash between the two leaves the record waiting, and the next
 ///   start confirms again, so `before_confirm` must be safe to run again.
 /// - Otherwise the binary that runs is not the new one: the version is added to the list of bad
 ///   versions in the store's directory ([`BadVersions`]), then the record is rewritten `Failed`
@@ -683,18 +682,43 @@ pub fn settle_with(
     running: &str,
     before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
 ) -> Result<Settled, SelfUpdateError> {
+    settle_activating(layout, store, running, before_confirm, false)
+}
+
+/// [`settle_with`], where a confirmation of the new binary, when `activate` is set, leaves the
+/// `activate` of its own native package still to be done (docs/design/packages-native.md, section
+/// 10.4, step 5): the wait is replaced in one write by [`crate::record::Progress::activate`]
+/// ([`Settlement::Activate`]) instead of `Succeeded`, and the record stays unfinished until the
+/// caller's `activate` ends it ([`RecordStore::settle_activate`]). The result is
+/// [`Settled::Confirmed`] either way; a fallback is settled as [`settle_with`] does.
+pub fn settle_activating(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+    before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+    activate: bool,
+) -> Result<Settled, SelfUpdateError> {
+    let confirm = match activate {
+        true => Settlement::Activate,
+        false => Settlement::Confirmed,
+    };
     let awaiting = match store.load()? {
         Loaded::Current(rec) => rec.progress.awaiting_restart,
-        Loaded::Absent | Loaded::Newer { .. } => None,
+        Loaded::Absent => None,
+        Loaded::Newer { .. } => return Ok(Settled::NotPending),
     };
     let Some(awaiting) = awaiting else {
+        layout.remove_next()?;
         return Ok(Settled::NotPending);
     };
+    if awaiting.next.is_some() {
+        return settle_hand_over(layout, store, running, &awaiting, before_confirm, confirm);
+    }
     let current = layout.current()?;
     let confirmed = (awaiting.version == running) & (current.as_deref() == Some(running));
     if confirmed {
         before_confirm()?;
-        store.settle_awaiting_restart(Settlement::Confirmed)?;
+        store.settle_awaiting_restart(confirm)?;
         return Ok(Settled::Confirmed);
     }
     BadVersions::load(store.dir())?.add(&awaiting.version)?;
@@ -702,75 +726,21 @@ pub fn settle_with(
     Ok(Settled::FellBack)
 }
 
-/// The drop-in for the updater's own unit: restart when it exits, and run the fallback unit
-/// once it has failed `burst` starts within [`START_LIMIT_WINDOW_SECS`]. `RestartMode=direct`
-/// (systemd 254 and later) makes an automatic restart skip the failed state, so `OnFailure=` runs
-/// once the restarts end at the start limit, not at every failed start.
-pub fn main_dropin(fallback_unit: &str, burst: u32) -> String {
-    format!(
-        "[Unit]\nOnFailure={fallback_unit}\nStartLimitIntervalSec={START_LIMIT_WINDOW_SECS}\nStartLimitBurst={burst}\n\n[Service]\nRestart=always\nRestartSec=1\nRestartMode=direct\n"
-    )
-}
-
-/// The fallback unit: the previous binary flips `current` back and the main unit is started.
-/// The verb's failure is ignored (`ExecStart=-`): when it puts nothing back (no update waits
-/// for its restart, as when a config does not load), the main unit's failed state is still reset
-/// and the unit started again, so a daemon that fails its start limit is never left failed. It
-/// has no start limit of its own (`StartLimitIntervalSec=0`): it runs once per start limit the
-/// main unit spends, for as long as the main unit cannot start.
-pub fn fallback_unit(layout: &Layout, main_unit: &str) -> String {
-    let dir = layout.dir().display();
-    format!(
-        "[Unit]\nDescription=Put the previous updater binary back after the new one failed to start\nStartLimitIntervalSec=0\n\n[Service]\nType=oneshot\nExecStart=-{dir}/previous self-update-fallback --dir {dir}\nExecStartPost=/usr/bin/systemctl reset-failed {main_unit}\nExecStartPost=/usr/bin/systemctl start --no-block {main_unit}\n"
-    )
-}
-
-/// The plist of the fallback timer job on macOS, labelled `<label>.fallback`: every
-/// `interval_secs` it runs the previous binary's `self-update-fallback` verb, the command
-/// [`fallback_unit`] runs, so the verb is the same code on both systems.
-///
-/// launchd has no start limit and no `OnFailure=` to run the job when the daemon fails its
-/// burst, so the job runs on a timer, and on macOS the verb falls back only after the burst
-/// ([`should_fall_back`] over the start log); otherwise it changes nothing. What the verb does
-/// when it runs, such as flipping `current` back ([`Layout::flip_back`]), is the verb's; this
-/// function only produces the text. The job does not run at load.
-pub fn launchd_fallback_job(layout: &Layout, label: &str, interval_secs: u32) -> String {
-    let dir = xml_escape(&layout.dir().display().to_string());
-    let label = xml_escape(label);
-    format!(
-        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
-         <plist version=\"1.0\">\n\
-         <dict>\n\
-         \x20 <key>Label</key>\n\
-         \x20 <string>{label}.fallback</string>\n\
-         \x20 <key>ProgramArguments</key>\n\
-         \x20 <array>\n\
-         \x20   <string>{dir}/previous</string>\n\
-         \x20   <string>self-update-fallback</string>\n\
-         \x20   <string>--dir</string>\n\
-         \x20   <string>{dir}</string>\n\
-         \x20 </array>\n\
-         \x20 <key>RunAtLoad</key>\n\
-         \x20 <false/>\n\
-         \x20 <key>StartInterval</key>\n\
-         \x20 <integer>{interval_secs}</integer>\n\
-         </dict>\n\
-         </plist>\n"
-    )
-}
-
-/// `text` for the inside of an XML element: `&`, `<`, `>`, `"` and `'` become entities.
-fn xml_escape(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for c in text.chars() {
-        match c {
-            '&' => out.push_str("&amp;"),
-            '<' => out.push_str("&lt;"),
-            '>' => out.push_str("&gt;"),
-            '"' => out.push_str("&quot;"),
-            '\'' => out.push_str("&apos;"),
-            other => out.push(other),
-        }
+/// The settlement of a hand-over that waits for `awaiting` ([`settle_with`]).
+fn settle_hand_over(
+    layout: &Layout,
+    store: &RecordStore,
+    running: &str,
+    awaiting: &AwaitingRestart,
+    before_confirm: &mut dyn FnMut() -> Result<(), SelfUpdateError>,
+    confirm: Settlement,
+) -> Result<Settled, SelfUpdateError> {
+    if awaiting.version != running {
+        return crate::handover::hand_over_failed(layout, store);
     }
-    out
+    layout.switch(running)?;
+    before_confirm()?;
+    store.settle_awaiting_restart(confirm)?;
+    layout.remove_next()?;
+    Ok(Settled::Confirmed)
 }

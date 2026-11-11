@@ -5,7 +5,9 @@
 // key hash the list gave for the request, or Enrollment.Reject, after a confirm, which takes the
 // request out of the queue and refuses its key from then on. Claims authorise nothing: they help an operator
 // recognise a machine. A match against one record (the Inventory page) fills in the host id and
-// role; it approves nothing, and several matching records fill in nothing. A request (not a
+// role and shows the record's state and window (a request that matches one record exactly while
+// its window is open is approved by the coordinator itself and is not listed); several matching
+// records fill in nothing. A request (not a
 // renewal) that matches one record is approved as that record's host id: an empty host id is sent
 // empty for the coordinator to fill in, and another host id needs Replace. The answer names the
 // host id approved.
@@ -20,7 +22,7 @@
 // (`record_contested`), until the operator rejects all but one.
 
 import {
-  h, action, checkbox, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
+  h, action, checkbox, enumLabel, errorView, field, fmtUnix, reasonProblem, table, trimmed, words,
 } from "../view.js";
 
 const PAGE_SIZE = 50;
@@ -137,6 +139,17 @@ function text(value) {
   return typeof value === "string" ? value.trim() : "";
 }
 
+// The window and state of the one record `request` matches, as a line; "" when it matches none or
+// the coordinator says nothing of it.
+export function recordWindowLine(request) {
+  const word = enumLabel(request.recordState, "RECORD_STATE_");
+  if (request.inventoryMatch !== "INVENTORY_MATCH_MATCHED" || word === "-") {
+    return "";
+  }
+  const until = fmtUnix(request.recordApproveUntilUnix);
+  return `The record is ${word}` + (until === "-" ? " (it has no window)." : `: its window ends ${until}.`);
+}
+
 // Whether `request` is a Linux request (it claims no Mac serial) that matches one record: by a
 // data MAC, and not contradicting the record's BMC MAC.
 function linuxMatch(request) {
@@ -219,6 +232,7 @@ function pending(ctx, request) {
       : null,
     h("p", { class: request.inventoryMatch === "INVENTORY_MATCH_AMBIGUOUS" ? "warning" : "note" },
       matchLine(request)),
+    recordWindowLine(request) === "" ? null : h("p", { class: "note" }, recordWindowLine(request)),
     linuxMatch(request) ? h("p", { class: "warning" }, NOT_PROOF) : null,
     hardClaims(request),
     table(["", ""], [
@@ -249,7 +263,7 @@ function pending(ctx, request) {
           `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
           return "Not approved.";
         }
-        const reply = await ctx.api.call("hostkeeper.operator.v1.Enrollment/Approve", body);
+        const reply = await ctx.api.enrollment.approve(body);
         ctx.refresh();
         return `Approved ${reply.hostId || named}: the host gets its certificate at its next poll.`;
       })),
@@ -272,7 +286,7 @@ function rejectSection(ctx, request) {
       if (!ctx.confirm(`Reject request ${request.requestId}? Its key is refused from then on.`)) {
         return "Not rejected.";
       }
-      await ctx.api.call("hostkeeper.operator.v1.Enrollment/Reject", { requestId: request.requestId, reason });
+      await ctx.api.enrollment.reject({ requestId: request.requestId, reason });
       ctx.refresh();
       return `Rejected request ${request.requestId}.`;
     }));
@@ -319,7 +333,7 @@ export async function render(ctx) {
   const body = expired ? { limit: PAGE_SIZE, pageToken, unenrolled: true } : { limit: PAGE_SIZE, pageToken };
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Enrollment/List", body);
+    listed = await ctx.api.enrollment.list(body);
   } catch (error) {
     return errorView("Enrollment", error);
   }

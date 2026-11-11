@@ -1,135 +1,128 @@
 //! The coordinator's typed orders end to end, in process: the real coordinator's heartbeat with
 //! typed orders (`Coordinator::heartbeat_with_orders`, what its gRPC route answers), the real
 //! heartbeat loop over the daemon (`hostkeeper_daemon::links`), and the real executor with its
-//! step runner. The fakes are the network transport (a link that calls the coordinator as the
-//! host `host-1` of the role `daemon`), the service manager and the package source.
+//! step runner. The fakes are the network transport (a link that calls the coordinator's gRPC
+//! heartbeat as the host `host-1` of the role `daemon`), the service manager and the package
+//! source (the fake of apt and dpkg, which the packages of each version are published in). CI sets
+//! each version with the release that lists the entry of its package, which is what the coordinator
+//! orders.
 //!
 //! The coordinator orders an `install` and an `abort` only to a daemon that announced
 //! `install-v1` and `abort-v1`; the loop announces what [`ANNOUNCED`] lists, so these tests also
 //! prove the daemon's announcement reaches the coordinator's gates.
 
 mod support;
+mod support_apt;
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use hostkeeper_config::names::{ServiceName, Version};
-use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::operator::Caller;
-use hostkeeper_coordinator::ops::OpsStore;
-use hostkeeper_coordinator::orders::Order as Ordered;
-use hostkeeper_coordinator::service::{Clock, Coordinator};
-use hostkeeper_coordinator::services::Services;
-use hostkeeper_coordinator::verdict_file::{VerdictFile, verdicts_path};
+use hostkeeper_coordinator::service::Coordinator;
 use hostkeeper_daemon::Daemon;
-use hostkeeper_daemon::links::Links;
+use hostkeeper_daemon::own_package::OwnActivate;
 use hostkeeper_daemon::start;
 use hostkeeper_daemon::testing::spawn;
-use hostkeeper_hook::{Class, Phase, Step};
-use hostkeeper_link::beat::AGENT_NAME;
-use hostkeeper_link::testing::{
-    FakeCerts, FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper, identity,
-};
+use hostkeeper_hook::Step;
+use hostkeeper_link::testing::ManualDispatch;
 use hostkeeper_link::{
-    ANNOUNCED, Acknowledged, BeatOutcome, CertState, ClientIdentity, CoordinatorLink,
-    DEFAULT_HEARTBEAT_SECS, Feature, Health, Heartbeat, Heartbeater, LinkError, Order, OrderId,
-    OrderRef, OrderResult, Outcome, PackageDigest, Reason, Reply, ServiceFacts, Sleeper, StopFlag,
+    ANNOUNCED, BeatOutcome, DEFAULT_HEARTBEAT_SECS, Entry, Feature, Order, PackageDigest, Sleeper,
     Target, Tick, Verb,
 };
 use hostkeeper_observe::ActiveState;
-use hostkeeper_oidc::testkit::{
-    STATIC_ISSUER, StaticKeys, clock as oidc_clock, config_text, good_claims, jwks_of, keys, mint,
-    spent,
-};
-use hostkeeper_oidc::{OidcConfig, Verifier};
 use hostkeeper_proto::hostkeeper::agent::v1 as pb;
-use hostkeeper_proto::hostkeeper::operator::v1::{
-    AbortRequest, GateReason, GetHostRequest, HostService,
-};
+use hostkeeper_proto::hostkeeper::operator::v1::{AbortRequest, GateReason};
+use hostkeeper_proto::hostkeeper::release::v1::Target as Release;
 use hostkeeper_steps::Settled;
-use hostkeeper_wire::identity::Identity;
-use hostkeeper_wire::wire::{self, ServiceBeat, UpdateResult};
+use hostkeeper_steps::record::Activated;
+use support::coordinated::{
+    HOOK_LINES, Host, convergence_of, coordinator_over, hk_on_host, hostkeeper_daemon, on_host,
+    order_and_try,
+};
 use support::selfupdate::{DEB_UNIT, DEB_WANTS, HK, NEW, OLD, SelfRig};
-use support::{OWN, Rig, Scratch, d};
+use support::typed::set_release;
+use support::{BASE, OWN, Scratch};
+use support_apt::AptRig;
+use support_apt::services;
 
 /// The service of the scenarios and the version the coordinator wants.
 const SERVICE: &str = "web";
 const TARGET: &str = "2.0.0";
 
-/// The operator token of the coordinator.
-const OPERATOR: &str = "operator-token-0123456789abcdef0123456789";
-
-/// The closing JSON line of each step of a conforming hook: `prepare` changes nothing it cannot
-/// undo, `cutover` commits, `verify` asks for no promotion, `cleanup` says nothing more.
-const HOOK_LINES: [(Step, &str); 4] = [
-    (Step::Prepare, r#"{"reversible":true}"#),
-    (Step::Cutover, r#"{"reversible":false}"#),
-    (Step::Verify, r#"{"promotion_pending":false}"#),
-    (Step::Cleanup, "{}"),
-];
-
-/// The real coordinator on the state files of `dir`: `web` runs on the role `daemon` and is wanted
-/// at [`TARGET`], whose package digest CI registered as [`d`], unless a coordinator before it on
-/// `dir` left another state; the verdicts it acknowledges are kept in the verdicts file beside
-/// the state file, as `serve` keeps them; it orders from its start (no quiet period), on a clock
-/// that stays at second 1000.
+/// The real coordinator on the state files of `dir`: `web` runs on the role `daemon`; nothing is
+/// desired until CI sets a version ([`publish_and_set`]); the verdicts it acknowledges are kept
+/// in the verdicts file beside the state file, as `serve` keeps them; it orders from its start
+/// (no quiet period), on a clock that stays at second 1000.
 fn coordinator(dir: &Path) -> Arc<Coordinator> {
-    coordinator_of(dir, SERVICE, TARGET)
+    coordinator_over(dir, SERVICE, "")
 }
 
-/// [`coordinator`] for `service`, wanted at `version`.
-fn coordinator_of(dir: &Path, service: &str, version: &str) -> Arc<Coordinator> {
-    let state = dir.join("desired.json");
-    // A coordinator started again on the same directory reads the state the first one left.
-    if !state.exists() {
-        std::fs::write(
-            &state,
-            format!(
-                r#"{{"services":{{"{service}":{{"version":"{version}","min_up":{{}},"release_digest":"{0}","digests":{{"{version}":"{0}"}}}}}}}}"#,
-                d()
-            ),
-        )
-        .expect("the desired state");
+/// `web` at `version` published in the repository of `apt`, and CI sets `web` to it with the
+/// release that lists the entry of that package: the entry is returned.
+fn publish_and_set(apt: &AptRig, coordinator: &Arc<Coordinator>, version: &str) -> Release {
+    let entry = services::publish(apt, SERVICE, version);
+    set_release(coordinator, SERVICE, version, &entry);
+    entry
+}
+
+/// hostkeeper at `version`, as an update or an install of the release the self-update rig
+/// published: the entry is the one the coordinator picked, and its digest the package's pin.
+fn hostkeeper_with(s: &SelfRig, version: &str) -> Target {
+    Target {
+        service: ServiceName::new(HK).expect("a service"),
+        version: Version::new(version).expect("a version"),
+        digest: PackageDigest::new(&s.pin(version)).expect("a digest"),
+        index_digest: None,
+        entry: Some(Entry::new(s.entry_of(HK, version))),
     }
-    let verdicts = VerdictFile::open(&verdicts_path(&state)).expect("the verdicts file");
-    let desired = DesiredStore::open(&dir.join("desired.json"), None).expect("the desired state");
-    let ops = OpsStore::open(&dir.join("desired.json.ops")).expect("the ops store");
-    // CI's allow-list admits the service, so a scenario can set its next version.
-    let allow = format!("{}services = [\"{service}\"]\n", config_text(STATIC_ISSUER));
-    let (oidc_now, _) = oidc_clock();
-    let verifier = Verifier::new(
-        OidcConfig::parse(&allow).expect("the allow-list"),
-        Arc::new(StaticKeys(jwks_of(&[&keys()[0]]))),
-        Duration::from_secs(30),
-        oidc_now,
-        spent(),
-    );
-    let clock: Clock = Arc::new(|| Duration::from_secs(1_000));
-    let rollout = format!("[[service]]\nname = \"{service}\"\nroles = [\"daemon\"]\n");
-    Arc::new(
-        Coordinator::new(desired, Arc::new(verifier), OPERATOR.to_owned(), clock)
-            .with_services(Services::parse(&rollout).expect("the rollout file"))
-            .with_quiet(Duration::ZERO)
-            .with_ops(ops)
-            .with_verdicts(verdicts),
-    )
 }
 
-/// CI sets `web` to `version`, with the package digest [`d`].
-fn set_desired(coordinator: &Coordinator, version: &str) {
-    let token = mint(&keys()[0], &good_claims(STATIC_ISSUER));
-    let body = format!(
-        r#"{{"service":"{SERVICE}","version":"{version}","release_digest":"{}"}}"#,
-        d()
+/// The real coordinator on the state files of `dir`, hostkeeper wanted at `version`: CI sets it
+/// with the release the rig published for it.
+fn hostkeeper_coordinator(dir: &Path, s: &SelfRig, version: &str) -> Arc<Coordinator> {
+    let coordinator = coordinator_over(dir, HK, "");
+    set_release(&coordinator, HK, version, &s.entry_of(HK, version));
+    coordinator
+}
+
+/// The daemon of `version` on the rig as its start settles the self-update: the settlement, and,
+/// once the new binary confirmed itself, the `activate` of its package, which ends the update.
+fn started_at(s: &SelfRig, version: &str) -> (Arc<Daemon>, Settled) {
+    let (daemon, settled) = hostkeeper_daemon(s, version);
+    if settled == Settled::Confirmed {
+        assert_eq!(
+            daemon.activate_own_package(),
+            Some(OwnActivate::Ended(Activated::Succeeded { reason: None }))
+        );
+    }
+    (daemon, settled)
+}
+
+/// `placed.json` records hostkeeper as installed with `apt`, as the installer leaves it, so
+/// that the daemon's heartbeat lists the service with its installer.
+fn record_hostkeeper_as_apt(s: &SelfRig) {
+    let mut record = s.rig.placed_record();
+    record
+        .installed
+        .insert(HK.to_owned(), hostkeeper_placed::InstalledEntry::new("apt"));
+    s.rig.save_placed(&record);
+}
+
+/// A host whose daemon started on `apt`, its loop over the in-process link to `coordinator`; the
+/// service manager runs the unit of `web`, as it does once the package is installed.
+fn host_of(apt: &AptRig, coordinator: &Arc<Coordinator>) -> Host {
+    apt.rig
+        .manager
+        .set("web.service", ActiveState::Active, Some(4242));
+    let started = start::startup(&apt.rig.settings(), apt.ports(), OWN).expect("the daemon starts");
+    assert_eq!(
+        started.boot_report().ready,
+        Some(Ok(())),
+        "the boot pass ran"
     );
-    let runtime = tokio::runtime::Builder::new_current_thread()
-        .build()
-        .expect("a runtime");
-    runtime
-        .block_on(coordinator.set_desired(Some(&token), body.as_bytes()))
-        .expect("CI sets the version");
+    let daemon = Arc::clone(started.daemon());
+    Host::of(daemon, coordinator, Some(started))
 }
 
 /// Where the coordinator says `web` stands: `converged`, `in_progress`, `blocked` or `halted`.
@@ -140,269 +133,6 @@ fn convergence(coordinator: &Coordinator) -> String {
         .to_owned()
 }
 
-/// The convergence the coordinator's status answers for `service`, as JSON.
-fn convergence_of(coordinator: &Coordinator, service: &str) -> serde_json::Value {
-    let status = coordinator.status(Some(OPERATOR)).expect("the status");
-    serde_json::to_value(&status.per_service[service].convergence).expect("JSON")
-}
-
-fn wire_version(text: &str) -> hostkeeper_wire::version::Version {
-    hostkeeper_wire::version::Version::parse(text).expect("a version the wire carries")
-}
-
-fn wire_health(health: Health) -> wire::Health {
-    match health {
-        Health::Healthy => wire::Health::Healthy,
-        Health::Unhealthy => wire::Health::Unhealthy,
-        Health::Absent => wire::Health::Absent,
-    }
-}
-
-fn wire_phase(phase: Phase) -> wire::Phase {
-    match phase {
-        Phase::BeforeCommit => wire::Phase::BeforeCommit,
-        Phase::GateRelease => wire::Phase::GateRelease,
-        Phase::GateEnvironment => wire::Phase::GateEnvironment,
-        Phase::AfterCommit => wire::Phase::AfterCommit,
-        Phase::Halt => wire::Phase::Halt,
-    }
-}
-
-fn wire_class(class: Class) -> wire::Class {
-    match class {
-        Class::Release => wire::Class::Release,
-        Class::Environment => wire::Class::Environment,
-    }
-}
-
-/// A verdict as the coordinator reads it: its order, outcome, phase, class and reason.
-fn update_result(result: &OrderResult) -> UpdateResult {
-    let outcome = match result.outcome {
-        Outcome::Succeeded => wire::Outcome::Succeeded,
-        Outcome::Failed | Outcome::Deferred { .. } => wire::Outcome::Failed,
-    };
-    UpdateResult {
-        order_id: wire::OrderId::parse(result.order.id.as_str()),
-        order_try: Some(result.order.order_try),
-        phase: result.phase.map(wire_phase),
-        class: result.class.map(wire_class),
-        reason: result
-            .reason
-            .as_ref()
-            .and_then(|reason| wire::Token::parse(reason.as_str())),
-        ..UpdateResult::new(wire_version(result.target.as_str()), outcome)
-    }
-}
-
-fn service_beat(facts: &ServiceFacts) -> ServiceBeat {
-    ServiceBeat {
-        name: facts.name.as_str().to_owned(),
-        version: wire_version(facts.version.as_str()),
-        health: wire_health(facts.health),
-        last_update: facts.last_update.as_ref().map(update_result),
-        updating: facts
-            .updating
-            .as_ref()
-            .map(|version| wire_version(version.as_str())),
-        step: None,
-        commit: None,
-        step_secs: BTreeMap::new(),
-        promotion_pending: false,
-        deferred: None,
-    }
-}
-
-/// The loop's heartbeat as the coordinator reads it: every service, and the features announced.
-fn wire_beat(beat: &Heartbeat) -> wire::Heartbeat {
-    wire::Heartbeat {
-        platform: hostkeeper_wire::Platform::parse(beat.platform.as_str()).expect("a platform"),
-        version: wire_version(beat.agent_version.as_str()),
-        health: wire::Health::Healthy,
-        last_update: None,
-        updating: None,
-        services: Some(beat.services.iter().map(service_beat).collect()),
-        agent_features: beat
-            .features
-            .iter()
-            .map(|feature| feature.as_str().to_owned())
-            .collect(),
-        step: None,
-        commit: None,
-        step_secs: BTreeMap::new(),
-        promotion_pending: false,
-        deferred: None,
-        // The agent, as the coordinator's gRPC route reads it from the loop's `agent`.
-        agent: Some(wire::Agent {
-            name: wire::AgentName::parse(AGENT_NAME).expect("an agent name"),
-            version: wire_version(beat.agent_version.as_str()),
-        }),
-        sent_unix: None,
-        cert_not_after_unix: None,
-        last_renew_error: None,
-    }
-}
-
-/// The coordinator's typed order as the loop reads it: the protobuf order it sends, word for
-/// word in the loop's types.
-fn link_order(ordered: &Ordered) -> Order {
-    let order = ordered.to_proto();
-    let target = |service: &str, version: &str, digest: &str, index: &str| Target {
-        service: ServiceName::new(service).expect("a service"),
-        version: Version::new(version).expect("a version"),
-        digest: PackageDigest::new(digest).expect("a digest"),
-        index_digest: (!index.is_empty())
-            .then(|| PackageDigest::new(index).expect("an index digest")),
-    };
-    let named = |service: &str| ServiceName::new(service).expect("a service");
-    let verb = match order.verb.expect("a verb") {
-        pb::order::Verb::Update(a) => Verb::Update(target(
-            &a.service,
-            &a.version,
-            &a.package_digest,
-            &a.index_digest,
-        )),
-        pb::order::Verb::Install(a) => Verb::Install(target(
-            &a.service,
-            &a.version,
-            &a.package_digest,
-            &a.index_digest,
-        )),
-        pb::order::Verb::Uninstall(a) => Verb::Uninstall(named(&a.service)),
-        pb::order::Verb::Abort(a) => Verb::Abort(named(&a.service)),
-        other => panic!("a verb these scenarios do not order: {other:?}"),
-    };
-    Order {
-        id: OrderId::new(&order.order_id).expect("an order id"),
-        order_try: order.r#try,
-        verb,
-    }
-}
-
-/// The network transport, in process: each heartbeat goes to the coordinator's heartbeat with
-/// typed orders as the host `host-1` of the role `daemon`. It keeps the order of each answer.
-struct InProcess {
-    coordinator: Arc<Coordinator>,
-    ordered: Arc<Mutex<Vec<Option<Order>>>>,
-}
-
-impl CoordinatorLink for InProcess {
-    fn heartbeat(&self, _identity: &ClientIdentity, beat: &Heartbeat) -> Result<Reply, LinkError> {
-        let who = Identity {
-            host_id: "host-1".parse().expect("a host id"),
-            role: "daemon".parse().expect("a role"),
-        };
-        let (answer, ordered) = self
-            .coordinator
-            .heartbeat_with_orders(who, wire_beat(beat))
-            .map_err(|_| LinkError::Refused(Reason::new("forbidden").expect("a token")))?;
-        let order = ordered.as_ref().map(link_order);
-        self.ordered
-            .lock()
-            .expect("the log is not poisoned")
-            .push(order.clone());
-        Ok(Reply {
-            order,
-            features: answer
-                .features
-                .iter()
-                .flatten()
-                .filter_map(|name| Feature::parse(name))
-                .collect(),
-            halt_generations: answer
-                .halts
-                .iter()
-                .map(|(service, generation)| {
-                    (ServiceName::new(service).expect("a service"), *generation)
-                })
-                .collect(),
-            acknowledged: answer
-                .acks
-                .iter()
-                .map(|ack| Acknowledged {
-                    service: ServiceName::new(&ack.service).expect("a service"),
-                    order: OrderRef {
-                        id: OrderId::new(ack.order_id.as_str()).expect("an id"),
-                        order_try: ack.order_try,
-                    },
-                })
-                .collect(),
-        })
-    }
-}
-
-/// A host whose daemon started on `rig`, its loop over the in-process link to `coordinator`
-/// announcing `features`, the jobs of its orders kept until the test runs them.
-struct Host {
-    heartbeater: Heartbeater,
-    dispatch: Arc<ManualDispatch>,
-    log: Arc<RecordingLog>,
-    ordered: Arc<Mutex<Vec<Option<Order>>>>,
-    _started: Option<start::Started>,
-}
-
-impl Host {
-    fn new(rig: &Rig, coordinator: &Arc<Coordinator>) -> Host {
-        let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
-        assert_eq!(
-            started.boot_report().ready,
-            Some(Ok(())),
-            "the boot pass ran"
-        );
-        let daemon = Arc::clone(started.daemon());
-        Host::of(daemon, coordinator, Some(started))
-    }
-
-    /// The host of `daemon`, its loop over the in-process link to `coordinator`; `started` is
-    /// kept while the host lives.
-    fn of(
-        daemon: Arc<Daemon>,
-        coordinator: &Arc<Coordinator>,
-        started: Option<start::Started>,
-    ) -> Host {
-        let ordered = Arc::new(Mutex::new(Vec::new()));
-        let dispatch = Arc::new(ManualDispatch::default());
-        let log = Arc::new(RecordingLog::default());
-        let links = Links {
-            enroller: Box::new(|| Err("the scenario has no enrollment".to_owned())),
-            link: Arc::new(InProcess {
-                coordinator: Arc::clone(coordinator),
-                ordered: Arc::clone(&ordered),
-            }),
-            certs: Arc::new(FakeCerts::new(CertState::Enrolled(identity("host-1")))),
-            clock: Arc::new(FakeClock::new(2_000_000_000, 7)),
-            log: log.clone(),
-            sleeper: Box::new(ScriptedSleeper::new(0)),
-            period: DEFAULT_HEARTBEAT_SECS,
-            dispatch: dispatch.clone(),
-            stop: StopFlag::default(),
-            enroll_sleeper: Box::new(ScriptedSleeper::new(0)),
-            renewal: hostkeeper_enroll::RenewalState::default(),
-            watchdog: Box::new(hostkeeper_daemon::NoWatchdog),
-            console: None,
-        };
-        Host {
-            heartbeater: links.heartbeater(&daemon),
-            dispatch,
-            log,
-            ordered,
-            _started: started,
-        }
-    }
-
-    /// One heartbeat, answered.
-    fn beat(&mut self) {
-        assert_eq!(self.heartbeater.beat_once(), BeatOutcome::Sent);
-    }
-
-    /// The order of each answer, in order.
-    fn ordered(&self) -> Vec<Option<Order>> {
-        self.ordered
-            .lock()
-            .expect("the log is not poisoned")
-            .clone()
-    }
-}
-
 /// Catches a daemon the coordinator never orders a first install (it did not announce
 /// `install-v1`), a loop that drops an install order or refuses it for its service not being
 /// installed, and an install that does not reach the executor's install path: the host, which
@@ -411,14 +141,15 @@ impl Host {
 /// install's verdict, and the coordinator reads `web` converged and orders nothing more.
 #[test]
 fn an_install_the_coordinator_orders_installs_the_service_and_converges() {
-    let rig = Rig::new("typed-install");
-    rig.stage(SERVICE, TARGET);
+    let apt = AptRig::new("typed-install");
+    let rig = &apt.rig;
     for (step, line) in HOOK_LINES {
         rig.launcher.replies(SERVICE, step, &[(0, line)]);
     }
     let dir = Scratch::new("typed-install-coordinator");
     let coordinator = coordinator(dir.path());
-    let mut host = Host::new(&rig, &coordinator);
+    publish_and_set(&apt, &coordinator, TARGET);
+    let mut host = host_of(&apt, &coordinator);
 
     host.beat();
     let ordered = host.ordered();
@@ -476,14 +207,15 @@ impl Sleeper for InstallInTheWait {
 /// one heartbeat period, on the loop's own sleeper and not the wall clock.
 #[test]
 fn hosts_get_lists_an_installed_service_without_another_heartbeat_period() {
-    let rig = Rig::new("typed-install-listed");
-    rig.stage(SERVICE, TARGET);
+    let apt = AptRig::new("typed-install-listed");
+    let rig = &apt.rig;
     for (step, line) in HOOK_LINES {
         rig.launcher.replies(SERVICE, step, &[(0, line)]);
     }
     let dir = Scratch::new("typed-install-listed-coordinator");
     let coordinator = coordinator(dir.path());
-    let host = Host::new(&rig, &coordinator);
+    publish_and_set(&apt, &coordinator, TARGET);
+    let host = host_of(&apt, &coordinator);
     let sleeper = InstallInTheWait {
         dispatch: Arc::clone(&host.dispatch),
         coordinator: Arc::clone(&coordinator),
@@ -533,15 +265,17 @@ fn hosts_get_lists_an_installed_service_without_another_heartbeat_period() {
 /// coordinator.
 #[test]
 fn an_abort_the_coordinator_queues_stops_the_live_update_and_its_halt_is_reported() {
-    let rig = Rig::new("typed-abort");
-    rig.add(SERVICE, TARGET);
+    let apt = AptRig::new("typed-abort");
+    let rig = &apt.rig;
+    services::installed(&apt, SERVICE, BASE);
     for (step, line) in HOOK_LINES {
         rig.launcher.replies(SERVICE, step, &[(0, line)]);
     }
     let gate = rig.launcher.hold_until_stopped(SERVICE, Step::Prepare);
     let dir = Scratch::new("typed-abort-coordinator");
     let coordinator = coordinator(dir.path());
-    let mut host = Host::new(&rig, &coordinator);
+    publish_and_set(&apt, &coordinator, TARGET);
+    let mut host = host_of(&apt, &coordinator);
 
     host.beat();
     let update = host.ordered()[0].clone().expect("an order");
@@ -589,19 +323,15 @@ fn an_abort_the_coordinator_queues_stops_the_live_update_and_its_halt_is_reporte
 /// The next version CI sets after the install.
 const NEXT: &str = "3.0.0";
 
-/// The order of the answer `n` (from 0) and its try, as the loop read it.
-fn order_and_try(host: &Host, n: usize) -> (Verb, u64) {
-    let order = host.ordered()[n].clone().expect("an order");
-    (order.verb, order.order_try)
-}
-
-/// `web` at `version`, as an update or an install of the package [`d`] names it.
-fn web_at(version: &str) -> Target {
+/// `web` at `version`, as an update or an install of the package `entry` names it: the entry
+/// is the one the coordinator picked, and its digest the package's pin.
+fn web_at(version: &str, entry: &Release) -> Target {
     Target {
         service: ServiceName::new(SERVICE).expect("a service"),
         version: Version::new(version).expect("a version"),
-        digest: PackageDigest::new(&d()).expect("a digest"),
+        digest: PackageDigest::new(&entry.digest).expect("a digest"),
         index_digest: None,
+        entry: Some(Entry::new(entry.clone())),
     }
 }
 
@@ -613,26 +343,32 @@ fn web_at(version: &str) -> Target {
 /// it, and the coordinator reads `web` converged at [`NEXT`] and orders nothing more.
 #[test]
 fn an_update_after_an_install_runs_and_converges() {
-    let rig = Rig::new("typed-install-update");
-    rig.stage(SERVICE, TARGET);
-    rig.stage(SERVICE, NEXT);
+    let apt = AptRig::new("typed-install-update");
+    let rig = &apt.rig;
     for (step, line) in HOOK_LINES {
         rig.launcher.replies(SERVICE, step, &[(0, line), (0, line)]);
     }
     let dir = Scratch::new("typed-install-update-coordinator");
     let coordinator = coordinator(dir.path());
-    let mut host = Host::new(&rig, &coordinator);
+    let target = publish_and_set(&apt, &coordinator, TARGET);
+    let mut host = host_of(&apt, &coordinator);
 
     host.beat();
-    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Install(web_at(TARGET, &target)), 1)
+    );
     assert!(host.dispatch.run_next());
     host.beat();
     assert_eq!(host.ordered()[1], None);
     assert_eq!(convergence(&coordinator), "converged");
 
-    set_desired(&coordinator, NEXT);
+    let next = publish_and_set(&apt, &coordinator, NEXT);
     host.beat();
-    assert_eq!(order_and_try(&host, 2), (Verb::Update(web_at(NEXT)), 2));
+    assert_eq!(
+        order_and_try(&host, 2),
+        (Verb::Update(web_at(NEXT, &next)), 2)
+    );
     assert!(host.dispatch.run_next());
     assert_eq!(
         rig.launcher.steps(SERVICE),
@@ -653,27 +389,33 @@ fn an_update_after_an_install_runs_and_converges() {
 /// `try_conflict`.
 #[test]
 fn a_restarted_daemon_is_ordered_one_past_the_try_it_reported() {
-    let rig = Rig::new("typed-restart-update");
-    rig.stage(SERVICE, TARGET);
-    rig.stage(SERVICE, NEXT);
+    let apt = AptRig::new("typed-restart-update");
+    let rig = &apt.rig;
     for (step, line) in HOOK_LINES {
         rig.launcher.replies(SERVICE, step, &[(0, line), (0, line)]);
     }
     let dir = Scratch::new("typed-restart-update-coordinator");
     let coordinator = coordinator(dir.path());
-    let mut host = Host::new(&rig, &coordinator);
+    let target = publish_and_set(&apt, &coordinator, TARGET);
+    let mut host = host_of(&apt, &coordinator);
     host.beat();
-    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Install(web_at(TARGET, &target)), 1)
+    );
     assert!(host.dispatch.run_next());
     host.beat();
     assert_eq!(host.ordered()[1], None);
     assert_eq!(convergence(&coordinator), "converged");
     drop(host);
 
-    set_desired(&coordinator, NEXT);
-    let mut host = Host::new(&rig, &coordinator);
+    let next = publish_and_set(&apt, &coordinator, NEXT);
+    let mut host = host_of(&apt, &coordinator);
     host.beat();
-    assert_eq!(order_and_try(&host, 0), (Verb::Update(web_at(NEXT)), 2));
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Update(web_at(NEXT, &next)), 2)
+    );
     assert!(host.dispatch.run_next());
     assert_eq!(
         rig.launcher.steps(SERVICE),
@@ -697,27 +439,32 @@ const LAST: &str = "4.0.0";
 /// daemon, whose step record holds try 2, would refuse it `stale_try` or `try_conflict`.
 #[test]
 fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
-    let rig = Rig::new("typed-twice");
-    for version in [TARGET, NEXT, LAST] {
-        rig.stage(SERVICE, version);
-    }
+    let apt = AptRig::new("typed-twice");
+    let rig = &apt.rig;
     for (step, line) in HOOK_LINES {
         rig.launcher
             .replies(SERVICE, step, &[(0, line), (0, line), (0, line)]);
     }
     let dir = Scratch::new("typed-twice-coordinator");
     let first = coordinator(dir.path());
-    let mut host = Host::new(&rig, &first);
+    let target = publish_and_set(&apt, &first, TARGET);
+    let mut host = host_of(&apt, &first);
 
     host.beat();
-    assert_eq!(order_and_try(&host, 0), (Verb::Install(web_at(TARGET)), 1));
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Install(web_at(TARGET, &target)), 1)
+    );
     assert!(host.dispatch.run_next());
     host.beat();
     assert_eq!(host.ordered()[1], None);
 
-    set_desired(&first, NEXT);
+    let next = publish_and_set(&apt, &first, NEXT);
     host.beat();
-    assert_eq!(order_and_try(&host, 2), (Verb::Update(web_at(NEXT)), 2));
+    assert_eq!(
+        order_and_try(&host, 2),
+        (Verb::Update(web_at(NEXT, &next)), 2)
+    );
     assert!(host.dispatch.run_next());
     host.beat();
     host.beat();
@@ -727,10 +474,13 @@ fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
     drop(first);
 
     let second = coordinator(dir.path());
-    let mut host = Host::new(&rig, &second);
-    set_desired(&second, LAST);
+    let mut host = host_of(&apt, &second);
+    let last = publish_and_set(&apt, &second, LAST);
     host.beat();
-    assert_eq!(order_and_try(&host, 0), (Verb::Update(web_at(LAST)), 3));
+    assert_eq!(
+        order_and_try(&host, 0),
+        (Verb::Update(web_at(LAST, &last)), 3)
+    );
     assert!(host.dispatch.run_next());
     assert_eq!(
         rig.launcher.steps(SERVICE),
@@ -741,24 +491,6 @@ fn install_update_restart_update_runs_every_order_one_try_past_the_last() {
     assert_eq!(convergence(&second), "converged");
 }
 
-/// A daemon of `version` on the self-update rig `s`, its probe the rig's, its update of
-/// hostkeeper settled as a start of that binary settles it.
-fn hostkeeper_daemon(s: &SelfRig, version: &str) -> (Arc<Daemon>, Settled) {
-    let daemon = s.daemon_at(version);
-    let settled = daemon.settle_self_update().expect("the start settles");
-    (Arc::new(daemon), settled)
-}
-
-/// hostkeeper at `version`, as an update or an install of the package [`d`] names it.
-fn hostkeeper_at(version: &str) -> Target {
-    Target {
-        service: ServiceName::new(HK).expect("a service"),
-        version: Version::new(version).expect("a version"),
-        digest: PackageDigest::new(&d()).expect("a digest"),
-        index_digest: None,
-    }
-}
-
 /// Catches a fleet built by bootstrap that never updates hostkeeper: a daemon the deb or the pkg
 /// installed lists no service `hostkeeper` in its heartbeat (no package of it is installed), so
 /// the coordinator counted the host `missing`, and the install it ordered placed the package and
@@ -767,17 +499,17 @@ fn hostkeeper_at(version: &str) -> Target {
 /// hostkeeper at [`NEW`]; the host's daemon runs [`OLD`] and names itself in the heartbeat's
 /// `agent`. The coordinator counts the host as one of hostkeeper's, behind, not missing; it
 /// orders the install of the release (try 1), which the executor runs as the self-update: the
-/// binary directory's `current` moves to [`NEW`] and the daemon asks to exit. The binary of
+/// binary directory's `next` links [`NEW`] (`current` stays) and the daemon asks to exit. The binary of
 /// [`NEW`] confirms the update at its start, and the coordinator reads hostkeeper converged and
 /// orders nothing more.
 #[test]
 fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converges() {
     let s = SelfRig::bootstrapped("typed-selfupdate-bootstrap");
-    for (step, line) in HOOK_LINES {
-        s.rig.launcher.replies(HK, step, &[(0, line)]);
-    }
+    s.rig
+        .manager
+        .set("hostkeeper.service", ActiveState::Active, Some(4242));
     let dir = Scratch::new("typed-selfupdate-bootstrap-coordinator");
-    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let coordinator = hostkeeper_coordinator(dir.path(), &s, NEW);
     let (daemon, settled) = hostkeeper_daemon(&s, OLD);
     assert_eq!(settled, Settled::NotPending);
     let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
@@ -785,7 +517,7 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
     host.beat();
     assert_eq!(
         order_and_try(&host, 0),
-        (Verb::Install(hostkeeper_at(NEW)), 1)
+        (Verb::Install(hostkeeper_with(&s, NEW)), 1)
     );
     let convergence = convergence_of(&coordinator, HK);
     assert_eq!(convergence["state"], "in_progress", "{convergence}");
@@ -796,11 +528,12 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
         "{convergence}"
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     drop(host);
 
-    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    let (daemon, settled) = started_at(&s, NEW);
     assert_eq!(settled, Settled::Confirmed);
     let mut host = Host::of(daemon, &coordinator, None);
     host.beat();
@@ -808,65 +541,55 @@ fn a_bootstrapped_daemon_is_installed_its_own_release_updates_itself_and_converg
     assert_eq!(host.ordered(), [None, None]);
     let convergence = convergence_of(&coordinator, HK);
     assert_eq!(convergence["state"], "converged", "{convergence}");
-    assert_eq!(
-        s.hk_steps(),
-        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
-    );
+    // hostkeeper's package carries no hook program: its steps are built in.
+    assert_eq!(s.hk_steps(), []);
 }
 
-/// What `Hosts.Get` says of `service` on `host-1`.
-fn on_host(coordinator: &Coordinator, service: &str) -> Option<HostService> {
-    let operator = Caller::Operator("operator".parse().expect("a token name"));
-    let request = GetHostRequest {
-        node_id: "host-1".to_owned(),
-    };
-    let host = coordinator.get_host(&operator, &request);
-    let services = host.expect("Hosts.Get").host.expect("a host").services;
-    services.into_iter().find(|one| one.service == service)
-}
-
-fn hk_on_host(coordinator: &Coordinator) -> HostService {
-    on_host(coordinator, HK).expect("hostkeeper on the host")
-}
-
-/// Catches the self-update of a daemon the deb installed stopping after it placed the package:
-/// the deb enabled `hostkeeper.service` with its own `WantedBy=` link, which `placed.json` does
-/// not list, and the install of hostkeeper's release (which carries that unit, run) was refused
-/// `path_conflict` before anything was written, and its verdict, of a service not listed, was
-/// never sent. The install of [`NEW`] the coordinator orders now places the release around the
-/// deb's link (left as it is), stages and switches the binary, and asks the daemon to exit; the
-/// next heartbeat reports the wait for the restart; the binary of [`NEW`] confirms it at its
-/// start, and the coordinator reads hostkeeper converged, its slot free, and orders nothing more.
+/// Catches the self-update of a daemon the deb installed stopping after it staged the package:
+/// the deb enabled `hostkeeper.service` with its own `WantedBy=` link, and the install of
+/// hostkeeper's release (which carries that unit, run) must leave that link as it is, and its
+/// verdict, of a service not listed, must be sent. The install of [`NEW`] the coordinator orders
+/// stages the release, links `next` at its binary, and asks the daemon to exit; the next
+/// heartbeat reports the wait for the restart; the binary of [`NEW`] confirms it at its start,
+/// and the coordinator reads hostkeeper converged, its slot free, and orders nothing more.
 #[test]
 fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_converges() {
     let s = SelfRig::deb("typed-selfupdate-deb");
-    for (step, line) in HOOK_LINES {
-        s.rig.launcher.replies(HK, step, &[(0, line)]);
-    }
     let dir = Scratch::new("typed-selfupdate-deb-coordinator");
-    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let coordinator = hostkeeper_coordinator(dir.path(), &s, NEW);
     let (daemon, _) = hostkeeper_daemon(&s, OLD);
     let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
 
     host.beat();
     assert_eq!(
         order_and_try(&host, 0),
-        (Verb::Install(hostkeeper_at(NEW)), 1)
+        (Verb::Install(hostkeeper_with(&s, NEW)), 1)
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     let link = |path: &str| std::fs::read_link(s.rig.host(path)).ok();
     assert_eq!(link(DEB_WANTS), Some(DEB_UNIT.into()));
-    assert_eq!(
-        link("/units/hostkeeper.service"),
-        Some("/packages/hostkeeper/current/units/hostkeeper.service".into())
-    );
     host.beat();
-    let reported = hk_on_host(&coordinator).last_update.expect("the verdict");
+    // The wait is reported as the service's deferral, which no verdict of the coordinator's
+    // answer shows.
+    let beat = host
+        .sent
+        .lock()
+        .expect("the log is not poisoned")
+        .last()
+        .cloned()
+        .expect("a heartbeat");
+    let own = beat
+        .services
+        .iter()
+        .find(|service| service.name == HK)
+        .expect("hostkeeper is listed with its wait");
+    let waiting = own.deferred.as_ref().expect("the wait for the restart");
     assert_eq!(
-        (reported.reason.as_str(), reported.order_try),
-        ("awaiting_restart", Some(1))
+        (waiting.target.as_str(), waiting.reason.as_str()),
+        (NEW, "awaiting_restart")
     );
     drop(host);
 
@@ -874,7 +597,7 @@ fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_conver
     s.rig
         .manager
         .set("hostkeeper.service", ActiveState::Active, Some(4242));
-    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    let (daemon, settled) = started_at(&s, NEW);
     assert_eq!(settled, Settled::Confirmed);
     let mut host = Host::of(daemon, &coordinator, None);
     host.beat();
@@ -894,19 +617,22 @@ fn a_daemon_the_deb_enabled_installs_its_own_release_restarts_into_it_and_conver
     );
 }
 
+/// A release older than the daemon's oldest reader (0.1.194).
+const BELOW: &str = "0.1.193";
+
 /// Catches the verdict of hostkeeper's own install kept unsent while hostkeeper is not listed (a
 /// daemon the deb installed lists no service `hostkeeper` until its package is placed), which
-/// left the order holding the fleet's one update slot: a release whose protocol this daemon
-/// cannot fall back from is refused before anything is written, and the next heartbeat carries
+/// left the order holding the fleet's one update slot: a release older than this daemon's oldest
+/// reader is refused before anything is written, and the next heartbeat carries
 /// that verdict, which the coordinator records as the host's last update of hostkeeper, the slot
 /// no longer held; once it is acknowledged, the coordinator does not order the same install
 /// again (the host still lists hostkeeper absent, reporting that refusal).
 #[test]
 fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
     let s = SelfRig::deb("typed-selfupdate-refused");
-    s.probe.set(|| Ok(9));
+    s.shipped_release(BELOW);
     let dir = Scratch::new("typed-selfupdate-refused-coordinator");
-    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let coordinator = hostkeeper_coordinator(dir.path(), &s, BELOW);
     let (daemon, _) = hostkeeper_daemon(&s, OLD);
     let mut host = Host::of(daemon, &coordinator, None);
 
@@ -928,7 +654,7 @@ fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
             reported.order_try
         ),
         (
-            NEW,
+            BELOW,
             pb::Outcome::Failed as i32,
             "protocol_unsupported",
             Some(1)
@@ -959,25 +685,27 @@ fn a_refused_install_of_hostkeeper_is_reported_in_the_next_heartbeat() {
 #[test]
 fn a_daemon_with_its_own_package_updates_itself_and_converges() {
     let s = SelfRig::new("typed-selfupdate-installed");
-    for (step, line) in HOOK_LINES {
-        s.rig.launcher.replies(HK, step, &[(0, line)]);
-    }
+    s.rig
+        .manager
+        .set("hostkeeper.service", ActiveState::Active, Some(4242));
+    record_hostkeeper_as_apt(&s);
     let dir = Scratch::new("typed-selfupdate-installed-coordinator");
-    let coordinator = coordinator_of(dir.path(), HK, NEW);
+    let coordinator = hostkeeper_coordinator(dir.path(), &s, NEW);
     let (daemon, _) = hostkeeper_daemon(&s, OLD);
     let mut host = Host::of(Arc::clone(&daemon), &coordinator, None);
 
     host.beat();
     assert_eq!(
         order_and_try(&host, 0),
-        (Verb::Update(hostkeeper_at(NEW)), 1)
+        (Verb::Update(hostkeeper_with(&s, NEW)), 1)
     );
     assert!(host.dispatch.run_next());
-    assert_eq!(s.current().as_deref(), Some(NEW));
+    assert_eq!(s.current().as_deref(), Some(OLD));
+    assert_eq!(s.layout().next().expect("next").as_deref(), Some(NEW));
     assert!(daemon.ctx().restart().requested());
     drop(host);
 
-    let (daemon, settled) = hostkeeper_daemon(&s, NEW);
+    let (daemon, settled) = started_at(&s, NEW);
     assert_eq!(settled, Settled::Confirmed);
     let mut host = Host::of(daemon, &coordinator, None);
     host.beat();
@@ -985,8 +713,6 @@ fn a_daemon_with_its_own_package_updates_itself_and_converges() {
     assert_eq!(host.ordered(), [None, None]);
     let convergence = convergence_of(&coordinator, HK);
     assert_eq!(convergence["state"], "converged", "{convergence}");
-    assert_eq!(
-        s.hk_steps(),
-        [Step::Prepare, Step::Cutover, Step::Verify, Step::Cleanup]
-    );
+    // hostkeeper's package carries no hook program: its steps are built in.
+    assert_eq!(s.hk_steps(), []);
 }

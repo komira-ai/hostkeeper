@@ -6,13 +6,14 @@
 //! A wait of this module ([`wait_until`], [`wait_for_file`]) polls a state systemd or the fixture
 //! reaches (a file written, a unit active) and sleeps between looks; it never bounds the time it
 //! waits and nothing asserts how long it took. A test that hangs is ended by the job's
-//! `timeout-minutes` in privileged.yml.
+//! `timeout-minutes` in privileged.yml (in net-install.yml for the network-install tests).
 //!
 //! The first-boot tests' harness is in submodules: [`spawn`] (a child process killed when dropped,
 //! and [`spawn::poll`], a wait of a bounded number of looks that fails with the last state it
 //! saw, so that a failure names what it waited for; the bound counts looks, and nothing asserts
-//! how long a wait took), [`pair`] (the coordinator and the daemon as programs, and the host paths the daemon fixes)
-//! and [`channel`] (a release channel on loopback and the fixture package it serves).
+//! how long a wait took), [`pair`] (the coordinator and the daemon as programs, and the host paths the daemon fixes),
+//! [`channel`] (an HTTPS server of the test's on loopback or a LAN) and [`aptrepo`] (the fixture
+//! packages: `.deb`s in a signed apt repository, and the entry of an order for one).
 #![allow(dead_code, reason = "each test file uses part of the shared support")]
 
 use std::collections::BTreeMap;
@@ -28,7 +29,19 @@ use hostkeeper_steps::systemd::{SYSTEMCTL, SYSTEMD_RUN};
 use hostkeeper_steps::{BootId, BootIdError, Clock};
 use hostkeeper_testkit::Scratch;
 
+#[allow(
+    clippy::duplicate_mod,
+    reason = "the fixture packages are shared by the two harnesses, which a test file may use both of"
+)]
+#[path = "../shared/aptrepo.rs"]
+pub mod aptrepo;
 pub mod channel;
+#[allow(
+    clippy::duplicate_mod,
+    reason = "the operator's calls are shared by the two harnesses, which a test file may use both of"
+)]
+#[path = "../shared/operator_api.rs"]
+pub mod operator_api;
 pub mod pair;
 pub mod self_update;
 pub mod spawn;

@@ -2,12 +2,12 @@
 //! tests do not depend on each other or on their order.
 //!
 //! [`Scenario::start`] brings up the whole rig: the host root and the host's fixed paths, the
-//! pinned `gh` and the fixture signer's trusted root, the release channel with the three fixture
-//! versions published, the coordinator in process, the daemon under a `Type=notify` unit, and the
-//! daemon's enrollment approved. [`Scenario::installed`] then has the coordinator install `1.0.0`
-//! (an `install` order, the hooked path with no previous release), and [`Scenario::updated`] goes
-//! on to `1.1.0` with the drain gate idle, which leaves `current` at `1.1.0`, `previous` at
-//! `1.0.0`, both on disk with their seals, and `1.1.0` the coordinator's last good version.
+//! apt repository with the three fixture versions published and the host's entry of it, the
+//! coordinator in process, the daemon under a `Type=notify` unit, and the daemon's enrollment
+//! approved. [`Scenario::installed`] then has the coordinator install `1.0.0` (an `install`
+//! order, the hooked path with no previous release), and [`Scenario::updated`] goes on to `1.1.0`
+//! with the drain gate idle, which leaves `current` at `1.1.0`, `previous` at `1.0.0`, both on
+//! disk with their seals, and `1.1.0` the coordinator's last good version.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -16,12 +16,11 @@ use std::process;
 
 use serde_json::Value;
 
-use super::channel::ReleaseChannel;
+use super::aptrepo::{AptRepo, REGISTRY_NAME};
 use super::coordinator::CoordinatorHandle;
 use super::host_root::{DaemonUnit, HostRoot};
 use super::package::{BuiltPackage, FixtureVersion, PackageBuilder};
-use super::signer::FixtureSigner;
-use super::{FIXTURE_BINARY, HOST_ID, ROLE, SERVICE, free_port, served_version, wait_for};
+use super::{FIXTURE_BINARY, HOST_ID, HeldPort, ROLE, SERVICE, served_version, wait_for};
 
 /// The first release.
 pub const V1: &str = "1.0.0";
@@ -36,16 +35,26 @@ pub const COORDINATED: u32 = 600;
 /// Tries for a state the host reaches on its own once ordered (a step, a switch, a unit).
 pub const LOCAL: u32 = 240;
 
+/// The config of a daemon that no order of this rig makes read a key of: the loader requires the
+/// release channel and the trusted signers, and the daemon reads neither.
+pub const CONFIG_TAIL: &str = "release_channel = \"https://releases.example\"\n\n\
+     [trusted_signers]\norganisation = \"example-org\"\nworkflow = \".github/workflows/release.yml\"\n\
+     refs = [\"refs/tags/*\"]\nhosted_runner = true\n";
+
 /// The rig of one test. The fields are dropped in this order: the daemon first (its unit stopped
-/// and unlinked), then the coordinator and the channel, the host root last (every unit of the
-/// fixture stopped and every path the test made on the host removed).
+/// and unlinked), then the coordinator and the repository, the host root (every unit of the
+/// fixture stopped, its package purged and every path the test made on the host removed), and the
+/// held ports last, once no unit of the fixture can bind them again.
 pub struct Scenario {
     pub daemon: DaemonUnit,
     pub coordinator: CoordinatorHandle,
-    pub channel: ReleaseChannel,
-    pub signer: FixtureSigner,
+    pub repo: AptRepo,
     pub packages: BTreeMap<&'static str, BuiltPackage>,
     pub host: HostRoot,
+    /// The ports of the fixture's instances, two per version, held from before the coordinator
+    /// binds its listeners until the test ends: a port only chosen and let go could be the one
+    /// such a listener is given, and the instance on it would fail to start.
+    pub ports: Vec<HeldPort>,
 }
 
 /// The pinned `gh` the workflow installed (its step `Install gh`), where the test finds it: next
@@ -64,17 +73,15 @@ pub fn pinned_gh() -> PathBuf {
     gh
 }
 
-/// Distinct free loopback ports, two per version.
-fn port_pairs(count: usize) -> Vec<[u16; 2]> {
-    let mut seen = BTreeSet::new();
-    let mut ports = Vec::new();
-    while ports.len() < count * 2 {
-        let port = free_port();
-        if seen.insert(port) {
-            ports.push(port);
-        }
-    }
-    ports.chunks(2).map(|pair| [pair[0], pair[1]]).collect()
+/// Held loopback ports, two per version (distinct, since the system gives a held port to no
+/// other socket), and their numbers in pairs.
+fn held_pairs(count: usize) -> (Vec<HeldPort>, Vec<[u16; 2]>) {
+    let held: Vec<HeldPort> = (0..count * 2).map(|_| HeldPort::new()).collect();
+    let pairs = held
+        .chunks(2)
+        .map(|pair| [pair[0].port(), pair[1].port()])
+        .collect();
+    (held, pairs)
 }
 
 /// A failed test's view of the coordinator: its status and convergence of the service, printed
@@ -85,20 +92,10 @@ impl Drop for Scenario {
         if !std::thread::panicking() {
             return;
         }
-        let ctl = |args: &[&str]| {
-            let output = self.coordinator.ctl_output(args);
-            format!(
-                "{}{}",
-                String::from_utf8_lossy(&output.stdout),
-                String::from_utf8_lossy(&output.stderr)
-            )
-        };
         let view = format!(
-            "releases status:\n{}\nreleases converge:\n{}\nrelease channel requests:\n{:#?}\n\
-             step record:\n{:#?}\n",
-            ctl(&["releases", "status", "--service", SERVICE]),
-            ctl(&["releases", "converge", "--service", SERVICE]),
-            self.channel.requests(),
+            "releases status:\n{}\nreleases converge:\n{}\nstep record:\n{:#?}\n",
+            self.coordinator.status_text(SERVICE),
+            self.coordinator.converge_text(SERVICE),
             self.host.step_record(),
         );
         eprintln!("the coordinator's view when the test failed:\n{view}");
@@ -114,54 +111,40 @@ impl Scenario {
     /// `tag` (a few lowercase letters) names the test's host root and daemon unit.
     pub fn start(tag: &str) -> Scenario {
         let host = HostRoot::new(tag);
-        host.install_gh(&pinned_gh());
-        let signer = FixtureSigner::new();
-        host.install_trusted_root(&signer.trusted_root_jsonl());
-        let channel = ReleaseChannel::start();
-        host.trust_ca(&channel.ca_pem());
+        let repo = AptRepo::new(host.base(), "tierstore-fixture");
+        host.install_repository(&repo);
 
-        let builder =
-            PackageBuilder::new(&host.packages(), &host.records(), Path::new(FIXTURE_BINARY));
-        let built = host.base().join("built");
-        fs::create_dir_all(&built).expect("the directory of the built packages");
+        let builder = PackageBuilder::new(&host.records(), Path::new(FIXTURE_BINARY));
         let versions = [(V1, false), (V2, false), (V3, true)];
         let mut packages = BTreeMap::new();
-        for ((version, fail_verify), ports) in versions.into_iter().zip(port_pairs(versions.len()))
-        {
+        let (ports, pairs) = held_pairs(versions.len());
+        for ((version, fail_verify), ports) in versions.into_iter().zip(pairs) {
             let fixture = FixtureVersion {
                 version,
                 ports,
                 fail_verify,
             };
-            let package = builder.build(&fixture, &built);
-            let bundle = signer.bundle(&package.file_name, &package.sha256);
-            channel.publish(
-                SERVICE,
-                version,
-                &package.file_name,
-                package.bytes.clone(),
-                bundle,
-            );
-            packages.insert(version, package);
+            packages.insert(version, builder.build(&fixture, &repo));
         }
 
         let coordinator = CoordinatorHandle::start(&host.base().join("coordinator"), SERVICE, ROLE);
+        // The coordinator refuses a set of `apt` entries for a repository its registry does not
+        // hold: the registry holds the repository the host's entry was made from.
+        coordinator.put_repository(repo.registry_entry(REGISTRY_NAME));
         host.write_config(&format!(
-            "coordinator = \"{}\"\nca_sha256 = \"{}\"\nrelease_channel = \"{}\"\n\n{}",
+            "coordinator = \"{}\"\nca_sha256 = \"{}\"\n{CONFIG_TAIL}",
             coordinator.heartbeat_url(),
             coordinator.ca_sha256(),
-            channel.base_url(),
-            signer.trusted_signers_toml(),
         ));
         let daemon = host.start_daemon(&format!("hostkeeper-ci-{tag}-{}-daemon", process::id()));
-        coordinator.approve_enrollment(HOST_ID, SERVICE);
+        coordinator.approve_enrollment(HOST_ID);
         Scenario {
             daemon,
             coordinator,
-            channel,
-            signer,
+            repo,
             packages,
             host,
+            ports,
         }
     }
 
@@ -196,11 +179,13 @@ impl Scenario {
         self.packages.get(version).expect("a fixture version")
     }
 
-    /// Sets the desired version of the service to `version`, with its package's digest, through
-    /// `hostkeeper ctl`.
+    /// Sets the desired version of the service to `version` by targets alone, as CI's set of a
+    /// release whose entries are all native does: the one `apt` entry of its package for the host's
+    /// platform, through the operator API.
     pub fn order(&self, version: &str) {
-        let digest = self.package(version).sha256.clone();
-        self.coordinator.set_desired(SERVICE, version, &digest);
+        let targets = self.package(version).targets();
+        self.coordinator
+            .set_desired_targets_alone(SERVICE, version, targets);
     }
 
     /// The coordinator's status of the service (`releases status`).
@@ -277,7 +262,8 @@ impl Scenario {
             .collect()
     }
 
-    /// The seal of `version` as JSON (`{"schema", "tree_digest", "package_digest"}`).
+    /// The seal of `version` as JSON (`{"schema", "tree_digest", "package_digest"}`, the last the
+    /// package's pin).
     pub fn seal(&self, version: &str) -> Value {
         let path = self.host.service_dir().join(format!("{version}.seal"));
         let bytes = fs::read(&path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));

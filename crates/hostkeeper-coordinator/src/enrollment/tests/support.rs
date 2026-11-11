@@ -12,6 +12,7 @@ use std::task::{Context, Poll};
 use std::time::Duration;
 
 use bytes::Bytes;
+use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::enroll::{Decision, poll_message};
 use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
@@ -19,7 +20,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_proto::hostkeeper::agent::v1::{
     Claims, EnrollRequest, PollRequest, PollResponse, PollState,
 };
-use hostkeeper_proto::hostkeeper::operator::v1::ApproveRequest;
+use hostkeeper_proto::hostkeeper::operator::v1::{AddRecordRequest, ApproveRequest};
 use hostkeeper_testkit::Scratch;
 use http_body_util::Full;
 use hyper::body::{Body, Frame};
@@ -29,9 +30,11 @@ use rcgen::{
     SigningKey,
 };
 
-use crate::enrollment::{Enrollment, Random, RpcError, Setup, SetupError, os_random, setup};
+use crate::enrollment::{
+    Enrollment, Random, RpcError, Setup, SetupError, StoreAt, os_random, setup,
+};
 use crate::identity::Identity;
-use crate::testutil::scratch;
+use crate::testutil::{ops_of, scratch};
 
 /// The wall-clock time every enrollment test starts at, in unix seconds.
 pub const NOW: u64 = 1_800_000_000;
@@ -90,7 +93,7 @@ impl Files {
     /// The setup of these files, making the CA when `init`.
     pub fn setup(&self, init: bool) -> Setup<'_> {
         Setup {
-            dir: &self.store,
+            store: StoreAt::Dir(&self.store),
             ca_key: &self.ca_key,
             ca_init: init,
             server_cert: &self.server_cert,
@@ -169,6 +172,32 @@ impl Rig {
         }
     }
 
+    /// [`Rig::new`], the enrollment's records kept in `records` rather than in the directory's
+    /// store; the CA and the server certificate are still the directory's files.
+    pub fn over_records(name: &str, records: Arc<dyn Records>) -> Rig {
+        let dir = scratch(name);
+        let files = Files::in_dir(&dir);
+        let clock = FixedClock::at(NOW);
+        let enrollment = Arc::new(
+            setup(
+                Arc::new(RealFs),
+                &Setup {
+                    store: StoreAt::Records(records),
+                    ..files.setup(true)
+                },
+                Arc::<FixedClock>::clone(&clock),
+                os_random(),
+            )
+            .expect("enrollment starts over the records"),
+        );
+        Rig {
+            _dir: dir,
+            files,
+            clock,
+            enrollment,
+        }
+    }
+
     /// Enrollment started again over the same files: what a restart makes.
     pub fn restart(&self) -> Arc<Enrollment> {
         self.restart_with(|enrollment| enrollment)
@@ -215,6 +244,7 @@ pub fn approval(key: &HostKey, host: &str) -> ApproveRequest {
         services: vec!["kbf".to_owned()],
         replace: false,
         reason: "new rack".to_owned(),
+        host_group: String::new(),
     }
 }
 
@@ -331,6 +361,7 @@ pub fn approve(enrollment: &Enrollment, key: &HostKey, host: &str, replace: bool
                 role: Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace,
+                host_group: None,
             },
         )
         .expect("approved");
@@ -377,6 +408,55 @@ pub async fn coordinator_over(name: &str, enrollment: &Rig) -> crate::testutil::
     rig.set(ONE_STORAGE).await;
     rig.at(2_100);
     rig
+}
+
+/// A time long before [`NOW`], in unix seconds.
+pub const LONG_BEFORE: u64 = 1_000_000_000;
+
+/// A coordinator over the enrollment of `enrollment` whose ops clock reads [`LONG_BEFORE`]: the
+/// approval window of a record added through it ended long before the enrollment's clock reads
+/// [`NOW`], so a request that matches the record is shown matched and waits for an operator,
+/// whatever day the test runs on.
+pub fn closed_windows(name: &str, enrollment: &Rig) -> crate::testutil::Rig {
+    let mut rig = crate::testutil::Rig::new(name);
+    rig.coordinator = crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_enrollment(Arc::clone(&enrollment.enrollment))
+        .with_ops(ops_of(&rig.dir).with_unix(Arc::new(|| LONG_BEFORE)));
+    rig
+}
+
+/// A coordinator over the enrollment of `enrollment` whose ops clock reads what the enrollment's
+/// clock does: the approval window of a record starts when the test's clock says, and is open or
+/// closed by that clock alone.
+pub fn aligned(name: &str, enrollment: &Rig) -> crate::testutil::Rig {
+    let mut rig = crate::testutil::Rig::new(name);
+    let clock = Arc::clone(&enrollment.clock);
+    rig.coordinator = crate::testutil::Rig::start(&rig.dir, &rig.clock)
+        .with_enrollment(Arc::clone(&enrollment.enrollment))
+        .with_ops(ops_of(&rig.dir).with_unix(Arc::new(move || clock.now_unix())));
+    rig
+}
+
+/// The add of the record `host`, a storage host, with the data MACs `data` and the BMC MAC
+/// `bmc` (empty for none), and no window asked for.
+pub fn add_of(host: &str, data: &[&str], bmc: &str) -> AddRecordRequest {
+    AddRecordRequest {
+        host_id: host.to_owned(),
+        role: "storage".to_owned(),
+        data_macs: data.iter().map(|m| (*m).to_owned()).collect(),
+        bmc_mac: bmc.to_owned(),
+        ..AddRecordRequest::default()
+    }
+}
+
+/// The `Enroll` of `key` from machine `machine_id` claiming the addresses `addresses` and the
+/// BMC MAC `bmc` (empty for none).
+pub fn claiming(key: &HostKey, machine_id: &str, addresses: &[&str], bmc: &str) -> EnrollRequest {
+    let mut request = enroll_request(key, machine_id);
+    let claims = request.claims.as_mut().expect("claims");
+    claims.addresses = addresses.iter().map(|a| (*a).to_owned()).collect();
+    claims.bmc_mac = bmc.to_owned();
+    request
 }
 
 /// Who the certificate `der` names, as the heartbeat path reads it.

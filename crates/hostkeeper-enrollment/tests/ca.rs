@@ -84,7 +84,7 @@ fn a_p256_request_gets_a_seven_day_client_certificate() {
         assert_eq!(verified.key().key_hash(), host.key_hash());
         let cert = ca
             .ca
-            .issue_host(&host_id("web-1"), verified.key(), 7)
+            .issue_host(&host_id("web-1"), verified.key(), HOST_VALIDITY_SECS, 7)
             .expect("issued");
         assert_eq!(
             (cert.serial, cert.not_before, cert.not_after),
@@ -107,6 +107,39 @@ fn a_p256_request_gets_a_seven_day_client_certificate() {
         assert_eq!(parsed.raw_serial(), [7]);
         assert_eq!(parsed.public_key().raw, host.p256().spki_der());
     }
+}
+
+/// Catches `issue_host` signing for another time than the validity it is given, and taking a
+/// validity of 0 or over the 7-day cap instead of refusing it.
+#[test]
+fn a_host_certificate_is_valid_for_the_time_asked_up_to_the_cap() {
+    let ca = TestCa::new("host-validity");
+    let host = HostKey::new();
+    for (secs, serial) in [(1, 2), (60, 3), (HOST_VALIDITY_SECS, 4)] {
+        let cert = ca
+            .ca
+            .issue_host(&host_id("web-1"), &host.p256(), secs, serial)
+            .expect("issued");
+        assert_eq!((cert.not_before, cert.not_after), (NOW, NOW + secs));
+        let parsed = parse(&cert.der);
+        assert_eq!(
+            parsed.validity().not_after.timestamp(),
+            (NOW + secs) as i64,
+            "{secs}"
+        );
+    }
+    assert_eq!(
+        ca.ca.issue_host(&host_id("web-1"), &host.p256(), 0, 5),
+        Err(SignError::EmptyValidity)
+    );
+    assert_eq!(
+        ca.ca
+            .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS + 1, 5),
+        Err(SignError::ValidityOverCap {
+            requested: HOST_VALIDITY_SECS + 1,
+            cap: HOST_VALIDITY_SECS,
+        })
+    );
 }
 
 /// Catches the CA signing a key of another type or curve: P-384, Ed25519 and RSA requests
@@ -204,9 +237,27 @@ fn a_csr_with_a_bad_self_signature_is_refused() {
     assert_eq!(at_limit, ProfileError::BadCsr(CsrDefect::NotDer));
 }
 
+/// Every subjectAltName of `cert`, each as `uri:`, `dns:` or `ip:` and its value.
+fn alt_names(cert: &X509Certificate<'_>) -> Vec<String> {
+    cert.subject_alternative_name()
+        .expect("one")
+        .map(|san| {
+            san.value
+                .general_names
+                .iter()
+                .map(|name| match name {
+                    GeneralName::URI(uri) => format!("uri:{uri}"),
+                    GeneralName::DNSName(dns) => format!("dns:{dns}"),
+                    other => format!("other:{other:?}"),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Catches the CA copying anything the request asked for: a CSR asking for `serverAuth`, a
 /// subjectAltName, `CA:TRUE` and `keyCertSign` is accepted, and its certificate has none of
-/// them.
+/// them: its one subjectAltName is the fixed host role every host certificate names.
 #[test]
 fn requested_extensions_are_never_copied() {
     let ca = TestCa::new("no-copy");
@@ -226,11 +277,11 @@ fn requested_extensions_are_never_copied() {
     let verified = check_request(&csr).expect("extensions are allowed in a request");
     let cert = ca
         .ca
-        .issue_host(&host_id("web-2"), verified.key(), 9)
+        .issue_host(&host_id("web-2"), verified.key(), HOST_VALIDITY_SECS, 9)
         .expect("issued");
     let parsed = parse(&cert.der);
     assert_eq!(purposes(&parsed), (false, true, false));
-    assert!(parsed.subject_alternative_name().expect("one").is_none());
+    assert_eq!(alt_names(&parsed), ["uri:urn:hostkeeper:host-role:host"]);
     assert!(
         !parsed
             .basic_constraints()
@@ -341,7 +392,7 @@ fn the_server_certificate_is_server_auth_only_and_chains_to_the_ca() {
         .expect("server certificate");
     let client = ca
         .ca
-        .issue_host(&host_id("web-1"), &host.p256(), 3)
+        .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS, 3)
         .expect("client certificate");
     let parsed = parse(&server.der);
     assert_eq!(purposes(&parsed), (true, false, false));
@@ -682,4 +733,111 @@ fn the_ca_fingerprint_is_the_sha256_of_the_ca_certificate() {
     };
     assert_eq!(poll.ca.sha256_hex(), bundle.sha256_hex());
     assert!(format!("{:?}", ca.ca).starts_with("Ca("));
+}
+
+/// Proves: a host certificate names the fixed host role `host` as its one subjectAltName, after
+/// the default prefix, or after the prefix the CA is given (the coordinator's
+/// `--host-role-uri-prefix`), whatever the host id; the server certificate names no URI.
+///
+/// Catches: a host certificate without a host-role URI, which readers that require one refuse,
+/// or one naming a role of the host, which would go stale at its first move.
+#[test]
+fn every_host_certificate_names_the_fixed_host_role() {
+    let test = TestCa::new("host-role");
+    let host = HostKey::new();
+    let issued = test
+        .ca
+        .issue_host(&host_id("db-7"), &host.p256(), HOST_VALIDITY_SECS, 5)
+        .expect("issued");
+    assert_eq!(
+        alt_names(&parse(&issued.der)),
+        ["uri:urn:hostkeeper:host-role:host"]
+    );
+    let server = test
+        .ca
+        .issue_server(
+            &HostKey::new().p256(),
+            ServerNames {
+                dns: &["coordinator.example".to_owned()],
+                ips: &[],
+            },
+            SERVER_VALIDITY_CAP_SECS,
+            6,
+        )
+        .expect("server certificate");
+    assert_eq!(alt_names(&parse(&server.der)), ["dns:coordinator.example"]);
+
+    let prefixed = test.ca.with_host_role_uri_prefix("urn:kbf:host-role:");
+    let issued = prefixed
+        .issue_host(&host_id("web-1"), &host.p256(), HOST_VALIDITY_SECS, 7)
+        .expect("issued");
+    assert_eq!(
+        alt_names(&parse(&issued.der)),
+        ["uri:urn:kbf:host-role:host"]
+    );
+}
+
+/// Proves: a CA given a host-role prefix that is not ASCII signs no host certificate, refused
+/// naming the URI, and still signs a server certificate.
+///
+/// Catches: a host certificate signed with a host-role URI no reader can parse.
+#[test]
+fn a_host_role_prefix_that_is_not_ascii_signs_no_host_certificate() {
+    let ca = TestCa::new("host-role-bad")
+        .ca
+        .with_host_role_uri_prefix("urn:r\u{f4}le:");
+    let refused = ca
+        .issue_host(
+            &host_id("web-1"),
+            &HostKey::new().p256(),
+            HOST_VALIDITY_SECS,
+            5,
+        )
+        .expect_err("not ASCII");
+    assert_eq!(
+        refused,
+        SignError::BadHostRoleUri("urn:r\u{f4}le:host".to_owned())
+    );
+    assert_eq!(
+        refused.to_string(),
+        "the host-role URI \"urn:r\u{f4}le:host\" is not one a certificate carries"
+    );
+    let server = ca.issue_server(
+        &HostKey::new().p256(),
+        ServerNames {
+            dns: &["coordinator.example".to_owned()],
+            ips: &[],
+        },
+        SERVER_VALIDITY_CAP_SECS,
+        6,
+    );
+    assert!(server.is_ok());
+}
+
+/// Proves: a host certificate in the form a release before this one issued (`CN=host:<id>` and
+/// no subjectAltName), signed by the CA's key, is still read as its host and its key.
+///
+/// Catches: a reader that came to require the fixed host role and so refuses every host still
+/// on a certificate issued before it, until that host renews.
+#[test]
+fn a_host_certificate_without_a_host_role_is_still_read() {
+    let test = TestCa::new("host-role-before");
+    let paths = files(test.dir.path());
+    let ca_key = KeyPair::try_from(std::fs::read(paths.key).expect("the CA key").as_slice())
+        .expect("a PKCS#8 key");
+    let issuer = rcgen::Issuer::new(subject("hostkeeper CA"), ca_key);
+    let host = HostKey::new();
+    let mut before = subject("host:web-1");
+    before.extended_key_usages = vec![ExtendedKeyUsagePurpose::ClientAuth];
+    let der = before
+        .signed_by(&host.pair, &issuer)
+        .expect("signed")
+        .der()
+        .to_vec();
+    assert!(alt_names(&parse(&der)).is_empty());
+
+    let read = test.ca.bundle().host_certificate(&der).expect("read");
+
+    assert_eq!(read.host_id, host_id("web-1"));
+    assert_eq!(read.key.point(), host.p256().point());
 }

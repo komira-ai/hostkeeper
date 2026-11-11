@@ -1,15 +1,15 @@
 # The HTTP/JSON gateway
 
 The coordinator's private listener serves the operator API twice: as gRPC, and as plain HTTP with
-JSON bodies, the gateway. `hostkeeper ctl --transport gateway` and the operator web app
+JSON bodies, the gateway. `hkctl` (which has no other transport) and the operator web app
 ([docs/ui-serving.md](ui-serving.md)) call the gateway. Both ways reach the same handlers with
 the same checks; the gateway adds no rule of its own. Every command and request message is in
-[docs/ctl.md](ctl.md).
+[docs/cli.md](cli.md).
 
 ## Route
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
-`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`):
+`Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Repositories`, `HostGroups`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -24,12 +24,25 @@ serves the gateway; the heartbeat listener never does.
 
 The caller sends `Authorization: Bearer <token>`, as a gRPC call sends it in its `authorization`
 metadata, and the token is checked before the body is read. `Releases.SetDesired` takes CI's
-OIDC token or an operator token; `Releases.Converge`, which changes nothing, also takes CI's OIDC
-token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
+OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
+`Releases.GetRelease`, which change nothing, also take CI's OIDC token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
 the admitting allow-list entry names. With an operator token it sets any service the coordinator
 manages, and the set is one audit entry, `set_desired`, under the token's name (the service, and
 as its reason the version, followed by `with package digest <digest>` when the call named one, or
-`with release index <digest>` when it named a release index, the digest being the index's).
+`with release index <digest>` when it named a release index, the digest being the index's). A
+set with `targets` is one audit entry `set_desired` whoever made it, CI's under `ci`: its reason
+is the version, `with targets`, CI's workflow (`by workflow <job_workflow_ref>`) and the release
+index (`and release index <digest>`) when there are, then for each platform its entries in
+order, each as its installer, its artifact's digest and `manifest <SHA-256 of the manifest's
+encoding>` (docs/design/packages.md, section 3.4). A `SetDesired` whose targets hold a repository
+entry is refused `repository_unknown` (`FAILED_PRECONDITION`, HTTP 400) when the registry
+(`Repositories`) does not hold the repository the service names, or the entry's `repository` is not
+`<name>-<suite>` of that repository's name and one of its suites. `Repositories` takes an operator
+token only; `Put` and `Remove` are audited as `repository_put` and `repository_remove`, with the
+operator's reason and then the repository's name, URI, suites and fingerprints, and for a private
+repository (`access` `hosts`) `access hosts credential <path>`, the credential file's path, never
+its bytes (for `Remove`, its name). `Put` of a private repository whose credential file the
+coordinator cannot use is refused `credential_unusable` (`FAILED_PRECONDITION`, HTTP 400).
 The JSON routes `POST /v1/desired` and `GET /v1/convergence` stay CI's only. The body of
 `POST /v1/desired` takes a release index as `release_index` (its text) and
 `release_index_digest`, and a refused index is a 400 with the reason `index_digest_mismatch` or
@@ -46,10 +59,42 @@ Both are the method's message in the canonical proto3 JSON mapping:
 - bytes are base64;
 - a field with its default value may be left out of a response, and a request.
 
-A request body is one JSON document of at most 4 KiB with nothing after it. A field the message
+A request body is one JSON document with nothing after it, of at most 256 KiB for
+`Releases.SetDesired` and `Repositories.Put` (a repository's keyring is up to 64 KiB, 87,382
+characters of base64), 64 KiB for `HostGroups.Put` and 4 KiB for every other method. In the `targets` object of a
+`SetDesired`, a platform whose value is `null` is dropped before the body is read, so
+`"linux-arm64": null` means the same as the key left out; a `targets` object that then names no
+platform is refused as `INVALID_ARGUMENT` with the reason `target_invalid`. A field the message
 does not have, a value of the wrong type, malformed JSON, a body that is too large and a body
 that does not arrive whole are all refused as `INVALID_ARGUMENT` with the reason
 `invalid_request`. A response is 200 with the response message.
+
+A field the message does not have is what a coordinator older than its client refuses: the
+client sends a field a later release added. So `hkctl`, on an `invalid_request`, asks the
+coordinator's version (below) and says `coordinator_older` when the coordinator is older than
+its own release ([docs/cli.md](cli.md)).
+
+## The coordinator's version
+
+`GET /v1/version` on the private listener, outside the gateway, takes no token and says which
+release the coordinator is: `200` and `{"version":"X.Y.Z","commit":"<12 hex>"}`, the two halves
+of what `hostkeeper-coordinator --version` prints as `X.Y.Z+<commit>`. With the query
+`at_least=<version>` it is that answer when the coordinator is at least that version (by its
+leading numbers: a build suffix does not order), and `409` with
+`{"error":"coordinator_older","version":"...","commit":"..."}` when it is older; any other query
+is `400` `{"error":"bad_request"}`. A coordinator from before the route answers `404`
+`{"error":"not_found"}`, which says as much: it is older than the release that added it. A
+release's deploy waits on `at_least=<the release>` before it sets the hosts
+([github-actions.md](deploy/github-actions.md)), and the coordinator's machine updates the
+coordinator ([coordinator-update.md](deploy/coordinator-update.md)).
+
+The gateway answers every call as soon as its handler does, and adds no deadline once the body
+is read. One method is held: `Releases.WaitConverged` answers when the service's hosts have
+converged on the version, the service is halted, another version is desired, or its `waitSecs`
+(1 to 1800) have passed, so a client's own timeout must be longer than `waitSecs`. A
+coordinator holds at most 16 such calls at once; the next is refused `FAILED_PRECONDITION` with
+the reason `too_many_waits`, and a `waitSecs` of 0 or above 1800 is `INVALID_ARGUMENT`
+`invalid_wait`.
 
 ## Errors
 
@@ -97,6 +142,3 @@ Only the HTTP status 200 is a success.
   call the gateway.
 - No gRPC-web, no streaming and no reflection. A gRPC call is HTTP/2 with `Content-Type:
   application/grpc` and does not go through the gateway.
-- A method the coordinator has no handler for yet would answer `UNIMPLEMENTED` (501) with an
-  empty reason after its caller is checked. Every method of `hostkeeper.operator.v1` has one
-  today.

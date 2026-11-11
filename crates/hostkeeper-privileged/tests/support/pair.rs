@@ -2,7 +2,7 @@
 //! the harness of the first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`).
 //!
 //! The tests drive the two only through what an operator and a host have: the coordinator's
-//! flags and its operator API (through `hostkeeper ctl`, the daemon binary's `ctl` verb), the
+//! flags and its operator API (the generated gRPC clients, through [`OperatorApi`]), the
 //! daemon's flags and config file, and the files the daemon keeps on the host. Each file the
 //! programs are given is in the test's scratch directory, except the paths the daemon fixes
 //! ([`HostPaths`]).
@@ -11,7 +11,9 @@ use std::fs;
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
+use hostkeeper_proto::hostkeeper::operator::v1::HostGroup;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType,
@@ -19,22 +21,23 @@ use rcgen::{
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
+use super::operator_api::{Approval, OperatorApi, must};
 use super::spawn::{Running, poll};
 
 /// The coordinator program, built by cargo with these tests: it forwards to the coordinator's
 /// command line, as the `hostkeeper-coordinator` binary does.
 pub const COORDINATOR: &str = env!("CARGO_BIN_EXE_hostkeeper-privileged-coordinator");
 /// The daemon program, built by cargo with these tests: it forwards to the daemon's command
-/// line, as the `hostkeeper` binary does (its `ctl` verb is the operator's client).
+/// line, as the `hostkeeper` binary does.
 pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 
 /// Where the daemon keeps its key and certificates: a path it fixes, with no flag.
 pub const PKI_DIR: &str = "/etc/updater/pki";
-/// The role every test host is approved for.
+/// The host group every test host is approved into: an approval's role is read as the group's
+/// name.
 pub const ROLE: &str = "ci";
-/// The service the rollout file runs on [`ROLE`], which CI's allow-list names (an entry names
-/// services the rollout file defines); no test sets a desired version of it, so the coordinator
-/// orders nothing for it.
+/// The service the tests list in the group [`ROLE`], which CI's allow-list names; no test sets a
+/// desired version of it, so the coordinator orders nothing for it.
 pub const BEACON: &str = "beacon";
 /// The operator's token.
 const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789";
@@ -44,10 +47,13 @@ const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789"
 /// guard is dropped, failed or not: the pki directory's parent `/etc/updater`, the self-update
 /// units it installs (`hostkeeper-fallback.service`, `hostkeeper.service.d/`), and the placement
 /// state `/var/lib/hostkeeper`; and, given to [`HostPaths::claim`], those an install test adds
-/// and the units it may leave running, which are stopped first.
+/// and the units it may leave running, which are stopped first; the packages the daemon installs
+/// ([`HostPaths::purging`]) are unheld and purged after the units are stopped and before the paths
+/// are removed.
 pub struct HostPaths {
     paths: Vec<PathBuf>,
     units: Vec<String>,
+    packages: Vec<String>,
 }
 
 /// The directory of the daemon's placement state, which it does not make itself.
@@ -84,7 +90,15 @@ impl HostPaths {
         HostPaths {
             paths,
             units: units.iter().map(|u| (*u).to_owned()).collect(),
+            packages: Vec::new(),
         }
+    }
+
+    /// The same, and the packages `packages` the daemon installs of the host's dpkg database,
+    /// which are purged when the guard is dropped.
+    pub fn purging(mut self, packages: &[&str]) -> HostPaths {
+        self.packages = packages.iter().map(|p| (*p).to_owned()).collect();
+        self
     }
 }
 
@@ -95,6 +109,10 @@ impl Drop for HostPaths {
                 hostkeeper_steps::systemd::SYSTEMCTL,
                 &["stop", "--system", unit.as_str()],
             );
+        }
+        for package in &self.packages {
+            let _ = super::run("/usr/bin/apt-mark", &["unhold", package.as_str()]);
+            let _ = super::run("/usr/bin/dpkg", &["--purge", package.as_str()]);
         }
         for path in &self.paths {
             // A path the test never made is not there; anything else is the test's own.
@@ -118,8 +136,8 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
     hex::encode(Sha256::digest(bytes))
 }
 
-/// A test certificate authority: of the coordinator's private listener (which the ctl dials) and
-/// of the release channel.
+/// A test certificate authority: of the coordinator's private listener (which the operator dials) and
+/// of the test's HTTPS server.
 pub struct TestCa {
     issuer: CertifiedIssuer<'static, KeyPair>,
 }
@@ -152,8 +170,13 @@ impl TestCa {
 
     /// A server certificate for the loopback address `127.0.0.1`.
     pub fn loopback_server(&self) -> Leaf {
+        self.server_for(Ipv4Addr::LOCALHOST)
+    }
+
+    /// A server certificate for the address `ip`.
+    pub fn server_for(&self, ip: Ipv4Addr) -> Leaf {
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
-        params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(Ipv4Addr::LOCALHOST))];
+        params.subject_alt_names = vec![SanType::IpAddress(IpAddr::V4(ip))];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
         let key = KeyPair::generate().expect("a key");
         let cert = params.signed_by(&key, &self.issuer).expect("signed");
@@ -166,30 +189,49 @@ impl TestCa {
     }
 }
 
-/// The rollout file: [`BEACON`] on [`ROLE`], and `more` (TOML `[[service]]` tables) after it.
-pub fn rollout(more: &str) -> String {
-    format!("[[service]]\nname = \"{BEACON}\"\nroles = [\"{ROLE}\"]\n{more}")
+/// Whether `host`, as `hosts list` gives it, was heard since the coordinator started: it has a
+/// heartbeat time. A host listed from its enrollment alone has none (proto3 JSON leaves the 0
+/// out), and may still carry the daemon its enrollment kept in `heartbeat.agent`.
+fn heard_since_start(host: &Value) -> bool {
+    host["lastHeartbeatUnix"].is_string()
 }
 
 /// The coordinator: the files its flags name, under `<scratch>/coordinator`, and the running
-/// program. It keeps its two ports across a restart, so that the daemon, which dials one
-/// address, finds it again.
+/// program. It keeps its ports across a restart, so that the daemon, which dials one address,
+/// finds it again.
 pub struct Coordinator {
     dir: PathBuf,
     extra: Vec<String>,
     pub heartbeat: SocketAddr,
     pub control: SocketAddr,
+    /// The LAN listener (`--lan-listen`), when it has one.
+    pub lan: Option<SocketAddr>,
     run: Option<Running>,
+    /// The operator's calls, made at the first.
+    api: OnceLock<OperatorApi>,
 }
 
 impl Coordinator {
-    /// Writes the coordinator's files (the rollout file is `rollout`) and starts it with
-    /// enrollment, making its CA (`--ca-init`), on ports of loopback the system picks; `extra`
-    /// are more flags of `serve`, given at every start.
-    pub fn start(scratch: &Path, rollout: &str, extra: &[&str]) -> Coordinator {
+    /// Writes the coordinator's files and starts it with enrollment, making its CA
+    /// (`--ca-init`), on ports of loopback the system picks; `extra` are more flags of `serve`,
+    /// given at every start. It holds no host group: the test puts its groups ([`Self::put_group`])
+    /// before it approves a host.
+    pub fn start(scratch: &Path, extra: &[&str]) -> Coordinator {
+        Coordinator::start_with(scratch, extra, Ipv4Addr::LOCALHOST, false)
+    }
+
+    /// [`Self::start`], with the private listener on `address` (its certificate for that
+    /// address) and a LAN listener there too (`--lan-listen`), each on a port the system picks:
+    /// the coordinator of the network-install tests, which `hostkeeper-pxe` reads over the
+    /// farm LAN and a network-installed host dials.
+    pub fn start_on_lan(scratch: &Path, extra: &[&str], address: Ipv4Addr) -> Coordinator {
+        Coordinator::start_with(scratch, extra, address, true)
+    }
+
+    fn start_with(scratch: &Path, extra: &[&str], address: Ipv4Addr, lan: bool) -> Coordinator {
         let dir = scratch.join("coordinator");
         let ca = TestCa::new("private listener CA");
-        let leaf = ca.loopback_server();
+        let leaf = ca.server_for(address);
         put(&dir.join("private-ca.pem"), ca.pem().as_bytes(), 0o644);
         put(&dir.join("tls.pem"), leaf.cert_pem.as_bytes(), 0o644);
         put(&dir.join("tls.key"), leaf.key_pem.as_bytes(), 0o600);
@@ -205,7 +247,6 @@ impl Coordinator {
             OPERATOR_TOKEN.as_bytes(),
             0o600,
         );
-        put(&dir.join("rollout.toml"), rollout.as_bytes(), 0o600);
         // CI's allow-list: required, and no test presents a CI token.
         put(
             &dir.join("oidc.toml"),
@@ -227,8 +268,10 @@ impl Coordinator {
             dir,
             extra: extra.iter().map(|s| (*s).to_owned()).collect(),
             heartbeat: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
-            control: SocketAddr::from((Ipv4Addr::LOCALHOST, 0)),
+            control: SocketAddr::from((address, 0)),
+            lan: lan.then(|| SocketAddr::from((address, 0))),
             run: None,
+            api: OnceLock::new(),
         };
         coordinator.launch(true);
         coordinator
@@ -254,8 +297,6 @@ impl Coordinator {
             &path("oidc.toml"),
             "--operator-token-file",
             &path("operator.token"),
-            "--rollout-file",
-            &path("rollout.toml"),
             "--enrollment-dir",
             &path("enrollment"),
             "--ca-key-file",
@@ -267,6 +308,9 @@ impl Coordinator {
         ]
         .map(String::from)
         .to_vec();
+        if let Some(lan) = self.lan {
+            args.extend(["--lan-listen".to_owned(), lan.to_string()]);
+        }
         if init {
             args.push("--ca-init".to_owned());
         }
@@ -291,6 +335,9 @@ impl Coordinator {
         };
         self.heartbeat = addr("heartbeat=");
         self.control = addr("control=");
+        if self.lan.is_some() {
+            self.lan = Some(addr("lan="));
+        }
         self.run = Some(run);
     }
 
@@ -341,9 +388,38 @@ impl Coordinator {
         sha256_hex(&fs::read(self.ca_cert_path()).expect("the CA certificate"))
     }
 
+    /// The file of the verdicts it acknowledged, beside its state file (`--state-file`).
+    pub fn verdicts_path(&self) -> PathBuf {
+        self.dir.join("state/desired.json.verdicts")
+    }
+
     /// The enrollment CA's certificate, DER: beside its key (`--ca-key-file`), `.cert` added.
     pub fn ca_cert_path(&self) -> PathBuf {
         self.dir.join("ca/ca.key.cert")
+    }
+
+    /// The CA of the private listener's certificate, PEM: what the operator's calls and
+    /// `pxe serve` take as the CA.
+    pub fn private_ca_path(&self) -> PathBuf {
+        self.dir.join("private-ca.pem")
+    }
+
+    /// The operator's token file (root's, mode 0600): what the operator's calls and
+    /// `pxe serve` take as `--token-file`.
+    pub fn token_path(&self) -> PathBuf {
+        self.dir.join("operator.token")
+    }
+
+    /// The URL of the private listener, by its address.
+    pub fn control_url(&self) -> String {
+        format!("https://{}", self.control)
+    }
+
+    /// The URL a network-installed host dials: the LAN listener, by its address, which the
+    /// server certificate holds as an IP SAN.
+    pub fn lan_url(&self) -> String {
+        let lan = self.lan.expect("a coordinator with a LAN listener");
+        format!("https://{lan}")
     }
 
     /// The URL a daemon dials: the heartbeat listener, by the name its server certificate holds.
@@ -351,55 +427,84 @@ impl Coordinator {
         format!("https://localhost:{}", self.heartbeat.port())
     }
 
-    /// Runs `hostkeeper ctl <args>` against the private listener with the operator's token and
-    /// gives its JSON answer, or the exit status and what it printed.
-    pub fn ctl(&self, args: &[&str]) -> Result<Value, String> {
-        let endpoint = format!("https://{}", self.control);
-        let ca = self.dir.join("private-ca.pem").display().to_string();
-        let token = self.dir.join("operator.token").display().to_string();
-        let mut all = vec![
-            "ctl",
-            "--endpoint",
-            &endpoint,
-            "--ca-file",
-            &ca,
-            "--token-file",
-            &token,
-            "--output",
-            "json",
-        ];
-        all.extend_from_slice(args);
-        let out = super::run(DAEMON, &all);
-        if !out.status.success() {
-            return Err(format!(
-                "ctl {args:?} ended with {}: {}{}",
-                out.status,
-                String::from_utf8_lossy(&out.stdout),
-                String::from_utf8_lossy(&out.stderr)
-            ));
-        }
-        serde_json::from_slice(&out.stdout).map_err(|e| {
-            format!(
-                "ctl {args:?} printed no JSON ({e}): {}",
-                String::from_utf8_lossy(&out.stdout)
+    /// The operator's calls to the private listener, with the operator's token. Made at the first
+    /// call, when the listener's address is known.
+    pub fn api(&self) -> &OperatorApi {
+        self.api.get_or_init(|| {
+            OperatorApi::open(
+                &self.control_url(),
+                &self.private_ca_path(),
+                &self.token_path(),
             )
         })
     }
 
-    /// [`Self::ctl`], failing the test unless the call succeeds.
-    pub fn ctl_ok(&self, args: &[&str]) -> Value {
-        self.ctl(args).unwrap_or_else(|e| panic!("{e}"))
-    }
-
     /// The pending enrollment requests, as `enrollment list` gives them.
     pub fn pending(&self) -> Result<Vec<Value>, String> {
-        let list = self.ctl(&["enrollment", "list"])?;
+        let list = self.api().pending().map_err(|e| e.to_string())?;
         Ok(list["requests"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Puts the host group `name` listing `packages` after `hostkeeper` (which every group
+    /// lists), with every policy key at its default: creates it, or replaces the group of that
+    /// name. The coordinator holds host groups from the first one.
+    pub fn put_group(&self, name: &str, packages: &[&str]) {
+        let packages = std::iter::once("hostkeeper")
+            .chain(packages.iter().copied().filter(|p| *p != "hostkeeper"))
+            .map(str::to_owned)
+            .collect();
+        must(
+            "host-groups put",
+            self.api().put_host_group(HostGroup {
+                name: name.to_owned(),
+                packages,
+                policy: None,
+            }),
+        );
+    }
+
+    /// Adds `service` to the end of the packages of the group `group` (its policy at the
+    /// defaults, as [`Self::put_group`] puts it), and sets the repository of the registry it
+    /// comes from to `repository` (which the registry holds): the operator putting a package on
+    /// the hosts of the group.
+    pub fn add_package(&self, group: &str, service: &str, repository: &str) {
+        let mut packages = self.group_packages(group);
+        packages.push(service.to_owned());
+        self.put_group(
+            group,
+            &packages.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        must(
+            "services set-repository",
+            self.api().set_repository(service, repository),
+        );
+    }
+
+    /// Takes `service` out of the packages of the group `group` (its policy at the defaults, as
+    /// [`Self::put_group`] puts it): the group's hosts are ordered to uninstall it.
+    pub fn remove_package(&self, group: &str, service: &str) {
+        let mut packages = self.group_packages(group);
+        packages.retain(|p| p != service);
+        self.put_group(
+            group,
+            &packages.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+    }
+
+    /// The packages the group `group` lists now, in its order.
+    fn group_packages(&self, group: &str) -> Vec<String> {
+        let held = must("host-groups get", self.api().get_host_group(group));
+        held["hostGroup"]["group"]["packages"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the group {group} lists no packages: {held}"))
+            .iter()
+            .map(|p| p.as_str().expect("a package name").to_owned())
+            .collect()
     }
 
     /// The entry of `service` in `services list`.
     pub fn service(&self, service: &str) -> Result<Value, String> {
-        let list = self.ctl(&["services", "list"])?;
+        let list = self.api().list_services().map_err(|e| e.to_string())?;
         list["services"]
             .as_array()
             .and_then(|all| all.iter().find(|s| s["service"] == service).cloned())
@@ -408,23 +513,47 @@ impl Coordinator {
 
     /// The host `node_id` as `hosts list` gives it, or `None`: the coordinator lists the hosts it
     /// has heard from since it started, each with its role, its enrollment, its last heartbeat and
-    /// how each service sees it.
+    /// how each service sees it, and every enrolled host not denied that it has not heard since,
+    /// as its enrollment kept it (not live, no heartbeat time).
     pub fn host(&self, node_id: &str) -> Result<Option<Value>, String> {
-        let list = self.ctl(&["hosts", "list"])?;
+        let list = self.api().list_hosts().map_err(|e| e.to_string())?;
         Ok(list["hosts"]
             .as_array()
             .and_then(|hosts| hosts.iter().find(|h| h["nodeId"] == node_id).cloned()))
     }
 
-    /// Waits until `hosts list` lists `node_id`: the coordinator has heard the host's heartbeat
-    /// since it started. Gives the host as listed.
+    /// Waits until `hosts list` lists `node_id` with a heartbeat time: the coordinator has heard
+    /// the host's heartbeat since it started. Gives the host as listed. A host listed from its
+    /// enrollment alone (right after its approval, or after the coordinator's restart) is waited
+    /// past.
     pub fn wait_heard(&mut self, node_id: &str, daemon: &mut Daemon) -> Value {
         poll(&format!("a heartbeat of {node_id}"), || {
             self.assert_running();
             daemon.assert_running();
-            self.host(node_id)?
-                .ok_or_else(|| format!("hosts list lists no {node_id}"))
+            let host = self
+                .host(node_id)?
+                .ok_or_else(|| format!("hosts list lists no {node_id}"))?;
+            if heard_since_start(&host) {
+                Ok(host)
+            } else {
+                Err(format!("hosts list has not heard {node_id}: {host}"))
+            }
         })
+    }
+
+    /// `hosts list` lists `node_id` as enrolled and not heard since the coordinator started: not
+    /// live and with no heartbeat time. Gives the host as listed.
+    pub fn assert_unheard(&self, node_id: &str) -> Value {
+        let host = self
+            .host(node_id)
+            .unwrap_or_else(|e| panic!("{e}"))
+            .unwrap_or_else(|| panic!("hosts list lists no {node_id}, an enrolled host"));
+        assert!(
+            !heard_since_start(&host),
+            "not heard since the start: {host}"
+        );
+        assert_eq!(host["live"], Value::Null, "not live: {host}");
+        host
     }
 
     /// Approves the one pending request as host `node_id` of [`ROLE`], once the daemon's request
@@ -441,20 +570,17 @@ impl Coordinator {
         });
         let id = request["requestId"].as_str().expect("a request id");
         let key = request["keySha256"].as_str().expect("a key hash");
-        self.ctl_ok(&[
-            "enrollment",
-            "approve",
-            "--request-id",
-            id,
-            "--key-sha256",
-            key,
-            "--host-id",
-            node_id,
-            "--role",
-            ROLE,
-            "--reason",
-            "first-boot test",
-        ]);
+        must(
+            "enrollment approve",
+            self.api().approve(&Approval {
+                request_id: id,
+                key_sha256: key,
+                host_id: node_id,
+                role: ROLE,
+                reason: "first-boot test",
+                ..Approval::default()
+            }),
+        );
         request
     }
 }
@@ -463,13 +589,13 @@ impl Coordinator {
 /// the running program.
 pub struct Daemon {
     dir: PathBuf,
-    socket: PathBuf,
     run: Option<Running>,
 }
 
 impl Daemon {
-    /// Writes the daemon's config (the coordinator's URL and CA pin, the release channel
-    /// `channel`) and starts it, beating every second.
+    /// Writes the daemon's config (the coordinator's URL and CA pin, and the release channel
+    /// `channel`, which the loader requires and the daemon reads no more) and starts it, beating
+    /// every second.
     pub fn start(scratch: &Path, coordinator: &Coordinator, channel: &str) -> Daemon {
         let dir = scratch.join("daemon");
         let config = format!(
@@ -481,16 +607,9 @@ impl Daemon {
         );
         put(&dir.join("hostkeeper.toml"), config.as_bytes(), 0o644);
         // The packages directory is the host's (made by the package that installs the daemon);
-        // the daemon makes its state directory and its admin socket's.
+        // the daemon makes its state directory.
         fs::create_dir_all(PACKAGES_DIR).expect("the packages directory");
-        // The admin socket's path is short (a socket's path is at most 107 bytes): right under the
-        // scratch directory.
-        let socket = scratch.join("run/a.sock");
-        let mut daemon = Daemon {
-            dir,
-            socket,
-            run: None,
-        };
+        let mut daemon = Daemon { dir, run: None };
         daemon.launch();
         daemon
     }
@@ -505,8 +624,8 @@ impl Daemon {
             &path("state"),
             "--packages-dir",
             PACKAGES_DIR,
-            "--admin-socket",
-            &self.socket.display().to_string(),
+            "--facts-file",
+            &path("facts.json"),
             "--heartbeat-secs",
             "1",
         ]
@@ -544,6 +663,19 @@ impl Daemon {
     /// What the daemon wrote to its standard error, over all its starts.
     pub fn log(&self) -> String {
         fs::read_to_string(self.dir.join("daemon.err")).unwrap_or_default()
+    }
+
+    /// The step record of `service` the daemon keeps, as JSON: `null` when it cannot be read.
+    pub fn step_record(&self, service: &str) -> Value {
+        fs::read(
+            self.dir
+                .join("state")
+                .join(service)
+                .join("step-record.json"),
+        )
+        .ok()
+        .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        .unwrap_or(Value::Null)
     }
 
     /// The daemon's packages directory.

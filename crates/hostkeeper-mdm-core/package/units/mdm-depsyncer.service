@@ -1,0 +1,39 @@
+# mdm-depsyncer.service: NanoDEP's syncer, which fetches the devices Apple
+# Business Manager assigns to this MDM. A unit of the mdm package;
+# `mdm dep define-profile` enables and starts it once NanoDEP holds Apple's
+# token.
+#
+# MDM_DEP_NAME, NanoDEP's name for the token, comes from the drop-in
+# mdm-depsyncer.service.d/settings.conf that the package's hook writes from
+# the settings.
+[Unit]
+Description=mdm NanoDEP depsyncer
+After=network-online.target mdm-depserver.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=mdm
+Group=mdm
+Slice=mdm.slice
+ExecStart=/var/lib/hostkeeper/packages/mdm/current/bin/depsyncer -storage filekv -storage-dsn /var/lib/mdm/dep -duration 1800 ${MDM_DEP_NAME}
+Restart=on-failure
+RestartSec=60
+UMask=0077
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+ProtectSystem=strict
+ReadWritePaths=/var/lib/mdm/dep
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

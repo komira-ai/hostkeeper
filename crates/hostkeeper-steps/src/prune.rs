@@ -13,15 +13,21 @@
 //!
 //! Each version is deleted in three steps, each durable before the next:
 //!
-//! 1. `<version>/` is renamed to `.stage-prune-<16 hex>` beside it, so the version is gone in
-//!    one step: no reader ever sees a half-deleted `<version>/`;
+//! 1. `<version>/` is opened to its owner (0700) and renamed to `.stage-prune-<16 hex>` beside
+//!    it, so the version is gone in one step: no reader ever sees a half-deleted `<version>/`.
+//!    The version is read-only (0555) as an unpack leaves it, and macOS refuses to rename a
+//!    directory its caller cannot write, even to a new name in the same parent (it rewrites the
+//!    directory's `..` entry); Linux makes that check only when the parent changes. The mode of
+//!    the top directory is not part of the tree digest;
 //! 2. `<version>.seal` is removed, so no seal outlives its tree;
 //! 3. the renamed tree is removed bottom-up. Each directory is opened to its owner first, so a
 //!    read-only tree (0555) can be emptied, and no link is followed: a link inside the tree is
 //!    removed itself, never what it points at.
 //!
-//! A crash leaves only a `.stage-*` directory or a seal with no tree beside it. The unpack's own
-//! orphan pass removes both (`hostkeeper_unpack::remove_orphans`), and so does the next prune.
+//! A crash leaves only a `.stage-*` directory, a seal with no tree beside it, or (a crash between
+//! the opening and the rename) a surplus version still whole, its top directory 0700. The unpack's
+//! own orphan pass removes the first two (`hostkeeper_install::version::remove_orphans`), and so does the
+//! next prune, which deletes all three.
 //! Every step is idempotent.
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -179,7 +185,7 @@ impl Layout {
             }
         }
         for version in plan.delete {
-            match self.delete_version(&version, at) {
+            match self.delete_version_with(&version, at) {
                 Ok(()) => {
                     report.deleted.insert(version);
                 }
@@ -227,9 +233,22 @@ impl Layout {
         Ok(inputs)
     }
 
+    /// Deletes version `version` of this package directory, whoever names it: its directory
+    /// renamed out of the way, its seal removed, the renamed tree removed, each durable before
+    /// the next ([`Layout::prune`] does the same for every surplus version). Idempotent: a version
+    /// already gone, or gone but its seal, is finished. The caller holds the service's lock and
+    /// has made sure no link names `version`. For a package directory only
+    /// ([`io::ErrorKind::InvalidInput`] otherwise); a `version` that is not a name of one is
+    /// refused before anything is touched.
+    pub fn delete_version(&self, version: &str) -> io::Result<()> {
+        self.expect_package()?;
+        self.check_name(version)?;
+        self.delete_version_with(version, &mut |_| Ok(()))
+    }
+
     /// The three steps of deleting `version`: its directory renamed out of the way, its seal
     /// removed, the renamed tree removed; each durable before the next.
-    fn delete_version(
+    fn delete_version_with(
         &self,
         version: &str,
         at: &mut dyn FnMut(PruneStep<'_>) -> io::Result<()>,
@@ -238,6 +257,7 @@ impl Layout {
         let moved = self.dir().join(prune_name(version));
         if fs::symlink_metadata(&dir).is_ok_and(|meta| meta.is_dir()) {
             remove_tree(&moved, at)?;
+            fs::set_permissions(&dir, Permissions::from_mode(0o700))?;
             fs::rename(dir, &moved)?;
             self.sync()?;
             at(PruneStep::Moved { version })?;

@@ -22,11 +22,12 @@ use hostkeeper_enrollment::names::{HostId, KeyHash, Role};
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_proto::hostkeeper::agent::v1::{Claims, EnrollRequest, PollRequest, PollState};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PublicKeyData, SigningKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ClientConfig, RootCertStore};
-use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, recorded, scratch};
+use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, scratch};
 
 /// The files the flags name, in a directory of their own.
 struct Files {
@@ -42,7 +43,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         files
     }
 
@@ -77,8 +77,6 @@ impl Files {
             "=oidc.toml",
             "--operator-token-file",
             "=operator.token",
-            "--rollout-file",
-            "=rollout.toml",
             "--legacy-service",
             "kbf",
         ];
@@ -193,11 +191,35 @@ fn allowlist(service: &str) -> String {
     )
 }
 
+/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
+/// coordinator started over them, which is stopped again.
+async fn put_build_group(files: &Files) {
+    let first = start(files, &enrollment_flags(true)).expect("started");
+    let operator = first.coordinator.caller(Some(OPERATOR)).await;
+    first
+        .coordinator
+        .host_groups_put(
+            &operator,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
+    // The state files' lock is the running coordinator's: the next start takes it after it.
+    drop(first);
+}
+
 /// Catches the pending cap or the Mac allowlist accepted without enrollment, a cap of 0, an
-/// allowlist that cannot be read or that names a service the rollout file does not define
-/// letting the coordinator start, and the cap not reaching the enrollment it starts.
-#[test]
-fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
+/// allowlist that cannot be read or that names services letting the coordinator start, and the
+/// cap not reaching the enrollment it starts.
+#[tokio::test]
+async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
     let files = Files::new("enrollment-cap-flags");
     let with = |extra: &[&'static str]| {
         let mut flags = enrollment_flags(true);
@@ -225,11 +247,12 @@ fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
     }
     files.put("mac.toml", &allowlist("nosuch"), 0o600);
     match start(&files, &with(&["--mac-serial-allowlist", "=mac.toml"])) {
-        Err(StartError::MacService(service)) => assert_eq!(service, "nosuch"),
+        Err(StartError::MacServicesRetired(serial)) => assert_eq!(serial, "C02XK1ABJG5J"),
         Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started with a service it does not manage"),
+        Ok(_) => panic!("started with an entry naming services"),
     }
-    files.put("mac.toml", &allowlist("kbf"), 0o600);
+    put_build_group(&files).await;
+    files.put("mac.toml", &allowlist_of("host_group = \"build\""), 0o600);
     let parts = start(
         &files,
         &with(&[
@@ -248,6 +271,60 @@ fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
         .enroll(new_request("machine-2"))
         .expect_err("the cap is 1");
     assert_eq!(full.token(), "pending_full");
+}
+
+/// An allowlist of one Mac serial, approved as `mac-<serial>`, whose entry's lines are `entry`.
+fn allowlist_of(entry: &str) -> String {
+    format!("[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\n{entry}\n")
+}
+
+/// Proves: `serve` started over state files that hold the host group `build` (put through
+/// `HostGroups.Put` by an earlier run) refuses a Mac allowlist whose entry names services
+/// (`MacServicesRetired`, naming the serial) and one whose entry names a group it does not hold
+/// (`MacHostGroup`, naming the group), each with its message; and starts, with enrollment, with
+/// an entry that names `build` by `host_group`, and with one that names it by `role`.
+///
+/// Catches: the start's allowlist check of a coordinator that holds groups not reached from the
+/// flags and the state files, so that a Mac entry the coordinator cannot place starts it.
+#[tokio::test]
+async fn a_coordinator_holding_groups_starts_only_with_an_allowlist_it_can_place() {
+    let files = Files::new("enrollment-mac-groups");
+    put_build_group(&files).await;
+    let with_allowlist = || {
+        let mut flags = enrollment_flags(false);
+        flags.extend_from_slice(&["--mac-serial-allowlist", "=mac.toml"]);
+        flags
+    };
+
+    files.put(
+        "mac.toml",
+        &allowlist_of("host_group = \"build\"\nservices = [\"kbf\"]"),
+        0o600,
+    );
+    match start(&files, &with_allowlist()) {
+        Err(why @ StartError::MacServicesRetired(_)) => assert_eq!(
+            why.to_string(),
+            "--mac-serial-allowlist: the entry of serial C02XK1ABJG5J names services; the \
+             coordinator places hosts by host group, and the Mac's group decides what it runs: name \
+             its host_group alone"
+        ),
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started with an entry naming services"),
+    }
+    files.put("mac.toml", &allowlist_of("host_group = \"lab\""), 0o600);
+    match start(&files, &with_allowlist()) {
+        Err(why @ StartError::MacHostGroup(_)) => assert_eq!(
+            why.to_string(),
+            "--mac-serial-allowlist names host group lab, which the coordinator does not hold"
+        ),
+        Err(other) => panic!("refused otherwise: {other}"),
+        Ok(_) => panic!("started with an entry naming a group it does not hold"),
+    }
+    for entry in ["host_group = \"build\"", "role = \"build\""] {
+        files.put("mac.toml", &allowlist_of(entry), 0o600);
+        let parts = start(&files, &with_allowlist()).expect("started");
+        assert!(parts.coordinator.enrollment().is_some(), "{entry}");
+    }
 }
 
 /// Catches `--enrollment-request-ttl` accepted without enrollment, or with a value that is not
@@ -319,6 +396,58 @@ fn the_request_ttl_needs_enrollment_and_a_whole_time() {
     assert!(!help.contains("[env:"), "{help}");
 }
 
+/// Catches `--host-cert-validity-secs` accepted without enrollment, below its floor of 60, above
+/// the CA's 7-day cap, or not a whole number of seconds; a default other than 7 days; a value
+/// not reaching the enrollment the coordinator starts; and the flag missing from the usage or
+/// read from the environment.
+#[test]
+fn the_host_cert_validity_needs_enrollment_and_fits_between_a_minute_and_the_cap() {
+    let with = |extra: &[&'static str]| {
+        let mut flags = enrollment_flags(true);
+        flags.extend_from_slice(extra);
+        flags
+    };
+    let files = Files::new("host-validity-refused");
+    let mut refused = vec![vec!["--host-cert-validity-secs", "60"]];
+    for value in ["", "0", "59", "604801", "60s", "1m", "6e1", " 60"] {
+        refused.push(with(&["--host-cert-validity-secs", value]));
+    }
+    refused.push(with(&["--host-cert-validity-secs=-60"]));
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    for (n, (value, secs)) in [
+        (None, 604_800),
+        (Some("60"), 60),
+        (Some("61"), 61),
+        (Some("604799"), 604_799),
+        (Some("604800"), 604_800),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let files = Files::new(&format!("host-validity-{n}"));
+        let extra: Vec<&str> =
+            value.map_or_else(Vec::new, |v| vec!["--host-cert-validity-secs", v]);
+        let parts = start(&files, &with(&extra)).expect("started");
+        let enrollment = parts.coordinator.enrollment().expect("enrollment");
+        assert_eq!(enrollment.store().host_validity_secs(), secs, "{value:?}");
+    }
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(
+        help.contains("--host-cert-validity-secs <HOST_CERT_VALIDITY_SECS>"),
+        "{help}"
+    );
+    assert!(help.contains("[default: 604800]"), "{help}");
+    assert!(!help.contains("[env:"), "{help}");
+}
+
 /// A host's P-256 key, enrolled as `s1`, a storage host: its certificate, DER, and its key,
 /// PKCS#8.
 fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
@@ -354,6 +483,7 @@ fn enroll_host(enrollment: &Enrollment) -> (Vec<u8>, Vec<u8>) {
                 role: Role::parse("storage").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
         )
         .expect("approved");

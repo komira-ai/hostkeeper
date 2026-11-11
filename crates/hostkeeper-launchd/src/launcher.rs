@@ -25,18 +25,6 @@
 //! way: `<executable> <hook_args...> <step> --params <params>` as one job, bounded by its
 //! `timeout_secs` (0 is no bound, as `RuntimeMaxSec=0` is for a systemd unit).
 //!
-//! [`StepLauncher::run_probe`] (the daemon asking a new hostkeeper binary for its self-update
-//! protocol) runs the same way too: `<executable> <args...>` as one job under the probe's label
-//! ([`Label::probe`], not a step's), bounded by its `timeout_secs` (`0` is read as `1`: a probe is
-//! never unbounded, as for `SystemdLauncher`). Its call is checked as `SystemdLauncher` checks
-//! it (an absolute path to an executable file), and its exit is read as `SystemdLauncher` reads
-//! it ([`ProbeExit::from_captured`]): the job's exit code (none when it was booted out at its
-//! bound or ended by a signal), and at most [`ProbeCall::output_bytes`] of its standard output,
-//! what passes it dropped and reported. The binary is the file of a verified release the daemon
-//! checked just before; on a Mac every Mach-O file of a release was refused at unpack when it
-//! carried the quarantine attribute or had no valid code signature (`hostkeeper_unpack`), so the
-//! probe runs nothing those checks did not pass.
-//!
 //! [`StepLauncher::stop`] is [`bootout`]: a label that is not loaded is stopped already, so a
 //! second stop, or a stop of a step that has ended, is not an error. `launchctl bootout` waits
 //! for the job to end; launchd sends `SIGTERM`, then `SIGKILL` to the job's process group after
@@ -64,8 +52,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use hostkeeper_steps::{
-    AdditiveCall, Bound, Captured, LaunchError, ProbeCall, ProbeExit, Ring, StepCall, StepExit,
-    StepLauncher, StepLog,
+    AdditiveCall, Bound, Captured, LaunchError, Ring, StepCall, StepExit, StepLauncher, StepLog,
 };
 
 use crate::label::{Label, LabelError};
@@ -243,8 +230,7 @@ fn bootstrapped(label: &Label, out: &LaunchctlOutput) -> Result<(), LaunchError>
     }
 }
 
-/// One run of a program as a job: what [`StepCall`], [`AdditiveCall`] and [`ProbeCall`] have in
-/// common.
+/// One run of a program as a job: what [`StepCall`] and [`AdditiveCall`] have in common.
 struct Run<'a> {
     /// The unit the job is named after.
     unit: &'a str,
@@ -265,7 +251,12 @@ impl<'a> Run<'a> {
             unit: call.unit,
             what: HOOK,
             executable: call.executable,
-            args: call.invocation.to_args(),
+            args: call
+                .hook_args
+                .iter()
+                .map(OsString::from)
+                .chain(call.invocation.to_args())
+                .collect(),
             params: call.invocation.params.as_deref(),
             bound: call.bound,
         }
@@ -284,18 +275,6 @@ impl<'a> Run<'a> {
             args,
             params: Some(call.params),
             bound: NonZeroU64::new(call.timeout_secs).map_or(Bound::Unbounded, Bound::Secs),
-        }
-    }
-
-    /// `<args...>`, bounded by `timeout_secs`, `0` read as `1` (a probe is never unbounded).
-    fn probe(call: &'a ProbeCall<'a>) -> Run<'a> {
-        Run {
-            unit: call.unit,
-            what: "the probed binary",
-            executable: call.executable,
-            args: call.args.iter().map(OsString::from).collect(),
-            params: None,
-            bound: Bound::Secs(NonZeroU64::MIN.saturating_add(call.timeout_secs.saturating_sub(1))),
         }
     }
 }
@@ -438,14 +417,6 @@ impl StepLauncher for LaunchdLauncher {
     /// runs a step, bounded by `timeout_secs`.
     fn run_additive(&self, call: &AdditiveCall<'_>) -> Result<StepExit, LaunchError> {
         self.run_step(&Run::additive(call))
-    }
-
-    /// Runs `<executable> <args...>` as one job under [`Label::probe`] of its unit, bounded by
-    /// `timeout_secs` (`0` is 1 second), and reads its exit as `SystemdLauncher` does
-    /// ([`ProbeExit::from_captured`]).
-    fn run_probe(&self, call: &ProbeCall<'_>) -> Result<ProbeExit, LaunchError> {
-        let captured = self.run_job(&Run::probe(call), Label::probe(call.unit))?;
-        Ok(ProbeExit::from_captured(&captured, call.output_bytes))
     }
 
     fn stop(&self, unit: &str) -> Result<(), LaunchError> {

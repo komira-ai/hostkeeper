@@ -1,5 +1,5 @@
 //! The HTTP/JSON gateway of the operator API, driven in process through `crate::grpc::route` on
-//! the private surface with the HTTP/1.1 requests `hostkeeper ctl --transport gateway` sends.
+//! the private surface with the HTTP/1.1 requests a gateway client (`hkctl`, the web app) sends.
 
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -370,6 +370,34 @@ async fn gateway_sends_no_cors_headers_and_refuses_options() {
             .collect();
         assert!(cors.is_empty(), "{} has {cors:?}", answer.status);
     }
+}
+
+/// Proves: a gateway POST of each method of `HostGroups` is served, not `UNIMPLEMENTED`: with the
+/// operator token it is answered by its handler (the empty body of `List` is 200 with a page of
+/// no group, `{}`; that of `Get`, `Put`, `Remove` and `Move` is 400 `invalid_request`), and with
+/// no token at all it is 401 `unauthorized`, before the body is read. No refusal changes a file.
+#[tokio::test]
+async fn gateway_serves_host_groups_and_checks_the_token_first() {
+    let gateway = Gateway::new("gw-host-groups");
+    let before = gateway.files();
+    let unauthorized = refused("UNAUTHENTICATED", "unauthorized");
+    let invalid = refused("INVALID_ARGUMENT", "invalid_request");
+    for (path, status, body) in [
+        ("List", StatusCode::OK, "{}"),
+        ("Get", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Put", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Remove", StatusCode::BAD_REQUEST, invalid.as_str()),
+        ("Move", StatusCode::BAD_REQUEST, invalid.as_str()),
+    ] {
+        let path = format!("/hostkeeper.operator.v1.HostGroups/{path}");
+        let with_token = gateway.operator(&path, "{}").await;
+        assert_eq!(with_token.status, status, "{path}");
+        assert_eq!(with_token.text(), body, "{path}");
+        let without = gateway.send(http("POST", &path, None, "{")).await;
+        assert_eq!(without.status, StatusCode::UNAUTHORIZED, "{path}");
+        assert_eq!(without.text(), unauthorized, "{path}");
+    }
+    assert_eq!(gateway.files(), before);
 }
 
 /// Proves: the caller is checked before the body is read and by the rule of the method: no

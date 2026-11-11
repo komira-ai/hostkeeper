@@ -23,6 +23,9 @@ fn required(name: &str, detail_len: usize) -> ServiceFacts {
         deferred: None,
         health_detail: None,
         observed: None,
+        record_try: None,
+        installer: None,
+        drift: None,
     }
 }
 
@@ -49,6 +52,10 @@ fn beat(services: Vec<ServiceFacts>) -> Heartbeat {
         services,
         sent_unix: 0,
         renewal: hostkeeper_link::Renewal::default(),
+        trusted_root: None,
+        installers: Vec::new(),
+        repositories: None,
+        facts_generation: None,
     }
 }
 
@@ -240,4 +247,52 @@ fn the_bound_is_exact_and_dropping_stops_as_soon_as_the_heartbeat_fits() {
         assert_eq!(facts.deferred, report());
         assert_eq!(facts.observed, observed());
     }
+}
+
+/// Proves the installers count toward the heartbeat's bound as the trusted root does: a
+/// heartbeat whose only excess is its installers is refused with the length it has with them,
+/// and the same heartbeat with none fits.
+///
+/// Catches: installers sent on the gRPC route that the bound never measured, so a heartbeat
+/// over the coordinator's limit leaves the host.
+#[test]
+fn installers_count_toward_the_bound() {
+    let plain = beat(vec![required("web", 0)]);
+    assert_eq!(
+        fit(plain.clone()).map(|fitted| fitted.dropped),
+        Ok(Vec::new())
+    );
+    let mut crowded = plain.clone();
+    crowded.installers = vec!["i".repeat(MAX_HEARTBEAT_BYTES)];
+    let counted = crowded.encoded_len();
+    assert_eq!(counted, plain.encoded_len() + MAX_HEARTBEAT_BYTES + 18);
+    assert_eq!(fit(crowded), Err(Oversize::Bytes { len: counted }));
+}
+
+/// Proves a service's drift counts toward the bound: a drift adds the bytes of its strings, none
+/// adds nothing, and a heartbeat whose only excess is a drift is refused with the length it has
+/// with it (the drift is not one of the facts dropped to fit).
+///
+/// Catches: a drift sent on the gRPC route that the bound never measured, so a heartbeat over
+/// the coordinator's limit leaves the host.
+#[test]
+fn a_drift_counts_toward_the_bound() {
+    use hostkeeper_link::Drift;
+    let plain = beat(vec![required("web", 0)]);
+    let mut drifting = plain.clone();
+    drifting.services[0].drift = Some(Drift {
+        found: Some("2.0".to_owned()),
+        recorded: None,
+    });
+    assert_eq!(
+        drifting.encoded_len(),
+        plain.encoded_len() + r#","drift":{"found":"2.0","recorded":null}"#.len()
+    );
+    let mut crowded = plain.clone();
+    crowded.services[0].drift = Some(Drift {
+        found: Some("f".repeat(MAX_HEARTBEAT_BYTES)),
+        recorded: None,
+    });
+    let counted = crowded.encoded_len();
+    assert_eq!(fit(crowded), Err(Oversize::Bytes { len: counted }));
 }

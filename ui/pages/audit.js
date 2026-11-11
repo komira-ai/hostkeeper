@@ -29,7 +29,7 @@ export async function render(ctx) {
   const request = auditRequest(params);
   let listed;
   try {
-    listed = await ctx.api.call("hostkeeper.operator.v1.Audit/List", request);
+    listed = await ctx.api.audit.list(request);
   } catch (error) {
     return errorView("Audit", error);
   }

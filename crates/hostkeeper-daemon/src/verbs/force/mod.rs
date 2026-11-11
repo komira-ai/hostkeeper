@@ -12,14 +12,15 @@
 //!   ([`checks::try_rule_with`] held to [`Checks::for_force`]): a resend of a force that ended is
 //!   answered from its record, `try_conflict` and `stale_try` are as for any order, and neither
 //!   `busy` (for a hooked update of the service) nor `halted` applies. A version below the
-//!   running one is not refused: the host keeps no floor of its own.
-//! - Steps 1 to 3, before anything on the host changes ([`obtain`]): the version directory, as
-//!   the host holds it when its tree still has its seal's digest and the seal names the order's
-//!   package digest, else from the [`crate::packages::Packages`] port (fetched, verified,
-//!   unpacked and sealed); its manifest read for the order's service and version and this
-//!   daemon's version; and the path check of the placed-path linker against `placed.json`. A
-//!   failure is the verdict `Failed` before the commit with the reason the port, the loader or
-//!   the linker gives, and nothing is written.
+//!   running one is not refused: the host keeps no floor of its own. An order with no entry is
+//!   `order_invalid`: a version is staged from the entry alone. The order's entry is judged next
+//!   by [`crate::entry::check`], as for any order that names a package.
+//! - Steps 1 to 3, before anything on the host changes ([`obtain`]): the version directory,
+//!   staged by the entry's installer, or as the host holds it when its tree still has its seal's
+//!   digest and the seal names the order's package digest (the start pass's resume, which has no
+//!   entry); and its manifest read for the order's service and version and this daemon's
+//!   version. A failure is the verdict `Failed` before the commit with the reason the stage or
+//!   the loader gives, and nothing is written.
 //! - The standing halt: an order whose halt generation is greater than the held one raises the
 //!   held generation and clears a `Halt` record
 //!   ([`hostkeeper_steps::StepRunner::clear_halt`]); a lower or equal one leaves the hold as it
@@ -35,9 +36,9 @@
 //!
 //! A force record with no verdict is the journal of a force under way. A resend of the same
 //! order, and the start pass ([`resume`]), run steps 7 to 16 again from its top with the recorded
-//! target, fetching it again only when its directory is gone: a resend under the same checks as
-//! the order; the start pass, whose record keeps no index digest, against the package digest, the
-//! index entry and the attestation, with no check of the index's own SHA-256.
+//! target: a resend stages it again from the entry only when its directory is gone or no longer
+//! whole; the start pass, whose record keeps no entry, needs the directory and fails the force
+//! `Failed` before the commit when it is gone.
 
 mod switch;
 
@@ -47,11 +48,13 @@ use std::path::{Path, PathBuf};
 use hostkeeper_config::manifest::{Class as ManifestClass, Expected, Manifest};
 use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_hook::{Class, Phase, Step, Verdict};
+use hostkeeper_proto::hostkeeper::release::v1::Target as Entry;
 use hostkeeper_steps::record::{HookSel, Progress, Record, SCHEMA, State};
 use hostkeeper_steps::{Finished, ForcePhase, ForceRecord, Layout, Seal, read_seal};
 
 use crate::boot::ALERT_UNSTOPPABLE;
 use crate::checks::{self, Checks, OrderKey, TryRule};
+use crate::entry;
 use crate::executor::{Ctx, Reply};
 use crate::files;
 use crate::installed::{self, CURRENT};
@@ -74,6 +77,8 @@ pub const FORCE_POLL_SECS: u64 = 1;
 /// The package a force switches to, read and checked.
 struct Target {
     manifest: Manifest,
+    /// The entry its version directory was staged for, as its `target.json` holds it.
+    entry: Entry,
     /// The digest of its version directory, as its seal holds it.
     tree_digest: String,
 }
@@ -151,6 +156,23 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
             );
         }
     }
+    // The entry of the order is judged before anything is staged; an order with none names no
+    // package this daemon can stage.
+    let Some(entry) = order.package.entry.as_ref() else {
+        return Reply::refused(
+            Refusal::OrderInvalid,
+            format!("the force of {service} carries no entry to stage the version from"),
+        );
+    };
+    if let Err(refused) = entry::check(
+        ctx.own_version,
+        &ctx.installers(),
+        &service,
+        &order.package.digest,
+        entry,
+    ) {
+        return refused;
+    }
     // The try rules let through a force record with no verdict only for this very order.
     let unfinished = last.and_then(|rec| {
         let force = rec.force.clone().filter(|force| force.verdict.is_none())?;
@@ -163,7 +185,7 @@ pub fn run(ctx: &Ctx, order: Forced) -> Reply {
                 &guard,
                 &service,
                 (rec, force),
-                (&package, order.package.index_digest.as_ref()),
+                (&package, order.package.entry.as_ref()),
             ),
             Err(reply) => reply,
         },
@@ -207,7 +229,7 @@ fn fresh<'c>(
         ctx,
         service,
         &order.package.version,
-        (&order.package.digest, order.package.index_digest.as_ref()),
+        (&order.package.digest, order.package.entry.as_ref()),
     ) {
         Ok(target) => target,
         Err(failed) => return failed,
@@ -227,7 +249,7 @@ fn fresh<'c>(
         Ok(begun) => begun,
         Err(refused) => return refused,
     };
-    switch::run(ctx, &guard, rec, force, &target.manifest)
+    switch::run(ctx, &guard, rec, force, &target)
 }
 
 /// The force under way that `journal` holds, to the version and digest of `package`, which the
@@ -238,51 +260,50 @@ fn resume_with(
     guard: &ServiceGuard<'_>,
     service: &ServiceName,
     journal: (Record, ForceRecord),
-    (package, index_digest): (&Package, Option<&PackageDigest>),
+    (package, entry): (&Package, Option<&Entry>),
 ) -> Reply {
     let (rec, force) = journal;
-    match obtain(
-        ctx,
-        service,
-        &package.version,
-        (&package.digest, index_digest),
-    ) {
-        Ok(target) => switch::run(ctx, guard, rec, force, &target.manifest),
+    match obtain(ctx, service, &package.version, (&package.digest, entry)) {
+        Ok(target) => switch::run(ctx, guard, rec, force, &target),
         Err(reply) => reply,
     }
 }
 
-/// Steps 1 to 3: the package, its manifest and the check of its paths. A version already on the
-/// host whole, under a seal of the order's digest, is used as it is; any other is asked of the
-/// package port, which fetches, verifies, unpacks and seals it. Nothing on the host changes but
-/// what the fetch itself stages.
+/// Steps 1 to 3: the package and its manifest. A version the entry's installer stages, or finds
+/// sealed on the host for the same entry, is used; with no entry (the start pass's resume) the
+/// version already on the host whole, under a seal of the order's digest, is, and one that is
+/// gone fails the force before anything on the host changes. Nothing changes but what the stage
+/// itself writes.
 fn obtain(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
-    (digest, index_digest): (&PackageDigest, Option<&PackageDigest>),
+    (digest, entry): (&PackageDigest, Option<&Entry>),
 ) -> Result<Target, Reply> {
-    let (dir, tree_digest) = match on_disk(ctx, service, version, digest) {
-        Some(found) => found,
-        None => {
+    let repository = entry
+        .and_then(|entry| crate::repository::native_of_entry(entry).map(|native| (native, entry)));
+    let (dir, tree_digest) = match repository {
+        // A native entry is staged, or found sealed for the same entry, by its installer.
+        Some((native, entry)) => {
+            let fetch_failed =
+                |error: PackageError| failed_before(package_class(&error), error.refusal().token());
             let dir = ctx
-                .packages
-                .version_dir(service, version, digest, index_digest)
-                .map_err(|error| {
-                    let refusal = checks::package_refusal(&error);
-                    failed_before(package_class(&error), refusal.token())
-                })?;
-            (dir.dir().to_path_buf(), dir.staged().digest().to_owned())
+                .repository()
+                .stage_with(native, service, version, entry, &fetch_failed)
+                .map_err(force_reply)?;
+            (dir.dir().to_path_buf(), dir.digest().to_owned())
         }
+        None => on_disk(ctx, service, version, digest).ok_or_else(|| {
+            failed_before(
+                ManifestClass::Environment,
+                Refusal::ReleaseUnreadable.token(),
+            )
+        })?,
     };
-    let manifest = read_manifest(ctx, service, version, &dir)?;
-    let placer = ctx.placer();
-    placer
-        .desired(&manifest)
-        .and_then(|claims| placer.check(&claims))
-        .map_err(|error| failed_before(error.class(), error.reason()))?;
+    let (entry, manifest) = read_manifest(ctx, service, version, &dir)?;
     Ok(Target {
         manifest,
+        entry,
         tree_digest,
     })
 }
@@ -308,21 +329,32 @@ fn on_disk(
     })
 }
 
-/// The manifest of the version directory `dir`, read for `service` at `version` and this
-/// daemon's version.
+/// The entry and the manifest of the version directory `dir`, read for `service` at `version`
+/// and this daemon's version.
 fn read_manifest(
     ctx: &Ctx,
     service: &ServiceName,
     version: &Version,
     dir: &Path,
-) -> Result<Manifest, Reply> {
+) -> Result<(Entry, Manifest), Reply> {
     let expected = Expected {
         name: service.clone(),
         version: version.clone(),
         platform: hostkeeper_config::platform::Platform::current(),
     };
-    Manifest::load(dir, &expected, &ctx.own_version)
+    crate::target::entry_and_manifest(dir, &expected, &ctx.own_version)
         .map_err(|error| failed_before(error.class(), Refusal::from(&error).token()))
+}
+
+/// A force's answer for a repository stage that ended before anything on the host changed: its
+/// verdict as it is, a refusal as `Failed` before the commit with the refusal's token.
+fn force_reply(reply: Reply) -> Reply {
+    match reply {
+        Reply::Refused { refusal, .. } | Reply::Interrupted { refusal, .. } => {
+            failed_before(ManifestClass::Environment, refusal.token())
+        }
+        finished => finished,
+    }
 }
 
 /// The verdict of a force that failed before anything on the host changed.
@@ -445,7 +477,7 @@ fn begin(ctx: &Ctx, order: &Forced, target: &Target) -> Result<(Record, ForceRec
         phase: ForcePhase::Started,
         order_try: order.package.order_try.get(),
         halt_generation: order.halt_generation,
-        order_id: order.order_id.clone(),
+        order_id: order.package.order_id.clone(),
         verdict: None,
     };
     let rec = Record {

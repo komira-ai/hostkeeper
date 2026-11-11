@@ -12,7 +12,8 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_pxe_seed::inputs::{
-    BootServer, DaemonConfigText, InstallDisk, IsoName, LinuxPlatform, Record, SerialConsole,
+    BootServer, DaemonConfigText, InstallDisk, IsoName, LinuxPlatform, Record, RepositoryFiles,
+    SerialConsole,
 };
 use hostkeeper_pxe_seed::keys::AuthorizedKeys;
 use hostkeeper_pxe_seed::menu::{Install, MenuChoice, MenuRequest, Mode};
@@ -106,6 +107,7 @@ pub struct Build {
     pub keys: AuthorizedKeys,
     pub disk: InstallDisk,
     pub console: Option<SerialConsole>,
+    pub repositories: Option<RepositoryFiles>,
 }
 
 impl Build {
@@ -117,6 +119,7 @@ impl Build {
             keys: one_key(),
             disk: InstallDisk::default(),
             console: None,
+            repositories: None,
         }
     }
 
@@ -130,11 +133,12 @@ impl Build {
             keys: &self.keys,
             install_disk: &self.disk,
             serial_console: self.console.as_ref(),
+            repositories: self.repositories.as_ref(),
         })
     }
 }
 
-/// The install of `record` on `platform`, chosen as `hostkeeper-pxe serve` chooses it: GRUB of
+/// The install of `record` on `platform`, chosen as `pxe serve` chooses it: GRUB of
 /// `platform` asks for the menu of a MAC in the answer set, in proxy mode.
 pub fn install(record: &Record, platform: LinuxPlatform) -> Install {
     let path = format!("grub/hostkeeper/{}/52:54:00:12:34:56", platform.grub_cpu());
@@ -156,4 +160,24 @@ pub fn iso(platform: LinuxPlatform) -> IsoName {
     }
     .parse()
     .expect("an ISO name")
+}
+
+/// The repository files of the golden: two entries and the keyring they share.
+pub fn repository_files() -> RepositoryFiles {
+    let entry = |suite: &str| {
+        format!(
+            "Types: deb\nURIs: https://packages.example.com/apt\nSuites: {suite}\nComponents: main\n\
+             Signed-By: /etc/hostkeeper/repositories/example-archive-keyring.gpg\n"
+        )
+        .into_bytes()
+    };
+    RepositoryFiles::new(vec![
+        ("example-testing.sources".to_owned(), entry("testing")),
+        (
+            "example-archive-keyring.gpg".to_owned(),
+            vec![0x99, 0x01, 0x0d, 0x00, 0xff],
+        ),
+        ("example-stable.sources".to_owned(), entry("stable")),
+    ])
+    .expect("three plain file names")
 }

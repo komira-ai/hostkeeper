@@ -34,6 +34,7 @@ fn announcing_other(mut top: Heartbeat, service: &str, running: &str) -> Heartbe
         step_secs: Default::default(),
         promotion_pending: false,
         deferred: None,
+        record_try: None,
     }]);
     top
 }
@@ -70,7 +71,7 @@ async fn a_replaced_kbf_converges_over_its_own_roles() {
         ("d1", "daemon", "2.0"),
         ("f1", "frontend", "1.0"),
     ] {
-        c.heartbeat(who(name, role(kind)), beat(running))
+        c.heartbeat_native(who(name, role(kind)), beat(running))
             .expect("answered");
     }
     let read = c
@@ -106,15 +107,12 @@ async fn the_priority_of_a_replaced_kbf_orders_the_offers() {
             r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
             r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
         ] {
-            rig.coordinator
-                .set_desired(Some(&ci_token()), body.as_bytes())
-                .await
-                .expect("set");
+            crate::testutil::set_native(&rig.coordinator, body).await;
         }
         rig.at(2_000);
         let reply = rig
             .coordinator
-            .heartbeat(
+            .heartbeat_native(
                 who("d1", role("daemon")),
                 announcing_other(beat("1.0"), "other", "1.0"),
             )
@@ -224,6 +222,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Gate::StageWait => "stage_wait",
             Gate::BelowMinUp => "below_min_up",
             Gate::RolloutElsewhere => "rollout_elsewhere",
+            Gate::InstallOrder => "install_order",
+            Gate::UninstallOrder => "uninstall_order",
+            Gate::Moving => "moving",
         }
     };
     let skip = |skip: Skip| -> &'static str {
@@ -236,6 +237,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
             Skip::Unsupported => "unsupported",
             Skip::NoDigest => "no_digest",
             Skip::NoPackageForPlatform => "no_package_for_platform",
+            Skip::NoTarget => "no_target",
+            Skip::NoBuildForHost => "no_build_for_host",
+            Skip::InstallerDropped => "installer_dropped",
         }
     };
     for g in [
@@ -255,6 +259,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Gate::StageWait,
         Gate::BelowMinUp,
         Gate::RolloutElsewhere,
+        Gate::InstallOrder,
+        Gate::UninstallOrder,
+        Gate::Moving,
     ] {
         assert_eq!(json!(g), json!(gate(g)));
         assert_eq!(json!(Why::Gate(g)), json!(gate(g)));
@@ -268,6 +275,9 @@ fn the_hold_strings_are_the_ones_the_status_documents() {
         Skip::Unsupported,
         Skip::NoDigest,
         Skip::NoPackageForPlatform,
+        Skip::NoTarget,
+        Skip::NoBuildForHost,
+        Skip::InstallerDropped,
     ] {
         assert_eq!(json!(s), json!(skip(s)));
         assert_eq!(json!(Why::Skip(s)), json!(skip(s)));

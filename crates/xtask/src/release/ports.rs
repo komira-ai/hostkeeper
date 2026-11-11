@@ -2,15 +2,15 @@
 //! traits, so that every verb runs in a test against fakes (`fakes`).
 //!
 //! The adapters that answer them for real are `git::GitCli` ([`GitHistory`]), `github::Gh`
-//! ([`GitHubRuns`], [`ReleaseStore`], [`ReleaseSource`], [`Verifier`]), `check_binary::VersionOf`
-//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`]) and
-//! `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
+//! ([`GitHubRuns`], [`ReleaseStore`], [`Verifier`]), `check_binary::VersionOf`
+//! ([`RunVersion`]), `macos_pkg::PkgbuildCli` ([`BuildPkg`], `pkgutil` too), `mdm_fetch::CurlCli`
+//! ([`Download`]) and `advisories::DenyCli` ([`AdvisoryCheck`]). Each runs its program through an [`Exec`], and the
 //! one [`Exec`] that starts a process, `real::SystemExec`, is built in `real` only and named by
 //! no test.
 
 use std::path::Path;
 
-use super::contract::{Commit, Repo, Signer, Version};
+use super::contract::{Commit, Repo, Signer};
 
 /// Why a port could not answer: what was asked and why it failed.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -64,6 +64,15 @@ pub(crate) struct Run {
     pub(crate) conclusion: Option<String>,
 }
 
+/// One job of a workflow run, as GitHub lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Job {
+    /// The job's name; a job of a matrix is named `<job> (<value>, ...)`.
+    pub(crate) name: String,
+    /// Set once the job is completed: `success`, `failure`, `cancelled`, `skipped`, ...
+    pub(crate) conclusion: Option<String>,
+}
+
 /// One open issue.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Issue {
@@ -77,6 +86,9 @@ pub(crate) trait GitHubRuns {
     /// The runs of the workflow file `workflow` for the head commit `commit`, of any event and
     /// branch: the caller picks the ones that count.
     fn runs(&self, repo: &Repo, workflow: &str, commit: &Commit) -> Result<Vec<Run>, PortError>;
+    /// The jobs of the run `run`, as its latest attempt lists them (a re-run of failed jobs
+    /// lists every job of the run, the ones it did not run again too).
+    fn jobs(&self, repo: &Repo, run: u64) -> Result<Vec<Job>, PortError>;
     /// Whether `commit` is on `main`: `main` is the commit or a descendant of it.
     fn on_main(&self, repo: &Repo, commit: &Commit) -> Result<bool, PortError>;
     /// The open issues.
@@ -154,16 +166,6 @@ pub(crate) trait Verifier {
     ) -> Result<Vec<Attestation>, PortError>;
 }
 
-/// Where `release channel-sync` reads the published releases of a repository and their assets:
-/// reads only, of public release assets.
-pub(crate) trait ReleaseSource {
-    /// Every release, drafts included (the caller leaves drafts out).
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError>;
-    /// Writes the asset `name` of the release `tag` to `dir/<name>`. `name` is a plain file name
-    /// (no `/`, no glob character); `dir` exists and does not hold it.
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError>;
-}
-
 /// What a program printed and how it ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Said {
@@ -185,18 +187,18 @@ pub(crate) trait AdvisoryCheck {
     fn check_advisories(&self) -> Result<Said, PortError>;
 }
 
-/// Builds a macOS installer package from a directory tree (`pkgbuild`) and wraps it as a
-/// distribution package (`productbuild`).
+/// Builds a macOS installer package from a directory tree (`pkgbuild`), wraps it as a
+/// distribution package (`productbuild`), and reads a package's signature (`pkgutil`).
 pub(crate) trait BuildPkg {
     /// Builds the component `pkg` from the tree `root`, installed at `/`, with the package identifier
-    /// `identifier` and version `version`, every entry owned by root and wheel, and the scripts
-    /// of the directory `scripts`.
+    /// `identifier` and the version text `version`, every entry owned by root and wheel, and the
+    /// scripts of the directory `scripts` (none when it is `None`).
     fn build_pkg(
         &self,
         root: &Path,
-        scripts: &Path,
+        scripts: Option<&Path>,
         identifier: &str,
-        version: &Version,
+        version: &str,
         pkg: &Path,
     ) -> Result<(), PortError>;
 
@@ -206,9 +208,36 @@ pub(crate) trait BuildPkg {
         &self,
         component: &Path,
         identifier: &str,
-        version: &Version,
+        version: &str,
         product: &Path,
     ) -> Result<(), PortError>;
+
+    /// What `pkgutil --check-signature` prints of the pkg `pkg`; an error when it exits other
+    /// than 0 (an unsigned pkg, or a signature the Mac does not trust).
+    fn check_signature(&self, pkg: &Path) -> Result<String, PortError>;
+}
+
+/// Downloads a file over HTTPS (`release mdm-fetch`).
+pub(crate) trait Download {
+    /// Writes what `url` (an `https://` URL) serves to `file`, replacing it; an error leaves
+    /// nothing at `file` that the caller trusts (it checks the bytes after).
+    fn download(&self, url: &str, file: &Path) -> Result<(), PortError>;
+}
+
+/// The registry the coordinator's image is pushed to (`skopeo`, read by `image_push`).
+pub(crate) trait Registry {
+    /// Copies every image of the OCI layout `layout`, the one its `index.json` names `tag`, to
+    /// `repository:tag`, keeping every digest (`skopeo copy --all --preserve-digests`): a
+    /// manifest the copy would have to change fails it.
+    fn copy(&self, layout: &Path, tag: &str, repository: &str) -> Result<(), PortError>;
+    /// The bytes the registry serves for `repository@digest` (`skopeo inspect --raw`).
+    fn served(&self, repository: &str, digest: &str) -> Result<Vec<u8>, PortError>;
+}
+
+/// The wait between two attempts of a verb that tries again.
+pub(crate) trait Wait {
+    /// Waits `secs` seconds after an attempt that failed for `why`.
+    fn wait(&self, secs: u64, why: &str);
 }
 
 /// How a process ended: its status was success or not, and its output.
@@ -224,17 +253,35 @@ pub(crate) trait Exec {
     fn spawn(&self, program: &str, args: &[String]) -> std::io::Result<Ran>;
 }
 
+/// One run of a program that inherits nothing: its environment is exactly `env`, and it runs in
+/// `cwd`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct Sealed {
+    /// An absolute path.
+    pub(crate) program: std::path::PathBuf,
+    pub(crate) args: Vec<String>,
+    pub(crate) env: Vec<(String, String)>,
+    pub(crate) cwd: std::path::PathBuf,
+}
+
+/// Starts a [`Sealed`] run and waits for it (the coordinator updater's offline `gh`).
+pub(crate) trait ExecSealed {
+    fn spawn_sealed(&self, run: &Sealed) -> std::io::Result<Ran>;
+}
+
 /// The ports one verb runs against.
 #[derive(Clone, Copy)]
 pub(crate) struct Ports<'a> {
     pub(crate) git: &'a dyn GitHistory,
     pub(crate) runs: &'a dyn GitHubRuns,
     pub(crate) store: &'a dyn ReleaseStore,
-    pub(crate) source: &'a dyn ReleaseSource,
     pub(crate) verifier: &'a dyn Verifier,
     pub(crate) run_version: &'a dyn RunVersion,
     pub(crate) pkgbuild: &'a dyn BuildPkg,
     pub(crate) advisories: &'a dyn AdvisoryCheck,
+    pub(crate) download: &'a dyn Download,
+    pub(crate) registry: &'a dyn Registry,
+    pub(crate) wait: &'a dyn Wait,
 }
 
 /// What owns a set of adapters and lends them as [`Ports`]: the wired adapters (`Wired`, over

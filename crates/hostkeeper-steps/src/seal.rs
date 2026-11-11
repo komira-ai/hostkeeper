@@ -1,12 +1,12 @@
 //! The seal of a package version: `packages/<service>/<version>.seal`, written when the version
-//! was unpacked and verified, read before the version is used (docs/package-format.md).
+//! was staged and verified, read before the version is used (docs/tree-digest.md).
 //!
 //! ```json
 //! {"schema":1,"tree_digest":"<64 hex>","package_digest":"<64 hex>"}
 //! ```
 //!
 //! `tree_digest` is the [`crate::tree_digest`] of the version directory; `package_digest` is the
-//! SHA-256 of the package archive it was unpacked from. The format changes additively only
+//! SHA-256 of the package it was staged from. The format changes additively only
 //! (AGENTS.md B8): a reader ignores fields it does not know, and a change that an older reader
 //! must not take for schema 1 gets a new `schema`, which that reader refuses
 //! ([`SealError::Schema`]) rather than misreads.
@@ -61,7 +61,7 @@ pub enum SealError {
     BadDigest(String),
 }
 
-/// What a seal says: the digest of the unpacked tree and of the archive it came from, each 64
+/// What a seal says: the digest of the staged tree and of the package it came from, each 64
 /// lower-case hex digits.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Seal {
@@ -89,7 +89,7 @@ impl Seal {
         &self.tree_digest
     }
 
-    /// The SHA-256 of the package archive.
+    /// The SHA-256 of the package.
     pub fn package_digest(&self) -> &str {
         &self.package_digest
     }

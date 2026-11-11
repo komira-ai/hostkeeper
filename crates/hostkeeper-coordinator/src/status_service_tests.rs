@@ -44,6 +44,7 @@ fn announcing(mut top: Heartbeat, services: &[(&str, &str)]) -> Heartbeat {
                 step_secs: Default::default(),
                 promotion_pending: false,
                 deferred: None,
+                record_try: None,
             })
             .collect(),
     );
@@ -69,25 +70,22 @@ async fn farm(name: &str) -> Rig {
         r#"{"version":"2.0","min_up":{"storage":0,"frontend":0}}"#,
         r#"{"service":"other","version":"3.0","min_up":{"storage":0,"frontend":0}}"#,
     ] {
-        rig.coordinator
-            .set_desired(Some(&ci_token()), body.as_bytes())
-            .await
-            .expect("set");
+        rig.set(body).await;
     }
     rig.at(2_000);
     let c = &rig.coordinator;
-    c.heartbeat(who("s1", role("storage")), beat("2.0"))
+    c.heartbeat_native(who("s1", role("storage")), beat("2.0"))
         .expect("a heartbeat");
-    c.heartbeat(who("s2", role("storage")), updating(beat("1.0"), "2.0"))
+    c.heartbeat_native(who("s2", role("storage")), updating(beat("1.0"), "2.0"))
         .expect("a heartbeat");
-    c.heartbeat(who("s3", role("storage")), beat("1.0"))
+    c.heartbeat_native(who("s3", role("storage")), beat("1.0"))
         .expect("a heartbeat");
-    c.heartbeat(
+    c.heartbeat_native(
         who("d1", role("daemon")),
         announcing(beat("2.0"), &[("other", "3.0"), ("third", "1.0")]),
     )
     .expect("a heartbeat");
-    c.heartbeat(
+    c.heartbeat_native(
         who("d2", role("daemon")),
         announcing(beat("2.0"), &[("other", "1.0")]),
     )
@@ -182,13 +180,13 @@ async fn status_lists_every_service_with_its_hosts_up_count_slots_and_hold() {
 async fn an_order_for_another_service_is_shown_under_that_service_only() {
     let rig = farm("status-service-slot").await;
     let c = &rig.coordinator;
-    c.heartbeat(
+    c.heartbeat_native(
         who("d1", role("daemon")),
         announcing(beat("2.0"), &[("other", "3.0"), ("third", "1.0")]),
     )
     .expect("a heartbeat");
     let ordered = c
-        .heartbeat(
+        .heartbeat_native(
             who("d2", role("daemon")),
             announcing(beat("2.0"), &[("other", "1.0")]),
         )
@@ -247,11 +245,13 @@ async fn the_convergence_in_the_status_is_the_convergence_read() {
     }
 }
 
+/// The bytes of the status before `hosts` of kbf, with the `agent_features` the host announces:
+/// `target-v1`, which the release of the tests is picked by.
 const OLD_HEAD: &str = concat!(
     r#"{"desired":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}},"#,
     r#""services":{"kbf":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}}},"#,
     r#""quiet":false,"services_dropped":0,"hosts":[{"node_id":"st1","agent":{"name":"kbf-updater"},"role":"storage","live":true,"up":true,"holds_slot":false,"silent_secs":0,"#,
-    r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null}],"#,
+    r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"agent_features":["target-v1"]}],"#,
     r#""per_service":{"kbf":{"desired":{"version":"2.0","max_updating":{"frontend":1,"storage":1,"daemon":2,"mac-daemon":2},"min_up":{"storage":1,"frontend":0}},"#,
     r#""roles":[{"role":"storage","at_desired":1,"updating":0,"failed":0,"down":0}]"#
 );
@@ -267,22 +267,31 @@ async fn the_kbf_status_keeps_its_bytes_and_only_gains_keys() {
         .await;
     rig.at(2_000);
     rig.coordinator
-        .heartbeat(who("st1", role("storage")), beat("2.0"))
+        .heartbeat_native(who("st1", role("storage")), beat("2.0"))
         .expect("a heartbeat");
     let status = rig.coordinator.status(Some(OPERATOR)).expect("status");
     let text = serde_json::to_string(&status).expect("JSON");
     let commit = crate::BUILD_COMMIT;
     let host = concat!(
         r#"{"node_id":"st1","agent":{"name":"kbf-updater"},"role":"storage","live":true,"up":true,"holds_slot":false,"silent_secs":0,"#,
-        r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"hold":"up_to_date"}"#
+        r#""platform":"linux-x86_64","version":"2.0","health":"healthy","last_update":null,"updating":null,"agent_features":["target-v1"],"hold":"up_to_date"}"#
     );
+    // The release of the version is picked by the host: the answer says how many hosts it is.
+    let picks = r#""picks":{"picked":1,"no_target":0,"no_build_for_host":0,"installer_dropped":0,"dropped":[]}"#;
     let convergence = format!(
-        r#"{{"desired":"2.0","quiet":false,"state":"converged","roles":[{{"role":"storage","at_desired":1,"updating":0,"failed":0,"down":0}}],"commit":"{commit}"}}"#
+        r#"{{"desired":"2.0","quiet":false,"state":"converged","roles":[{{"role":"storage","at_desired":1,"updating":0,"failed":0,"down":0}}],{picks},"commit":"{commit}"}}"#
     );
+    // The audit of CI's set of the release, which the status holds under `ops`, comes before the
+    // build commit.
     let want = format!(
-        r#"{OLD_HEAD},"hosts":[{host}],"up":1,"slots_held":0,"convergence":{convergence}}}}},"commit":"{commit}"}}"#
+        r#"{OLD_HEAD},"hosts":[{host}],"up":1,"slots_held":0,"convergence":{convergence}}}}},"ops":"#
     );
-    assert_eq!(text, want);
+    assert!(text.starts_with(&want), "{text}");
+    assert!(
+        text.ends_with(&format!(r#","commit":"{commit}"}}"#)),
+        "{text}"
+    );
+    assert!(text.contains(r#""action":"set_desired""#), "{text}");
 }
 
 /// Pins: the top-level keys of the status, which old clients read, are exactly those they
@@ -305,6 +314,8 @@ async fn the_status_keys_are_the_old_keys_plus_additions() {
             "commit",
             "desired",
             "hosts",
+            // The audit of CI's sets with a release.
+            "ops",
             "per_service",
             "quiet",
             "services",

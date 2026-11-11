@@ -155,8 +155,7 @@ fn the_loops_start_only_after_ready_and_the_enrollment_loop_first() {
     assert!(!stop.is_stopped(), "the loops run while the daemon serves");
 
     daemon.ctx().restart().request();
-    let ended = runtime.block_on(served).expect("the server task");
-    assert!(ended.is_ok(), "{ended:?}");
+    runtime.block_on(served).expect("the server task");
     assert!(stop.is_stopped(), "the loops are told to stop");
     assert!(
         jobs.wait(&serving).is_err(),
@@ -293,11 +292,15 @@ fn the_host_enroller_is_made_from_the_config_and_the_pki_directory() {
 
 fn files_under(root: &Path) -> HostFiles {
     HostFiles {
-        ca_bundle: root.join("ca.pem"),
-        gh: root.join("gh"),
-        trusted_root: root.join("trusted_root.json"),
+        repositories: None,
+        os_root: root.join("os"),
+        stores: root.join("stores.toml"),
+        macos_pkg_signers: None,
         pki: root.join("pki"),
         console: None,
+        managed_config: None,
+        managed_stores: None,
+        managed_macos_pkg: None,
     }
 }
 

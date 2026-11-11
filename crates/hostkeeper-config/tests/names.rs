@@ -5,7 +5,7 @@ use hostkeeper_config::manifest::HostkeeperVersion;
 use hostkeeper_config::names::{
     MAX_NAME, MAX_PATH, MAX_UNIT_NAME, NameError, PathError, SERVICE_NAME_RULE, ServiceName,
     UnitError, UnitName, VERSION_RULE, Version, check_path, check_relative, is_service_name,
-    is_version, is_within,
+    is_version, is_within, launchd_label, plist_label,
 };
 
 /// Strings both rules of design 11.8 accept: a service name and a version alike.
@@ -332,4 +332,55 @@ fn a_hostkeeper_version_is_the_version_of_its_own_text() {
         assert_eq!(version.as_str(), own.to_string());
         assert_eq!(Version::new(version.as_str()), Ok(version));
     }
+}
+
+/// Catches a launchd label accepted that is not the service's, or one refused that is: the service
+/// name alone and the service name, a `.` and more pass; a label of another service, one with
+/// nothing after the dot, the service name as a bare prefix, a bad character, an empty label and
+/// one over 255 bytes are refused, each for its own reason, with the length edge exact.
+#[test]
+fn a_launchd_label_is_the_service_name_or_the_service_name_a_dot_and_more() {
+    for good in ["web", "web.cache", "web.a.b", "web.A-1_2"] {
+        assert_eq!(launchd_label("web", good), Ok(good), "{good}");
+    }
+    let neither =
+        UnitError::BadLabel("it is neither the service name nor the service name, `.` and more");
+    for bad in ["api", "api.cache", "web.", "webx", "webx.cache"] {
+        assert_eq!(launchd_label("web", bad), Err(neither.clone()), "{bad}");
+    }
+    assert_eq!(
+        launchd_label("web", "web.c ache"),
+        Err(UnitError::BadLabel(
+            "it has a character outside `A-Za-z0-9._-`"
+        ))
+    );
+    assert_eq!(
+        launchd_label("web", ""),
+        Err(UnitError::BadLabel("it is empty"))
+    );
+    let longest = format!("web.{}", "a".repeat(MAX_UNIT_NAME - 4));
+    assert_eq!(launchd_label("web", &longest), Ok(longest.as_str()));
+    let over = format!("{longest}a");
+    assert_eq!(
+        launchd_label("web", &over),
+        Err(UnitError::BadLabel("it is longer than 255 bytes"))
+    );
+}
+
+/// Catches a plist file taken for a label that is not named `<label>.plist`, or its label judged
+/// otherwise than by [`launchd_label`]: the label is returned for a good file, and a file with
+/// another suffix or a label of another service is refused.
+#[test]
+fn a_plist_file_is_a_launchd_label_and_the_plist_suffix() {
+    assert_eq!(plist_label("web", "web.cache.plist"), Ok("web.cache"));
+    assert_eq!(
+        plist_label("web", "web.cache"),
+        Err(UnitError::BadLabel("a plist file is named `<label>.plist`"))
+    );
+    assert_eq!(
+        plist_label("web", "api.plist"),
+        Err(UnitError::BadLabel(
+            "it is neither the service name nor the service name, `.` and more"
+        ))
+    );
 }

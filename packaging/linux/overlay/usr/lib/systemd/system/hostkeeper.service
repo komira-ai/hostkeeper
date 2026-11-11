@@ -1,23 +1,24 @@
-# The hostkeeper daemon: the one unit of a Linux host (docs/design/hostkeeper-design.md,
-# section 4.1). It runs as root, with no sandbox and no capability bound: the daemon runs the
-# hooks and places the units of every service of the host (section 5.3). Its configuration is
-# its flags; of the environment it reads only what systemd sets for it, NOTIFY_SOCKET and
-# WATCHDOG_USEC.
+# The hostkeeper daemon's bootstrap unit: installed at /usr/lib/systemd/system/hostkeeper.service
+# by the deb and the rpm (packaging/linux/nfpm.yaml) and by a boot image through
+# packaging/linux/overlay/ (docs/design/two-programs.md, section 4.1). While hostkeeper is
+# installed from its archive package, that install's package unit
+# (packaging/linux/units/hostkeeper.service), linked in /etc/systemd/system/, takes its place; an
+# update through this deb leaves this one, and hostkeeper's move to it takes the package unit
+# away (docs/design/packages-native.md, sections 10.4 and 10.6). It
+# runs as root, with no sandbox and no capability bound: the daemon runs the hooks and places the
+# units of every service of the host (docs/design/hostkeeper-design.md, section 5.3). Its
+# configuration is its flags; of the environment it reads only what systemd sets for it,
+# NOTIFY_SOCKET and WATCHDOG_USEC.
 #
-# The one unit file of the daemon. Installed at /usr/lib/systemd/system/hostkeeper.service by the
-# deb and the rpm (packaging/linux/nfpm.yaml) and by a boot image through
-# packaging/linux/overlay/, and carried as units/hostkeeper.service by hostkeeper's own package
-# (.github/workflows/artifacts.yml), whose update links it in place of this one.
-#
-# It starts the binary hostkeeper's own update chose (section 6.6): `current` of the binary
-# directory under the state directory. A self-update stages the new binary there, switches
-# `current` and exits 0, and the restart policy, always, starts the new binary; the fallback unit
-# (hostkeeper-fallback.service, with the drop-in hostkeeper.service.d/self-update.conf that names
-# it in OnFailure=, both written by the daemon at its start) switches `current` back when the new
-# binary fails its start limit. Before each start, the binary the package installed gives the
-# binary directory its first binary when `current` starts none, so the first start of a host
-# works before any update; the `-` lets a start go on when that binary is older and lacks the
-# verb, since `current` is then already there.
+# It starts the binary the package installed, /usr/bin/hostkeeper, which comes from the same deb
+# or rpm as this file. Started from that path, `hostkeeper daemon` gives the binary directory of
+# hostkeeper's own update its first binary when `current` starts none, and then execs `current`
+# with its own arguments, keeping its process id, so the binary the last self-update chose runs
+# as the daemon of this unit (two-programs.md section 2.1, `hostkeeper_daemon::packaged`). A
+# self-update stages the new binary in the binary directory, links `next` at it and exits 0, and
+# the restart policy, always, starts this binary again, which execs `current`, the old binary,
+# which execs `next` while its start count lasts (the hand-over, section 4.3). The daemon binds
+# no socket and the unit has no RuntimeDirectory=; the tmpfiles rules make /run/hostkeeper.
 [Unit]
 Description=hostkeeper, the update daemon of this host
 Documentation=https://github.com/komira-ai/hostkeeper/blob/main/packaging/linux/README.md
@@ -32,29 +33,21 @@ Conflicts=kbf-updater-agent.service kbf-host-local.service kbf-host-local-fronte
 # Before= orders them (systemd.unit(5), Before=, After=). So in a handoff, in either direction,
 # the stopping updater has exited before the starting one runs.
 After=kbf-updater-agent.service kbf-host-local.service kbf-host-local-frontend.service
-# No start limit of its own. The start limit is the self-update drop-in's
-# (hostkeeper_steps::selfupdate::main_dropin, which the daemon writes once it is ready, and
-# whose assignments replace these): three starts within 300 seconds, restarts included, start
-# its OnFailure= unit, the fallback of design section 6.6. The fallback, which has no start
-# limit of its own, puts the previous binary back while an update waits for its restart and,
-# either way, starts this unit again, so the daemon is retried for good, three starts at a time. Before the daemon has first been ready
-# there is no drop-in and no fallback, and with no limit here a daemon that cannot start is
-# still retried every RestartSec= rather than left failed.
+# No start limit: a daemon that cannot start is retried every RestartSec= rather than left
+# failed.
 StartLimitIntervalSec=0
 
 [Service]
-# The daemon tells systemd it is ready only after its boot pass (design section 6.5).
+# The daemon tells systemd it is ready only after its boot pass (design section 6.5). The exec
+# of `current` keeps the process id, so the notice comes from the main process.
 Type=notify
 # The boot pass runs every unfinished update to its verdict, each step under its own timeout,
 # before the daemon is ready: no start timeout cuts it short.
 TimeoutStartSec=infinity
-ExecStartPre=-/usr/bin/hostkeeper self-update-seed --state-dir /var/lib/updater/state --binary /usr/bin/hostkeeper
-ExecStart=/var/lib/updater/state/hostkeeper/bin/current daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --admin-socket /run/hostkeeper/admin.sock --notify-systemd
+ExecStart=/usr/bin/hostkeeper daemon --config /etc/hostkeeper/hostkeeper.toml --state-dir /var/lib/updater/state --packages-dir /var/lib/hostkeeper/packages --notify-systemd
 # The daemon exits 0 to be started again after its own update, so a clean exit restarts it too.
 # An automatic restart goes straight to the next start without the failed state
-# (RestartMode=direct, systemd 254 and later), so the drop-in's OnFailure= runs once the
-# restarts end at the start limit, not at every failed start. The drop-in the daemon writes
-# (hostkeeper_steps::selfupdate::main_dropin) sets the same three.
+# (RestartMode=direct, systemd 254 and later).
 Restart=always
 RestartSec=1
 RestartMode=direct
@@ -66,9 +59,6 @@ RestartMode=direct
 # systemd starts the watchdog once the daemon is ready, so the boot pass is not bound by it. The
 # packaging test holds WatchdogSec= to at least three periods of this command line's heartbeat.
 WatchdogSec=60
-# /run/hostkeeper, the directory of the admin socket: root's alone.
-RuntimeDirectory=hostkeeper
-RuntimeDirectoryMode=0700
 
 [Install]
 WantedBy=multi-user.target

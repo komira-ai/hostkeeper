@@ -21,10 +21,12 @@
 //!   (`halt`: the host, the check and the version); see [`crate::halt`].
 //! - `in_progress`: everything else.
 //!
-//! A host whose platform the desired version's release index lists no package for is not ordered
-//! the version ([`crate::decide::Skip::NoPackageForPlatform`]) and could never reach it: it is
-//! left out of every count, as a pair an operator holds is, so it neither blocks the others nor
-//! keeps the service from converging.
+//! A host the desired version's release picks no entry for ([`crate::picks`]: `no_target`,
+//! `no_build_for_host`, `installer_dropped`) is not ordered the version and could never reach it:
+//! it is left out of every count, as a pair an operator holds is, so it neither blocks the others
+//! nor keeps the service from converging. A version no host is picked an entry of has no counted
+//! host and is never converged: so is a version with no release kept (one set with a package
+//! digest, with a release index, or with neither), which picks every host no entry.
 //!
 //! How long a farm has gone without progress is the caller's to judge: it needs the time of
 //! the last change, which the coordinator does not keep.
@@ -95,6 +97,23 @@ impl From<Halt> for HaltNote {
     }
 }
 
+/// For a desired version set with targets, how many of a service's hosts the release picks an
+/// entry for, and how many it picks none for, by why ([`crate::picks`]). A host picked none is in
+/// no count of `roles`; a host whose daemon's installers are not read yet is in none here.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct PickCounts {
+    /// Picked an entry.
+    pub picked: usize,
+    /// Of a platform the release has no list for (`no_target`).
+    pub no_target: usize,
+    /// Not running the service, with no entry its daemon can install (`no_build_for_host`).
+    pub no_build_for_host: usize,
+    /// Running the service with an installer the release dropped (`installer_dropped`).
+    pub installer_dropped: usize,
+    /// The node ids of those, in order.
+    pub dropped: Vec<String>,
+}
+
 /// What CI reads.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct Convergence {
@@ -113,6 +132,10 @@ pub struct Convergence {
     /// selector until there is one to count.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hosts: Option<HostCounts>,
+    /// For a desired version set with targets, the hosts picked an entry of it and those picked
+    /// none ([`crate::picks`]); left out for any other.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub picks: Option<PickCounts>,
     /// The commit this coordinator was built from ([`crate::BUILD_COMMIT`]): what a client
     /// compares with a release before it orders one.
     pub commit: &'static str,
@@ -140,17 +163,13 @@ fn failed_to_reach(host: &Host, desired: &Desired) -> bool {
             .is_some_and(|r| r.outcome == Outcome::Failed && r.target == desired.version)
 }
 
-/// Whether the desired version's release index lists no package for the platform of `host`:
-/// nothing is ordered it, so it is not counted.
-fn unlisted(host: &Host, desired: &Desired) -> bool {
-    desired.lacks_package_for(host.beat.platform)
-}
-
 /// Whether the host `id` of `def` is counted against `desired`: the service is assigned to it
 /// ([`Fleet::is_assigned`], the function the order path asks), an operator does not hold the pair,
-/// and the release index lists a package for its platform.
-fn counted(def: &ServiceDef, desired: &Desired, fleet: &Fleet, id: &HostId, host: &Host) -> bool {
-    fleet.is_assigned(def, id) && !fleet.is_held(&def.name, id) && !unlisted(host, desired)
+/// and the release did not pick it nothing ([`crate::picks::unpicked`]).
+fn counted(def: &ServiceDef, desired: &Desired, fleet: &Fleet, id: &HostId) -> bool {
+    fleet.is_assigned(def, id)
+        && !fleet.is_held(&def.name, id)
+        && !crate::picks::unpicked(fleet, &def.name, &desired.version, id)
 }
 
 fn counts(
@@ -163,7 +182,7 @@ fn counts(
     let mine = || {
         fleet
             .hosts_of(&def.name)
-            .filter(|(id, h)| counted(def, desired, fleet, id, h))
+            .filter(|(id, _)| counted(def, desired, fleet, id))
             .map(|(_, h)| h)
             .filter(move |h| h.role_name() == role)
     };
@@ -198,7 +217,7 @@ pub fn role_counts(
     };
     let assigned: BTreeSet<&str> = fleet
         .hosts_of(&def.name)
-        .filter(|(id, h)| counted(def, desired, fleet, id, h))
+        .filter(|(id, _)| counted(def, desired, fleet, id))
         .map(|(_, h)| h.role_name())
         .collect();
     let base = def.role_names();
@@ -234,6 +253,7 @@ pub fn converge_service(
             roles: Vec::new(),
             halt: None,
             hosts: None,
+            picks: None,
             commit: crate::BUILD_COMMIT,
         };
     };
@@ -241,7 +261,7 @@ pub fn converge_service(
     let roles = role_counts(def, Some(desired), fleet, now);
     let live = fleet
         .hosts_of(service)
-        .filter(|(id, h)| h.is_live(now) && counted(def, desired, fleet, id, h))
+        .filter(|(id, h)| h.is_live(now) && counted(def, desired, fleet, id))
         .count();
     let at_desired: usize = roles.iter().map(|c| c.at_desired).sum();
     let clear = roles.iter().all(|c| c.updating == 0 && c.failed == 0);
@@ -249,7 +269,7 @@ pub fn converge_service(
     // version. A pair an operator holds is left out of every count: it never blocks the others.
     let settled = fleet.hosts_of(service).all(|(id, h)| {
         !h.is_live(now)
-            || !counted(def, desired, fleet, id, h)
+            || !counted(def, desired, fleet, id)
             || !(h.beat.promotion_pending
                 || fleet.is_baking(service, id, h, &desired.version, def.bake_beats, now))
     });
@@ -267,6 +287,7 @@ pub fn converge_service(
         roles,
         halt: None,
         hosts: None,
+        picks: None,
         commit: crate::BUILD_COMMIT,
     }
 }

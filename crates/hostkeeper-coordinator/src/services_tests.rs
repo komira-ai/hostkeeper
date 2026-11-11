@@ -6,11 +6,12 @@ use std::time::Duration;
 
 use hostkeeper_wire::wire::{MAX_SERVICE_NAME, MAX_SERVICES, Reply};
 
-use crate::decide::decide_in;
 use crate::desired::Desired;
 use crate::fleet::{Fleet, ORDER_AGE};
 use crate::services::{Services, ServicesError, VersionScheme};
-use crate::testutil::{beat, desired, id, kbf_def, kbf_services, role, scratch, updating, version};
+use crate::testutil::{
+    beat, decide_in, desired, id, kbf_def, kbf_services, role, scratch, updating, version,
+};
 
 const NOW: Duration = Duration::from_secs(1_000);
 

@@ -9,7 +9,6 @@ use std::ffi::OsString;
 use std::future::Pending;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
@@ -18,173 +17,21 @@ use std::time::Duration;
 use clap::Parser;
 use clap::error::ErrorKind;
 use futures::FutureExt;
-use hostkeeper_coordinator::config::{
-    Bound, Cli, Command, Serve, StartError, build, build_with, run, start,
-};
+use hostkeeper_coordinator::config::{Bound, Cli, StartError, build_with, run, start};
 use hostkeeper_coordinator::desired::DesiredStore;
 use hostkeeper_coordinator::lock::{LockError, LockGuard, StateLock};
 use hostkeeper_coordinator::service::Unauthorized;
 use hostkeeper_coordinator::tokens::Reload;
 use hostkeeper_coordinator::ui::UiDirError;
-use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
-use hostkeeper_testkit::Scratch;
 use hostkeeper_wire::identity::{
     DEFAULT_HOST_ROLE_URI_PREFIX, DEFAULT_ROLE_URI_PREFIX, SanPrefixes,
 };
-use rustls::pki_types::CertificateDer;
-use sha2::{Digest as _, Sha256};
-use support::{Ca, OPERATOR, recorded, scratch};
+use support::serve::{
+    Files, build_given, exit_code, flags_of, refusal, renamed, roots, sha256_hex, with, without,
+};
+use support::{OPERATOR, recorded};
 use tokio::io::DuplexStream;
-
-/// The files the flags name, in a directory of their own.
-struct Files {
-    dir: Scratch,
-}
-
-impl Files {
-    fn new(name: &str) -> Self {
-        let dir = scratch(name);
-        let leaf = Ca::new("config CA").coordinator();
-        let files = Self { dir };
-        files.put("tls.pem", &leaf.cert_pem, 0o644);
-        files.put("tls.key", &leaf.key_pem, 0o600);
-        files.put("ca.pem", &Ca::new("clients CA").pem, 0o644);
-        files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
-        files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
-        files
-    }
-
-    fn put(&self, file: &str, text: &str, mode: u32) {
-        let path = self.dir.path().join(file);
-        std::fs::write(&path, text).expect("written");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
-    }
-
-    fn path(&self, file: &str) -> PathBuf {
-        self.dir.path().join(file)
-    }
-
-    /// Writes `tokens.toml` (mode 0600) with a `[[token]]` for each `(name, token)`, holding
-    /// the hash of the token; answers its path as text.
-    fn tokens(&self, entries: &[(&str, &str)]) -> String {
-        let text: String = entries
-            .iter()
-            .map(|(name, token)| {
-                format!(
-                    "[[token]]\nname = \"{name}\"\nsha256 = \"{}\"\n",
-                    sha256_hex(token)
-                )
-            })
-            .collect();
-        self.put("tokens.toml", &text, 0o600);
-        self.path("tokens.toml").display().to_string()
-    }
-
-    /// The arguments of a `serve` the recorded flags describe, kbf's namespaces included.
-    fn args(&self) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
-        let pairs = [
-            ("--heartbeat-listen", "192.0.2.1:1".to_owned()),
-            ("--private-listen", "192.0.2.1:2".to_owned()),
-            ("--tls-cert", self.path("tls.pem").display().to_string()),
-            ("--tls-key", self.path("tls.key").display().to_string()),
-            ("--client-ca", self.path("ca.pem").display().to_string()),
-            (
-                "--state-file",
-                self.path("desired.json").display().to_string(),
-            ),
-            (
-                "--oidc-config",
-                self.path("oidc.toml").display().to_string(),
-            ),
-            (
-                "--operator-token-file",
-                self.path("operator.token").display().to_string(),
-            ),
-            (
-                "--rollout-file",
-                self.path("rollout.toml").display().to_string(),
-            ),
-            ("--legacy-service", "kbf".to_owned()),
-            ("--role-uri-prefix", "urn:kbf:role:".to_owned()),
-            ("--host-role-uri-prefix", "urn:kbf:host-role:".to_owned()),
-        ];
-        for (flag, value) in pairs {
-            args.push(flag.into());
-            args.push(value.into());
-        }
-        args
-    }
-}
-
-/// `args` with the value of `flag` replaced.
-fn with(args: &[OsString], flag: &str, value: &str) -> Vec<OsString> {
-    let mut args = args.to_vec();
-    let at = args.iter().position(|a| a == flag).expect("a flag");
-    args[at + 1] = value.into();
-    args
-}
-
-/// `args` with every element equal to `from` spelled `to`.
-fn renamed(args: &[OsString], from: &str, to: &str) -> Vec<OsString> {
-    args.iter()
-        .map(|a| {
-            if a == from {
-                OsString::from(to)
-            } else {
-                a.clone()
-            }
-        })
-        .collect()
-}
-
-/// The SHA-256 of `text` as lowercase hex.
-fn sha256_hex(text: &str) -> String {
-    Sha256::digest(text.as_bytes())
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect()
-}
-
-/// `args` without `flag` and its value.
-fn without(args: &[OsString], flag: &str) -> Vec<OsString> {
-    let mut args = args.to_vec();
-    let at = args.iter().position(|a| a == flag).expect("a flag");
-    args.drain(at..=at + 1);
-    args
-}
-
-/// The roots the issuer's keys are fetched trusting: a CA of the test, so no test reads the
-/// host's certificate store.
-fn roots() -> Roots {
-    Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)])
-}
-
-/// [`build`] trusting [`roots`].
-fn build_given(flags: &Serve) -> Result<hostkeeper_coordinator::config::Parts, StartError> {
-    build(flags, roots())
-}
-
-fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
-        panic!("serve")
-    };
-    flags
-}
-
-/// Why `build` refuses `args`.
-fn refusal(args: Vec<OsString>) -> StartError {
-    match build_given(&flags_of(args)) {
-        Err(why) => why,
-        Ok(_) => panic!("the start was not refused"),
-    }
-}
-
-fn exit_code(args: Vec<OsString>) -> ExitCode {
-    hostkeeper_coordinator::config::main(args)
-}
 
 /// Catches: the flags not being the interface: `--version` and `--help` exit 0 with the usage
 /// naming `serve`, no verb, a missing flag, an unknown flag and a reload of zero seconds exit 2.
@@ -202,14 +49,13 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
         "--tokens-file",
         "--operator-token-file",
         "--oidc-config",
-        "--rollout-file",
         "--legacy-service",
         "--role-uri-prefix",
         "--host-role-uri-prefix",
     ] {
         assert!(text.contains(flag), "{flag} is missing from {text}");
     }
-    for hidden in ["--services-file", "--control-listen"] {
+    for hidden in ["--rollout-file", "--control-listen"] {
         assert!(!text.contains(hidden), "{hidden} is hidden");
     }
     assert_eq!(
@@ -239,6 +85,33 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
     let mut args = files.args();
     args.extend([OsString::from("--tls-reload-secs"), OsString::from("0")]);
     assert_eq!(exit_code(args), ExitCode::from(2));
+}
+
+/// Catches: the release channel still a flag: `--release-channel` and its two deadlines are no
+/// flags of `serve` any more, so a start that passes one is a usage error (exit 2), the usage
+/// names none of them, and a start without them reads the files as before.
+#[test]
+fn the_release_channel_flags_are_gone() {
+    let files = Files::new("config-no-release-channel");
+    let serve_help =
+        Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"]).expect_err("help");
+    let text = serve_help.to_string();
+    assert!(!text.contains("release-channel"), "{text}");
+    for flag in [
+        "--release-channel",
+        "--release-channel-connect-secs",
+        "--release-channel-timeout-secs",
+    ] {
+        let mut args = files.args();
+        args.extend([
+            OsString::from(flag),
+            OsString::from("https://channel.example"),
+        ]);
+        let refused = Cli::try_parse_from(args.clone()).expect_err("an unknown flag");
+        assert_eq!(refused.kind(), ErrorKind::UnknownArgument, "{flag}");
+        assert_eq!(exit_code(args), ExitCode::from(2), "{flag}");
+    }
+    build_given(&flags_of(files.args())).expect("a start without the channel");
 }
 
 /// Catches: the certificate namespaces and the legacy service not being flags with the
@@ -324,10 +197,9 @@ fn the_recorded_flags_build_a_coordinator_that_has_them() {
 }
 
 /// Catches: a start that goes on with a file it cannot use, or flags that do not fit: a missing
-/// certificate, an operator token file others can read, a bad allow-list, a missing rollout
-/// file, an allow-list entry naming a service that is not defined or no service with no legacy
-/// service to stand for, a legacy service that is not defined, namespaces that overlap and a
-/// state file that is not a state each stop it with a reason that names the file or the flag; and
+/// certificate, an operator token file others can read, a bad allow-list, a host group that is
+/// not a host group name, or no service with no legacy service to stand for, namespaces that
+/// overlap and a state file that is not a state each stop it with a reason that names the file or the flag; and
 /// the binary exits 1.
 #[test]
 fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
@@ -356,33 +228,44 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     assert!(matches!(why, StartError::Oidc(_)), "{why}");
     assert!(why.to_string().contains("remote_operator"), "{why}");
 
-    let nope = files.path("nope.toml").display().to_string();
-    let why = refusal(with(&args, "--rollout-file", &nope));
-    assert!(matches!(why, StartError::Services(_)), "{why}");
-    assert!(why.to_string().contains("--rollout-file"), "{why}");
-
-    let unknown = format!(
-        "{}services = [\"kbf\", \"nope\"]\n",
+    // Each `host_groups` name is a host group name: a bad one is refused at start, named in
+    // full, and a name at the grammar's bound of 32 bytes is accepted.
+    let long = "a".repeat(33);
+    for bad in ["Canary", "1st", "a_b", "a-", "a--b", long.as_str()] {
+        let groups = format!(
+            "{}services = [\"kbf\"]\nhost_groups = [\"canary\", \"{bad}\"]\n",
+            config_text(STATIC_ISSUER)
+        );
+        files.put("groups.toml", &groups, 0o644);
+        let path = files.path("groups.toml").display().to_string();
+        let why = refusal(with(&args, "--oidc-config", &path));
+        assert!(
+            matches!(&why, StartError::OidcEntryHostGroup { entry: 1, name } if name == bad),
+            "{why}"
+        );
+        assert_eq!(
+            why.to_string(),
+            format!(
+                "--oidc-config: entry 1 names the host group {bad:?}, which is not a host group \
+                 name (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with \
+                 - or holding --)"
+            )
+        );
+    }
+    let longest = "a".repeat(32);
+    let groups = format!(
+        "{}services = [\"kbf\"]\nhost_groups = [\"canary\", \"{longest}\"]\n",
         config_text(STATIC_ISSUER)
     );
-    files.put("unknown.toml", &unknown, 0o644);
-    let path = files.path("unknown.toml").display().to_string();
-    let why = refusal(with(&args, "--oidc-config", &path));
-    assert!(
-        matches!(&why, StartError::OidcEntryService { entry: 1, service } if service == "nope"),
-        "{why}"
-    );
-    assert!(why.to_string().contains("--oidc-config"), "{why}");
+    files.put("groups.toml", &groups, 0o644);
+    let path = files.path("groups.toml").display().to_string();
+    let parts = build_given(&flags_of(with(&args, "--oidc-config", &path)))
+        .expect("host group names in the grammar start");
+    // The parts hold the lock of the state files, which the next refusals take.
+    drop(parts);
 
     let why = refusal(without(&args, "--legacy-service"));
     assert!(matches!(why, StartError::OidcEntryUnnamed(1)), "{why}");
-    assert!(why.to_string().contains("--legacy-service"), "{why}");
-
-    let why = refusal(with(&args, "--legacy-service", "nope"));
-    assert!(
-        matches!(&why, StartError::LegacyService(name) if name == "nope"),
-        "{why}"
-    );
     assert!(why.to_string().contains("--legacy-service"), "{why}");
 
     let why = refusal(with(&args, "--host-role-uri-prefix", "urn:kbf:role:"));
@@ -396,14 +279,13 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     assert!(why.to_string().contains("state.json"), "{why}");
 }
 
-/// Catches: a coordinator that manages no service being unable to start: an empty rollout
-/// file, no `--legacy-service` and an allow-list entry with `services = []` (which grants CI
-/// nothing) build a coordinator whose status lists no service, through `build` and through
-/// `start`; an entry that names a service the file does not define is still refused.
+/// Catches: a coordinator that manages no service being unable to start: no `--legacy-service`
+/// and an allow-list entry with `services = []` (which grants CI nothing) build a coordinator
+/// whose status lists no service, through `build` and through `start`; the coordinator reads no
+/// rollout file, so an entry that names a service is not checked against one.
 #[tokio::test]
 async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
     let files = Files::new("config-empty");
-    files.put("rollout.toml", "", 0o600);
     files.put(
         "empty.toml",
         &format!("{}services = []\n", config_text(STATIC_ISSUER)),
@@ -435,8 +317,8 @@ async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
     let named = format!("{}services = [\"kbf\"]\n", config_text(STATIC_ISSUER));
     files.put("named.toml", &named, 0o644);
     let path = files.path("named.toml").display().to_string();
-    let why = refusal(with(&args, "--oidc-config", &path));
-    assert!(matches!(why, StartError::OidcEntryService { .. }), "{why}");
+    build_given(&flags_of(with(&args, "--oidc-config", &path)))
+        .expect("an entry names a service no file defines");
 }
 
 /// Catches: a state file in the single-state form read with no legacy service to own it: a file
@@ -541,6 +423,7 @@ async fn run_binds_both_listeners_and_reports_them() {
             heartbeat: "192.0.2.9:1".parse().expect("an address"),
             control: "192.0.2.9:2".parse().expect("an address"),
             lan: None,
+            health: None,
         })
     );
 }
@@ -607,40 +490,22 @@ async fn start_runs_until_stopped_and_says_why_it_ended() {
     assert_eq!(*untouched.lock().expect("count"), 0, "nothing was bound");
 }
 
-/// Proves that the names the flags had are still accepted and hidden: `--services-file` and
-/// `--control-listen` parse as `--rollout-file` and `--private-listen` and build a start, and
-/// giving a flag with its old name beside it is a usage error (exit 2) naming the new flag.
+/// Proves that the name `--control-listen` is still accepted and hidden: it parses as
+/// `--private-listen` and builds a start, and giving the flag with its old name beside it is a
+/// usage error (exit 2) naming the new flag.
 ///
 /// Catches: a rename that breaks the start line of a coordinator already deployed, or one that
 /// lets the two names set the flag twice and the last one win.
 #[test]
-fn the_old_flag_names_are_hidden_aliases_and_both_together_are_refused() {
+fn the_old_flag_name_is_a_hidden_alias_and_both_together_are_refused() {
     let files = Files::new("config-aliases");
-    let old = renamed(
-        &renamed(&files.args(), "--rollout-file", "--services-file"),
-        "--private-listen",
-        "--control-listen",
-    );
+    let old = renamed(&files.args(), "--private-listen", "--control-listen");
     let flags = flags_of(old.clone());
-    assert_eq!(flags.rollout_file, files.path("rollout.toml"));
     assert_eq!(
         flags.private_listen,
         "192.0.2.1:2".parse::<SocketAddr>().expect("an address")
     );
-    build_given(&flags).expect("a start through the old names");
-
-    let mut both = files.args();
-    both.extend([
-        OsString::from("--services-file"),
-        files.path("rollout.toml").into_os_string(),
-    ]);
-    let conflict = Cli::try_parse_from(both.clone()).expect_err("both names of one flag");
-    assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict);
-    assert!(
-        conflict.to_string().contains("--rollout-file"),
-        "{conflict}"
-    );
-    assert_eq!(exit_code(both), ExitCode::from(2));
+    build_given(&flags).expect("a start through the old name");
 
     let mut both = files.args();
     both.extend([
@@ -720,7 +585,7 @@ fn the_legacy_single_token_flag_is_one_token_named_operator() {
     let entry = c
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("the action is done");
     assert_eq!(entry.by, "operator");
@@ -775,7 +640,8 @@ fn a_tokens_file_gives_each_token_its_name_and_is_read_again() {
     assert_eq!(exit_code(open), ExitCode::from(1));
 }
 
-/// Proves that a wildcard `--private-listen` is refused at start, however it is spelled (IPv4,
+/// Proves that, without `--private-listen-wildcard`, a wildcard `--private-listen` is refused at
+/// start, however it is spelled (IPv4,
 /// IPv6 and IPv4-mapped IPv6) and through the old flag name too, with the text that names the
 /// flag and the address and exit 1; an address of one interface is accepted, and so is a
 /// wildcard `--heartbeat-listen`, whose flag is unchanged.
@@ -796,7 +662,7 @@ fn a_wildcard_private_listen_is_refused_at_start() {
         assert_eq!(
             why.to_string(),
             format!(
-                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
             )
         );
         assert_eq!(exit_code(given), ExitCode::from(1));

@@ -1,37 +1,17 @@
-//! The command line of `hostkeeper-pxe`: two verbs, `fetch` ([`crate::fetch`]) and `serve`
-//! ([`crate::serve`]).
+//! The command line of `pxe`, the boot server of network install: `serve` ([`crate::serve`])
+//! and `update-hook`, the six steps of the hook the `pxe` .deb ships ([`crate::hook`]).
 //!
 //! ```text
-//! hostkeeper-pxe fetch --release <https URL> --dir <new directory> --daemon-config <file>
-//!     [--platform linux-x86_64|linux-arm64]... [--ca-bundle <file>] [--gh <file>]
-//!     [--trusted-root <file>] [--download-timeout-secs <n>]
-//! hostkeeper-pxe serve --mode proxy|router --address <IPv4> --dir <sealed directory>
+//! pxe serve --mode proxy|router --address <IPv4> --dir <sealed directory>
 //!     --daemon-config <file> --ssh-authorized-keys <file> --coordinator <https URL>
 //!     --ca-file <file> --token-file <file> --user-id <n> --group-id <n>
 //!     [--interface <name>] [--dhcp-listen <a:p>] [--proxy-listen <a:p>] [--tftp-listen <a:p>]
 //!     [--http-listen <a:p>] [--dhcp-reply-to <a:p>] [--install-disk <form>=<glob>]
-//!     [--serial-console <port>] [--reinstall <host id>]... [--tftp-timeout-ms <n>]
+//!     [--serial-console <port>] [--repositories <dir>] [--reinstall <host id>]...
+//!     [--tftp-timeout-ms <n>] [--settings <file>] [--notify-systemd]
+//! pxe update-hook prepare <staged release> --params <file>
+//! pxe update-hook cutover|verify|rollback|cleanup|uninstall --params <file>
 //! ```
-//!
-//! `fetch`:
-//!
-//! - `--release`: the `https://` URL of the directory holding the release's assets, such as
-//!   `https://github.com/<owner>/<repo>/releases/download/v<X.Y.Z>`; `netboot.json`, the debs and
-//!   their bundles are fetched from it. Its redirects are followed, up to [`MAX_REDIRECTS`], to
-//!   `https://` URLs only: a GitHub release download answers with one.
-//! - `--dir`: the directory to make and fill; it must not exist.
-//! - `--daemon-config`: the daemon config the installed hosts get (the one `serve` writes into
-//!   the seeds), loaded with the daemon's own loader: root-owned, not writable by group or
-//!   others. Its `[trusted_signers]` is the signer `netboot.json` and the debs must be attested
-//!   by; its `bounds.attestation_timeout_secs` bounds each check, and `bounds.max_package_bytes`
-//!   each deb.
-//! - `--platform`: a platform to fetch, repeatable; both when none is named.
-//! - `--ca-bundle`, `--gh`, `--trusted-root`: the roots the HTTPS client trusts, the pinned `gh`
-//!   and the Sigstore trusted root the hostkeeper deb installs; by default the paths a Linux host
-//!   has them at ([`CA_BUNDLE`], [`GH`], [`TRUSTED_ROOT`]). `gh` and the trusted root must be
-//!   owned by root and not writable by group or others, as for the daemon.
-//! - `--download-timeout-secs`: the bound of each download, [`DOWNLOAD_TIMEOUT_SECS`] by default
-//!   (an ISO is several GiB).
 //!
 //! `serve` (network-install.md section 3, "What it serves, and how it runs"):
 //!
@@ -46,65 +26,72 @@
 //! - `--coordinator`, `--ca-file`, `--token-file`: the coordinator's private listener
 //!   (`https://<host>[:<port>]`), the CA its certificate chains to, and the operator token, in a
 //!   file of the starting user's (root's) with mode 0600 or 0400.
-//! - `--dir`: a directory `fetch` sealed. `--daemon-config` (root-owned, loaded with the daemon's
-//!   loader), `--ssh-authorized-keys`, `--install-disk` and `--serial-console`: the inputs of
-//!   the seeds (section 4).
+//! - `--dir`: a directory the `prepare` step sealed. `--daemon-config` (root-owned, loaded with
+//!   the daemon's loader), `--ssh-authorized-keys`, `--install-disk` and `--serial-console`: the
+//!   inputs of the seeds (section 4).
+//! - `--repositories`: a directory of the installed hosts' repository entries, `<name>.sources`
+//!   files whose `Signed-By` names `/etc/hostkeeper/repositories/<keyring>`, and the keyrings
+//!   they name (packages-repositories.md sections 3.1 and 3.2). It is checked as root at the
+//!   start with the daemon's own loader, as if it were at that path, and a directory it would
+//!   refuse, a missing one or one holding no entry refuses the start. Every seed then writes the
+//!   files, byte for byte, to `/etc/hostkeeper/repositories/`. Without it a seed writes none.
 //! - `--reinstall`: a host id whose record is installed even though a host or a pending request
 //!   holds it (section 8), repeatable; it must name a record.
 //! - `--user-id`, `--group-id`: the unprivileged user and group `serve` drops to once its
 //!   sockets are bound, before it reads the token or a packet.
 //! - `--tftp-timeout-ms`: how long a TFTP transfer waits for an ACK before it sends again.
+//! - `--settings`: the settings file ([`crate::settings`]); its `[serve]` table is expanded into
+//!   flags appended after the command line's, so the one parser judges both.
+//! - `--notify-systemd`: send `READY=1` to the socket systemd names in `NOTIFY_SOCKET` once the
+//!   start is complete; without that socket the start is refused before anything is bound.
 //!
-//! Exit status 0 when the fetch is sealed (one line on standard output names it) or `serve`
-//! stops on SIGINT or SIGTERM, 1 when the verb is refused (one line on standard error says why;
-//! a refused fetch leaves no directory), 2 for a command line that does not parse. `serve` logs
-//! one line per event on standard error. Configuration is flags only; nothing is read from the
-//! environment.
+//! The steps are run by hostkeeper's daemon as the manifest's hook command, `/usr/lib/pxe/pxe
+//! update-hook`, then `<step> [<staged release>] --params <file>` ([`crate::hook`] says what each
+//! does); the daemon runs the sealed copy of that file in the version's tree, under
+//! `/var/lib/hostkeeper/packages/pxe/<version>/tree/`. `--params` is the file of the package's
+//! `[params]` and the updater's `updater.*` keys.
+//!
+//! Exit status: 0 when `serve` stops on SIGINT or SIGTERM or a step succeeds, 1 when the verb is
+//! refused (one line on standard error says why, as `pxe <verb>: <why>`; a refused step also
+//! ends its standard output with a JSON report), 75 for a step deferred, 2 for a command line
+//! that does not parse (for `update-hook`, one `pxe update-hook: <why>` line). `serve` logs one line per event on standard error. Configuration is
+//! flags and the settings file; the one thing read from the environment is systemd's
+//! `NOTIFY_SOCKET`.
 
-use std::collections::BTreeSet;
-use std::ffi::OsString;
+use std::ffi::{OsStr, OsString};
 use std::io::{self, Write};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
-use std::sync::Arc;
-use std::time::Duration;
 
 use clap::{Parser, Subcommand};
-use hostkeeper_config::daemon::DaemonConfig;
-use hostkeeper_package::gh::{FileTrust, GhVerifier, OwnedBy, Runner, SystemRunner};
-use hostkeeper_package::net::{Timeouts, UreqTransport};
+use hostkeeper_hook::Invocation;
 use hostkeeper_pxe_seed::inputs::{InstallDisk, SerialConsole};
-use hostkeeper_steps::{Clock, ProcBootId, SystemClock};
-use rustls_pki_types::CertificateDer;
-use rustls_pki_types::pem::PemObject;
 
-use crate::fetch::{GH_HOME, Ports, Request, VERIFY_DIR, fetch};
-use crate::platform::BootPlatform;
-use crate::seal::Seal;
+use crate::hook::{self, HostSystemctl};
 use crate::serve::{ServePorts, serve_with};
+use crate::settings;
 
-/// The default of `--ca-bundle`: the Debian family's CA bundle.
+/// The default of `--ca-bundle` in `[prepare]`: the Debian family's CA bundle.
 pub const CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
-/// The default of `--gh`: the pinned `gh` the hostkeeper deb installs.
+/// The default of `gh` in `[prepare]`: the pinned `gh` the hostkeeper deb installs.
 pub const GH: &str = "/usr/lib/hostkeeper/gh";
-/// The default of `--trusted-root`: the Sigstore trusted root the hostkeeper deb installs.
+/// The default of `trusted-root` in `[prepare]`: the Sigstore trusted root the hostkeeper deb
+/// installs.
 pub const TRUSTED_ROOT: &str = "/usr/lib/hostkeeper/trusted_root.json";
-/// The default of `--download-timeout-secs`: four hours.
+/// The default of `download-timeout-secs` in `[prepare]`: four hours.
 pub const DOWNLOAD_TIMEOUT_SECS: u64 = 4 * 60 * 60;
 /// The longest a download waits to connect.
 pub const CONNECT_TIMEOUT_SECS: u64 = 30;
 /// The most redirects a download follows.
 pub const MAX_REDIRECTS: u32 = 5;
-/// The owner `--daemon-config`, `gh` and the trusted root must have: root.
+/// The owner the daemon config, the settings file, `gh` and the trusted root must have: root.
 const ROOT: u32 = 0;
+/// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
+const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 
 #[derive(Debug, Parser)]
-#[command(
-    name = "hostkeeper-pxe",
-    about = "The boot server of network install",
-    version
-)]
+#[command(name = "pxe", about = "The boot server of network install", version)]
 pub(crate) struct Cli {
     #[command(subcommand)]
     pub(crate) verb: Verb,
@@ -112,12 +99,16 @@ pub(crate) struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub(crate) enum Verb {
-    /// Download the boot sets and debs of a release into a new directory, verify them against
-    /// the release's attestation and netboot.json, and seal the directory.
-    Fetch(FetchFlags),
     /// Serve a sealed directory to the machines the coordinator's inventory may install: by
     /// proxyDHCP or behind the router, by TFTP and by HTTP, until SIGINT or SIGTERM.
     Serve(Box<ServeFlags>),
+    /// The update hook hostkeeper runs as root: <step> [<staged release>] --params <file>, the
+    /// step being prepare, cutover, verify, rollback, cleanup or uninstall.
+    UpdateHook {
+        /// The step and its arguments, as the hook contract gives them.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        args: Vec<OsString>,
+    },
 }
 
 /// The modes of `--mode`.
@@ -165,7 +156,7 @@ pub(crate) struct ServeFlags {
     /// The operator token, in a file of the starting user's with mode 0600 or 0400.
     #[arg(long)]
     pub(crate) token_file: PathBuf,
-    /// A directory hostkeeper-pxe fetch sealed.
+    /// A directory the prepare step sealed.
     #[arg(long)]
     pub(crate) dir: PathBuf,
     /// The daemon config the seeds install.
@@ -181,6 +172,10 @@ pub(crate) struct ServeFlags {
     /// The installed system's serial console: ttyS<n> or ttyAMA<n>.
     #[arg(long)]
     pub(crate) serial_console: Option<SerialConsole>,
+    /// A directory of the installed hosts' repository entries (<name>.sources) and the keyrings
+    /// they name, written to /etc/hostkeeper/repositories/ by every seed.
+    #[arg(long)]
+    pub(crate) repositories: Option<PathBuf>,
     /// A host id to reinstall (repeatable).
     #[arg(long = "reinstall")]
     pub(crate) reinstall: Vec<hostkeeper_wire::HostId>,
@@ -193,78 +188,67 @@ pub(crate) struct ServeFlags {
     /// How long a TFTP transfer waits for an ACK before it sends again, in milliseconds.
     #[arg(long, default_value_t = 1000, value_parser = clap::value_parser!(u64).range(1..))]
     pub(crate) tftp_timeout_ms: u64,
-}
-
-#[derive(Debug, clap::Args)]
-pub(crate) struct FetchFlags {
-    /// The https:// URL of the directory holding the release's assets.
-    #[arg(long, value_parser = release_url)]
-    release: String,
-    /// The directory to make and fill; it must not exist.
+    /// A settings file (root-owned, not writable by group or others) whose [serve] table gives
+    /// flags of this command; the command line's flags come first, and a flag may not be given
+    /// in both.
     #[arg(long)]
-    dir: PathBuf,
-    /// The daemon config whose trusted signer the assets must be attested by.
+    pub(crate) settings: Option<PathBuf>,
+    /// Send READY=1 to systemd's notify socket once the start is complete (a Type=notify unit).
     #[arg(long)]
-    daemon_config: PathBuf,
-    /// A platform to fetch (repeatable); both when none is named.
-    #[arg(long = "platform")]
-    platforms: Vec<BootPlatform>,
-    /// The PEM bundle of the roots the HTTPS client trusts.
-    #[arg(long, default_value = CA_BUNDLE)]
-    ca_bundle: PathBuf,
-    /// The pinned gh that checks the attestations.
-    #[arg(long, default_value = GH)]
-    gh: PathBuf,
-    /// The Sigstore trusted root gh checks against.
-    #[arg(long, default_value = TRUSTED_ROOT)]
-    trusted_root: PathBuf,
-    /// The bound of each download, in seconds.
-    #[arg(long, default_value_t = DOWNLOAD_TIMEOUT_SECS)]
-    download_timeout_secs: u64,
+    pub(crate) notify_systemd: bool,
 }
 
-/// `text` as the release URL: `https://`, then printable characters with no query or fragment.
-fn release_url(text: &str) -> Result<String, String> {
-    let rest = text.strip_prefix("https://").unwrap_or_default();
-    let plain = rest
-        .bytes()
-        .all(|b| b.is_ascii_graphic() & !matches!(b, b'?' | b'#'));
-    match !rest.is_empty() & plain {
-        true => Ok(text.to_owned()),
-        false => Err("not an https:// URL without a query or fragment".to_owned()),
-    }
-}
-
-/// The program: [`run`] over the host's ports, with root as the owner of the daemon config,
-/// `gh` and the trusted root; `serve` logs to standard error, by the host's clock, until SIGINT
-/// or SIGTERM.
+/// The program: [`run`] over the host's ports, with root as the owner of the settings file, the
+/// daemon config, `gh` and the trusted root, and `/usr/bin/systemctl` as the service manager;
+/// `serve` logs to standard error, by the host's clock, until SIGINT or SIGTERM.
 pub fn main(args: Vec<OsString>) -> ExitCode {
     let mut out = io::stdout();
     let mut err = io::stderr();
+    let notify_socket = notify_socket();
+    let systemctl = HostSystemctl::host();
+    let host = hook::Host {
+        owner: ROOT,
+        systemctl: &systemctl,
+        fetch: &hook::fetch_with,
+    };
     ExitCode::from(run(
         args,
-        &|flags| fetch_with(flags, ROOT),
-        &|flags| serve_with(flags, ROOT, ServePorts::host()),
+        &|flags| serve_with(flags, ROOT, ServePorts::host(notify_socket.clone())),
+        &host,
         &mut out,
         &mut err,
     ))
 }
 
-/// How `fetch` is run once its flags parse: [`fetch_with`] on a host.
-type Fetch<'a> = &'a dyn Fn(&FetchFlags) -> Result<Seal, String>;
+/// The address of the notify socket systemd set for this process, if it did.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "NOTIFY_SOCKET is the platform-set marker of a Type=notify unit, which AGENTS.md S2 allows; the flag --notify-systemd decides whether it is used"
+)]
+fn notify_socket() -> Option<OsString> {
+    std::env::var_os(NOTIFY_SOCKET)
+}
 
 /// How `serve` is run once its flags parse: [`serve_with`] on a host. It returns when the run
 /// stops.
 type Serve<'a> = &'a dyn Fn(&ServeFlags) -> Result<(), String>;
 
-/// Parses `args` and runs the verb through `fetch` or `serve`; returns the exit status.
+/// Parses `args` and runs the verb: `serve` through `serve`, a step through `host`; returns the
+/// exit status.
 fn run(
     args: Vec<OsString>,
-    fetch: Fetch<'_>,
     serve: Serve<'_>,
+    host: &hook::Host<'_>,
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> u8 {
+    let args = match with_settings(args, host.owner) {
+        Ok(args) => args,
+        Err(why) => {
+            drop(writeln!(err, "pxe serve: {why}"));
+            return 1;
+        }
+    };
     let cli = match Cli::try_parse_from(args) {
         Ok(cli) => cli,
         Err(error) => {
@@ -277,115 +261,151 @@ fn run(
         }
     };
     match cli.verb {
-        Verb::Fetch(flags) => match fetch(&flags) {
-            Ok(seal) => {
-                drop(writeln!(out, "{}", sealed_line(&flags.dir, &seal)));
-                0
-            }
-            Err(why) => {
-                drop(writeln!(err, "hostkeeper-pxe fetch: {why}"));
-                1
-            }
-        },
         Verb::Serve(flags) => match serve(&flags) {
             Ok(()) => 0,
             Err(why) => {
-                drop(writeln!(err, "hostkeeper-pxe serve: {why}"));
+                drop(writeln!(err, "pxe serve: {why}"));
                 1
             }
         },
+        Verb::UpdateHook { args } => update_hook(&args, host, out, err),
     }
 }
 
-/// The line that names a sealed directory.
-fn sealed_line(dir: &Path, seal: &Seal) -> String {
-    let platforms: Vec<&str> = seal.platforms.keys().map(String::as_str).collect();
-    format!(
-        "sealed {}: hostkeeper {}, Ubuntu {}, {}",
-        dir.display(),
-        seal.version,
-        seal.ubuntu,
-        platforms.join(" and ")
-    )
-}
-
-/// Loads the daemon config and the CA bundle, makes the host's ports and fetches.
-fn fetch_with(flags: &FetchFlags, owner: u32) -> Result<Seal, String> {
-    let config = DaemonConfig::load(&flags.daemon_config, owner)
-        .map_err(|e| format!("{}: {e}", flags.daemon_config.display()))?;
-    let roots = tls_roots(&flags.ca_bundle)?;
-    let clock: Arc<dyn Clock> = Arc::new(SystemClock::new(Box::new(ProcBootId::host())));
-    let transport = UreqTransport::following_redirects(&roots, MAX_REDIRECTS);
-    let verifier = verifier_of(
-        flags,
-        Box::new(SystemRunner::new(Arc::clone(&clock))),
-        Box::new(OwnedBy { uid: owner }),
-    );
-    let ports = Ports {
-        transport: &transport,
-        verifier: &verifier,
-        clock: &*clock,
+/// Runs the hook step `args` give (`<step> [<staged release>] --params <file>`, parsed as the
+/// contract of `hostkeeper_hook` has it); a command line it cannot read exits 2 with
+/// `pxe update-hook: <why>` and runs nothing.
+fn update_hook(
+    args: &[OsString],
+    host: &hook::Host<'_>,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> u8 {
+    let call = match Invocation::parse(args.iter().cloned()) {
+        Ok(call) => call,
+        Err(why) => {
+            drop(writeln!(err, "pxe update-hook: {why}"));
+            return 2;
+        }
     };
-    fetch(&ports, &request_of(flags, config)).map_err(|e| e.to_string())
+    let Some(params) = call.params else {
+        drop(writeln!(
+            err,
+            "pxe update-hook: the step needs --params <file>"
+        ));
+        return 2;
+    };
+    hook::run(host, call.step, &params, call.artifact.as_deref(), out, err)
 }
 
-/// The daemon's verifier as the flags name it: `--gh` run by `runner` against `--trusted-root`,
-/// in `gh`'s home under the new directory, each file checked by `trust` before each run.
-fn verifier_of(
-    flags: &FetchFlags,
-    runner: Box<dyn Runner>,
-    trust: Box<dyn FileTrust>,
-) -> GhVerifier {
-    GhVerifier::new(
-        flags.gh.clone(),
-        flags.trusted_root.clone(),
-        flags.dir.join(VERIFY_DIR).join(GH_HOME),
-        runner,
-        trust,
-    )
+/// `args` with, for a `serve` that names `--settings`, the file's `[serve]` table expanded into
+/// flags after them. Any other command line is returned as it is.
+fn with_settings(mut args: Vec<OsString>, owner: u32) -> Result<Vec<OsString>, String> {
+    if args.get(1).map(OsString::as_os_str) != Some(OsStr::new("serve")) {
+        return Ok(args);
+    }
+    let mut named = None;
+    let mut rest = args.iter().skip(2);
+    while let Some(arg) = rest.next() {
+        if arg == "--settings" {
+            named = rest.next().map(PathBuf::from);
+        } else if let Some(path) = arg.to_str().and_then(|a| a.strip_prefix("--settings=")) {
+            named = Some(PathBuf::from(path));
+        }
+    }
+    let Some(path) = named else {
+        return Ok(args);
+    };
+    let expanded = settings::read(&path, owner)?;
+    args.extend(expanded.serve.into_iter().map(OsString::from));
+    Ok(args)
 }
 
-/// The fetch the flags and the loaded daemon config ask for.
-fn request_of(flags: &FetchFlags, config: DaemonConfig) -> Request {
-    Request {
-        release: flags.release.clone(),
-        dir: flags.dir.clone(),
-        platforms: platforms_of(&flags.platforms),
-        signers: config.trusted_signers,
-        attestation_timeout_secs: config.bounds.attestation_timeout_secs,
-        max_deb_bytes: config.bounds.max_package_bytes,
-        timeouts: Timeouts {
-            connect: Duration::from_secs(CONNECT_TIMEOUT_SECS),
-            total: Duration::from_secs(flags.download_timeout_secs),
-        },
+/// The flags of `serve` as the settings file's `[serve]` table and `--dir` give them: the same
+/// parser as the command line's, so a key it does not know, a flag it needs and a bad value are
+/// refused as it refuses them.
+///
+/// # Errors
+/// The parser's message.
+pub(crate) fn serve_flags(
+    settings: &Path,
+    serve: &[String],
+    dir: &Path,
+) -> Result<ServeFlags, String> {
+    let mut args: Vec<OsString> = vec!["pxe serve".into()];
+    args.extend([
+        "--settings".into(),
+        settings.into(),
+        "--dir".into(),
+        dir.into(),
+    ]);
+    args.extend(serve.iter().map(OsString::from));
+    ServeOnly::try_parse_from(args)
+        .map(|only| only.flags)
+        .map_err(|e| one_line(&e))
+}
+
+/// What a unit's `ExecStart` gives `serve`, as [`parse_serve_line`] reads it.
+#[derive(Debug, PartialEq, Eq)]
+pub struct ServeLine {
+    /// The settings file the line names.
+    pub settings: Option<PathBuf>,
+    /// The sealed directory the line names.
+    pub dir: PathBuf,
+    /// Whether the line asks for the readiness notice.
+    pub notify_systemd: bool,
+}
+
+/// Reads `args`, the words of a `serve` command line after the program's name (`serve --settings
+/// ...`), with the parser `pxe` itself uses, over `settings_serve`, the flags the settings file's
+/// `[serve]` table would add after them. It exists so the unit the .deb ships can be checked
+/// against the program, as a test of this crate does.
+///
+/// # Errors
+/// The parser's message on one line, or that the line is not a `serve` line.
+pub fn parse_serve_line(args: &[OsString], settings_serve: &[&str]) -> Result<ServeLine, String> {
+    let mut argv: Vec<OsString> = vec!["pxe".into()];
+    argv.extend(args.iter().cloned());
+    argv.extend(settings_serve.iter().map(OsString::from));
+    match Cli::try_parse_from(argv).map_err(|e| one_line(&e))?.verb {
+        Verb::Serve(flags) => Ok(ServeLine {
+            settings: flags.settings,
+            dir: flags.dir,
+            notify_systemd: flags.notify_systemd,
+        }),
+        Verb::UpdateHook { .. } => Err("not a serve line".to_owned()),
     }
 }
 
-/// The platforms a fetch of `named` (the `--platform` flags) takes: both when none is named.
-fn platforms_of(named: &[BootPlatform]) -> BTreeSet<BootPlatform> {
-    match named.is_empty() {
-        true => BootPlatform::ALL.into_iter().collect(),
-        false => named.iter().copied().collect(),
-    }
+/// The message of the parser's refusal `error` on one line: its words up to the usage text.
+pub(crate) fn one_line(error: &clap::Error) -> String {
+    error
+        .to_string()
+        .lines()
+        .take_while(|line| !line.starts_with("Usage:"))
+        .map(|line| line.trim().trim_start_matches("error: "))
+        .filter(|line| !line.is_empty() && !line.starts_with("For more information"))
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
-/// The DER certificates of the PEM bundle at `path`; a bundle that holds none is refused, since
-/// no download could succeed.
-fn tls_roots(path: &Path) -> Result<Vec<Vec<u8>>, String> {
-    let roots: Vec<Vec<u8>> = CertificateDer::pem_file_iter(path)
-        .map(|sections| {
-            sections
-                .filter_map(Result::ok)
-                .map(|der| der.as_ref().to_vec())
-                .collect()
-        })
-        .unwrap_or_default();
-    match roots.is_empty() {
-        true => Err(format!(
-            "--ca-bundle {}: no certificate could be read",
-            path.display()
-        )),
-        false => Ok(roots),
+/// The flags of `serve` alone, for [`serve_flags`].
+#[derive(Debug, Parser)]
+#[command(name = "pxe serve")]
+struct ServeOnly {
+    #[command(flatten)]
+    flags: ServeFlags,
+}
+
+/// `text` as the release URL: `https://`, then printable characters with no query or fragment.
+pub(crate) fn release_url(text: &str) -> Result<String, String> {
+    let rest = text.strip_prefix("https://").unwrap_or_default();
+    let plain = rest
+        .bytes()
+        .all(|b| b.is_ascii_graphic() & !matches!(b, b'?' | b'#'));
+    match !rest.is_empty() & plain {
+        true => Ok(text.to_owned()),
+        false => Err("not an https:// URL without a query or fragment".to_owned()),
     }
 }
 

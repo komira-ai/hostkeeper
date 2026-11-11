@@ -8,11 +8,16 @@
 //! error with the field `alert = "halt"` once when it appears, which is what an operator alert
 //! watches.
 //!
+//! In group mode ([`crate::group_scope`]) a halt is a (group, package)'s: a host's report halts the
+//! package in the group of the host alone, a clear lifts it there, and the generation the agents are
+//! told is the group's.
+//!
 //! The halt is kept in the ops store ([`crate::ops`]). Raising it is written *after* it is in
 //! memory, so a halt that could not be written still stops the service, and under a marker
 //! file ([`crate::ops::Write::Halt`]): a write that fails is tried again at every heartbeat
-//! until it lands, and a coordinator started over the marker refuses to start. Clearing it is
-//! written *first*, so a clear that could not be written leaves it standing.
+//! until it lands, and a coordinator started over the marker refuses to start unless the ops
+//! file holds the halt. Clearing it is written *first*, so a clear that could not be written
+//! leaves it standing.
 //!
 //! Who raised a halt says what lifts it ([`HaltOrigin`], design section 5.4). A halt the
 //! updater raised itself (a report whose reason is one of [`UPDATER_HALT_REASONS`]) is lifted
@@ -64,10 +69,11 @@ use hostkeeper_wire::wire::{Heartbeat, Outcome, Phase, Token, UpdateResult};
 use crate::decide::{Decision, Gate, decide_marked};
 use crate::desired::Desired;
 use crate::fleet::{Fleet, Node};
+use crate::host_groups::GroupName;
 use crate::identity::Identity;
 use crate::membership::{self, Standing};
 use crate::ops::{AuditEntry, Halt, HaltAck, HaltOrigin, OpsError, OpsState, OpsStore, Write};
-use crate::services::Services;
+use crate::services::{ServiceDef, Services};
 
 /// The feature an agent announces to be told the clear generations.
 pub const FEATURE: &str = "halt-v1";
@@ -168,18 +174,18 @@ pub(crate) fn note(
     }));
     let mut held = Vec::new();
     for (service, last, updating) in reports {
-        let counted = services.get(service).is_some_and(|def| {
+        let counted = services.get(service).filter(|def| {
             membership::standing(def, &who.host_id, node, &state, now) == Standing::Counted
         });
-        if updating || !counted {
+        let Some(group) = counted.filter(|_| !updating).map(|def| def.group()) else {
             continue;
-        }
+        };
         let report = reported(last, &who.host_id);
-        if !end_ack(ops, service, &who.host_id, report.as_ref()) {
+        if !end_ack(ops, group, service, &who.host_id, report.as_ref()) {
             held.push(service.to_owned());
         }
         if let Some(halt) = report {
-            raise(ops, service, halt);
+            raise(ops, group, service, halt);
         }
     }
     held
@@ -193,31 +199,35 @@ pub(crate) fn note(
 /// restart. Decided under the writers' lock, on the state it changes. Answers whether it
 /// holds: `false` when the write failed and the acknowledgement stands, so no order may go out
 /// before it is gone.
-fn end_ack(ops: &OpsStore, service: &str, id: &HostId, report: Option<&Halt>) -> bool {
+fn end_ack(
+    ops: &OpsStore,
+    group: Option<&GroupName>,
+    service: &str,
+    id: &HostId,
+    report: Option<&Halt>,
+) -> bool {
     let node = id.to_string();
     let report = report.and_then(|halt| halt.report.clone());
     let differs = |ack: &HaltAck| {
         ack.node_id == node && !report.as_ref().is_some_and(|r| ack.matches(&node, r))
     };
-    let held = ops.read(|state| {
-        state
-            .services
-            .get(service)
-            .is_some_and(|m| m.halt_acked.iter().any(differs))
-    });
+    let held = ops.read(|state| state.halt_acked_in(group, service).iter().any(differs));
     if !held {
         return true;
     }
     let ended = ops.decide_change(Write::BeforeMemory, |state| {
-        let marks = state.services.entry(service.to_owned()).or_default();
-        let before = marks.halt_acked.len();
-        marks.halt_acked.retain(|ack| !differs(ack));
-        if marks.halt_acked.len() == before {
+        let ended = state.edit_marks_in(group, service, |marks| {
+            let before = marks.halt_acked.len();
+            marks.halt_acked.retain(|ack| !differs(ack));
+            marks.halt_acked.len() != before
+        });
+        if !ended {
             return Err(Unchanged::NoAck);
         }
         let mut entry = AuditEntry::new(COORDINATOR, "halt_ack_ended");
         entry.service = Some(service.to_owned());
         entry.node_id = Some(node.clone());
+        entry.host_group = group.map(ToString::to_string);
         Ok(entry)
     });
     match ended {
@@ -231,46 +241,48 @@ fn end_ack(ops: &OpsStore, service: &str, id: &HostId, report: Option<&Halt>) ->
 }
 
 /// Raises `halt` for `service`, or keeps it for the clear when the service is halted already,
-/// unless an operator cleared exactly this report: in memory first, then written under the
-/// unfinished-halt marker ([`Write::Halt`]). Which of these it is is decided under the writers'
-/// lock, on the state the change is applied to, so a clear or another host's halt that got there
-/// first is seen. A failed write is logged and the change stands in memory; the write is tried
-/// again at every heartbeat until it lands ([`OpsStore::retry_unwritten`]), and the marker
-/// stops a restart before then.
+/// unless an operator cleared exactly this report: in memory first, then committed under the
+/// marker of changes not yet written ([`Write::Halt`]). Which of these it is is decided under the
+/// writers' lock, on the state the change is applied to, so a clear or another host's halt that
+/// got there first is seen. A failed commit is logged and the change stands in memory, pending;
+/// it is committed again at every heartbeat until it lands ([`OpsStore::retry_unwritten`]), and
+/// the marker stops a restart before then.
 ///
 /// A report made while the halt stands is kept once per host, with the halt (`halt_seen`), for
 /// the clear to acknowledge: a report the halt itself holds, or one kept already, is not kept
 /// again.
-fn raise(ops: &OpsStore, service: &str, halt: Halt) {
+fn raise(ops: &OpsStore, group: Option<&GroupName>, service: &str, halt: Halt) {
     let node_id = halt.node_id.clone();
     let changed = ops.decide_change(Write::Halt, |state| {
-        let marks = state.services.entry(service.to_owned()).or_default();
-        let acked = halt.report.as_ref().is_some_and(|report| {
-            marks
-                .halt_acked
-                .iter()
-                .any(|ack| ack.matches(&halt.node_id, report))
-        });
-        if acked {
-            return Err(Unchanged::Acked);
-        }
-        let mut entry = AuditEntry::new(COORDINATOR, "halt");
-        entry.service = Some(service.to_owned());
-        entry.node_id = Some(halt.node_id.clone());
-        entry.reason = Some(halt.check.clone());
-        let Some(standing) = &marks.halt else {
-            marks.halt = Some(halt);
-            return Ok(entry);
-        };
-        let ack = HaltAck::from(halt);
-        let own = (&standing.node_id, &standing.report) == (&ack.node_id, &ack.report);
-        if own || marks.halt_seen.contains(&ack) {
-            return Err(Unchanged::Known);
-        }
-        marks.halt_seen.retain(|seen| seen.node_id != ack.node_id);
-        marks.halt_seen.push(ack);
-        entry.action = "halt_report".to_owned();
-        Ok(entry)
+        state.edit_marks_in(group, service, |marks| {
+            let acked = halt.report.as_ref().is_some_and(|report| {
+                marks
+                    .halt_acked
+                    .iter()
+                    .any(|ack| ack.matches(&halt.node_id, report))
+            });
+            if acked {
+                return Err(Unchanged::Acked);
+            }
+            let mut entry = AuditEntry::new(COORDINATOR, "halt");
+            entry.service = Some(service.to_owned());
+            entry.node_id = Some(halt.node_id.clone());
+            entry.host_group = group.map(ToString::to_string);
+            entry.reason = Some(halt.check.clone());
+            let Some(standing) = &marks.halt else {
+                marks.halt = Some(halt);
+                return Ok(entry);
+            };
+            let ack = HaltAck::from(halt);
+            let own = (&standing.node_id, &standing.report) == (&ack.node_id, &ack.report);
+            if own || marks.halt_seen.contains(&ack) {
+                return Err(Unchanged::Known);
+            }
+            marks.halt_seen.retain(|seen| seen.node_id != ack.node_id);
+            marks.halt_seen.push(ack);
+            entry.action = "halt_report".to_owned();
+            Ok(entry)
+        })
     });
     match changed {
         Ok(_) | Err(Unchanged::Known | Unchanged::NoAck) => {}
@@ -291,8 +303,8 @@ fn raise(ops: &OpsStore, service: &str, halt: Halt) {
 pub const OPERATOR_CHECK: &str = "operator";
 
 /// Raises a halt of `service` for the operator `by`, with `reason`, as a host's halt report
-/// raises one ([`raise`]): in memory first, then written under the unfinished-halt marker
-/// ([`Write::Halt`]): an alert ([`crate::alerts`]). The halt names no host, the check
+/// raises one ([`raise`]): in memory first, then committed under the marker of changes not yet
+/// written ([`Write::Halt`]): an alert ([`crate::alerts`]). The halt names no host, the check
 /// [`OPERATOR_CHECK`] and the desired version `target`; its origin is [`HaltOrigin::Operator`],
 /// so only `clear_halt`, or a force, lifts it. Decided under the writers' lock: `already` is
 /// answered, and nothing changes, when a halt stands.
@@ -313,17 +325,61 @@ pub(crate) fn raise_by_operator<E: From<OpsError>>(
         if marks.halt.is_some() {
             return Err(already);
         }
-        marks.halt = Some(Halt {
-            node_id: String::new(),
-            check: OPERATOR_CHECK.to_owned(),
-            target: target.clone(),
-            report: None,
-            origin: HaltOrigin::Operator,
-        });
+        marks.halt = Some(operator_halt(target));
         let mut entry = AuditEntry::new(by, "halt");
         entry.service = Some(service.to_owned());
         entry.reason = Some(reason.to_owned());
         Ok(entry)
+    })
+}
+
+/// The halt an operator raises of a desired version `target`.
+fn operator_halt(target: &Version) -> Halt {
+    Halt {
+        node_id: String::new(),
+        check: OPERATOR_CHECK.to_owned(),
+        target: target.clone(),
+        report: None,
+        origin: HaltOrigin::Operator,
+    }
+}
+
+/// [`raise_by_operator`] for a package of host groups: halts it in each of `targets`, a group
+/// with the desired version it is halted at, in one change, with one entry for each group that
+/// had no halt standing, naming it. A group already halted is left as it is.
+///
+/// # Errors
+/// `already` when every group is halted already; or `E` from [`OpsError`] when the write failed.
+pub(crate) fn raise_by_operator_in<E: From<OpsError>>(
+    ops: &OpsStore,
+    service: &str,
+    targets: &[(GroupName, Version)],
+    by: &str,
+    reason: &str,
+    already: E,
+) -> Result<Vec<AuditEntry>, E> {
+    ops.decide_changes(Write::Halt, |state| {
+        let mut entries = Vec::new();
+        for (group, target) in targets {
+            let raised = state.edit_marks_in(Some(group), service, |marks| {
+                let free = marks.halt.is_none();
+                if free {
+                    marks.halt = Some(operator_halt(target));
+                }
+                free
+            });
+            if raised {
+                let mut entry = AuditEntry::new(by, "halt");
+                entry.service = Some(service.to_owned());
+                entry.host_group = Some(group.to_string());
+                entry.reason = Some(reason.to_owned());
+                entries.push(entry);
+            }
+        }
+        if entries.is_empty() {
+            return Err(already);
+        }
+        Ok(entries)
     })
 }
 
@@ -351,7 +407,7 @@ pub fn lift_by_ci(
     version: &Version,
     workflow: &str,
 ) -> Result<Lifted, OpsError> {
-    lift_by_setter(ops, service, version, crate::reconcile::CI, workflow)
+    lift_by_setter(ops, None, service, version, crate::reconcile::CI, workflow)
 }
 
 /// [`lift_by_ci`] for any setter of the desired version: the audit entry `lift_halt` is by
@@ -361,37 +417,14 @@ pub fn lift_by_ci(
 /// [`OpsError`]: the ops file could not be written; the halt stands.
 pub(crate) fn lift_by_setter(
     ops: &OpsStore,
+    group: Option<&GroupName>,
     service: &str,
     version: &Version,
     actor: &str,
     set_by: &str,
 ) -> Result<Lifted, OpsError> {
     let lifted = ops.decide_change(Write::BeforeMemory, |state| {
-        let Some(marks) = state.services.get_mut(service) else {
-            return Err(Unchanged::Known);
-        };
-        let liftable = marks.halt.as_ref().is_some_and(|halt| {
-            halt.origin == HaltOrigin::Updater
-                && halt.target != *version
-                && marks
-                    .halt_seen
-                    .iter()
-                    .all(|seen| origin_of(seen.report.as_ref()) == HaltOrigin::Updater)
-        });
-        let Some(halt) = marks.halt.take().filter(|_| liftable) else {
-            return Err(Unchanged::Known);
-        };
-        let mut entry = AuditEntry::new(actor, "lift_halt");
-        entry.service = Some(service.to_owned());
-        entry.node_id = Some(halt.node_id.clone());
-        entry.reason = Some(format!("{version} set by {set_by}"));
-        let seen = std::mem::take(&mut marks.halt_seen);
-        for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
-            marks.halt_acked.retain(|ack| ack.node_id != report.node_id);
-            marks.halt_acked.push(report);
-        }
-        marks.halt_generation = marks.halt_generation.saturating_add(1);
-        Ok(entry)
+        lift(state, group, service, version, actor, set_by).ok_or(Unchanged::Known)
     });
     match lifted {
         Ok(_) => Ok(Lifted::Lifted),
@@ -400,9 +433,45 @@ pub(crate) fn lift_by_setter(
     }
 }
 
-/// The standing halt of `service` in `state`, if any.
-pub(crate) fn standing(state: &OpsState, service: &str) -> Option<Halt> {
-    state.services.get(service).and_then(|m| m.halt.clone())
+/// Lifts the halt of `service` in `state` as [`lift_by_setter`] does, and answers the audit entry
+/// of the lift; `None` when there is no halt to lift.
+pub(crate) fn lift(
+    state: &mut OpsState,
+    group: Option<&GroupName>,
+    service: &str,
+    version: &Version,
+    actor: &str,
+    set_by: &str,
+) -> Option<AuditEntry> {
+    let mut marks = state.marks_in(group, service);
+    let liftable = marks.halt.as_ref().is_some_and(|halt| {
+        halt.origin == HaltOrigin::Updater
+            && halt.target != *version
+            && marks
+                .halt_seen
+                .iter()
+                .all(|seen| origin_of(seen.report.as_ref()) == HaltOrigin::Updater)
+    });
+    let halt = marks.halt.take().filter(|_| liftable)?;
+    let mut entry = AuditEntry::new(actor, "lift_halt");
+    entry.service = Some(service.to_owned());
+    entry.node_id = Some(halt.node_id.clone());
+    entry.host_group = group.map(ToString::to_string);
+    entry.reason = Some(format!("{version} set by {set_by}"));
+    let seen = std::mem::take(&mut marks.halt_seen);
+    for report in std::iter::once(HaltAck::from(halt)).chain(seen) {
+        marks.halt_acked.retain(|ack| ack.node_id != report.node_id);
+        marks.halt_acked.push(report);
+    }
+    marks.halt_generation = marks.halt_generation.saturating_add(1);
+    state.edit_marks_in(group, service, |kept| *kept = marks);
+    Some(entry)
+}
+
+/// The standing halt of `service` in `state`, if any: the halt in `group`, when it is a service
+/// made for one.
+pub(crate) fn standing(state: &OpsState, group: Option<&GroupName>, service: &str) -> Option<Halt> {
+    state.halt_in(group, service).cloned()
 }
 
 /// [`Gate::Halted`] for a service that is halted, and [`decide_marked`] (which holds the
@@ -419,9 +488,10 @@ pub(crate) fn decide(
     id: &HostId,
     now: Duration,
 ) -> Decision {
+    let group = services.get(service).and_then(ServiceDef::group);
     let (halted, bad) = ops.read(|state| {
         (
-            standing(state, service).is_some(),
+            standing(state, group, service).is_some(),
             state
                 .services
                 .get(service)
@@ -436,16 +506,17 @@ pub(crate) fn decide(
 }
 
 /// The generation of every service an operator has cleared a halt of, by name, of the
-/// services `services` defines. The ops file keeps the generation of a service that is no longer
+/// services `services` defines (in a group, the generations of the group's packages). The ops file keeps the generation of a service that is no longer
 /// defined (it counts on if the service comes back), but an agent reads at most a services
 /// file's worth of them and refuses an answer with more, so only the defined ones are told.
 pub(crate) fn generations(ops: &OpsStore, services: &Services) -> BTreeMap<String, u64> {
+    let group = services.group();
     ops.read(|state| {
-        state
-            .services
-            .iter()
-            .filter(|(name, marks)| marks.halt_generation > 0 && services.get(name).is_some())
-            .map(|(name, marks)| (name.clone(), marks.halt_generation))
+        services
+            .names()
+            .map(|name| (name, state.halt_generation_in(group, name)))
+            .filter(|(_, generation)| *generation > 0)
+            .map(|(name, generation)| (name.to_owned(), generation))
             .collect()
     })
 }

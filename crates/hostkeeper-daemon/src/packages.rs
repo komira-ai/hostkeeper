@@ -1,80 +1,36 @@
-//! The package port: what the daemon asks of whatever fetches, verifies and unpacks packages
-//! (design section 5.5).
+//! The package port: what the daemon asks of whatever fetches the artifact of a `macos-pkg`
+//! entry (packages-repositories.md section 4.7).
 //!
-//! The daemon asks for the version directory of the package an order names, under the service's
-//! lock and outside the step lock: a fetch has its own deadline and is not bounded by the
-//! dead-man. The port answers with the unpacked, sealed directory, or with one error of a closed
-//! set. The daemon then reads the directory's `manifest.toml` itself, with the manifest's loader,
-//! for the order's service and version, so that a store cannot hand it a package of another name
-//! or version.
+//! A `macos-pkg` entry carries no attestation: the `.pkg` is fetched by the entry's pin alone
+//! ([`Packages::pinned`]) from the host's stores, and the installer's `stage` checks the package's
+//! signature. The port answers with the staging file, or with one error of a closed set; the
+//! daemon reports the error as its token ([`PackageError::refusal`]). No other installer fetches
+//! through it: the package manager of a repository entry downloads for itself.
 
+use std::any::Any;
 use std::fmt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
-use hostkeeper_config::manifest::Manifest;
-use hostkeeper_config::names::{ServiceName, Version};
+use hostkeeper_config::names::ServiceName;
 use hostkeeper_hook::{Class, Outcome};
-use hostkeeper_steps::Staged;
+use hostkeeper_proto::hostkeeper::release::v1::Target;
 
 use crate::refusal::Refusal;
-use crate::trusted_root::RootReport;
-use crate::verb::PackageDigest;
-
-/// The unpacked version directory of one package, sealed: nothing from it runs unless the tree
-/// still has the digest it had when it was sealed ([`Staged::check`]).
-#[derive(Clone, Debug, PartialEq)]
-pub struct VersionDir {
-    staged: Staged,
-    manifest: Option<Manifest>,
-}
-
-impl VersionDir {
-    /// A sealed directory whose manifest the store did not keep.
-    pub fn new(staged: Staged) -> VersionDir {
-        VersionDir {
-            staged,
-            manifest: None,
-        }
-    }
-
-    /// A sealed directory with the manifest the store parsed from it.
-    pub fn with_manifest(staged: Staged, manifest: Manifest) -> VersionDir {
-        VersionDir {
-            staged,
-            manifest: Some(manifest),
-        }
-    }
-
-    /// The manifest the store parsed from the directory, when it kept it.
-    pub fn manifest(&self) -> Option<&Manifest> {
-        self.manifest.as_ref()
-    }
-
-    /// The directory.
-    pub fn dir(&self) -> &Path {
-        self.staged.dir()
-    }
-
-    /// The seal.
-    pub fn staged(&self) -> &Staged {
-        &self.staged
-    }
-}
 
 /// Why a package could not be had. Each carries a text for the log; the daemon reports the
 /// variant as its token ([`PackageError::refusal`]) and writes no step record.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PackageError {
-    /// The release channel has no package of that service and version.
-    #[error("the package is not in the release channel: {0}")]
+    /// The store has no package of that service and version.
+    #[error("the package is not in the store: {0}")]
     NotFound(String),
-    /// The package's bytes, or its attestation, are not the digest the order names.
+    /// The package's bytes are not the digest the order names.
     #[error("the package is not the digest the order names: {0}")]
     DigestMismatch(String),
     /// The disk is full; nothing was staged.
     #[error("there is no space to stage the package: {0}")]
     NoSpace(String),
-    /// Any other failure to fetch, verify or unpack.
+    /// Any other failure to fetch.
     #[error("the package could not be had: {0}")]
     Other(String),
     /// A failure with its own token, outcome and class, as the real store reports them.
@@ -120,8 +76,8 @@ impl PackageError {
         }
     }
 
-    /// Whom the error is blamed on: the package for one the channel does not have or whose
-    /// bytes are not the digest, the host for the rest.
+    /// Whom the error is blamed on: the package for one the store does not have or whose bytes
+    /// are not the digest, the host for the rest.
     pub fn class(&self) -> Class {
         match self {
             PackageError::NotFound(_) | PackageError::DigestMismatch(_) => Class::Release,
@@ -131,29 +87,33 @@ impl PackageError {
     }
 }
 
-/// Fetches, verifies, unpacks and seals packages.
+/// The file of an entry's artifact fetched by its pin alone ([`Packages::pinned`]), whose size
+/// and SHA-256 are the entry's: what it holds (a staging file the store removes when it is
+/// dropped) lives as long as it does.
+pub struct Pinned {
+    path: PathBuf,
+    _held: Box<dyn Any + Send>,
+}
+
+impl Pinned {
+    /// The file at `path`, kept as long as `held` lives.
+    pub fn new(path: &Path, held: Box<dyn Any + Send>) -> Pinned {
+        Pinned {
+            path: path.to_path_buf(),
+            _held: held,
+        }
+    }
+
+    /// The file.
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
+/// Fetches the artifact of an entry by its pin.
 pub trait Packages: Send + Sync {
-    /// The sealed version directory of `service` at `version`, whose package has `digest`. When
-    /// `index_digest` is given, the release index must have that SHA-256 (checked before it is
-    /// read); `None` checks nothing.
-    fn version_dir(
-        &self,
-        service: &ServiceName,
-        version: &Version,
-        digest: &PackageDigest,
-        index_digest: Option<&PackageDigest>,
-    ) -> Result<VersionDir, PackageError>;
-
-    /// Removes what a crashed fetch or unpack of `service` left in its package directory. The
-    /// default removes nothing.
-    fn remove_orphans(&self, _service: &ServiceName) -> Result<(), PackageError> {
-        Ok(())
-    }
-
-    /// The age of the Sigstore trusted root the store checks attestations with, and the reason
-    /// it needs attention, read now: what the admin `Status` reports of it. The default has no
-    /// root to report.
-    fn trusted_root(&self) -> Option<RootReport> {
-        None
-    }
+    /// The artifact of `entry` for `service` fetched by its pin alone, with no attestation and
+    /// nothing unpacked: the `.pkg` of a `macos-pkg` entry, which carries none (its pin and the
+    /// package's signature, checked by the installer's `stage`, are the whole check).
+    fn pinned(&self, service: &ServiceName, entry: &Target) -> Result<Pinned, PackageError>;
 }

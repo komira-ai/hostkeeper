@@ -6,7 +6,7 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
-description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table of `hostkeeper ctl` generated from them, and the check that keeps them compatible."
+description = "hostkeeper's protobuf services, compiled from proto/ with protox, the command table `hkctl` and the UI client are generated from, and the check that keeps them compatible."
 
 [dependencies]
 prost.workspace = true
@@ -14,13 +14,15 @@ tonic.workspace = true
 tonic-prost.workspace = true
 
 [build-dependencies]
-# Reads the compiled descriptors, options included, for the command table of `hostkeeper ctl`.
+# Reads the compiled descriptors, options included, for the command table.
 prost-reflect.workspace = true
 protox.workspace = true
 tonic-prost-build.workspace = true
 
 [dev-dependencies]
-prost-reflect.workspace = true
+# `serde`: the JSON of a repository entry, as the gateway and the releases file read it
+# (tests/additions_repository.rs).
+prost-reflect = { workspace = true, features = ["serde"] }
 prost-types.workspace = true
 protox.workspace = true
 serde_json.workspace = true

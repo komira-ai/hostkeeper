@@ -1,7 +1,7 @@
 //! The real adapters of a Mac's package checks and enrollment claims (design section 5.9, rows
 //! Package verification and Enrollment), behind the ports their libraries own:
 //!
-//! - [`HostMacVerify`], `hostkeeper_unpack`'s [`MacVerify`]: the quarantine attribute of a staged
+//! - [`HostMacVerify`], `hostkeeper_install`'s [`MacVerify`]: the quarantine attribute of a staged
 //!   entry, read with `getxattr` without following a link, and the code signature of a Mach-O
 //!   file, judged by `codesign --verify --strict`;
 //! - [`HostIoreg`], `hostkeeper_enroll`'s [`Ioreg`]: the `IOPlatformExpertDevice` entry of
@@ -22,8 +22,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use hostkeeper_enroll::Ioreg;
+use hostkeeper_install::mac_verify::{MacVerify, SignatureVerdict, VerifyIoError};
 use hostkeeper_launchd::{Launchctl, LaunchctlError, LaunchctlOutput, LaunchctlProcess};
-use hostkeeper_unpack::{MacVerify, SignatureVerdict, VerifyIoError};
 use rustix::io::Errno;
 
 /// The attribute macOS sets on what came from the network, and a tool that unpacks it can

@@ -3,14 +3,15 @@
 //!
 //! The state is the files `serve` keeps, named by the same flags:
 //!
-//! - beside `--state-file`: the state file itself, the spent ids of CI's tokens (`.jti`) and the
-//!   verdicts (`.verdicts`);
+//! - beside `--state-file`: the state file itself, the releases set with targets
+//!   (`.releases`), the registry of package repositories (`.repositories`), the spent ids of CI's
+//!   tokens (`.jti`) and the verdicts (`.verdicts`);
 //! - beside the ops file (`--ops-file`, by default the state file's name with `.ops` added): the
 //!   ops file itself, the audit file (`.audit`) and each of its sealed segments (`.audit.<n>`,
 //!   named `ops-audit.<n>` in a snapshot, with the number it has), the halts file (`.halts`), a
 //!   halts file staged by a change that had not finished (`.halts.next`, which the next start
-//!   settles) and the marker of a halt that was being written (`.halts.unfinished`, which
-//!   refuses a start);
+//!   settles) and the marker of changes that were not yet written (`.halts.unfinished`, which
+//!   refuses a start unless the ops file holds every change it lists);
 //! - with `--enrollment-dir`, every file of the enrollment store: each file ending `.pb` in that
 //!   directory and in the directories under it. Anything else there (the store's `lock`, a
 //!   `.tmp` file a crash left, a CA key or a server certificate kept in the same directory) is
@@ -55,6 +56,8 @@ use crate::audit_file;
 use crate::jti_file::jti_path;
 use crate::lock::{LockError, StateLock, lock_path};
 use crate::ops_file::{halts_path, staged_path, unfinished_path};
+use crate::releases::releases_path;
+use crate::repositories::repositories_path;
 use crate::verdict_file::verdicts_path;
 
 /// The name of the manifest in a snapshot.
@@ -87,7 +90,20 @@ pub fn restore_marker(state: &Path) -> PathBuf {
     with_suffix(state, RESTORE_UNFINISHED)
 }
 
-/// The name in a snapshot of the marker of a halt that was being written.
+/// What is added to the state file's name for the marker of a `host-groups migrate --apply` under
+/// way, a verb of release 0.1.253 that this release does not have.
+const MIGRATE_UNFINISHED: &str = ".migrate-unfinished";
+
+/// The marker of a `host-groups migrate --apply` of release 0.1.253 on the state file `state` that
+/// has not finished: that release wrote it before its first file and removed it after its last.
+/// This release writes none, and still refuses the files of one that stopped partway: `serve` and
+/// `backup` refuse them, and `restore` and `export` take the marker for state in their targets.
+#[must_use]
+pub fn migrate_marker(state: &Path) -> PathBuf {
+    with_suffix(state, MIGRATE_UNFINISHED)
+}
+
+/// The name in a snapshot of the marker of changes that were not yet written.
 const UNFINISHED: &str = "ops-halts-unfinished";
 
 /// The name in a snapshot of the audit file; its sealed segment `n` is `ops-audit.<n>`.
@@ -96,9 +112,11 @@ const AUDIT: &str = "ops-audit";
 /// Where the coordinator's state is: the flags `serve` names it by.
 #[derive(Clone, Debug, Args)]
 pub struct StatePaths {
-    /// The desired-state file, as `serve --state-file` names it. The spent ids of CI's tokens
-    /// (`<state-file>.jti`) and the verdicts (`<state-file>.verdicts`) are beside it, and the
-    /// lock taken is `<state-file>.lock`, the one `serve` holds.
+    /// The desired-state file, as `serve --state-file` names it. The releases
+    /// (`<state-file>.releases`), the registry of package repositories
+    /// (`<state-file>.repositories`), the spent ids of CI's tokens (`<state-file>.jti`) and the
+    /// verdicts (`<state-file>.verdicts`) are beside it, and the lock taken is
+    /// `<state-file>.lock`, the one `serve` holds.
     #[arg(long)]
     pub state_file: PathBuf,
     /// The ops file, as `serve --ops-file` names it. Default: the state file's name with `.ops`
@@ -126,6 +144,8 @@ impl StatePaths {
         let ops = self.ops_file();
         vec![
             ("state", state.clone()),
+            ("state-releases", releases_path(state)),
+            ("state-repositories", repositories_path(state)),
             ("state-jti", jti_path(state)),
             ("state-verdicts", verdicts_path(state)),
             ("ops", ops.clone()),
@@ -295,6 +315,15 @@ pub enum BackupError {
         "the snapshot holds the enrollment store and --enrollment-dir is not given: restoring without it would lose the enrolled hosts"
     )]
     EnrollmentDirNeeded,
+    /// A `host-groups migrate --apply` of release 0.1.253, a verb this release does not have, on
+    /// these state files stopped before it finished.
+    #[error(
+        "{path}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it"
+    )]
+    MigrateUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
     /// A target holds state.
     #[error(
         "{path} is already there; restore writes only into targets that hold no state, never over a file"
@@ -330,6 +359,13 @@ fn left_text(left: &[PathBuf]) -> String {
 /// What a backup or a restore did, a line each, for the operator.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Report(Vec<String>);
+
+impl Report {
+    /// The report of `lines`.
+    pub(crate) fn of(lines: Vec<String>) -> Report {
+        Report(lines)
+    }
+}
 
 impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -385,6 +421,7 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
         });
     }
     let _held = take(lock, &flags.paths.state_file)?;
+    refuse_migrating(&flags.paths.state_file)?;
     let mut sources = Vec::new();
     let mut absent = Vec::new();
     for (name, path) in flags.paths.beside() {
@@ -495,7 +532,7 @@ pub fn restore(flags: &Restore, lock: &dyn StateLock) -> Result<Report, BackupEr
     }
     if manifest.files.iter().any(|entry| entry.name == UNFINISHED) {
         lines.push(
-            "the snapshot holds the marker of a halt that was being written: serve refuses to start until the halts file is settled by hand and the marker removed, as it did before the backup".to_owned(),
+            "the snapshot holds the marker of changes that were not yet written: serve refuses to start until they are settled by hand and the marker removed, unless the ops file holds every change it lists, as it did before the backup".to_owned(),
         );
     }
     Ok(Report(lines))
@@ -504,7 +541,7 @@ pub fn restore(flags: &Restore, lock: &dyn StateLock) -> Result<Report, BackupEr
 /// Makes the state file's directory (it holds the lock's file, and stays), takes the lock,
 /// refuses targets that hold state, and writes `files`, each to its target. A write that fails
 /// removes, still under the lock, every file and directory the writes had made.
-fn write_targets(
+pub(crate) fn write_targets(
     paths: &StatePaths,
     lock: &dyn StateLock,
     files: &[(PathBuf, Vec<u8>)],
@@ -545,7 +582,10 @@ fn put_all(
 }
 
 /// The lock of the state file `state`'s state files, taken by `lock`.
-fn take(lock: &dyn StateLock, state: &Path) -> Result<crate::lock::LockGuard, BackupError> {
+pub(crate) fn take(
+    lock: &dyn StateLock,
+    state: &Path,
+) -> Result<crate::lock::LockGuard, BackupError> {
     let path = lock_path(state);
     lock.acquire(&path).map_err(|why| match why {
         LockError::Held => BackupError::Locked { path: path.clone() },
@@ -754,8 +794,11 @@ fn read_no_follow(path: &Path) -> io::Result<Vec<u8>> {
 /// Refuses targets that hold state: a file beside the state file or the ops file, a sealed
 /// segment of the audit file, or an enrollment directory with anything in it.
 fn refuse_state(paths: &StatePaths) -> Result<(), BackupError> {
-    let marker = ("restore marker", restore_marker(&paths.state_file));
-    for (_, path) in paths.beside().into_iter().chain([marker]) {
+    let markers = [
+        ("restore marker", restore_marker(&paths.state_file)),
+        ("migrate marker", migrate_marker(&paths.state_file)),
+    ];
+    for (_, path) in paths.beside().into_iter().chain(markers) {
         if there(&path)? {
             return Err(BackupError::NotEmpty { path });
         }
@@ -850,6 +893,19 @@ fn sync_dir(dir: &Path) -> Result<(), BackupError> {
     File::open(dir)
         .and_then(|file| file.sync_all())
         .map_err(io_at(dir))
+}
+
+/// Refuses the state file `state` while the marker of a `host-groups migrate --apply` of release
+/// 0.1.253 that did not finish stands beside it.
+///
+/// # Errors
+/// [`BackupError::MigrateUnfinished`]: the marker is there.
+pub(crate) fn refuse_migrating(state: &Path) -> Result<(), BackupError> {
+    let path = migrate_marker(state);
+    if there(&path)? {
+        return Err(BackupError::MigrateUnfinished { path });
+    }
+    Ok(())
 }
 
 /// Whether something (a file, a directory, a link) is at `path`.
