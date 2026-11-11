@@ -13,7 +13,7 @@ use tonic::Code;
 
 use super::support::{Served, call, decode, grpc_request, raw, served, served_built};
 use crate::http::Surface;
-use crate::mdm::tests::{devices_dir, flags_in, mdm_with, record};
+use crate::mdm::tests::{devices_dir, flags_in, mdm_with, mdm_with_baseline, record};
 use crate::mdm::{Devices, Mdm};
 use crate::operator_mdm::MAX_DEVICE_PAGE;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
@@ -234,6 +234,55 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
             "gate": true
         })
     );
+}
+
+/// Proves: a coordinator whose gate has an enrollment baseline for the host group of an enrolled
+/// Mac lists that Mac with the baseline state the gate says (`pending`: Screen Sharing is due and
+/// has not been answered), by gRPC and by the gateway, and the device the gate has no baseline
+/// for (one that is not enrolled) with no state.
+///
+/// Catches: `Mdm.ListDevices` that leaves the baseline columns at their defaults for a gate that
+/// has a baseline, or shows a state for a device the baseline does not cover.
+#[tokio::test]
+async fn a_device_under_a_baseline_is_listed_with_its_state_over_grpc_and_the_gateway() {
+    let dir = scratch("grpc-mdm-baseline-gate");
+    let mdm = mdm_with_baseline(&dir, &two_records(), "build");
+    let served = served_built("grpc-mdm-baseline", |rig_dir, clock| {
+        Rig::start(rig_dir, clock).with_mdm(Some(mdm))
+    });
+    let (code, said, listed) = page(&served, 0, "").await;
+    assert_eq!((code, said.as_str()), (Code::Ok, ""));
+    let states: Vec<(&str, i32, &str)> = listed
+        .devices
+        .iter()
+        .map(|d| {
+            (
+                d.enrollment_id.as_str(),
+                d.baseline_state,
+                d.baseline_reason.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        states,
+        [
+            ("AAAA-FULL", i32::from(proto::MdmBaselineState::Pending), ""),
+            (
+                "BBBB-BARE",
+                i32::from(proto::MdmBaselineState::Unspecified),
+                ""
+            ),
+        ]
+    );
+
+    let (status, json) = gateway(&served, Some(OPERATOR), "{}").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        json["devices"][0]["baselineState"],
+        "MDM_BASELINE_STATE_PENDING"
+    );
+    assert!(json["devices"][0].get("baselineReason").is_none());
+    assert!(json["devices"][1].get("baselineState").is_none());
 }
 
 /// Proves: a limit of 1 over three devices gives three pages of one, each page but the last
