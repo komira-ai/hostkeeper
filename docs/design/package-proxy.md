@@ -147,7 +147,7 @@ is task PP5.
 | One slow fill and fifty waiters | each waiter waits `proxy_wait_s` at most, then is passed through directly; the fill still commits |
 | An arbitrary digest asked of `/pkg/` | 404, and no origin request is made, since only digests of the current manifest's `installs` are fetched |
 | The origin serves a poisoned or truncated file | apt rejects a bad hash or signature; the daemon rejects a bad digest; the coordinator rejects a pkg whose digest differs from its path; a truncated body (length short) is not committed |
-| A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start |
+| A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start; a client that stays connected but stops reading is cut when its eight-frame buffer is full (its body ends with an error, `FetchError::Behind`) and the fill goes on, so one stuck client holds neither the flight nor a place of `proxy_fetches` |
 | Two coordinators on one cache directory | not supported: the proxy is part of the single-node MDM listener (coordinator-mdm.md 4.9); the directory is the coordinator's |
 | A request for an arbitrary URL, or a `..` segment | the route shape and the locator grammar refuse it with 404 or 400; nothing is fetched |
 | The origin is slow | 30 s to headers and 30 s per frame, as `repository_origin.rs` has them; waiters share one fetch; `proxy_fetches` caps concurrent origin pulls and the next request gets `503` |

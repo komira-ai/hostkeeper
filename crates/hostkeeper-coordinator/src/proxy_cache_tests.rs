@@ -59,14 +59,14 @@ pub(super) fn key(path: &str) -> Key {
 
 /// The origin's side of a test: how often it was read, what it was asked, and the release of the
 /// bodies that wait.
-struct Fake {
+pub(super) struct Fake {
     calls: AtomicU64,
     asked: std::sync::Mutex<Vec<Request>>,
     gate: Arc<Semaphore>,
 }
 
 impl Fake {
-    fn new() -> Arc<Self> {
+    pub(super) fn new() -> Arc<Self> {
         Arc::new(Self {
             calls: AtomicU64::new(0),
             asked: std::sync::Mutex::new(Vec::new()),
@@ -74,7 +74,7 @@ impl Fake {
         })
     }
 
-    fn calls(&self) -> u64 {
+    pub(super) fn calls(&self) -> u64 {
         self.calls.load(Ordering::SeqCst)
     }
 
@@ -89,7 +89,10 @@ impl Fake {
 }
 
 /// What a read of the fake answers: the `n`th read (from 1) is given to `plan`.
-fn origin(fake: &Arc<Fake>, plan: impl Fn(u64) -> Plan + Send + Sync + 'static) -> Origin {
+pub(super) fn origin(
+    fake: &Arc<Fake>,
+    plan: impl Fn(u64) -> Plan + Send + Sync + 'static,
+) -> Origin {
     let fake = Arc::clone(fake);
     Arc::new(move |request| {
         let fake = Arc::clone(&fake);
@@ -102,7 +105,7 @@ fn origin(fake: &Arc<Fake>, plan: impl Fn(u64) -> Plan + Send + Sync + 'static) 
 
 /// One answer of the fake origin.
 #[derive(Clone)]
-enum Plan {
+pub(super) enum Plan {
     /// The headers fail.
     Refuse,
     /// A body of frames, with the length it declares; it waits for a release before the frame
@@ -117,18 +120,18 @@ enum Plan {
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Then {
+pub(super) enum Then {
     Go,
     Fail,
     Hang,
 }
 
 impl Plan {
-    fn whole(bytes: &[u8]) -> Self {
+    pub(super) fn whole(bytes: &[u8]) -> Self {
         Self::frames(&[bytes])
     }
 
-    fn frames(frames: &[&[u8]]) -> Self {
+    pub(super) fn frames(frames: &[&[u8]]) -> Self {
         Self::Body {
             declared: Some(frames.iter().map(|f| f.len() as u64).sum()),
             frames: frames.iter().map(|f| f.to_vec()).collect(),
@@ -221,7 +224,7 @@ impl Drop for DropFlag {
     }
 }
 
-async fn read(mut answer: Answer) -> Result<Vec<u8>, FetchError> {
+pub(super) async fn read(mut answer: Answer) -> Result<Vec<u8>, FetchError> {
     let mut all = Vec::new();
     while let Some(frame) = answer.body.next().await {
         all.extend_from_slice(&frame?);
@@ -229,7 +232,11 @@ async fn read(mut answer: Answer) -> Result<Vec<u8>, FetchError> {
     Ok(all)
 }
 
-async fn get(cache: &ProxyCache, path: &str, origin: &Origin) -> Result<Answer, ProxyError> {
+pub(super) async fn get(
+    cache: &ProxyCache,
+    path: &str,
+    origin: &Origin,
+) -> Result<Answer, ProxyError> {
     cache.get(&key(path), None, origin, &limits()).await
 }
 

@@ -8,7 +8,8 @@
 //!
 //! - **Hit.** A committed object is read from its file, whole or as a [`ByteRange`].
 //! - **Miss.** The first asker leads: its read starts and the body is streamed to it while a task
-//!   writes it to `tmp/` and commits it when it ends whole, even if the asker has gone. A second
+//!   writes it to `tmp/` and commits it when it ends whole, even if the asker has gone or has
+//!   fallen behind (it is cut with [`FetchError::Behind`], and the fill goes on). A second
 //!   asker of the same key waits for that fill at most [`Limits::wait`], then reads the file, or,
 //!   when the wait ends first or the fill could not be stored, is passed through to the origin
 //!   on its own, uncached. When the fill failed, the waiters ask again and the first of them leads.
@@ -34,7 +35,7 @@ use std::future::Future;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -84,6 +85,10 @@ pub enum FetchError {
     /// A cached file could not be read to its end.
     #[error("a cached file could not be read")]
     Cache,
+    /// The asker of a fill read too slowly: the fill went on to the disk without it, and the file
+    /// is a hit for its next ask.
+    #[error("the reader fell behind the fill")]
+    Behind,
 }
 
 /// Why the cache gave no answer.
@@ -214,6 +219,9 @@ enum Done {
 struct Entry {
     meta: Meta,
     used: u64,
+    /// The tick of its commit: no two commits of a key share one, so a reader that holds a
+    /// stale one cannot mistake a newer object for the one it read.
+    born: u64,
 }
 
 #[derive(Default)]
@@ -282,6 +290,8 @@ impl Drop for Flight {
 }
 
 enum Claim {
+    /// The key was committed while its asker was on the way: ask again, it is a hit.
+    Cached,
     Lead(Flight),
     Wait(watch::Receiver<Done>),
 }
@@ -324,6 +334,7 @@ impl ProxyCache {
                 Entry {
                     meta: found.meta,
                     used: state.tick,
+                    born: state.tick,
                 },
             );
         }
@@ -371,6 +382,7 @@ impl ProxyCache {
                 return self.pass(key, range, origin, limits).await;
             }
             match self.claim(&digest) {
+                Claim::Cached => {}
                 Claim::Lead(flight) => return self.lead(key, flight, origin, limits).await,
                 Claim::Wait(mut done) => {
                     let ended = tokio::time::timeout(
@@ -394,14 +406,14 @@ impl ProxyCache {
 
     /// The committed object `digest`, read now, if there is one.
     fn hit(&self, digest: &str, range: Option<ByteRange>) -> Result<Option<Answer>, ProxyError> {
-        let meta = {
+        let (meta, born) = {
             let mut state = self.shared.state();
             state.tick += 1;
             let tick = state.tick;
             match state.entries.get_mut(digest) {
                 Some(entry) => {
                     entry.used = tick;
-                    entry.meta.clone()
+                    (entry.meta.clone(), entry.born)
                 }
                 None => return Ok(None),
             }
@@ -424,8 +436,9 @@ impl ProxyCache {
             Ok(file)
         });
         let Ok(file) = opened else {
-            // The file is gone (the directory was wiped): forget it, and the next ask fills it.
-            self.shared.forget(digest);
+            // The file is gone (the directory was wiped): forget that object, if it is still the
+            // one read, and the next ask fills it.
+            self.shared.forget(digest, born);
             return Ok(None);
         };
         self.shared.state().stats.hits += 1;
@@ -443,6 +456,11 @@ impl ProxyCache {
     /// Makes the asker the leader of the key's fill, or gives it the flight to wait on.
     fn claim(&self, digest: &str) -> Claim {
         let mut state = self.shared.state();
+        // Looked at under the lock that inserts the flight, and the commit inserts its entry
+        // before its flight ends: a key is never led while it is committed.
+        if state.entries.contains_key(digest) {
+            return Claim::Cached;
+        }
         if let Some(flight) = state.flights.get(digest) {
             return Claim::Wait(flight.subscribe());
         }
@@ -519,15 +537,28 @@ impl ProxyCache {
         };
         let fetched_at = self.shared.clock.now_unix();
         let (to_asker, from_fill) = mpsc::channel(AHEAD);
+        let cut = Arc::new(AtomicBool::new(false));
+        let cut_seen = Arc::clone(&cut);
         let answer = Answer {
             served: Served::Filled,
             validator: fetched.validator.clone(),
             length: fetched.length,
             fetched_at,
             range: None,
-            body: Box::pin(stream::unfold(from_fill, |mut from_fill| async move {
-                from_fill.recv().await.map(|frame| (frame, from_fill))
-            })),
+            body: Box::pin(stream::unfold(
+                (from_fill, cut_seen),
+                |(mut from_fill, cut)| async move {
+                    match from_fill.recv().await {
+                        Some(frame) => Some((frame, (from_fill, cut))),
+                        // The fill dropped the asker for falling behind: an error, once, and
+                        // not an end that looks whole.
+                        None if cut.swap(false, Ordering::SeqCst) => {
+                            Some((Err(FetchError::Behind), (from_fill, cut)))
+                        }
+                        None => None,
+                    }
+                },
+            )),
         };
         self.shared.state().stats.fills += 1;
         let fill = Fill {
@@ -542,6 +573,7 @@ impl ProxyCache {
             declared: fetched.length,
             max_bytes: limits.max_bytes,
             asker: Some(to_asker),
+            cut,
         };
         tokio::spawn(fill.run(fetched.body, flight, slot));
         Ok(answer)
@@ -563,15 +595,21 @@ impl ProxyCache {
 }
 
 impl Shared {
-    /// Forgets the object `digest` and deletes its files.
-    fn forget(&self, digest: &str) {
+    /// Forgets the object `digest` committed at `born` and deletes its files, unless that object
+    /// has been evicted or replaced since it was read: then the files are another's.
+    fn forget(&self, digest: &str, born: u64) {
         let mut state = self.state();
-        let gone = state
+        if state
             .entries
-            .remove(digest)
-            .map_or(0, |entry| entry.meta.length);
-        state.total -= gone;
-        drop(state);
+            .get(digest)
+            .is_none_or(|entry| entry.born != born)
+        {
+            return;
+        }
+        if let Some(entry) = state.entries.remove(digest) {
+            state.total -= entry.meta.length;
+        }
+        // Under the lock: a commit of the key waits for the files to be gone.
         self.layout.remove(digest);
     }
 }
@@ -616,6 +654,8 @@ struct Fill {
     declared: Option<u64>,
     max_bytes: u64,
     asker: Option<mpsc::Sender<Result<Bytes, FetchError>>>,
+    /// Set when the asker was dropped for a full channel.
+    cut: Arc<AtomicBool>,
 }
 
 impl Fill {
@@ -680,11 +720,28 @@ impl Fill {
         }
     }
 
-    /// Passes a frame to the asker, who is dropped when it has gone.
+    /// Passes a frame to the asker, who is dropped when it has gone. While the file is being
+    /// stored (and for an error, which ends the fill) the fill does not wait for a full channel:
+    /// an asker that has fallen behind is cut and gets [`FetchError::Behind`], and the fill goes
+    /// on to the disk. With nothing stored the asker's pace is the fill's.
     async fn send(&mut self, frame: Result<Bytes, FetchError>) {
-        if let Some(asker) = &self.asker
-            && asker.send(frame).await.is_err()
-        {
+        let Some(asker) = &self.asker else {
+            return;
+        };
+        let may_wait = self.sink.is_none() && frame.is_ok();
+        let gone = if may_wait {
+            asker.send(frame).await.is_err()
+        } else {
+            match asker.try_send(frame) {
+                Ok(()) => false,
+                Err(mpsc::error::TrySendError::Full(_)) => {
+                    self.cut.store(true, Ordering::SeqCst);
+                    true
+                }
+                Err(mpsc::error::TrySendError::Closed(_)) => true,
+            }
+        };
+        if gone {
             self.asker = None;
         }
     }
@@ -707,6 +764,8 @@ impl Fill {
         let tmp_meta = PathBuf::from(format!("{}.meta", sink.body.display()));
         self.meta.length = got;
         let mut state = self.shared.state();
+        // The object this one replaces is dropped from the books now, to make room, and its files
+        // with it when the commit fails: the books and the disk agree on every path.
         let replaced = state.entries.get(&digest).map_or(0, |e| e.meta.length);
         state.total -= replaced;
         state.entries.remove(&digest);
@@ -726,6 +785,7 @@ impl Fill {
                     Entry {
                         meta: self.meta.clone(),
                         used,
+                        born: used,
                     },
                 );
                 Done::Committed
@@ -733,6 +793,7 @@ impl Fill {
             Err(why) => {
                 tracing::warn!(error = %why, "the proxy cache could not commit a file");
                 state.stats.store_failures += 1;
+                self.shared.layout.remove(&digest);
                 drop(state);
                 drop(std::fs::remove_file(&sink.body));
                 drop(std::fs::remove_file(&tmp_meta));
@@ -800,6 +861,9 @@ impl crate::service::Coordinator {
     }
 }
 
+#[cfg(test)]
+#[path = "proxy_cache_review_tests.rs"]
+mod review_tests;
 #[cfg(test)]
 #[path = "proxy_cache_start_tests.rs"]
 mod start_tests;
