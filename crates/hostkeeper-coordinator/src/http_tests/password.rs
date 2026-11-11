@@ -340,6 +340,36 @@ async fn a_change_that_raced_another_is_refused() {
     assert_eq!(sent.json(), json!({ "error": "sign_in_required" }));
 }
 
+/// Proves: a password stored by another request after this change's checks passed and before its
+/// write is not overwritten by this change: it is refused as a change of a password that is no
+/// longer the user's, and the other request's hash stays.
+#[tokio::test]
+async fn a_password_stored_after_the_checks_is_not_overwritten() {
+    let world = World::new("password-raced-late");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let other = Passwords::new(cheap())
+        .expect("passwords")
+        .hash("the other change won")
+        .expect("a hash");
+    let stored = other.as_str().to_owned();
+    let weak = Arc::downgrade(&world.coordinator);
+    world.login().when_checked(move || {
+        let coordinator = weak.upgrade().expect("the coordinator");
+        let other = stored.clone();
+        coordinator
+            .accounts()
+            .change(|held| held.with_user_edited("alice", |user| user.hash = other))
+            .expect("changed");
+    });
+    let sent = world
+        .send(alice.post("/v1/password", &change(PASSWORD, NEW_PASSWORD)))
+        .await;
+    assert_eq!(sent.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(sent.json(), invalid());
+    let held = world.coordinator.accounts().snapshot();
+    assert_eq!(held.user("alice").expect("alice").hash, other.as_str());
+}
+
 /// Proves: a change refuses a session's call that fails the checks of a session's `POST`: no CSRF
 /// header, a wrong one, another origin, a cross-site request, a body not said to be JSON; each is
 /// 403 `csrf` and changes nothing. No session at all is 401 `sign_in_required`.

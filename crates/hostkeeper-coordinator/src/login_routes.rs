@@ -337,6 +337,40 @@ impl Coordinator {
             .cloned()
     }
 
+    /// Edits the user `name` in the store, but only if the user is still enabled and still has
+    /// the hash `expected`: the compare runs under the store's lock, in the same step as the
+    /// write, so a password stored by another request after the caller's check is not undone.
+    /// A user that changed is `Refused::Invalid`; a store that cannot write is
+    /// `Refused::Unreachable`, logged as `what`.
+    fn edit_if_hash(
+        &self,
+        name: &str,
+        expected: &str,
+        what: &str,
+        edit: impl FnOnce(&mut User),
+    ) -> Result<(), Refused> {
+        let mut stale = false;
+        let stored = self.accounts().change(|held| {
+            if held
+                .user(name)
+                .is_some_and(|user| user.enabled && user.hash == expected)
+            {
+                held.with_user_edited(name, edit)
+            } else {
+                stale = true;
+                Err(crate::accounts::AccountsError::NoUser(name.to_owned()))
+            }
+        });
+        match stored {
+            Ok(()) => Ok(()),
+            Err(_) if stale => Err(Refused::Invalid),
+            Err(why) => {
+                tracing::error!(%why, "{what}");
+                Err(Refused::Unreachable)
+            }
+        }
+    }
+
     /// A login: `Ok` is the session id for the cookie and what the session says.
     ///
     /// A locked name or a full set of hash slots is refused before any hash. An unknown name, a
@@ -371,21 +405,16 @@ impl Coordinator {
         {
             return Err(Refused::Invalid);
         }
-        login.limiter.succeeded(name);
         let now = login.now();
-        self.accounts()
-            .change(|held| {
-                held.with_user_edited(name, |user| {
-                    user.last_login_at = Some(now);
-                    if let Some(rehash) = rehash {
-                        user.hash = rehash.as_str().to_owned();
-                    }
-                })
-            })
-            .map_err(|why| {
-                tracing::error!(%why, "a login could not be stored");
-                Refused::Unreachable
-            })?;
+        #[cfg(test)]
+        login.checked();
+        self.edit_if_hash(name, &user.hash, "a login could not be stored", |user| {
+            user.last_login_at = Some(now);
+            if let Some(rehash) = rehash {
+                user.hash = rehash.as_str().to_owned();
+            }
+        })?;
+        login.limiter.succeeded(name);
         let until = user.initial_expires_at.filter(|_| user.must_change);
         let (id, view) = login
             .sessions
@@ -465,18 +494,18 @@ impl Coordinator {
             tracing::error!(%why, "a password change could not be audited");
             Refused::Internal
         })?;
-        self.accounts()
-            .change(|held| {
-                held.with_user_edited(name, |user| {
-                    user.hash = hash;
-                    user.must_change = false;
-                    user.initial_expires_at = None;
-                })
-            })
-            .map_err(|why| {
-                tracing::error!(%why, "a password change could not be stored");
-                Refused::Unreachable
-            })?;
+        #[cfg(test)]
+        login.checked();
+        self.edit_if_hash(
+            name,
+            &user.hash,
+            "a password change could not be stored",
+            |user| {
+                user.hash = hash;
+                user.must_change = false;
+                user.initial_expires_at = None;
+            },
+        )?;
         login.limiter.succeeded(name);
         login.sessions.end_user(name, Some(&held.id));
         if let Some(id) = &user.initial_id

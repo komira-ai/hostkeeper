@@ -73,6 +73,10 @@ pub struct Login {
     /// acted on, so a test can change the user in that window instead of waiting for a race.
     #[cfg(test)]
     hashed: std::sync::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
+    /// A test's progress event: told after the checks that follow a hash passed and before the
+    /// store is written.
+    #[cfg(test)]
+    checked: std::sync::Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
 }
 
 impl std::fmt::Debug for Login {
@@ -101,6 +105,8 @@ impl Login {
             clock,
             #[cfg(test)]
             hashed: std::sync::Mutex::new(None),
+            #[cfg(test)]
+            checked: std::sync::Mutex::new(None),
         })
     }
 
@@ -112,6 +118,29 @@ impl Login {
             .hashed
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    /// From now on, `hook` runs each time the checks that follow a hash have passed and the store
+    /// is about to be written.
+    #[cfg(test)]
+    pub(crate) fn when_checked(&self, hook: impl Fn() + Send + Sync + 'static) {
+        *self
+            .checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(Box::new(hook));
+    }
+
+    /// Tells the test's hook that the checks passed.
+    #[cfg(test)]
+    pub(crate) fn checked(&self) {
+        if let Some(hook) = self
+            .checked
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .as_ref()
+        {
+            hook();
+        }
     }
 
     /// Tells the test's hook that a password was hashed.

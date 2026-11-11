@@ -428,6 +428,47 @@ async fn a_user_changed_while_the_password_is_hashed_gets_no_session() {
     assert!(world.login().sessions.is_empty());
 }
 
+/// Proves: a password stored by another request after the login's checks passed and before its
+/// write is not overwritten by the login's rehash or its last sign-in time: the compare is made
+/// in the store's own step, the login is refused, and no session is made.
+#[tokio::test]
+async fn a_password_stored_after_the_checks_is_not_undone_by_a_rehash() {
+    let stronger = PasswordSettings {
+        memory_kib: 16,
+        ..cheap()
+    };
+    let world = World::with(
+        "login-rehash-raced",
+        LoginSettings {
+            passwords: stronger,
+            ..settings()
+        },
+        counting(),
+    );
+    let other = Passwords::new(cheap())
+        .expect("passwords")
+        .hash(NEW_PASSWORD)
+        .expect("a hash");
+    let stored = other.as_str().to_owned();
+    let weak = Arc::downgrade(&world.coordinator);
+    world.login().when_checked(move || {
+        let coordinator = weak.upgrade().expect("the coordinator");
+        let other = stored.clone();
+        coordinator
+            .accounts()
+            .change(|held| held.with_user_edited("alice", |user| user.hash = other))
+            .expect("changed");
+    });
+    let sent = login(&world, "alice", PASSWORD).await;
+    assert_eq!(sent.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(sent.json(), invalid());
+    assert!(world.login().sessions.is_empty());
+    let held = world.coordinator.accounts().snapshot();
+    let alice = held.user("alice").expect("alice");
+    assert_eq!(alice.hash, other.as_str());
+    assert_eq!(alice.last_login_at, None);
+}
+
 /// Proves: `GET /v1/session` answers a live session's user, CSRF token and `must_change` with the
 /// cookie alone (no CSRF header), the deadline only for a session that must change its password,
 /// and 401 `sign_in_required` for no cookie, an unknown one, an `Authorization` header (the
