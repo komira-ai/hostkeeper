@@ -707,3 +707,53 @@ async fn the_tick_applies_a_file_that_appears_and_refuses_one_that_is_bad_withou
     );
     watching.abort();
 }
+
+#[test]
+fn the_file_a_password_came_from_is_deleted_by_its_user_and_id() {
+    let look = Look::new("ia-delete-adopted");
+    look.put_for("id-1", "admin", 3000);
+    look.admin.delete_if_adopted("admin", "id-1").unwrap();
+    assert!(!look.path().exists());
+    // Already gone: nothing to do, and no error.
+    look.admin.delete_if_adopted("admin", "id-1").unwrap();
+}
+
+#[test]
+fn a_file_of_another_user_or_another_id_stays_when_a_password_changes() {
+    let look = Look::new("ia-delete-other");
+    look.put_for("id-2", "admin", 3000);
+    look.admin.delete_if_adopted("admin", "id-1").unwrap();
+    assert!(look.path().exists(), "another id");
+    look.admin.delete_if_adopted("other", "id-2").unwrap();
+    assert!(look.path().exists(), "another user");
+}
+
+#[test]
+fn a_file_that_does_not_read_is_an_error_of_the_deletion_and_stays() {
+    let look = Look::new("ia-delete-unreadable");
+    look.put(&text("id-1", "admin", PASSWORD, NOW + 3000), 0o644);
+    let why = look.admin.delete_if_adopted("admin", "id-1").unwrap_err();
+    assert!(matches!(why, InitialAdminError::Read(_)), "{why}");
+    assert!(look.path().exists());
+}
+
+#[test]
+fn a_file_that_cannot_be_deleted_says_so_when_a_password_changes() {
+    if hostkeeper_wire::secret::euid() == 0 {
+        eprintln!("skipped: root writes into a directory whatever its mode");
+        return;
+    }
+    let look = Look::new("ia-delete-adopted-fails");
+    look.put_for("id-1", "admin", 3000);
+    fs::set_permissions(look.dir.path(), fs::Permissions::from_mode(0o500)).unwrap();
+    let why = look.admin.delete_if_adopted("admin", "id-1").unwrap_err();
+    fs::set_permissions(look.dir.path(), fs::Permissions::from_mode(0o700)).unwrap();
+    assert!(
+        matches!(
+            why,
+            InitialAdminError::Delete(std::io::ErrorKind::PermissionDenied)
+        ),
+        "{why}"
+    );
+    assert!(look.path().exists());
+}

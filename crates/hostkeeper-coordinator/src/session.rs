@@ -269,6 +269,20 @@ impl Sessions {
         Some(entry.view.clone())
     }
 
+    /// Clears the session's `must_change` (and its deadline): the user has chosen a new
+    /// password. The session's view as it is now; None for an unknown, ended or expired one.
+    pub fn clear_must_change(&self, id: &str) -> Option<SessionView> {
+        let now = self.clock.now_unix();
+        let mut table = self.table();
+        let entry = table.get_mut(&id_hash(id))?;
+        if self.expired(entry, now) {
+            return None;
+        }
+        entry.view.must_change = false;
+        entry.view.must_change_until = None;
+        Some(entry.view.clone())
+    }
+
     /// Ends the session of a cookie value; whether there was one.
     pub fn end(&self, id: &str) -> bool {
         self.table().remove(&id_hash(id)).is_some()
