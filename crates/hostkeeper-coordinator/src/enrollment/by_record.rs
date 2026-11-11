@@ -101,7 +101,7 @@ pub enum ByRecord {
         host_id: HostId,
         /// The `enrollment.auto_approved` entry as the ops store numbered it; `None` when the
         /// change that makes it could not be written (logged; it is made at the next start).
-        entry: Option<AuditEntry>,
+        entry: Option<Box<AuditEntry>>,
     },
     /// The request stays pending.
     Waits(Waits),
@@ -201,7 +201,8 @@ impl Enrollment {
         let recorded = self.recorded(&checked, &approval, view.claims, &approved.host_group);
         let entry = self
             .ops()
-            .and_then(|ops| record_auto_approval(&ops, &recorded));
+            .and_then(|ops| record_auto_approval(&ops, &recorded))
+            .map(Box::new);
         tracing::info!(
             request_id = %request_id,
             host_id = %host_id,

@@ -18,17 +18,29 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::records::Records;
+use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_mdm_gate::DeviceStore;
 use hostkeeper_oidc::Clock;
 
 use super::{Serve, StartError, take_lock};
+use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
+use crate::enrollment::os_random;
+use crate::initial_admin::InitialAdmin;
 use crate::jti_file::jti_path;
 use crate::lock::{LockGuard, StateLock, lock_path};
+use crate::login::Login;
+use crate::mdm_secrets::MasterKey;
+use crate::mdm_setup::MdmSetup;
 use crate::ops::{Marker, OpsState, unlanded};
+use crate::service::Coordinator;
+use crate::store::mdm_setup::SetupStore;
+use crate::store::mdm_setup::files::FileSetup;
+use crate::store::postgres::mdm_setup::PgSetup;
 use crate::store::postgres::{DatabaseError, Dsn, PgDevices, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
+use crate::tokens::OperatorTokens;
 use crate::verdict_file::verdicts_path;
 
 /// The store a start opened: the backend under the three stores and CI's spent ids, what it
@@ -42,6 +54,8 @@ pub(super) struct Opened {
     pub(super) held: LockGuard,
     pub(super) records: Option<Arc<dyn Records>>,
     pub(super) devices: Option<Box<dyn DeviceStore>>,
+    /// The tables of the MDM setup: the directory beside the state file, or the database's.
+    pub(super) setup: Arc<dyn SetupStore>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -73,6 +87,7 @@ pub(super) fn open_store(
             held,
             records: None,
             devices: None,
+            setup: Arc::new(FileSetup::open(&mdm_setup_dir(&state))?),
         });
     };
     let file_flags = [
@@ -118,6 +133,7 @@ pub(super) fn open_store(
         Some(_) => Some(Box::new(PgDevices::over(&store))),
         None => None,
     };
+    let setup = Arc::new(PgSetup::over(&store));
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
@@ -125,7 +141,44 @@ pub(super) fn open_store(
         held: LockGuard::new(store),
         records,
         devices,
+        setup,
     })
+}
+
+/// The directory of the MDM setup's files beside the state file `state`: `<state>.mdm-setup`.
+#[must_use]
+pub fn mdm_setup_dir(state: &Path) -> PathBuf {
+    let mut path = state.as_os_str().to_owned();
+    path.push(".mdm-setup");
+    PathBuf::from(path)
+}
+
+/// The MDM setup over `store`, sealing under the key of `--mdm-secrets-key-file`, under the start
+/// rules of [`MasterKey::load`]: the key file is made when it is not there and the store holds no
+/// sealed secret, and a start with sealed secrets and no key, or a key that opens none of the
+/// kinds the store holds, is refused.
+///
+/// # Errors
+/// [`StartError::MdmSecretsKey`], [`StartError::MdmSecretsUnopened`] and
+/// [`StartError::MdmSetupStore`].
+pub(super) fn mdm_setup(flags: &Serve, store: Arc<dyn SetupStore>) -> Result<MdmSetup, StartError> {
+    let sealed = MdmSetup::holds_secrets(&*store).map_err(StartError::mdm_setup_store)?;
+    let key = MasterKey::load(flags.mdm_secrets_key_file.as_deref(), sealed, &*os_random())?;
+    let held = key.is_some();
+    let setup = MdmSetup::new(store, key, os_random());
+    if held {
+        let kinds = setup.unopened().map_err(StartError::mdm_setup_store)?;
+        if !kinds.is_empty() {
+            return Err(StartError::MdmSecretsUnopened(
+                kinds
+                    .iter()
+                    .map(|kind| kind.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ));
+        }
+    }
+    Ok(setup)
 }
 
 /// Settles the marker at `marker`, which lists the audit `numbers`, against the `audit` table of
@@ -206,12 +259,19 @@ fn open(
         .with_jti(&jti_path(state), Arc::clone(oidc_clock))?
         .with_desired(state, legacy)
         .with_ops(ops, rotation)?
-        .with_verdicts(&verdicts_path(state));
+        .with_verdicts(&verdicts_path(state))
+        .with_accounts(&accounts_path(state));
     let loaded = files.load()?;
     if let Some(numbers) = marker {
         settle_unfinished(ops, &numbers, &loaded.ops)?;
     }
     Ok((files, loaded))
+}
+
+impl From<crate::store::mdm_setup::SetupError> for StartError {
+    fn from(why: crate::store::mdm_setup::SetupError) -> Self {
+        Self::MdmSetupStore(why.to_string())
+    }
 }
 
 impl From<BackendError> for StartError {
@@ -222,6 +282,7 @@ impl From<BackendError> for StartError {
             BackendError::Desired(why) => why.into(),
             BackendError::Ops(why) => why.into(),
             BackendError::Verdicts(why) => why.into(),
+            BackendError::Accounts(why) => why.into(),
             BackendError::Jti(why) => why.into(),
             BackendError::Spent => Self::Io(io::Error::other(why)),
         }
@@ -295,4 +356,80 @@ pub(crate) fn refuse_unfinished_migrate(state: &Path) -> Result<(), StartError> 
         return Err(StartError::MigrateUnfinished { path: marker });
     }
     Ok(())
+}
+
+/// The tokens an operator calls with: the file of `--tokens-file`, the one token of
+/// `--operator-token-file`, or none when only `--initial-admin-file` is given (the users sign in
+/// with a password).
+///
+/// # Errors
+/// [`StartError::TokenFlags`]: both token flags are given. [`StartError::NoTokenFlag`]: none of
+/// the three flags is. [`StartError::Tokens`] and [`StartError::OperatorToken`]: the file is
+/// refused.
+pub(super) fn operator_tokens(flags: &Serve) -> Result<OperatorTokens, StartError> {
+    let initial = flags.login.initial_admin_file.is_some();
+    Ok(match (&flags.tokens_file, &flags.operator_token_file) {
+        (Some(path), None) => OperatorTokens::from_file(path)?,
+        (None, Some(path)) => OperatorTokens::single(
+            &hostkeeper_wire::secret::read_token(path).map_err(StartError::OperatorToken)?,
+        ),
+        (Some(_), Some(_)) => return Err(StartError::TokenFlags),
+        (None, None) if initial => OperatorTokens::none(),
+        (None, None) => return Err(StartError::NoTokenFlag),
+    })
+}
+
+/// The initial-admin file `--initial-admin-file` names, judged by the wall clock, or none.
+///
+/// # Errors
+/// [`StartError::InitialAdmin`]: the password settings are refused.
+pub(super) fn initial_admin(flags: &Serve) -> Result<Option<InitialAdmin>, StartError> {
+    let login = &flags.login;
+    login
+        .initial_admin_file
+        .as_ref()
+        .map(|path| {
+            InitialAdmin::new(
+                path.clone(),
+                login.initial_password_secs,
+                login.password_settings(),
+                wall_clock(),
+            )
+        })
+        .transpose()
+        .map_err(StartError::from)
+}
+
+/// `coordinator` looking at the initial-admin file of `--initial-admin-file`, if it is given, and
+/// having looked once: the user a fresh file asks for exists before the first call is served.
+///
+/// # Errors
+/// [`StartError::InitialAdmin`]: the settings or the file are refused.
+pub(super) fn with_initial_admin(
+    coordinator: Coordinator,
+    flags: &Serve,
+) -> Result<Coordinator, StartError> {
+    let coordinator = match initial_admin(flags)? {
+        Some(file) => coordinator.with_initial_admin(file),
+        None => coordinator,
+    };
+    coordinator.look_at_initial_admin()?;
+    Ok(coordinator)
+}
+
+/// `coordinator` serving the sign-in routes, over the settings of the login flags, judged by the
+/// system's clock and drawing session ids from the system's random bytes.
+///
+/// # Errors
+/// [`StartError::Password`]: the password hash parameters are outside what Argon2id takes.
+pub(super) fn with_login(
+    coordinator: Coordinator,
+    flags: &Serve,
+) -> Result<Coordinator, StartError> {
+    let login = Login::new(
+        flags.login.login_settings(),
+        Arc::new(SystemClock),
+        os_random(),
+    )?;
+    Ok(coordinator.with_login(login))
 }

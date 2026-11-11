@@ -162,7 +162,7 @@ capability instead). The script is the owner's (S3) and the choice is confirmed 
 | `GET /pkg/<sha256>.pkg` | the MDM client, following `InstallEnterpriseApplication` | the digest is the capability: only files named in the installs setting |
 | `GET /apt/<repo>/dists/...` and `/apt/<repo>/pool/...` | a host's apt, including a wiped host before it enrolls | none: public bytes, read-only, by the route shape; the client checks the signatures (package-proxy.md) |
 
-The routes of this table are the whole surface of the listener: the setup rpcs, `/v1/*`, the sign-in routes and `/ui/` are on the private listener only, and on this one every other path answers `404` (a test asserts it for each of those, CM20). Each route family is served when its own prerequisites are set (package-proxy.md section 3): the proxy needs only the name and the certificate.
+The routes of this table are the whole surface of the listener: the setup rpcs, `/v1/*`, the sign-in routes and `/ui/` are on the private listener only, and on this one every other path answers `404` (a test asserts it for each of those, CM20; **Built**: `http::Surface::Mdm`, which `grpc::route` hands to the JSON router alone, with no gRPC, no gateway, no cookie and no token read, and which answers `404 not_found` to every request until each route of the table lands with its task). Each route family is served when its own prerequisites are set (package-proxy.md section 3): the proxy needs only the name and the certificate.
 
 **Why a listener of its own and not routes on the heartbeat or LAN listener.** The heartbeat surface admits any client certificate of the
 host CA and is pinned by every daemon's `ca_sha256`. A Mac at Setup Assistant holds no certificate and trusts only public roots, so its
@@ -471,14 +471,18 @@ and 14, `abm_alert_days` 60, `tls_renew_days` 30, `identity` as in 4.2); crossin
 colours the panel, so a renewal is a reminder in the UI and not a calendar entry. These are what the coordinator can know; it cannot know
 that Apple revoked a certificate until APNs answers `403` (4.3), and says so.
 
-**Storage of the secrets.** One new table, `mdm_secrets` (its own migration, with its file-store family): one row per record kind (push key
-and certificate, mdmcert encryption key, ABM key and token, MDM CA key, ACME account key, DNS credential, TLS key), holding the ciphertext, the fingerprint, the
-expiry and a version. Each value is sealed with AES-256-GCM (`ring`, already in the workspace) under a master key read from one file named
-by `--mdm-secrets-key-file`; the associated data is the record kind and version, so a row cannot be replayed into another kind. The flag
+**Storage of the secrets.** (**Built**, CM20: `crates/hostkeeper-coordinator/src/{mdm_secrets,mdm_setup,mdm_settings,operator_mdm_setup}.rs`,
+`store/mdm_setup/`, migration `0012_mdm_setup`.) One new table, `mdm_secrets` (its own migration, with its file-store family): one row per record kind and version (push key
+and certificate, mdmcert encryption key, ABM key, certificate and token, MDM CA key, ACME account key, DNS credential, TLS key and certificate: `push_key`, `push_cert`,
+`push_encryption_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key`, `tls_cert`; the ABM token is the JSON of its four
+OAuth parts and `access_secret_expiry`, the key a PKCS#1 PEM as Apple's tooling and NanoDEP write it), holding the ciphertext, the fingerprint, the
+expiry and the version. The file store keeps the same rows in `<state-file>.mdm-setup/secrets.json`. Each value is sealed with AES-256-GCM (`ring`, already in the workspace) under a master key read from one file named
+by `--mdm-secrets-key-file` (64 hex digits); the sealed bytes are a random 12-byte nonce, then the ciphertext and its tag; the associated data is a fixed label, the record kind and version, so a row cannot be replayed into another kind or version. The flag
 names a file of secret material, an exception S2 allows, and it is the only secret outside the store. Rules:
 
 - The file is created by the coordinator (mode 0600, no symlink) when it is absent **and** the store holds no sealed row; a missing file
-  with sealed rows is a start-time error, never a silent new key (that would orphan every secret). Backups of the database hold only
+  with sealed rows is a start-time error, never a silent new key (that would orphan every secret); so is no flag with sealed rows, and a key
+  that opens none of the rows of a kind the store holds (**Built**). Backups of the database hold only
   ciphertext; the key file is backed up apart from it, and the runbook says that losing it loses the MDM CA, which means every Mac
   re-enrolls (an erase), the push certificate and the ABM token are uploaded again.
 - Plaintext lives in memory of the coordinator only while in use, in types that print nothing (a redacting `Debug`); a test asserts by
@@ -508,9 +512,18 @@ be read:** the listen addresses (`--mdm-listen`, the existing ones), the store c
 and `--mdm-pkg-dir` (a file of key material and a directory of files the host provides). The flags of sections 4.1 to 4.8 that earlier
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
-setup page**, each with its default from the start (the numbers stay as written in this document), kept in one row `mdm_settings` and
+setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
+
+**What CM20 built of the rpcs.** Four `Mdm` rpcs over these tables, which the later tasks narrow with the validated ones of their steps (CM7, CM13, CM17, CM21):
+`PutSecret` (a kind and the material, 1 byte to 32 KiB, an `abm_token` read as its five-field JSON; answers the kind, version, fingerprint and times) and `PutSetting`, both
+**session-only** (`grpc::SESSION_ONLY`: an operator token gets `PERMISSION_DENIED` `session_required`, and CI's token `forbidden`), and `ListSecrets` and `ListSettings`, which
+any operator caller reads. A write is audited before the store is touched, under the signed-in user's name, with the action of the kind (`mdm_push_cert_put`, `mdm_abm_token_put`,
+`mdm_tls_put`, `mdm_acme_credential_put`, or `mdm_secret_put` for the kinds with no action of their own in the list above), and a refusal after the caller is known, or a store that
+then fails, adds an entry of the same action whose reason is the refusal's token; if the entry cannot be written the write is not made (`audit_unavailable`). Reads are not audited: a
+panel that polls would fill the log. The Debug and Display of every secret type print nothing of it.
 
 **Single node.** The sync, the push sender and the listener are single-node in v1: the coordinator refuses to start the MDM listener
 when the store's lease is held by another coordinator that serves MDM (the lease record names whether it does). Because the secrets are
@@ -765,8 +778,25 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 ### 9.1 Compatibility (B8) and formats
 
 - Two migrations add tables only. The login one, first (operator-login.md): `users` and `api_tokens`; sessions are in memory. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
-  `mdm_identities`, `abm_devices`, `abm_state`, `mdm_secrets`, `mdm_settings`. Each table has a file-store family, because both backends exist
-  today, and each header is `older-releases: may-run`. The device record of the gate, `mdm_devices`,
+  `mdm_identities`, `abm_devices`, `abm_state`; `mdm_secrets` and `mdm_settings` are the migration of CM20's own, as 4.9 says. Each table has a file-store family, because both backends exist
+  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0010_mdm.sql` (it takes the next free number; the login migration is not on `main`, and
+  whichever of the two lands second is renumbered before it merges, since no MDM table refers to a login table), the port `MdmStore`
+  (`crates/hostkeeper-coordinator/src/store/mdm/`) with its two stores, `FileMdm` (one `<family>.json` file per table in a directory, each
+  `{"schema": 1, "rows": [...]}`, replaced whole, the commands written before the enrollments so that a change that stops half way leaves
+  commands cancelled under an enrollment that still stands and never the reverse) and `PgMdm`
+  (`store/postgres/mdm.rs`), and one conformance suite run against both. The tables keep the rules of the model check of section 10 by
+  themselves: one live enrollment per serial (a unique index; the new `Authenticate` retires the old row, cancels its commands and retires
+  its identity in one change), enqueue idempotent on the command id and refused for an enrollment that is not live, a claim of one
+  `UPDATE ... FOR UPDATE SKIP LOCKED` that takes only a queued command of a live enrollment that the connection has not tried, an
+  answer matched only to a command in `Sent` through the enrollment it was sent to (`NotNow` queues it again, marked deferred),
+  `requeue_timed_out` that hands back the commands for the caller to push, and a challenge consumed once (keyed on the challenge and the
+  hash of the key, so a repeat with the same key gets the stored certificate whatever its `transactionID`, and a refusal changes
+  nothing). The store is a table store and does not bind an enrollment to its identity: `replace_live` takes the `cert_sha256` it is given, and an
+  enrollment without one retires no identity when it ends. CM11a, which holds the certificate that the Mac presented and looks its identity up, must check before the call that
+  the identity is issued and has the serial and the UDID of the enrollment, and must enter every enrollment with its `cert_sha256`. `FileMdm` writes back, with their rows,
+  the fields of a later release that it read, so that a rollback and a roll forward lose none; a file whose directory could not be synced after the file was put in place is counted
+  as written (the change is kept and the failure is logged), since the memory must not differ from what a restart reads. A write that fails before a file is replaced leaves the memory as it was, and
+  the families written before it stay until the next change that writes them. `import` and `export` between the stores do not carry these tables yet (no code writes them before CM11a). The device record of the gate, `mdm_devices`,
   gains no required field.
 - New flags: `--mdm-listen`, `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir`; the login flags (`--initial-admin-file`, `--initial-password-secs`, the session, lockout and password settings) are listed in operator-login.md section 10; the rest of MDM and of the
   proxy is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
@@ -866,7 +896,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM12a | Spike on the farm Mac: capture the `/enroll` POST and prove the Apple chain verifies; read whether the `/enroll` response must be signed; run a SCEP exchange against a library fixture; read which client-auth mode the live profile uses. Output: a note and fixtures, decides 4.2 | CM1 | S |
 | CM5 | `hostkeeper-mdm-server`: plist wire types for check-in and results, with Apple-schema fixtures and negative cases | CM1 | M |
 | CM6 | The MDM migration (after the login one), the file-store families, conformance tests for both stores, `abm_devices` (with `abm_state.profile_uuid`) and `mdm_enrollments` first | CM4 | M |
-| CM20 | **Secrets and settings, no UI yet.** Tables `mdm_secrets` and `mdm_settings`, the AES-256-GCM seal under `--mdm-secrets-key-file` with its start rules, redacting types, the audit actions of 4.9. Setup writes need a signed-in user: the rpcs carry the session-only attribute of L6b, so an API token is refused. Tests: nothing returned after upload, a row does not open as another kind, a missing key refuses to start, a token gets a permission error, and on the MDM listener every path outside the 4.1 table is 404 (setup rpcs, `/v1/*`, `/ui/`) | CM6, L6b | M |
+| CM20 | (**Built**) **Secrets and settings, no UI yet.** Tables `mdm_secrets` and `mdm_settings`, the AES-256-GCM seal under `--mdm-secrets-key-file` with its start rules, redacting types, the audit actions of 4.9. Setup writes need a signed-in user: the rpcs carry the session-only attribute of L6b, so an API token is refused. Tests: nothing returned after upload, a row does not open as another kind, a missing key refuses to start, a token gets a permission error, and on the MDM listener every path outside the 4.1 table is 404 (setup rpcs, `/v1/*`, `/ui/`) | CM6, L6b | M |
 | CM7 | APNs sender (priority, expiry, event-based outstanding) and the push certificate lifecycle as `Mdm` rpcs: create the request (key, CSR, encryption key), the mdmcert.download reply decrypt, certificate and key upload (the migration), expiry alerts. The sender's rules include `NotNow` and a timeout return arming the floor (4.3). Begins by reading mdmcert.download's formats. No `hkctl`-only verbs: the generated CLI gets the rpcs for free | CM5, CM20 | M |
 | CM21 | `Mdm.Status`, the name and settings rpcs, the *configured* computation, the extended `ListDevices` (enrollment state, host id, group, baseline status) | CM20 | S |
 | CM22a | **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, L8a | M |

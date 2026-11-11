@@ -12,6 +12,9 @@ use std::sync::Mutex;
 use hyper::HeaderMap;
 
 use super::*;
+use crate::login::Login;
+use crate::login_support::{Seconds, counting, settings};
+use crate::service::Coordinator;
 use crate::ui::{CONTENT_SECURITY_POLICY, MAX_FILE_BYTES, Open, PREFIX, UiDir, UiDirError};
 
 const INDEX: &str = "<!doctype html><title>operator</title>";
@@ -62,6 +65,13 @@ struct Site {
     opened: Opened,
 }
 
+/// `coordinator` with a sign-in over cheap hashes, by the rig's clock.
+fn with_signin(rig: &Rig, coordinator: Coordinator) -> Coordinator {
+    let login = Login::new(settings(), Arc::new(Seconds(rig.clock.clone())), counting())
+        .expect("a sign-in");
+    coordinator.with_login(login)
+}
+
 fn site(name: &str) -> Site {
     let mut rig = Rig::new(name);
     let ui = rig.dir.path().join("ui");
@@ -75,7 +85,8 @@ fn site(name: &str) -> Site {
     fs::write(rig.dir.path().join("secret"), SENTINEL).expect("written");
     let opened = Opened::default();
     let dir = UiDir::with_open(&ui, opened.port()).expect("a directory");
-    rig.coordinator = Rig::start(&rig.dir, &rig.clock).with_ui(Some(dir));
+    let coordinator = Rig::start(&rig.dir, &rig.clock).with_ui(Some(dir));
+    rig.coordinator = with_signin(&rig, coordinator);
     Site { rig, ui, opened }
 }
 
@@ -540,26 +551,44 @@ async fn the_static_handler_needs_no_token_and_reads_none() {
     assert_eq!(site.opened.paths().len(), 4);
 }
 
-/// Catches: a UI-specific route (a login, a session, a config, a second way to the API): every
-/// method over the committed paths and the probe paths, asked on the private surface of a
-/// coordinator serving a directory, is answered exactly on the routes of
-/// `private_routes.txt`; without `--ui-dir` it is those routes less `/ui/*`; and the heartbeat
-/// surface answers `POST /v1/heartbeat` alone.
+/// Catches: a route nobody listed (a config, a second way to the API, a sign-in route beyond the
+/// four): every method over the committed paths and the probe paths, asked on the private surface
+/// of a coordinator that serves a directory and has a sign-in, is answered exactly on the routes
+/// of `private_routes.txt`; without `--ui-dir` it is those routes less `/ui/*`; without a sign-in
+/// it is those less the four sign-in routes; and the heartbeat surface answers `POST
+/// /v1/heartbeat` alone.
 #[tokio::test]
-async fn the_private_route_set_is_unchanged() {
+async fn the_private_route_set_is_the_committed_one() {
     let site = site("ui-routes");
     let committed = committed_routes();
     assert_eq!(
         answered(&site.rig, Surface::Control, &None).await,
         committed
     );
-    let plain = Rig::new("ui-routes-plain");
+    let mut plain = Rig::new("ui-routes-plain");
+    plain.coordinator = with_signin(&plain, Rig::start(&plain.dir, &plain.clock));
     let without: BTreeSet<String> = committed
         .iter()
         .filter(|route| !route.ends_with("/ui/*"))
         .cloned()
         .collect();
     assert_eq!(answered(&plain, Surface::Control, &None).await, without);
+    let mut unsigned = Rig::new("ui-routes-unsigned");
+    let ui = unsigned.dir.path().join("ui");
+    fs::create_dir_all(&ui).expect("the directory");
+    fs::write(ui.join("index.html"), INDEX).expect("written");
+    unsigned.coordinator = Rig::start(&unsigned.dir, &unsigned.clock)
+        .with_ui(Some(UiDir::new(&ui).expect("a directory")));
+    let without_signin: BTreeSet<String> = committed
+        .iter()
+        .filter(|route| !route.contains("/v1/login") && !route.contains("/v1/logout"))
+        .filter(|route| !route.contains("/v1/password") && !route.contains("/v1/session"))
+        .cloned()
+        .collect();
+    assert_eq!(
+        answered(&unsigned, Surface::Control, &None).await,
+        without_signin
+    );
     assert_eq!(
         answered(&site.rig, Surface::Heartbeat, &None).await,
         BTreeSet::from([format!("POST {HEARTBEAT_PATH}")])
