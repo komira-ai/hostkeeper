@@ -231,7 +231,7 @@ The wire stays additive: no field, message, enum value, call or service is renum
 | `agent.v1.HeartbeatResponse`, `HeartbeatRequest` | | New `HostFacts facts` in the answer and `facts_generation` in the request; the daemon feature `facts-v1` |
 | `HostGroups` service | | New (section 7.1) |
 
-Coordinator configuration, old -> new: `--rollout-file` is refused by `serve` once this is built, naming the migration verb (section 10); it is read only by `hostkeeper-coordinator host-groups migrate`. `--live-rollouts` stays, as the default of a group's `live_rollouts`. The OIDC allow-list gains `host_groups` (section 2.2). The Mac allowlist's `role` is read as `host_group`, which it gains; its `services` is refused at start. The repository registry's entry gains `access` and `credential_file` (section 6.6).
+Coordinator configuration, old -> new: `--rollout-file` is refused by `serve` once this is built, naming the operator API calls that place the hosts instead (the removal note of section 10); no verb reads it. `--live-rollouts` stays, as the default of a group's `live_rollouts`. The OIDC allow-list gains `host_groups` (section 2.2). The Mac allowlist's `role` is read as `host_group`, which it gains; its `services` is refused at start. The repository registry's entry gains `access` and `credential_file` (section 6.6).
 
 ## 8. Storage
 
@@ -269,6 +269,8 @@ The wire stays additive (section 7.2), and the coordinator's own store is intern
 | A release before refuses the migrated store (migration `0008` `refuse`; the state file's and the ops file's `host_groups` keys) | A release before would place by roles over hosts that have none. Going back is restoring the backup of section 10. The test that the previous release reads the new data is therefore replaced by the test that it refuses it, naming the migration. |
 
 ## 10. Migration in one update window
+
+*Removed:* the verb `hostkeeper-coordinator host-groups migrate` described here was removed after it shipped in release 0.1.253. A fleet placed by roles moves to groups through the operator API, in [Moving a fleet from roles to host groups](../operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups); the rest of this section is the design as it was built, kept as history.
 
 Today's roles, rollout file and assignments become groups in one window, with the hosts running throughout. The new coordinator's `serve` refuses `--rollout-file`; the conversion is one offline verb over the store:
 

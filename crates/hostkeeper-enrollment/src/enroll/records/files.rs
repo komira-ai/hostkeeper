@@ -378,8 +378,8 @@ impl Records for FileRecords {
     }
 }
 
-/// Every record of a store, read whole: what `hostkeeper-coordinator import` moves into its
-/// database and `export` writes back (docs/design/coordinator-storage.md, section 11).
+/// Every record of a store, read whole: what `hostkeeper-coordinator export` writes from its
+/// database (docs/design/coordinator-storage.md, section 11) and its tests read back.
 ///
 /// Each list is in the order of its key, as a file store lists its files.
 #[derive(Clone, Debug, Default, PartialEq)]

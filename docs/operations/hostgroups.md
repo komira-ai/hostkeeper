@@ -4,7 +4,7 @@ A host group is a name, the ordered list of the packages its hosts run, and one 
 Every enrolled host is in at most one group, and a host runs exactly the packages its group
 lists, at the group's desired version of each. This page is what the coordinator does with groups.
 The design is [hostgroups.md](../design/hostgroups.md). A fleet that was placed by roles and a
-rollout file is converted once, offline, by [Migrating from roles](#migrating-from-roles).
+rollout file moves through the operator API, by [Moving a fleet from roles to host groups](#moving-a-fleet-from-roles-to-host-groups).
 `hkctl` is [cli.md](../cli.md).
 
 Every `HostGroups` call takes the operator token only: a CI token is refused with `forbidden`, no
@@ -34,9 +34,10 @@ nor resets it, so an incident's minimum is never undone by putting the group's f
 ## How the coordinator places hosts
 
 `serve` always places by groups, whether or not the coordinator holds a group yet: it refuses
-`--rollout-file` (`--rollout-file is not read by serve: convert it once with hostkeeper-coordinator
-host-groups migrate (docs/operations/hostgroups.md)`) and has no rollout file, role or assignment
-to place by. A coordinator that holds no group orders every host nothing. The coordinator decides
+`--rollout-file` (`--rollout-file is not read by serve: start serve without it and place hosts with
+the operator API: HostGroups.Put each group, HostGroups.Move each host, Services.SetRepository and
+Services.SetMinVersion where needed, Releases.SetDesired per group (docs/operations/hostgroups.md)`)
+and has no rollout file, role or assignment to place by. A coordinator that holds no group orders every host nothing. The coordinator decides
 at each heartbeat:
 
 - A host runs the packages its group lists and no others. `Services.Assign` and
@@ -49,8 +50,8 @@ at each heartbeat:
   `unknown_host_group`, a coordinator that holds none included.
 - A host in no group is ordered nothing: no install, no update, no uninstall. It keeps running
   what it runs. A host is in none when it was approved before the coordinator held a group, until
-  `Move` puts it in one; [the migration](#migrating-from-roles) puts every host of a role in a
-  group.
+  `Move` puts it in one; [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
+  puts every host of a role in the group of that name.
 - The role the coordinator's fleet records for a host is the name of its group (empty for a host in
   none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
   `host_group` (an approval by group writes the group's name as the host's role, too); a host in
@@ -401,140 +402,46 @@ with `host_group` lists those entries. The actions `host_group_put`, `host_group
 `rollout_advance`, `rollout_pause`, `rollout_resume` and the rollback entries name the group of
 the plan they are about.
 
-## Migrating from roles
+## Moving a fleet from roles to host groups
 
-A coordinator that placed hosts by roles, a rollout file and assignments is converted once, by an
-offline verb over its store. `serve` does not read the rollout file any more and refuses it, so
-the conversion is the window in which a fleet changes from one to the other, with the hosts running
-throughout and no service touched.
+A coordinator that placed hosts by roles, a rollout file and assignments moves to groups through
+the operator API, with the hosts running throughout and no service touched. `serve` does not read
+the rollout file any more and refuses it, and a coordinator that holds no group orders every host
+nothing (see [How the coordinator places hosts](#how-the-coordinator-places-hosts)), so the order
+below is safe at every step.
 
-```
-hostkeeper-coordinator host-groups migrate --rollout-file <file> \
-    ( --state-file <file> [--ops-file <file>] --enrollment-dir <dir> | --database-dsn-file <file> ) \
-    [--legacy-service <name>] [--live-rollouts <n>] [--mac-serial-allowlist <file>] [--apply]
-```
-
-- `--rollout-file` (required) is the file `serve` was given, read once with the reader `serve` used
-  (a file it refused is refused here, `--rollout-file: ...`).
-- The store is given by the flags `serve` names it by: exactly one of `--state-file` (with
-  `--ops-file`, default the state file's name with `.ops` added, and `--enrollment-dir`) or
-  `--database-dsn-file`; a file flag beside the database is refused, naming it. The enrollment store
-  is required: without `--enrollment-dir` the verb is refused, since without the enrolled hosts
-  there is no host to put in a group.
-- `--legacy-service` reads a desired-state file in the single-state form, as `serve` does.
-  `--live-rollouts` (1 to 16, default 1) is `serve`'s, and is used only for the note the plan
-  prints. `--mac-serial-allowlist` is read so that the plan can say what each entry needs.
-- **Without `--apply`** (the dry run) it reads the store and the rollout file and writes nothing: no
-  file is made or changed, no lock taken, no migration run. It prints the plan and exits 0, or, when
-  the plan holds an error, prints it to standard error and exits 1.
-- A store that holds a host group already is refused (`the store already holds a host group: it is
-  migrated already`), with `--apply` and without. A store that holds `<state-file>.migrate-unfinished`
-  or the marker of a restore is refused as `serve` refuses it.
-
-### What the plan is
-
-For each enrolled host that is not denied, the set of packages placed on it today, decided as
-the coordinator decided it (the rollout file's roles and selector, then the entries of the role and
-of the host), plus `hostkeeper`. A host whose role is empty or is not a group name is an error
-naming it. Then:
-
-- **Groups.** The hosts of one role with the same set form one group named after the role. When the
-  hosts of a role run different sets, the most common set takes the role's name (a tie goes to the
-  set whose first host, by node id, sorts first) and each other set is `<role>-2`, `<role>-3`, in
-  the order of the node id of its first host. A derived name that is over 32 bytes, or that is
-  already a role's name (of a host, a record, an approval, the rollout file or the Mac allowlist),
-  is an error naming the role. A role that a record, a pending approval or an allowlist entry names
-  and no host has gets a group too, with the set the file places on a host of that role with no
-  labels, and a role nothing names gets none.
-- **Packages.** A group lists its set by the rollout file's `priority` (higher first), then by
-  name; `hostkeeper` has priority 0. More than 64 packages is an error naming the group.
-- **Policy.** The keys the rollout file's services of the group agree on become the group's
-  policy. Where they differ, the most careful value of each key, and the plan prints each choice
-  (`bake_beats 5: the highest of kbf 5, tierstore 0`): the `stages` and `canary` of the service
-  whose first stage holds the fewest of the group's hosts (a tie goes to the first by name), the
-  highest `bake_beats`, `manual` over `automatic` for `rollback`, the lowest
-  `rollback_after_failed` percent and `min_hosts`, the longest `defer_backoff` of each field, and,
-  from the per-role limits of the desired state over the group's packages that have one, the
-  lowest `max_updating` and the highest `min_up`. `live_rollouts` is left unset, so it follows
-  `serve --live-rollouts`; a group may now roll that many packages at once where the whole fleet
-  did, and the plan says so. A policy that fails its checks is an error naming the group and key.
-- **Desired versions and marks.** Each group's desired version of each package that has one (its
-  generation kept on the database, 1 on the files), the package's `last_good`, halt, halt
-  acknowledgements and force marks (a force of a role is rewritten to the group, one of hosts is
-  cut to the group's hosts, and one that covers none of them is dropped), and the plan's position
-  (stages entered, pause), with its done hosts split to the group each is in. The release registry
-  and the versions marked bad stay per package. The package's own fields, the assignments, the
-  plans and the per-role state are left as they are, unread afterwards.
-- **Minimum versions.** What `Services.SetMinVersion` of a role writes: for each group that lists a
-  package, the higher of the role's minimum and the rollout file's `min_version`. Host minimums,
-  exclusions and holds of a host, and uninstall intents, stay as they are. A hold of a role is kept
-  and copied to each other group of that role.
-- **Repositories.** What `Services.SetRepository` writes: each service of the rollout file whose
-  `repository` is not `komira`. A repository the registry does not hold is an error naming the
-  service. Put the registry's entries in place first ([package-repositories.md](../deploy/package-repositories.md)).
-- **Records.** Each enrolled host's `host_group`, each approved request not yet polled, and each
-  inventory record of a role with no group, get the group of their role. A Mac allowlist entry
-  cannot be rewritten by the verb: the plan prints the `host_group = "<role>"` it needs and the
-  `services` that go, and an entry whose services are not all in its group's packages is an error
-  naming its serial.
-- **Audit.** One `host_group_put` entry per group (by `migration`, reason `migrated from role
-  <role>: <n> hosts`), each followed by that group's `set_min_version` entries, then the
-  `set_repository` entries (reason `repository <name>: from the rollout file`), numbered after the
-  store's newest line.
-- **A check.** For every host and package, the placement after the migration (its group's list)
-  must equal the set it has today; a difference is an error naming host and package. The groups
-  are built so there is none.
-
-The report is the same with and without `--apply`: a header line (`hostkeeper-coordinator
-host-groups migrate: the file store of <state-file> (dry run)`), per group `group <name> (from role
-<role>): <n> hosts; packages a, b, c` with its non-default policy, merge choices, desired versions,
-marks and minimums indented under it, the `hosts:` by group, the `repositories:`, the `records:`
-(hosts, approvals, inventory records and allowlist entries), the `live_rollouts:` note, then
-`no errors` or `errors:` with each one. The last line is `nothing written; --apply writes it in one
-commit` for a dry run. With any error the report ends `nothing written; --apply refuses while there
-is an error`, and `--apply` writes nothing and exits 1.
-
-### What `--apply` writes
-
-`--apply` writes the plan in one commit and prints it, ending `written in one commit (files); audit
-entries <first>..<last>` or `written in one transaction (database); audit entries <first>..<last>`.
-
-- **Database.** In one transaction: the changed rows of the desired state and the ops, the changed
-  enrollment records, the audit rows. It takes the database's lock first, so a coordinator serving
-  on it refuses the verb, and runs the migrations the database lacks. It reads everything back and compares it with the plan, and a difference
-  rolls the transaction back. It does not raise the lease's epoch.
-- **Files.** Under the lock of the state files, which a running coordinator holds (so it refuses
-  with `a coordinator holds the lock of these state files`). It first writes the marker
-  `<state-file>.migrate-unfinished`, then the changed enrollment records, the audit lines and the
-  ops file, and the state file last: the state file is what introduces `host_groups`, and is the
-  commit point. It removes the marker at the end.
-- **The marker.** A write that fails (or a stop partway) leaves the marker and returns the error.
-  `serve`, `backup`, `restore`, `import`, `export` and `migrate` then refuse the files:
-  `<state-file>.migrate-unfinished: a host-groups migrate --apply stopped partway; restore the
-  backup taken before it and run it again`. Restore the backup of the window, then run it again.
-
-### The window
-
-1. **Before the window**, on a copy of the store (`hostkeeper-coordinator export --into-empty` of
-   a database into new files, or the backup of the files restored into new paths, both in
-   [coordinator-state.md](coordinator-state.md)), or on the store itself (a dry run writes nothing
-   and takes no lock), run the verb without `--apply`. On a database the dry run runs no
-   migration: one whose schema is older than this release is refused by the read, and one that is
-   newer is refused, so rehearse on a restored copy that a `serve` of this release has opened. Read the groups and policy choices, and fix
-   every error: name or set the roles right, put the repositories in the registry, trim a
-   package list.
-2. **In the window.** Stop the coordinator. Take the backup
+1. **Start this release without the rollout file.** Stop the coordinator and take the backup
    ([coordinator-state.md](coordinator-state.md#backing-up) for the files, `pg_dump` for the
-   database). Run the verb with `--apply`. Edit the coordinator's configuration: drop
-   `--rollout-file` (or `rollout-file` of the configuration file), and in the Mac serial
-   allowlist add the `host_group` and remove the `services` of each entry the plan listed (a start
-   refuses an entry that names `services`, or a group the store does not hold). Start the new
-   release.
-3. **After the window.** Point CI at the groups (`host_group` of its release step,
-   [github-actions.md](../deploy/github-actions.md)), put the config packages into their groups
-   with `hkctl host-groups put`, and stop naming roles in scripts: `--role` is read as the group's
-   name.
+   database). Drop `--rollout-file` (or `rollout-file` of the configuration file). Also leave out
+   `--mac-serial-allowlist` for now: a start refuses an entry that names `services`, and one that
+   names a group the store does not hold, which at this point is every group. Start the release.
+   Every host keeps running what it runs and is ordered nothing.
+2. **Put each group.** `hkctl host-groups put` with the group's packages in install order and its
+   policy ([cli.md](../cli.md#hkctl-host-groups-put), [The calls](#the-calls)). Name a group after
+   the role whose hosts it takes.
+3. **Move each enrolled host into its group.** `hkctl host-groups move` for each host, the hosts
+   of a role into the group of that name ([cli.md](../cli.md#hkctl-host-groups-move),
+   [Moving a host](#moving-a-host)).
+4. **Set what the rollout file held per package.** `hkctl services set-repository` for each
+   package whose repository is not `komira` (put the registry's entries in place first,
+   [package-repositories.md](../deploy/package-repositories.md)), and `hkctl services
+   set-min-version` for each minimum a group needs
+   ([Where a package's repository and minimum version come from](#where-a-packages-repository-and-minimum-version-come-from)).
+5. **Set the desired versions.** `hkctl releases set-desired --host-group <group>` for each
+   package of each group ([Deployments](#deployments-a-version-is-set-in-a-group)), and point CI at
+   the groups with the `host_group` of its release step
+   ([github-actions.md](../deploy/github-actions.md)).
+6. **Bring the Mac allowlist back.** Once the groups exist, give each entry of
+   `--mac-serial-allowlist` its `host_group` and remove its `services`, and start the coordinator
+   with the file again.
 
-To go back, restore the backup and the old configuration with the release before: the migrated
-files hold `host_groups`, which that release refuses. A coordinator holding groups has no way back
-to roles but the backup.
+A host is ordered nothing until both its group exists and has a desired version, so no service is
+touched while the move runs; a host's packages change only when step 5 gives its group a version
+that differs from what it runs. Scripts that pass `--role` to `hkctl enrollment approve` or
+`enrollment add-record`, or name a `role` in a `releases force` request, keep working: it is read as
+the group's name. Scripts that call `services assign` or `unassign`, or approve naming services, are
+refused (`placed_by_host_group`, `services_retired`) and must change.
+
+To go back, restore the backup and the old configuration with the release before: the store now
+holds `host_groups`, which that release refuses. A coordinator holding groups has no way back to
+roles but the backup.
