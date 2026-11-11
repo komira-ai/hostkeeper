@@ -404,6 +404,11 @@ fn a_setting_is_judged_audited_and_listed() {
             ("acme_timeout_s", "300", true),
             ("tls_check_s", "300", true),
             ("tls_retry_s", "3600", true),
+            ("proxy_wait_s", "10", true),
+            ("proxy_redirects", "3", true),
+            ("proxy_index_ttl_s", "300", true),
+            ("proxy_cache_max_bytes", "21474836480", true),
+            ("proxy_fetches", "8", true),
         ]
     );
     assert_eq!(
