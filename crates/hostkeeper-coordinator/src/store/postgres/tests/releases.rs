@@ -397,9 +397,9 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
 
     let (ran, held) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..3]).expect("the release before's set");
-        let refused = migrate::refuse_newer(session, &before).expect_err("0008 stops it");
-        let ran = migrate::apply(session, &before).expect_err("its runner is refused");
-        let ran = [refused.to_string(), ran.to_string()];
+        let ran = migrate::apply(session, &before)
+            .expect_err("its runner is refused")
+            .to_string();
         let mut tables = Tables::new();
         for table in &state::DESIRED[..2] {
             let rows = session
@@ -413,9 +413,10 @@ fn the_release_before_runs_on_a_database_with_a_release_and_reads_the_third_form
             state::desired_of(&tables).expect("its load reads the state"),
         )
     });
-    let refused = "the database's schema is newer than this coordinator (migration 8, host_groups)"
-        .to_owned();
-    assert_eq!(ran, [refused.clone(), refused]);
+    assert_eq!(
+        ran,
+        "the database's schema is newer than this coordinator (migration 8, host_groups)"
+    );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),

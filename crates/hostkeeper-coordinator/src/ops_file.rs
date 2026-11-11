@@ -482,29 +482,6 @@ pub(crate) fn joined(path: &Path, ops: OpsState) -> Result<(OpsState, usize), Op
     Ok((join(ops, file), skipped))
 }
 
-/// [`joined`] without a write: `ops`, the state the ops file at `path` holds, joined with the
-/// halts file a start would settle on. A staged halts file that names the ops file's digest is
-/// the one a start renames in, and is read in its place; any other is the one a start removes,
-/// and is passed over. Nothing is renamed or removed.
-///
-/// # Errors
-/// [`OpsError`]: a file cannot be read, or a halts file holds what this build refuses.
-pub(crate) fn read_joined(path: &Path, ops: OpsState) -> Result<OpsState, OpsError> {
-    let staged = staged_path(path);
-    let committed = read_if_any(path)?.map(|text| digest(&text));
-    let (file, _skipped) = match read_if_any(&staged)? {
-        Some(bytes)
-            if committed
-                .as_ref()
-                .is_some_and(|ops| names(&bytes).as_ref() == Some(ops)) =>
-        {
-            parse_halts(&staged, &bytes)?
-        }
-        _ => read_halts(&halts_path(path))?,
-    };
-    Ok(join(ops, file))
-}
-
 /// The bytes [`write`] puts into the ops file at `path` and into its halts file for `state`: the
 /// halts file's are none when [`write`] writes none, on an ops file with no halts file beside it.
 ///

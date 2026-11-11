@@ -212,12 +212,9 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
   (`crates/hostkeeper-pxe/src/serve/tests/repositories.rs`, the golden `user-data-repositories.yaml` of
   `crates/hostkeeper-pxe-seed/tests/seed.rs`); a directory the loader refuses, a missing or empty one, and a keyring
   over the cap are refused at the start with the loader's reason, before any socket; the loader judges a source
-  directory as it will be placed (`crates/hostkeeper-install/tests/repositories_placed.rs`). On a host set up by hand,
-  `hostkeeper check-repositories --dir DIR` passes the staged two channels and their keyring, listing each entry with
-  its keyring's SHA-256, refuses a missing keyring, an `http://` URI, a `.sources` that is a directory, a stray link
-  and an armored keyring with the loader's message, resolves a `Signed-By` of `/etc/hostkeeper/repositories/` to
-  `DIR`, and accepts and refuses exactly what the daemon's start does on the same files
-  (`crates/hostkeeper-daemon/tests/check_repositories.rs`; the real binary in `crates/hostkeeper/tests/binary.rs`).
+  directory as it will be placed (`crates/hostkeeper-install/tests/repositories_placed.rs`). The verb
+  `hostkeeper check-repositories --dir DIR` and its tests were removed: the daemon's start and `pxe serve`'s start
+  make this check.
   The network-install guest
   test serves with `--repositories` and checks the installed host's `/etc/hostkeeper/repositories/`
   (`crates/hostkeeper-privileged/tests/net_install.rs`, in `net-install.yml`). A Mac's daemon renders `stores.toml`

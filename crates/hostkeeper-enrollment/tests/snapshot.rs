@@ -1,5 +1,5 @@
 //! The store read whole and written back (`FileRecords::read_snapshot` and `write_snapshot`),
-//! what `hostkeeper-coordinator import` and `export` move between the files and the database:
+//! what `hostkeeper-coordinator export` writes from the database and its tests read back:
 //! every record comes back as it was written, the read writes nothing, and it refuses what the
 //! store refuses when it reads a record.
 
@@ -133,7 +133,7 @@ fn a_snapshot_reads_every_record_and_writes_them_back() {
 }
 
 /// Catches a read that makes a directory, takes the store's lock or marks a nonce's file: the
-/// import reads files it must leave as it found them. A store with no subdirectories reads as
+/// snapshot read leaves the files as it found them. A store with no subdirectories reads as
 /// one that holds nothing.
 #[test]
 fn a_snapshot_writes_nothing() {
@@ -329,7 +329,7 @@ impl Fs for Phantom {
 }
 
 /// Catches a record listed and then not read taken as one that never was: the store changed
-/// while it was read, which the import refuses rather than move part of it.
+/// while it was read, which the snapshot read refuses rather than return part of it.
 #[test]
 fn a_snapshot_refuses_a_record_that_is_gone_after_it_was_listed() {
     for sub in ["requests", "issued", "hosts", "deny", "mac-nonces"] {
