@@ -307,3 +307,103 @@ fn the_alert_flags_set_the_thresholds_and_default_to_300_s_and_14_days() {
     let expired_only = serve_with(&["--alert-cert-window-secs", "0"]).expect("parsed");
     assert_eq!(alert_thresholds(&expired_only).cert_window_secs, 0);
 }
+
+/// Proves: the alert is derived from the setup's push certificate in use and the setting
+/// `push_alert_days`, on a coordinator: none with no certificate, one when the certificate expires
+/// inside a threshold, none again when the setting asks for fewer days, and a certificate that
+/// was replaced is judged by its newest version.
+///
+/// Catches: an expiry read off a replaced version, and a setting that does not change when the alert
+/// comes.
+#[tokio::test]
+async fn a_coordinator_alerts_on_the_push_certificate_it_holds() {
+    use crate::operator_mdm_push_tests::{DAY, TOPIC, alice, rig};
+    use hostkeeper_mdm_push::request::pkcs1_pem;
+    use hostkeeper_mdm_push::testkit::{fixture_key, push_certificate_pem};
+
+    let rig = rig("alerts-push-certificate");
+    let alerts = |rig: &crate::operator_mdm_push_tests::Rig| {
+        rig.world
+            .coordinator
+            .list_alerts(&alice(), proto::ListAlertsRequest::default())
+            .expect("listed")
+            .alerts
+            .into_iter()
+            .filter(|alert| alert.kind == proto::AlertKind::PushCertNearExpiry as i32)
+            .collect::<Vec<_>>()
+    };
+    assert!(alerts(&rig).is_empty(), "no certificate, no alert");
+    // A secret of another kind in the setup is not a certificate and raises nothing.
+    rig.world
+        .coordinator
+        .mdm_put_secret(
+            &alice(),
+            proto::PutSecretRequest {
+                kind: "push_key".to_owned(),
+                material: b"a key that is not a certificate".to_vec(),
+                not_after_unix: None,
+            },
+        )
+        .expect("stored");
+    assert!(alerts(&rig).is_empty(), "a key is not a certificate");
+    let key = fixture_key(0);
+    let now = rig.now();
+    let nearly = push_certificate_pem(key, TOPIC, now - DAY, now + 20 * DAY);
+    rig.certificate(&nearly, pkcs1_pem(key).expect("pem").expose())
+        .expect("stored");
+    // A secret of another kind is not the push certificate, whatever its expiry.
+    rig.world
+        .coordinator
+        .mdm_setup
+        .put_secret(
+            crate::mdm_secrets::SecretKind::TlsCert,
+            &crate::mdm_secrets::Secret::new(b"not read".to_vec()),
+            Some(now + DAY),
+            1,
+        )
+        .expect("stored");
+    let found = alerts(&rig);
+    assert_eq!(found.len(), 1);
+    assert_eq!(found[0].version, "60");
+    assert_eq!(found[0].severity, proto::AlertSeverity::Warning as i32);
+    rig.world
+        .coordinator
+        .mdm_put_setting(
+            &alice(),
+            &proto::PutSettingRequest {
+                name: "push_alert_days".to_owned(),
+                value: "10".to_owned(),
+            },
+        )
+        .expect("set");
+    assert!(
+        alerts(&rig).is_empty(),
+        "20 days left is outside a threshold of 10"
+    );
+    let renewed = push_certificate_pem(key, TOPIC, now - DAY, now + 5 * DAY);
+    rig.certificate(&renewed, pkcs1_pem(key).expect("pem").expose())
+        .expect("stored");
+    assert_eq!(
+        alerts(&rig)[0].version,
+        "10",
+        "the newest certificate's expiry is read"
+    );
+}
+
+/// Proves: a setup that cannot be read raises no alert of its own and does not fail the list.
+///
+/// Catches: an alert list that fails because the MDM setup store is down.
+#[tokio::test]
+async fn a_setup_that_cannot_be_read_does_not_fail_the_alerts() {
+    use crate::operator_mdm_push_tests::{alice, flaky_rig};
+    use std::sync::atomic::Ordering;
+
+    let (rig, store) = flaky_rig("alerts-push-unreadable");
+    store.reads_fail.store(true, Ordering::SeqCst);
+    let listed = rig
+        .world
+        .coordinator
+        .list_alerts(&alice(), proto::ListAlertsRequest::default())
+        .expect("listed");
+    assert!(listed.alerts.is_empty());
+}

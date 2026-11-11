@@ -18,6 +18,11 @@
 //! blob too, checked to be the release's asset byte for byte, and an `index.json` that names the
 //! image index under the release's version. `skopeo copy --all --preserve-digests` of that layout
 //! (`.github/workflows/release.yml`, job `image`) pushes it, refusing any change of a digest.
+//!
+//! `image-digest` says what a deploy of the linux-x86_64 image tarball to the control plane is
+//! given (`.github/workflows/release.yml`, jobs `cp-deploy-digest` and `cp-deploy`): the digest of
+//! the one manifest its `index.json` names, read and checked as the image index's are, and the
+//! release's download addresses of the tarball and of its bundle.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -25,9 +30,9 @@ use std::path::Path;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-use super::Error;
 use super::compare_images::{Files, tar_files};
-use super::contract::{COORDINATOR, Platform, Version};
+use super::contract::{COORDINATOR, Platform, Repo, Version, bundle_of};
+use super::{Error, answer};
 
 /// The registry repository the `image` job of release.yml pushes the image to, tagged with the
 /// release's version.
@@ -66,6 +71,8 @@ pub(crate) fn digest_of(bytes: &[u8]) -> String {
 struct Image {
     files: Files,
     descriptor: Value,
+    /// The manifest's digest, `sha256:<64 hex>`.
+    digest: String,
 }
 
 /// Reads the image tarball of `platform` in `dir`, refusing one whose `index.json` does not name
@@ -126,7 +133,11 @@ fn image(
         "digest": digest,
         "platform": { "architecture": arch, "os": "linux" },
     });
-    Ok(Image { files, descriptor })
+    Ok(Image {
+        files,
+        descriptor,
+        digest: digest.to_owned(),
+    })
 }
 
 /// The two images of the release, in the order of [`IMAGE_PLATFORMS`].
@@ -181,6 +192,40 @@ pub(crate) fn check_index(dir: &Path, version: &Version) -> Result<String, Error
         )));
     }
     Ok(digest_of(&have))
+}
+
+/// `release image-digest`: the inputs of a deploy of the linux-x86_64 image tarball of `version`
+/// in `dir`, released in `repo`: `digest=` the digest of the one manifest its `index.json` names
+/// (refused as [`image`] refuses a tarball), `image-url=` and `bundle-url=` the release's download
+/// addresses of the tarball and of its bundle, which must be in `dir` too. Appended to `output`
+/// when it is given.
+pub(crate) fn deploy_inputs(
+    dir: &Path,
+    version: &Version,
+    repo: &Repo,
+    output: Option<&Path>,
+) -> Result<Vec<String>, Error> {
+    let image = image(dir, version, IMAGE_PLATFORMS[0])?;
+    let name = image_name(version, IMAGE_PLATFORMS[0].0);
+    let bundle = bundle_of(&name);
+    if !dir.join(&bundle).is_file() {
+        return Err(Error::Failed(format!(
+            "{bundle} is missing from {}: a deploy is given the bundle of the image",
+            dir.display()
+        )));
+    }
+    let base = format!(
+        "https://github.com/{repo}/releases/download/{}",
+        version.tag()
+    );
+    answer(
+        output,
+        vec![
+            format!("digest={}", image.digest),
+            format!("image-url={base}/{name}"),
+            format!("bundle-url={base}/{bundle}"),
+        ],
+    )
 }
 
 /// `release image-layout`: the OCI image layout of the multi-platform image at `out`, which must
