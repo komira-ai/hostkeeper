@@ -137,12 +137,31 @@ impl World {
         random: Random,
         build: impl FnOnce(Coordinator, &Rig) -> Coordinator,
     ) -> Self {
+        Self::build_timed(name, settings, random, false, build)
+    }
+
+    /// [`World::build`], with the audit's clock (the coordinator's unix time) the rig's when
+    /// `timed`, so that [`World::at`] moves it.
+    pub(crate) fn build_timed(
+        name: &str,
+        settings: LoginSettings,
+        random: Random,
+        timed: bool,
+        build: impl FnOnce(Coordinator, &Rig) -> Coordinator,
+    ) -> Self {
         let rig = Rig::new(name);
         let fake = Fake::new();
+        let mut ops = OpsStore::over(Arc::new(fake.clone()), OpsState::default());
+        if timed {
+            let clock = rig.clock.clone();
+            ops = ops.with_unix(Arc::new(move || {
+                clock.load(std::sync::atomic::Ordering::SeqCst)
+            }));
+        }
         let login =
             Login::new(settings, Arc::new(Seconds(rig.clock.clone())), random).expect("a sign-in");
         let coordinator = Rig::start(&rig.dir, &rig.clock)
-            .with_ops(OpsStore::over(Arc::new(fake.clone()), OpsState::default()))
+            .with_ops(ops)
             .with_accounts(AccountStore::over(Arc::new(fake.clone()), users()))
             .with_login(login);
         let coordinator = build(coordinator, &rig);

@@ -18,14 +18,14 @@
 // Units: as operator.proto says. An enrollment id is NanoMDM's, on a Mac its UDID: 1 to 64 ASCII
 // letters, digits and `-`. A serial is 1 to 64 ASCII letters and digits.
 //
-// The setup (`PutSecret`, `PutSetting`, `ListSecrets`, `ListSettings`; docs/design/coordinator-mdm.md
+// The setup (`PutSecret`, `PutSetting`, `PutName`, `ListSecrets`, `ListSettings`, `Status`; docs/design/coordinator-mdm.md
 // section 4.9): the secrets the MDM server keeps, sealed in the coordinator's store under the key of
-// `--mdm-secrets-key-file`, and its settings. The two writes are session-only: a call that carries a
+// `--mdm-secrets-key-file`, and its settings. The three writes are session-only: a call that carries a
 // bearer token, an operator token or one made in the UI, is refused `PERMISSION_DENIED` with the
 // message `session_required`, and only a signed-in user's call (the JSON gateway with the session
-// cookie) is served. The two reads take either. No call returns a secret's value: what an answer
+// cookie) is served. The reads take either. No call returns a secret's value: what an answer
 // shows of one is its kind, version, SHA-256 fingerprint and times, and no refusal, log line or
-// audit row holds it either.
+// audit row holds it either. `Status` computes from these records whether the setup is complete.
 //
 // Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
 // rename, retype or remove one, and never reuse a number.
@@ -61,6 +61,19 @@ service Mdm {
   // Every setting this release knows, with its value and whether that is its default. Changes
   // nothing.
   rpc ListSettings(ListSettingsRequest) returns (ListSettingsResponse);
+
+  // Whether the MDM setup is complete (`configured`), and when it is not, which conditions are
+  // missing; the name, its enrollment URL, and what is shown of the push certificate and key, the
+  // ABM token and the TLS certificate and key in use, with the expiry and topic read from their
+  // material. Computed from the records at each call and never stored, so it cannot go stale.
+  // Never returns a value of a secret. Changes nothing.
+  rpc Status(MdmStatusRequest) returns (MdmStatusResponse);
+
+  // Sets the MDM name, the host name the Macs enroll at (`https://<name>/enroll`). Session-only,
+  // as `PutSecret` is. Audited as `mdm_name_set` with the name. The first name is always taken
+  // (Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
+  // another is refused `name_locked`, and the same name is taken again.
+  rpc PutName(PutNameRequest) returns (PutNameResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -79,6 +92,53 @@ enum MdmRefusal {
   // FAILED_PRECONDITION: the coordinator holds no master key (`--mdm-secrets-key-file` is not
   // given), so it keeps no secret.
   MDM_REFUSAL_SECRETS_UNAVAILABLE = 6;
+  // FAILED_PRECONDITION: a Mac has enrolled, and the enrollment profile it holds carries the
+  // name, so the name cannot change (the Macs would have to enroll again).
+  MDM_REFUSAL_NAME_LOCKED = 7;
+}
+
+// One condition of the setup that is not met, which keeps it from being `configured`. The token
+// is the value's name without the prefix, in lower case.
+enum MdmCondition {
+  MDM_CONDITION_UNSPECIFIED = 0;
+  // No `push_cert` is held.
+  MDM_CONDITION_PUSH_CERT_MISSING = 1;
+  // No `push_key` is held.
+  MDM_CONDITION_PUSH_KEY_MISSING = 2;
+  // The push certificate or key cannot be read, or the key is not the certificate's.
+  MDM_CONDITION_PUSH_PAIR_INVALID = 3;
+  // The push certificate has expired.
+  MDM_CONDITION_PUSH_CERT_EXPIRED = 4;
+  // No `abm_token` is held.
+  MDM_CONDITION_ABM_TOKEN_MISSING = 5;
+  // The ABM token cannot be read, or its expiry is not an RFC 3339 time.
+  MDM_CONDITION_ABM_TOKEN_UNREADABLE = 6;
+  // The ABM token has expired.
+  MDM_CONDITION_ABM_TOKEN_EXPIRED = 7;
+  // No MDM name is set.
+  MDM_CONDITION_NAME_MISSING = 8;
+  // No `tls_cert` is held.
+  MDM_CONDITION_TLS_CERT_MISSING = 9;
+  // No `tls_key` is held.
+  MDM_CONDITION_TLS_KEY_MISSING = 10;
+  // The TLS certificate or key cannot be read, or the key is not the certificate's.
+  MDM_CONDITION_TLS_PAIR_INVALID = 11;
+  // The TLS certificate has expired.
+  MDM_CONDITION_TLS_CERT_EXPIRED = 12;
+  // The TLS certificate does not name the MDM name.
+  MDM_CONDITION_TLS_NAME_MISMATCH = 13;
+}
+
+// How far the hostkeeper settings profile of the gate has got on a device in its enrollment.
+enum MdmBaseline {
+  // None was sent in this enrollment (not enrolled, or not a Mac the gate installs it on).
+  MDM_BASELINE_UNSPECIFIED = 0;
+  // Sent, and the device has not answered.
+  MDM_BASELINE_PENDING = 1;
+  // The device acknowledged it.
+  MDM_BASELINE_APPLIED = 2;
+  // The device answered with an error.
+  MDM_BASELINE_FAILED = 3;
 }
 
 // Where a device is in its MDM enrollment.
@@ -106,6 +166,10 @@ message ListDevicesResponse {
   string next_page_token = 2;
   // Whether the coordinator runs the gate (`--mdm-api-url`).
   bool gate = 3;
+  // Whether the MDM setup is complete, as `Status` says. The devices are listed either way.
+  bool configured = 4;
+  // When it is not, the conditions that are missing, as `Status` lists them.
+  repeated MdmCondition missing = 5;
 }
 
 // One command the gate sent a device that the device has not answered.
@@ -161,6 +225,13 @@ message MdmDevice {
   optional uint64 install_last_sent_unix = 18;
   // The SHA-256 of the pkg it last sent, 64 lower-case hex digits; empty before the first send.
   string install_sha256 = 19;
+  // The host id of the inventory record whose serial is this device's; empty when no record, or
+  // more than one, has it.
+  string host_id = 20;
+  // The host group that record names; empty when it names none.
+  string group = 21;
+  // How far the settings profile has got in this enrollment.
+  MdmBaseline baseline = 22;
 }
 
 message PutSecretRequest {
@@ -234,4 +305,53 @@ message MdmSetting {
 
 message ListSettingsResponse {
   repeated MdmSetting settings = 1;
+}
+
+message MdmStatusRequest {}
+
+message MdmStatusResponse {
+  // Whether every condition is met: the push certificate and key are a pair and not expired, the
+  // ABM token is held and not expired, the name is set, and a TLS certificate that names it and
+  // its key are a pair and not expired.
+  bool configured = 1;
+  // The conditions that are not met; empty when `configured`.
+  repeated MdmCondition missing = 2;
+  // The MDM name; empty when none is set.
+  string name = 3;
+  // `https://<name>/enroll`; empty when no name is set.
+  string enrollment_url = 4;
+  // Whether the name is set and a Mac has enrolled, which locks it: `PutName` refuses another.
+  bool name_locked = 5;
+  // Whether the coordinator holds a master key, so that secrets are kept.
+  bool sealing = 6;
+  // What `ListSecrets` shows of the version in use of each; absent when none is held.
+  optional SecretInfo push_cert = 7;
+  optional SecretInfo push_key = 8;
+  optional SecretInfo abm_token = 9;
+  optional SecretInfo tls_cert = 10;
+  optional SecretInfo tls_key = 11;
+  // The push topic, the subject UID of the push certificate; empty when none reads.
+  string push_topic = 12;
+  // When the push certificate stops being valid, read from it; absent when none reads.
+  optional int64 push_not_after_unix = 13;
+  // When the ABM token expires, read from its `access_secret_expiry`; absent when none reads.
+  optional int64 abm_not_after_unix = 14;
+  // When the TLS certificate stops being valid, read from it; absent when none reads.
+  optional int64 tls_not_after_unix = 15;
+  // The DNS names the TLS certificate holds as subject alternative names.
+  repeated string tls_names = 16;
+}
+
+message PutNameRequest {
+  // The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and
+  // not starting or ending with `-`, at most 253 in all, whose last label is not all digits;
+  // kept in lower case. Else `invalid_request`.
+  string name = 1;
+}
+
+message PutNameResponse {
+  // The name as it is kept.
+  string name = 1;
+  // `https://<name>/enroll`.
+  string enrollment_url = 2;
 }

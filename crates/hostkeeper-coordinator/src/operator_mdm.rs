@@ -6,6 +6,11 @@
 //! `unauthorized`, before the request is looked at. It reads the gate's records and asks no
 //! device and not NanoHUB; nothing is audited, since nothing changes. A coordinator without
 //! the gate answers no device, with `gate` false.
+//!
+//! Each answer also says whether the MDM setup is complete (`configured`) and, when it is not,
+//! what is missing ([`Coordinator::setup_status`]); the devices are listed either way. A device's
+//! host id and group are those of the one inventory record that has its serial, and its baseline
+//! is how far the config profile has got in its enrollment.
 
 use std::sync::Arc;
 
@@ -13,6 +18,7 @@ use hostkeeper_mdm_gate::{DeviceRecord, EnrollmentId, Phase};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
+use crate::inventory::InventoryRecord;
 use crate::mdm::Mdm;
 use crate::operator::Caller;
 use crate::service::Coordinator;
@@ -48,8 +54,13 @@ impl Coordinator {
             "" => None,
             token => Some(EnrollmentId::parse(token).ok_or(MdmRefusal::InvalidRequest)?),
         };
+        let status = self.setup_status()?;
         let Some(mdm) = self.mdm() else {
-            return Ok(proto::ListDevicesResponse::default());
+            return Ok(proto::ListDevicesResponse {
+                configured: status.configured,
+                missing: status.missing,
+                ..proto::ListDevicesResponse::default()
+            });
         };
         let limit = match request.limit as usize {
             0 => MAX_DEVICE_PAGE,
@@ -68,11 +79,61 @@ impl Coordinator {
             Some(last) if more => last.enrollment_id.as_str().to_owned(),
             _ => String::new(),
         };
+        let devices = self.ops.read(|state| {
+            records
+                .iter()
+                .map(|record| {
+                    let mut device = device_proto(record);
+                    if let Some(inventory) = record
+                        .serial
+                        .as_deref()
+                        .and_then(|serial| inventory_of(&state.inventory, serial))
+                    {
+                        device.host_id.clone_from(&inventory.host_id);
+                        device.group = inventory.group().to_owned();
+                    }
+                    device
+                })
+                .collect()
+        });
         Ok(proto::ListDevicesResponse {
-            devices: records.iter().map(device_proto).collect(),
+            devices,
             next_page_token,
             gate: true,
+            configured: status.configured,
+            missing: status.missing,
         })
+    }
+
+    /// Whether any Mac has enrolled: the gate has seen a device's first `TokenUpdate`. The MDM
+    /// name is locked from then on, since the enrollment profile a Mac holds carries it.
+    pub(crate) fn macs_enrolled(&self) -> bool {
+        self.mdm().is_some_and(|mdm| {
+            mdm.gate
+                .records()
+                .iter()
+                .any(|record| record.enrolled_since_unix.is_some())
+        })
+    }
+}
+
+/// The one inventory record whose serial is `serial` (letters compared without case); none when
+/// no record, or more than one, has it.
+fn inventory_of<'a>(records: &'a [InventoryRecord], serial: &str) -> Option<&'a InventoryRecord> {
+    let mut found = records
+        .iter()
+        .filter(|record| !record.serial.is_empty() && record.serial.eq_ignore_ascii_case(serial));
+    let one = found.next()?;
+    found.next().is_none().then_some(one)
+}
+
+/// How far the config profile has got.
+fn baseline_proto(record: &DeviceRecord) -> proto::MdmBaseline {
+    match record.config_profile.as_ref().map(|sent| sent.answer) {
+        None => proto::MdmBaseline::Unspecified,
+        Some(None) => proto::MdmBaseline::Pending,
+        Some(Some(answer)) if answer.acknowledged => proto::MdmBaseline::Applied,
+        Some(Some(_)) => proto::MdmBaseline::Failed,
     }
 }
 
@@ -121,5 +182,8 @@ fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
             .as_ref()
             .map(|install| install.sha256.as_str().to_owned())
             .unwrap_or_default(),
+        host_id: String::new(),
+        group: String::new(),
+        baseline: baseline_proto(record).into(),
     }
 }
