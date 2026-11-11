@@ -11,7 +11,8 @@
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
 //! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
-//!   calls the CI client), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   calls the CI client, or [`deploy::JOB`], which calls the deploy workflow of the coordinator's
+//!   Docker Swarm service), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
 //!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
@@ -19,7 +20,8 @@
 //! - a job's `permissions` is not a mapping, or grants `write` for a scope that is not in
 //!   [`WRITE_ALLOWED`] for that workflow file and job, or grants it under another `if:` than the
 //!   one the table gives; or grants `id-token: write` in a job that is in none of that table,
-//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`] and [`callers::TEMPLATE`];
+//!   [`ID_TOKEN_ALLOWED`], [`callers::CALLERS`], [`callers::TEMPLATE`] and [`deploy::JOB`] (which
+//!   holds it under [`deploy::DEPLOY_IF`] alone);
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
@@ -57,7 +59,9 @@
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
 //!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]; for its
-//!   package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
+//!   two jobs that deploy the coordinator to its Docker Swarm service, one of which calls a
+//!   reusable workflow of another repository and holds `id-token: write` under its exact `if:`,
+//!   [`super::deploy`]; for its package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
 //!   exact `if:`, [`super::packages`]).
 //!
 //! A workflow that tags or publishes is also held to [`release::publish_problems`].
@@ -82,6 +86,7 @@
 
 use super::advisories;
 use super::callers;
+use super::deploy;
 use super::desired;
 
 use super::downloads;
@@ -399,7 +404,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         // workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
-        if !calls_client {
+        if !calls_client && !deploy::is_deploy_job(file, name) {
             problems.extend(runner_problems(name, job));
         }
         if on_pull_request {
@@ -425,6 +430,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(net_install::problems(&doc));
     }
     problems.extend(callers::problems(file, text, &doc));
+    problems.extend(deploy::problems(file, text, &doc));
     problems.extend(downloads::problems(&doc));
     problems.extend(pinned_cache::problems(&doc));
     if file == one_command::FILE {
@@ -513,6 +519,17 @@ fn permission_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
             && level == Some("write")
             && (ID_TOKEN_ALLOWED.contains(&(file, name)) || callers::caller(file, name).is_some());
         if id_token {
+            continue;
+        }
+        // The one job that calls the deploy workflow of the coordinator's Docker Swarm service,
+        // under its exact `if:`; what it calls and with what is held by `deploy::problems`.
+        if scope == "id-token" && level == Some("write") && deploy::is_deploy_job(file, name) {
+            if condition != Some(deploy::DEPLOY_IF) {
+                problems.push(format!(
+                    "job {name}: `id-token: write` needs the exact `if: {}`",
+                    deploy::DEPLOY_IF
+                ));
+            }
             continue;
         }
         // The jobs of the package channels that assume the cloud role, each under its exact `if:`.

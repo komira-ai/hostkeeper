@@ -150,19 +150,23 @@ fn a_coordinator_job_with_another_token_right_than_the_oidc_token_is_refused() {
 #[test]
 fn a_coordinator_job_that_does_not_wait_for_the_targets_is_refused() {
     // Catches: the wait started before the targets job decided whether this run's release is
-    // the newest (the version it asks for is the targets job's output), or after nothing.
+    // the newest (the version it asks for is the targets job's output), or after nothing; and
+    // the wait started without waiting for the deploy of the coordinator, which would ask the
+    // coordinator's version while the deploy is still replacing it.
     for (to, got) in [
         ("[plan]", "[\"plan\"]"),
         ("[plan, publish]", "[\"plan\", \"publish\"]"),
         ("targets", "[\"targets\"]"),
+        ("[plan, targets]", "[\"plan\", \"targets\"]"),
+        ("[plan, deploy]", "[\"deploy\", \"plan\"]"),
     ] {
         assert_eq!(
             about_the_job(found(
-                "    needs: [plan, targets]\n",
+                "    needs: [plan, targets, deploy]\n",
                 &format!("    needs: {to}\n")
             )),
             [format!(
-                "release.yml: job coordinator needs {got}, not [\"plan\", \"targets\"]"
+                "release.yml: job coordinator needs {got}, not [\"deploy\", \"plan\", \"targets\"]"
             )],
             "{to}"
         );
