@@ -227,6 +227,7 @@ fn gate_and_enrollment(
         Devices::Files(dir.path()),
         Arc::clone(clock) as _,
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("the gate opens")
     .expect("the flags name a gate");
@@ -383,6 +384,7 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
             Devices::Files(dir.path()),
             FixedClock::at(NOW),
             os_random(),
+            &crate::mdm_setup::MdmSetup::volatile(),
         )
         .expect_err("refused")
     };
@@ -429,6 +431,7 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
         Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("opens")
     .expect("a gate");
@@ -439,6 +442,7 @@ async fn the_start_refuses_a_bad_identifier_or_daemon_config() {
         Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("opens")
     .expect("a gate");
@@ -478,7 +482,8 @@ fn approve_at(rig: &Rig, key: &HostKey, host: &str, at: u64) {
 /// flagged (so the gate takes it as a candidate), a request of another serial listed, a
 /// request's posting time or platform UUID changed; an approval of another serial counted as
 /// the Mac's, or an earlier approval taken for the last; a nonce not issued for a waiting
-/// request, or issued for a malformed serial; the allowlist not the one the enrollment holds.
+/// request, or issued for a malformed serial; the allowlist not the one the enrollment holds; a
+/// device name that is not the allowlist entry's host id.
 #[test]
 fn the_enrollment_answers_the_gate_from_its_store() {
     use hostkeeper_mdm_gate::Enrollments as _;
@@ -497,6 +502,9 @@ fn the_enrollment_answers_the_gate_from_its_store() {
     assert!(!e.allowed("C02OTHER0001"));
     assert_eq!(e.host_group(SERIAL), Some("build".to_owned()));
     assert_eq!(e.host_group("C02OTHER0001"), None);
+    // The device name the baseline sets: the allowlist entry's host id.
+    assert_eq!(e.host_name(SERIAL), Some("mac-c02xk1abjg5j".to_owned()));
+    assert_eq!(e.host_name("C02OTHER0001"), None);
 
     let (first, twin, other) = (HostKey::new(), HostKey::new(), HostKey::new());
     e.enroll(mac_request(&first, "machine-mac", SERIAL, &[]))
@@ -577,6 +585,7 @@ async fn the_start_refuses_a_stores_or_signers_file_the_loaders_refuse() {
             Devices::Files(dir.path()),
             FixedClock::at(NOW),
             os_random(),
+            &crate::mdm_setup::MdmSetup::volatile(),
         )
     };
     let stores = |text: &str| MdmFlags {
@@ -660,6 +669,7 @@ async fn a_mac_with_older_settings_is_sent_the_profile_with_the_stores_and_signe
         Devices::Files(dir.path()),
         Arc::clone(&clock) as _,
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("the gate opens")
     .expect("the flags name a gate");
@@ -712,7 +722,7 @@ async fn a_mac_with_older_settings_is_sent_the_profile_with_the_stores_and_signe
 }
 
 /// Catches: the gate asking an enrollment that is not attached, or one that is gone, for a host
-/// group and getting one (its baseline then applied to a Mac the enrollment never allowed); the
+/// group or a device name and getting one (its baseline then applied to a Mac the enrollment never allowed); the
 /// attached enrollment's answer changed on its way: a Mac's host group is its entry's role.
 #[test]
 fn the_gate_asks_the_attached_enrollment_for_a_host_group() {
@@ -723,11 +733,13 @@ fn the_gate_asks_the_attached_enrollment_for_a_host_group() {
         Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("opens")
     .expect("a gate");
     let attached = mdm.attached.clone().expect("the side");
     assert_eq!(attached.host_group(SERIAL), None, "not attached");
+    assert_eq!(attached.host_name(SERIAL), None, "not attached");
     let policy = MacPolicy {
         allowlist: MacAllowlist::parse(ALLOWED).expect("an allowlist"),
         ..MacPolicy::default()
@@ -741,4 +753,10 @@ fn the_gate_asks_the_attached_enrollment_for_a_host_group() {
     mdm.attach(&rig.enrollment);
     assert_eq!(attached.host_group(SERIAL), Some("build".to_owned()));
     assert_eq!(attached.host_group("C02OTHER0001"), None);
+    assert_eq!(
+        attached.host_name(SERIAL),
+        Some("mac-c02xk1abjg5j".to_owned()),
+        "the device name is the entry's host id"
+    );
+    assert_eq!(attached.host_name("C02OTHER0001"), None);
 }

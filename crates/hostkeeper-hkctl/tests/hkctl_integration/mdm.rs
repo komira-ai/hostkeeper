@@ -325,6 +325,7 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("push_expiry_s", "86400", true),
             ("push_priority", "10", true),
             ("push_timeout_s", "30", true),
+            ("installs", "[]", true),
             ("proxy_wait_s", "10", true),
             ("proxy_redirects", "3", true),
             ("proxy_index_ttl_s", "300", true),

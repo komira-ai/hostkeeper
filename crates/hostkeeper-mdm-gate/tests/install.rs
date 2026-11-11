@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
 use hostkeeper_mdm_gate::install::{ACTION_INSTALL_SENT, INSTALL_RESEND_SECS};
-use hostkeeper_mdm_gate::{Command, CommandUuid, PkgDigest, PkgEntry, pkg};
+use hostkeeper_mdm_gate::{Command, CommandUuid, InstallEntry, PkgDigest, pkg};
 use plist::Dictionary;
 use support::enrollment::{EnrollRig, HOST, request};
 use support::{
@@ -312,10 +312,13 @@ async fn only_an_allowlisted_digest_is_sent() {
 #[test]
 fn the_manifest_carries_the_digest_the_mac_checks() {
     let digest = PkgDigest::of(PKG);
-    let entry = PkgEntry {
+    let entry = InstallEntry {
+        name: "hostkeeper".to_owned(),
+        bundle_id: "dev.hostkeeper.hostkeeper".to_owned(),
         sha256: digest.clone(),
         version: hostkeeper_wire::version::Version::parse("0.1.66").expect("a version"),
         path: PathBuf::from(format!("/var/lib/hostkeeper-mdm-pkg/{digest}.pkg")),
+        url: None,
     };
     let host = hostkeeper_mdm_gate::MdmHost::parse("MDM.Example.com").expect("a host");
     let uuid = CommandUuid::from_random([0xAB; 16]);

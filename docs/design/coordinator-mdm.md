@@ -434,7 +434,7 @@ are all of:
 4. the nonce, as today: single-use, one hour, bound to the request and the serial, which proves the pkg installed and the daemon runs.
 
 **Name from inventory.** The baseline's `Settings` command sets `DeviceName` to the host id and `HostName` to the same lower-case DNS-safe
-string. A Mac without an inventory record gets the default rule's id. Changing the inventory's `host_id` changes the baseline target and
+string. **Built** (CM8) with the allowlist entry's host id as the source (`Enrollments::host_name`); the inventory record's `host_id` replaces it in CM9. A Mac without an inventory record gets the default rule's id. Changing the inventory's `host_id` changes the baseline target and
 the next re-apply (5.3) sends the new name. The schema's `Settings` entry for macOS is device channel and not user-enrollment, and
 Apple's text says `DeviceName` is available on supervised devices only; supervised is what this design assumes anyway.
 
@@ -455,7 +455,11 @@ buffered whole (the pattern of `repository_serve.rs`). The manifest stays inline
 inline manifest needs no second fetch and no second route. The pkg allowlist becomes the setting `installs`, a list of named installs
 (`name, bundle_id, sha256, version, path`, and an optional `url` the package proxy pulls the file from), edited on the setup page and kept in the store; the old file is read once as the starting
 value, additively. `pkg.rs` hard-codes `dev.hostkeeper.hostkeeper`; CM8 makes it a list, so a second pkg needs no code. Additive: the old
-single-pkg file is read as one install named `hostkeeper`. The pkg files stay a directory because they are files the host provides,
+single-pkg file is read as one install named `hostkeeper`. **Built** (CM8): `crates/hostkeeper-mdm-gate/src/installs.rs` (the entries, the JSON the
+setting keeps, the digest that decides a resend) and `crates/hostkeeper-coordinator/src/mdm_settings.rs` (the setting `installs`, default `[]`);
+`install_of` in `mdm.rs` seeds it from the old file only while it was never set, and `Mdm.PutSetting installs` reaches the running gate at once.
+The install named `hostkeeper` is the pkg step's; every other install is a baseline entry (5.3), sent to the Macs of each group that has a
+baseline. The entry's digest is its name, bundle identifier, file digest and version, so a changed `url` or `path` sends nothing. The pkg files stay a directory because they are files the host provides,
 not configuration.
 
 **The Mac is on the lab LAN only** (the coordinator is on the tailnet, the Macs will not be). There is no Tailscale install, no tagged key
@@ -493,8 +497,12 @@ first daemon runs and enrolls over the LAN listener with no package source at al
   poll. It also offers `com.apple.configuration.package` (macOS 26 and up, supervised) for the pkg. It is a second state machine, so it
   is a later task (CM15) that is model-checked first. The farm Macs run macOS 27, so nothing blocks it later.
 
-The gate's command list grows from five to eight types; the test that pins it (**Built**, `the_gate_enqueues_only_its_five_command_types`
-in `crates/hostkeeper-mdm-gate/tests/gate.rs`) changes with CM8 and states the new list.
+The gate's command list grows from five to eight types (**Built**, CM8: the baseline pull request took it to seven with `EnableRemoteDesktop`
+and `ProfileList`, CM8 adds `Settings`); the test that pins it, `the_gate_enqueues_only_its_eight_command_types`
+in `crates/hostkeeper-mdm-gate/tests/gate.rs`, states the list. Delivery is at least once (model finding 4), so each of the eight tolerates a repeat:
+a result is read only for a command id the gate sent and has not had answered, so the second answer of one command is passed over and changes
+nothing (`a_pinned_command_delivered_twice_is_harmless`), and the gate never enqueues one command id twice (a record is written with the id before the
+enqueue, and an unanswered command is not sent again).
 
 **Where the secrets live** is section 4.9.
 

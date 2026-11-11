@@ -385,6 +385,7 @@ fn a_setting_is_judged_audited_and_listed() {
             ("push_expiry_s", "86400", true),
             ("push_priority", "10", true),
             ("push_timeout_s", "30", true),
+            ("installs", "[]", true),
             ("proxy_wait_s", "10", true),
             ("proxy_redirects", "3", true),
             ("proxy_index_ttl_s", "300", true),
@@ -556,5 +557,109 @@ fn a_write_without_its_audit_is_not_made_and_a_failed_store_is_told() {
     assert_eq!(
         reasons[3],
         "mdm_setting_set: refused: MDM_REFUSAL_STORE_FAILED"
+    );
+}
+
+/// A gate with the pkg install over the installs `text`, which the setup holds as its setting.
+fn gate_over(name: &str, text: &str) -> (MdmSetup, crate::mdm::Mdm) {
+    let dir = crate::testutil::scratch(name);
+    let setup = MdmSetup::volatile();
+    setup.set_setting("installs", text).expect("seeded");
+    let flags = crate::mdm::MdmFlags {
+        mdm_host: Some("mdm.example.com".to_owned()),
+        ..crate::mdm::tests::flags_in(&dir)
+    };
+    let mdm = crate::mdm::Mdm::open(
+        &flags,
+        crate::mdm::Devices::Files(dir.path()),
+        crate::enrollment::tests::support::FixedClock::at(1),
+        crate::enrollment::os_random(),
+        &setup,
+    )
+    .expect("opens")
+    .expect("a gate");
+    (setup, mdm)
+}
+
+/// One install as the JSON the setting holds.
+fn install_json(name: &str, fill: char) -> String {
+    let sha = fill.to_string().repeat(64);
+    format!(
+        r#"{{"name":"{name}","bundle_id":"com.example.hostkeeper.{name}","sha256":"{sha}","version":"1.0","path":"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg"}}"#
+    )
+}
+
+/// Proves: a setting `installs` set by an operator reaches the gate that sends by it, as the text
+/// the setting keeps; a value the setting refuses leaves the gate's installs as they were; another
+/// setting leaves them alone; and the same call on a coordinator that runs no gate is stored all
+/// the same.
+///
+/// Catches: an installs change that is stored and never sent (the Macs keep the old baseline until
+/// a restart), or a refused one that reached the gate.
+#[test]
+fn an_installs_setting_reaches_the_gate() {
+    let first = format!("[{}]", install_json("hostkeeper", 'a'));
+    let (setup, mdm) = gate_over("mdm-setup-installs", &first);
+    let gate = Arc::clone(&mdm.gate);
+    let with_gate = World::build(
+        "mdm-setup-installs-world",
+        crate::login_support::settings(),
+        crate::login_support::counting(),
+        move |c, _| c.with_mdm_setup(keyed(setup)).with_mdm(Some(mdm)),
+    );
+    let names = |gate: &hostkeeper_mdm_gate::Gate| -> Vec<String> {
+        gate.installs()
+            .expect("a pkg install")
+            .entries()
+            .iter()
+            .map(|entry| entry.name.clone())
+            .collect()
+    };
+    assert_eq!(names(&gate), ["hostkeeper"]);
+
+    let two = format!(
+        "[{},{}]",
+        install_json("hostkeeper", 'a'),
+        install_json("tools", 'b')
+    );
+    let set = with_gate
+        .coordinator
+        .mdm_put_setting(&alice(), &setting("installs", &two))
+        .expect("set");
+    assert_eq!(set.value, two);
+    assert_eq!(names(&gate), ["hostkeeper", "tools"]);
+
+    assert_eq!(
+        with_gate
+            .coordinator
+            .mdm_put_setting(&alice(), &setting("installs", "[{\"name\":\"x\"}]")),
+        Err(MdmRefusal::InvalidRequest)
+    );
+    with_gate
+        .coordinator
+        .mdm_put_setting(&alice(), &setting("tls_renew_days", "9"))
+        .expect("set");
+    assert_eq!(names(&gate), ["hostkeeper", "tools"]);
+    let listed = with_gate
+        .coordinator
+        .mdm_list_settings(&alice())
+        .expect("listed");
+    let shown = listed
+        .settings
+        .iter()
+        .find(|setting| setting.name == "installs")
+        .expect("listed");
+    assert_eq!(
+        (shown.value.as_str(), shown.is_default),
+        (two.as_str(), false)
+    );
+
+    let bare = world("mdm-setup-installs-no-gate");
+    assert_eq!(
+        bare.coordinator
+            .mdm_put_setting(&alice(), &setting("installs", &two))
+            .expect("set")
+            .value,
+        two
     );
 }
