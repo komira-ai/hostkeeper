@@ -196,7 +196,10 @@ fn config_template_loads_once_placeholders_are_filled() {
         config.ca_sha256.as_str(),
         "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
     );
-    assert_eq!(config.release_channel.as_str(), "https://releases.example");
+    assert_eq!(
+        config.release_channel.as_ref().map(|u| u.as_str()),
+        Some("https://releases.example")
+    );
     assert_eq!(
         config.trusted_signers,
         TrustedSigners {

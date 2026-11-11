@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use sha2::{Digest, Sha256};
 
 use crate::enrollment::Random;
+use crate::mdm_acme::status::TlsStatus;
 use crate::mdm_secrets::{MasterKey, SealError, Secret, SecretKind};
 use crate::mdm_settings;
 use crate::store::mdm_setup::files::FileSetup;
@@ -71,6 +72,7 @@ pub struct MdmSetup {
     key: Option<MasterKey>,
     random: Random,
     writing: Mutex<()>,
+    tls: Arc<TlsStatus>,
 }
 
 impl MdmSetup {
@@ -82,7 +84,14 @@ impl MdmSetup {
             key,
             random,
             writing: Mutex::new(()),
+            tls: Arc::default(),
         }
+    }
+
+    /// What the renewal of the certificate for the MDM name reports to the alerts.
+    #[must_use]
+    pub fn tls_status(&self) -> &Arc<TlsStatus> {
+        &self.tls
     }
 
     /// A setup in memory alone and without a key: for a coordinator built without a store.
@@ -208,6 +217,28 @@ impl MdmSetup {
                     .map_err(SetupFailure::from)
             })
             .transpose()
+    }
+
+    /// Every version of `kind` still held, newest first, each opened. Replaced versions are held
+    /// for `secret_grace_days`.
+    ///
+    /// # Errors
+    /// As [`Self::open`], for any version.
+    pub fn open_held(&self, kind: SecretKind) -> Result<Vec<Secret>, SetupFailure> {
+        let key = self.key.as_ref().ok_or(SetupFailure::NoKey)?;
+        let mut rows: Vec<_> = self
+            .store
+            .secrets()?
+            .into_iter()
+            .filter(|row| row.kind == kind.as_str())
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.version));
+        rows.iter()
+            .map(|row| {
+                key.open(&row.kind, row.version, &row.sealed.0)
+                    .map_err(SetupFailure::from)
+            })
+            .collect()
     }
 
     /// The kinds whose secret in use the key does not open: the check of a start that holds a key

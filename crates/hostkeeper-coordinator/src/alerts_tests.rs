@@ -1,6 +1,6 @@
 //! The alerts: each kind's derivation on a state built for it, with the time given; whom a
-//! duplicate claim collides with; and the book that logs an alert once and keeps when it was
-//! first observed. The tests over a coordinator are in `alerts_coordinator_tests.rs`.
+//! duplicate claim collides with. The book that logs an alert once is tested in
+//! `alerts_book_tests.rs`, and the tests over a coordinator are in `alerts_coordinator_tests.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
@@ -12,14 +12,13 @@ use hostkeeper_wire::Platform;
 use hostkeeper_wire::wire::Health;
 
 use super::{
-    Alert, At, Book, EnrollmentFacts, Kind, Observed, Subject, Thresholds, Waiting, collides_with,
-    derive,
+    Alert, At, EnrollmentFacts, Kind, Subject, Thresholds, Waiting, collides_with, derive,
 };
 use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::holds::{HoldMark, HoldScope, marks_of};
 use crate::ops::{AuditEntry, Exclusion, Halt, HaltOrigin, OpsState, ServiceOps};
 use crate::services::Services;
-use crate::testutil::{LEGACY, Log, beat, id, kbf_services, secs, version};
+use crate::testutil::{LEGACY, beat, id, kbf_services, secs, version};
 
 /// The unix time of the coordinator's clock at 0.
 const UNIX: u64 = 1_800_000_000;
@@ -540,6 +539,72 @@ fn a_cert_inside_the_window_is_near_expiry_and_one_outside_is_not() {
     assert_eq!(cert_alerts(None), Vec::new());
 }
 
+/// The alerts of a push certificate that expires at `not_after`, at 1000, with the thresholds
+/// `days`.
+fn push_alerts(not_after: Option<u64>, days: &[u32]) -> Vec<Alert> {
+    let store = EnrollmentFacts {
+        push_cert_not_after: not_after,
+        push_alert_days: days.to_vec(),
+        ..EnrollmentFacts::default()
+    };
+    derive(
+        &fleet_of(&[], 0),
+        &OpsState::default(),
+        &Services::default(),
+        &store,
+        at(1_000),
+        &Thresholds::default(),
+    )
+}
+
+/// Proves: the push certificate raises one alert once its expiry is within the largest of the
+/// `push_alert_days` thresholds, its version is the smallest threshold reached (so that reaching
+/// 14 days is a new alert after 60), it is `expired` once the certificate has, and none for a
+/// certificate beyond every threshold, with no certificate held, or when no threshold is set and it
+/// has not expired.
+///
+/// Catches: a renewal missed because the reminder never came, and a reminder that says nothing new
+/// at 14 days.
+#[test]
+fn the_push_certificate_alerts_at_each_threshold_and_when_it_expired() {
+    let now = UNIX + 1_000;
+    let day = 86_400;
+    let version = |alerts: &[Alert]| {
+        alerts
+            .iter()
+            .map(|a| a.subject.version.clone())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(push_alerts(Some(now + 61 * day), &[60, 14]), Vec::new());
+    assert_eq!(
+        version(&push_alerts(Some(now + 60 * day - 1), &[60, 14])),
+        ["60"]
+    );
+    assert_eq!(
+        version(&push_alerts(Some(now + 30 * day), &[60, 14])),
+        ["60"]
+    );
+    assert_eq!(
+        version(&push_alerts(Some(now + 14 * day - 1), &[60, 14])),
+        ["14"]
+    );
+    assert_eq!(version(&push_alerts(Some(now + 1), &[60, 14])), ["14"]);
+    assert_eq!(version(&push_alerts(Some(now), &[60, 14])), ["expired"]);
+    assert_eq!(version(&push_alerts(Some(now - day), &[])), ["expired"]);
+    assert_eq!(push_alerts(Some(now + day), &[]), Vec::new());
+    assert_eq!(push_alerts(None, &[60, 14]), Vec::new());
+    let alerts = push_alerts(Some(now + 10 * day), &[60, 14]);
+    assert_eq!(alerts[0].subject.kind, Kind::PushCertNearExpiry);
+    assert_eq!(
+        alerts[0].message,
+        format!(
+            "the MDM push certificate expires at unix {}, in 864000 s: renew it from the MDM setup \
+             (a push certificate that expires stops every push to the Macs)",
+            now + 10 * day
+        )
+    );
+}
+
 /// Proves: alerts of several kinds come in the order of their kinds, then by service and host,
 /// whatever order the derivations found them in; each kind has its log token and severity.
 ///
@@ -589,6 +654,9 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::CertNearExpiry,
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
+        Kind::PushCertNearExpiry,
+        Kind::MdmTlsRenewalFailed,
+        Kind::MdmDnsCredentialRejected,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -604,11 +672,14 @@ fn alerts_come_by_kind_then_service_and_host() {
             "cert_near_expiry",
             "store_unreachable",
             "trusted_root",
+            "push_cert_near_expiry",
+            "mdm_tls_renewal_failed",
+            "mdm_dns_credential_rejected",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     );
     let critical: Vec<Kind> = all
         .into_iter()
@@ -757,76 +828,4 @@ fn a_duplicate_claim_collides_with_the_host_whose_identity_it_shares() {
     assert_eq!(collides_with(&itself, &approvals), None);
     let blank = request("09", claims("", &["02:00:00:00:00:01"]));
     assert_eq!(collides_with(&blank, &approvals), None);
-}
-
-// ---- the book -----------------------------------------------------------------------------
-
-fn halt_alert(host: &str) -> Alert {
-    Alert {
-        subject: subject(Kind::Halt, "kbf", host, "2.0"),
-        message: format!("kbf is halted by {host}"),
-    }
-}
-
-/// Proves: an alert is logged once, at the first observation that finds it, as one error line
-/// with its `alert=` field and what it concerns; later observations keep when it was first
-/// observed and log nothing; one that ended is forgotten, and coming back it is logged again
-/// and first observed anew.
-///
-/// Catches: an alert logged at every observation, never, or without its token; a first
-/// observation time that moves; an ended alert that keeps its old time.
-#[test]
-fn an_alert_is_logged_once_when_it_appears_and_keeps_its_first_time() {
-    let book = Book::default();
-    let log = Log::default();
-    let _guard = log.install();
-    assert_eq!(
-        book.observe_with(|| Ok::<_, ()>((vec![halt_alert("d1")], UNIX)))
-            .expect("observed"),
-        vec![Observed {
-            alert: halt_alert("d1"),
-            first_unix: UNIX
-        }]
-    );
-    let lines: Vec<String> = log.text().lines().map(str::to_owned).collect();
-    let [line] = lines.as_slice() else {
-        panic!("one line: {}", log.text());
-    };
-    assert!(
-        line.ends_with(
-            r#"ERROR hostkeeper_coordinator::alerts: kbf is halted by d1 alert="halt" service=kbf node_id=d1 version=2.0 request_id= other_host_id="#
-        ),
-        "{line}"
-    );
-
-    let both = book
-        .observe_with(|| Ok::<_, ()>((vec![halt_alert("d1"), halt_alert("d2")], UNIX + 15)))
-        .expect("observed");
-    assert_eq!(
-        both.iter()
-            .map(|one| (one.alert.subject.host.as_str(), one.first_unix))
-            .collect::<Vec<_>>(),
-        vec![("d1", UNIX), ("d2", UNIX + 15)]
-    );
-    assert_eq!(log.text().lines().count(), 2, "{}", log.text());
-
-    assert_eq!(
-        book.observe_with(|| Ok::<_, ()>((vec![halt_alert("d2")], UNIX + 30)))
-            .expect("observed")
-            .len(),
-        1
-    );
-    let back = book
-        .observe_with(|| Ok::<_, ()>((vec![halt_alert("d1"), halt_alert("d2")], UNIX + 45)))
-        .expect("observed");
-    assert_eq!(
-        back.iter().map(|one| one.first_unix).collect::<Vec<_>>(),
-        vec![UNIX + 45, UNIX + 15]
-    );
-    assert_eq!(
-        log.text().matches("node_id=d1").count(),
-        2,
-        "{}",
-        log.text()
-    );
 }

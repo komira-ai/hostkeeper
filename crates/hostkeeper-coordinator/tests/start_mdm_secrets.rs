@@ -60,6 +60,10 @@ fn serve_without_the_flag_keeps_no_secret_and_writes_nothing() {
     let parts = start(files.args());
     assert!(!parts.coordinator.mdm_setup().has_key());
     assert!(!files.path("desired.json.mdm-setup").exists());
+    // The tables of the MDM server are opened at every start (`/checkin` needs them); the ABM
+    // client runs idle until a token is uploaded, which needs a key.
+    assert!(files.path("desired.json.mdm").is_dir());
+    assert!(parts.coordinator.runs_abm());
     assert!(
         parts
             .coordinator
@@ -268,4 +272,55 @@ fn serve_refuses_a_database_whose_secrets_it_cannot_read() {
         "{text}"
     );
     assert!(!files.path("mdm.key").exists());
+}
+
+/// Proves: with files the coordinator runs the ABM client when `--mdm-secrets-key-file` is given,
+/// with the tables in the directory beside the state file (`<state>.mdm`) that the start makes.
+///
+/// Catches: an MDM farm whose ABM sync is never started.
+#[test]
+fn serve_runs_the_abm_client_over_the_files_when_there_is_a_key_file() {
+    let files = Files::new("start-mdm-abm-files");
+    let parts = start(with_key(&files, "mdm.key"));
+    assert!(parts.coordinator.runs_abm());
+    assert!(files.path("desired.json.mdm").is_dir());
+}
+
+/// Proves: over the database the coordinator runs the ABM client, with the flag or without it.
+///
+/// Catches: a database farm whose ABM sync is never started.
+#[test]
+fn serve_runs_the_abm_client_over_the_database() {
+    let files = Files::new("start-mdm-abm-database");
+    let database = Database::new();
+    for key in [None, Some("mdm.key")] {
+        let parts = start(database_args(&files, &database, key));
+        assert!(parts.coordinator.runs_abm());
+        drop(parts);
+        database.lock_is_free();
+    }
+}
+
+/// Proves: a file of the MDM tables that does not read refuses the start naming the file, before
+/// the coordinator serves anything.
+///
+/// Catches: a damaged table file taken as an empty table, which the ABM sync would then fill from
+/// scratch and the approval of Macs would trust.
+#[test]
+fn serve_refuses_a_damaged_mdm_table_file() {
+    let files = Files::new("start-mdm-abm-damaged");
+    std::fs::create_dir_all(files.path("desired.json.mdm")).expect("a directory");
+    files.put("desired.json.mdm/abm_devices.json", "{not json", 0o600);
+    let why = refusal(with_key(&files, "mdm.key"));
+    assert!(matches!(&why, StartError::MdmSetupStore(_)), "{why}");
+    assert!(
+        why.to_string().contains(
+            &files
+                .path("desired.json.mdm")
+                .join("abm_devices.json")
+                .display()
+                .to_string()
+        ),
+        "{why}"
+    );
 }

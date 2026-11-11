@@ -65,6 +65,7 @@ fn upload(world: &World, kind: &str, material: &[u8]) {
                 kind: kind.to_owned(),
                 material: material.to_vec(),
                 not_after_unix: None,
+                with_certificate: Vec::new(),
             },
         )
         .expect("stored");
@@ -154,9 +155,78 @@ fn a_complete_setup_is_configured_and_shows_what_is_read_of_it() {
             abm_not_after_unix: Some(ABM_ENDS),
             tls_not_after_unix: Some(ENDS),
             tls_names: vec![NAME.to_owned()],
+            abm_last_sync_unix: None,
+            abm_sync_error: String::new(),
+            abm_unavailable: true,
+            dns_credential: None,
+            tls_renewal: None,
         }
     );
     assert!(status.push_cert.is_some() && status.tls_key.is_some());
+}
+
+/// Proves: a DNS credential that is held is shown by what `ListSecrets` shows of it (kind,
+/// version, fingerprint) and its value is nowhere in the answer, and a replacement shows version 2.
+#[test]
+fn a_held_dns_credential_is_shown_without_its_value() {
+    let world = complete("mdm-status-dns-credential");
+    assert_eq!(status(&world).dns_credential, None);
+    let value =
+        br#"{"provider":"godaddy","kind":"sso-key","key":"visible-key","secret":"hidden-secret"}"#;
+    upload(&world, "dns_credential", value);
+    let shown = status(&world);
+    let info = shown.dns_credential.clone().expect("held");
+    assert_eq!((info.kind.as_str(), info.version), ("dns_credential", 1));
+    let text = format!("{shown:?}");
+    assert!(!text.contains("hidden-secret") && !text.contains("visible-key"));
+    upload(&world, "dns_credential", value);
+    assert_eq!(status(&world).dns_credential.expect("held").version, 2);
+}
+
+/// Proves: a renewal that failed is in the status with when it began, how many attempts failed,
+/// the words of the last failure, the provider's refusal and when the next attempt may start; one
+/// that has not failed, or that ended in a certificate, is absent; and a wait of no time is absent.
+#[test]
+fn a_failing_renewal_is_shown_and_a_renewal_that_succeeded_is_not() {
+    let world = complete("mdm-status-renewal");
+    assert_eq!(status(&world).tls_renewal, None);
+    let tls = world.coordinator.mdm_setup().tls_status().clone();
+    tls.failed(
+        NOW - 600,
+        NOW + 3000,
+        "the provider refused the credential",
+        true,
+        1,
+    );
+    tls.failed(
+        NOW,
+        NOW + 3600,
+        "the provider refused the credential",
+        true,
+        1,
+    );
+    assert_eq!(
+        status(&world).tls_renewal,
+        Some(proto::TlsRenewal {
+            since_unix: NOW - 600,
+            attempts: 2,
+            message: "the provider refused the credential".to_owned(),
+            dns_rejected: "the provider refused the credential".to_owned(),
+            retry_at_unix: Some(NOW + 3600),
+        })
+    );
+    tls.failed(NOW, 0, "no order", false, 1);
+    let shown = status(&world).tls_renewal.expect("failing");
+    assert_eq!(
+        (
+            shown.message.as_str(),
+            shown.dns_rejected.as_str(),
+            shown.retry_at_unix
+        ),
+        ("no order", "", None)
+    );
+    tls.succeeded();
+    assert_eq!(status(&world).tls_renewal, None);
 }
 
 /// Proves: before anything is set every condition is named, in the order push, ABM, name, TLS,
@@ -181,6 +251,7 @@ fn an_empty_setup_names_every_condition() {
         proto::MdmStatusResponse {
             missing: status.missing.clone(),
             sealing: true,
+            abm_unavailable: true,
             ..proto::MdmStatusResponse::default()
         }
     );

@@ -775,6 +775,10 @@ fn wire_names_are_pinned() {
                 "cert_near_expiry",
                 "store_unreachable",
                 "trusted_root",
+                "push_cert_near_expiry",
+                "mdm_tls_renewal_failed",
+                "mdm_dns_credential_rejected",
+                "mdm_identity_near_expiry",
             ],
         ),
         (

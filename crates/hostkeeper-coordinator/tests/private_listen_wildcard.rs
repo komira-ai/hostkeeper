@@ -202,6 +202,7 @@ async fn run_binds_the_private_listener_on_the_wildcard_it_was_given() {
                 heartbeat: addr("198.51.100.7:1"),
                 control: addr("198.51.100.7:2"),
                 lan: None,
+                mdm: None,
                 health: None,
             })
         );

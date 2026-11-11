@@ -1454,6 +1454,27 @@ enum AlertKind {
   // reason; a host whose last heartbeat said nothing of its root raises none. Log token
   // `trusted_root`.
   ALERT_KIND_TRUSTED_ROOT = 11;
+  // The MDM push certificate expires within the first of the `push_alert_days` it has reached
+  // (60, then 14, by default), or has expired: renew it from the MDM setup. The alert is the same
+  // until the next threshold, and then a new one: its `version` is the threshold in days (`60`,
+  // `14`), or `expired`. Log token `push_cert_near_expiry`.
+  ALERT_KIND_PUSH_CERT_NEAR_EXPIRY = 12;
+  // The certificate for the MDM name could not be renewed: the last attempt of the coordinator's
+  // ACME client failed (the message says how), and the next waits `tls_retry_s`. Stands until an
+  // attempt ends in a certificate; renew by hand by uploading one. Log token
+  // `mdm_tls_renewal_failed`.
+  ALERT_KIND_MDM_TLS_RENEWAL_FAILED = 13;
+  // The DNS provider refused the credential of the MDM name's ACME challenge (status 401 or 403):
+  // it is wrong, expired, or has no right to the zone. Stands until an attempt gets past the
+  // provider; upload another credential. Log token `mdm_dns_credential_rejected`.
+  ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED = 14;
+  // The identity certificate of a Mac, or the CA that issues them, expires within the
+  // `renew_alert_days` setting (90 by default), or has expired. The message lists the serials. A
+  // Mac's identity is renewed by enrolling it again (a wipe, or an `InstallProfile` of a fresh
+  // enrollment profile); that macOS renews the identity inside the MDM payload by itself is not
+  // established. The alert's `version` is the `renew_alert_days` it was raised at, or `expired`.
+  // Log token `mdm_identity_near_expiry`.
+  ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY = 15;
 }
 
 // How soon an `Alert` needs a person.

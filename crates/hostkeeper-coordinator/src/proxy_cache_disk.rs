@@ -28,7 +28,7 @@ const MAX_SIDECAR: u64 = 64 * 1024;
 /// What a cached object is: the origin that gave it and its path under that origin.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Key {
-    /// The origin: a repository's name, or the host a pkg is read from.
+    /// The origin: a repository's base URL, or the host a pkg is read from.
     pub origin: String,
     /// The path under the origin, as the origin spells it.
     pub path: String,
@@ -60,6 +60,10 @@ impl Key {
 pub struct Meta {
     /// The origin's validator (its `ETag`, else its `Last-Modified`), for a conditional request.
     pub validator: Option<String>,
+    /// The origin's `Last-Modified`, when it gave one, even beside an `ETag`: what a client's
+    /// `If-Modified-Since` is judged against. A sidecar written before it was kept has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_modified: Option<String>,
     /// When the object was fetched, in unix seconds.
     pub fetched_at: u64,
     /// The length of the body in bytes.
@@ -133,6 +137,23 @@ impl Layout {
             return Err(why);
         }
         Ok(())
+    }
+
+    /// Replaces the sidecar of `key` with one for `meta`: written to a temp file of `tmp/` and
+    /// renamed over the old, so a reader sees one or the other whole.
+    pub(crate) fn rewrite_meta(&self, key: &Key, meta: &Meta, n: u64) -> io::Result<()> {
+        let digest = key.digest();
+        let text = serde_json::to_vec(&Sidecar {
+            origin: key.origin.clone(),
+            path: key.path.clone(),
+            meta: meta.clone(),
+        })
+        .map_err(io::Error::other)?;
+        let scratch = self.tmp.join(format!("{digest}.{n}.meta"));
+        fs::write(&scratch, text)?;
+        fs::rename(&scratch, self.meta(&digest)).inspect_err(|_| {
+            drop(fs::remove_file(&scratch));
+        })
     }
 
     /// Deletes the files of `digest`, the body first; a file that is not there is no error.

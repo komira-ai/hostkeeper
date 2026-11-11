@@ -148,3 +148,7 @@ fleetdm.com
 
 # The third-party service that signs push-certificate requests (docs/design/coordinator-mdm.md).
 =mdmcert.download
+
+# The DNS provider API of the MDM name's certificate (hostkeeper-coordinator, src/mdm_acme/godaddy.rs):
+# the one host the coordinator sends the DNS credential to.
+=api.godaddy.com

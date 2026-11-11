@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 18] = [
+const FIELDS: [(&str, &[Field]); 42] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -92,6 +92,7 @@ const FIELDS: [(&str, &[Field]); 18] = [
             ("kind", 1, false),
             ("material", 2, false),
             ("not_after_unix", 3, true),
+            ("with_certificate", 4, false),
         ],
     ),
     (
@@ -135,6 +136,88 @@ const FIELDS: [(&str, &[Field]); 18] = [
         "hostkeeper.operator.v1.ListSettingsResponse",
         &[("settings", 1, false)],
     ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestRequest",
+        &[("email", 1, false), ("submit", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestResponse",
+        &[
+            ("csr_pem", 1, false),
+            ("encryption_certificate_pem", 2, false),
+            ("submitted", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyRequest",
+        &[("reply", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyResponse",
+        &[("signed_request", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateRequest",
+        &[("certificate_pem", 1, false), ("key_pem", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateResponse",
+        &[
+            ("topic", 1, false),
+            ("not_before_unix", 2, false),
+            ("not_after_unix", 3, false),
+            ("secret", 4, true),
+            ("renewal", 5, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenRequest",
+        &[("token_json", 1, false), ("token_p7m", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenResponse",
+        &[
+            ("secret", 1, true),
+            ("server_name", 2, false),
+            ("org_name", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.GetAbmPublicKeyRequest", &[]),
+    (
+        "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+        &[
+            ("certificate_pem", 1, false),
+            ("fingerprint_sha256", 2, false),
+            ("created", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.ListEnrollmentRequestsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+        &[("requests", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.EnrollmentRequest",
+        &[
+            ("serial", 1, false),
+            ("udid", 2, false),
+            ("product", 3, true),
+            ("reason", 4, false),
+            ("first_unix", 5, false),
+            ("last_unix", 6, false),
+            ("count", 7, false),
+            ("in_abm", 8, false),
+            ("confirmed_until_unix", 9, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+        &[("serial", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+        &[("serial", 1, false), ("expires_unix", 2, false)],
+    ),
     ("hostkeeper.operator.v1.MdmStatusRequest", &[]),
     (
         "hostkeeper.operator.v1.MdmStatusResponse",
@@ -155,6 +238,21 @@ const FIELDS: [(&str, &[Field]); 18] = [
             ("abm_not_after_unix", 14, true),
             ("tls_not_after_unix", 15, true),
             ("tls_names", 16, false),
+            ("abm_last_sync_unix", 17, true),
+            ("abm_sync_error", 18, false),
+            ("abm_unavailable", 19, false),
+            ("dns_credential", 20, true),
+            ("tls_renewal", 21, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.TlsRenewal",
+        &[
+            ("since_unix", 1, false),
+            ("attempts", 2, false),
+            ("message", 3, false),
+            ("dns_rejected", 4, false),
+            ("retry_at_unix", 5, true),
         ],
     ),
     (
@@ -164,6 +262,61 @@ const FIELDS: [(&str, &[Field]); 18] = [
     (
         "hostkeeper.operator.v1.PutNameResponse",
         &[("name", 1, false), ("enrollment_url", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.VerifyRequest",
+        &[("enrollment_id", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.MdmAbmCheck",
+        &[
+            ("result", 1, false),
+            ("organization", 2, false),
+            ("detail", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.MdmPushCheck",
+        &[
+            ("enrollment_id", 1, false),
+            ("result", 2, false),
+            ("detail", 3, false),
+            ("apns_id", 4, false),
+            ("topic", 5, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.VerifyResponse",
+        &[
+            ("status", 1, true),
+            ("listener", 2, false),
+            ("serving", 3, false),
+            ("served_names", 4, false),
+            ("served_names_the_name", 5, false),
+            ("abm", 6, true),
+            ("push", 7, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenRequest",
+        &[("token_json", 1, false), ("token_p7m", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenResponse",
+        &[
+            ("secret", 1, true),
+            ("server_name", 2, false),
+            ("org_name", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.GetAbmPublicKeyRequest", &[]),
+    (
+        "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+        &[
+            ("certificate_pem", 1, false),
+            ("fingerprint_sha256", 2, false),
+            ("created", 3, false),
+        ],
     ),
 ];
 
@@ -190,8 +343,16 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "PutSetting(PutSettingRequest) PutSettingResponse",
             "ListSecrets(ListSecretsRequest) ListSecretsResponse",
             "ListSettings(ListSettingsRequest) ListSettingsResponse",
+            "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
+            "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
+            "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
             "Status(MdmStatusRequest) MdmStatusResponse",
             "PutName(PutNameRequest) PutNameResponse",
+            "Verify(VerifyRequest) VerifyResponse",
+            "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
+            "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
+            "ListEnrollmentRequests(ListEnrollmentRequestsRequest) ListEnrollmentRequestsResponse",
+            "ConfirmEnrollment(ConfirmEnrollmentRequest) ConfirmEnrollmentResponse",
         ]
     );
 
@@ -209,6 +370,24 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("audit_unavailable", 5),
             ("secrets_unavailable", 6),
             ("name_locked", 7),
+            ("mdmcert_unavailable", 8),
+            ("no_pending_request", 9),
+            ("reply_undecryptable", 10),
+            ("reply_not_for_request", 11),
+            ("certificate_invalid", 12),
+            ("key_invalid", 13),
+            ("key_mismatch", 14),
+            ("certificate_expired", 15),
+            ("topic_changed", 16),
+            ("abm_unavailable", 17),
+            ("abm_key_missing", 18),
+            ("abm_token_unreadable", 19),
+            ("abm_credential_refused", 20),
+            ("abm_clock_refused", 21),
+            ("abm_unreachable", 22),
+            ("enrollment_unavailable", 23),
+            ("no_pending_enrollment", 24),
+            ("serial_not_in_abm", 25),
         ])
     );
     assert_eq!(
@@ -265,6 +444,48 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("pending", 1),
             ("applied", 2),
             ("failed", 3),
+        ])
+    );
+
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmAbmResult",
+            "MDM_ABM_RESULT_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("no_token", 1),
+            ("not_checked", 2),
+            ("accepted", 3),
+            ("rejected", 4),
+            ("unreachable", 5),
+            ("unreadable", 6),
+        ])
+    );
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmPushResult",
+            "MDM_PUSH_RESULT_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("sent", 1),
+            ("no_push_identity", 2),
+            ("no_listener", 3),
+            ("no_such_enrollment", 4),
+            ("no_push_token", 5),
+            ("bad_device_token", 6),
+            ("unregistered", 7),
+            ("topic_disallowed", 8),
+            ("bad_certificate_environment", 9),
+            ("certificate_rejected", 10),
+            ("no_client_certificate", 11),
+            ("throttled", 12),
+            ("apns_unavailable", 13),
+            ("rejected", 14),
+            ("connection_failed", 15),
         ])
     );
 

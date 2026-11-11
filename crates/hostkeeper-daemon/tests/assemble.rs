@@ -513,7 +513,10 @@ fn a_config_with_a_release_channel_and_trusted_signers_still_starts_the_daemon()
     assert!(text.contains("release_channel = "), "{text}");
     assert!(text.contains("[trusted_signers]"), "{text}");
     let config = start::load_config(&rig.settings()).expect("the loader accepts both keys");
-    assert_eq!(config.release_channel.as_str(), "https://releases.example");
+    assert_eq!(
+        config.release_channel.as_ref().map(|u| u.as_str()),
+        Some("https://releases.example")
+    );
     assert_eq!(config.trusted_signers.organisation, "komira-ai");
     let started = start::startup(&rig.settings(), rig.ports(), OWN).expect("the daemon starts");
     assert_eq!(started.boot_report().ready, Some(Ok(())));

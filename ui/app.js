@@ -21,6 +21,7 @@ import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
 import * as users from "./pages/users.js";
 import * as tokens from "./pages/tokens.js";
+import * as mdm from "./pages/mdm.js";
 
 const PAGES = [
   ["fleet", "Fleet", fleet],
@@ -33,13 +34,15 @@ const PAGES = [
   ["audit", "Audit", audit],
   ["users", "Users", users],
   ["tokens", "API tokens", tokens],
+  ["mdm", "MDM setup", mdm],
 ];
 
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
-// yes-or-no question to the operator (the browser's confirm) and `now` the time in unix seconds,
+// yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds and
+// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`),
 // each injected so tests can fake them. Returns the frame's controls, which the browser does not
 // need.
-export function startApp({ doc, root, fetch, confirm, now }) {
+export function startApp({ doc, root, fetch, confirm, now, download }) {
   // Why the session last ended on the coordinator's word, shown on the sign-in form it returns to.
   let notice = null;
   // A sign-in or a change of password is on its way: a second submit waits for it.
@@ -206,6 +209,7 @@ export function startApp({ doc, root, fetch, confirm, now }) {
       params: at.params,
       confirm: (question) => confirm(question) === true,
       now: () => now(),
+      download: (file) => download(file),
       navigate,
       refresh: () => {
         if (here()) {

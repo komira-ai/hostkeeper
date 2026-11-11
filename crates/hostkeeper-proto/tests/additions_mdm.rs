@@ -98,6 +98,7 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 kind: "abm_token".to_owned(),
                 material: vec![0, 1, 2, 255],
                 not_after_unix: Some(1_900_000_000),
+                with_certificate: vec![4, 5, 6],
             }),
         ),
         (
@@ -150,6 +151,102 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         (
+            "hostkeeper.operator.v1.CreatePushRequestRequest",
+            round_trip(&op::CreatePushRequestRequest {
+                email: "ops@example.org".to_owned(),
+                submit: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestResponse",
+            round_trip(&op::CreatePushRequestResponse {
+                csr_pem: "-----BEGIN CERTIFICATE REQUEST-----".to_owned(),
+                encryption_certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                submitted: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyRequest",
+            round_trip(&op::PutPushReplyRequest {
+                reply: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyResponse",
+            round_trip(&op::PutPushReplyResponse {
+                signed_request: b"<plist/>".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateRequest",
+            round_trip(&op::PutPushCertificateRequest {
+                certificate_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                key_pem: b"-----BEGIN RSA PRIVATE KEY-----".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateResponse",
+            round_trip(&op::PutPushCertificateResponse {
+                topic: "com.apple.mgmt.External.d1801ae1".to_owned(),
+                not_before_unix: 1_800_000_000,
+                not_after_unix: 1_900_000_000,
+                secret: Some(secret_info()),
+                renewal: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenRequest",
+            round_trip(&op::PutAbmTokenRequest {
+                token_json: b"{}".to_vec(),
+                token_p7m: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenResponse",
+            round_trip(&op::PutAbmTokenResponse {
+                secret: Some(secret_info()),
+                server_name: "js-mdm".to_owned(),
+                org_name: "Org".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+            round_trip(&op::GetAbmPublicKeyResponse {
+                certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                fingerprint_sha256: "ab".repeat(32),
+                created: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+            round_trip(&op::ListEnrollmentRequestsResponse {
+                requests: vec![op::EnrollmentRequest {
+                    serial: "P24LH9H6JT".to_owned(),
+                    udid: "00008112-001A2B3C4D5E6F70".to_owned(),
+                    product: Some("Mac14,13".to_owned()),
+                    reason: "the blob is not trusted".to_owned(),
+                    first_unix: 1_800_000_000,
+                    last_unix: 1_800_000_060,
+                    count: 3,
+                    in_abm: true,
+                    confirmed_until_unix: Some(1_800_003_600),
+                }],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+            round_trip(&op::ConfirmEnrollmentRequest {
+                serial: "P24LH9H6JT".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+            round_trip(&op::ConfirmEnrollmentResponse {
+                serial: "P24LH9H6JT".to_owned(),
+                expires_unix: 1_800_003_600,
+            }),
+        ),
+        (
             "hostkeeper.operator.v1.MdmStatusResponse",
             round_trip(&op::MdmStatusResponse {
                 configured: true,
@@ -168,6 +265,27 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 abm_not_after_unix: Some(1_825_020_096),
                 tls_not_after_unix: Some(1_850_000_000),
                 tls_names: vec!["mdm.example.com".to_owned()],
+                abm_last_sync_unix: Some(1_800_000_000),
+                abm_sync_error: "ABM refused the timestamp (timestamp_refused)".to_owned(),
+                abm_unavailable: true,
+                dns_credential: Some(secret_info()),
+                tls_renewal: Some(op::TlsRenewal {
+                    since_unix: 1_800_000_000,
+                    attempts: 3,
+                    message: "the provider refused the credential".to_owned(),
+                    dns_rejected: "the provider refused the credential".to_owned(),
+                    retry_at_unix: Some(1_800_003_600),
+                }),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.TlsRenewal",
+            round_trip(&op::TlsRenewal {
+                since_unix: 1_800_000_000,
+                attempts: 1,
+                message: "no order".to_owned(),
+                dns_rejected: String::new(),
+                retry_at_unix: None,
             }),
         ),
         (
@@ -181,6 +299,74 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&op::PutNameResponse {
                 name: "mdm.example.com".to_owned(),
                 enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.VerifyRequest",
+            round_trip(&op::VerifyRequest {
+                enrollment_id: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmAbmCheck",
+            round_trip(&op::MdmAbmCheck {
+                result: op::MdmAbmResult::Accepted.into(),
+                organization: "Example Org".to_owned(),
+                detail: "no detail".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmPushCheck",
+            round_trip(&op::MdmPushCheck {
+                enrollment_id: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
+                result: op::MdmPushResult::BadCertificateEnvironment.into(),
+                detail: "BadCertificateEnvironment".to_owned(),
+                apns_id: "0a1b2c3d".to_owned(),
+                topic: "com.apple.mgmt.External.0a1b2c3d".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.VerifyResponse",
+            round_trip(&op::VerifyResponse {
+                status: Some(op::MdmStatusResponse {
+                    configured: true,
+                    ..op::MdmStatusResponse::default()
+                }),
+                listener: true,
+                serving: true,
+                served_names: vec!["mdm.example.com".to_owned()],
+                served_names_the_name: true,
+                abm: Some(op::MdmAbmCheck {
+                    result: op::MdmAbmResult::NotChecked.into(),
+                    ..op::MdmAbmCheck::default()
+                }),
+                push: Some(op::MdmPushCheck {
+                    result: op::MdmPushResult::Sent.into(),
+                    ..op::MdmPushCheck::default()
+                }),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenRequest",
+            round_trip(&op::PutAbmTokenRequest {
+                token_json: b"{}".to_vec(),
+                token_p7m: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenResponse",
+            round_trip(&op::PutAbmTokenResponse {
+                secret: Some(secret_info()),
+                server_name: "js-mdm".to_owned(),
+                org_name: "Org".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+            round_trip(&op::GetAbmPublicKeyResponse {
+                certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                fingerprint_sha256: "ab".repeat(32),
+                created: true,
             }),
         ),
     ]
@@ -197,7 +383,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 15);
+    assert_eq!(messages.len(), 35);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
@@ -291,6 +477,7 @@ fn an_absent_time_of_a_secret_stays_absent_and_a_zero_is_written() {
             kind: "tls_key".to_owned(),
             material: vec![1],
             not_after_unix: None,
+            with_certificate: Vec::new(),
         })
         .as_slice(),
     )

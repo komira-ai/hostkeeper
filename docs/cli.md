@@ -443,10 +443,10 @@ holds no master key.
 
 | flag | value | meaning |
 |---|---|---|
-| `--kind` | STRING | The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`; else `invalid_request`. |
+| `--kind` | STRING | The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `push_pending_key`, `abm_key`, `abm_cert`, `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`; else `invalid_request`. |
 | `--not-after-unix` | INT64 | When the value stops being good, when it says so; shown by `ListSecrets` and the status. |
 
-Through `--request` only: `material` (bytes).
+Through `--request` only: `material` (bytes), `with_certificate` (bytes).
 
 #### `hkctl mdm put-setting`
 
@@ -474,6 +474,55 @@ each, never its value. Changes nothing.
 Every setting this release knows, with its value and whether that is its default. Changes
 nothing.
 
+#### `hkctl mdm create-push-request`
+
+`/hostkeeper.operator.v1.Mdm/CreatePushRequest`
+
+Makes a push certificate request: an RSA 2048 key, a CSR over it with the `email` in its
+subject, and a second key and self-signed certificate that mdmcert.download encrypts its
+reply to. Both keys are sealed and kept; a request pending before is replaced. With `submit`
+the coordinator posts the CSR and the encryption certificate to mdmcert.download, which
+**emails** the signed request to `email`: the reply is not in this answer, the operator
+uploads the attachment with `PutPushReply`. Without `submit` nothing is sent, and the CSR is
+for a vendor certificate or a signer of the operator's own. Session-only; audited as
+`mdm_push_csr`. Refused `invalid_request` (the email is not one address),
+`secrets_unavailable`, `mdmcert_unavailable` (the service could not be reached or did not
+take it; the request stays pending), `audit_unavailable`, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--email` | STRING | The address the request is made for: it is in the CSR's subject, and mdmcert.download emails its reply to it. One plain address (`local@domain`), up to 254 bytes; else `invalid_request`. |
+| `--submit` | true\|false | Whether the coordinator posts the request to mdmcert.download. |
+
+#### `hkctl mdm put-push-reply`
+
+`/hostkeeper.operator.v1.Mdm/PutPushReply`
+
+Decrypts the reply of mdmcert.download (the attachment of its email, as the mail has it, hex
+text, or its raw bytes) with the pending request's encryption key and checks that it is the
+signed request for the pending CSR; answers it, for the operator to upload to Apple's push
+portal, which returns the certificate for `PutPushCertificate`. Stores nothing. Session-only;
+audited as `mdm_push_reply_put`. Refused `no_pending_request`, `reply_undecryptable` (not a
+message encrypted to the pending request's key), `reply_not_for_request`, `audit_unavailable`.
+
+Through `--request` only: `reply` (bytes).
+
+#### `hkctl mdm put-push-certificate`
+
+`/hostkeeper.operator.v1.Mdm/PutPushCertificate`
+
+Stores a push certificate. Without `key_pem` the certificate must match the pending request's
+key (what Apple returned for the request); with it, the pair is stored as it is (the
+migration of an existing certificate and key; PKCS#1 `BEGIN RSA PRIVATE KEY` and PKCS#8 are
+both read). It must match its key, be unexpired, carry a topic that starts
+`com.apple.mgmt.External.`, and, when a certificate is already in use, the same topic.
+Session-only; audited as `mdm_push_cert_put` with the topic and the expiry, never the key.
+Refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expired`,
+`topic_changed`, `no_pending_request`, `secrets_unavailable`, `audit_unavailable`,
+`store_failed`.
+
+Through `--request` only: `certificate_pem` (bytes), `key_pem` (bytes).
+
 #### `hkctl mdm status`
 
 `/hostkeeper.operator.v1.Mdm/Status`
@@ -496,6 +545,80 @@ another is refused `name_locked`, and the same name is taken again.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
+
+#### `hkctl mdm verify`
+
+`/hostkeeper.operator.v1.Mdm/Verify`
+
+Reads the setup back and proves its parts work, as a button of the setup page: the status as
+`Status` computes it; whether the Macs' listener runs and which names the certificate it serves
+names; with an ABM token held, whether Apple accepts it (`GET /account` of the ABM service,
+which answers only an accepted token); and, when `enrollment_id` names an enrolled Mac, one
+push to it through the sender the queue uses, which proves the push certificate, its topic and
+the environment. The push is a plain push with no command behind it: the Mac that gets it
+connects, is idle, and nothing is queued or recorded for it. What APNs, or the connection to
+it, answered is one class of `MdmPushResult`, so that a wrong topic, a dead token and a
+certificate of the wrong environment are told apart. Session-only; audited as `mdm_verify`
+with the enrollment id, before the push is sent. A failed check is in the answer, not a
+refusal. Refused `unauthorized`, `forbidden`, `invalid_request` (the enrollment id is not
+one), `audit_unavailable`, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--enrollment-id` | STRING | The enrollment id of the enrolled Mac to send the test push to (as `ListDevices` lists it); empty sends none and checks the rest. |
+
+#### `hkctl mdm put-abm-token`
+
+`/hostkeeper.operator.v1.Mdm/PutAbmToken`
+
+Takes the ABM server token (docs/design/coordinator-mdm.md, 4.5): either the JSON of its four
+OAuth parts and expiry, which is what a takeover of NanoDEP's token uploads, or the `.p7m` file
+ABM hands over, opened with the `abm_key` the coordinator holds. The token is proved to
+Apple before it is kept (a session is opened with it and `GET /account` is read), so that one
+that is not good is refused and nothing is stored. Session-only, as `PutSecret` is, and
+audited as `mdm_abm_token_put` with the fingerprint and the expiry, never the token. Refused
+`abm_unavailable` when this coordinator has no ABM client, `secrets_unavailable` with no
+master key, `invalid_request` for a token that is not five parts or a request that gives both
+forms or neither, `abm_key_missing` for a `.p7m` with no `abm_key` held, `abm_token_unreadable`
+for a `.p7m` that does not open with it, `abm_credential_refused` and `abm_clock_refused`
+for the two faults Apple names on the session, `abm_unreachable` when no answer came.
+
+Through `--request` only: `token_json` (bytes), `token_p7m` (bytes).
+
+#### `hkctl mdm get-abm-public-key`
+
+`/hostkeeper.operator.v1.Mdm/GetAbmPublicKey`
+
+The certificate of the ABM server entry's key, in PEM, for the operator to add to the entry
+in ABM (the public-key download of the fallback path, when NanoDEP's key cannot be taken
+over). The key pair is made when none is held (RSA 2048, stored as `abm_key` and `abm_cert`),
+which is why the call is session-only; once made, the same certificate is answered. Audited as
+`mdm_abm_cert_get`. The private key is never returned.
+
+#### `hkctl mdm list-enrollment-requests`
+
+`/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests`
+
+The enrollment requests that wait for an operator (docs/design/coordinator-mdm.md, 4.2): each
+is a Mac whose Setup Assistant posted a device blob to `/enroll` that the coordinator could not
+verify against Apple's roots, so it was given no challenge. The list is in memory (a restart
+empties it and the Mac's next post fills it again). Each entry says whether the ABM table lists
+the serial now. Changes nothing.
+
+#### `hkctl mdm confirm-enrollment`
+
+`/hostkeeper.operator.v1.Mdm/ConfirmEnrollment`
+
+Confirms the waiting request of `serial`: the next post of that serial from the UDID that
+waited is given a challenge, once, for `challenge_ttl_s` seconds. The ABM table is read again
+here, and a serial it does not list (or lists as removed) is refused `serial_not_in_abm`. A
+confirmation says that the operator saw this Mac enroll; it cannot be made for a serial that
+is not waiting (`no_pending_enrollment`). Session-only; audited as `mdm_enroll_confirmed`.
+Refused also `enrollment_unavailable` when this coordinator has no MDM listener, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--serial` | STRING | The serial, 1 to 64 ASCII letters and digits. |
 
 ### `releases`
 

@@ -67,7 +67,7 @@ and the rules). Any signed-in user may do the setup; every step is audited under
    Apple's push portal and *uploads the certificate* Apple returns. An Apple MDM vendor certificate is the alternative route (4.4). For
    the migration, *upload an existing certificate and key* instead.
 2. **Apple Business Manager.** For the org's existing server entry (`js-mdm`), *upload the existing key pair* (the one NanoDEP holds) and
-   the *server token* (`.p7m`, which is encrypted to that key): ABM needs no change. Only if the key pair cannot be had, *download the
+   the *server token* (NanoDEP keeps it decrypted, as its four parts and their expiry; `cargo xtask abm-takeover-token` assembles the JSON the page takes): ABM needs no change. Only if the key pair cannot be had, *download the
    coordinator's new public key*, add it in ABM as the MDM server's key, and upload the token ABM gives back.
 3. **Name.** Set the MDM name (for example `mdm.example.com`). The page shows the enrollment URL the ADE profile will carry, and the DNS
    record the name needs.
@@ -164,6 +164,14 @@ capability instead). The script is the owner's (S3) and the choice is confirmed 
 
 The routes of this table are the whole surface of the listener: the setup rpcs, `/v1/*`, the sign-in routes and `/ui/` are on the private listener only, and on this one every other path answers `404` (a test asserts it for each of those, CM20; **Built**: `http::Surface::Mdm`, which `grpc::route` hands to the JSON router alone, with no gRPC, no gateway, no cookie and no token read, and which answers `404 not_found` to every request until each route of the table lands with its task). Each route family is served when its own prerequisites are set (package-proxy.md section 3): the proxy needs only the name and the certificate.
 
+**Built (CM11a)**: the listener is `--mdm-listen <ip:port>` (a wildcard stops the start; the port is whatever the address says, 443 on the farm, set by the held script K1), `crates/hostkeeper-coordinator/src/mdm_server/`, and serves `PUT /checkin` and `PUT /mdm`. `/enroll` and `/scep` are not served: until CM12c Caddy routes them to the old stack and this listener answers `404` to them, as it does to the proxy's `/pkg/` (CM11c); `/apt/` is served by PP2 (package-proxy.md section 12). A method other than `PUT` is `405`, a body over 1 MiB is `400`, both before any credential is read. **`CheckOut`**: the live profile has `CheckOutWhenRemoved true` (spike `scep.md`), so a Mac whose profile is removed sends `CheckOut`, which ends its enrollment in one change (commands cancelled, identity retired) and is told to the gate; a Mac that is wiped sends none, and its enrollment is replaced by the next `Authenticate` of its serial (4.2). Whether the new profile keeps the key is CM12c's, and whether a macOS client sends it unprompted is unverified.
+
+**The route-family switch** ([package-proxy.md](package-proxy.md) section 11 item 5, answered): `MdmServer::serves(family)` is asked for each request, so a family whose prerequisites are not met answers `503 unavailable` for each of its routes while the other is served. The proxy family needs the certificate and key of the name (without them no handshake is made at all); the MDM family needs that and a push identity (a push certificate with the key that matches it). Each later task adds its own prerequisite to that one function: the CA of the Macs' identities (CM12c) and the ABM token (CM13). The test `the_mdm_routes_answer_503_while_the_package_routes_are_served` holds it: with the certificate alone the MDM routes answer `503` and the package routes answer `404` for a repository the registry does not hold (`/apt/`, mounted by PP2) or for any path (`/pkg/`, not mounted until CM11c), and once a push certificate is stored the MDM routes answer; PP2's `the_apt_routes_are_served_without_any_mdm_credential` serves a file with the certificate alone.
+
+**What each route reads of the client certificate** (the table `client_cert`): `/enroll` and `/scep` read none (a Mac at Setup Assistant has none, and a certificate it offers is not looked at); `/checkin` and `/mdm` need a credential, either the TLS client certificate of the connection or an `Mdm-Signature` header (the live profile has `SignMessage true`, spike `scep.md`, so a Mac may present no certificate at all). A request with neither is `401`. Either way the SHA-256 of the certificate must be that of an identity the coordinator issued and that is still `Issued` in the identity table, and the live enrollment of the identity's serial must have been entered with that same certificate: the certificate of a replaced or checked-out enrollment is `401` from then on. The signature is checked by `mdm_server::signature`: CMS SignedData (detached) over the body, one signer found by issuer and serial or by key identifier, SHA-1/256/384/512 with RSA PKCS#1 v1.5, with or without signed attributes; it proves possession of the key, and the identity table, not a chain, says whether the coordinator issued the certificate.
+
+**The TLS** (`mdm_server::tls`): the certificate and key of the name are read from the store for each connection when their versions or the trusted issuers changed, so a certificate uploaded or renewed is served from the next handshake on (a connection that is open keeps what it was accepted under), and a connection that arrives while there is none is closed. The client certificate is optional (rustls `allow_unauthenticated`), the verifier names the trusted issuers as the hint list, and a certificate that does not chain to one is refused at the handshake. The trusted issuers are `trusted_issuers()` in `config_mdm.rs`: empty until CM12c supplies the MDM CA, so until then no client certificate is trusted at the handshake and a Mac authenticates by its `Mdm-Signature` (a client that offers a certificate is then not asked for one). This is the one place the listener is behind the design's text, and it is the CA's.
+
 **Why a listener of its own and not routes on the heartbeat or LAN listener.** The heartbeat surface admits any client certificate of the
 host CA and is pinned by every daemon's `ca_sha256`. A Mac at Setup Assistant holds no certificate and trusts only public roots, so its
 listener needs a public-CA server certificate and a different client-trust rule. Separating the listeners keeps the host CA's meaning
@@ -182,12 +190,14 @@ hint list holds the MDM CA (and any issuer the migration trusts). Verify with th
 
 **Is the `/enroll` response signed?** For ADE, Apple's text may require the returned enrollment profile to be CMS-signed. If so the signing
 key is a second use of the public TLS key that the coordinator reads, and the signing is a task in CM12c. Not established; section 12, item 11.
-The capture that decides it is the same capture as for the device blob (CM12a). The live stack's Mac enrolled with an unsigned response, so signing may not be needed. This rests on one Mac and one macOS version (27.0.x), and the POST was not seen (inferred, [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md)). CM12c keeps the signing step, built conditionally on the first capture; item 11 stays open.
+The capture that decides it is the same capture as for the device blob (CM12a). The live stack's Mac enrolled with an unsigned response, so signing may not be needed. This rests on one Mac and one macOS version (27.0.x), and the POST was not seen (inferred, [coordinator-mdm-cm12a.md](coordinator-mdm-cm12a.md)). **Decided in CM12c: the profile is served unsigned** (a plain XML property list, as the live stack serves it); no signing is built. Item 11 stays open: if the first real enrollment shows a Mac refusing the unsigned profile, signing is a change to `mdm_enroll/enroll.rs` alone.
 
 **An unknown enrollment.** What a Mac does with `401`, `403` or `410` from `/mdm` is not the same: some are read by the MDM client as
 "this server no longer manages me" and remove management. The status for an enrollment the table does not know is chosen from Apple's
 protocol text before CM11 (a `410` is not used until that text says what it does), and CM11 tests that no Mac-side state is lost on it
 (a fake client keeps its profile). Section 12, item 12.
+
+**Decided in CM11a** (Apple's text for the status codes could not be read, so this is the conservative choice, not a verified one): every request on `/checkin` and `/mdm` that the table does not know is answered `401` `{"error":"unauthorized"}`: no credential, a signature that does not verify, a certificate the coordinator did not issue, an identity a replacement or a check-out retired, and the certificate of an enrollment that is no longer the live one. `401` is what an HTTP client reads as "authenticate again"; `410 Gone` is never answered, and `403` is kept for a credential that is valid for something else (another device or serial than the message names, a replacement the rules refuse). The test `an_unknown_enrollment_keeps_the_fake_macs_state` runs a fake client that removes its profile only on `410`. What the real client does on `401` (retry, re-run `Authenticate`, back off) is not established; section 12, item 12 stays open until the farm Mac is observed.
 
 **Certificate renewal.** Decided in 4.10: the coordinator obtains and renews the certificate itself (ACME DNS-01, in process), so no
 unit, `lego` or file writer remains. Until that lands the operator can upload a certificate and key in the UI (4.9, step 4); the listener
@@ -250,8 +260,22 @@ the gate after it. What a replay does buy under owner decision B is stated in 9.
   replaces without the table. The model check of section 10 holds this rule over every schedule it explores, and finds that the table
   must be read at `Authenticate` and not only at `/enroll` (a serial removed between the two replaced a live enrollment when it was not).
   The price of the rule is stated in 9.2: a replayed blob verifies as well, so a peer that captured one can replace the Mac's enrollment.
+  **Built (CM11a)**, `mdm_server/checkin.rs`: the `Authenticate` handler holds the check. It requires an issued identity whose serial and UDID are the message's (`mdm_serial_mismatch` audited otherwise), treats a repeat for the enrollment already live with that certificate as a no-op, and for another live enrollment reads the ABM table (a device listed and not removed) or the identity's operator confirmation before it writes the audit row `mdm_enrollment_replaced` and then replaces: one change of the store ends the old enrollment, cancels its commands and retires its identity, and the gate hears a `CheckOut` of the old id and an `Authenticate` of the new, so the serial is not ambiguous in its records. A refusal is `403` and the audit row `mdm_replace_refused`; a replacement whose audit row cannot be written is `503` and is not made. One `Authenticate` runs at a time. **Limit**: the table store has no call that reads the ABM table and replaces in one transaction, so a sync that removes the serial between the two calls lets one replacement through, which its audit row shows; the next `Authenticate` reads the table again. Closing it takes a store call that does both (not built).
 - A request on an identity that is replaced or checked out, or on a certificate this CA did not issue, changes nothing.
 - ACME with attestation (CM16) is the real fix for the weaker case, since the certificate is then bound to the hardware. 9.2 says so.
+
+**Built (CM12c)**, `crates/hostkeeper-mdm-ade` (the blob and the profile, pure), `crates/hostkeeper-coordinator/src/mdm_enroll/` (the routes) and `operator_mdm_enroll.rs` (the operator's two rpcs):
+
+- **The blob.** `hostkeeper_mdm_ade::blob::verify` reads the `SignedData` from the bytes as received, checks the `messageDigest` and the signature over the signed attributes as sent (not re-encoded), walks the chain from the signer through the certificates of the blob to one of the roots given (Apple Root CA and Apple Root CA - G3 are shipped, `roots.rs`; a test injects a fake Apple), checks every certificate's validity at the time, requires every issuer in it to be a CA (`basicConstraints` `cA`, `keyUsage` `keyCertSign` when present, `pathLenConstraint` kept) and the signer's own certificate not to be one, and only then reads the plist (`SERIAL`, `UDID`, `PRODUCT`, `VERSION`). It implements RSA with SHA-1, SHA-256, SHA-384 and SHA-512, and ECDSA with P-256 and SHA-256 or P-384 and SHA-384 (the keys of Apple Root CA and of Apple Root CA - G3), DER encodings, and a signer named by issuer and serial. **What a verified blob proves** is that its signer holds a certificate that chains to the root through CAs, not that the certificate is a Mac's device identity: Apple's device-identity CA is not pinned, because no real chain was seen to read its name from, so a certificate Apple issued for another use directly under a CA that also signs device identities would verify. Item 4 of section 12 carries the pin (the issuer of the real device certificate, or its serial against the plist's `SERIAL`) for when a blob is captured. **No real blob was seen** (CM12a), so item 4 of section 12 stays open: the verifier is proved against a fake Apple only. A real blob outside the implemented shape (BER, a signer named by key identifier, another curve, an intermediate that is not in the blob) is **not verified**, and the fail-closed rule below is what the coordinator does then; it never lets such a blob through.
+- **`/enroll`** (`POST`; a `GET` is a manual enrollment and is declined `403 serial_not_in_abm`). The order is: the peer's rate (`enroll_rate_per_min`, `429`), the prerequisites (the name `mdm_name`, a push identity for the topic; else `503 unavailable`), the blob, the serial (letters and digits, 1 to 64; else `400`), **the ABM table** (a serial it does not list or lists removed is declined `403 serial_not_in_abm`, verified or not, audited once a window as `mdm_enroll_declined`), then
+  - a verified blob: a challenge of 32 random bytes in hex, kept as its SHA-256 only (`mdm_identities`, bound to the serial and the blob's UDID, valid `challenge_ttl_s`, default 3600, `confirmed` false), and the enrollment profile (`hostkeeper_mdm_ade::profile`: a SCEP payload at `https://<mdm_name>/scep` with the challenge, and an MDM payload with `CheckInURL` `/checkin`, `ServerURL` `/mdm`, the push topic and `SignMessage`) as `application/x-apple-aspen-config`, unsigned;
+  - an unverified blob: **no challenge**. The request is held in memory (`mdm_enroll/pending.rs`, at most `enroll_pending_max` serials, the oldest unconfirmed dropped for a new one) with the verifier's reason and answered `503 waiting_for_operator`; the first post is audited `mdm_enroll_held`. The list is `Mdm.ListEnrollmentRequests`; **`Mdm.ConfirmEnrollment` (session-only)** reads the ABM table again and, for a serial it lists, marks the row confirmed for `challenge_ttl_s`; the next post of that serial **from the UDID that waited** is given a challenge with `confirmed` true, once, and the row is gone. A restart empties the list (the Mac posts again) and a confirmation with it.
+  - **Replay before the first enrollment** (an unverified blob copied by a peer): it holds the serial's place in the list, and what it can win is a confirmation of its own UDID by an operator who sees that UDID listed; it is never an approval (approval is the gate's, from the nonce, CM9) and it creates no challenge, identity or enrollment. A verified blob that is replayed does get a challenge, and the price of that is in 9.2.
+- **`/scep`** (`GetCACaps`, `GetCACert`, `PKIOperation` by POST, which is what the Mac sends) over the library of CM12b and the challenges in the tables (`mdm_enroll/scep.rs`, `StoreChallenges`). A refusal consumes nothing. Retry rules, tested: **an unconsumed challenge is redeemed by a retry with the same key in a new session** (a new `transactionID`, as the old stack's journal shows macOS retrying); a **consumed challenge answers the same key with the certificate stored** and **another key with a failure `CertRep`** (`badRequest`); an expired, unknown, retired or dead challenge is a failure `CertRep`; a request that loses a race on the challenge gets the winner's certificate or a failure by the same rule. A message that names no transaction is `400`. Each peer is limited before any RSA operation runs.
+- **The identity CA** (`mdm_enroll/ca.rs`): made at the first need (`GetCACert`, a `PKIOperation`, or the first profile), RSA 2048, `CN=hostkeeper MDM CA`, `ca_days` (3650), apart from the host CA; its key and certificate are one sealed secret, `mdm_ca_key` (a four-byte length, the certificate, the PKCS#8 key), stored after an audit row `mdm_ca_created`; two needs at once make one. It is added to the hint list of the listener's TLS (`trusted_issuers`). The identity is `CN=<serial>,O=<identity_org>,OU=hostkeeper-mdm`, RSA 2048, client authentication, `identity_days` (1095).
+- **Renewal alert**: `mdm_identity_near_expiry` lists the serials of live enrollments whose identity expires within `renew_alert_days` (90), and the CA when it does; its version is the window or `expired`. That macOS renews a SCEP identity inside the MDM payload is **not established** (item 3), so the way to renew is to enroll the Mac again (a wipe, or an `InstallProfile` of a fresh enrollment profile, which no task here builds): the alert is the only renewal there is.
+- **Settings** (each with its default from the start): `identity_days`, `renew_alert_days`, `challenge_ttl_s`, `ca_days`, `identity_org`, `enroll_rate_per_min`, `enroll_pending_max`.
+- **Tests**: `mdm_enroll/*_tests.rs`, including `flow_tests.rs`, a fake Mac that runs 5.1 from the blob to the first `TokenUpdate`, and the traces of the model check: a wiped Mac that never checked out, a serial removed from ABM between the challenge and `Authenticate`, an operator-confirmed enrollment past a table that no longer lists the serial, and a replay before the first enrollment.
 
 **Renewal.** Identity validity is the setting `identity_days`, default 1095 (a tunable, with its default from the start, edited on the setup page). At
 `renew_alert_days` (default 90) before expiry, the coordinator raises an alert listing the serials, through the path the push certificate
@@ -286,10 +310,22 @@ certificate path needs OpenSSL. The in-house client is a few hundred lines with 
 - **Delivery is at least once.** A command is held by one connection at a time only while the Mac answers within the timeout or never; a
   slow Mac that answers after the timeout fired sees the command twice. Commands of the pinned list and the gate's handling of a result
   must therefore be safe to repeat (a result for a command already at an end state is dropped, 5.2).
-- Each push sets `apns-priority: 10` and an `apns-expiration` of `push_expiry_s` (default 86400, never 0, because 0 drops the push
-  when the Mac is asleep). Both are settings with defaults.
-- A `410` marks the token invalid and stops pushing it; the next `TokenUpdate` replaces it. A `403` raises the push-certificate alert (the
-  certificate is expired or revoked). `429` and `503` retry with the window as the floor.
+- Each push sets `apns-priority` (the setting `push_priority`, 10 or 5, default 10) and `apns-expiration`: the time APNs keeps the push
+  until, which is an **absolute** time (Apple's text for the header, not read here; the spike's `86400` got a `200`, which does not tell
+  a 1970 time from a duration), so the header is the clock's now plus `push_expiry_s` (default 86400), and `0` when the setting is 0 (APNs
+  tries once and keeps nothing; accepted by APNs, a policy choice and not an API rule). The floor is `push_retry_s` (3600) and the
+  connection and answer timeout `push_timeout_s` (30); all four are settings with defaults.
+- **What APNs answers** (measured by the spike, except where said). `400 BadDeviceToken` is terminal for that token (an unknown
+  token gives `400`, not `410`): the token is dead until the next `TokenUpdate` replaces it, and so is a `410`. `400 TopicDisallowed` is a
+  setup mistake (the topic is not the certificate's), the same for every Mac. A certificate APNs refuses by environment arrives as an HTTP/2
+  GOAWAY whose payload is `{"reason":"BadCertificateEnvironment"}`, not as a response: a connection error that carries it, or a TLS
+  alert about the certificate, is a certificate alert. `403 MissingProviderToken` is what a missing client certificate gets and is not the
+  expiry signal; any other `403` is taken as a certificate APNs refuses and raises the certificate alert, **which is unverified**
+  (what an expired or revoked certificate gets was not provoked). `429`, `500` and `503` leave the floor armed and are tried again after
+  it; `410`, `429` and `503` were not provoked.
+- **Built** (CM7, `crates/hostkeeper-mdm-push`): the sender (`apns`), the rules above as a state machine over an injected clock
+  (`policy`, with a test named for each rule of the model check) and the sender with that policy (`pusher`). The queue (CM11a) calls it
+  when a command is queued, times out or answers `NotNow`, and when a Mac connects. **Built (CM11a)**, `mdm_server/queue.rs`: the in-process queue calls it, and replaces NanoHUB's: the gate puts its commands through the port `CommandQueue` (the NanoHUB client is the other implementation, until CM14a deletes it), a `/mdm` request claims and answers through the table store, and `MdmServer`'s sweep (every `--mdm-queue-sweep-s`) returns the commands whose `--mdm-command-timeout-s` passed and pushes a Mac whose floor elapsed with a command queued. The sweep reads the store, not memory, for who waits (`enrollments_with_queued`: live enrollments holding a `Queued` command): an enrollment new to the process gets its floor armed at its first sweep, so after a restart or deploy a Mac with a command left queued is pushed one `push_retry_s` after the first sweep, not never. A `TokenUpdate` carrying `UserID`, `EnrollmentUserID` or `NotOnConsole` true is a user channel's and never replaces the device's push token. Each invariant of the model check of the queue is a test of `queue_tests.rs` named for it.
 - A command that waits without a push-capable token waits for the Mac's next connection. That a Mac polls on any schedule is **not**
   established by anything read (section 12, item 13); the design does not depend on it, and the push is the wake.
 
@@ -321,9 +357,19 @@ has the topic `com.apple.mgmt.External.d1801ae1-3ef7-483e-9f6d-4979e2ebfc09`; th
    the coordinator generates, besides the push key and CSR, an encryption key pair, and offers the request the service takes (the CSR
    and the encryption certificate, public parts only). The service signs the CSR and returns it encrypted to that certificate; the operator
    uploads the reply, the coordinator decrypts it with the encryption key (held sealed, 4.9) and offers the signed request as a download
-   for Apple's push portal, which returns the PEM that step 1b takes. Whether the coordinator posts the request to the service itself,
-   as the service's own client tool does, or the operator submits it on the site, and the exact formats, are read from the service and
-   its client before CM7 and are not assumed here (section 12, item 6).
+   for Apple's push portal, which returns the PEM that step 1b takes. **Read from the service's own client** (micromdm's
+   `mdmctl mdmcert.download`, CM7): the coordinator posts the request itself, `POST https://mdmcert.download/api/v1/signrequest` with the
+   JSON `{csr: base64(PEM CSR), email, key: <a public API key every client of the service sends>, encrypt: base64(PEM encryption
+   certificate)}`, and the service's answer to the call is only `{"result": "success"}` or a refusal with a `reason`: **the signed request
+   arrives by email** to the address in the request, as an attachment, hex text of a PKCS#7 enveloped message encrypted to the encryption
+   certificate. The operator uploads the attachment as the mail has it (hex text or raw bytes), and the coordinator decrypts it (RSA key
+   transport, then AES-CBC or DES-EDE3-CBC, the ciphers the client's PKCS#7 reader takes) and checks that it is the signed request for the
+   pending CSR. The CSR is RSA 2048 with `C=US`, `CN=mdm-push` and the email as `emailAddress`; the encryption certificate is self-signed,
+   RSA 2048, `CN=mdmcert.download`, valid a year. **Not verified** (one real request with the owner's email would; none was sent): that the
+   API key constant is still accepted, the name and encoding of the attachment beyond the client's source, which content cipher the
+   service uses (a cipher that is not read is refused naming its identifier), and the keys of the decrypted property list
+   (`PushCertRequestCSR`, `PushCertCertificateChain`, `PushCertSignature`, as the client writes them), so the check is lenient about the
+   form of the CSR in it. A first real request is also the test that the coordinator's own CSR is accepted by Apple.
    **The dependency, plainly.** mdmcert.download is a third-party community service, not Apple's; the MicroMDM guide labels such signers
    for testing and development, and the push certificate cannot be renewed in 2027 if the service is gone, so its availability is checked
    before 2027-09 (section 12, item 8). The alternative is an Apple **MDM vendor CSR signing certificate** (requested by the Developer
@@ -338,9 +384,10 @@ caches and refreshes. Every call carries `X-Server-Protocol-Version`; a `429` is
 error refreshes the session once. These protocol details rest on NanoDEP's source and are unverified (section 12, item 1). HMAC-SHA1 is about sixty lines on `ring`; no OAuth crate is needed.
 
 - **Token and key.** ABM hands over a `.p7m` encrypted to the server entry's public key. **The coordinator takes over NanoDEP's existing key
-  pair and token** (section 7): the operator uploads the private key and certificate and the token, the coordinator decrypts the `.p7m`
-  with `cms` and `rsa`, and keeps the key and the four token parts encrypted in the store (4.9); `GET /account` proves them before the
-  upload is accepted. Because the token is encrypted to that key, ABM's entry (`js-mdm`) needs no change at all. Only as a fallback, when
+  pair and token** (section 7): the operator uploads the private key and certificate and the token, and the coordinator keeps the key and the four token parts
+  encrypted in the store (4.9); `GET /account` proves them before the upload is accepted. **The token's takeover input is not a `.p7m`** (spike abm, 1):
+  NanoDEP keeps the four decrypted parts and the expiry, so the token upload takes a small JSON of them, and the `.p7m` (decrypted with `cms` and `rsa`
+  under the coordinator's own key) is the input of the fallback path alone. Because the token is encrypted to that key, ABM's entry (`js-mdm`) needs no change at all. Only as a fallback, when
   the key pair cannot be read out of NanoDEP, the coordinator generates a new RSA key and self-signed certificate (the page's *Download the
   public key* returns the certificate to add in ABM) and the operator uploads the token ABM then returns. Expiry is read from the token and
   alerted at `abm_alert_days` (default 60). The live token expires 2027-10-31.
@@ -357,6 +404,24 @@ error refreshes the session once. These protocol details rest on NanoDEP's sourc
   (it points at `js-mdm`, the MDM server entry of the current stack). So a purchase reaches that server's device list with no operator
   action, and the sync then assigns the ADE profile (lesson 1). The coordinator holds `js-mdm`'s own key pair and token, so ABM's default
   assignment needs no change.
+
+**Built (CM13)** (`crates/hostkeeper-coordinator/src/abm/` and `operator_abm.rs`). The transport is a port (`AbmTransport`) with an HTTPS implementation
+(`HttpsTransport`, HTTP/1.1 over rustls, one connection a request, the host's roots, answers read to 16 MiB) and a scripted fake and a simulated ABM for the tests,
+so that no test opens a socket. `oauth.rs` signs `GET /session` as the spike measured it (HMAC-SHA1 over `GET&enc(url)&enc(sorted params)`, key
+`enc(consumer_secret)&enc(access_secret)`, RFC 3986 encoding). `client.rs` keeps the `X-ADM-Auth-Session` for the token it was made for and sends
+`X-Server-Protocol-Version: 3` on every call; a `403`, or a `200` whose body is not JSON, refreshes the session once and repeats the call, and a second one is
+surfaced; on `/session` a `403` that says `signature_invalid` is a fault of the credential and one that says `timestamp_refused` a fault of this machine's clock (the upload
+answers `abm_credential_refused` and `abm_clock_refused`); a `429` that names `Retry-After` is repeated after it (the setting `abm_retries`, each wait cut to `abm_sync_s`), and a `400` whose body names a cursor (`INVALID_CURSOR`; `EXPIRED_CURSOR`, `EXHAUSTED_CURSOR` and `CURSOR_ALREADY_USED` are matched by name, not verified live) is its own error.
+`sync` is `Abm::sync_once`: a full fetch (`POST /server/devices`, pages of 1000) when there is no cursor, the last pass is older than seven days or ABM answers
+a cursor error, otherwise `POST /devices/sync` with the cursor; the devices, the serials a full fetch no longer lists (marked removed; a sync's `deleted` also removes, a `profile_status` of `removed` does not, and such a device is assigned the profile again), and the cursor are written in one change
+(`abm_apply`). Then, when the setting `mdm_name` names a host name, the ADE profile (`profile.rs`: the live profile's flags, `url` `https://<mdm_name>/enroll`, named by `ade_profile_name`) is defined at ABM when its digest differs
+from the stored one (`POST /profile`), and every device that has no profile is given it (`POST /profile/devices`, `PUT` when the `POST` is answered with a `4xx`); a device ABM does not give it (`NOT_ACCESSIBLE`) is tried again by the next pass; a device already on a profile is left on it. **Nothing is written to ABM
+until an operator has uploaded a token and named the MDM host; the assignment write was not probed in the spike and runs only against the fake in the tests.** A single timer (`abm_sync_every`, the setting `abm_sync_s`, default 300) runs the passes;
+a pass runs only while the node holds the MDM lease (4.9, **Built** CM19: `crates/hostkeeper-coordinator/src/mdm_lease.rs`). `Abm::serial_in_abm` (and `Coordinator::serial_in_abm`) is the read the approval (CM9) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
+The two `Mdm` rpcs, both session-only: `PutAbmToken` (the JSON of the four parts and `access_secret_expiry`, or a `.p7m` opened with the `abm_key` held by CMS key transport, RSAES-PKCS1-v1_5 or RSAES-OAEP, and AES-CBC or 3DES-CBC content; the token is proved to Apple with a session and `GET /account` before it is kept, its expiry is the token's own,
+and the answer names the server entry and the organisation Apple says it belongs to) and `GetAbmPublicKey` (the certificate of the key pair, made once, RSA 2048, when none is held; calls are serialized, and a certificate held without its key is refused `abm_key_missing`, never replaced). `PutSecret` judges `abm_key` (an RSA private key in PEM, PKCS#1 or PKCS#8) and `abm_cert` (a certificate, made for the key when one is held) at upload.
+The `.p7m` decryption rests on the CMS and S/MIME standards and a round trip with a synthetic token; no `.p7m` that Apple made was available. The one-off reader of the takeover is `cargo xtask abm-takeover-token` ([the runbook](../operations/abm-takeover.md)).
+The MDM tables are opened only when the database is used or, with files, `--mdm-secrets-key-file` is given (`<state-file>.mdm/`), so a farm that does not use MDM gets no directory. Not built here: the status of the sync for the setup page (`Abm::status` is kept for CM21), the setting `mdm_name` itself (CM21 declares it; the sync reads it as a plain setting until then), and, left to the task that builds it, the renewal of the certificate under the lease (CM17).
 
 **Cost.** One external request every five minutes when nothing changed, one more per page of changes, one per profile assignment batch.
 That is 288 requests a day idle. The interval is a tunable so the cost and the window below can be traded.
@@ -408,7 +473,7 @@ setting keeps, the digest that decides a resend) and `crates/hostkeeper-coordina
 `install_of` in `mdm.rs` seeds it from the old file only while it was never set, and `Mdm.PutSetting installs` reaches the running gate at once.
 The install named `hostkeeper` is the pkg step's; every other install is a baseline entry (5.3), sent to the Macs of each group that has a
 baseline. The entry's digest is its name, bundle identifier, file digest and version, so a changed `url` or `path` sends nothing. The pkg files stay a directory because they are files the host provides,
-not configuration.
+not configuration. **Built** (CM11c): `crates/hostkeeper-coordinator/src/mdm_server/pkg.rs`, `--mdm-pkg-dir`. The route answers only a digest that the setting `installs` names at that request (any other digest, or a name that is not 64 lower-case hex digits and `.pkg`, is `404` and the directory is not read), and only `GET` and `HEAD` (`405` otherwise). A full `GET` streams the file in 64 KiB chunks with its `Content-Length` and hashes as it goes, holding back the last chunk until the digest is equal, so a file that differs from its name ends the body in an error and no client holds a whole wrong file; `HEAD` and `Range` (one range, `206`; past the end `416`) are answered for a file whose whole digest was checked once at its present size, modification time, inode and change time (a file replaced with its old size and modification time restored has another change time, so it is hashed again), hashing it first when it was not. A `200`, `206` and `304` carry `Cache-Control: public, max-age=31536000, immutable`; a `416` carries none, so no cache keeps it. The `ETag` is the digest; `If-None-Match` is `304`; `If-Modified-Since` is ignored, since the file has no `Last-Modified`. The pull-through from an entry's `url` for a digest with no file in `--mdm-pkg-dir` is **Built** (PP3): `mdm_server/pkg_pull.rs` and `pkg_origin.rs`, with `--proxy-cache-dir` ([package-proxy.md](package-proxy.md) section 4).
 
 **The Mac is on the lab LAN only** (the coordinator is on the tailnet, the Macs will not be). There is no Tailscale install, no tagged key
 and no VPN or system-extension profile in this design, and a Mac holds no secret beyond its own identity. Everything a Mac talks to is on
@@ -468,13 +533,13 @@ pages; `ui/calls.json` is generated from the API, **Built**).
 
 | Step | Operator does | Coordinator does | Checks at entry |
 |---|---|---|---|
-| 1a | *Create the push request* | generates the push key and an encryption key, keeps both sealed, returns the CSR and the encryption certificate (for the mdmcert.download route, or the CSR alone for a vendor certificate, 4.4) | none; replaces a pending request with an audit row |
-| 1a' | uploads the signed reply of mdmcert.download | decrypts it with the encryption key, offers the signed request to download for Apple's portal | the reply decrypts and holds a signed request for the pending CSR |
-| 1b | uploads the certificate Apple returned | stores it with the pending key | the certificate matches the pending key; not expired; its topic starts `com.apple.mgmt.External.`; on a renewal the topic equals the current one |
-| 1b' (migration) | uploads an existing certificate and key | stores both | the pair matches; the topic is the one in section 4.4; the key is never returned |
+| 1a | *Create the push request* (`Mdm.CreatePushRequest`, **Built**) | generates the push key and an encryption key, keeps both sealed, returns the CSR and the encryption certificate (for the mdmcert.download route, or the CSR alone for a vendor certificate, 4.4) | none; replaces a pending request with an audit row |
+| 1a' | uploads the signed reply of mdmcert.download (`Mdm.PutPushReply`, **Built**) | decrypts it with the encryption key, offers the signed request to download for Apple's portal | the reply decrypts and holds a signed request for the pending CSR |
+| 1b | uploads the certificate Apple returned (`Mdm.PutPushCertificate`, **Built**) | stores it with the pending key | the certificate matches the pending key; not expired; its topic starts `com.apple.mgmt.External.`; on a renewal the topic equals the current one |
+| 1b' (migration) | uploads an existing certificate and key (`Mdm.PutPushCertificate` with `key_pem`, **Built**) | stores both | the pair matches; the topic is the one in section 4.4; the key is never returned |
 | 2a | uploads the existing ABM key pair (the migration, section 7) | stores the key and certificate sealed; the key is never returned | the key and certificate match |
 | 2a' (fallback) | *Download the public key* | generates the ABM server key and a self-signed certificate once, returns the certificate to register in ABM | none |
-| 2b | uploads the `.p7m` (the existing token, or the one ABM returned for a new key) | decrypts it with the ABM key, stores the four parts, runs `GET /account` | the file decrypts; Apple accepts the session; expiry read |
+| 2b | uploads the token JSON (the takeover: NanoDEP's four parts and expiry) or the `.p7m` (the one ABM returned for a new key) | for a `.p7m`, decrypts it with the ABM key; stores the four parts, after `GET /session` and `GET /account` | the file decrypts; Apple accepts the session; expiry read from the token |
 | 3 | sets the MDM name | stores it, shows the enrollment URL `https://<name>/enroll` and the DNS record the name needs | a DNS-safe name; refused once any Mac has enrolled (the enrollment profile carries the name; a change is a re-enrollment of every Mac, so it is an explicit later task, not a field) |
 | 4 | uploads the GoDaddy API key and secret, or a certificate and key | 4.10 | the certificate chains to a public root, names the MDM name, matches the key, is not expired |
 
@@ -535,7 +600,7 @@ and `--mdm-pkg-dir` (a file of key material and a directory of files the host pr
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
 setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
-new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and for the proxy's `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`) and
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`, and for the proxy's `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
 
@@ -546,6 +611,59 @@ any operator caller reads. A write is audited before the store is touched, under
 `mdm_tls_put`, `mdm_acme_credential_put`, or `mdm_secret_put` for the kinds with no action of their own in the list above), and a refusal after the caller is known, or a store that
 then fails, adds an entry of the same action whose reason is the refusal's token; if the entry cannot be written the write is not made (`audit_unavailable`). Reads are not audited: a
 panel that polls would fill the log. The Debug and Display of every secret type print nothing of it.
+
+**What CM7 built of the rpcs.** Three more session-only `Mdm` rpcs for the push certificate, each audited at entry under the signed-in
+user's name (`mdm_push_csr`, `mdm_push_reply_put`, `mdm_push_cert_put`) with a refusal's token as the reason, and no key, address or
+certificate in an answer, an entry or a log line: `CreatePushRequest` (the email; makes both RSA keys, keeps them sealed as `push_pending_key`,
+the key with its CSR, and `push_encryption_key`, answers the CSR and the encryption certificate, and with `submit` posts them to
+mdmcert.download, a failure leaving the request pending), `PutPushReply` (decrypts the emailed attachment, answers the signed request,
+stores nothing) and `PutPushCertificate` (a certificate for the pending key, or with `key_pem` an existing pair; PKCS#1 and PKCS#8 are read;
+refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expired` and, when a certificate is in use, `topic_changed`).
+The key is stored, then the certificate: a failure between the two leaves the new key beside the old certificate; `MdmSetup::push_identity`
+pairs the newest certificate with the newest held key that matches it, which is the key it replaced (held for `secret_grace_days`), so the
+old identity keeps working until the upload is repeated. The `apns` sender gives each try its own timeout, drops a connection that
+timed out, and sends HTTP/2 PINGs every 60 s, also while idle. The settings `push_retry_s`, `push_expiry_s`,
+`push_priority` and `push_timeout_s` are new, with their defaults. The alert `push_cert_near_expiry` stands once the certificate in use
+expires within the largest of `push_alert_days` (60 and 14), with the smallest threshold reached as its version, so that 14 days is a new
+alert, and `expired` after expiry. The production transport to mdmcert.download is built at start, and a
+coordinator built with none reaches no network.
+**What CM22a built of the setup page.** (`ui/pages/mdm.js`, `ui/bytes.js`, `docs/ui-serving.md`.) A page "MDM setup" in the UI's page list (any signed-in user; the writes it
+calls are session-only). The status panel draws `Mdm.Status` with the thresholds of `Mdm.ListSettings` (`push_alert_days`, `abm_alert_days`, `tls_renew_days`) on every drawing: configured, or each missing condition in words;
+per secret the version, the first 16 hex digits of the fingerprint, the expiry and the days left, with a reminder line and a coloured row inside the largest threshold, and `expired` after the end; the name and
+its enrollment URL, the push topic and the TLS names. The push step is `CreatePushRequest` (email, send or not) with the CSR and the encryption certificate shown and downloadable, `PutPushReply` (the emailed
+attachment as a file or its pasted hex text, sent as bytes) with the signed request downloadable, `PutPushCertificate` for the certificate Apple returns, and one form that sends an existing certificate and a key
+file (PKCS#1 or PKCS#8) in one call. The page reads a file when its button is pressed, sends it and drops it, takes a key only as a file, and shows nothing of a secret; a refusal is the API's `CODE reason`
+unchanged. The request made in the page is kept in the page only: after a reload the coordinator still holds it pending, and the reply can be checked without it; the CSR is shown again only by making a new request.
+The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder. The CM11b setup check is in `coordinator-mdm-cm11b.md`: the ABM check answers `not_checked` until CM13 (#328) gives the client.
+
+**What CM22b built of the ABM and name steps.** (`ui/pages/mdm.js`, `docs/ui-serving.md`.) The ABM step has four parts: *Take over the existing token* sends the
+JSON of the token's four parts and expiry as a file (`PutAbmToken.token_json`; there is no field to paste it into, because it holds secrets), *Upload the token file from ABM* sends a `.p7m` as a file
+(`token_p7m`), *Take over the existing key pair* sends the key with its certificate in one `PutSecret` (`abm_key` with `with_certificate`, field 4; the server stores neither unless the certificate is the key's, and refuses an `abm_key` alone that is not the key of the
+`abm_cert` held, so a wrong pair cannot replace the key a held certificate was added in ABM with; the certificate alone when the key is stored already), and *Get public key* calls `GetAbmPublicKey` and shows the certificate, its fingerprint and whether this call made the pair, with a download; it is for a new server entry, because
+the call makes a pair when none is held. A stored token is answered by the server entry and the organisation Apple names and the expiry (`2027-10-31 22:01:36 UTC` for the live token). The two faults Apple names are
+explained in the page, after the API's own `CODE reason`: `abm_clock_refused` and the sync's `timestamp_refused` (set the clock of the machine the coordinator runs on), `abm_credential_refused` and `signature_invalid`
+(the four parts do not belong together, or the token was revoked). The name step sets the name with `PutName` and shows the enrollment URL the coordinator answers; the name needs a DNS record that resolves, on the LAN,
+to the coordinator's MDM listener; once `name_locked` is true the page shows the name and the reason and no form. Three additive fields of `MdmStatusResponse` carry what the sync knows, which closes the dead-code
+exception of `Abm::status`: `abm_last_sync_unix` (the last pass that ended without an error, as the running coordinator saw it; absent after a start until a pass ends well, so a restart reads *none since the
+coordinator started*) and `abm_sync_error` (the words of the last failure, empty after a good pass; a token ABM accepts clears it at once) and `abm_unavailable` (this coordinator runs no ABM client, which the row says). They are not part of *configured*. The numbers of the ABM refusals are 17 to 22, after `topic_changed` (16), because
+CM7 holds 8 to 16, after main's `name_locked` (7); none of them is released. Not verified: the browser glue in `ui/main.js` (the blob download), a real file chooser, and ABM's own pages.
+
+**Second node and the lease** (**Built**, CM19: `crates/hostkeeper-coordinator/src/mdm_lease.rs`). The sync, the push sender and the
+renewal of the TLS certificate (4.10) act on the outside world, so one node does them at a time: the one that holds **the MDM lease**,
+which is the store's own, the advisory lock of the database at the node's epoch (`coordinator-storage.md` sections 4.4 and 5), seen as
+the writing session being up. A lost session or a store another coordinator led is a lease not held; the files, with one writer by
+`flock`, always hold it. Before each act the node asks `Lease::held`: a push to APNs (the enqueue of a command, the timeout return, the
+floor, a Mac's `NotNow`), a pass of the ABM sync, and, when CM17 lands, a renewal. A node that does not hold the lease does none of
+them and asks again at its next tick, so a node whose session is revived goes on by itself, and a node that took the lease over starts its
+push floor at its first sweep, one floor before its first push. A sweep without the lease drops what the node armed and what its push policy held for those Macs, so a node whose lease came back starts its floors anew from the store instead of pushing at a floor, or for a Mac, it knew before the gap. No
+second lock is made, so the lease that fences the store's writes is the lease that fences the timers. An act that began while the lease
+was held is not cut short; its writes are fenced by the database (`lease_fenced`) and what it sent to Apple is repeatable. The
+earlier plan, a refusal to start the MDM listener beside a lease holder that serves MDM, is not built: what keeps two coordinators off one
+database is the advisory lock, which refuses the second one's start, and that is what stays until the standby (`coordinator-storage.md`
+section 7, not built) lets a second node wait. Because the secrets are in the store, a second node needs only the same key file; a node
+given none refuses to start when the store holds a sealed row, and one given a key that opens none of them refuses too (4.9, "The master
+key"; tests `no_flag_is_no_key_unless_secrets_are_sealed` and `serve_over_the_database_keeps_the_same_rules`).
+**What CM22c built of the setup page.** (`ui/pages/mdm.js`; `Mdm.Status` gained `dns_credential` = 20 and `tls_renewal` = 21, a new message `TlsRenewal`, all additive.) The TLS step has two halves. *Upload a certificate and key* works with no ACME: the chain (a file, or pasted) and the key (a file only) are stored by two `Mdm.PutSecret` calls, `tls_key` first and then `tls_cert`, the key dropped as soon as it is stored; a refusal of the certificate after the key was stored is reported as that (the status then shows `tls_pair_invalid` until a certificate for the key is stored). The coordinator checks nothing of the pair at upload; the status says whether it is a pair, names the MDM name and has not expired. *Renewal by ACME* shows the renewal status, the three ACME settings (`dns_zone`, `acme_directory`, `acme_contact`, one `Mdm.PutSetting` for each that changed, read from the `ListSettings` answer the page already draws), and the DNS credential (kind `sso-key` or a personal access token, provider `godaddy`, typed into password fields and sent as the JSON `DnsCredential::parse` reads; the fields are emptied whatever the answer is). The status reads: off, with what is lacking (the MDM name, the zone, a credential: the conditions under which the renewer does nothing); on, with the days at which it orders; or failing, with the last error, when the run of failures began, the attempts, the provider's refusal when it refused the credential, and the next attempt. A failing renewal also puts a line in the status panel. `tls_renewal` is the renewer's own report ([`TlsStatus`], the one the alerts read): in memory, so a restart clears it and it says nothing of a failure before it. Not verified: the browser's file chooser and password fields, and a live ACME run.
 
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not
@@ -560,11 +678,6 @@ enrolled before this setup hold the name they enrolled at and the operator sets 
 same name is taken again. The lock reads the gate's records only and the check and the write are not one transaction: a coordinator with no gate (no `--mdm-api-url`) holds no Mac, so it never locks, and a Mac whose first `TokenUpdate` lands between the check and the write is not seen. CM11a makes the lock a durable store fact set at the first enrollment and checked in the same transaction as the name write. The name is kept among the settings' rows under `mdm_name`, which `PutSetting` refuses and `ListSettings` does not list. `Mdm.ListDevices` still lists the gate's devices whether or not the setup is
 configured, so the farm's existing view does not vanish at the upgrade; it adds `configured` and `missing`, which the Devices page (CM23) reads to show *not configured* and what is missing, and per device the `host_id` and `group` of
 the one inventory record with its serial and a `baseline` that follows the config profile in this enrollment (none sent, pending, applied, failed). The reconciler's richer baseline states join the enum when it lands. `hkctl` has `mdm status` and `mdm put-name` from the generated table.
-
-**Single node.** The sync, the push sender and the listener are single-node in v1: the coordinator refuses to start the MDM listener
-when the store's lease is held by another coordinator that serves MDM (the lease record names whether it does). Because the secrets are
-in the store, a second node needs only the same key file, so the earlier "secrets in the store for a second node" task shrinks to lifting
-that refusal (CM19).
 
 ### 4.10 The TLS certificate for the MDM name, with no separate stack
 
@@ -596,6 +709,35 @@ DNS-01 authorization, a CSR, finalize and download, one HTTPS exchange each.
   outbound HTTPS to the ACME directory and to the GoDaddy API from the MDM host. (3) A zone whose provider has no API could instead delegate
   `_acme-challenge.<name>` by CNAME to a zone the coordinator answers itself; that makes the coordinator a DNS server, so it is not chosen.
   (4) It adds an ACME and a GoDaddy client to the coordinator, with fakes behind ports for tests (T12): no network is touched by a test.
+
+**Built (CM17)**, `src/mdm_acme/`, on `instant-acme` 0.8.5 (Apache-2.0, features `ring` and `rcgen` only: no aws-lc, the workspace's rustls and
+ring; its `hyper-rustls` feature is off, so the one HTTPS client is the coordinator's own, `https.rs`, on the TLS client of `hostkeeper-mdm-push`).
+Four ports and a timer:
+
+- `Https` (`https.rs`): every request, to the CA and to the DNS provider, through one trait; tests answer both with fakes, so no test reaches a network,
+  and `instant-acme` is given an `HttpClient` that is an adapter over it (`order.rs`).
+- `DnsProvider` / `DnsProviders` (`dns.rs`), GoDaddy first (`godaddy.rs`): `publish`, `is_published`, `remove` of one TXT value at a name. **The zone is the
+  setting `dns_zone`**, never the name with a label taken off: `mdm.internal.example.net` lives in `example.net` and its record is `_acme-challenge.mdm.internal`.
+  GoDaddy's `PUT` on `records/TXT/<name>` replaces every TXT at that name, so `publish` reads them (`GET`) and writes them back with the new value, and
+  `remove` writes the rest back, or `DELETE`s the name when nothing else is there. Visibility is read back from the provider's `GET`, not from a resolver.
+  The credential is one sealed record whose JSON names the provider and the kind, `sso-key` now and `bearer` (a personal access token) later. A 401 or 403
+  is `Rejected`, told apart from a failure. At most 60 calls a minute (`RateLimit`, on the injected clock).
+- `Clock` (`mod.rs`): the time and the sleep of every wait, injected, so no test waits (T10).
+- `order.rs`: account (made once per directory, its credentials stored before the order is placed so a failed order still leaves it), new order, the dns-01
+  authorization published and polled until the provider shows it within `dns_timeout_s`, `dns_settle_s` more, `set_ready`, poll within `acme_timeout_s`,
+  finalize with a new key, read the chain. **The record is removed after the order on every path**; a removal that fails is logged and does not change the order's answer.
+- `renewal.rs`: a tick (every `tls_check_s`) reads the settings, does nothing until the name, zone and credential are set, and orders when no certificate is
+  held or the one in use (read from the stored certificate, not the upload's label) expires within `tls_renew_days`. One attempt at a time under a lock in the
+  process: **the store's lease of the design does not exist yet** (v1 has one coordinator on a store, the state lock refuses a second), so the lock is the single flight, and CM19 moves it
+  to the lease with the rest of the multi-node work. After a failure the next attempt waits `tls_retry_s`. A success stores the key and then the chain, as the next
+  versions of `tls_key` and `tls_cert`; the listener's resolver (`MdmTls::config`) reads the held versions on each handshake and serves the newest certificate with the newest key that fits it, so the renewed certificate is
+  served from the next one, and between the two writes (the new key stored, its certificate not yet) the pair in use keeps serving. The certificate upload of 4.9 is unchanged and works until the certificate it stores is due.
+- Alerts: `mdm_tls_renewal_failed` (the attempts, since when, the message) and `mdm_dns_credential_rejected`, derived from the renewal's in-memory status, which a
+  restart clears (the first failed attempt after it raises the alert again).
+
+New settings, all with defaults: `dns_zone`, `acme_directory`, `acme_contact`, `dns_ttl_s` (600), `dns_poll_s` (15), `dns_timeout_s` (600), `dns_settle_s` (60),
+`acme_timeout_s` (300), `tls_check_s` (300), `tls_retry_s` (3600). The TTL, the time for a record to show and the add and delete calls were never run against the
+live zone (the spike was blocked from a DNS write), so they are settings and are measured at the cutover. `PutSecret` now refuses a `dns_credential` that is not the JSON above.
 
 With this, the `lego` unit is not in the plan: the table of 1.1 lists the coordinator alone. The task is CM17, now before the cutover
 (section 11).
@@ -729,7 +871,7 @@ operator action are involved.
 | The serial was removed from ABM after its challenge was issued, and it enrolls | the ABM table is read at the replacement; the enrollment is refused, audited and waits for the operator's confirmation (4.2) |
 | `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key gets the stored certificate, whatever the `transactionID`, a different key is refused; tests for both |
 | Identity certificate's serial differs from `Authenticate.SerialNumber` | refused, audited `mdm_serial_mismatch` |
-| Two coordinators on one Postgres | MDM is single-node in v1 (4.9): a second coordinator serving MDM refuses to start while the lease holder serves it; the gate's saves run under the lease (**Built**) |
+| Two coordinators on one Postgres | the advisory lock refuses the second coordinator's start; the MDM timers (push, ABM sync) act only under the lease, which a node that lost its session or a deposed one does not hold (4.9, **Built**, CM19), and the gate's saves run under it too |
 | The push certificate expires | `403` from APNs raises the alert; commands queue; the Macs still `Idle` on their own, so nothing is lost, only delayed |
 | The ABM token expires | alert at 60 days and the status panel; the sync fails closed with a named error and the setup goes back to *not configured*; enrolled Macs are unaffected; the operator uploads a new token in the UI |
 | The TLS certificate for the name expires, or the DNS credential is revoked | the renewal alerts from 30 days; the listener serves the expired certificate until replaced, which a new Mac refuses, so new enrollments fail and existing Macs, which hold their identity, are unaffected; the status says *not configured, TLS expired* |
@@ -756,7 +898,7 @@ topic, and everything else is a fresh upload on the setup page (4.9):
 | Item | Where it is today | How |
 |---|---|---|
 | Push certificate and key | NanoHUB's storage (the audit: "inside NanoHUB storage") | the operator takes the PEM pair from there once and uploads it in step 1b'; the page checks the pair matches and that the topic is the one the Mac was enrolled under, and the key is never shown again |
-| ABM key pair and server token | NanoDEP's storage | **taken over.** The operator reads NanoDEP's key pair and the token (encrypted to that key) out of its storage once and uploads both (steps 2a and 2b); `js-mdm` in ABM needs no change, so no device moves and the default assignment stays. A new key (step 2a', and the token ABM returns for it) is the fallback if the pair cannot be read out; whether ABM then accepts a replaced key for the entry is not read (section 12, item 16). The old stack keeps working with the same token until it is stopped, which is what the rollback of step 5 below relies on |
+| ABM key pair and server token | NanoDEP's storage | **taken over.** The operator reads NanoDEP's key pair and the token (which NanoDEP keeps decrypted, as four parts and an expiry, not as a `.p7m`) out of its storage once and uploads both (steps 2a and 2b); the token as the JSON that `cargo xtask abm-takeover-token` assembles; `js-mdm` in ABM needs no change, so no device moves and the default assignment stays. A new key (step 2a', and the token ABM returns for it) is the fallback if the pair cannot be read out; whether ABM then accepts a replaced key for the entry is not read (section 12, item 16). The old stack keeps working with the same token until it is stopped, which is what the rollback of step 5 below relies on |
 | ADE profile | NanoDEP's storage under the DEP name | not copied: the coordinator defines its own (4.5) and assigns it to the devices it lists |
 
 The one thing outside the UI is that the operator reads the push pair out of NanoHUB's storage and the key pair and token out of NanoDEP's,
@@ -772,7 +914,7 @@ entry, to which the default assignment and the devices would then move in ABM, w
    the farm Mac, which still talks to the old stack.
 3. Cut over: stop Caddy and NanoHUB (leave their units installed), start `--mdm-listen` on the name's address and port 443, which Caddy
    held before (4.1 says how the container gets the port).
-4. Erase `m3ultra-1` in ABM-assigned state; it enrolls through 5.1. Confirm `Mdm.ListDevices` shows it and a `DeviceInformation` round
+4. Erase `m3ultra-1` in ABM-assigned state; it enrolls through 5.1. If its blob does not verify (section 12, item 4: no real blob has been seen), its post is answered `503 waiting_for_operator` and the request is in `Mdm.ListEnrollmentRequests` with the verifier's reason; `Mdm.ConfirmEnrollment` (session-only, `hkctl` cannot make it) lets the Mac's next post through, and the first real post is the capture that item 4 and item 11 wait for. Confirm `Mdm.ListDevices` shows it and a `DeviceInformation` round
    trip returns through APNs.
 5. **Rollback holds only until the Mac's first `TokenUpdate` reaches the coordinator.** Before it, stop `--mdm-listen` and start Caddy
    and NanoHUB (their storage is untouched). After it, the way back is to wipe the Mac and enroll it into the old stack again.
@@ -828,18 +970,20 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
   hash of the key, so a repeat with the same key gets the stored certificate whatever its `transactionID`, and a refusal changes
   nothing). The store is a table store and does not bind an enrollment to its identity: `replace_live` takes the `cert_sha256` it is given, and an
   enrollment without one retires no identity when it ends. CM11a, which holds the certificate that the Mac presented and looks its identity up, must check before the call that
-  the identity is issued and has the serial and the UDID of the enrollment, and must enter every enrollment with its `cert_sha256`. `FileMdm` writes back, with their rows,
+  the identity is issued and has the serial and the UDID of the enrollment, and must enter every enrollment with its `cert_sha256`. **Built (CM11a)**: `Authenticate` does both. The file store's tables are the directory `<state-file>.mdm/` (operations/coordinator-state.md). `FileMdm` writes back, with their rows,
   the fields of a later release that it read, so that a rollback and a roll forward lose none; a file whose directory could not be synced after the file was put in place is counted
   as written (the change is kept and the failure is logged), since the memory must not differ from what a restart reads. A write that fails before a file is replaced leaves the memory as it was, and
   the families written before it stay until the next change that writes them. `import` and `export` between the stores do not carry these tables yet (no code writes them before CM11a). The device record of the gate, `mdm_devices`,
   gains no required field.
-- New flags: `--mdm-listen`, `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir`; the login flags (`--initial-admin-file`, `--initial-password-secs`, the session, lockout and password settings) are listed in operator-login.md section 10; the rest of MDM and of the
+- New flags: `--mdm-listen` (**Built, CM11a**, with `--mdm-command-timeout-s`, default 86400, and `--mdm-queue-sweep-s`, default 60, which need it), `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir`; the login flags (`--initial-admin-file`, `--initial-password-secs`, the session, lockout and password settings) are listed in operator-login.md section 10; the rest of MDM and of the
   proxy is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
 - New proto messages and rpcs on `Mdm` (push CSR and certificate, ABM certificate and token, name and settings, TLS certificate and DNS
   credential, status, ABM device list, queued-command list); `ListDevices` gains optional fields and is otherwise unchanged. The tokens file and its format are unchanged (operator-login.md reads it as before). The previous release's `hkctl` and UI run against a new coordinator, and a new `hkctl` or UI against an old
   coordinator gets `UNIMPLEMENTED` for the new verbs (the UI shows the page as unavailable). Each task names the test that runs the previous release on new data and the
   reverse (to build, in each PR).
 - The host CA, `ca_sha256` and every daemon config are untouched.
+- **CM12c adds no table and no migration**: one method on the table port (`identities_expiring`, a read), two rpcs on `Mdm` (`ListEnrollmentRequests`, `ConfirmEnrollment`), three refusal values (22 to 24; the numbers 7 to 21 are CM7's and CM13's, which no release has shipped), one alert kind (`mdm_identity_near_expiry`), seven settings with defaults, and the secret `mdm_ca_key`, a kind CM20 already holds whose content (a length, the certificate, the key) is documented in operations/coordinator-state.md. An older coordinator
+  reads none of them: its `UNIMPLEMENTED` is the answer to the two rpcs, an alert kind it does not know is listed as unspecified, and a row of a kind it does not know is skipped. The test that runs the release before on a database this one wrote is the migration test of CM6 (`0011_mdm`), unchanged by this task.
 
 ### 9.2 What a compromise gets, and the new secrets
 
@@ -851,7 +995,8 @@ send. A stolen session or a guessed password can replace the push certificate, t
 where it shows; it cannot read a secret back. Passwords are Argon2id hashes in the store, sessions are in memory, and the one plaintext password, the initial one, is on disk for one hour of validity at most and is deleted by the first start or tick after that (operator-login.md section 4). A copy of the database without the key file holds only ciphertext, and with both it holds every
 secret, so the two are backed up in different places (4.9). A stolen MDM CA key lets its holder sign identities the coordinator would accept, so `/enroll` (the Apple-signed blob and the ABM
 table) and the nonce are the gates that do not depend on that key. If the blob cannot be verified (4.2), `/enroll` issues nothing
-without an operator, so the weak case is closed by an operator click and not by the ABM table alone.
+without an operator, so the weak case is closed by an operator click and not by the ABM table alone. **Built (CM12c)**: the click reads the ABM table again, is session-only and audited, and admits the
+UDID that waited, once; the key of the CA is a sealed secret that is made by the coordinator and never shown or uploaded.
 
 **Threat model of automatic replacement (owner decision B, 2026-11-10; accepted risk).** A new enrollment for a serial in the ABM table
 replaces its live enrollment with no operator (4.2). The Apple-signed device-information blob carries no freshness, so a peer on the lab
@@ -932,19 +1077,19 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM5 | `hostkeeper-mdm-server`: plist wire types for check-in and results, with Apple-schema fixtures and negative cases | CM1 | M |
 | CM6 | The MDM migration (after the login one), the file-store families, conformance tests for both stores, `abm_devices` (with `abm_state.profile_uuid`) and `mdm_enrollments` first | CM4 | M |
 | CM20 | (**Built**) **Secrets and settings, no UI yet.** Tables `mdm_secrets` and `mdm_settings`, the AES-256-GCM seal under `--mdm-secrets-key-file` with its start rules, redacting types, the audit actions of 4.9. Setup writes need a signed-in user: the rpcs carry the session-only attribute of L6b, so an API token is refused. Tests: nothing returned after upload, a row does not open as another kind, a missing key refuses to start, a token gets a permission error, and on the MDM listener every path outside the 4.1 table is 404 (setup rpcs, `/v1/*`, `/ui/`) | CM6, L6b | M |
-| CM7 | APNs sender (priority, expiry, event-based outstanding) and the push certificate lifecycle as `Mdm` rpcs: create the request (key, CSR, encryption key), the mdmcert.download reply decrypt, certificate and key upload (the migration), expiry alerts. The sender's rules include `NotNow` and a timeout return arming the floor (4.3). Begins by reading mdmcert.download's formats. No `hkctl`-only verbs: the generated CLI gets the rpcs for free | CM5, CM20 | M |
+| CM7 | (**Built**) APNs sender (priority, expiry, event-based outstanding) and the push certificate lifecycle as `Mdm` rpcs: create the request (key, CSR, encryption key), the mdmcert.download reply decrypt, certificate and key upload (the migration), expiry alerts. The sender's rules include `NotNow` and a timeout return arming the floor (4.3). Begins by reading mdmcert.download's formats. No `hkctl`-only verbs: the generated CLI gets the rpcs for free | CM5, CM20 | M |
 | CM21 | (**Built**) `Mdm.Status`, the name and settings rpcs, the *configured* computation, the extended `ListDevices` (enrollment state, host id, group, baseline status) | CM20 | S |
-| CM22a | **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, L8a | M |
+| CM22a | (**Built**) **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, L8a | M |
 | CM8 | Named installs (the `installs` setting, with the old file read once), `Settings` and the device name in the baseline, the pinned command list of eight | CM2, CM20 | M |
-| CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub` with the rules of 4.3 and 5.2 (a claim skips what the connection tried, `NotNow` and a timeout return arm the push, delivery is at least once) and the replacement of an enrollment under 4.2 (the ABM table read at `Authenticate`), signature or certificate checks, the unknown-enrollment answer | CM2, CM5, CM6, CM7, CM20 | L |
-| CM11b | `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
+| CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub` with the rules of 4.3 and 5.2 (a claim skips what the connection tried, `NotNow` and a timeout return arm the push, delivery is at least once) and the replacement of an enrollment under 4.2 (the ABM table read at `Authenticate`), signature or certificate checks, the unknown-enrollment answer. **Built.** The webhook is not used with `--mdm-listen` (CM14a deletes it) | CM2, CM5, CM6, CM7, CM20 | L |
+| CM11b | (**Built**) `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
 | CM11c | `GET /pkg/<sha256>.pkg`, streamed and digest-checked | CM11a, CM8 | S |
-| CM13 | ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
-| CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |
+| CM13 | (**Built**) ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
+| CM22b | (**Built**) UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |
 | CM12b | SCEP library: `GetCACaps`, `GetCACert`, `PKIOperation`, signed and enveloped `CertRep`, idempotent consumption, fixtures and the farm Mac. Consumption and the issue of a certificate never replace an enrollment (that is `Authenticate`, CM12c) | CM12a, CM5 | L |
-| CM12c | `/enroll` wiring: the verified blob, the per-serial challenge, the MDM CA (sealed key), renewal alert, fail-closed rules, and the replacement of 4.2 under owner decision B: `Authenticate` replaces a serial's live enrollment when the serial is in the ABM table, read again in that transaction, with no operator and no check-out; refused and audited when it is not; tests from the model's traces (a wiped Mac that never checked out, a serial removed from ABM between challenge and `Authenticate`, an operator-confirmed enrollment) | CM11a, CM12b, CM6, CM13 | M |
-| CM17 | **In-process ACME for the MDM name, moved ahead of the cutover.** Account key, DNS-01 through one DNS provider port with the owner's provider first, renewal timer under the lease, alerts, the credential and directory as setup data; the certificate upload of 4.9 works until it lands. Reads the crate and the provider first (section 12, item 14) | CM20, CM11a | L |
-| CM22c | UI: the TLS step, first upload of a certificate and key, then the DNS credential, ACME directory and renewal status | CM11a, CM21, CM22a (CM17 for the second half) | S |
+| CM12c | (**Built**) `/enroll` wiring: the verified blob, the per-serial challenge, the MDM CA (sealed key), renewal alert, fail-closed rules, and the replacement of 4.2 under owner decision B: `Authenticate` replaces a serial's live enrollment when the serial is in the ABM table, read again in that transaction, with no operator and no check-out; refused and audited when it is not; tests from the model's traces (a wiped Mac that never checked out, a serial removed from ABM between challenge and `Authenticate`, an operator-confirmed enrollment) | CM11a, CM12b, CM6, CM13 | M |
+| CM17 | (**Built**) **In-process ACME for the MDM name, moved ahead of the cutover.** Account key, DNS-01 through one DNS provider port with the owner's provider first, renewal timer under the lease, alerts, the credential and directory as setup data; the certificate upload of 4.9 works until it lands. Reads the crate and the provider first (section 12, item 14) | CM20, CM11a | L |
+| CM22c | (**Built**) UI: the TLS step, first upload of a certificate and key, then the DNS credential, ACME directory and renewal status | CM11a, CM21, CM22a (CM17 for the second half) | S |
 | CM9 | Approval from the ABM table, inventory name and group, the `default_group` setting, the three new tokens (family pinned), the allowlist as override. A Mac whose enrollment replaced another's (4.2, 5.4) is approved by the same conditions of 4.6 and its own nonce: a replacement is not an approval | CM3, CM6, CM13 | M |
 | CM23 | **UI Devices page, shown only when the setup says *configured***: ABM-synced Macs with enrollment state, host id, group and baseline status; before that, the page names what is missing | CM21, CM9 | M |
 | PP1 to PP6 | **Package proxy on the LAN and the end of the download server**: the cache, the apt and pkg routes on the MDM listener, the docs, the loader, the farm step. Tasks, sizes and order are in [package-proxy.md](package-proxy.md) section 9 | CM20 and CM11a, then each as listed there | S to M |
@@ -954,7 +1099,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM14c | Remove the three NanoHUB flags and the allowlist flag | one release after CM14a and CM9 | S |
 | CM15 | DDM: declaration store, sync token, status ingest, model-checked first | CM11a | L |
 | CM16 | ACME identity with attestation, behind the identity port, after a farm-Mac test of `IdentityCertificateUUID` | CM12c | M |
-| CM19 | Second node for MDM: lift the single-node refusal (the secrets are already in the store under the shared key file, 4.9) and run the push sender and sync under the lease | CM12c, CM20 | S |
+| CM19 | (**Built**, except the ACME timer, which waits for CM17) Second node for MDM: the push sender and the ABM sync run under the lease (4.9); the secrets are already in the store under the shared key file; there is no MDM-specific refusal to lift | CM12c, CM20 | S |
 
 **Smallest usable slice.** L1 to L6b, L8a and K1 (an operator signs in as `admin`), then CM20, CM7, CM21, CM22a: an operator sets the push certificate up in the UI and sees its status, which is all
 the interim milestone needs. Then CM13 and CM22b (ABM and the name), CM11a and CM22c's upload (TLS), after which the status reads
@@ -974,27 +1119,31 @@ repository ([package-proxy.md](package-proxy.md) section 10).
 Not verified. A claim in this document that depends on one of these is marked, and none is stated as fact elsewhere.
 
 1. Apple's own text for APNs, Device Assignment and the MDM protocol reference was not reachable; the endpoint details rest on the
-   Apple schema, NanoDEP and `a2` source.
+   Apple schema, NanoDEP and `a2` source. For ABM, what spike abm measured is **verified** (OAuth session, the `403` that is not `401`, `timestamp_refused`, `INVALID_CURSOR`, the page limit, the record keys, `GET /account`); what stays unverified is the assignment write (`POST` or `PUT /profile/devices`, never run against ABM), `429` and `Retry-After`, the lifetime of a session, and a `.p7m` that Apple made.
 2. Whether `IdentityCertificateUUID` accepts an ACME identity during ADE (CM16).
 3. Whether macOS renews a SCEP identity inside the MDM payload on its own (4.2).
-4. Whether the signature of the ADE POST can be verified against Apple's root with what the Mac sends (4.2). CM12a could not capture a POST (see its note); open.
+4. Whether the signature of the ADE POST can be verified against Apple's root with what the Mac sends (4.2). CM12a could not capture a POST (see its note); open. CM12c built the verifier against a fake Apple, and the fail-closed path for a blob it cannot verify; the first real post decides (the held request's reason says why a blob did not verify), and the design needs no change either way.
 5. Measured by CM12a from configuration: the live profile sets `SignMessage true` and the live proxy requests no TLS client certificate. That NanoHUB, run with `-ca`, accepts the requests is the only evidence that `Mdm-Signature` verifies against the device identity; that is inferred. The new profile keeps `SignMessage true`; the listener accepts either (4.1). Before CM11a relies on it, one real `/checkin` request (headers and body) is captured through a logging tap and committed as a redacted fixture for CM5. Open.
-6. mdmcert.download's request and reply formats, whether the coordinator may post the request itself, and that it still operates (4.4).
+6. mdmcert.download's request and reply formats were read from micromdm's client and the coordinator posts the request itself (4.4, CM7);
+   not verified: that the service still operates and still accepts its API key, the name and encoding of the emailed attachment, the
+   content cipher, and the keys of the decrypted property list. One real request with the owner's email settles all four.
 7. Whether a Mac that is enrolled but unknown to the table re-runs `Authenticate` on a refusal (section 6, lesson 3).
 8. Whether the community mdmcert service is operating today and whether Apple grants the vendor CSR signing certificate to an organization that
    manages only its own fleet.
 9. The licence of KMFDDM, to copy its declaration store design for CM15.
 10. Whether a macOS client offers its identity given the root hints of 4.1 (CM11a). Not tested; the live `SignMessage true` mode does not depend on it.
-11. Whether the ADE `/enroll` response must be CMS-signed (4.1; CM12a). The live enrollment suggests "no" for one Mac on macOS 27.0.x (an unsigned response enrolled m3ultra-1); the POST was not seen, so this is inferred and stays open. CM12c keeps signing as a conditional step.
-12. What the MDM client does on `401`, `403` and `410` from `/mdm` (4.1; before CM11a).
+11. Whether the ADE `/enroll` response must be CMS-signed (4.1; CM12a). The live enrollment suggests "no" for one Mac on macOS 27.0.x (an unsigned response enrolled m3ultra-1); the POST was not seen, so this is inferred and stays open. CM12c serves the profile unsigned and builds no signing.
+12. What the MDM client does on `401`, `403` and `410` from `/mdm` (4.1). CM11a answers `401` to an unknown enrollment and never `410` (the conservative choice, 4.1); what the client does with `401` is not established.
 13. Whether a Mac polls on any schedule of its own (4.3); the design does not depend on it.
 14. `instant-acme`'s TLS backend and licence under the workspace's `ring` provider, and GoDaddy's API for TXT records (the call, its minimum
     TTL and how long a record takes to be visible), which `lego` already uses with the org's credential (4.10).
-15. That NanoDEP's key pair and token can be read out of its storage and uploaded as they are, so that `js-mdm` needs no change in ABM (7).
+15. ~~That NanoDEP's key pair and token can be read out of its storage and uploaded as they are~~ **Verified** (spike abm, 2026-11-10): the four decrypted parts, used unchanged, authenticate to Apple, the PKCS#1 key and its certificate are readable, and the certificate's expiry is irrelevant to the token. The token's input is the JSON of its parts, not a `.p7m` (4.5).
 16. If they cannot: whether ABM lets a server entry's public key be replaced, and whether the old stack's token still works afterwards (7).
 17. Which of the per-container sysctl, the host sysctl or a capability gives the coordinator port 443 on the farm's networking (4.1).
 18. The licence and `cargo deny` result of the Argon2 and password-hash crates (R6), run first in L3 before any code, and that the `__Host-` cookie prefix is accepted by the
     farm's browsers on the private listener's name (operator-login.md section 5.1).
+19. That `apns-expiration` is an absolute time, as Apple's text for the header says and the sender sends (4.3): the spike sent `86400` and
+    got a `200`, and no push was seen to be kept or dropped by it. Which `403` an expired or revoked push certificate gets (4.3).
 
 ## 13. Future work
 

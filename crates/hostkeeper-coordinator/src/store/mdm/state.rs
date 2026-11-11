@@ -337,6 +337,43 @@ impl MdmState {
         all
     }
 
+    pub(crate) fn enrollments_with_queued(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .commands
+            .values()
+            .filter(|c| c.state == CommandState::Queued)
+            .filter(|c| {
+                self.enrollments
+                    .get(&c.enrollment_id)
+                    .is_some_and(|e| e.state == EnrollmentState::Live)
+            })
+            .map(|c| c.enrollment_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
+    pub(crate) fn identities_expiring(&self, before_unix: i64) -> Vec<(String, i64)> {
+        let mut expiring: Vec<(String, i64)> = self
+            .enrollments
+            .values()
+            .filter(|e| e.state == EnrollmentState::Live)
+            .filter_map(|e| {
+                let cert = e.cert_sha256.as_deref()?;
+                self.identities
+                    .values()
+                    .filter(|i| i.state == IdentityState::Issued)
+                    .filter_map(|i| i.issued.as_ref().map(|issued| (&e.serial, issued)))
+                    .find(|(_, issued)| issued.cert_sha256 == cert)
+                    .map(|(serial, issued)| (serial.clone(), issued.not_after_unix))
+            })
+            .filter(|(_, not_after)| *not_after < before_unix)
+            .collect();
+        expiring.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        expiring
+    }
+
     pub(crate) fn abm_apply(&mut self, batch: &AbmBatch) {
         for device in &batch.upserts {
             let first_seen_unix = self

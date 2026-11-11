@@ -68,6 +68,7 @@ fn a_start_deletes_what_a_crash_leaves_and_keeps_the_rest() {
         let layout = super::Layout::create(dir.path()).expect("a layout");
         let meta = super::Meta {
             validator: None,
+            last_modified: None,
             fetched_at,
             length: body.len() as u64,
         };

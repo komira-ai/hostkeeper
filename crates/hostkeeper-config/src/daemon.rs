@@ -22,13 +22,17 @@
 //! ```
 //!
 //! Every table refuses a key it does not know, and the error names the key and its table. Every
-//! key is required except those of `[bounds]`, which default to the values above; a missing
+//! key is required except `release_channel` and those of `[bounds]`, which default to the values
+//! above; `release_channel` may be left out (it is read when present and checked as an `https://`
+//! URL); a missing
 //! `[trusted_signers]` is refused, because there is no unsigned mode. There is no list of
 //! services and no per-service key: a host runs what the coordinator assigns it.
 //!
 //! The daemon reads neither `release_channel` nor `[trusted_signers]` (it stages packages from its
-//! package manager's repositories and fetches no release channel); the loader still requires both,
-//! so a config written for an earlier release keeps loading.
+//! package manager's repositories and fetches no release channel); the loader accepts a config
+//! with `release_channel` and one without it, so a config written for an earlier release keeps
+//! loading. The generated configs still write the key, since a daemon of the previous release
+//! refuses a config without it; they stop one release after this loader has shipped.
 
 use std::path::Path;
 
@@ -273,7 +277,8 @@ pub struct DaemonConfig {
     /// The SHA-256 of the CA certificate the coordinator's certificate chains to.
     pub ca_sha256: Sha256Hex,
     /// The release channel an earlier daemon fetched packages from; the daemon reads it no more.
-    pub release_channel: HttpsUrl,
+    /// `None` when the config leaves the key out.
+    pub release_channel: Option<HttpsUrl>,
     /// The signer an earlier daemon checked packages against; the daemon reads it no more.
     pub trusted_signers: TrustedSigners,
     pub bounds: Bounds,
@@ -364,7 +369,10 @@ fn read(document: &toml::Table) -> Result<DaemonConfig, Problem> {
     Ok(DaemonConfig {
         coordinator: https(&top, "coordinator")?,
         ca_sha256: sha256(&top, "ca_sha256")?,
-        release_channel: https(&top, "release_channel")?,
+        release_channel: top
+            .get("release_channel")
+            .map(|_| https(&top, "release_channel"))
+            .transpose()?,
         trusted_signers: signers(&top)?,
         bounds: bounds(&top)?,
     })

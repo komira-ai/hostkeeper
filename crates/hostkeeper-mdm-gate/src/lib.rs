@@ -1,8 +1,10 @@
 //! The MDM policy gate's device side (docs/design/hostkeeper-mdm.md sections 3 and 6.1), a
 //! component linked into the coordinator.
 //!
-//! - [`NanoHub`]: the client of NanoHUB's command queue, on loopback, with the API key read
-//!   from a file ([`ApiKey`]); it sends only the eight [`COMMAND_TYPES`].
+//! - [`CommandQueue`]: where the gate puts a command for a Mac. [`NanoHub`] is one: the client of
+//!   NanoHUB's command queue, on loopback, with the API key read from a file ([`ApiKey`]); it
+//!   sends only the eight [`COMMAND_TYPES`]. The coordinator's own queue (`--mdm-listen`) is the
+//!   other, and the Macs' check-ins then reach [`Gate::handle`] directly.
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
 //!   command result to; a thin adapter that reads the body ([`parse_event`]) and calls
 //!   [`Gate::handle`], the one entry point for events.
@@ -59,8 +61,8 @@ pub use gate::{DeviceStatus, Gate, Handled, Random, Unavailable};
 pub use ids::{CommandUuid, EnrollmentId, is_serial};
 pub use installs::{HOSTKEEPER_INSTALL, InstallEntry, Installs, InstallsError, SETTING_NAME};
 pub use nanohub::{
-    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CALL_TIMEOUT, EnqueueError, KEY_FLAG, NanoHub,
-    Queued, URL_FLAG,
+    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CALL_TIMEOUT, CommandQueue, EnqueueError, KEY_FLAG,
+    NanoHub, Queued, URL_FLAG,
 };
 pub use pkg::{
     ALLOWLIST_FLAG, HOST_FLAG, Install, MdmHost, MdmHostError, PKG_IDENTIFIER, PkgAllowlist,
