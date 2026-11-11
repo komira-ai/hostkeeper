@@ -5,7 +5,7 @@ says why and in what order; [operator-login.md](../design/operator-login.md) say
 signs in). It moves the farm's Macs from the old MDM stack (the `hostkeeper-mdm-*` units: Caddy,
 NanoHUB, the SCEP server, NanoDEP) to the MDM that is built into the coordinator. One operator runs
 it, once, on the dev box. Every step that changes the machine is the held script
-`tools/held/hostkeeper/mdm_cutover.sh` of komira-internal (dry run by default) or the owner's own
+`mdm_cutover.sh`, a held script of the owner's deployment repository (dry run by default) or the owner's own
 action in the coordinator's web app, an Apple portal or at a Mac. Nothing here changes a running
 service until the owner runs the script with `--apply`.
 
@@ -129,30 +129,39 @@ steps and checks that apply would run, and changes nothing.
 One command does both, in this order, and stops at the first failure (exit 3 names what was done):
 
 ```
-bash mdm_cutover.sh --version X.Y.Z --download-dir DIR --helper-image REPO@sha256:HEX \
-    --old-args OLD_ARGS_FILE --initial-admin NAME [--mdm-listen IP[:PORT]] [--gh PATH]
-bash mdm_cutover.sh --version X.Y.Z ... --apply
+bash mdm_cutover.sh --old-args OLD_ARGS_FILE --version X.Y.Z --initial-admin NAME [--mdm-listen IP[:PORT]]
+bash mdm_cutover.sh --old-args OLD_ARGS_FILE --version X.Y.Z --initial-admin NAME [--mdm-listen IP[:PORT]] --apply
 ```
 
-The first form is the dry run. `--mdm-listen` defaults to the address of the old flags' `--lan-listen`
-with port 443. `NAME` is the owner's user name (1 to 32 characters of a-z, 0-9 and `-`).
+The first form is the dry run. `OLD_ARGS_FILE` is the file of the flags the running coordinator was deployed with (it holds the
+flags `coordinator_docker.sh` takes, among them the download directory and the helper image, so the script takes neither again);
+its name ends in `.args`. `--mdm-listen` defaults to the address of the old flags' `--lan-listen`
+with port 443. `NAME` is the owner's user name (1 to 32 characters of a-z, 0-9 and `-`). `--state-dir` (default: the directory
+of the old flags file) holds the script's record and the new flags file; `--sysctl-dir` defaults to `/etc/sysctl.d`.
 
 What apply does:
 
+0. Writes the record `mdm_cutover.record` in the state directory: each old unit's state, the sysctl's old value and whether the
+   script made its file. It holds no secret.
 1. (b) Stops and disables the old units `hostkeeper-mdm-proxy.service`,
    `hostkeeper-mdm-proxy-reload.path`, `hostkeeper-mdm-cert.timer`, `hostkeeper-mdm-nanohub.service`,
-   `hostkeeper-mdm-scep.service`, `hostkeeper-mdm-depsyncer.service` and `hostkeeper-mdm-depserver.service`, after writing a
-   record of which were active and enabled. Port 443 on the LAN address is free afterwards. Their
+   `hostkeeper-mdm-scep.service`, `hostkeeper-mdm-depsyncer.service` and `hostkeeper-mdm-depserver.service`, in the order
+   cert.timer, proxy-reload.path, proxy, depsyncer, nanohub, scep, depserver; each must then be inactive. Port 443 on the LAN
+   address must be free afterwards, or the script puts everything back. Their
    unit files and the state under `/var/lib/hostkeeper-mdm`, the settings
    `/etc/hostkeeper-mdm.conf` and the files under `/etc/hostkeeper-mdm` are not touched.
    Until the coordinator serves port 443 no Mac can reach an MDM server; `m3ultra-1` retries.
-2. (c) Writes the sysctl drop-in of section 3 and applies it.
-3. (c) Runs `coordinator_docker.sh apply` with the new flags. That script verifies the release's image and the
+2. (c) Writes the sysctl drop-in of section 3 (`/etc/sysctl.d/61-hostkeeper-coordinator-mdm.conf`, only when the host's value is
+   above 443) and applies it.
+3. Writes the new flags file beside the old one (`coord.gate.args` becomes `coord.gate.mdm.args`); every later deploy must use it.
+4. (c) Runs `coordinator_docker.sh apply` with the new flags. That script verifies the release's image and the
    macOS pkg against their attestations, replaces the container (a new container beside the old, the old
    kept until the new is ready), mounts the pkg directory read-only, passes
    `--mdm-secrets-key-file` and `--initial-admin-file`, and prints the first user's one-hour
-   password once. **Copy the password now**; it is in no other file and no later output.
-4. Writes the new flags file.
+   password once, on the terminal (the held script never sees it). **Copy the password now**; it is in no other file and no later
+   output. If any step fails, the script starts the old units again as the record has them, removes the sysctl file it made and sets
+   the value back, moves the new flags file to `.failed` and the record to `.backed-out`, and exits 3; the coordinator is what
+   `coordinator_docker.sh` left (it keeps the old container when the new one is not ready).
 
 The coordinator's start line names the MDM listener. Until the certificate of the MDM name is stored the
 listener is bound and answers no TLS handshake; that is expected, step (d) fixes it.
@@ -163,7 +172,7 @@ Open the coordinator's web app on its private address (the one the owner uses to
 
 1. Sign in as `NAME` with the printed password. The app requires a new password at once (12
    characters or more). The one-hour file is deleted by the coordinator when it has expired; if
-   you missed the hour, run `coordinator_docker.sh apply` with `--reset-admin NAME` for a new one.
+   you missed the hour, run `coordinator_docker.sh apply` with the words of the new flags file and `--reset-admin NAME` for a new one.
 2. Open the MDM setup page. It says *not configured* and lists what is missing. Upload, in this
    order, what is below. Everything is checked at entry and is audited under your name; no key is
    shown again after upload. The files are root-only on the box: read them with `sudo`, copy to a
@@ -175,7 +184,7 @@ Open the coordinator's web app on its private address (the one the owner uses to
 | 1b' Push certificate and key | the PEM pair of the push certificate. The page checks that the key matches and that the topic is the one the enrolled Mac has | NanoHUB's storage: `/var/lib/hostkeeper-mdm/nanohub/mdm/push_cert/<2 hex>/<2 hex>/<topic>.pem` and `<topic>.key`, the topic being the one in `/var/lib/hostkeeper-mdm/push-topic`. Root-only. To confirm: that the `.pem` holds the leaf only or a chain the page accepts |
 | 2a ABM key pair | NanoDEP's key and certificate for the server `js-mdm` (a takeover: no change in ABM, no device moves) | `/var/lib/hostkeeper-mdm/dep/dep_names/key.js-mdm` and `cert.js-mdm` (and `consumer_key.js-mdm`, `consumer_secret.js-mdm`). To confirm: the page takes PEM of the key and certificate as they are there |
 | 2b ABM server token | the `.p7m` of the token, which the page decrypts with the key of step 2a | NanoDEP keeps the token's parts (`access_token.js-mdm`, `access_secret.js-mdm`, `consumer_*`) decrypted, not the `.p7m`. To confirm on the box: the original `.p7m` is the file ABM gave when the token was made; if it was not kept, take the fallback: step 2a' (the page makes a new key and shows its public certificate), register it in ABM for the `js-mdm` entry, download the new token and upload that. Whether ABM accepts a replaced key for the entry is not verified (design section 12, item 16). The token expires 2027-10-31 |
-| 3 MDM name | `mdm.internal.komira.dev` | `MDM_DNS_NAME` in `/etc/hostkeeper-mdm.conf`. It resolves to the LAN address of the dev box. Refused once any Mac has enrolled |
+| 3 MDM name | the name in `MDM_DNS_NAME` (written `mdm.example.com` below) | `MDM_DNS_NAME` in `/etc/hostkeeper-mdm.conf`. It resolves to the LAN address of the dev box. Refused once any Mac has enrolled |
 | 4 Certificate: GoDaddy credential, ACME directory, contact | the GoDaddy API key and secret; the ACME directory (Let's Encrypt production is the default; choose staging for the first try, because production rate-limits failures); contact `MDM_ACME_EMAIL` of the settings file | the key and secret are in `/etc/hostkeeper-mdm/dns.env` (root-only). Open it with `sudo` and copy the two values by hand into the page. Do not print the file in a terminal that is logged. Or upload a certificate and key for the name, from `/var/lib/hostkeeper-mdm/lego/certificates/` (`mdm.internal.komira.dev.crt`, `.key`), which is valid until 2027-02-05, as a fallback |
 
 3. When the status panel says *configured* (the push certificate present and not expired, the ABM
@@ -197,7 +206,7 @@ Open the coordinator's web app on its private address (the one the owner uses to
    token and sends a test push to the farm Mac that is still enrolled in the old stack. Each line
    must pass. A push to `m3ultra-1` proves the push certificate (the Mac is not yet talking to the
    coordinator).
-2. From a LAN machine: `curl -sSI https://mdm.internal.komira.dev/enroll` answers over TLS with a
+2. From a LAN machine: `curl -sSI https://mdm.example.com/enroll` (with the name of step 3) answers over TLS with a
    certificate that a stock client trusts (`curl` needs no `-k`). A TLS failure here means the certificate step did not finish.
 3. The status shows the ABM last-sync time, no last error, and the serials ABM lists. If `js-mdm`
    lists none, the devices are not assigned yet (step (g)).
@@ -242,14 +251,15 @@ Before the owner touches a Mac:
 ### Step (h): back-out, and what is deleted later
 
 ```
-bash mdm_cutover.sh --back-out --old-args OLD_ARGS_FILE [--download-dir DIR]
-bash mdm_cutover.sh --back-out --old-args OLD_ARGS_FILE [--download-dir DIR] --apply
+bash mdm_cutover.sh --back-out --old-args OLD_ARGS_FILE
+bash mdm_cutover.sh --back-out --old-args OLD_ARGS_FILE --apply
 ```
 
-Apply redeploys the coordinator with the old flags file (same script, same volumes; the old
-container spec returns), removes the sysctl drop-in and restores the value the script recorded, and
-starts and enables the old units the record names, in the reverse of the stop order. It deletes
-nothing: the coordinator's secrets, the users, the MDM CA and the device records stay in its store.
+Apply starts and enables the NanoHUB side of the old stack the record names (depserver, scep, nanohub, depsyncer), redeploys the
+coordinator with the old flags file (same script, same volumes; the old container spec returns, which frees port 443), starts and
+enables the proxy, proxy-reload.path and cert.timer, removes the sysctl drop-in the script made and restores the value it recorded,
+and moves the record to `mdm_cutover.record.backed-out`. It deletes nothing else: the new flags file, the coordinator's secrets, the
+users, the MDM CA and the device records stay.
 
 The limit: the back-out is free only until the first Mac's first `TokenUpdate` reaches the
 coordinator. After it, NanoHUB's copy of that Mac is stale. The way back then is to erase the Mac and
