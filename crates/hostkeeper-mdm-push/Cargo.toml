@@ -23,20 +23,20 @@ testkit = []
 
 [dependencies]
 # The CMS reply of mdmcert.download is read with the RustCrypto 0.8-era ciphers and rsa 0.9, which
-# this crate was written against; hostkeeper-mdm-scep uses the newer lines through the workspace.
-aes = "0.8.4"
+# this crate was written against (the `-legacy` aliases of the root manifest).
+aes-legacy.workspace = true
 base64.workspace = true
 bytes.workspace = true
-cbc = { version = "0.1.2", features = ["alloc"] }
-des = "0.8.1"
+cbc-legacy.workspace = true
+des-legacy.workspace = true
 hex.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
-rand_core = { version = "0.6.4", features = ["getrandom"] }
+rand_core-legacy.workspace = true
 rcgen.workspace = true
-rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
+rsa-legacy.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
 rustls-pki-types.workspace = true
 serde.workspace = true

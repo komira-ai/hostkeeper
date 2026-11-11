@@ -12,12 +12,12 @@
 //! that takes all of these), so a cipher outside the list is refused with its identifier in the
 //! error, and AES-GCM and RSA-OAEP are not read.
 
-use aes::{Aes128, Aes192, Aes256};
-use cbc::Decryptor;
-use cbc::cipher::block_padding::Pkcs7;
-use des::{Des, TdesEde3};
-use rand_core::OsRng;
-use rsa::Pkcs1v15Encrypt;
+use aes_legacy::{Aes128, Aes192, Aes256};
+use cbc_legacy::Decryptor;
+use cbc_legacy::cipher::block_padding::Pkcs7;
+use des_legacy::{Des, TdesEde3};
+use rand_core_legacy::OsRng;
+use rsa_legacy::Pkcs1v15Encrypt;
 
 use crate::ber::{self, Tlv};
 use crate::identity::{self, IdentityError};
@@ -179,7 +179,7 @@ fn decrypt_content(info: &Tlv<'_>, key: &[u8]) -> Result<Vec<u8>, ReplyError> {
 /// none when the key or iv do not suit the cipher or the padding is wrong.
 fn cbc_open<D>(key: &[u8], iv: &[u8], ciphertext: &[u8]) -> Option<Vec<u8>>
 where
-    D: cbc::cipher::BlockDecryptMut + cbc::cipher::KeyIvInit,
+    D: cbc_legacy::cipher::BlockDecryptMut + cbc_legacy::cipher::KeyIvInit,
 {
     D::new_from_slices(key, iv)
         .ok()?
