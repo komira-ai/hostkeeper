@@ -592,14 +592,14 @@ The TLS step is CM22c. The page's downloads go through a `download` function the
 
 **What CM22b built of the ABM and name steps.** (`ui/pages/mdm.js`, `docs/ui-serving.md`.) The ABM step has four parts: *Take over the existing token* sends the
 JSON of the token's four parts and expiry as a file (`PutAbmToken.token_json`; there is no field to paste it into, because it holds secrets), *Upload the token file from ABM* sends a `.p7m` as a file
-(`token_p7m`), *Take over the existing key pair* sends the key and then its certificate with `PutSecret` (`abm_key`, then `abm_cert`; the certificate alone when the key is stored already, which a certificate
-refused after a stored key says), and *Get public key* calls `GetAbmPublicKey` and shows the certificate, its fingerprint and whether this call made the pair, with a download; it is for a new server entry, because
+(`token_p7m`), *Take over the existing key pair* sends the key with its certificate in one `PutSecret` (`abm_key` with `with_certificate`, field 4; the server stores neither unless the certificate is the key's, and refuses an `abm_key` alone that is not the key of the
+`abm_cert` held, so a wrong pair cannot replace the key a held certificate was added in ABM with; the certificate alone when the key is stored already), and *Get public key* calls `GetAbmPublicKey` and shows the certificate, its fingerprint and whether this call made the pair, with a download; it is for a new server entry, because
 the call makes a pair when none is held. A stored token is answered by the server entry and the organisation Apple names and the expiry (`2027-10-31 22:01:36 UTC` for the live token). The two faults Apple names are
 explained in the page, after the API's own `CODE reason`: `abm_clock_refused` and the sync's `timestamp_refused` (set the clock of the machine the coordinator runs on), `abm_credential_refused` and `signature_invalid`
 (the four parts do not belong together, or the token was revoked). The name step sets the name with `PutName` and shows the enrollment URL the coordinator answers; the name needs a DNS record that resolves, on the LAN,
-to the coordinator's MDM listener; once `name_locked` is true the page shows the name and the reason and no form. Two additive fields of `MdmStatusResponse` carry what the sync knows, which closes the dead-code
+to the coordinator's MDM listener; once `name_locked` is true the page shows the name and the reason and no form. Three additive fields of `MdmStatusResponse` carry what the sync knows, which closes the dead-code
 exception of `Abm::status`: `abm_last_sync_unix` (the last pass that ended without an error, as the running coordinator saw it; absent after a start until a pass ends well, so a restart reads *none since the
-coordinator started*) and `abm_sync_error` (the words of the last failure, empty after a good pass). They are not part of *configured*. The numbers of the ABM refusals are 17 to 22, after `name_locked` (16), because
+coordinator started*) and `abm_sync_error` (the words of the last failure, empty after a good pass; a token ABM accepts clears it at once) and `abm_unavailable` (this coordinator runs no ABM client, which the row says). They are not part of *configured*. The numbers of the ABM refusals are 17 to 22, after `name_locked` (16), because
 CM7 holds 7 to 15; CM13's branch used 7 to 12 and must take the same numbers. Not verified: the browser glue in `ui/main.js` (the blob download), a real file chooser, and ABM's own pages.
 
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the

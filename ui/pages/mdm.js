@@ -188,6 +188,15 @@ function levelClass(level) {
   return level === "ok" || level === "none" ? "" : "warning";
 }
 
+// What the "ABM last sync" row says: the time of the last good pass, that none has run since the
+// coordinator started, or that this coordinator has no ABM client.
+function abmLastSync(status) {
+  if (status.abmUnavailable === true) {
+    return "this coordinator runs no ABM client";
+  }
+  return status.abmLastSyncUnix === undefined ? "none since the coordinator started" : fmtUnix(status.abmLastSyncUnix);
+}
+
 // The words of a failed ABM sync, and what to do about a fault Apple names; nothing after a good pass.
 function syncFailure(status) {
   const failed = status.abmSyncError;
@@ -226,7 +235,7 @@ function statusPanel(status, now, days) {
         h("th", {}, label), h("td", {}, held), h("td", {}, until), h("td", {}, when)))),
     table(["", ""], [
       ["Push topic", status.pushTopic || "-"],
-      ["ABM last sync", status.abmLastSyncUnix === undefined ? "none since the coordinator started" : fmtUnix(status.abmLastSyncUnix)],
+      ["ABM last sync", abmLastSync(status)],
       ["MDM name", status["name"] || "-"],
       ["Enrollment URL", status.enrollmentUrl || "-"],
       ["TLS names", (status.tlsNames || []).join(", ") || "-"],
@@ -482,8 +491,9 @@ function keyPairSection(ctx, flow) {
     h("legend", {}, "Take over the existing key pair"),
     h("p", { class: "note" },
       "The key of the server entry in ABM and its certificate, so that a token ABM makes later opens "
-      + "here. The key is stored first and then the certificate, which must be the key's; when the "
-      + "key is stored already, choose the certificate alone. Both are read from their files when "
+      + "here. Both are stored together, and only when the certificate is the key's; a key alone is "
+      + "refused when a certificate is held that it does not go with. When the key is stored "
+      + "already, choose the certificate alone. Both are read from their files when "
       + "the button is pressed, sent and dropped; the key is never shown."),
     filePicker("Key file (PEM)", "abm-key-file", flow, "abmKeyFile"),
     filePicker("Certificate file (PEM)", "abm-certificate-file", flow, "abmCertFile"),
@@ -501,20 +511,17 @@ function keyPairSection(ctx, flow) {
         if (typeof key === "string") {
           return key;
         }
-        try {
-          await ctx.api.mdm.putSecret({ kind: "abm_key", material: toBase64(key) });
-        } catch (error) {
-          return abmRefusal(error);
-        }
-        flow.abmKeyFile = null;
       }
+      // A key goes with its certificate in one call: the server stores neither unless the key is
+      // the certificate's, so a wrong pair cannot replace the key a held certificate was made for.
       try {
-        await ctx.api.mdm.putSecret({ kind: "abm_cert", material: toBase64(certificate) });
+        await ctx.api.mdm.putSecret(key === null
+          ? { kind: "abm_cert", material: toBase64(certificate) }
+          : { kind: "abm_key", material: toBase64(key), withCertificate: toBase64(certificate) });
       } catch (error) {
-        return key === null
-          ? abmRefusal(error)
-          : `${abmRefusal(error)} The key is stored; send the certificate again.`;
+        return abmRefusal(error);
       }
+      flow.abmKeyFile = null;
       flow.abmCertFile = null;
       await again(ctx, flow);
       return key === null ? "Stored the ABM certificate." : "Stored the ABM key and its certificate.";

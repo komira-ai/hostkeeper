@@ -82,14 +82,16 @@ impl Coordinator {
             kind,
             material,
             not_after_unix,
+            with_certificate,
         } = request;
         let material = Secret::new(material);
+        let with_certificate = Secret::new(with_certificate);
         let Some(kind) = SecretKind::parse(&kind) else {
             return self.refused_put(by, None, MdmRefusal::InvalidRequest);
         };
         let wellformed = !material.is_empty()
             && material.len() <= MAX_SECRET_BYTES
-            && self.kind_takes(kind, &material);
+            && self.kind_takes(kind, &material, &with_certificate);
         if !wellformed {
             return self.refused_put(by, Some(kind), MdmRefusal::InvalidRequest);
         }
@@ -109,9 +111,14 @@ impl Coordinator {
             .mdm_setup
             .put_secret(kind, &material, not_after_unix, now)
         {
-            Ok(info) => Ok(proto::PutSecretResponse {
-                secret: Some(secret_proto(&info)),
-            }),
+            Ok(info) => {
+                if !with_certificate.is_empty() {
+                    self.put_certificate_of(by, &with_certificate, now)?;
+                }
+                Ok(proto::PutSecretResponse {
+                    secret: Some(secret_proto(&info)),
+                })
+            }
             Err(why) => {
                 tracing::error!(%why, kind = kind.as_str(), "an MDM secret could not be stored");
                 self.refused_put(by, Some(kind), MdmRefusal::StoreFailed)
@@ -119,14 +126,48 @@ impl Coordinator {
         }
     }
 
+    /// Seals `certificate`, already checked against the `abm_key` just stored, as the next
+    /// `abm_cert`, audited by `by`.
+    fn put_certificate_of(
+        &self,
+        by: &str,
+        certificate: &Secret,
+        now: i64,
+    ) -> Result<(), MdmRefusal> {
+        let kind = SecretKind::AbmCert;
+        self.audit_setup(
+            by,
+            kind.put_action(),
+            Some(kind.as_str()),
+            format!(
+                "fingerprint {}, expires none",
+                crate::mdm_setup::fingerprint(certificate)
+            ),
+        )?;
+        self.mdm_setup
+            .put_secret(kind, certificate, None, now)
+            .map(drop)
+            .or_else(|why| {
+                tracing::error!(%why, "the ABM certificate could not be stored");
+                self.refused_put(by, Some(kind), MdmRefusal::StoreFailed)
+                    .map(drop)
+            })
+    }
+
     /// Whether `material` is what `kind` holds, as far as it can be judged at upload: the ABM
     /// token is its five parts, the ABM key an RSA private key in PEM, and the ABM certificate a
-    /// certificate in PEM that is the one of the ABM key held, when one is. The other kinds are
-    /// judged by the task that uses them.
-    fn kind_takes(&self, kind: SecretKind, material: &Secret) -> bool {
+    /// certificate in PEM that is the one of the ABM key held, when one is. An ABM key is also
+    /// refused when it is not the one of the `abm_cert` held, unless `with_certificate` is the
+    /// certificate it goes with (which is then stored after it): a key that breaks the pair would
+    /// lose the key every `.p7m` for that certificate is encrypted to. `with_certificate` is
+    /// taken by no other kind. The other kinds are judged by the task that uses them.
+    fn kind_takes(&self, kind: SecretKind, material: &Secret, with_certificate: &Secret) -> bool {
+        if kind != SecretKind::AbmKey && !with_certificate.is_empty() {
+            return false;
+        }
         match kind {
             SecretKind::AbmToken => AbmToken::parse(material.expose()).is_ok(),
-            SecretKind::AbmKey => keys::parse_key(material.expose()).is_ok(),
+            SecretKind::AbmKey => self.key_pairs(material, with_certificate),
             SecretKind::AbmCert => {
                 let held = self
                     .mdm_setup
@@ -136,6 +177,21 @@ impl Coordinator {
                     .and_then(|pem| keys::parse_key(pem.expose()).ok());
                 keys::check_certificate(material.expose(), held.as_ref()).is_ok()
             }
+            _ => true,
+        }
+    }
+
+    /// Whether the ABM key `material` is an RSA private key that goes with `with_certificate`,
+    /// or, when none is sent, with the `abm_cert` held, if there is one.
+    fn key_pairs(&self, material: &Secret, with_certificate: &Secret) -> bool {
+        let Ok(key) = keys::parse_key(material.expose()) else {
+            return false;
+        };
+        if !with_certificate.is_empty() {
+            return keys::check_certificate(with_certificate.expose(), Some(&key)).is_ok();
+        }
+        match self.mdm_setup.open(SecretKind::AbmCert) {
+            Ok(Some(held)) => keys::check_certificate(held.expose(), Some(&key)).is_ok(),
             _ => true,
         }
     }

@@ -884,6 +884,7 @@ fn the_key_pair_of_a_takeover_is_judged_at_upload() {
                 kind: kind.to_owned(),
                 material: material.to_vec(),
                 not_after_unix: None,
+                with_certificate: Vec::new(),
             },
         )
     };
@@ -912,6 +913,87 @@ fn the_key_pair_of_a_takeover_is_judged_at_upload() {
     assert_eq!(
         put("abm_key", &[0xff, 0xfe]).err(),
         Some(MdmRefusal::InvalidRequest)
+    );
+}
+
+/// Proves: an `abm_key` that is not the key of the `abm_cert` held is refused and the key held
+/// stays; sent with the certificate it goes with, the key and the certificate are both stored; sent
+/// with a certificate that is not its own, or with `with_certificate` on another kind, nothing is
+/// stored.
+///
+/// Catches: a takeover with a wrong key or wrong certificate that replaces the key a held
+/// certificate was added in ABM with, so every `.p7m` for it stops opening.
+#[test]
+fn a_key_that_breaks_the_pair_held_is_refused_and_the_key_held_stays() {
+    let world = start("abm-pair-atomic", true, true).world;
+    let coordinator = &world.coordinator;
+    let put = |kind: &str, material: &[u8], with: &[u8]| {
+        coordinator.mdm_put_secret(
+            &alice(),
+            proto::PutSecretRequest {
+                kind: kind.to_owned(),
+                material: material.to_vec(),
+                not_after_unix: None,
+                with_certificate: with.to_vec(),
+            },
+        )
+    };
+    let version = |kind: SecretKind| {
+        coordinator
+            .mdm_setup
+            .list_secrets()
+            .expect("a list")
+            .iter()
+            .filter(|info| info.kind == kind)
+            .map(|info| info.version)
+            .max()
+    };
+    let key = generate(2048).expect("a key");
+    let other = generate(2048).expect("another key");
+    let (key_pem, other_pem) = (
+        pkcs1_pem(&key).expect("a PEM"),
+        pkcs1_pem(&other).expect("a PEM"),
+    );
+    let cert = self_signed(&key, NOW).expect("a certificate");
+    let other_cert = self_signed(&other, NOW).expect("a certificate");
+
+    assert!(put("abm_key", key_pem.as_bytes(), cert.as_bytes()).is_ok());
+    assert_eq!(
+        (version(SecretKind::AbmKey), version(SecretKind::AbmCert)),
+        (Some(1), Some(1)),
+        "the key and its certificate are both stored"
+    );
+
+    assert_eq!(
+        put("abm_key", other_pem.as_bytes(), &[]).err(),
+        Some(MdmRefusal::InvalidRequest),
+        "another key alone would break the pair held"
+    );
+    assert_eq!(
+        put("abm_key", other_pem.as_bytes(), cert.as_bytes()).err(),
+        Some(MdmRefusal::InvalidRequest),
+        "a certificate that is not the new key's"
+    );
+    assert_eq!(
+        put("abm_cert", cert.as_bytes(), cert.as_bytes()).err(),
+        Some(MdmRefusal::InvalidRequest),
+        "with_certificate belongs to the key"
+    );
+    assert_eq!(
+        (version(SecretKind::AbmKey), version(SecretKind::AbmCert)),
+        (Some(1), Some(1)),
+        "no refusal stored anything"
+    );
+    assert!(
+        put("abm_key", key_pem.as_bytes(), &[]).is_ok(),
+        "the same key again keeps the pair"
+    );
+
+    assert!(put("abm_key", other_pem.as_bytes(), other_cert.as_bytes()).is_ok());
+    assert_eq!(
+        (version(SecretKind::AbmKey), version(SecretKind::AbmCert)),
+        (Some(3), Some(2)),
+        "a whole new pair replaces the old one"
     );
 }
 
@@ -975,7 +1057,8 @@ async fn the_coordinators_timer_idles_without_a_client_and_runs_with_one() {
 /// Proves: `Mdm.Status` carries the time of the last ABM pass that ended well and the words of the
 /// last one that failed: none of either before a pass, the time and no error after a good one, the
 /// same time and the words Apple's refusal of the clock gives after a failed one, and none of
-/// either from a coordinator with no ABM client.
+/// either from a coordinator with no ABM client, which says so; a token Apple accepts clears the
+/// failure at once.
 ///
 /// Catches: a status page that shows a sync as healthy after it failed, or never shows it.
 #[tokio::test]
@@ -1009,6 +1092,32 @@ async fn the_status_names_the_last_good_abm_pass_and_the_last_failure() {
         )
     );
 
+    rig.sim.state().session_fault = None;
+    rig.world
+        .coordinator
+        .mdm_put_abm_token(&alice(), json_request(&token_json()))
+        .await
+        .expect("kept again");
+    assert_eq!(
+        status(&rig),
+        (Some(at), String::new()),
+        "a token Apple has accepted answers the failure at once"
+    );
+
     let none = start("abm-status-fields-none", true, false);
     assert_eq!(status(&none), (None, String::new()));
+    assert!(
+        none.world
+            .coordinator
+            .mdm_status(&alice())
+            .expect("status")
+            .abm_unavailable
+    );
+    assert!(
+        !rig.world
+            .coordinator
+            .mdm_status(&alice())
+            .expect("status")
+            .abm_unavailable
+    );
 }

@@ -88,6 +88,8 @@ impl Coordinator {
             let sync = abm.status();
             status.abm_last_sync_unix = sync.last_ok_unix.and_then(|at| i64::try_from(at).ok());
             status.abm_sync_error = sync.last_error.unwrap_or_default();
+        } else {
+            status.abm_unavailable = true;
         }
 
         let mut missing = Vec::new();

@@ -166,6 +166,7 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                     kind: "push_key".to_owned(),
                     material: MATERIAL.to_vec(),
                     not_after_unix: None,
+                    with_certificate: Vec::new(),
                 },
                 Some(OPERATOR),
             )

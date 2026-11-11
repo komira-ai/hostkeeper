@@ -593,6 +593,7 @@ export namespace hostkeeper_operator_v1 {
     tlsNames?: string[];
     abmLastSyncUnix?: string;
     abmSyncError?: string;
+    abmUnavailable?: boolean;
   }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
@@ -684,7 +685,7 @@ export namespace hostkeeper_operator_v1 {
     repository?: hostkeeper_operator_v1.RegisteredRepository;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
-  export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; }
+  export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; withCertificate?: string; }
   export interface PutSecretResponse { secret?: hostkeeper_operator_v1.SecretInfo; }
   export interface PutSettingRequest { name?: string; value?: string; }
   export interface PutSettingResponse { name?: string; value?: string; }

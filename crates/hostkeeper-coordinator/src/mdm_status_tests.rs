@@ -65,6 +65,7 @@ fn upload(world: &World, kind: &str, material: &[u8]) {
                 kind: kind.to_owned(),
                 material: material.to_vec(),
                 not_after_unix: None,
+                with_certificate: Vec::new(),
             },
         )
         .expect("stored");
@@ -156,6 +157,7 @@ fn a_complete_setup_is_configured_and_shows_what_is_read_of_it() {
             tls_names: vec![NAME.to_owned()],
             abm_last_sync_unix: None,
             abm_sync_error: String::new(),
+            abm_unavailable: true,
         }
     );
     assert!(status.push_cert.is_some() && status.tls_key.is_some());
@@ -183,6 +185,7 @@ fn an_empty_setup_names_every_condition() {
         proto::MdmStatusResponse {
             missing: status.missing.clone(),
             sealing: true,
+            abm_unavailable: true,
             ..proto::MdmStatusResponse::default()
         }
     );

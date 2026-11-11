@@ -95,8 +95,8 @@ Sign out ends the session on the coordinator.
   line. The writes need a signed-in user's session: a bearer is refused them.
   The ABM step takes the token of a takeover (the JSON of its four parts and expiry, `Mdm.PutAbmToken`) or the `.p7m` ABM hands
   over, each as a file that the coordinator proves to Apple before it keeps it (the answer names the server entry, the
-  organisation and the expiry); the existing key pair of the server entry (`Mdm.PutSecret`, the key first and then its
-  certificate, both files); and *Get public key* (`Mdm.GetAbmPublicKey`), for a new server entry only, which shows the
+  organisation and the expiry); the existing key pair of the server entry (`Mdm.PutSecret`, the key and its certificate
+  together as files, stored only when the certificate is the key's); and *Get public key* (`Mdm.GetAbmPublicKey`), for a new server entry only, which shows the
   certificate of the key pair the coordinator holds, makes one when it holds none, and offers it as a download. A token or a key
   can only be chosen as a file. The status panel adds the time of the last ABM sync that ended well and, when the last sync
   failed, Apple's words for it; for the two faults Apple names (`timestamp_refused`, `signature_invalid`) and for the same

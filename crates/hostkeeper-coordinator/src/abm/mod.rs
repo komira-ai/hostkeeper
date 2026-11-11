@@ -142,6 +142,15 @@ impl Abm {
             .clone()
     }
 
+    /// Forgets the error of the last pass: a token ABM has just accepted answers it, and the
+    /// status should not go on naming a fault the operator has fixed until the next pass.
+    pub(crate) fn clear_error(&self) {
+        self.status
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .last_error = None;
+    }
+
     /// Whether `serial` is in our ABM now: in the table and not marked removed. The approval of a
     /// Mac asks it (CM9), and so does the enrollment of one (CM12c): a serial that is not is
     /// declined `serial_not_in_abm`. The table is the sync's last word; nothing is asked of ABM.

@@ -110,11 +110,14 @@ impl Coordinator {
             .mdm_setup
             .put_secret(kind, &material, Some(expires), now)
         {
-            Ok(info) => Ok(proto::PutAbmTokenResponse {
-                secret: Some(secret_proto(&info)),
-                server_name: account.server_name,
-                org_name: account.org_name,
-            }),
+            Ok(info) => {
+                abm.clear_error();
+                Ok(proto::PutAbmTokenResponse {
+                    secret: Some(secret_proto(&info)),
+                    server_name: account.server_name,
+                    org_name: account.org_name,
+                })
+            }
             Err(why) => {
                 tracing::error!(%why, "the ABM token could not be stored");
                 refuse(MdmRefusal::StoreFailed)

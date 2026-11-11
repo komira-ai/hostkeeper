@@ -109,6 +109,12 @@ fn the_status_panel_shows_the_token_expiry_the_last_sync_and_a_failed_sync_with_
     let mut other = held();
     other["abmSyncError"] = json!("ABM answered status 500");
     draw(&ui, other);
+    let mut none = held();
+    none["abmUnavailable"] = json!(true);
+    none.as_object_mut()
+        .expect("an object")
+        .remove("abmLastSyncUnix");
+    draw(&ui, none);
     let drive = |ui: &mut Ui| {
         ui.run(&page_driver(
             "mdm",
@@ -121,6 +127,7 @@ fn the_status_panel_shows_the_token_expiry_the_last_sync_and_a_failed_sync_with_
     let clock = drive(&mut ui);
     let credential = drive(&mut ui);
     let other = drive(&mut ui);
+    let none = drive(&mut ui);
 
     assert_eq!(
         good["out"]["token"],
@@ -140,6 +147,10 @@ fn the_status_panel_shows_the_token_expiry_the_last_sync_and_a_failed_sync_with_
     );
     assert!(!shown(&good).contains("sync failed"), "{}", shown(&good));
 
+    assert_eq!(
+        none["out"]["sync"][1],
+        json!(["ABM last sync", "this coordinator runs no ABM client"])
+    );
     assert_eq!(
         clock["out"]["sync"][1],
         json!(["ABM last sync", "none since the coordinator started"])
@@ -345,11 +356,10 @@ await click(after, "put-abm-p7m");
 }
 
 #[test]
-fn the_key_pair_is_sent_key_first_from_files_and_the_key_is_never_shown() {
-    // Catches: the certificate sent before the key (the coordinator judges it against the key
-    // held), a pair sent with the certificate missing, a refused key followed by the certificate,
-    // a certificate refused after the key was stored not saying so, a retry that needs the key
-    // chosen again, a part of the key (as text or as base64) in the page or a report, a field to
+fn the_key_and_its_certificate_are_sent_in_one_call_from_files_and_the_key_is_never_shown() {
+    // Catches: the key sent on its own so that a wrong certificate leaves the held key replaced, a
+    // pair sent with the certificate missing, a refused pair that drops the files so the retry
+    // needs them chosen again, a certificate alone not sent when the key is stored already, a part of the key (as text or as base64) in the page or a report, a field to
     // type a key into, and the files kept after the pair was stored.
     let mut ui = Ui::start();
     draw(&ui, held());
@@ -360,8 +370,6 @@ fn the_key_pair_is_sent_key_first_from_files_and_the_key_is_never_shown() {
         "invalid_request",
     );
     ui.reply(&m(PUT_SECRET), json!({"secret": info("abm_key")}));
-    ui.refuse(&m(PUT_SECRET), 400, "INVALID_ARGUMENT", "invalid_request");
-    ui.reply(&m(PUT_SECRET), json!({"secret": info("abm_cert")}));
     draw(&ui, held());
     let out = ui.run(&page_driver(
         "mdm",
@@ -393,13 +401,10 @@ return {{ chosen: [text(named(after, "abm-key-file-chosen")[0]), text(named(afte
     assert_eq!(
         sent,
         [
-            // the third press: the key is refused, the certificate is not sent
-            json!({"kind": "abm_key", "material": KEY_B64}),
-            // the fourth: the key is taken, the certificate is refused
-            json!({"kind": "abm_key", "material": KEY_B64}),
-            json!({"kind": "abm_cert", "material": CERT_B64}),
-            // the fifth: the key file was dropped once stored, so the certificate alone
-            json!({"kind": "abm_cert", "material": CERT_B64}),
+            // the third press: the key and its certificate go in one call, which is refused
+            json!({"kind": "abm_key", "material": KEY_B64, "withCertificate": CERT_B64}),
+            // the fourth: the same pair, taken; the fifth sends nothing, both files are dropped
+            json!({"kind": "abm_key", "material": KEY_B64, "withCertificate": CERT_B64}),
         ]
     );
     assert_eq!(
@@ -408,8 +413,8 @@ return {{ chosen: [text(named(after, "abm-key-file-chosen")[0]), text(named(afte
             "Choose the certificate file.",
             "Choose the certificate file.",
             "FAILED_PRECONDITION invalid_request",
-            "INVALID_ARGUMENT invalid_request The key is stored; send the certificate again.",
-            "Stored the ABM certificate.",
+            "Stored the ABM key and its certificate.",
+            "Choose the certificate file.",
         ])
     );
     assert_eq!(

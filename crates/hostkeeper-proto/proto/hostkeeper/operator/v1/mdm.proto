@@ -372,6 +372,12 @@ message PutSecretRequest {
   bytes material = 2;
   // When the value stops being good, when it says so; shown by `ListSecrets` and the status.
   optional int64 not_after_unix = 3;
+  // Only with `abm_key`: the certificate (PEM) the key goes with. The key is stored only when it is the
+  // certificate's (else `invalid_request`, nothing stored), and then the certificate after it. Without
+  // it, an `abm_key` that is not the key of the `abm_cert` held is refused with `invalid_request`, so
+  // the key a held certificate was added in ABM with is never replaced by another one alone. On any
+  // other kind, `invalid_request`.
+  bytes with_certificate = 4;
 }
 
 // What `ListSecrets` shows of one version of one secret.
@@ -523,6 +529,9 @@ message MdmStatusResponse {
   // What the last pass of the ABM sync failed with, in words (the faults Apple names on the session
   // are in them: `signature_invalid`, `timestamp_refused`); empty after a pass that did not fail.
   string abm_sync_error = 18;
+  // True when this coordinator runs no ABM client, so there is no sync to report; the two fields above
+  // are then empty. Not part of `configured`.
+  bool abm_unavailable = 19;
 }
 
 message PutNameRequest {

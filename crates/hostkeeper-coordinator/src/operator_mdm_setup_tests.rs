@@ -43,6 +43,7 @@ fn put(kind: &str, material: &[u8], not_after: Option<i64>) -> proto::PutSecretR
         kind: kind.to_owned(),
         material: material.to_vec(),
         not_after_unix: not_after,
+        with_certificate: Vec::new(),
     }
 }
 
