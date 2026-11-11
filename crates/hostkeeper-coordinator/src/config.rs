@@ -82,7 +82,7 @@ use crate::http::Surface;
 use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, accept_tcp, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
@@ -109,6 +109,15 @@ use secs::{record_window_secs, request_ttl_secs};
 /// The start's checks of the listen addresses.
 #[path = "config_listen.rs"]
 mod listen;
+
+/// The addresses `serve` bound, the line it prints for them, and the socket it binds with.
+#[path = "config_bound.rs"]
+mod bound;
+pub use bound::{Bound, bind_tcp, start_line};
+
+/// The start's wiring of the MDM listener.
+#[path = "config_mdm.rs"]
+mod mdm_listener;
 
 /// The start's check of the Mac serial allowlist against the host groups the store holds.
 #[path = "config_mac.rs"]
@@ -368,6 +377,16 @@ pub struct Serve {
     /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
     #[command(flatten)]
     pub mdm: MdmFlags,
+    /// The file that holds the key the MDM server's secrets (the push key, the ABM token and the
+    /// rest of the setup, `docs/design/coordinator-mdm.md` section 4.9) are sealed under in the
+    /// store: 64 hex digits, a regular file of the coordinator's user, mode 0600 or 0400. The
+    /// coordinator makes it (mode 0600) when it is not there and the store holds no sealed
+    /// secret. A file that is not there, or no flag, with sealed secrets in the store, and a key
+    /// that opens none of them, refuse the start: a new key would orphan every secret. Keep the
+    /// file apart from the store's backups. Without the flag the coordinator keeps no MDM secret
+    /// and `Mdm.PutSecret` is refused `secrets_unavailable`.
+    #[arg(long)]
+    pub mdm_secrets_key_file: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -430,19 +449,6 @@ impl Serve {
     }
 }
 
-/// Where the listeners are bound.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Bound {
-    /// The heartbeat listener.
-    pub heartbeat: SocketAddr,
-    /// The private listener.
-    pub control: SocketAddr,
-    /// The LAN listener, when `--lan-listen` is given.
-    pub lan: Option<SocketAddr>,
-    /// The health listener, when `--health-listen` is given.
-    pub health: Option<SocketAddr>,
-}
-
 /// What a running coordinator is made of.
 pub struct Parts {
     /// The coordinator.
@@ -458,6 +464,8 @@ pub struct Parts {
     /// Where to bind the LAN listener, when there is one. It serves the heartbeat listener's
     /// TLS and surface.
     pub lan_listen: Option<SocketAddr>,
+    /// Where to bind the listener of the Macs (`--mdm-listen`), when there is one.
+    pub mdm_listen: Option<SocketAddr>,
     /// Where to bind the health listener (`--health-listen`, a loopback address), when there
     /// is one.
     pub health_listen: Option<SocketAddr>,
@@ -535,7 +543,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         held,
         records,
         devices,
+        setup: setup_store,
+        mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
+    let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
+    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup);
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -569,9 +581,17 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
-        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
+            roots.clone(),
+        )?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
+    coordinator = coordinator
+        .with_shared_mdm_setup(mdm_setup)
+        .with_mdmcert(Arc::new(
+            hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
+        ));
+    coordinator = coordinator.with_abm(state::abm(Arc::clone(&mdm_store), roots.clone())?);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -606,7 +626,14 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             };
             let mdm = match devices {
                 Some(devices) => {
-                    Mdm::open(&flags.mdm, devices, Arc::new(SystemClock), os_random())?
+                    let queue = wiring.as_ref().map(mdm_listener::Wiring::queue);
+                    Mdm::open_with(
+                        &flags.mdm,
+                        devices,
+                        Arc::new(SystemClock),
+                        os_random(),
+                        queue,
+                    )?
                 }
                 None => None,
             };
@@ -650,6 +677,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         // clap requires --ca-key-file, --server-cert-file and --server-name together.
         _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,
     };
+    let (coordinator, mdm_listen) = mdm_listener::attach(wiring, coordinator);
     Ok(Parts {
         coordinator: Arc::new(coordinator),
         heartbeat_tls,
@@ -657,6 +685,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         heartbeat_listen: flags.heartbeat_listen,
         control_listen: flags.private_listen,
         lan_listen: flags.lan_listen,
+        mdm_listen,
         health_listen: flags.health_listen,
         reload: interval,
         lock: held,
@@ -683,21 +712,6 @@ fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError>
             source,
         },
     })
-}
-
-/// Binds a TCP socket at `addr`: the address it got, and the function that accepts its
-/// connections.
-///
-/// # Errors
-/// The address cannot be bound.
-pub async fn bind_tcp(
-    addr: SocketAddr,
-) -> io::Result<(
-    SocketAddr,
-    impl FnMut() -> futures::future::BoxFuture<'static, io::Result<tokio::net::TcpStream>> + Send,
-)> {
-    let tcp = tokio::net::TcpListener::bind(addr).await?;
-    Ok((tcp.local_addr()?, accept_tcp(tcp)))
 }
 
 /// Binds the listeners with `bind` (which answers the address bound and the function that
@@ -787,17 +801,25 @@ where
         None => None,
     };
     let webhook = match parts.coordinator.mdm() {
-        Some(mdm) => {
-            let (addr, accept) = bind(mdm.webhook_listen).await?;
-            tracing::info!(%addr, "serving the MDM webhook");
-            Either::Left(Mdm::serve(Arc::clone(&mdm.gate), accept))
-        }
-        None => Either::Right(std::future::pending()),
+        Some(mdm) => match mdm.webhook_listen {
+            Some(listen) => {
+                let (addr, accept) = bind(listen).await?;
+                tracing::info!(%addr, "serving the MDM webhook");
+                Either::Left(Mdm::serve(Arc::clone(&mdm.gate), accept))
+            }
+            None => Either::Right(Either::Left(Mdm::looks(Arc::clone(&mdm.gate)))),
+        },
+        None => Either::Right(Either::Right(std::future::pending())),
+    };
+    let macs = match parts.mdm_listen {
+        Some(addr) => Some(bind(addr).await?),
+        None => None,
     };
     ready(Bound {
         heartbeat: heartbeat_addr,
         control: control_addr,
         lan: lan.as_ref().map(|(addr, _)| *addr),
+        mdm: macs.as_ref().map(|(addr, _)| *addr),
         health: None,
     });
     let lan = lan.map(|(_, accept)| Listener {
@@ -821,6 +843,7 @@ where
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
+    let syncing = crate::operator_abm::abm_sync_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -831,6 +854,10 @@ where
         )),
         None => Either::Right(std::future::pending()),
     };
+    let serving_macs = match macs {
+        Some((_, accept)) => Either::Left(mdm_listener::serve(accept, Arc::clone(&coordinator))),
+        None => Either::Right(std::future::pending()),
+    };
     let serving = together(
         serve(
             heartbeat,
@@ -838,7 +865,12 @@ where
             CLIENT_PATIENCE,
             MAX_CONNECTIONS,
         ),
-        serve(control, coordinator, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serve(
+            control,
+            Arc::clone(&coordinator),
+            CLIENT_PATIENCE,
+            MAX_CONNECTIONS,
+        ),
     );
     let reloading = reload_every(
         enrollment,
@@ -847,8 +879,11 @@ where
         parts.reload,
     );
     let all = together(
-        together(serving, serving_lan),
-        together(reloading, together(observing, together(webhook, adopting))),
+        together(together(serving, serving_lan), serving_macs),
+        together(
+            reloading,
+            together(observing, together(webhook, together(adopting, syncing))),
+        ),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).
@@ -857,22 +892,6 @@ where
         Either::Left((never, _)) => match never {},
         Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
     }
-}
-
-/// The line `serve` prints once its listeners are bound ([`start`]): the version, then where
-/// each listener is, `lan=` (with `--lan-listen` only) after `control=`, and `health=` (with
-/// `--health-listen` only) last.
-#[must_use]
-pub fn start_line(bound: &Bound) -> String {
-    let lan = bound
-        .lan
-        .map_or_else(String::new, |lan| format!(" lan={lan}"));
-    let health = bound
-        .health
-        .map_or_else(String::new, |health| format!(" health={health}"));
-    let (heartbeat, control) = (bound.heartbeat, bound.control);
-    let version = env!("CARGO_PKG_VERSION");
-    format!("hostkeeper-coordinator {version} heartbeat={heartbeat} control={control}{lan}{health}")
 }
 
 /// Resolves on SIGTERM or SIGINT.

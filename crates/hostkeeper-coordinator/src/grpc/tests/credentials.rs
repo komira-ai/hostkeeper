@@ -18,7 +18,7 @@ use super::support::{
     grpc_request, peer, served, served_built, served_unreachable, served_with_operator_token,
     updater,
 };
-use crate::grpc::{Admitted, PENDING, admit};
+use crate::grpc::{Admitted, PENDING, SESSION_ONLY, admit};
 use crate::http::Surface;
 use crate::operator::Caller;
 use crate::service::MAX_BEARER_BYTES;
@@ -301,9 +301,15 @@ async fn every_operator_method_admits_exactly_its_credential() {
         } else {
             refused(Code::PermissionDenied, "forbidden")
         };
+        // A session-only method admits no bearer at all: the operator's token is told so.
+        let with_operator = if SESSION_ONLY.contains(&path) {
+            refused(Code::PermissionDenied, "session_required")
+        } else {
+            Outcome::Admitted
+        };
         assert_eq!(
             outcome(&served, path, Some(OPERATOR)).await,
-            Outcome::Admitted,
+            with_operator,
             "{path} with the operator token"
         );
         assert_eq!(

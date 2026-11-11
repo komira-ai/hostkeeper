@@ -113,10 +113,12 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
+pub(crate) mod abm;
 pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
+mod alerts_mdm;
 pub mod assign;
 pub mod assignment;
 pub mod audit_actions;
@@ -161,14 +163,33 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
+pub(crate) mod mdm_enroll;
+pub mod mdm_push;
+pub mod mdm_secrets;
+mod mdm_server;
+pub mod mdm_settings;
+pub mod mdm_setup;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
+pub(crate) mod operator_abm;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
+mod operator_mdm_enroll;
+pub mod operator_mdm_push;
+#[cfg(test)]
+#[path = "operator_mdm_push_cert_tests.rs"]
+mod operator_mdm_push_cert_tests;
+#[cfg(test)]
+#[path = "operator_mdm_push_tests.rs"]
+mod operator_mdm_push_tests;
+pub mod operator_mdm_setup;
+#[cfg(test)]
+#[path = "operator_mdm_setup_tests.rs"]
+mod operator_mdm_setup_tests;
 pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;

@@ -26,9 +26,11 @@ const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
-const MDM_SERVER: &str = "hostkeeper-mdm-server";
+const MDM_ADE: &str = "hostkeeper-mdm-ade";
 const MDM_MODEL: &str = "hostkeeper-mdm-model";
+const MDM_PUSH: &str = "hostkeeper-mdm-push";
 const MDM_SCEP: &str = "hostkeeper-mdm-scep";
+const MDM_SERVER: &str = "hostkeeper-mdm-server";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
@@ -93,15 +95,16 @@ pub type Layer = (
 /// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
 /// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
 /// the coordinator starts; neither depends on the gate or the coordinator.
-pub const LAYERS: [Layer; 35] = [
+pub const LAYERS: [Layer; 37] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
         &[
-            CONFIG, ENROLLMENT, MDM_GATE, OIDC, PROTO, RELEASE, TLS, WIRE,
+            CONFIG, ENROLLMENT, MDM_ADE, MDM_GATE, MDM_PUSH, MDM_SCEP, MDM_SERVER, OIDC, PROTO,
+            RELEASE, TLS, WIRE,
         ],
-        &[OIDC],
+        &[MDM_PUSH, OIDC],
     ),
     (
         DAEMON,
@@ -126,9 +129,11 @@ pub const LAYERS: [Layer; 35] = [
     (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, INSTALL, PACKAGE, WIRE], &[]),
-    (MDM_SERVER, &[], &[]),
+    (MDM_ADE, &[], &[]),
     (MDM_MODEL, &[], &[]),
+    (MDM_PUSH, &[], &[]),
     (MDM_SCEP, &[], &[]),
+    (MDM_SERVER, &[], &[]),
     (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),

@@ -21,6 +21,9 @@
 //!   coordinator's) and its macOS installer (signed by the release, not notarized) reaching the repositories at
 //!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
 //!   the promotion. Copied from komira-ai/tierstore (`channels`).
+//! - `abm-takeover-token`: the one-off reader of the ABM takeover, which assembles the token JSON
+//!   `Mdm.PutAbmToken` takes from the files NanoDEP keeps its decrypted token in (`abm_takeover`).
+//!   Not a CI step: the operator runs it on the old MDM stack's machine.
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
@@ -38,6 +41,7 @@
 //! with the feature `test-support`, which only this crate's own tests turn on, it also exports
 //! `test_support`, what its integration tests need of its internals.
 
+mod abm_takeover;
 mod advisories;
 mod channels;
 mod coordinator_update;
@@ -79,6 +83,8 @@ enum Error {
     DbBackup(#[from] db_backup::Error),
     #[error(transparent)]
     Channels(#[from] channels::Error),
+    #[error(transparent)]
+    AbmTakeover(#[from] abm_takeover::Error),
 }
 
 #[derive(Parser)]
@@ -144,6 +150,10 @@ enum Verb {
         #[command(subcommand)]
         verb: channels::Verb,
     },
+    /// The one-off reader of the ABM takeover: assemble the JSON that `Mdm.PutAbmToken` takes
+    /// from the five files NanoDEP keeps its decrypted token in, into a file of mode 0600. Prints
+    /// the file's name and no value; sends nothing.
+    AbmTakeoverToken(abm_takeover::Flags),
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -174,6 +184,7 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
         Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
+        Verb::AbmTakeoverToken(flags) => Ok(abm_takeover::run(&flags)?),
     }
 }
 
@@ -196,7 +207,8 @@ pub fn main() -> ExitCode {
                 | Error::SigningTest(_)
                 | Error::NetinstallReport(_)
                 | Error::DbBackup(_)
-                | Error::Channels(_) => ExitCode::FAILURE,
+                | Error::Channels(_)
+                | Error::AbmTakeover(_) => ExitCode::FAILURE,
             }
         }
     }

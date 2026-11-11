@@ -47,6 +47,17 @@ export interface Client {
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
+    putSecret(request: hostkeeper_operator_v1.PutSecretRequest): Promise<hostkeeper_operator_v1.PutSecretResponse>;
+    putSetting(request: hostkeeper_operator_v1.PutSettingRequest): Promise<hostkeeper_operator_v1.PutSettingResponse>;
+    listSecrets(request: hostkeeper_operator_v1.ListSecretsRequest): Promise<hostkeeper_operator_v1.ListSecretsResponse>;
+    listSettings(request: hostkeeper_operator_v1.ListSettingsRequest): Promise<hostkeeper_operator_v1.ListSettingsResponse>;
+    createPushRequest(request: hostkeeper_operator_v1.CreatePushRequestRequest): Promise<hostkeeper_operator_v1.CreatePushRequestResponse>;
+    putPushReply(request: hostkeeper_operator_v1.PutPushReplyRequest): Promise<hostkeeper_operator_v1.PutPushReplyResponse>;
+    putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
+    putAbmToken(request: hostkeeper_operator_v1.PutAbmTokenRequest): Promise<hostkeeper_operator_v1.PutAbmTokenResponse>;
+    getAbmPublicKey(request: hostkeeper_operator_v1.GetAbmPublicKeyRequest): Promise<hostkeeper_operator_v1.GetAbmPublicKeyResponse>;
+    listEnrollmentRequests(request: hostkeeper_operator_v1.ListEnrollmentRequestsRequest): Promise<hostkeeper_operator_v1.ListEnrollmentRequestsResponse>;
+    confirmEnrollment(request: hostkeeper_operator_v1.ConfirmEnrollmentRequest): Promise<hostkeeper_operator_v1.ConfirmEnrollmentResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -214,7 +225,9 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_SILENT_HOST"
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_STORE_UNREACHABLE"
-    | "ALERT_KIND_TRUSTED_ROOT";
+    | "ALERT_KIND_TRUSTED_ROOT"
+    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
+    | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -255,6 +268,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface ClearRecordRequest { nodeId?: string; service?: string; }
   export interface ClearRecordResponse { orderId?: string; }
+  export interface ConfirmEnrollmentRequest { serial?: string; }
+  export interface ConfirmEnrollmentResponse { serial?: string; expiresUnix?: string; }
   export interface ConvergeRequest { service?: string; hostGroup?: string; }
   export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
   export interface Convergence {
@@ -279,6 +294,8 @@ export namespace hostkeeper_operator_v1 {
   export interface CreateApiTokenResponse { token?: hostkeeper_operator_v1.ApiTokenInfo; secret?: string; }
   export interface CreateUserRequest { name?: string; }
   export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
+  export interface CreatePushRequestRequest { email?: string; submit?: boolean; }
+  export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
   export interface DeleteUserRequest { name?: string; }
   export interface DeleteUserResponse {
@@ -294,6 +311,17 @@ export namespace hostkeeper_operator_v1 {
   export interface DisableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
   export interface EnableUserRequest { name?: string; }
   export interface EnableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
+  export interface EnrollmentRequest {
+    serial?: string;
+    udid?: string;
+    product?: string;
+    reason?: string;
+    firstUnix?: string;
+    lastUnix?: string;
+    count?: number;
+    inAbm?: boolean;
+    confirmedUntilUnix?: string;
+  }
   export type EnrollmentRequestState =
     | "ENROLLMENT_REQUEST_STATE_UNSPECIFIED"
     | "ENROLLMENT_REQUEST_STATE_PENDING"
@@ -359,6 +387,9 @@ export namespace hostkeeper_operator_v1 {
     | "GATE_REASON_INSTALL_ORDER"
     | "GATE_REASON_MOVING"
     | "GATE_REASON_UNINSTALL_ORDER";
+  export interface GetAbmPublicKeyRequest {
+  }
+  export interface GetAbmPublicKeyResponse { certificatePem?: string; fingerprintSha256?: string; created?: boolean; }
   export interface GetHostGroupRequest { hostGroup?: string; limit?: number; pageToken?: string; }
   export interface GetHostGroupResponse { hostGroup?: hostkeeper_operator_v1.HostGroupState; nodeIds?: string[]; nextPageToken?: string; }
   export interface GetHostRequest { nodeId?: string; }
@@ -499,6 +530,9 @@ export namespace hostkeeper_operator_v1 {
   export interface ListAuditResponse { entries?: hostkeeper_operator_v1.AuditEntry[]; nextSeq?: string; }
   export interface ListDevicesRequest { limit?: number; pageToken?: string; }
   export interface ListDevicesResponse { devices?: hostkeeper_operator_v1.MdmDevice[]; nextPageToken?: string; gate?: boolean; }
+  export interface ListEnrollmentRequestsRequest {
+  }
+  export interface ListEnrollmentRequestsResponse { requests?: hostkeeper_operator_v1.EnrollmentRequest[]; }
   export interface ListHostGroupsRequest { limit?: number; pageToken?: string; }
   export interface ListHostGroupsResponse { hostGroups?: hostkeeper_operator_v1.HostGroupState[]; nextPageToken?: string; }
   export interface ListHostsRequest { limit?: number; pageToken?: string; }
@@ -514,12 +548,18 @@ export namespace hostkeeper_operator_v1 {
     generation?: string;
     unregistered?: string[];
   }
+  export interface ListSecretsRequest {
+  }
+  export interface ListSecretsResponse { secrets?: hostkeeper_operator_v1.SecretInfo[]; sealing?: boolean; }
   export interface ListServicesRequest {
   }
   export interface ListServicesResponse { services?: hostkeeper_operator_v1.ServiceEntry[]; holds?: hostkeeper_operator_v1.HoldMark[]; }
   export interface ListUsersRequest {
   }
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
+  export interface ListSettingsRequest {
+  }
+  export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"
@@ -560,6 +600,7 @@ export namespace hostkeeper_operator_v1 {
     baselineReason?: string;
   }
   export type MdmPhase = "MDM_PHASE_UNSPECIFIED" | "MDM_PHASE_AUTHENTICATED" | "MDM_PHASE_ENROLLED" | "MDM_PHASE_CHECKED_OUT";
+  export interface MdmSetting { name?: string; value?: string; isDefault?: boolean; }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
     | "MEMBERSHIP_PRESENT"
@@ -629,13 +670,29 @@ export namespace hostkeeper_operator_v1 {
     | "PLAN_WAIT_DEFERRING"
     | "PLAN_WAIT_BAKING";
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
+  export interface PutAbmTokenRequest { tokenJson?: string; tokenP7m?: string; }
+  export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }
+  export interface PutPushCertificateResponse {
+    topic?: string;
+    notBeforeUnix?: string;
+    notAfterUnix?: string;
+    secret?: hostkeeper_operator_v1.SecretInfo;
+    renewal?: boolean;
+  }
+  export interface PutPushReplyRequest { reply?: string; }
+  export interface PutPushReplyResponse { signedRequest?: string; }
   export interface PutRepositoryRequest { repository?: hostkeeper_release_v1.Repository; reason?: string; }
   export interface PutRepositoryResponse {
     repository?: hostkeeper_operator_v1.RegisteredRepository;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
+  export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; }
+  export interface PutSecretResponse { secret?: hostkeeper_operator_v1.SecretInfo; }
+  export interface PutSettingRequest { name?: string; value?: string; }
+  export interface PutSettingResponse { name?: string; value?: string; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
   export interface RegisteredRepository {
     repository?: hostkeeper_release_v1.Repository;
@@ -689,6 +746,14 @@ export namespace hostkeeper_operator_v1 {
     liveRollouts?: number;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
+  export interface SecretInfo {
+    kind?: string;
+    version?: number;
+    fingerprintSha256?: string;
+    notAfterUnix?: string;
+    createdUnix?: string;
+    supersededUnix?: string;
+  }
   export interface ServiceEntry {
     service?: string;
     hosts?: string[];

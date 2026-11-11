@@ -25,7 +25,6 @@ use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::Alerts as AlertsA
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::Audit as AuditApi;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::Enrollment as EnrollmentApi;
 use hostkeeper_proto::hostkeeper::operator::v1::hosts_server::Hosts as HostsApi;
-use hostkeeper_proto::hostkeeper::operator::v1::mdm_server::Mdm as MdmApi;
 use hostkeeper_proto::hostkeeper::operator::v1::releases_server::Releases as ReleasesApi;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::Rollouts as RolloutsApi;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::Services as ServicesApi;
@@ -842,32 +841,6 @@ impl AlertsApi for AlertsService {
             .list_alerts(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::alerts)
-    }
-}
-
-/// The service of `Mdm`.
-pub(crate) struct MdmService {
-    coordinator: Arc<Coordinator>,
-}
-
-impl MdmService {
-    /// The service over `coordinator`.
-    pub(crate) fn new(coordinator: Arc<Coordinator>) -> Self {
-        Self { coordinator }
-    }
-}
-
-#[tonic::async_trait]
-impl MdmApi for MdmService {
-    async fn list_devices(
-        &self,
-        request: Request<proto::ListDevicesRequest>,
-    ) -> Result<Response<proto::ListDevicesResponse>, Status> {
-        let caller = caller_of(&request);
-        self.coordinator
-            .mdm_list_devices(&caller, request.get_ref())
-            .map(Response::new)
-            .map_err(refusal::mdm)
     }
 }
 

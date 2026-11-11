@@ -1,0 +1,32 @@
+[package]
+name = "hostkeeper-mdm-ade"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The automated-enrollment side of the coordinator's MDM server as a library: the Apple-signed device blob of /enroll checked against Apple's roots, and the enrollment profile a Mac is given."
+
+# docs/design/coordinator-mdm.md 4.2 (task CM12c). Pure: bytes in, values out, the time passed in.
+# It depends on no crate of this workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+cms.workspace = true
+const-oid.workspace = true
+der.workspace = true
+p256.workspace = true
+p384.workspace = true
+plist.workspace = true
+rsa.workspace = true
+sha1.workspace = true
+sha2.workspace = true
+signature.workspace = true
+spki.workspace = true
+thiserror.workspace = true
+x509-cert = { workspace = true, features = ["pem"] }
+
+[dev-dependencies]
+rand.workspace = true
+
+[lints]
+workspace = true

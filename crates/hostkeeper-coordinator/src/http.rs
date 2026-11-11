@@ -29,6 +29,13 @@
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
+//! - **MDM** (`Surface::Mdm`; `docs/design/coordinator-mdm.md`, section 4.1): the listener of
+//!   the Macs and of a host's apt, on the LAN. It serves exactly the routes of the table of 4.1
+//!   (`/enroll`, `/scep`, `/checkin`, `/mdm`, `/pkg/` and `/apt/`), each when its own task lands;
+//!   every other path, the operator API, its JSON gateway and its gRPC, `/v1/*`, the sign-in
+//!   routes, the heartbeat and `/ui/` among them, answers `404 not_found`, for any method and
+//!   whatever credential the request carries, and no request on it reads a cookie or a token.
+//!
 //! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
 //! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
 //! before a request comes here ([`crate::repository_serve`]).
@@ -120,6 +127,9 @@ pub enum Surface {
     Heartbeat,
     /// The private listener: the listener of CI and the operator.
     Control,
+    /// The listener of the MDM server and the package proxy: only the routes of the table of
+    /// `docs/design/coordinator-mdm.md`, section 4.1, and `404` for every other path.
+    Mdm,
 }
 
 /// The address a connection came from, put in the extensions of each request it carries by
@@ -212,6 +222,13 @@ where
         && let Some(login) = coordinator.login()
     {
         return crate::login_routes::answer(coordinator, login, request, patience).await;
+    }
+    if surface == Surface::Mdm
+        && let Some(server) = coordinator.mdm_server()
+        && let Some(family) = crate::mdm_server::family_of(&path)
+    {
+        return crate::mdm_server::answer(coordinator, server, family, peer, request, patience)
+            .await;
     }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {

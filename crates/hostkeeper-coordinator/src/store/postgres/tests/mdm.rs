@@ -269,8 +269,9 @@ fn every_call_answers_an_error_when_the_tables_are_gone() {
 
 /// Proves: `0011` does not stop the release before it (migrations `0001` to `0010`, whose start
 /// never reads the MDM tables) on a database this release migrated and whose MDM tables hold an
-/// enrollment: its runner takes the database, and the state reads as this release loads it. And the
-/// other way: this release starts on a database the release before migrated, runs `0011`, and the
+/// enrollment: its runner takes the database and runs nothing, and the state reads as this release
+/// loads it. And the other way: this release starts on a database the release before migrated, runs
+/// `0011` and `0012`, and the
 /// MDM tables are empty.
 ///
 /// Catches: an MDM table that makes the previous coordinator refuse to start (the back-out of a
@@ -285,16 +286,16 @@ fn the_release_before_starts_on_a_database_with_0011_and_this_one_on_its() {
         .expect("an enrollment");
     store.stop();
     let (taken, before_loaded) = with_session(&db, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..10]).expect("the release before's set");
         let taken = migrate::apply(session, &before);
         (
             taken,
             load_all(session, SPENT_NOW).expect("the state reads"),
         )
     });
-    assert_eq!(
-        taken.expect("0011 says older releases may run"),
-        Vec::<i32>::new()
+    assert!(
+        matches!(&taken, Ok(ran) if ran.is_empty()),
+        "0011 says older releases may run: {taken:?}"
     );
     assert_eq!(before_loaded, loaded);
     assert_eq!(
@@ -304,16 +305,16 @@ fn the_release_before_starts_on_a_database_with_0011_and_this_one_on_its() {
 
     let older = TestDatabase::new();
     let ran = with_session(&older, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..10]).expect("the release before's set");
         migrate::apply(session, &before).expect("the release before migrates")
     });
-    assert_eq!(ran, (1..=9).collect::<Vec<_>>());
+    assert_eq!(ran, (1..=10).collect::<Vec<_>>());
     let (store, _) = older.open("this release").expect("this release starts");
     assert_eq!(PgMdm::over(&store).abm_devices(), Ok(Vec::new()));
     assert_eq!(PgMdm::over(&store).live_enrollment("S1"), Ok(None));
     store.stop();
     assert_eq!(
-        older.rows("SELECT version FROM schema_version WHERE version = 9"),
-        vec![vec![Some("9".to_owned())]]
+        older.rows("SELECT version FROM schema_version WHERE version >= 11 ORDER BY version"),
+        vec![vec![Some("11".to_owned())], vec![Some("12".to_owned())]]
     );
 }

@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 4] = [
+const FIELDS: [(&str, &[Field]); 29] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -81,6 +81,137 @@ const FIELDS: [(&str, &[Field]); 4] = [
             ("baseline_reason", 21, false),
         ],
     ),
+    (
+        "hostkeeper.operator.v1.PutSecretRequest",
+        &[
+            ("kind", 1, false),
+            ("material", 2, false),
+            ("not_after_unix", 3, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.SecretInfo",
+        &[
+            ("kind", 1, false),
+            ("version", 2, false),
+            ("fingerprint_sha256", 3, false),
+            ("not_after_unix", 4, true),
+            ("created_unix", 5, false),
+            ("superseded_unix", 6, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSecretResponse",
+        &[("secret", 1, true)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSettingRequest",
+        &[("name", 1, false), ("value", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSettingResponse",
+        &[("name", 1, false), ("value", 2, false)],
+    ),
+    ("hostkeeper.operator.v1.ListSecretsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListSecretsResponse",
+        &[("secrets", 1, false), ("sealing", 2, false)],
+    ),
+    ("hostkeeper.operator.v1.ListSettingsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.MdmSetting",
+        &[
+            ("name", 1, false),
+            ("value", 2, false),
+            ("is_default", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ListSettingsResponse",
+        &[("settings", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestRequest",
+        &[("email", 1, false), ("submit", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestResponse",
+        &[
+            ("csr_pem", 1, false),
+            ("encryption_certificate_pem", 2, false),
+            ("submitted", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyRequest",
+        &[("reply", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyResponse",
+        &[("signed_request", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateRequest",
+        &[("certificate_pem", 1, false), ("key_pem", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateResponse",
+        &[
+            ("topic", 1, false),
+            ("not_before_unix", 2, false),
+            ("not_after_unix", 3, false),
+            ("secret", 4, true),
+            ("renewal", 5, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenRequest",
+        &[("token_json", 1, false), ("token_p7m", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenResponse",
+        &[
+            ("secret", 1, true),
+            ("server_name", 2, false),
+            ("org_name", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.GetAbmPublicKeyRequest", &[]),
+    (
+        "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+        &[
+            ("certificate_pem", 1, false),
+            ("fingerprint_sha256", 2, false),
+            ("created", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.ListEnrollmentRequestsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+        &[("requests", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.EnrollmentRequest",
+        &[
+            ("serial", 1, false),
+            ("udid", 2, false),
+            ("product", 3, true),
+            ("reason", 4, false),
+            ("first_unix", 5, false),
+            ("last_unix", 6, false),
+            ("count", 7, false),
+            ("in_abm", 8, false),
+            ("confirmed_until_unix", 9, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+        &[("serial", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+        &[("serial", 1, false), ("expires_unix", 2, false)],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -100,7 +231,20 @@ fn wire_names_of_the_mdm_api_are_pinned() {
         .collect();
     assert_eq!(
         rpcs,
-        ["ListDevices(ListDevicesRequest) ListDevicesResponse"]
+        [
+            "ListDevices(ListDevicesRequest) ListDevicesResponse",
+            "PutSecret(PutSecretRequest) PutSecretResponse",
+            "PutSetting(PutSettingRequest) PutSettingResponse",
+            "ListSecrets(ListSecretsRequest) ListSecretsResponse",
+            "ListSettings(ListSettingsRequest) ListSettingsResponse",
+            "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
+            "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
+            "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
+            "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
+            "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
+            "ListEnrollmentRequests(ListEnrollmentRequestsRequest) ListEnrollmentRequestsResponse",
+            "ConfirmEnrollment(ConfirmEnrollmentRequest) ConfirmEnrollmentResponse",
+        ]
     );
 
     let owned = |pairs: &[(&str, i32)]| -> Vec<(String, i32)> {
@@ -113,6 +257,27 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("unauthorized", 1),
             ("forbidden", 2),
             ("invalid_request", 3),
+            ("store_failed", 4),
+            ("audit_unavailable", 5),
+            ("secrets_unavailable", 6),
+            ("mdmcert_unavailable", 7),
+            ("no_pending_request", 8),
+            ("reply_undecryptable", 9),
+            ("reply_not_for_request", 10),
+            ("certificate_invalid", 11),
+            ("key_invalid", 12),
+            ("key_mismatch", 13),
+            ("certificate_expired", 14),
+            ("topic_changed", 15),
+            ("abm_unavailable", 16),
+            ("abm_key_missing", 17),
+            ("abm_token_unreadable", 18),
+            ("abm_credential_refused", 19),
+            ("abm_clock_refused", 20),
+            ("abm_unreachable", 21),
+            ("enrollment_unavailable", 22),
+            ("no_pending_enrollment", 23),
+            ("serial_not_in_abm", 24),
         ])
     );
     assert_eq!(

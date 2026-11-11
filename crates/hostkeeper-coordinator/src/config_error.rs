@@ -21,6 +21,13 @@ use crate::tokens::TokensError;
 use crate::ui::UiDirError;
 use crate::verdict_file::VerdictsError;
 
+impl StartError {
+    /// The refusal of a setup store that could not be read.
+    pub(crate) fn mdm_setup_store(why: crate::mdm_setup::SetupFailure) -> Self {
+        Self::MdmSetupStore(why.to_string())
+    }
+}
+
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
 pub enum StartError {
@@ -38,6 +45,18 @@ pub enum StartError {
     /// None of the three is given.
     #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
+    /// The MDM secrets key of `--mdm-secrets-key-file` is refused, or the store holds sealed
+    /// secrets and none is given.
+    #[error(transparent)]
+    MdmSecretsKey(#[from] crate::mdm_secrets::KeyError),
+    /// The key of `--mdm-secrets-key-file` does not open the secret of these kinds in the store.
+    #[error(
+        "--mdm-secrets-key-file: the key does not open the sealed secrets of {0}: it is not the key they were sealed under"
+    )]
+    MdmSecretsUnopened(String),
+    /// The tables of the MDM setup could not be opened or read.
+    #[error("{0}")]
+    MdmSetupStore(String),
     /// The password hash parameters of the login flags are outside what Argon2id takes.
     #[error(transparent)]
     Password(#[from] crate::password::PasswordError),
@@ -54,6 +73,11 @@ pub enum StartError {
         "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
     )]
     LanListen(SocketAddr),
+    /// `--mdm-listen` is a wildcard address.
+    #[error(
+        "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address"
+    )]
+    MdmListen(SocketAddr),
     /// `--health-listen` is not a loopback address.
     #[error(
         "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"
