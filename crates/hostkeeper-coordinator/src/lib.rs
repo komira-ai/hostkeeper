@@ -170,6 +170,7 @@ pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
 pub(crate) mod operator_abm;
+pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;

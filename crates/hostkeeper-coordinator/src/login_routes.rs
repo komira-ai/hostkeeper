@@ -301,7 +301,7 @@ where
 
 impl Coordinator {
     /// Writes `entry` to the audit before anything it records is done.
-    fn audit(&self, entry: AuditEntry) -> Result<(), OpsError> {
+    pub(crate) fn audit(&self, entry: AuditEntry) -> Result<(), OpsError> {
         self.ops
             .change(Write::BeforeMemory, entry, |_| {})
             .map(drop)
