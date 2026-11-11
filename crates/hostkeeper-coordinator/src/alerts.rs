@@ -33,6 +33,10 @@
 //!   `--alert-silent-host-secs` old;
 //! - `cert_near_expiry`: the certificate the coordinator serves its hosts (with an enrollment
 //!   store), when it expires within `--alert-cert-window-secs`, or has expired;
+//! - `push_cert_near_expiry`: the MDM push certificate (the setup's `push_cert`, in use) at the
+//!   smallest of the `push_alert_days` thresholds its expiry has come within (60, then 14 by
+//!   default), or expired; the alert's version is the threshold in days, or `expired`, so that
+//!   crossing the next threshold is a new alert, logged again;
 //! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
 //!   gives no facts rather than refusing the list, so the alert is seen;
@@ -53,6 +57,8 @@ use hostkeeper_wire::HostId;
 use crate::fleet::Fleet;
 use crate::holds::bad_version;
 use crate::host_groups::HostGroups;
+use crate::mdm_secrets::SecretKind;
+use crate::mdm_settings;
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, Halt, HaltOrigin, OpsState};
 use crate::service::Coordinator;
@@ -110,6 +116,8 @@ pub enum Kind {
     StoreUnreachable,
     /// A host's trusted root is stale, missing or unparseable.
     TrustedRoot,
+    /// The MDM push certificate expires within a threshold of `push_alert_days`, or has expired.
+    PushCertNearExpiry,
 }
 
 impl Kind {
@@ -130,6 +138,7 @@ impl Kind {
             Self::CertNearExpiry => "cert_near_expiry",
             Self::StoreUnreachable => "store_unreachable",
             Self::TrustedRoot => "trusted_root",
+            Self::PushCertNearExpiry => "push_cert_near_expiry",
         }
     }
 
@@ -146,7 +155,8 @@ impl Kind {
             | Self::AbandonedWhileUpdating
             | Self::SilentHost
             | Self::CertNearExpiry
-            | Self::TrustedRoot => proto::AlertSeverity::Warning,
+            | Self::TrustedRoot
+            | Self::PushCertNearExpiry => proto::AlertSeverity::Warning,
         }
     }
 
@@ -165,6 +175,7 @@ impl Kind {
             Self::CertNearExpiry => proto::AlertKind::CertNearExpiry,
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
+            Self::PushCertNearExpiry => proto::AlertKind::PushCertNearExpiry,
         }
     }
 }
@@ -234,6 +245,12 @@ pub struct EnrollmentFacts {
     pub duplicates: BTreeSet<HostId>,
     /// When the certificate the coordinator serves its hosts expires, unix seconds.
     pub server_not_after: Option<u64>,
+    /// When the MDM push certificate in use expires, unix seconds; none when no push certificate
+    /// is held.
+    pub push_cert_not_after: Option<u64>,
+    /// The days before that expiry at which the alert is raised, falling (the setting
+    /// `push_alert_days`).
+    pub push_alert_days: Vec<u32>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -298,6 +315,7 @@ pub(crate) fn derive_in(
         at.unix,
         thresholds.cert_window_secs,
     ));
+    alerts.extend(push_cert_near_expiry(enrollment, at.unix));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -606,6 +624,40 @@ fn cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64, window: u64) -> Vec
         .collect()
 }
 
+/// `push_cert_near_expiry`: the push certificate in use, when it expires before `unix` plus the
+/// days of a threshold: the smallest threshold reached is the alert's version, `expired` once it
+/// has expired.
+fn push_cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64) -> Vec<Alert> {
+    let Some(not_after) = enrollment.push_cert_not_after else {
+        return Vec::new();
+    };
+    let reached = enrollment
+        .push_alert_days
+        .iter()
+        .copied()
+        .filter(|days| not_after < unix.saturating_add(u64::from(*days) * 86_400))
+        .min();
+    let (version, when) = if not_after <= unix {
+        ("expired".to_owned(), format!("expired at unix {not_after}"))
+    } else if let Some(days) = reached {
+        (
+            days.to_string(),
+            format!("expires at unix {not_after}, in {} s", not_after - unix),
+        )
+    } else {
+        return Vec::new();
+    };
+    let mut subject = Subject::of(Kind::PushCertNearExpiry);
+    subject.version = version;
+    vec![Alert {
+        subject,
+        message: format!(
+            "the MDM push certificate {when}: renew it from the MDM setup (a push certificate \
+             that expires stops every push to the Macs)"
+        ),
+    }]
+}
+
 /// For a duplicate claim `view`, the enrolled host it collides with: the host it renews, else a
 /// host whose recorded approval has its machine id or one of its universally administered MACs.
 fn collides_with(view: &RequestView, approvals: &[RecordedApproval]) -> Option<String> {
@@ -741,7 +793,7 @@ impl Coordinator {
                 .nodes()
                 .map(|(id, _)| id.clone())
                 .collect();
-            let enrollment = match self.enrollment_facts(&heard) {
+            let mut enrollment = match self.enrollment_facts(&heard) {
                 Ok(facts) => facts,
                 // The alert that says the database is lost is not hidden by it.
                 Err(why) if self.lock_fleet().store_lost => {
@@ -750,6 +802,7 @@ impl Coordinator {
                 }
                 Err(why) => return Err(why),
             };
+            self.note_push_certificate(&mut enrollment);
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),
@@ -766,6 +819,27 @@ impl Coordinator {
             );
             Ok((alerts, at.unix))
         })
+    }
+
+    /// Notes in `facts` when the push certificate in use expires and the days of the alert, from
+    /// the MDM setup; a setup that cannot be read is logged and raises no alert of its own.
+    fn note_push_certificate(&self, facts: &mut EnrollmentFacts) {
+        let setup = &self.mdm_setup;
+        match (setup.list_secrets(), setup.settings()) {
+            (Ok(secrets), Ok(settings)) => {
+                facts.push_cert_not_after = secrets
+                    .iter()
+                    .filter(|info| {
+                        info.kind == SecretKind::PushCert && info.superseded_unix.is_none()
+                    })
+                    .find_map(|info| info.not_after_unix)
+                    .and_then(|at| u64::try_from(at).ok());
+                facts.push_alert_days = mdm_settings::list_of(&settings, "push_alert_days");
+            }
+            (Err(why), _) | (_, Err(why)) => {
+                tracing::warn!(%why, "the push certificate's expiry is not read: the MDM setup could not be read");
+            }
+        }
     }
 
     /// `Alerts.List`: every alert now, as an observation finds it ([`Self::observe_alerts`]).
@@ -827,6 +901,7 @@ impl Coordinator {
                 .cloned()
                 .collect(),
             server_not_after: Some(enrollment.server_certificate().not_after),
+            ..EnrollmentFacts::default()
         })
     }
 }

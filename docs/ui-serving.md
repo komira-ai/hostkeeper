@@ -2,7 +2,9 @@
 
 The operator web app in [`ui/`](../ui) is static files. The coordinator serves them from its
 private listener, the same listener as the operator API, so the app's calls are same-origin:
-there is no cross-origin access, no cookie and no session.
+there is no cross-origin access. The static files set no cookie and read none; a person's session
+is made by the sign-in routes of the operator API (see
+[the operator login design](design/operator-login.md)).
 
 ## The directory the coordinator serves
 
@@ -28,9 +30,12 @@ The flag is the only way to set it: no environment variable is read.
 
 ## Open the app
 
-Browse to `https://<private-address>/ui/` and paste an operator token when the page asks for one.
-The page keeps the token in memory only and sends it on each API call; reloading the page asks for
-it again.
+Browse to `https://<private-address>/ui/` and sign in with your user name and password. The
+browser keeps the session in a cookie the page cannot read; the page keeps only the session's CSRF
+token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloading the page asks
+the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
+sign-in with a temporary password an admin set, shows only the form for choosing a new password.
+Sign out ends the session on the coordinator.
 
 ## What the pages do for services
 
@@ -74,7 +79,21 @@ it again.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.
-- Each action is one API call, and the Audit page shows it by the token's name. A refused call
+- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate step, `docs/design/coordinator-mdm.md`
+  sections 4.4 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
+  because:* and each missing condition in words; the push certificate and key, the ABM token and the TLS certificate and key with the
+  version and the first 16 hex digits of the fingerprint `Status` gives, when each expires and the days left. The days left are
+  coloured and listed as a reminder once they are inside the largest value of the setting that names them (`push_alert_days`,
+  `abm_alert_days`, `tls_renew_days`), and an expiry is shown `expired`; when `ListSettings` is refused, only an expiry is coloured.
+  A coordinator with no master key says so. The push step has three buttons in order: *Create request* (`Mdm.CreatePushRequest` with
+  the email and whether to send it to mdmcert.download, which **emails** its reply to that address; the CSR and the encryption
+  certificate, both public, are shown and can be downloaded), *Check reply* (`Mdm.PutPushReply` with the emailed attachment, as a file
+  or its hex text pasted; the signed request it answers can be downloaded, to upload to Apple's push portal) and *Store certificate*
+  (`Mdm.PutPushCertificate` with the certificate Apple returned). A separate form takes an existing certificate and its key, PKCS#1
+  or PKCS#8, in one call (the migration). A file is read when the button is pressed, sent and dropped; a key can only be chosen as a
+  file, never typed, and the page shows no value of a secret. A refusal is shown as the API says it (`CODE reason`) in the status
+  line. The writes need a signed-in user's session: a bearer is refused them.
+- Each action is one API call, and the Audit page shows it by the signed-in user's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
@@ -94,8 +113,8 @@ it again.
   `Referrer-Policy: no-referrer` and
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. No answer of the
   coordinator carries an `Access-Control-*` header.
-- The files need no token. The operator API the app calls still needs the operator token on every
-  call.
+- The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
+  header) or an operator token on every call.
 
 ## Where the app comes from
 

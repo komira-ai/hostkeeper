@@ -1,12 +1,15 @@
 // The app's frame: sign-in, the page list, sign-out and the status line.
 //
-// The token goes from the sign-in form to `session.js` and from there only to `api.js`, which
-// sends it in the Authorization header. A reply that refuses the token forgets it, and the frame
-// shows the sign-in form again. Pages are switched in memory: the address never changes, so it
-// never carries the token or anything else.
+// A person signs in with a user name and password (`signin.js`); the coordinator answers with a
+// session that the browser keeps for it, and a CSRF token that goes to `session.js` and from there
+// only to `api.js`, which sends it in the X-HK-CSRF header. A reply that ends the session forgets
+// it, and the frame shows the sign-in form again; a session that owes a new password shows the
+// form for it and nothing else. A reload asks the coordinator for the session again. Pages are
+// switched in memory: the address never changes, so it never carries anything.
 
 import * as session from "./session.js";
-import { createApi } from "./api.js";
+import { createApi, createAuth } from "./api.js";
+import { changeView, signInView, wordsFor } from "./signin.js";
 import { h, describeError, errorView, mount } from "./view.js";
 import * as fleet from "./pages/fleet.js";
 import * as host from "./pages/host.js";
@@ -16,6 +19,7 @@ import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
 import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
+import * as mdm from "./pages/mdm.js";
 
 const PAGES = [
   ["fleet", "Fleet", fleet],
@@ -26,22 +30,32 @@ const PAGES = [
   ["enrollment", "Enrollment", enrollment],
   ["inventory", "Inventory", inventory],
   ["audit", "Audit", audit],
+  ["mdm", "MDM setup", mdm],
 ];
 
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
-// yes-or-no question to the operator (the browser's confirm) and `now` the time in unix seconds,
+// yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds and
+// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`),
 // each injected so tests can fake them. Returns the frame's controls, which the browser does not
 // need.
-export function startApp({ doc, root, fetch, confirm, now }) {
-  // Why the coordinator last refused the token, shown on the sign-in form it returns to.
-  let refusal = null;
+export function startApp({ doc, root, fetch, confirm, now, download }) {
+  // Why the session last ended on the coordinator's word, shown on the sign-in form it returns to.
+  let notice = null;
+  // A sign-in or a change of password is on its way: a second submit waits for it.
+  let working = false;
+  const auth = createAuth({ fetch });
   const api = createApi({
     fetch,
-    getToken: session.getToken,
-    clearToken: (error, refused) => {
-      if (session.getToken() === refused) {
-        refusal = describeError(error);
-        session.forget(refused);
+    getCsrf: session.getCsrf,
+    refused: (error, sent) => {
+      if (session.getCsrf() !== sent) {
+        return;
+      }
+      if (error.passwordChangeRequired) {
+        session.requireChange();
+      } else {
+        notice = `Your session has ended (${describeError(error)}). Sign in again.`;
+        session.forget(sent);
       }
     },
   });
@@ -61,7 +75,8 @@ export function startApp({ doc, root, fetch, confirm, now }) {
             class: name === current.view ? "current" : "",
             on: { click: () => navigate(name, {}) },
           }, title)),
-          h("button", { type: "button", name: "sign-out", on: { click: () => session.signOut() } }, "Sign out"))),
+          h("span", { class: "note", name: "who" }, session.who()?.username ?? ""),
+          h("button", { type: "button", name: "sign-out", on: { click: () => signOutNow() } }, "Sign out"))),
       h("p", { class: "status", role: "status" }, status),
       h("main", {}, content));
   }
@@ -70,29 +85,113 @@ export function startApp({ doc, root, fetch, confirm, now }) {
     mount(doc, root, frame(shown === null ? h("p", {}, "Loading...") : shown));
   }
 
-  function signInView(message) {
-    const form = { token: "" };
-    return h("form", {
-      class: "sign-in",
-      on: {
-        submit: () => {
-          const pasted = form.token;
-          form.token = "";
-          if (!session.signIn(pasted)) {
-            mount(doc, root, signInView("Paste the operator token."));
-          }
-        },
-      },
-    },
-    h("h1", {}, "hostkeeper"),
-    h("p", {}, "Paste your operator token. It is kept in this tab's memory only and forgotten when the tab is reloaded or closed."),
-    h("label", {}, "Operator token",
-      h("input", {
-        type: "password", name: "token", autocomplete: "off", spellcheck: "false",
-        on: { input: (e) => { form.token = e.target.value; } },
-      })),
-    h("button", { type: "submit", name: "sign-in" }, "Sign in"),
-    message ? h("p", { class: "error", role: "alert" }, message) : null);
+  function showSignIn(message, username) {
+    mount(doc, root, signInView({ username, message, submit: signInWith }));
+  }
+
+  function showChange(message) {
+    const who = session.who();
+    if (who === null) {
+      return;
+    }
+    mount(doc, root, changeView({
+      username: who.username,
+      until: who.mustChangeUntil,
+      message,
+      submit: changeWith,
+      signOut: signOutNow,
+    }));
+  }
+
+  // `POST /v1/login`; the session it answers is kept, which draws what comes next.
+  async function signInWith(username, password) {
+    if (working) {
+      return;
+    }
+    working = true;
+    let view;
+    try {
+      view = await auth.login(username, password);
+    } catch (error) {
+      working = false;
+      showSignIn(wordsFor(error), username);
+      return;
+    }
+    working = false;
+    if (!session.signIn(view)) {
+      showSignIn("The coordinator's answer was not a session.", username);
+    }
+  }
+
+  // `POST /v1/password` from the form of the new password.
+  async function changeWith(current, next, again) {
+    if (working) {
+      return;
+    }
+    if (next !== again) {
+      showChange("The two new passwords are not the same.");
+      return;
+    }
+    const sent = session.getCsrf();
+    working = true;
+    let view;
+    try {
+      view = await auth.changePassword(sent, current, next);
+    } catch (error) {
+      working = false;
+      if (session.getCsrf() !== sent) {
+        return;
+      }
+      if (error.reason === "initial_password_expired") {
+        notice = wordsFor(error);
+        signOutNow();
+      } else if (error.reason === "sign_in_required" || error.reason === "csrf") {
+        notice = wordsFor(error);
+        session.forget(sent);
+      } else if (error.reason === "invalid_credentials") {
+        showChange("The current password is wrong.");
+      } else {
+        showChange(wordsFor(error));
+      }
+      return;
+    }
+    working = false;
+    if (session.getCsrf() === sent && !session.signIn(view)) {
+      showChange("The coordinator's answer was not a session.");
+    }
+  }
+
+  // Leaves at once, then tells the coordinator to end the session; if it cannot be told, the
+  // form says the session ends only when it has been idle long enough.
+  function signOutNow() {
+    const sent = session.getCsrf();
+    if (sent === null) {
+      return;
+    }
+    session.forget(sent);
+    auth.logout(sent).catch((error) => {
+      if (error.reason !== "sign_in_required" && !session.isSignedIn()) {
+        showSignIn("The coordinator did not confirm the sign-out: the session ends when it has been idle long enough.");
+      }
+    });
+  }
+
+  // Asks the coordinator for the session the browser already holds (after a reload).
+  async function restore() {
+    let view;
+    try {
+      view = await auth.session();
+    } catch (error) {
+      if (error.reason === "sign_in_required") {
+        showSignIn(null);
+      } else {
+        showSignIn(wordsFor(error));
+      }
+      return;
+    }
+    if (!session.signIn(view)) {
+      showSignIn("The coordinator's answer was not a session.");
+    }
   }
 
   // What a page may do. `refresh` and `report` act while the operator stays on the page the
@@ -106,6 +205,7 @@ export function startApp({ doc, root, fetch, confirm, now }) {
       params: at.params,
       confirm: (question) => confirm(question) === true,
       now: () => now(),
+      download: (file) => download(file),
       navigate,
       refresh: () => {
         if (here()) {
@@ -156,16 +256,20 @@ export function startApp({ doc, root, fetch, confirm, now }) {
     generation += 1;
     status = "";
     shown = null;
-    if (session.isSignedIn()) {
-      show();
+    const who = session.who();
+    if (who === null) {
+      const said = notice;
+      notice = null;
+      showSignIn(said);
+    } else if (who.mustChange) {
+      showChange(null);
     } else {
-      const said = refusal === null ? null : `The coordinator refused the token (${refusal}). Paste a valid operator token.`;
-      refusal = null;
-      mount(doc, root, signInView(said));
+      show();
     }
   }
 
   session.onChange(onSession);
-  onSession();
+  mount(doc, root, h("p", {}, "Loading..."));
+  restore();
   return { navigate };
 }

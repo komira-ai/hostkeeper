@@ -18,7 +18,7 @@ use super::support::{
     grpc_request, peer, served, served_built, served_unreachable, served_with_operator_token,
     updater,
 };
-use crate::grpc::{Admitted, PENDING, admit};
+use crate::grpc::{Admitted, PENDING, SESSION_ONLY, admit};
 use crate::http::Surface;
 use crate::operator::Caller;
 use crate::service::MAX_BEARER_BYTES;
@@ -32,7 +32,7 @@ const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]
 
 /// The path of each method of the operator API that has a handler: every one but those of
 /// [`PENDING`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
-fn operator_paths() -> Vec<&'static str> {
+pub(super) fn operator_paths() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .filter(|command| command.package == "hostkeeper.operator.v1")
@@ -299,9 +299,15 @@ async fn every_operator_method_admits_exactly_its_credential() {
         } else {
             refused(Code::PermissionDenied, "forbidden")
         };
+        // A session-only method admits no bearer at all: the operator's token is told so.
+        let with_operator = if SESSION_ONLY.contains(&path) {
+            refused(Code::PermissionDenied, "session_required")
+        } else {
+            Outcome::Admitted
+        };
         assert_eq!(
             outcome(&served, path, Some(OPERATOR)).await,
-            Outcome::Admitted,
+            with_operator,
             "{path} with the operator token"
         );
         assert_eq!(
@@ -477,10 +483,10 @@ async fn admitted_debug_never_prints_the_bearer() {
     let text = format!("{operator:?}");
     assert_eq!(
         text,
-        format!("Operator {{ caller: {:?}, .. }}", Caller::Operator(name))
+        format!("Operator {{ caller: {:?} }}", Caller::Operator(name))
     );
     assert!(!text.contains(OPERATOR), "{text}");
-    assert!(matches!(operator, Admitted::Operator { bearer, .. } if bearer == OPERATOR));
+    assert!(matches!(operator, Admitted::Operator { .. }));
 
     let certificate = updater("host-1", "storage");
     let der = certificate.as_deref().expect("a certificate");

@@ -37,8 +37,10 @@ ui_files![
     "calls.json",
     "api.js",
     "app.js",
+    "bytes.js",
     "main.js",
     "session.js",
+    "signin.js",
     "view.js",
     "gen/client.js",
     "gen/client.d.ts",
@@ -49,6 +51,7 @@ ui_files![
     "pages/hostgroups.js",
     "pages/host.js",
     "pages/inventory.js",
+    "pages/mdm.js",
     "pages/release.js",
     "pages/rollout.js",
 ];

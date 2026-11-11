@@ -7,29 +7,45 @@ import { createApi, createCall } from "../ui/api.js";
 import * as session from "../ui/session.js";
 import { mount } from "../ui/view.js";
 
-// What the data layer is given over the fake gateway, signed in with `token`, or signed out
-// when it is null.
-function gateway(token) {
+// What the data layer is given over the fake gateway, signed in as `operator` with `csrf` as the
+// session's CSRF token, or signed out when it is null.
+function gateway(csrf) {
   session.signOut();
-  if (token !== null) {
-    session.signIn(token);
+  if (csrf !== null) {
+    session.signIn({ username: "operator", csrf, must_change: false });
   }
   return {
     fetch: gatewayFetch,
-    getToken: session.getToken,
-    clearToken: (_, refused) => session.forget(refused),
+    getCsrf: session.getCsrf,
+    // What the app does with a refusal that ends the session, or that owes a new password.
+    refused: (error, sent) => {
+      if (error.passwordChangeRequired) {
+        session.requireChange();
+      } else {
+        session.forget(sent);
+      }
+    },
   };
 }
 
-// The generated client over the data layer and the fake gateway, signed in with `token`.
-export function api(token) {
-  return createApi(gateway(token));
+// The generated client over the data layer and the fake gateway, signed in with `csrf`.
+export function api(csrf) {
+  return createApi(gateway(csrf));
 }
 
-// The data layer's own `call(method, body)` alone, signed in with `token`: how a test sends a
+// The data layer's own `call(method, body)` alone, signed in with `csrf`: how a test sends a
 // method name that no function of the client would.
-export function transport(token) {
-  return createCall(gateway(token));
+export function transport(csrf) {
+  return createCall(gateway(csrf));
+}
+
+// Lets every job an event started run: a request and its reply cross a few promises, and this
+// yields to more of them than the longest chain the app makes. It counts turns of the job queue,
+// not time.
+export async function settle() {
+  for (let turn = 0; turn < 60; turn++) {
+    await null;
+  }
 }
 
 // The time a page context reads, in unix seconds, unless a test gives another.
@@ -39,7 +55,7 @@ export const NOW = 1800000000;
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
 // reads `now` (NOW when absent).
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [] };
+  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], downloads: [] };
   const left = (answers || []).slice();
   const ctx = {
     api: client,
@@ -62,6 +78,9 @@ export function recorder(client, params, answers, now) {
     },
     show(tree) {
       seen.shown.push(tree);
+    },
+    download(file) {
+      seen.downloads.push(file);
     },
   };
   return { ctx, seen };

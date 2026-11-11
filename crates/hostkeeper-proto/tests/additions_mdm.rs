@@ -21,6 +21,18 @@ fn round_trip<M: prost::Message + Default + PartialEq + std::fmt::Debug>(message
     bytes
 }
 
+/// What `ListSecrets` shows of a secret, every field set.
+fn secret_info() -> op::SecretInfo {
+    op::SecretInfo {
+        kind: "push_key".to_owned(),
+        version: 2,
+        fingerprint_sha256: "ab".repeat(32),
+        not_after_unix: Some(1_900_000_000),
+        created_unix: 1_800_000_000,
+        superseded_unix: Some(1_800_000_500),
+    }
+}
+
 /// A device with every field set.
 fn device() -> op::MdmDevice {
     op::MdmDevice {
@@ -47,6 +59,9 @@ fn device() -> op::MdmDevice {
         install_sends: 2,
         install_last_sent_unix: Some(1_800_000_040),
         install_sha256: "ab".repeat(32),
+        host_id: "lab-mac-1".to_owned(),
+        group: "mac-builders".to_owned(),
+        baseline: op::MdmBaseline::Applied.into(),
     }
 }
 
@@ -66,6 +81,8 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 devices: vec![device()],
                 next_page_token: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
                 gate: true,
+                configured: true,
+                missing: vec![op::MdmCondition::NameMissing.into()],
             }),
         ),
         (
@@ -73,6 +90,141 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
             round_trip(&device().unanswered[0]),
         ),
         ("hostkeeper.operator.v1.MdmDevice", round_trip(&device())),
+        (
+            "hostkeeper.operator.v1.PutSecretRequest",
+            round_trip(&op::PutSecretRequest {
+                kind: "abm_token".to_owned(),
+                material: vec![0, 1, 2, 255],
+                not_after_unix: Some(1_900_000_000),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.SecretInfo",
+            round_trip(&secret_info()),
+        ),
+        (
+            "hostkeeper.operator.v1.PutSecretResponse",
+            round_trip(&op::PutSecretResponse {
+                secret: Some(secret_info()),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutSettingRequest",
+            round_trip(&op::PutSettingRequest {
+                name: "push_alert_days".to_owned(),
+                value: "60,14".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutSettingResponse",
+            round_trip(&op::PutSettingResponse {
+                name: "push_alert_days".to_owned(),
+                value: "60,14".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListSecretsResponse",
+            round_trip(&op::ListSecretsResponse {
+                secrets: vec![secret_info()],
+                sealing: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmSetting",
+            round_trip(&op::MdmSetting {
+                name: "tls_renew_days".to_owned(),
+                value: "30".to_owned(),
+                is_default: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListSettingsResponse",
+            round_trip(&op::ListSettingsResponse {
+                settings: vec![op::MdmSetting {
+                    name: "tls_renew_days".to_owned(),
+                    value: "30".to_owned(),
+                    is_default: false,
+                }],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestRequest",
+            round_trip(&op::CreatePushRequestRequest {
+                email: "ops@example.org".to_owned(),
+                submit: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestResponse",
+            round_trip(&op::CreatePushRequestResponse {
+                csr_pem: "-----BEGIN CERTIFICATE REQUEST-----".to_owned(),
+                encryption_certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                submitted: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyRequest",
+            round_trip(&op::PutPushReplyRequest {
+                reply: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyResponse",
+            round_trip(&op::PutPushReplyResponse {
+                signed_request: b"<plist/>".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateRequest",
+            round_trip(&op::PutPushCertificateRequest {
+                certificate_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                key_pem: b"-----BEGIN RSA PRIVATE KEY-----".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateResponse",
+            round_trip(&op::PutPushCertificateResponse {
+                topic: "com.apple.mgmt.External.d1801ae1".to_owned(),
+                not_before_unix: 1_800_000_000,
+                not_after_unix: 1_900_000_000,
+                secret: Some(secret_info()),
+                renewal: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmStatusResponse",
+            round_trip(&op::MdmStatusResponse {
+                configured: true,
+                missing: vec![op::MdmCondition::TlsNameMismatch.into()],
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+                name_locked: true,
+                sealing: true,
+                push_cert: Some(secret_info()),
+                push_key: Some(secret_info()),
+                abm_token: Some(secret_info()),
+                tls_cert: Some(secret_info()),
+                tls_key: Some(secret_info()),
+                push_topic: "com.apple.mgmt.External.0a1b2c3d".to_owned(),
+                push_not_after_unix: Some(1_900_000_000),
+                abm_not_after_unix: Some(1_825_020_096),
+                tls_not_after_unix: Some(1_850_000_000),
+                tls_names: vec!["mdm.example.com".to_owned()],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameRequest",
+            round_trip(&op::PutNameRequest {
+                name: "mdm.example.com".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameResponse",
+            round_trip(&op::PutNameResponse {
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+            }),
+        ),
     ]
 }
 
@@ -87,7 +239,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 4);
+    assert_eq!(messages.len(), 21);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
@@ -97,6 +249,8 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     for name in [
         "hostkeeper.operator.v1.MdmRefusal",
         "hostkeeper.operator.v1.MdmPhase",
+        "hostkeeper.operator.v1.MdmCondition",
+        "hostkeeper.operator.v1.MdmBaseline",
     ] {
         assert!(older.get_enum_by_name(name).is_none(), "{name} is new");
     }
@@ -147,4 +301,40 @@ fn an_absent_optional_of_a_device_stays_absent_and_a_zero_is_written() {
     assert_eq!(read, zero);
     assert_eq!(read.supervised, Some(false));
     assert_eq!(read.checked_out_unix, Some(0));
+}
+
+/// Catches: a secret's `not_after_unix` or `superseded_unix` that reads as 0 when absent, which a
+/// status would show as expired in 1970 or replaced at once: a version in use writes neither and
+/// reads both absent, and a zero is written and read back as set.
+#[test]
+fn an_absent_time_of_a_secret_stays_absent_and_a_zero_is_written() {
+    let bare = op::SecretInfo {
+        kind: "tls_key".to_owned(),
+        version: 1,
+        ..op::SecretInfo::default()
+    };
+    let read = op::SecretInfo::decode(round_trip(&bare).as_slice()).expect("decodes");
+    assert_eq!((read.not_after_unix, read.superseded_unix), (None, None));
+    let zero = op::SecretInfo {
+        not_after_unix: Some(0),
+        superseded_unix: Some(0),
+        ..bare.clone()
+    };
+    let bytes = round_trip(&zero);
+    assert!(bytes.len() > round_trip(&bare).len());
+    let read = op::SecretInfo::decode(bytes.as_slice()).expect("decodes");
+    assert_eq!(
+        (read.not_after_unix, read.superseded_unix),
+        (Some(0), Some(0))
+    );
+    let request = op::PutSecretRequest::decode(
+        round_trip(&op::PutSecretRequest {
+            kind: "tls_key".to_owned(),
+            material: vec![1],
+            not_after_unix: None,
+        })
+        .as_slice(),
+    )
+    .expect("decodes");
+    assert_eq!(request.not_after_unix, None);
 }

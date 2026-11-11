@@ -176,6 +176,19 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::Unauthorized => Code::Unauthenticated,
         MdmRefusal::Forbidden => Code::PermissionDenied,
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
+        MdmRefusal::StoreFailed => Code::Internal,
+        MdmRefusal::AuditUnavailable => Code::Unavailable,
+        MdmRefusal::SecretsUnavailable | MdmRefusal::NoPendingRequest | MdmRefusal::NameLocked => {
+            Code::FailedPrecondition
+        }
+        MdmRefusal::MdmcertUnavailable => Code::Unavailable,
+        MdmRefusal::ReplyUndecryptable
+        | MdmRefusal::ReplyNotForRequest
+        | MdmRefusal::CertificateInvalid
+        | MdmRefusal::KeyInvalid
+        | MdmRefusal::KeyMismatch
+        | MdmRefusal::CertificateExpired
+        | MdmRefusal::TopicChanged => Code::InvalidArgument,
     };
     refused(code, refusal.as_str_name(), "MDM_REFUSAL_")
 }
