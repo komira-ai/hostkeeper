@@ -34,6 +34,7 @@ use tonic::{Code, Status};
 
 use super::{CLIENT_PATIENCE, Remote, WriteDeadline, carry, connection, reload_all};
 use crate::http::{PeerAddr, STATUS_PATH, Surface};
+use crate::mdm_server::ConnectionTried;
 use crate::service::Coordinator;
 use crate::testutil::{OPERATOR, Rig, ci_token, scratch};
 use crate::tokens::OperatorTokens;
@@ -570,11 +571,11 @@ fn a_request_carries_the_address_of_its_connection_when_it_has_one() {
     let from: std::net::SocketAddr = "192.0.2.7:4433".parse().expect("an address");
     let waits = ConnectionWaits::default();
     let mut named = Request::new(());
-    carry(&mut named, &waits, Some(from));
+    carry(&mut named, &waits, &ConnectionTried::default(), Some(from));
     assert_eq!(named.extensions().get::<PeerAddr>(), Some(&PeerAddr(from)));
     assert!(named.extensions().get::<ConnectionWaits>().is_some());
     let mut nameless = Request::new(());
-    carry(&mut nameless, &waits, None);
+    carry(&mut nameless, &waits, &ConnectionTried::default(), None);
     assert_eq!(nameless.extensions().get::<PeerAddr>(), None);
     assert!(nameless.extensions().get::<ConnectionWaits>().is_some());
 }

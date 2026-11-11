@@ -539,6 +539,13 @@ pub(crate) trait MdmStore: Send + Sync {
     /// [`MdmError::Store`].
     fn commands(&self, enrollment_id: &str) -> Result<Vec<Command>, MdmError>;
 
+    /// The ids of the live enrollments that hold a queued command, in id order: what a restarted
+    /// coordinator pushes for, since the Mac does not call until it is pushed.
+    ///
+    /// # Errors
+    /// [`MdmError::Store`].
+    fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError>;
+
     /// Applies one page of the ABM sync in one change.
     ///
     /// # Errors

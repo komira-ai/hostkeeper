@@ -32,6 +32,8 @@ hostkeeper-package = { path = "../hostkeeper-package" }
 # The file rule of the API key file (`--mdm-api-key-file`), and the version of a pkg on the
 # allowlist (`--mdm-pkg-allowlist`).
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The boxed future of the command queue's port (`CommandQueue`).
+futures.workspace = true
 http-body-util.workspace = true
 # The client of NanoHUB's API and the server of the webhook, both HTTP/1.1 on loopback.
 hyper = { workspace = true, features = ["client", "http1", "server"] }

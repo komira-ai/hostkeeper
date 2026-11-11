@@ -522,6 +522,20 @@ impl MdmStore for PgMdm {
         self.select(sql, enrollment_id, command_of)
     }
 
+    fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError> {
+        let rows = self.read(|s| {
+            s.query(
+                "SELECT DISTINCT c.enrollment_id FROM mdm_commands c \
+                 JOIN mdm_enrollments e ON e.enrollment_id = c.enrollment_id \
+                 WHERE c.state = 'queued' AND e.state = 'live'",
+                &[],
+            )
+        })?;
+        let mut ids: Vec<String> = rows.iter().map(|row| row.get(0)).collect();
+        ids.sort();
+        Ok(ids)
+    }
+
     fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError> {
         let batch = batch.clone();
         self.write(move |tx| {
