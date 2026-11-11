@@ -17,6 +17,10 @@
 //! coordinator on a store (the state lock refuses a second), so a lock in the process is the
 //! lease.
 //!
+//! **A pair that does not match** is due: the key is stored before the chain, and a renewal that
+//! stops between the two (a store error, an exit) leaves a new key with the old chain, which the
+//! listener cannot serve. The next tick finds the key is not the leaf's and orders again.
+//!
 //! **A new certificate** is stored as the next version of `tls_key` and then `tls_cert`; the
 //! listener's resolver ([`crate::mdm_server::tls::MdmTls`]) reads the newest versions of both for
 //! the next handshake, and a connection already open keeps what it was accepted under.
@@ -25,8 +29,8 @@ use std::convert::Infallible;
 use std::sync::Arc;
 use std::time::Duration;
 
-use rustls::pki_types::CertificateDer;
 use rustls::pki_types::pem::PemObject;
+use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 
 use super::Clock;
 use super::dns::{CredentialError, DnsCredential, DnsProviders};
@@ -153,7 +157,13 @@ impl TlsRenewer {
             return Tick::NotConfigured;
         };
         let now = self.parts.clock.now_unix();
+        // A failure is cleared when the certificate in use is good again, whatever made it so
+        // (an upload of 4.9 included), and a new DNS credential ends the wait the old one earned.
+        self.parts
+            .status
+            .credential_is(self.version_of(SecretKind::DnsCredential));
         if !self.due(&config, now) {
+            self.parts.status.succeeded();
             return Tick::NotDue;
         }
         if now < self.parts.status.retry_at_unix() {
@@ -181,16 +191,40 @@ impl TlsRenewer {
             now.saturating_add(u64::from(config.retry_s)),
             &why.to_string(),
             rejected,
+            self.version_of(SecretKind::DnsCredential),
         );
         Tick::Failed
     }
 
-    /// Whether no certificate is held, or the one in use expires within the renew window.
+    /// The newest version of `kind` held, 0 when none or the list cannot be read.
+    fn version_of(&self, kind: SecretKind) -> u32 {
+        self.parts
+            .setup
+            .list_secrets()
+            .unwrap_or_default()
+            .iter()
+            .filter(|info| info.kind == kind)
+            .map(|info| info.version)
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// Whether no usable certificate is held: none, the one in use expires within the renew
+    /// window, or the key in use is not the key of its leaf (a renewal that stopped between its
+    /// two writes leaves that, and the listener serves nothing until it is repaired).
     fn due(&self, config: &Config, now: u64) -> bool {
         let window = u64::from(config.renew_days).saturating_mul(86_400);
         match self.parts.setup.open(SecretKind::TlsCert) {
-            Ok(Some(cert)) => leaf_not_after(cert.expose())
-                .is_none_or(|not_after| not_after < now.saturating_add(window)),
+            Ok(Some(cert)) => {
+                let key = match self.parts.setup.open(SecretKind::TlsKey) {
+                    Ok(key) => key,
+                    // A record that does not open is not replaced: an operator looks at it.
+                    Err(_) => return false,
+                };
+                key.is_none_or(|key| !key_matches(key.expose(), cert.expose()))
+                    || leaf_not_after(cert.expose())
+                        .is_none_or(|not_after| not_after < now.saturating_add(window))
+            }
             Ok(None) => true,
             // A record that does not open is not replaced: an operator looks at it.
             Err(_) => false,
@@ -244,6 +278,24 @@ impl TlsRenewer {
     fn now_i64(&self) -> i64 {
         i64::try_from(self.parts.clock.now_unix()).unwrap_or(i64::MAX)
     }
+}
+
+/// Whether the private key PEM `key` is the key of the first certificate of the PEM `chain`.
+fn key_matches(key: &[u8], chain: &[u8]) -> bool {
+    let Ok(key) = PrivateKeyDer::from_pem_slice(key) else {
+        return false;
+    };
+    let Ok(key) = rustls::crypto::ring::sign::any_supported_type(&key) else {
+        return false;
+    };
+    let Some(public) = key.public_key() else {
+        return false;
+    };
+    let Some(Ok(leaf)) = CertificateDer::pem_slice_iter(chain).next() else {
+        return false;
+    };
+    x509_parser::parse_x509_certificate(&leaf)
+        .is_ok_and(|(_, parsed)| parsed.public_key().raw == public.as_ref())
 }
 
 /// When the first certificate of the PEM `chain` expires, unix seconds.

@@ -64,7 +64,7 @@ fn a_coordinator_lists_the_alerts_of_the_renewal_it_runs() {
             .collect::<Vec<_>>()
     };
     assert!(listed().is_empty());
-    status.failed(10, 3_610, "the provider refused", true);
+    status.failed(10, 3_610, "the provider refused", true, 1);
     assert_eq!(
         listed(),
         [

@@ -105,6 +105,11 @@ impl FakeDns {
         self.lock().reject = Some(status);
     }
 
+    /// Calls are accepted again.
+    pub(crate) fn accept(&self) {
+        self.lock().reject = None;
+    }
+
     pub(crate) fn fail_publish(&self) {
         self.lock().fail_publish = true;
     }

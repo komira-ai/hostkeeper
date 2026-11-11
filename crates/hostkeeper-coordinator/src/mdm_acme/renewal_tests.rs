@@ -419,6 +419,150 @@ async fn a_store_or_a_chain_that_fails_fails_the_attempt() {
     assert_eq!(rig.version(SecretKind::TlsCert), 0);
 }
 
+/// Proves: a renewal that stops between its two writes (the key stored, the chain not) leaves a
+/// pair the listener cannot serve, and the next tick repairs it by ordering again even when the
+/// old chain is outside the renew window; the repaired pair makes a TLS configuration.
+///
+/// Catches: a listener left with no TLS configuration for as long as the old chain stays valid.
+#[tokio::test]
+async fn a_key_that_is_not_the_chains_is_repaired_by_the_next_tick() {
+    let rig = configured();
+    let tls = MdmTls::new(Arc::clone(&rig.setup), Arc::new(Vec::new));
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert!(tls.config().is_some());
+    rig.days_later(61);
+    // The account is held: the next puts are the key, then the chain, which fails.
+    rig.store.puts_left.store(1, Ordering::SeqCst);
+    assert_eq!(rig.renewer.tick().await, Tick::Failed);
+    assert_eq!(
+        (
+            rig.version(SecretKind::TlsKey),
+            rig.version(SecretKind::TlsCert)
+        ),
+        (2, 1)
+    );
+    assert!(tls.config().is_none(), "a new key with the old chain");
+    // The operator narrows the window, so the old chain alone would not be due.
+    rig.setup.set_setting("tls_renew_days", "1").expect("set");
+    rig.store.puts_left.store(i64::MAX, Ordering::SeqCst);
+    rig.clock.advance(3_600);
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert_eq!(
+        (
+            rig.version(SecretKind::TlsKey),
+            rig.version(SecretKind::TlsCert)
+        ),
+        (3, 2)
+    );
+    assert!(tls.config().is_some());
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+}
+
+/// Proves: a pair that matches is left alone, a key that is absent or is not a key makes the
+/// certificate due, and a key record that does not open is not replaced.
+#[tokio::test]
+async fn the_key_is_checked_against_the_leaf_before_a_certificate_is_left_alone() {
+    let rig = configured();
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+    rig.put(SecretKind::TlsKey, b"not a key");
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+    let other = configured();
+    assert_eq!(other.renewer.tick().await, Tick::Renewed);
+    let key = other
+        .setup
+        .open(SecretKind::TlsKey)
+        .expect("open")
+        .expect("held");
+    rig.put(SecretKind::TlsKey, key.expose());
+    assert_eq!(
+        rig.renewer.tick().await,
+        Tick::Renewed,
+        "another key of the same kind"
+    );
+    let keyless = bare();
+    keyless.setup.set_setting("mdm_name", NAME).expect("set");
+    keyless
+        .setup
+        .set_setting("dns_zone", "example.net")
+        .expect("set");
+    keyless.credential(CREDENTIAL);
+    let cert = other
+        .setup
+        .open(SecretKind::TlsCert)
+        .expect("open")
+        .expect("held");
+    keyless.put(SecretKind::TlsCert, cert.expose());
+    assert_eq!(
+        keyless.renewer.tick().await,
+        Tick::Failed,
+        "a chain with no key is due"
+    );
+    // A key sealed under another master key does not open here, and is not replaced.
+    let strange = MdmSetup::new(
+        Arc::clone(&rig.store) as Arc<dyn SetupStore>,
+        Some(MasterKey::from_bytes(&[0x44; 32]).expect("a key")),
+        crate::enrollment::os_random(),
+    );
+    strange
+        .put_secret(SecretKind::TlsKey, &Secret::new(b"x".to_vec()), None, 2)
+        .expect("stored");
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+}
+
+/// Proves: a failure and its alerts are cleared when the certificate in use is good again by a
+/// way other than an attempt of the renewer (an uploaded pair), without waiting out the retry.
+///
+/// Catches: an alert that stands after the operator has fixed the cause.
+#[tokio::test]
+async fn an_uploaded_certificate_clears_the_failure() {
+    let rig = configured();
+    rig.ca.be(Mood::OrderInvalid);
+    assert_eq!(rig.renewer.tick().await, Tick::Failed);
+    assert!(rig.status.snapshot().failing.is_some());
+    let other = configured();
+    assert_eq!(other.renewer.tick().await, Tick::Renewed);
+    for kind in [SecretKind::TlsKey, SecretKind::TlsCert] {
+        let held = other.setup.open(kind).expect("open").expect("held");
+        rig.put(kind, held.expose());
+    }
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+    assert_eq!(rig.status.snapshot(), Default::default());
+    assert_eq!(rig.status.retry_at_unix(), 0);
+}
+
+/// Proves: a new DNS credential ends the wait after a failure and the refusal alert, and the
+/// next tick attempts at once; the failure alert stands until that attempt ends in a certificate.
+/// A credential that is unchanged keeps the wait.
+///
+/// Catches: a corrected credential waiting out the retry interval under a stale alert.
+#[tokio::test]
+async fn a_new_dns_credential_ends_the_wait_and_the_refusal() {
+    let rig = configured();
+    rig.dns.reject_with(401);
+    assert_eq!(rig.renewer.tick().await, Tick::Failed);
+    assert_eq!(rig.renewer.tick().await, Tick::Waiting);
+    assert!(rig.status.snapshot().dns_rejected.is_some());
+    rig.dns.accept();
+    rig.credential(CREDENTIAL);
+    rig.dns.reject_with(403);
+    assert_eq!(
+        rig.renewer.tick().await,
+        Tick::Failed,
+        "no wait after a new credential"
+    );
+    assert_eq!(
+        rig.status.snapshot().dns_rejected.as_deref(),
+        Some("the DNS provider refused the credential (status 403)")
+    );
+    rig.dns.accept();
+    rig.credential(CREDENTIAL);
+    assert_eq!(rig.status.snapshot().failing.map(|f| f.attempts), Some(2));
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert_eq!(rig.status.snapshot(), Default::default());
+}
+
 /// Proves: an attempt in progress makes a tick that finds it do nothing.
 ///
 /// Catches: two orders for one name at once, which the CA's duplicate-certificate limit counts.
