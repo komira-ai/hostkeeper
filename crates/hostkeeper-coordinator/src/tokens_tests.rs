@@ -461,3 +461,62 @@ fn a_near_miss_of_a_token_is_not_a_token() {
         assert_eq!(c.operator(miss), Err(Unauthorized));
     }
 }
+
+/// Proves: a bearer is resolved over the tokens file's tokens and the store's in one pass: a
+/// stored token answers its name, a digest both hold answers the file's name whatever order the
+/// store lists in, a token neither holds answers none, and a stored name that is not a name
+/// answers none.
+#[test]
+fn a_bearer_is_resolved_over_the_tokens_file_and_the_store() {
+    let tokens = OperatorTokens::single(ALICE);
+    let (bob, alice) = (digest(BOB.as_bytes()), digest(ALICE.as_bytes()));
+    let among = |presented: &str, list: &[(&str, String)]| {
+        tokens
+            .name_of_among(
+                presented,
+                list.iter().map(|(name, sha256)| (*name, sha256.as_str())),
+            )
+            .map(|name| name.as_str().to_owned())
+    };
+    assert_eq!(
+        among(BOB, &[("bob-bot", bob.clone())]).as_deref(),
+        Some("bob-bot")
+    );
+    assert_eq!(
+        among(ALICE, &[("bob-bot", bob.clone())]).as_deref(),
+        Some("operator")
+    );
+    assert_eq!(
+        among(ALICE, &[("zed", alice.clone()), ("abe", alice.clone())]).as_deref(),
+        Some("operator"),
+        "the file's token wins, whatever the store's order"
+    );
+    assert_eq!(
+        among(BOB, &[("zed", bob.clone()), ("abe", bob.clone())]).as_deref(),
+        Some("zed"),
+        "of two stored tokens, the first listed"
+    );
+    assert_eq!(among("neither", &[("bob-bot", bob.clone())]), None);
+    assert_eq!(among("", &[]), None);
+    assert_eq!(among(BOB, &[("Bad Name", bob)]), None);
+    assert_eq!(tokens.name_of(ALICE).expect("a name").as_str(), "operator");
+    assert_eq!(tokens.name_of(BOB), None);
+}
+
+/// Proves: the tokens file's names are told in the file's order, and a name or a digest is held
+/// only when the file in use names it; a coordinator with no tokens holds none.
+#[test]
+fn the_tokens_file_says_which_names_and_digests_it_holds() {
+    let dir = scratch("tokens-holds");
+    let path = write(&dir, &[("bob", BOB), ("alice", ALICE)]);
+    let tokens = OperatorTokens::from_file(&path).expect("tokens");
+    assert_eq!(tokens.names(), ["bob", "alice"]);
+    assert!(tokens.has_name("alice"));
+    assert!(!tokens.has_name("carol"));
+    assert!(tokens.has_digest(&digest(BOB.as_bytes())));
+    assert!(!tokens.has_digest(&digest(b"carol")));
+    let none = OperatorTokens::none();
+    assert!(none.names().is_empty());
+    assert!(!none.has_name("alice"));
+    assert!(!none.has_digest(&digest(ALICE.as_bytes())));
+}
