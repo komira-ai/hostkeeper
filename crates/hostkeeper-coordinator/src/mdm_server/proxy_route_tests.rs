@@ -70,6 +70,7 @@ fn site(version: Arc<AtomicU64>) -> impl Fn(&str) -> Then + Send + Sync + 'stati
                 )
             }
             "/apt/pool/main/a.deb" | "/cdn/a.deb" => pool(head, method),
+            "/apt/pool/main/c++~1.deb" => pool(head, method),
             "/apt/pool/main/moved.deb" => bare(
                 &[
                     "HTTP/1.1 302 Found",
@@ -317,6 +318,44 @@ async fn a_request_outside_the_route_shape_is_refused_before_any_origin_is_read(
         );
     }
     assert_eq!(world.heard(), Vec::<String>::new());
+}
+
+/// Proves: apt's escapes of `+` and `~` (`%2b`, `%2B`, `%7e`) name the same file as the
+/// characters, share one cache entry and one origin read, and are asked of the origin unescaped;
+/// the escapes of `/`, `.` and `%` stay refused.
+///
+/// Catches: every package whose name has a `+` (`libstdc++6`, `1.0+git1`) being unreachable.
+#[tokio::test]
+async fn the_escapes_apt_writes_for_plus_and_tilde_are_the_same_file() {
+    let world = World::new("pp2-escapes");
+    let log = Log::default();
+    let _guard = log.install();
+    for path in [
+        "/apt/pub/pool/main/c%2b%2b%7e1.deb",
+        "/apt/pub/pool/main/c%2B%2B%7E1.deb",
+        "/apt/pub/pool/main/c++~1.deb",
+    ] {
+        let (status, _, body) = world.get(path).await;
+        assert_eq!(
+            (status, body.as_ref()),
+            (StatusCode::OK, package().as_slice()),
+            "{path}"
+        );
+    }
+    assert_eq!(world.heard(), ["GET /apt/pool/main/c++~1.deb"]);
+    for path in [
+        "/apt/pub/pool/main/a%2fb.deb",
+        "/apt/pub/pool/main/%2e%2e/a.deb",
+        "/apt/pub/pool/main/a%252b.deb",
+        "/apt/pub/pool/main/a%00.deb",
+        "/apt/pub/pool/main/a%2",
+        "/apt/pub/pool/main/a%",
+        "/apt/pub/pool/main/%2b%2f.deb",
+    ] {
+        let (status, _, _) = world.get(path).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}");
+    }
+    assert_eq!(world.heard().len(), 1);
 }
 
 /// Proves: with no cache directory every route is 404, with no origin client a read is 502, and

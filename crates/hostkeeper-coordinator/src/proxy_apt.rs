@@ -13,7 +13,8 @@
 //!   ([`crate::repositories`]) whose `access` is public, is 404, and so is every route when the
 //!   coordinator has no cache directory (`--proxy-cache-dir`);
 //! - a `<path>` that is not 1 to 1024 bytes of segments with no empty, `.` or `..` segment and no
-//!   `%` (the locator grammar of [`hostkeeper_release::grammar::check_locator`]) is 400.
+//!   `%` other than the escapes of `+` and `~`, which are read as those characters (apt writes a
+//!   `+` as `%2b`) (the locator grammar of [`hostkeeper_release::grammar::check_locator`]) is 400.
 //!
 //! The origin is the entry's `uri` (its base URL, so no setting of origins is needed), and the
 //! path under it is the request's own, so a request cannot name another host. The route family is
@@ -109,6 +110,31 @@ fn limits_of(coordinator: &Coordinator) -> Limits {
     }
 }
 
+/// `path` with the escapes of `+` (`%2b`) and `~` (`%7e`), either case, written as the characters.
+/// apt writes a `+` of a file name as `%2b`; both are characters the locator grammar allows, so
+/// they decode to one name, one cache entry and one origin path. Every other escape stays as it
+/// is and is refused by the grammar's `%`, so `%2f`, `%2e` and `%25` cannot reach a path.
+fn decode_plain_escapes(path: &str) -> String {
+    let mut out = String::with_capacity(path.len());
+    let mut rest = path;
+    while let Some(at) = rest.find('%') {
+        out.push_str(&rest[..at]);
+        let plain = match rest
+            .get(at + 1..at + 3)
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("2b") => Some('+'),
+            Some("7e") => Some('~'),
+            _ => None,
+        };
+        out.push(plain.unwrap_or('%'));
+        rest = &rest[at + if plain.is_some() { 3 } else { 1 }..];
+    }
+    out.push_str(rest);
+    out
+}
+
 /// What a request asks for, once it has passed the route's shape.
 struct Wanted<'a> {
     name: &'a str,
@@ -134,6 +160,8 @@ async fn serve(
     if !is_repository_name(name) {
         return not_found();
     }
+    let decoded = decode_plain_escapes(under);
+    let under = decoded.as_str();
     if check_locator(under).is_err() {
         return plain(error(StatusCode::BAD_REQUEST, "bad_request"));
     }

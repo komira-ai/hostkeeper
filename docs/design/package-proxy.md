@@ -89,7 +89,7 @@ never committed), after which a full request fills the cache.
 `<repo>` must be a name in the registry of repositories (**Built**; `hostkeeper-release/src/registry.rs` says what an entry is) whose
 `access` is public. Its `uri` is the base URL of the origin, so the proxy has no setting of origins (answered in section 11 item 1; PP2).
 The path passes the locator grammar `repository_serve.rs` already uses
-(`hostkeeper_release::grammar::check_locator`: no empty, `.` or `..` segment, no `%`).
+(`hostkeeper_release::grammar::check_locator`: no empty, `.` or `..` segment, no `%`), after the escapes of `+` (`%2b`) and `~` (`%7e`), which apt writes, are read as those characters: `+` and `%2b` are one file, one cache entry and one origin path. Every other escape, `%2f`, `%2e` and `%25` among them, is still refused.
 
 ## 4. Decisions
 
