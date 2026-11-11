@@ -404,7 +404,7 @@ test-only, and tests that it reads both binary and XML plists
 
 **Enrolled.** NanoHUB sends the gate a webhook event (to a loopback listener of the coordinator)
 for each check-in: `Authenticate`, `TokenUpdate`, `CheckOut`. A device is enrolled from its first
-`TokenUpdate` until a `CheckOut`. The serial comes from `Authenticate` when it carries one: the
+`TokenUpdate` until a `CheckOut`. The listener only reads NanoHUB's body into an event and hands it to `Gate::handle`, the one entry point for events; the gate's logic does not see HTTP or the body's JSON. The serial comes from `Authenticate` when it carries one: the
 key is optional in Apple's schema, and needs the `AllowQueryDeviceInformation` access right,
 which the kit's enrollment profile grants. Either way the gate asks `DeviceInformation` for
 `SerialNumber`, `UDID` and `IsSupervised`, and the answer decides. A device whose answer has no
