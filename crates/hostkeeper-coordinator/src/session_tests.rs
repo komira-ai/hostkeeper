@@ -61,7 +61,8 @@ fn the_defaults_are_the_numbers_of_the_design() {
     assert_eq!(
         LimiterSettings {
             max_failures: 5,
-            lockout_secs: 900
+            lockout_secs: 900,
+            max_tracked: 4096
         },
         LimiterSettings::default()
     );
@@ -347,6 +348,7 @@ fn limiter(
         LimiterSettings {
             max_failures,
             lockout_secs,
+            max_tracked: 4096,
         },
         clock.clone(),
         HashSlots::new(NonZeroUsize::new(hashes).unwrap()),
@@ -545,6 +547,71 @@ fn the_refusals_and_the_limiter_say_no_name_and_no_count() {
     let _ = limiter.failed("ann");
     assert_eq!(
         format!("{limiter:?}"),
-        "LoginLimiter { settings: LimiterSettings { max_failures: 5, lockout_secs: 900 }, .. }"
+        "LoginLimiter { settings: LimiterSettings { max_failures: 5, lockout_secs: 900, max_tracked: 4096 }, .. }"
     );
+}
+
+fn tracking(max_tracked: usize, clock: &Arc<Clock>) -> LoginLimiter {
+    LoginLimiter::new(
+        LimiterSettings {
+            max_failures: 2,
+            lockout_secs: 900,
+            max_tracked,
+        },
+        clock.clone(),
+        HashSlots::new(NonZeroUsize::new(1).unwrap()),
+    )
+}
+
+#[test]
+fn past_the_tracking_cap_the_oldest_unlocked_name_is_dropped() {
+    let clock = clock();
+    let limiter = tracking(2, &clock);
+    let _ = limiter.failed("a");
+    set(&clock, START + 1);
+    let _ = limiter.failed("b");
+    set(&clock, START + 2);
+    let _ = limiter.failed("c");
+    assert_eq!(limiter.tracked(), 2);
+    assert_eq!(limiter.failed("a"), Failure::First, "a was dropped");
+    assert_eq!(limiter.tracked(), 2);
+}
+
+#[test]
+fn a_locked_name_outlasts_a_flood_of_unlocked_ones() {
+    let clock = clock();
+    let limiter = tracking(2, &clock);
+    let _ = limiter.failed("a");
+    assert_eq!(limiter.failed("a"), Failure::Locked);
+    for (i, name) in ["b", "c", "d", "e"].into_iter().enumerate() {
+        set(&clock, START + 1 + u64::try_from(i).unwrap());
+        let _ = limiter.failed(name);
+    }
+    assert_eq!(limiter.tracked(), 2);
+    assert!(limiter.is_locked("a"));
+}
+
+#[test]
+fn when_every_tracked_name_is_locked_the_oldest_is_dropped_for_a_new_one() {
+    let clock = clock();
+    let limiter = tracking(2, &clock);
+    for (i, name) in ["a", "b"].into_iter().enumerate() {
+        set(&clock, START + u64::try_from(i).unwrap());
+        let _ = limiter.failed(name);
+        assert_eq!(limiter.failed(name), Failure::Locked);
+    }
+    set(&clock, START + 5);
+    let _ = limiter.failed("c");
+    assert_eq!(limiter.tracked(), 2);
+    assert!(!limiter.is_locked("a"));
+    assert!(limiter.is_locked("b"));
+}
+
+#[test]
+fn a_tracking_cap_of_zero_holds_one_name() {
+    let clock = clock();
+    let limiter = tracking(0, &clock);
+    let _ = limiter.failed("a");
+    let _ = limiter.failed("b");
+    assert_eq!(limiter.tracked(), 1);
 }

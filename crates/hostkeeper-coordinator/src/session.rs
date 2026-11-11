@@ -15,7 +15,8 @@
 //! [`HashSlots`] (`--login-max-hashes`). It counts every name it is told of, a user that does
 //! not exist as much as one that does, so a lock never says which names are users. A count is
 //! forgotten once a lockout length has passed since its last failure, which keeps the table
-//! from growing with every name a guesser tries.
+//! from growing with every name a guesser tries; the table also holds at most
+//! `--login-max-tracked` names. Names are the canonical user key, which the caller makes.
 //!
 //! The flags that give these their settings are wired by the change that adds the login route.
 
@@ -64,6 +65,8 @@ pub struct LimiterSettings {
     pub max_failures: u32,
     /// Seconds a lock lasts (`--login-lockout-secs`).
     pub lockout_secs: u64,
+    /// Most names the limiter tracks at once; at least 1 (`--login-max-tracked`).
+    pub max_tracked: usize,
 }
 
 impl Default for LimiterSettings {
@@ -71,6 +74,7 @@ impl Default for LimiterSettings {
         Self {
             max_failures: 5,
             lockout_secs: 900,
+            max_tracked: 4096,
         }
     }
 }
@@ -348,6 +352,7 @@ impl LoginLimiter {
             clock,
             settings: LimiterSettings {
                 max_failures: settings.max_failures.max(1),
+                max_tracked: settings.max_tracked.max(1),
                 ..settings
             },
             slots,
@@ -363,7 +368,10 @@ impl LoginLimiter {
         count.locked_until.is_some_and(|until| now < until)
     }
 
-    /// Whether `username` is locked now.
+    /// Whether `username` is locked now. Like every `username` here, it is the canonical user
+    /// key: the same normalised, length-checked name the user lookup uses, so that two spellings
+    /// of one user share one count and a long name cannot make an entry large. The caller (the
+    /// login route) canonicalises and checks the length before it calls the limiter.
     #[must_use]
     pub fn is_locked(&self, username: &str) -> bool {
         let now = self.clock.now_unix();
@@ -387,7 +395,9 @@ impl LoginLimiter {
     }
 
     /// Counts a failed login of `username`. The count that reaches the limit locks the name for
-    /// the lockout length. A failure that arrives while the name is locked (a hash that was
+    /// the lockout length. The table holds at most `max_tracked` names; a new name past that drops
+    /// an unlocked entry with the oldest last failure first, a locked one only when all are.
+    /// A failure that arrives while the name is locked (a hash that was
     /// already running) is counted as a failure and does not move the lock.
     pub fn failed(&self, username: &str) -> Failure {
         let now = self.clock.now_unix();
@@ -396,6 +406,17 @@ impl LoginLimiter {
         counts.retain(|_, count| {
             Self::locked(count, now) || now.saturating_sub(count.last_failure) < lockout
         });
+        if !counts.contains_key(username) && counts.len() >= self.settings.max_tracked {
+            // Full: drop the entry that matters least, an unlocked one before a locked one and
+            // the one with the oldest last failure first.
+            let drop = counts
+                .iter()
+                .min_by_key(|(key, count)| (Self::locked(count, now), count.last_failure, *key))
+                .map(|(key, _)| key.clone());
+            if let Some(key) = drop {
+                counts.remove(&key);
+            }
+        }
         let count = counts.entry(username.to_owned()).or_insert(Count {
             failures: 0,
             last_failure: now,
