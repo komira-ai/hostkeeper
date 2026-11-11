@@ -58,7 +58,7 @@ impl Reply {
         Self {
             status: 200,
             body: String::new(),
-            apns_id: Some("11111111-2222-3333-4444-555555555555".to_owned()),
+            apns_id: Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee".to_owned()),
             then_goaway: false,
             hang: false,
             abort: false,

@@ -115,7 +115,7 @@ fn a_certificate_is_judged_for_expiry_the_topic_prefix_and_a_renewal_topic() {
         Err(IdentityError::TopicChanged)
     );
     let foreign =
-        read_certificate(cert("com.example.app", 1_700_000_000, 1_900_000_000).as_bytes()).unwrap();
+        read_certificate(cert("app.example.org", 1_700_000_000, 1_900_000_000).as_bytes()).unwrap();
     assert_eq!(foreign.judge(NOW, None), Err(IdentityError::NotMdmTopic));
 }
 

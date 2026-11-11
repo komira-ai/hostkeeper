@@ -41,7 +41,7 @@ async fn a_push_posts_the_hex_token_url_with_the_mdm_headers_and_the_magic_body(
     let delivered = sender.send(&push(10, 1_700_086_400)).await.unwrap();
     assert_eq!(
         delivered.apns_id.as_deref(),
-        Some("11111111-2222-3333-4444-555555555555")
+        Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
     );
     let seen = server.requests();
     assert_eq!(seen.len(), 1);

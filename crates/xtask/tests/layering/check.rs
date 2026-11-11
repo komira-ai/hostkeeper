@@ -101,7 +101,7 @@ pub const LAYERS: [Layer; 35] = [
         &[
             CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, OIDC, PROTO, RELEASE, TLS, WIRE,
         ],
-        &[OIDC],
+        &[MDM_PUSH, OIDC],
     ),
     (
         DAEMON,

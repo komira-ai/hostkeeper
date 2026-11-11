@@ -205,7 +205,7 @@ async fn a_certificate_that_is_wrong_is_refused_for_its_own_reason() {
         refusal(&expired, key_pem.expose()),
         MdmRefusal::CertificateExpired
     );
-    let foreign = cert_for(key, "com.example.app", now - DAY, now + DAY);
+    let foreign = cert_for(key, "app.example.org", now - DAY, now + DAY);
     assert_eq!(
         refusal(&foreign, key_pem.expose()),
         MdmRefusal::CertificateInvalid

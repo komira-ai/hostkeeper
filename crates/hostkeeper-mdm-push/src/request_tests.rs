@@ -114,7 +114,7 @@ fn an_email_that_is_not_one_plain_address_is_refused_before_a_key_is_made() {
         "\"a\"@example.org",
         "a@.example.org",
         "a@example.org.",
-        "a@exa\nmple.org",
+        "a@example org",
         "<a@example.org>",
     ] {
         assert!(!email_is_valid(bad), "{bad:?}");
