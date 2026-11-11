@@ -1979,6 +1979,27 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-mdm-scep"
+version = "0.1.0"
+dependencies = [
+ "aes 0.9.4",
+ "cbc 0.2.1",
+ "cipher 0.5.2",
+ "cms",
+ "const-oid 0.10.2",
+ "der 0.8.3",
+ "des 0.9.0",
+ "rand 0.10.3",
+ "rsa 0.10.0",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "signature 3.0.0",
+ "spki 0.8.1",
+ "thiserror",
+ "x509-cert",
+]
+
+[[package]]
 name = "hostkeeper-mdm-server"
 version = "0.1.0"
 dependencies = [

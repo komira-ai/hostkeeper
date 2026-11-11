@@ -1,4 +1,5 @@
-//! The real machine, the kernel's random source, the wall clock and the program's entry.
+//! The real machine, the kernel's random source, the wall clock, the pause and the program's
+//! entry.
 
 use std::io;
 use std::os::unix::fs::MetadataExt;
@@ -57,6 +58,7 @@ pub(crate) fn with_machine<T>(f: impl FnOnce(&System<'_>) -> T) -> T {
         api: &api,
         random: &system_random,
         now: secs.map_or(0, |d| d.as_secs()),
+        pause: &std::thread::sleep,
     };
     f(&system)
 }
