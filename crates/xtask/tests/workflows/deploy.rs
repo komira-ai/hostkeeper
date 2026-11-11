@@ -109,8 +109,14 @@ pub const WITH: [(&str, &str); 11] = [
         "https://github.com/komira-ai/hostkeeper/releases/download/v${{ needs.targets.outputs.version }}/hostkeeper-coordinator-${{ needs.targets.outputs.version }}-linux-x86_64.image.tar",
     ),
     ("service", "hostkeeper-coordinator"),
-    ("tailscale-audience", "${{ vars.CP_DEPLOY_TAILSCALE_AUDIENCE }}"),
-    ("tailscale-oauth-client-id", "${{ vars.CP_DEPLOY_TAILSCALE_CLIENT_ID }}"),
+    (
+        "tailscale-audience",
+        "${{ vars.CP_DEPLOY_TAILSCALE_AUDIENCE }}",
+    ),
+    (
+        "tailscale-oauth-client-id",
+        "${{ vars.CP_DEPLOY_TAILSCALE_CLIENT_ID }}",
+    ),
     ("tailscale-tags", "tag:cp-deploy"),
     ("version", "${{ needs.targets.outputs.version }}"),
 ];
@@ -284,7 +290,9 @@ fn digest_problems(job: Option<&Node>) -> Vec<String> {
     }
     let outputs = pairs(job, "outputs");
     if outputs != DIGEST_OUTPUTS {
-        problems.push(format!("{who} outputs are {outputs:?}, not {DIGEST_OUTPUTS:?}"));
+        problems.push(format!(
+            "{who} outputs are {outputs:?}, not {DIGEST_OUTPUTS:?}"
+        ));
     }
     problems
 }

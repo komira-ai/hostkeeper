@@ -28,13 +28,15 @@ fn release_yml() -> String {
         .expect("release.yml exists")
 }
 
-/// The text of the job `name` of release.yml, from its line to the blank line that ends it.
+/// The text of the job `name` of release.yml, from its line to the blank line that ends
+/// it, its last line with its newline.
 fn job_text(name: &str) -> String {
     let text = release_yml();
     let at = text
         .find(&format!("\n  {name}:\n"))
         .unwrap_or_else(|| panic!("release.yml has a job {name}"));
-    let end = at + text[at + 1..].find("\n\n").expect("a blank line ends the job") + 1;
+    let rest = &text[at + 1..];
+    let end = at + 1 + rest.find("\n\n").expect("a blank line ends the job") + 1;
     text[at..end].to_owned()
 }
 
@@ -146,7 +148,11 @@ fn a_job_that_goes_on_after_a_failure_is_refused() {
         (DIGEST_JOB, "    timeout-minutes: 10\n"),
         (JOB, "    permissions:\n      id-token: write\n"),
     ] {
-        let found = changed(name, after, &format!("{after}    continue-on-error: true\n"));
+        let found = changed(
+            name,
+            after,
+            &format!("{after}    continue-on-error: true\n"),
+        );
         assert_has(
             &found,
             &format!(
@@ -189,7 +195,10 @@ fn the_coordinator_wait_runs_as_before_when_the_deploy_is_skipped_and_not_after_
     assert!(!runs(&on, false, true));
     assert!(!runs(&on, true, false));
     let mut older = on.clone();
-    older.insert("needs.targets.outputs.newest".to_owned(), "false".to_owned());
+    older.insert(
+        "needs.targets.outputs.newest".to_owned(),
+        "false".to_owned(),
+    );
     assert!(!runs(&older, false, false));
     let mut off = on.clone();
     off.insert("vars.RELEASE_SETS_DESIRED".to_owned(), String::new());
@@ -218,14 +227,20 @@ fn a_deploy_job_with_another_token_right_than_the_oidc_token_is_refused() {
         perms,
         "    permissions:\n      id-token: write\n      contents: write\n",
     );
-    assert_has(&found, "job deploy: `contents: write` is not allowed in release.yml");
+    assert_has(
+        &found,
+        "job deploy: `contents: write` is not allowed in release.yml",
+    );
     assert_has(&found, exactly);
     let found = changed(
         JOB,
         perms,
         "    permissions:\n      id-token: write\n      packages: write\n",
     );
-    assert_has(&found, "job deploy: `packages: write` is not allowed in release.yml");
+    assert_has(
+        &found,
+        "job deploy: `packages: write` is not allowed in release.yml",
+    );
     assert_has(&found, exactly);
 }
 
@@ -235,7 +250,9 @@ fn id_token_write_is_refused_in_every_other_job_and_workflow() {
     // proxy would have to tell from the deploy), in release.yml or in another workflow, and the
     // deploy's name given to a job of another file.
     assert!(
-        WRITE_ALLOWED.iter().all(|a| a.job != JOB && a.job != DIGEST_JOB),
+        WRITE_ALLOWED
+            .iter()
+            .all(|a| a.job != JOB && a.job != DIGEST_JOB),
         "the deploy's scope is held by deploy.rs, not by the table"
     );
     assert!(ID_TOKEN_ALLOWED.iter().all(|(_, name)| *name != JOB));
@@ -258,13 +275,19 @@ fn id_token_write_is_refused_in_every_other_job_and_workflow() {
         "      contents: read\n      packages: write\n",
         "      contents: read\n      packages: write\n      id-token: write\n",
     );
-    assert_has(&found, "job image: `id-token: write` is not allowed in release.yml");
+    assert_has(
+        &found,
+        "job image: `id-token: write` is not allowed in release.yml",
+    );
     // The same call, named `deploy`, in another workflow file.
     let elsewhere = format!(
         "name: example\non:\n  push:\n    branches: [main]\npermissions: {{}}\njobs:\n  deploy:\n    permissions:\n      id-token: write\n    uses: {WORKFLOW}@{COMMIT} # v{RELEASE}\n"
     );
     let found = lint("ci.yml", &elsewhere);
-    assert_has(&found, "job deploy: `id-token: write` is not allowed in ci.yml");
+    assert_has(
+        &found,
+        "job deploy: `id-token: write` is not allowed in ci.yml",
+    );
     assert_has(&found, "job deploy: no `runs-on`");
 }
 
@@ -380,7 +403,10 @@ fn a_deploy_job_that_passes_other_inputs_or_other_keys_is_refused() {
         assert_has(&found, &want);
     }
     let found = changed(JOB, &pin, &format!("{pin}    secrets: inherit\n"));
-    assert_has(&found, "`secrets: inherit` hands every secret of the caller on");
+    assert_has(
+        &found,
+        "`secrets: inherit` hands every secret of the caller on",
+    );
 }
 
 #[test]
@@ -447,7 +473,8 @@ fn a_digest_job_with_other_steps_or_outputs_is_refused() {
     );
     assert_has(&found, &format!("{who} step 3 is "));
     let file = " end' \"hostkeeper-coordinator-$VERSION.image.json\"";
-    let spliced = " end' \"hostkeeper-coordinator-${{ needs.targets.outputs.version }}.image.json\"";
+    let spliced =
+        " end' \"hostkeeper-coordinator-${{ needs.targets.outputs.version }}.image.json\"";
     let found = changed(DIGEST_JOB, file, spliced);
     assert_has(
         &found,
@@ -597,7 +624,11 @@ fn an_index_without_exactly_one_amd64_manifest_by_a_sha256_digest_fails_the_step
         ),
     ];
     for (name, index) in cases {
-        assert_eq!(run_digest_step(&index), Ended::Failed(String::new()), "{name}");
+        assert_eq!(
+            run_digest_step(&index),
+            Ended::Failed(String::new()),
+            "{name}"
+        );
     }
     assert_eq!(
         run_digest_step("not json"),
