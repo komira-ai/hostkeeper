@@ -448,3 +448,49 @@ fn a_call_of_the_updater_from_another_job_or_workflow_is_refused() {
         ["job deploy: no `runs-on` (a job that calls a reusable workflow is not evaluated)"]
     );
 }
+
+#[test]
+fn the_caller_passes_all_three_tailscale_inputs_from_the_repository_variables() {
+    // Catches: a caller that drops the tailnet tags (tailscale/github-action then refuses the
+    // federated join: "Please provide either an auth key, OAuth secret and tags, or federated
+    // identity client ID and audience with tags"), the client ID or the audience; or one that
+    // writes a fixed value in place of the repository variable.
+    let tailscale = [
+        (
+            "tailscale-oauth-client-id",
+            "${{ vars.CP_DEPLOY_TAILSCALE_CLIENT_ID }}",
+        ),
+        (
+            "tailscale-audience",
+            "${{ vars.CP_DEPLOY_TAILSCALE_AUDIENCE }}",
+        ),
+        ("tailscale-tags", "${{ vars.CP_DEPLOY_TAILSCALE_TAGS }}"),
+    ];
+    for pair in tailscale {
+        assert!(WITH.contains(&pair), "{pair:?}");
+    }
+    for (input, value) in tailscale {
+        let line = format!("      {input}: {value}\n");
+        let rest: Vec<(&str, &str)> = WITH.iter().copied().filter(|(k, _)| *k != input).collect();
+        assert_eq!(
+            release_problems(&in_job(JOB, &line, "")),
+            [format!(
+                "release.yml: job cp-deploy passes {rest:?}, not {WITH:?}"
+            )],
+            "{input} dropped"
+        );
+        let mut fixed: Vec<(&str, &str)> = WITH
+            .iter()
+            .map(|&(k, v)| (k, if k == input { "tag:ci" } else { v }))
+            .collect();
+        fixed.sort_unstable();
+        assert_eq!(
+            release_problems(&in_job(JOB, &line, &format!("      {input}: tag:ci\n"))),
+            [format!(
+                "release.yml: job cp-deploy passes {fixed:?}, not {WITH:?}"
+            )],
+            "{input} fixed"
+        );
+    }
+    assert!(DEPLOY_IF.contains(" && vars.CP_DEPLOY_TAILSCALE_TAGS != ''"));
+}
