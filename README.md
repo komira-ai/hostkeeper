@@ -73,6 +73,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-mdm-model`](crates/hostkeeper-mdm-model) | exhaustive model checks of the coordinator's MDM command queue and Mac enrollment, with the invariants as the tests' names; nothing depends on it ([design](docs/design/coordinator-mdm.md), task CM4) |
+| [`hostkeeper-mdm-scep`](crates/hostkeeper-mdm-scep) | the coordinator's SCEP server as a library: `GetCACaps`, `GetCACert` and `PKIOperation` with signed and enveloped `CertRep`, the MDM identity CA, and the one-time challenges behind a port; pure (the clock and the random source are passed in); nothing calls it yet ([design](docs/design/coordinator-mdm.md) 4.2, task CM12b) |
 | [`hostkeeper-release`](crates/hostkeeper-release) | the pure checks of a release, shared by the coordinator and the daemon: each platform's list of artifacts, one per installer, with digests, sizes, attestation and locations, and each entry's manifest, by the rules every manifest keeps and those of its installer, against the daemon's version and installers and against the staged tree ([design](docs/design/packages.md), item A1); nothing calls it yet |
 | [`hostkeeper-tls`](crates/hostkeeper-tls) | TLS server configuration reloaded from certificate files, with its reload metrics |
 | [`hostkeeper-ui-tests`](crates/hostkeeper-ui-tests) | the generator of the web app's API client ([`ui/gen/`](ui/gen), from the protos), and the tests of the operator web app in [`ui/`](ui), run in a JavaScript engine against a fake gateway, with each call of [`ui/calls.json`](ui/calls.json) sent to the real coordinator with an operator's token; not shipped |
@@ -138,6 +139,8 @@ The items B1 to B28 of section 12.2 of the design, by theme. "Built" means the c
 - **Operator surfaces.** Built: B1 (the protobuf services, every method of which has a handler),
   B10 (the generated command line: `hkctl`, over the gateway),
   B24 (the CI client), B25 (the UI).
+  Designed: operator login with a username, a password and a browser session, and API tokens
+  managed in the UI ([operator-login.md](docs/design/operator-login.md)).
 - **Platforms and packaging.** Built: B11 (deb, rpm, unit, boot-image overlay). Partly built:
   B18 (macOS: `hostkeeper-launchd`, the daemon's Mac adapters, package check and claims, and a
   device run of the daemon under launchd after each merge; no update has run through it on a

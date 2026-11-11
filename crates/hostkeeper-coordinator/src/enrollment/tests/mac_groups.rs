@@ -361,6 +361,7 @@ fn a_moved_mac_that_rejoins_is_held_to_its_group() {
         SERIAL,
         Ok(DeviceStatus {
             enrolled_since_unix: Some(NOW + 1),
+            enrolled_via_dep: None,
             ..GOOD
         }),
     );

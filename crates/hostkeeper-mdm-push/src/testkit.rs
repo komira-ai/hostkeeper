@@ -8,17 +8,17 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 
-use aes::{Aes128, Aes192, Aes256};
+use aes08::{Aes128, Aes192, Aes256};
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use cbc::Encryptor;
-use cbc::cipher::block_padding::Pkcs7;
+use cbc01::Encryptor;
+use cbc01::cipher::block_padding::Pkcs7;
 
-use des::{Des, TdesEde3};
+use des08::{Des, TdesEde3};
 use rand_core::OsRng;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PKCS_RSA_SHA256};
-use rsa::pkcs8::EncodePrivateKey as _;
-use rsa::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
+use rsa09::pkcs8::EncodePrivateKey as _;
+use rsa09::{Pkcs1v15Encrypt, RsaPrivateKey, RsaPublicKey};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 
 use crate::BoxFuture;
@@ -282,7 +282,7 @@ pub fn oid_der(dotted: &str) -> Vec<u8> {
     der(0x06, &body)
 }
 
-fn cbc_seal<E: cbc::cipher::BlockEncryptMut + cbc::cipher::KeyIvInit>(
+fn cbc_seal<E: cbc01::cipher::BlockEncryptMut + cbc01::cipher::KeyIvInit>(
     key: &[u8],
     iv: &[u8],
     plain: &[u8],

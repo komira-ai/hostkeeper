@@ -2,7 +2,7 @@
 //! HTTP/1.1, by what its handshake settles on), and the tick that re-reads the tokens file.
 
 use std::fs;
-use std::future::poll_fn;
+use std::future::{Future, poll_fn};
 use std::io;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
@@ -577,4 +577,122 @@ fn a_request_carries_the_address_of_its_connection_when_it_has_one() {
     carry(&mut nameless, &waits, None);
     assert_eq!(nameless.extensions().get::<PeerAddr>(), None);
     assert!(nameless.extensions().get::<ConnectionWaits>().is_some());
+}
+
+/// A pipe that says it came from `from`, to drive [`connection`] with a transport that has an
+/// address.
+struct Named {
+    pipe: DuplexStream,
+    from: std::net::SocketAddr,
+}
+
+impl Remote for Named {
+    fn remote(&self) -> Option<std::net::SocketAddr> {
+        Some(self.from)
+    }
+}
+
+impl AsyncRead for Named {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.pipe).poll_read(cx, buf)
+    }
+}
+
+impl AsyncWrite for Named {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        Pin::new(&mut self.pipe).poll_write(cx, buf)
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.pipe).poll_flush(cx)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.pipe).poll_shutdown(cx)
+    }
+}
+
+/// The debug events [`connection`] writes while it serves a stream that came from `from`, with
+/// `client` run against the other end of the pipe first.
+async fn debug_log_of_connection<F, Fut>(
+    name: &str,
+    from: std::net::SocketAddr,
+    patience: Duration,
+    client: F,
+) -> String
+where
+    F: FnOnce(DuplexStream) -> Fut,
+    Fut: Future<Output = DuplexStream>,
+{
+    let log = crate::testutil::Log::default();
+    let _guard = tracing::subscriber::set_default(
+        tracing_subscriber::fmt()
+            .with_writer(log.clone())
+            .with_ansi(false)
+            .with_max_level(tracing::Level::DEBUG)
+            .finish(),
+    );
+    let (coordinator, _dir) = coordinator(name);
+    let (source, _ca) = tls_material();
+    let (far, near) = tokio::io::duplex(64 * 1024);
+    let far = client(far);
+    let served = connection(
+        Named { pipe: near, from },
+        source,
+        Surface::Control,
+        coordinator,
+        patience,
+    );
+    let (_far, ()) = tokio::join!(far, served);
+    log.text()
+}
+
+/// Proves: a TLS handshake that fails writes a debug event naming the address the stream came
+/// from.
+///
+/// Catches: the remote address dropped from, or misreported in, the handshake-failure
+/// diagnostic.
+#[tokio::test]
+async fn a_failed_tls_handshake_is_logged_with_the_address_of_its_stream() {
+    let from: std::net::SocketAddr = "192.0.2.7:4433".parse().expect("an address");
+    let text = debug_log_of_connection("listen-log-failed", from, PATIENCE, |mut far| async move {
+        far.write_all(b"GET / HTTP/1.1\r\n\r\n")
+            .await
+            .expect("sent");
+        far.shutdown().await.expect("closed");
+        far
+    })
+    .await;
+    assert!(
+        text.contains("a TLS handshake failed") && text.contains("remote=Some(192.0.2.7:4433)"),
+        "log: {text}"
+    );
+}
+
+/// Proves: a TLS handshake that does not finish within the patience writes a debug event naming
+/// the address the stream came from.
+///
+/// Catches: the remote address dropped from, or misreported in, the handshake-timeout
+/// diagnostic.
+#[tokio::test(start_paused = true)]
+async fn a_tls_handshake_that_does_not_finish_is_logged_with_the_address_of_its_stream() {
+    let from: std::net::SocketAddr = "192.0.2.8:5544".parse().expect("an address");
+    let text = debug_log_of_connection("listen-log-timeout", from, PATIENCE, |far| async move {
+        // Says nothing and stays open, so only the patience ends the handshake.
+        far
+    })
+    .await;
+    assert!(
+        text.contains("a TLS handshake did not finish in time")
+            && text.contains("remote=Some(192.0.2.8:5544)"),
+        "log: {text}"
+    );
 }

@@ -2,7 +2,7 @@ use rustls::pki_types::CertificateSigningRequestDer;
 use rustls::pki_types::pem::PemObject as _;
 use x509_parser::prelude::{FromDer as _, X509CertificationRequest};
 
-use rsa::RsaPublicKey;
+use rsa09::RsaPublicKey;
 
 use super::*;
 
@@ -65,7 +65,7 @@ fn the_csr_is_rsa_2048_signed_by_the_push_key_with_the_email_in_its_subject() {
     // The signing key is the one of the request, and it is 2048 bits.
     let spki = csr.certification_request_info.subject_pki.raw.to_vec();
     let expected = {
-        use rsa::pkcs8::EncodePublicKey as _;
+        use rsa09::pkcs8::EncodePublicKey as _;
         RsaPublicKey::from(key)
             .to_public_key_der()
             .unwrap()
@@ -73,7 +73,7 @@ fn the_csr_is_rsa_2048_signed_by_the_push_key_with_the_email_in_its_subject() {
             .to_vec()
     };
     assert_eq!(spki, expected);
-    assert_eq!(rsa::traits::PublicKeyParts::size(key) * 8, KEY_BITS);
+    assert_eq!(rsa09::traits::PublicKeyParts::size(key) * 8, KEY_BITS);
 }
 
 #[test]
