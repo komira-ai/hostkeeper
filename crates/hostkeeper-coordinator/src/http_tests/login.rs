@@ -128,6 +128,26 @@ async fn every_wrong_login_is_the_same_answer_and_spends_one_verify() {
     );
 }
 
+/// Proves: a user whose initial password was voided is refused with the right password, as every
+/// wrong login is (401, the bytes of an unknown name's answer, one verify), and gets no session.
+#[tokio::test]
+async fn a_voided_initial_password_is_refused_as_every_wrong_login_is() {
+    let world = World::new("login-void");
+    let unknown = login(&world, "nobody", PASSWORD).await;
+    world
+        .coordinator
+        .accounts()
+        .change(|held| held.with_user_edited("alice", |user| user.initial_void = true))
+        .expect("voided");
+    let before = verifies(&world);
+    let sent = login(&world, "alice", PASSWORD).await;
+    assert_eq!(verifies(&world) - before, 1);
+    assert_eq!(sent.status, StatusCode::UNAUTHORIZED);
+    assert_eq!(sent.body, unknown.body);
+    assert_eq!(sent.headers, unknown.headers);
+    assert!(world.login().sessions.is_empty());
+}
+
 /// Proves: the fifth failure of a name locks it: the audit holds the first failure and the lock
 /// and not the failures between; a login of the locked name, with the right password, is 429
 /// `try_later` and starts no hash; the lock ends by the clock, at its last second and not before.

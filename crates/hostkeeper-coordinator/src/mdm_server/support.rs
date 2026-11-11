@@ -297,6 +297,18 @@ impl Rig {
         )
     }
 
+    /// A queue as a restarted coordinator builds it before any push identity is stored: nothing
+    /// armed and no pusher, over the same tables, setup and clock.
+    pub(super) fn restarted_queue_without_push(&self) -> MdmQueue {
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(|| None),
+            Arc::clone(&self.setup),
+            86_400,
+        )
+    }
+
     /// A rig whose server asks Apple about the ABM token through `abm`, with the certificate and the
     /// push identity.
     pub(super) fn asking(name: &str, abm: Arc<dyn crate::mdm_verify::AbmAccountCheck>) -> Self {
@@ -839,6 +851,7 @@ pub(super) struct Spec {
     pub(super) indefinite_attributes: bool,
     pub(super) signers: usize,
     pub(super) sid_tag: Option<u8>,
+    pub(super) info_fields: Option<usize>,
     pub(super) flip_signature: bool,
     pub(super) drop_certificates: bool,
 }
@@ -857,6 +870,7 @@ impl Default for Spec {
             indefinite_attributes: false,
             signers: 1,
             sid_tag: None,
+            info_fields: None,
             flip_signature: false,
             drop_certificates: false,
         }
@@ -903,6 +917,7 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     }
     let (_, parsed) = x509_parser::parse_x509_certificate(&mac.der).expect("a certificate");
     let sid = match (&spec.ski, spec.sid_tag) {
+        (_, Some(0x30)) => der(0x30, &der(0x02, &[1])),
         (_, Some(tag)) => der(tag, b"x"),
         (Some(ski), None) => der(0x80, ski),
         (None, None) => {
@@ -922,18 +937,16 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     } else {
         der(0xa0, &attributes)
     };
-    let info = der(
-        0x30,
-        &[
-            der(0x02, &[1]),
-            sid,
-            algorithm(spec.digest),
-            attributes_field,
-            algorithm(spec.signature),
-            der(0x04, &signature),
-        ]
-        .concat(),
-    );
+    let mut fields = vec![
+        der(0x02, &[1]),
+        sid,
+        algorithm(spec.digest),
+        attributes_field,
+        algorithm(spec.signature),
+        der(0x04, &signature),
+    ];
+    fields.truncate(spec.info_fields.unwrap_or(fields.len()));
+    let info = der(0x30, &fields.concat());
     let infos = vec![info; spec.signers].concat();
     let certificates = if spec.drop_certificates {
         Vec::new()

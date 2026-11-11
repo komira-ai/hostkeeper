@@ -165,6 +165,25 @@ async fn a_restarted_queue_pushes_for_a_command_left_queued() {
     assert_eq!(rig.apns.sent().len(), 1, "at the floor");
 }
 
+/// Proves: a restarted queue with no push identity arms the enrollment that waits and pushes
+/// nothing, and sends nothing when it is swept again.
+///
+/// Catches: a sweep that panics or pushes through a pusher that does not exist.
+#[tokio::test]
+async fn a_restarted_queue_without_a_push_identity_arms_and_pushes_nothing() {
+    let rig = Rig::new("queue-restart-no-push");
+    rig.live("e1", SERIAL, true);
+    rig.store
+        .enqueue(&crate::mdm_server::queue_new(1, "e1"))
+        .expect("queued");
+    let restarted = rig.restarted_queue_without_push();
+    restarted.sweep().await.expect("swept");
+    rig.time.advance(FLOOR);
+    restarted.sweep().await.expect("swept");
+    assert!(rig.apns.sent().is_empty());
+    assert_eq!(restarted.armed.lock().expect("lock").len(), 1);
+}
+
 /// Proves: a sweep whose store cannot say which enrollments wait carries on with the timed-out
 /// commands and the enrollments already armed.
 ///

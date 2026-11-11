@@ -317,3 +317,32 @@ fn a_message_corrupted_anywhere_is_judged_and_never_crashes_the_reader() {
         good.len() * 3
     );
 }
+
+/// Proves: a signer info cut short (before its digest algorithm, or before its signature algorithm
+/// and signature) and a signer named by a sequence that is not issuer and serial are each refused as
+/// encoding, and none of them reaches the verifier.
+///
+/// Catches: a signer info indexed past its end, or a signer id of one part read as issuer and serial.
+#[test]
+fn a_signer_info_cut_short_or_a_signer_sequence_of_one_part_is_refused_as_encoding() {
+    let mac = mac();
+    for fields in [Some(2), Some(4)] {
+        let cut = Spec {
+            info_fields: fields,
+            ..Spec::default()
+        };
+        assert_eq!(
+            signer(BODY, &header(BODY, &mac, &cut)),
+            Err(SignatureError::Encoding),
+            "{fields:?}"
+        );
+    }
+    let one_part = Spec {
+        sid_tag: Some(0x30),
+        ..Spec::default()
+    };
+    assert_eq!(
+        signer(BODY, &header(BODY, &mac, &one_part)),
+        Err(SignatureError::Encoding)
+    );
+}
