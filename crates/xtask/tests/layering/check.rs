@@ -29,6 +29,7 @@ const MDM: &str = "hostkeeper-mdm";
 const MDM_MODEL: &str = "hostkeeper-mdm-model";
 const MDM_PUSH: &str = "hostkeeper-mdm-push";
 const MDM_SERVER: &str = "hostkeeper-mdm-server";
+const MDM_SCEP: &str = "hostkeeper-mdm-scep";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
 const PXE: &str = "hostkeeper-pxe";
@@ -129,6 +130,7 @@ pub const LAYERS: [Layer; 35] = [
     (MDM_MODEL, &[], &[]),
     (MDM_PUSH, &[], &[]),
     (MDM_SERVER, &[], &[]),
+    (MDM_SCEP, &[], &[]),
     (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
     (OBSERVE, &[CONFIG, PROTO], &[HOOK, STEPS]),

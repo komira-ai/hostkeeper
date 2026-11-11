@@ -3,7 +3,10 @@
 mod common;
 
 use common::{FakeNet, SVC, acme, config, kit, ready_host, site_addresses, with_env};
-use hostkeeper_mdm::verify::{Compared, Verdict, Verify, Want, compare, run};
+use std::cell::RefCell;
+use std::time::Duration;
+
+use hostkeeper_mdm::verify::{Compared, LISTEN_TRIES, Verdict, Verify, Want, compare, run};
 use hostkeeper_mdm_core::render::{render, render_tls, strip_comments};
 use hostkeeper_mdm_step::Account;
 use hostkeeper_mdm_step::fake::FakeHost;
@@ -90,6 +93,7 @@ fn go(host: &FakeHost, acme_on: bool, ignore: &[String]) -> (bool, String) {
         config: &c,
         acme: acme_on.then_some(&a),
         ignore,
+        pause: &|_| {},
     };
     let net = FakeNet::new(Default::default());
     let mut out = Vec::new();
@@ -254,6 +258,7 @@ fn an_ignore_that_is_empty_or_holds_a_line_break_is_refused() {
             config: &c,
             acme: Some(&a),
             ignore: &ignore,
+            pause: &|_| {},
         };
         let mut out = Vec::new();
         let err = with_env(&host, &net, |env| run(env, &v, &mut out)).unwrap_err();
@@ -456,6 +461,7 @@ fn a_bare_host_fails_every_check_and_reports_every_file_missing() {
         config: &c,
         acme: Some(&a),
         ignore: &[],
+        pause: &|_| {},
     };
     let bare = FakeHost::new(0);
     bare.put_file(CERT, 0o644, (0, 0), b"c");
@@ -600,4 +606,173 @@ fn the_enrollment_profile_must_be_0640_of_root_and_the_service_group() {
     let (_, shown) = go(&host, true, &[]);
     let want = format!("FAIL  {line}: no user hostkeeper-mdm\n");
     assert!(shown.contains(&want), "{shown}");
+}
+
+/// Runs verify on `host` with the ACME settings; before each pause, `on_pause` is given the
+/// number of the pause (from 1). The answer, the output and every pause's length, in order.
+fn go_waiting(host: &FakeHost, on_pause: impl Fn(usize)) -> (bool, String, Vec<Duration>) {
+    let (c, a) = (config(), acme());
+    let pauses = RefCell::new(Vec::new());
+    let pause = |d: Duration| {
+        pauses.borrow_mut().push(d);
+        on_pause(pauses.borrow().len());
+    };
+    let v = Verify {
+        config: &c,
+        acme: Some(&a),
+        ignore: &[],
+        pause: &pause,
+    };
+    let net = FakeNet::new(Default::default());
+    let mut out = Vec::new();
+    let ok = with_env(host, &net, |env| run(env, &v, &mut out)).unwrap();
+    (ok, String::from_utf8(out).unwrap(), pauses.into_inner())
+}
+
+/// What `ss -Hltn` prints on the installed host, with the proxy's listener on `MDM_BIND:443`
+/// left out when `proxy` is false.
+fn ss_listing(proxy: bool) -> String {
+    let mut text = "LISTEN 0 4096 127.0.0.1:9004 0.0.0.0:*\nLISTEN 0 4096 127.0.0.1:9005 0.0.0.0:*\nLISTEN 0 4096 127.0.0.1:9001 0.0.0.0:*\n".to_owned();
+    if proxy {
+        text.push_str("LISTEN 0 4096 @TEST_BIND@:443 0.0.0.0:*\n");
+    }
+    site_addresses(&text)
+}
+
+/// How many times `host` was asked for its listeners.
+fn ss_calls(host: &FakeHost) -> usize {
+    host.calls()
+        .iter()
+        .filter(|c| c[0] == "/usr/bin/ss")
+        .count()
+}
+
+/// Catches verify racing a proxy that was started a moment ago (run straight after `migrate`
+/// or `tls`, it reported "nothing listens there" for the proxy, then passed a minute later):
+/// the proxy's unit is activating at the first look and active from the second, and its port is
+/// bound only after the third pause. Verify pauses exactly three times, one second each, says it
+/// waited until the fourth look, and then every check passes.
+#[test]
+fn verify_waits_for_a_proxy_that_binds_late() {
+    let host = installed();
+    let proxy = [SYSTEMCTL, "is-active", "hostkeeper-mdm-proxy.service"];
+    host.reply(&proxy, 3, "activating\n");
+    host.reply(&["/usr/bin/ss", "-Hltn"], 0, &ss_listing(false));
+    let (ok, shown, pauses) = go_waiting(&host, |n| match n {
+        1 => host.reply(&proxy, 0, "active\n"),
+        3 => host.reply(&["/usr/bin/ss", "-Hltn"], 0, &ss_listing(true)),
+        _ => {}
+    });
+    assert!(ok, "{shown}");
+    assert_eq!(pauses, vec![Duration::from_secs(1); 3]);
+    assert_eq!(
+        shown
+            .lines()
+            .filter(|l| l.starts_with("waited"))
+            .collect::<Vec<_>>(),
+        vec!["waited     the services were active and listening at look 4 of 60, 1 s apart"]
+    );
+    assert!(shown.contains(&site_addresses(
+        "ok    the proxy listens on @TEST_BIND@:443 only\n"
+    )));
+    assert!(shown.ends_with("verify: all checks passed\n"), "{shown}");
+    assert_eq!(
+        ss_calls(&host),
+        4 + 1,
+        "four looks, then the checks read the host again"
+    );
+}
+
+/// Catches a wait that never ends, or one that hides the failure: a proxy that never binds
+/// its port is looked for exactly [`LISTEN_TRIES`] times (59 pauses), verify says it gave up,
+/// and the proxy's listener check fails with the reason.
+#[test]
+fn verify_gives_up_waiting_after_the_last_look() {
+    let host = installed();
+    host.reply(&["/usr/bin/ss", "-Hltn"], 0, &ss_listing(false));
+    let (ok, shown, pauses) = go_waiting(&host, |_| {});
+    assert!(!ok);
+    assert_eq!(LISTEN_TRIES, 60);
+    assert_eq!(pauses.len(), 59);
+    assert_eq!(
+        shown
+            .lines()
+            .filter(|l| l.starts_with("waited"))
+            .collect::<Vec<_>>(),
+        vec![
+            "waited     the services were not all active and listening after 60 looks, 1 s apart; the checks below say which"
+        ]
+    );
+    assert!(shown.contains(&site_addresses(
+        "FAIL  the proxy listens on @TEST_BIND@:443 only: nothing listens there\n"
+    )));
+    assert_eq!(ss_calls(&host), 60 + 1);
+}
+
+/// Catches a wait on a unit that is not active although its port is bound (a unit that died
+/// while something else holds its port): each service's unit is part of the look, so a
+/// stopped SCEP server is waited for, given up on, and reported inactive.
+#[test]
+fn verify_waits_for_each_unit_to_be_active() {
+    let host = installed();
+    host.reply(
+        &[SYSTEMCTL, "is-active", "hostkeeper-mdm-scep.service"],
+        3,
+        "failed\n",
+    );
+    let (ok, shown, pauses) = go_waiting(&host, |_| {});
+    assert!(!ok);
+    assert_eq!(pauses.len(), 59);
+    assert!(shown.contains("FAIL  hostkeeper-mdm-scep.service is active: is failed\n"));
+    assert!(
+        shown.contains("SCEP listens on 127.0.0.1:9005 only\n"),
+        "{shown}"
+    );
+}
+
+/// Catches a healthy host made to wait, or a wait line on it: everything is up at the first
+/// look, so verify pauses never, prints no wait line and reads the listeners twice (the look
+/// and the checks).
+#[test]
+fn verify_does_not_wait_on_a_host_that_is_up() {
+    let host = installed();
+    let (ok, shown, pauses) = go_waiting(&host, |_| {});
+    assert!(ok, "{shown}");
+    assert_eq!(pauses, Vec::<Duration>::new());
+    assert!(!shown.contains("waited"), "{shown}");
+    assert_eq!(ss_calls(&host), 2);
+}
+
+/// Catches a wait on a host where waiting cannot help: when `ss` exits non-zero, cannot be
+/// started, or `systemctl` cannot be started, verify stops looking at once (no pause, no wait
+/// line) and the checks report why.
+#[test]
+fn verify_does_not_wait_when_ss_or_systemctl_cannot_run() {
+    let failing = installed();
+    failing.reply(&["/usr/bin/ss", "-Hltn"], 1, "");
+    let (ok, shown, pauses) = go_waiting(&failing, |_| {});
+    assert!(!ok);
+    assert_eq!(pauses.len(), 0);
+    assert!(!shown.contains("waited"), "{shown}");
+    assert_eq!(
+        shown.matches("ss exited with status 1").count(),
+        5,
+        "{shown}"
+    );
+
+    let bare = FakeHost::new(0);
+    let (_, shown, pauses) = go_waiting(&bare, |_| {});
+    assert_eq!(pauses.len(), 0);
+    assert!(!shown.contains("waited"), "{shown}");
+
+    let no_systemctl = FakeHost::new(0);
+    no_systemctl.reply(&["/usr/bin/ss", "-Hltn"], 0, &ss_listing(true));
+    let (_, shown, pauses) = go_waiting(&no_systemctl, |_| {});
+    assert_eq!(pauses.len(), 0);
+    assert!(!shown.contains("waited"), "{shown}");
+    assert!(
+        shown
+            .contains("FAIL  hostkeeper-mdm-scep.service is active: fake host: unexpected command"),
+        "{shown}"
+    );
 }

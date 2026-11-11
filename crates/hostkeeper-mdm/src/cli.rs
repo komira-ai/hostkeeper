@@ -506,6 +506,7 @@ fn dispatch(
                 config: &config,
                 acme: acme.as_ref(),
                 ignore: &ignore,
+                pause: system.pause,
             };
             return verify::run(&env(system, host.as_ref()), &v, out);
         }
@@ -572,6 +573,7 @@ mod tests {
             api: &api,
             random: &system_random,
             now: 0,
+            pause: &|_| {},
         };
         let (mut out, mut err) = (Vec::new(), Vec::new());
         let args = ["hostkeeper-mdm".to_owned(), "--help".to_owned()];
