@@ -479,6 +479,24 @@ async fn a_waiter_whose_wait_ends_is_told_to_come_back() {
     assert_eq!(waiter.header("retry-after"), Some("2"));
 }
 
+/// Proves: a pkg the origin gives faster than the asker reads it (the cache cuts that asker for
+/// falling behind, and the fill goes on) is answered from the committed file, never `502`.
+///
+/// Catches: a first Mac that gets a spurious `origin_failed` for a pkg that was fetched, checked and
+/// kept, because its read of the fill was cut.
+#[tokio::test]
+async fn an_asker_cut_for_falling_behind_is_answered_from_the_committed_pkg() {
+    let bytes = bytes_of(15, 6_000_000);
+    let digest = sha(&bytes);
+    let world = world("pp3-behind", false, serving(&bytes));
+    install(&world.rig, &[named(&digest)]);
+    let first = get(&world.rig, &digest).await;
+    assert_eq!(first.status, StatusCode::OK, "{:?}", first.text());
+    assert_eq!(first.body.as_ref().expect("a body"), &bytes);
+    assert_eq!(world.fake.dials(), 1);
+    assert_eq!(world.cache.bytes(), 6_000_000);
+}
+
 /// Proves: `verified` passes the frames of a body whose digest is right, ends a body whose digest is
 /// not in an error and then stops, and passes an error of the body on and stops.
 ///

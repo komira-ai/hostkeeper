@@ -136,9 +136,18 @@ async fn fill(
     }
     let mut body = answer.body;
     while let Some(frame) = body.next().await {
-        if let Err(why) = frame {
-            tracing::warn!(%why, "a pkg was not read whole from its origin; nothing was kept");
-            return Err(failure(StatusCode::BAD_GATEWAY, "origin_failed"));
+        match frame {
+            Ok(_) => {}
+            // This asker was cut for reading slower than the origin gave; the fill goes on and
+            // commits on its own. Ask again: the flight is joined, or the pkg is a hit.
+            Err(FetchError::Behind) => {
+                drop(body);
+                return Box::pin(fill(cache, key, origin, limits)).await;
+            }
+            Err(why) => {
+                tracing::warn!(%why, "a pkg was not read whole from its origin; nothing was kept");
+                return Err(failure(StatusCode::BAD_GATEWAY, "origin_failed"));
+            }
         }
     }
     Ok(())
