@@ -795,16 +795,11 @@ fn device_information(uuid: &str) -> Vec<u8> {
     .expect("json")
 }
 
-/// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
-/// profile sent, or one of another identifier or without the daemon config's keys), or the
-/// gate's enrollment not attached at start (the allowlisted serial not allowed).
-#[tokio::test]
-async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
-    let hub = Hub::start().await;
-    let files = Files::new("mdm-side-start");
-    let roots = || Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
-    // The allowlist's entry names the host group `build`, which the state files must hold.
-    let first = build(&flags_of(files.args(&enrollment())), roots()).expect("started");
+/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
+/// coordinator started over them, which is stopped again.
+async fn put_build_group(files: &Files) {
+    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    let first = build(&flags_of(files.args(&enrollment())), roots).expect("started");
     first
         .coordinator
         .host_groups_put(
@@ -821,6 +816,18 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
         )
         .expect("put");
     drop(first);
+}
+
+/// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
+/// profile sent, or one of another identifier or without the daemon config's keys), or the
+/// gate's enrollment not attached at start (the allowlisted serial not allowed).
+#[tokio::test]
+async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
+    let hub = Hub::start().await;
+    let files = Files::new("mdm-side-start");
+    let roots = || Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    // The allowlist's entry names the host group `build`, which the state files must hold.
+    put_build_group(&files).await;
     let parts = build(&flags_of(side_args(&files, &hub.url)), roots()).expect("started");
     let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
 
@@ -882,13 +889,14 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
 /// `--mdm-profile-identifier` or without `--mac-serial-allowlist`, the check interval without
 /// the file, an interval of 0), a baseline file that is not root's let through the start (it
 /// says what every Mac is configured with), and a default check interval other than six hours.
-#[test]
-fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
+#[tokio::test]
+async fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
     let files = Files::new("mdm-baseline-flags");
+    put_build_group(&files).await;
     files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
     files.put(
         "mac.toml",
-        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\nservices = [\"kbf\"]\n",
+        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n",
         0o600,
     );
     files.put(
