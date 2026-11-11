@@ -1769,6 +1769,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "hostkeeper-mdm-server"
+version = "0.1.0"
+dependencies = [
+ "plist",
+ "thiserror",
+]
+
+[[package]]
 name = "hostkeeper-mdm-step"
 version = "0.1.0"
 dependencies = [
