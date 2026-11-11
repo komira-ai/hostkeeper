@@ -504,13 +504,14 @@ async fn a_range_of_a_pkg_is_served_from_the_file() {
     assert_eq!(head.header("content-length"), Some("10"));
 }
 
-/// Proves: a file whole-checked by a full `GET` is not hashed again for a `Range` while its size
-/// and modification time stay as they were (a changed file with the same stamp is answered from
-/// the record, which is the cost of not hashing a pkg for each range), and one whose stamp changed
-/// is checked again: a changed size or time with other bytes is refused as a mismatch.
+/// Proves: a file whole-checked by a full `GET` is on record under its size, modification time,
+/// device, inode and change time, and a `Range` is answered from the record; a file whose bytes
+/// are replaced with the old size and the old modification time restored (what `cp -p` and `rsync
+/// -t` do) has another change time, so it is hashed again and refused as a mismatch; so is one
+/// whose size or modification time changed.
 ///
-/// Catches: a check recorded for the digest and not for the file that was checked, and a `Range`
-/// that hashes the whole pkg every time.
+/// Catches: a check recorded for the digest and not for the file that was checked, a record that a
+/// restored modification time defeats, and a `Range` that hashes the whole pkg every time.
 #[tokio::test]
 async fn a_pkg_changed_since_it_was_checked_is_checked_again() {
     let rig = Rig::new("pkg-recheck");
@@ -519,7 +520,13 @@ async fn a_pkg_changed_since_it_was_checked_is_checked_again() {
     let stamp = std::fs::metadata(&path)
         .and_then(|m| m.modified())
         .expect("a time");
+    let on_record = |path: &std::path::Path| {
+        let meta = std::fs::metadata(path).expect("metadata");
+        rig.server.pkgs.is_checked(&digest, pkg::Stamp::of(&meta))
+    };
+    assert!(!on_record(&path), "nothing was checked yet");
     assert_eq!(get(&rig, &digest, &[]).await.body, Ok(bytes.clone()));
+    assert!(on_record(&path), "a full GET that ended well is recorded");
     let seen = get(&rig, &digest, &[("range", "bytes=0-9")]).await;
     assert_eq!(seen.status, StatusCode::PARTIAL_CONTENT);
 
@@ -531,12 +538,9 @@ async fn a_pkg_changed_since_it_was_checked_is_checked_again() {
         .open(&path)
         .expect("opened");
     file.set_modified(stamp).expect("a time");
+    assert!(!on_record(&path), "the size and time are as they were");
     let seen = get(&rig, &digest, &[("range", "bytes=0-9")]).await;
-    assert_eq!(
-        seen.status,
-        StatusCode::PARTIAL_CONTENT,
-        "same stamp, answered from the record"
-    );
+    assert_eq!(seen.status, StatusCode::INTERNAL_SERVER_ERROR);
     file.set_modified(stamp + std::time::Duration::from_secs(5))
         .expect("a time");
     let seen = get(&rig, &digest, &[("range", "bytes=0-9")]).await;
@@ -547,6 +551,188 @@ async fn a_pkg_changed_since_it_was_checked_is_checked_again() {
     put(&rig, &digest, &longer);
     let seen = get(&rig, &digest, &[("range", "bytes=0-9")]).await;
     assert_eq!(seen.status, StatusCode::INTERNAL_SERVER_ERROR);
+}
+
+/// Proves: a `200`, `206` and `304` are cacheable for a year (the digest names the bytes), and a
+/// `416` carries the `ETag` and `Accept-Ranges` but no `Cache-Control`, so no cache keeps an
+/// unsatisfiable answer for the URL.
+///
+/// Catches: a cached `416` that outlives the file that was too short.
+#[tokio::test]
+async fn only_an_answer_with_the_file_is_cacheable() {
+    let rig = Rig::new("pkg-cache");
+    let (digest, _) = provided(&rig, 11, 100);
+    let etag = format!("\"{digest}\"");
+    let cacheable = Some("public, max-age=31536000, immutable");
+    let full = get(&rig, &digest, &[]).await;
+    let part = get(&rig, &digest, &[("range", "bytes=0-9")]).await;
+    let current = get(&rig, &digest, &[("if-none-match", &etag)]).await;
+    for (seen, status) in [
+        (&full, StatusCode::OK),
+        (&part, StatusCode::PARTIAL_CONTENT),
+        (&current, StatusCode::NOT_MODIFIED),
+    ] {
+        assert_eq!(seen.status, status);
+        assert_eq!(seen.header("cache-control"), cacheable, "{status}");
+    }
+    let past = get(&rig, &digest, &[("range", "bytes=100-")]).await;
+    assert_eq!(past.status, StatusCode::RANGE_NOT_SATISFIABLE);
+    assert_eq!(past.header("cache-control"), None);
+    assert_eq!(past.header("etag"), Some(etag.as_str()));
+    assert_eq!(past.header("accept-ranges"), Some("bytes"));
+    assert_eq!(past.header("content-range"), Some("bytes */100"));
+}
+
+/// A file as `AsyncRead` and `AsyncSeek` that fails where it is told to.
+struct Faulty {
+    data: Vec<u8>,
+    at: usize,
+    /// The read that fails once this many bytes were read.
+    fail_read_after: Option<usize>,
+    fail_seek: bool,
+}
+
+impl Faulty {
+    fn new(data: Vec<u8>) -> Self {
+        Self {
+            data,
+            at: 0,
+            fail_read_after: None,
+            fail_seek: false,
+        }
+    }
+}
+
+impl tokio::io::AsyncRead for Faulty {
+    fn poll_read(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+        buf: &mut tokio::io::ReadBuf<'_>,
+    ) -> std::task::Poll<std::io::Result<()>> {
+        if self.fail_read_after.is_some_and(|n| self.at >= n) {
+            return std::task::Poll::Ready(Err(std::io::Error::other("a read failed")));
+        }
+        let mut end = (self.at + buf.remaining()).min(self.data.len());
+        if let Some(n) = self.fail_read_after {
+            end = end.min(n);
+        }
+        buf.put_slice(&self.data[self.at..end]);
+        self.at = end;
+        std::task::Poll::Ready(Ok(()))
+    }
+}
+
+impl tokio::io::AsyncSeek for Faulty {
+    fn start_seek(
+        mut self: std::pin::Pin<&mut Self>,
+        position: std::io::SeekFrom,
+    ) -> std::io::Result<()> {
+        if self.fail_seek {
+            return Err(std::io::Error::other("a seek failed"));
+        }
+        if let std::io::SeekFrom::Start(to) = position {
+            self.at = usize::try_from(to).expect("a position");
+        }
+        Ok(())
+    }
+
+    fn poll_complete(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<std::io::Result<u64>> {
+        std::task::Poll::Ready(Ok(self.at as u64))
+    }
+}
+
+/// The frames of `body` until it ends: the bytes it gave and whether it ended in an error.
+async fn drained(body: crate::grpc::RouteBody) -> (Vec<u8>, bool) {
+    let mut body = std::pin::pin!(body);
+    let mut bytes = Vec::new();
+    while let Some(frame) =
+        std::future::poll_fn(|cx| hyper::body::Body::poll_frame(body.as_mut(), cx)).await
+    {
+        match frame {
+            Ok(frame) => bytes.extend(frame.into_data().unwrap_or_default()),
+            Err(_) => return (bytes, true),
+        }
+    }
+    (bytes, false)
+}
+
+/// Proves: the body of a range reads from the start it was given, and ends in an error (never as
+/// a shorter whole answer) when the seek fails, when a read fails after some bytes went out, and
+/// when the file ends before the length that was promised.
+///
+/// Catches: a range cut short that the client takes for complete, and a failed seek answered with
+/// bytes from the wrong place.
+#[tokio::test]
+async fn a_range_body_that_cannot_be_read_ends_in_an_error() {
+    let data = bytes_of(3, 200_000);
+    let (bytes, failed) = drained(pkg::part(Faulty::new(data.clone()), 10, 150_000)).await;
+    assert_eq!((bytes, failed), (data[10..150_010].to_vec(), false));
+
+    let mut no_seek = Faulty::new(data.clone());
+    no_seek.fail_seek = true;
+    assert_eq!(
+        drained(pkg::part(no_seek, 10, 100)).await,
+        (Vec::new(), true)
+    );
+
+    let mut breaks = Faulty::new(data.clone());
+    breaks.fail_read_after = Some(70_000);
+    let (bytes, failed) = drained(pkg::part(breaks, 0, 150_000)).await;
+    assert!(failed);
+    assert!(bytes.len() < 150_000);
+    assert_eq!(bytes, data[..bytes.len()].to_vec());
+
+    let (bytes, failed) = drained(pkg::part(Faulty::new(data[..50].to_vec()), 0, 100)).await;
+    assert_eq!((bytes, failed), (data[..50].to_vec(), true));
+}
+
+/// Proves: a full `GET` whose file cannot be read part-way ends the body in an error without its
+/// last chunk and does not record the file as checked, and hashing a file that cannot be read is
+/// an error, not a digest of what was read.
+///
+/// Catches: a read error taken for the end of the file, so a truncated pkg is sent as whole.
+#[tokio::test]
+async fn a_read_error_while_streaming_or_hashing_is_not_a_whole_answer() {
+    let rig = Rig::new("pkg-read-error");
+    provided(&rig, 5, 10);
+    let data = bytes_of(4, 200_000);
+    let digest = sha(&data);
+    let mut breaks = Faulty::new(data.clone());
+    breaks.fail_read_after = Some(100_000);
+    let mut streaming = pkg::Streaming {
+        file: breaks,
+        hasher: Sha256::new(),
+        held: None,
+        left: data.len() as u64,
+        done: false,
+        digest: digest.clone(),
+        stamp: pkg::Stamp::of(&std::fs::metadata(rig.pkg_dir()).expect("metadata")),
+        server: Arc::clone(&rig.server),
+    };
+    let mut sent = 0;
+    let mut ended = None;
+    while let Some(frame) = streaming.next().await {
+        match frame {
+            Ok(frame) => sent += frame.into_data().map_or(0, |d| d.len()),
+            Err(why) => ended = Some(why),
+        }
+    }
+    assert!(ended.is_some(), "the body ended in an error");
+    assert!(sent < data.len(), "the last chunk was held back");
+    assert!(!rig.server.pkgs.is_checked(&digest, streaming.stamp));
+
+    let mut breaks = Faulty::new(data.clone());
+    breaks.fail_read_after = Some(1000);
+    assert!(pkg::hash_of(&mut breaks, 200_000).await.is_err());
+    assert_eq!(
+        pkg::hash_of(&mut Faulty::new(data.clone()), 200_000)
+            .await
+            .ok(),
+        Some(digest)
+    );
 }
 
 /// Proves: the package family answers `503 unavailable` while the name has no certificate, and a

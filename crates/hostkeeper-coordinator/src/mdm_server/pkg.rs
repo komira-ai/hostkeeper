@@ -16,7 +16,8 @@
 //! chunk, so the client's connection is cut with fewer bytes than the length it was promised and
 //! no client holds a complete wrong file. A `HEAD` and a `Range` request cannot be checked as they
 //! are streamed, so they are answered only for a file whose whole digest was checked, once, at its
-//! present size and modification time: an earlier full `GET` that ended well records it, and
+//! present size, modification time, inode and change time (a file replaced with `cp -p` or `rsync
+//! -t` keeps the first two and not the last): an earlier full `GET` that ended well records it, and
 //! otherwise the file is hashed first (still in chunks); a file that fails is `500
 //! pkg_digest_mismatch`.
 //!
@@ -29,6 +30,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{self, SeekFrom};
+use std::os::unix::fs::MetadataExt as _;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::SystemTime;
@@ -45,7 +47,7 @@ use hyper::header::{
 use hyper::{Method, Response, StatusCode};
 use sha2::{Digest, Sha256};
 use tokio::fs::File;
-use tokio::io::{AsyncReadExt as _, AsyncSeekExt as _};
+use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncSeek, AsyncSeekExt as _};
 
 use super::{Family, MdmServer};
 use crate::grpc::RouteBody;
@@ -63,9 +65,39 @@ const CHUNK: usize = 64 * 1024;
 #[derive(Debug, Default)]
 pub(crate) struct Pkgs {
     dir: Option<PathBuf>,
-    /// For each digest, the size and modification time of the file when its whole digest was
-    /// last found equal to the name.
-    checked: Mutex<BTreeMap<String, (u64, Option<SystemTime>)>>,
+    /// For each digest, the stamp of the file when its whole digest was last found equal to the
+    /// name.
+    checked: Mutex<BTreeMap<String, Stamp>>,
+}
+
+/// What identifies the file a check was made of: its size, modification time, device and inode,
+/// and change time. A user cannot set the change time, so a file replaced or written in place under
+/// the old size and modification time (`cp -p`, `rsync -t`, a restore) has another stamp.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Stamp {
+    len: u64,
+    modified: Option<SystemTime>,
+    device: u64,
+    inode: u64,
+    changed: (i64, i64),
+}
+
+impl Stamp {
+    fn of(meta: &std::fs::Metadata) -> Self {
+        Self {
+            len: meta.len(),
+            modified: meta.modified().ok(),
+            device: meta.dev(),
+            inode: meta.ino(),
+            changed: (meta.ctime(), meta.ctime_nsec()),
+        }
+    }
+}
+
+/// `text` as a header value. The texts of this module are digits, hex digits and ASCII
+/// punctuation, which every header value allows.
+fn header(text: &str) -> HeaderValue {
+    HeaderValue::from_str(text).unwrap_or(HeaderValue::from_static(""))
 }
 
 impl Pkgs {
@@ -77,7 +109,7 @@ impl Pkgs {
         }
     }
 
-    fn is_checked(&self, digest: &str, stamp: (u64, Option<SystemTime>)) -> bool {
+    fn is_checked(&self, digest: &str, stamp: Stamp) -> bool {
         self.checked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -85,7 +117,7 @@ impl Pkgs {
             == Some(&stamp)
     }
 
-    fn record(&self, digest: &str, stamp: (u64, Option<SystemTime>)) {
+    fn record(&self, digest: &str, stamp: Stamp) {
         self.checked
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
@@ -206,7 +238,7 @@ fn matches_none(headers: &HeaderMap, etag: &str) -> bool {
 
 /// The SHA-256 of the next `len` bytes of `file`, read in chunks, in hex; of fewer bytes when the
 /// file ends before that.
-async fn hash_of(file: &mut File, len: u64) -> io::Result<String> {
+async fn hash_of<R: AsyncRead + Unpin>(file: &mut R, len: u64) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut left = len;
     let mut buffer = vec![0u8; CHUNK];
@@ -223,18 +255,18 @@ async fn hash_of(file: &mut File, len: u64) -> io::Result<String> {
 }
 
 /// The state of the body of a full `GET`: the file read so far and the chunk held back.
-struct Streaming {
-    file: File,
+struct Streaming<R> {
+    file: R,
     hasher: Sha256,
     held: Option<Bytes>,
     left: u64,
     done: bool,
     digest: String,
-    stamp: (u64, Option<SystemTime>),
+    stamp: Stamp,
     server: Arc<MdmServer>,
 }
 
-impl Streaming {
+impl<R: AsyncRead + Unpin> Streaming<R> {
     /// The next frame of the body: the chunk read before this one, or at the end the held last
     /// chunk once the digest is found equal, or the error that cuts the connection.
     async fn next(&mut self) -> Option<io::Result<Frame<Bytes>>> {
@@ -281,30 +313,48 @@ impl Streaming {
     }
 }
 
-/// The body of `length` bytes of `file` from its present position, with nothing hashed: a range of
-/// a file that was checked whole.
-fn part(file: File, length: u64) -> RouteBody {
-    let frames = stream::unfold((file, length), |(mut file, left)| async move {
-        if left == 0 {
-            return None;
-        }
-        let take = usize::try_from(left).map_or(CHUNK, |left| left.min(CHUNK));
-        let mut buffer = BytesMut::zeroed(take);
-        let read = file.read(&mut buffer).await.and_then(|read| match read {
-            0 => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "the pkg is shorter than it was",
-            )),
-            read => Ok(read),
-        });
-        match read {
-            Ok(read) => {
-                buffer.truncate(read);
-                Some((Ok(Frame::data(buffer.freeze())), (file, left - read as u64)))
+/// The body of `length` bytes of `file` from byte `start`, with nothing hashed: a range of a file
+/// that was checked whole. A seek or read that fails, or a file that ends early, ends the body in
+/// an error.
+fn part<R: AsyncRead + AsyncSeek + Send + Unpin + 'static>(
+    file: R,
+    start: u64,
+    length: u64,
+) -> RouteBody {
+    let frames = stream::unfold(
+        (file, length, Some(start)),
+        |(mut file, left, from)| async move {
+            if left == 0 {
+                return None;
             }
-            Err(why) => Some((Err(why), (file, 0))),
-        }
-    });
+            let take = usize::try_from(left).map_or(CHUNK, |left| left.min(CHUNK));
+            let mut buffer = BytesMut::zeroed(take);
+            let sought = match from {
+                Some(start) => file.seek(SeekFrom::Start(start)).await.map(drop),
+                None => Ok(()),
+            };
+            let read = match sought {
+                Ok(()) => file.read(&mut buffer).await.and_then(|read| match read {
+                    0 => Err(io::Error::new(
+                        io::ErrorKind::UnexpectedEof,
+                        "the pkg is shorter than it was",
+                    )),
+                    read => Ok(read),
+                }),
+                Err(why) => Err(why),
+            };
+            match read {
+                Ok(read) => {
+                    buffer.truncate(read);
+                    Some((
+                        Ok(Frame::data(buffer.freeze())),
+                        (file, left - read as u64, None),
+                    ))
+                }
+                Err(why) => Some((Err(why), (file, 0, None))),
+            }
+        },
+    );
     Either::Right(tonic::body::Body::new(StreamBody::new(frames)))
 }
 
@@ -360,18 +410,18 @@ pub(crate) async fn serve(
         return failure(StatusCode::NOT_FOUND, "not_found");
     };
     let len = meta.len();
-    let stamp = (len, meta.modified().ok());
+    let stamp = Stamp::of(&meta);
     let etag = format!("\"{digest}\"");
-    let tag = HeaderValue::try_from(etag.as_str()).unwrap_or_else(|_| HeaderValue::from_static(""));
+    let tag = header(&etag);
     let mut response = if matches_none(headers, &etag) {
         empty(StatusCode::NOT_MODIFIED)
     } else {
         let wanted = wanted(headers, len, &etag);
         if wanted == Wanted::Unsatisfiable {
             let mut response = empty(StatusCode::RANGE_NOT_SATISFIABLE);
-            if let Ok(value) = HeaderValue::try_from(format!("bytes */{len}")) {
-                response.headers_mut().insert(CONTENT_RANGE, value);
-            }
+            response
+                .headers_mut()
+                .insert(CONTENT_RANGE, header(&format!("bytes */{len}")));
             response
         } else {
             let whole_get = wanted == Wanted::Whole && method == Method::GET;
@@ -412,13 +462,7 @@ pub(crate) async fn serve(
                 });
                 Either::Right(tonic::body::Body::new(StreamBody::new(frames)))
             } else {
-                match file.seek(SeekFrom::Start(start)).await {
-                    Ok(_) => part(file, length),
-                    Err(why) => {
-                        tracing::error!(%why, %digest, "a pkg could not be read");
-                        return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal");
-                    }
-                }
+                part(file, start, length)
             };
             let mut response = Response::new(body);
             *response.status_mut() = status;
@@ -428,22 +472,26 @@ pub(crate) async fn serve(
                 CONTENT_TYPE,
                 HeaderValue::from_static("application/octet-stream"),
             );
-            if status == StatusCode::PARTIAL_CONTENT
-                && let Ok(value) =
-                    HeaderValue::try_from(format!("bytes {start}-{}/{len}", start + length - 1))
-            {
-                out.insert(CONTENT_RANGE, value);
+            if status == StatusCode::PARTIAL_CONTENT {
+                out.insert(
+                    CONTENT_RANGE,
+                    header(&format!("bytes {start}-{}/{len}", start + length - 1)),
+                );
             }
             response
         }
     };
+    let status = response.status();
     let out = response.headers_mut();
     out.insert(ETAG, tag);
     out.insert(ACCEPT_RANGES, HeaderValue::from_static("bytes"));
-    out.insert(
-        CACHE_CONTROL,
-        HeaderValue::from_static("public, max-age=31536000, immutable"),
-    );
+    // An answer that is no part of the file (`416`) is not stored for a year.
+    if status != StatusCode::RANGE_NOT_SATISFIABLE {
+        out.insert(
+            CACHE_CONTROL,
+            HeaderValue::from_static("public, max-age=31536000, immutable"),
+        );
+    }
     response
 }
 
