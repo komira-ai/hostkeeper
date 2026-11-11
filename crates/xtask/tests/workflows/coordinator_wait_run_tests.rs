@@ -222,7 +222,7 @@ fn wait_after(name: &str, first: &[&Coordinator], then: &Coordinator) -> Ran {
 /// The annotation of the error step after a 409 or a 404 with `status`.
 fn no_updater(status: &str) -> String {
     format!(
-        "::error::No coordinator updater reported this release ({VERSION}) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP {status}; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. With the control-plane deploy on (CP_DEPLOY_ENDPOINT), the job cp-deploy reported this release deployed, so check that HOSTKEEPER_COORDINATOR_URL names the coordinator it deploys. The hosts' desired version is not set."
+        "::error::No coordinator updater reported this release ({VERSION}) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP {status}; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. With the control-plane deploy on (CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS both set), the job cp-deploy reported this release deployed, so check that HOSTKEEPER_COORDINATOR_URL names the coordinator it deploys. The hosts' desired version is not set."
     )
 }
 
