@@ -28,7 +28,7 @@ It is made of two programs:
   host asks the coordinator to enroll it, and an operator approves the request. Macs are to be
   managed through a self-hosted MDM server; of that part the pure core and the host-step layer of
   its install kit, and the policy gate linked into the coordinator (without the pkg install yet,
-  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
+  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md); the server is designed to move into the coordinator, [coordinator-mdm.md](docs/design/coordinator-mdm.md), with the LAN package proxy in [package-proxy.md](docs/design/package-proxy.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
