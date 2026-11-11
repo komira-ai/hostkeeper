@@ -15,6 +15,8 @@ publish = false
 [workspace.dependencies]
 # Argon2id, the operator password hash of hostkeeper-coordinator (docs/design/operator-login.md
 # section 6.1). Pure Rust, MIT OR Apache-2.0; the PHC string format comes with it.
+# AES-CBC, one of the content ciphers of the CMS reply of mdmcert.download (hostkeeper-mdm-push).
+aes = "0.8.4"
 argon2 = "0.6.0"
 # The JWT segments of a CI token (hostkeeper-oidc); the attestation bundle's DSSE payload and
 # certificate (hostkeeper-package).
@@ -25,8 +27,12 @@ base64 = "0.23.1"
 boa_engine = "=0.22.0"
 # The byte buffers of HTTP bodies and of gRPC messages.
 bytes = "1.12.1"
+# CBC mode over `aes` and `des`, the content ciphers of that reply.
+cbc = { version = "0.1.2", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
+# Single and triple DES, the other content ciphers a CMS reply may use (hostkeeper-mdm-push).
+des = "0.8.1"
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 futures = "0.3.34"
 # The operating system's random bytes, from which hostkeeper-enroll makes the host's key. Already in
@@ -81,6 +87,11 @@ prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
 # hostkeeper-ui-tests and hostkeeper-testkit add `serde` to read a message's canonical JSON against
 # its descriptor.
+# The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
+rand_core = { version = "0.6.4", features = ["getrandom"] }
+# The RSA key of a push request, its CSR's and encryption certificate's signing key, and the
+# PKCS#1 decryption of the reply's content key (hostkeeper-mdm-push). MIT OR Apache-2.0.
+rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.
@@ -172,6 +183,9 @@ tonic-prost-build = "0.14.6"
 # fields; the coordinator's logs.
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+# The root certificates of the public web, which the APNs and mdmcert.download clients trust
+# (hostkeeper-mdm-push). Licence CDLA-Permissive-2.0, allowed in deny.toml.
+webpki-roots = "1.0.12"
 # Reads a CSR and a certificate (hostkeeper-enrollment), and its tests read issued certificates
 # back; a certificate's subjectAltNames and validity (hostkeeper-wire, hostkeeper-tls).
 x509-parser = "0.18.1"
@@ -179,7 +193,7 @@ x509-parser = "0.18.1"
 tower = { version = "0.5.3", default-features = false }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
 # the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
-# and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
+# and no webpki-roots (the package fetch trusts the roots its caller gives it, not a bundled set). The ring provider is ureq's
 # `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
 # feature with a leading underscore is not covered by semver, so the version is exact.
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
