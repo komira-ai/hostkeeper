@@ -412,8 +412,8 @@ fn device_of(record: &DeviceRecord, now: i64) -> AbmDevice {
 /// The ADE profile the settings want: none until `mdm_name` names a host name.
 fn wanted_profile(set: &BTreeMap<String, String>) -> Option<AdeProfile> {
     let host = set.get("mdm_name").filter(|name| is_host_name(name))?;
-    let name = mdm_settings::text_of(set, "ade_profile_name")?;
-    Some(AdeProfile::new(name, host))
+    let name = mdm_settings::text_of(set, "ade_profile_name");
+    Some(AdeProfile::new(&name, host))
 }
 
 /// Runs a pass every `abm_sync_s` seconds, for as long as it is polled.

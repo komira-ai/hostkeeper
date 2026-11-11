@@ -56,6 +56,7 @@ use hyper::{Method, Request, Response, StatusCode};
 
 use crate::enrollment::Random;
 use crate::http::{BoxError, Peer, error, read_body};
+use crate::mdm_acme::renewal::TlsRenewer;
 use crate::mdm_verify::AbmAccountCheck;
 use crate::service::Coordinator;
 use crate::store::mdm::{MdmError, MdmStore};
@@ -212,6 +213,8 @@ pub(crate) struct Parts {
     /// What asks Apple whether the ABM token is accepted (`Mdm.Verify`); the ABM client gives one,
     /// and none says the token cannot be checked.
     pub(crate) abm: Option<Arc<dyn AbmAccountCheck>>,
+    /// The renewal of the certificate for the MDM name, run beside the listener.
+    pub(crate) renewer: Arc<TlsRenewer>,
 }
 
 /// The MDM server: what the routes of the Macs' listener use.
@@ -225,6 +228,7 @@ pub(crate) struct MdmServer {
     tls: Arc<MdmTls>,
     sweep: Duration,
     abm: Option<Arc<dyn AbmAccountCheck>>,
+    pub(crate) renewer: Arc<TlsRenewer>,
     /// One `Authenticate` at a time: the live enrollment of a serial is read, then replaced.
     pub(crate) authenticating: tokio::sync::Mutex<()>,
 }
@@ -241,6 +245,7 @@ impl MdmServer {
             tls,
             sweep,
             abm,
+            renewer,
         } = parts;
         Self {
             store,
@@ -252,6 +257,7 @@ impl MdmServer {
             tls,
             sweep,
             abm,
+            renewer,
             authenticating: tokio::sync::Mutex::new(()),
         }
     }

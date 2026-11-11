@@ -28,6 +28,12 @@ enum Shape {
     Whole { min: u64, max: u64 },
     /// One of the values listed.
     OneOf(&'static [&'static str]),
+    /// A DNS name of two or more labels, kept in lower case; empty clears it.
+    DnsName,
+    /// An `https://` URL with a host and no space, up to 512 bytes.
+    HttpsUrl,
+    /// An email address: one `@`, text each side, no space, up to 254 bytes; empty clears it.
+    Email,
 }
 
 /// One setting: its name, its default and what it takes.
@@ -41,7 +47,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 18] = [
+pub const SETTINGS: [Setting; 28] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -97,6 +103,81 @@ pub const SETTINGS: [Setting; 18] = [
         name: "push_timeout_s",
         default: "30",
         shape: Shape::Whole { min: 1, max: 300 },
+    },
+    // The DNS zone the MDM name lives in at the DNS provider, for the ACME challenge record
+    // (docs/design/coordinator-mdm.md, 4.10). Never worked out from the name: `mdm.internal.example.net`
+    // is in the zone `example.net`. Empty: the certificate is not ordered.
+    Setting {
+        name: "dns_zone",
+        default: "",
+        shape: Shape::DnsName,
+    },
+    // The ACME directory the certificate is ordered at; the staging directory is a choice for a
+    // first try, because the production CA rate-limits failures.
+    Setting {
+        name: "acme_directory",
+        default: "https://acme-v02.api.letsencrypt.org/directory",
+        shape: Shape::HttpsUrl,
+    },
+    // The contact address of a new ACME account. Empty: none.
+    Setting {
+        name: "acme_contact",
+        default: "",
+        shape: Shape::Email,
+    },
+    // The time to live, in seconds, of the challenge record. The provider's shortest is not
+    // measured; GoDaddy documents 600 for a TXT record.
+    Setting {
+        name: "dns_ttl_s",
+        default: "600",
+        shape: Shape::Whole {
+            min: 60,
+            max: 86_400,
+        },
+    },
+    // The seconds between two looks at whether the provider shows the challenge record, and
+    // between two looks at the CA's state of the order.
+    Setting {
+        name: "dns_poll_s",
+        default: "15",
+        shape: Shape::Whole { min: 1, max: 300 },
+    },
+    // How long, in seconds, the challenge record may take to show at the provider.
+    Setting {
+        name: "dns_timeout_s",
+        default: "600",
+        shape: Shape::Whole { min: 30, max: 3600 },
+    },
+    // The seconds the coordinator waits after the provider shows the record and before it asks the
+    // CA to check it, for the zone's servers to answer with it. Not measured.
+    Setting {
+        name: "dns_settle_s",
+        default: "60",
+        shape: Shape::Whole { min: 0, max: 600 },
+    },
+    // How long, in seconds, the CA may take to check the challenge and to issue.
+    Setting {
+        name: "acme_timeout_s",
+        default: "300",
+        shape: Shape::Whole { min: 30, max: 3600 },
+    },
+    // The seconds between two looks at whether the certificate for the MDM name is due.
+    Setting {
+        name: "tls_check_s",
+        default: "300",
+        shape: Shape::Whole {
+            min: 10,
+            max: 86_400,
+        },
+    },
+    // The seconds between two attempts to renew the certificate after one failed.
+    Setting {
+        name: "tls_retry_s",
+        default: "3600",
+        shape: Shape::Whole {
+            min: 60,
+            max: 604_800,
+        },
     },
     // The packages the gate may send a Mac by name; the hostkeeper pkg is the one named
     // `hostkeeper`. Seeded once from the old `--mdm-pkg-allowlist` file.
@@ -206,6 +287,11 @@ impl Setting {
                 let printable = value.chars().all(|c| !c.is_control());
                 ((1..=64).contains(&value.chars().count()) && printable).then(|| value.to_owned())
             }
+            Shape::DnsName => Some(String::new())
+                .filter(|_| value.is_empty())
+                .or_else(|| dns_name(value)),
+            Shape::HttpsUrl => https_url(value).then(|| value.to_owned()),
+            Shape::Email => (value.is_empty() || email(value)).then(|| value.to_owned()),
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =
                     value.split(',').map(|d| parse_days(d.trim())).collect();
@@ -221,6 +307,52 @@ impl Setting {
             }
         }
     }
+}
+
+/// `text` as a DNS name in lower case: two or more labels of letters, digits and `-` that neither
+/// start nor end with `-`, each 1 to 63 long, at most 253 in all.
+fn dns_name(text: &str) -> Option<String> {
+    let name = text.to_ascii_lowercase();
+    let label_ok = |label: &str| {
+        (1..=63).contains(&label.len())
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+    };
+    let labels: Vec<&str> = name.split('.').collect();
+    (name.len() <= 253 && labels.len() >= 2 && labels.iter().all(|label| label_ok(label)))
+        .then_some(name)
+}
+
+fn https_url(text: &str) -> bool {
+    let plain = text.bytes().all(|b| b.is_ascii_graphic());
+    let host = text
+        .strip_prefix("https://")
+        .and_then(|rest| rest.split(['/', '?', '#']).next())
+        .unwrap_or("");
+    plain && text.len() <= 512 && !host.is_empty() && !host.contains('@')
+}
+
+fn email(text: &str) -> bool {
+    let plain = text.bytes().all(|b| b.is_ascii_graphic());
+    let mut parts = text.split('@');
+    let (local, domain, rest) = (parts.next(), parts.next(), parts.next());
+    plain
+        && text.len() <= 254
+        && rest.is_none()
+        && local.is_some_and(|part| !part.is_empty())
+        && domain.is_some_and(|part| {
+            part.contains('.') && !part.starts_with('.') && !part.ends_with('.')
+        })
+}
+
+/// The text value of the setting `name` among the `set` ones: what was set, or its default; empty
+/// for a name this release does not know.
+#[must_use]
+pub fn text_of(set: &BTreeMap<String, String>, name: &str) -> String {
+    find(name).map_or_else(String::new, |setting| value_of(set, setting).to_owned())
 }
 
 /// A whole number of days written with digits only.
@@ -275,13 +407,6 @@ pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u6
     find(name)
         .and_then(|setting| parse_whole(value_of(set, setting)))
         .unwrap_or(fallback)
-}
-
-/// The text of the setting `name` among the `set` ones: what was set or its default, and none for
-/// a name this release does not know.
-#[must_use]
-pub fn text_of<'a>(set: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
-    find(name).map(|setting| value_of(set, setting))
 }
 
 #[cfg(test)]

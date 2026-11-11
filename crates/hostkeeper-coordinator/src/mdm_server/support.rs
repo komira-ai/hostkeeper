@@ -391,6 +391,7 @@ impl Rig {
             tls: Arc::new(MdmTls::new(Arc::clone(&setup), trust)),
             sweep: Duration::from_secs(60),
             abm,
+            renewer: Arc::new(idle_renewer(&setup)),
         }));
         let fake = Fake::new();
         let coordinator = Arc::new(coordinator_over(&fake, &setup, Some(&server)));
@@ -853,6 +854,10 @@ pub(super) struct Spec {
     pub(super) sid_tag: Option<u8>,
     pub(super) flip_signature: bool,
     pub(super) drop_certificates: bool,
+    /// Only the first this many fields of the signer info are sent, when set.
+    pub(super) keep_fields: Option<usize>,
+    /// The signer is named by a sequence of one part, not issuer and serial.
+    pub(super) lone_sid: bool,
     /// Keeps only this many of the six fields of the signer's info, when set.
     pub(super) info_fields: Option<usize>,
     /// Names the signer by its issuer alone, without a serial number.
@@ -875,6 +880,8 @@ impl Default for Spec {
             sid_tag: None,
             flip_signature: false,
             drop_certificates: false,
+            keep_fields: None,
+            lone_sid: false,
             info_fields: None,
             short_sid: false,
         }
@@ -921,7 +928,7 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     }
     let (_, parsed) = x509_parser::parse_x509_certificate(&mac.der).expect("a certificate");
     let sid = match (&spec.ski, spec.sid_tag) {
-        (_, Some(0x30)) => der(0x30, &der(0x02, &[1])),
+        _ if spec.lone_sid => der(0x30, &der(0x02, &[1])),
         (_, Some(tag)) => der(tag, b"x"),
         (Some(ski), None) => der(0x80, ski),
         (None, None) => {
@@ -956,7 +963,10 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     if let Some(keep) = spec.info_fields {
         fields.truncate(keep);
     }
-    let info = der(0x30, &fields.concat());
+    let info = der(
+        0x30,
+        &fields[..spec.keep_fields.unwrap_or(fields.len())].concat(),
+    );
     let infos = vec![info; spec.signers].concat();
     let certificates = if spec.drop_certificates {
         Vec::new()
@@ -982,4 +992,20 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
 
 pub(super) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
     STANDARD.encode(message(body, mac, spec))
+}
+
+/// A renewer over `setup` whose CA is down and whose clock is the test's: with no name set it
+/// does nothing.
+fn idle_renewer(setup: &Arc<MdmSetup>) -> crate::mdm_acme::renewal::TlsRenewer {
+    use crate::mdm_acme::testkit::{FakeAcme, FakeClock, FakeDns, FakeProviders, Mood};
+    let dns = FakeDns::new();
+    let ca = FakeAcme::new(&dns, "localhost", "_acme-challenge", NOW, 1);
+    ca.be(Mood::Down);
+    crate::mdm_acme::renewal::TlsRenewer::new(crate::mdm_acme::renewal::Parts {
+        setup: Arc::clone(setup),
+        https: ca,
+        providers: Arc::new(FakeProviders(dns)),
+        clock: FakeClock::at(NOW),
+        status: Arc::clone(setup.tls_status()),
+    })
 }

@@ -47,6 +47,11 @@ jaq-std = "3.0.4"
 # hostkeeper-oidc); members turn on the parts they use.
 http-body-util = "0.1.5"
 hyper = { version = "1.12.0", default-features = false }
+# The ACME client of the coordinator's certificate for the MDM name (hostkeeper-coordinator,
+# docs/design/coordinator-mdm.md 4.10). Apache-2.0; ring only (no aws-lc), the same rustls as
+# above. No hyper-rustls: its HTTP is the coordinator's own (`mdm_acme::https`), one client for
+# the ACME directory and the DNS provider, and one fake for both in tests.
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "rcgen"] }
 hyper-util = { version = "0.1.21", default-features = false }
 # The Linux daemon's reader of the BMC over `/dev/ipmi0` (hostkeeper-daemon's `ipmi`): the
 # kernel IPMI device's `ioctl`s behind a safe `File`, so the workspace keeps `unsafe` out. Only

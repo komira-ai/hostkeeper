@@ -133,6 +133,27 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
   push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
   reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).
+- **The certificate for the MDM name (CM17).** With `--mdm-listen` the coordinator orders and renews the
+  certificate of the MDM name itself, by ACME with DNS-01, and stores it as the next version of `tls_key`
+  and `tls_cert`; the listener serves it from the next handshake on. It starts once the setup holds the
+  name (`mdm_name`), the zone (`dns_zone`, for `mdm.internal.example.net` the zone `example.net`, never
+  worked out from the name) and a DNS credential (`dns_credential`, JSON that names the provider and the
+  kind: `{"provider":"godaddy","kind":"sso-key","key":"..","secret":".."}`, or `"kind":"bearer"` with a
+  `"token"`); until then it does nothing and reports nothing. The ACME account is made once per
+  directory and kept as `acme_account_key`. The challenge record is `_acme-challenge.<labels of the name
+  before the zone>` and is removed after every order, whether it succeeded or failed; GoDaddy replaces
+  all TXT records at a name on a write, so the provider code reads them and writes them back with the
+  new one, and removes only its own value. An uploaded certificate (`tls_key`, `tls_cert`) is used until
+  it is due. Settings, with their defaults: `acme_directory` (Let's Encrypt production; the staging
+  directory is a choice for a first try), `acme_contact` (none), `tls_renew_days` (30), `tls_check_s`
+  (300, the seconds between two looks at whether it is due), `tls_retry_s` (3600, the wait after a
+  failure), `dns_ttl_s` (600), `dns_poll_s` (15), `dns_timeout_s` (600, how long the record may take to
+  show at the provider), `dns_settle_s` (60, the wait between the provider showing it and the CA being
+  asked) and `acme_timeout_s` (300). The TTL, the time to show and the add and delete calls were not
+  measured against the live zone, hence the settings. A failing renewal raises the alert
+  `mdm_tls_renewal_failed`, and a provider that answers 401 or 403 raises `mdm_dns_credential_rejected`;
+  both stand until an attempt ends in a certificate. The coordinator needs outbound HTTPS to the ACME
+  directory and to `api.godaddy.com`. A credential is called 60 times a minute at most.
 - **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
   (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
   committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, fetch time,

@@ -8,7 +8,7 @@ fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these eighteen, each with its default from the start
+/// Proves: the settings this release knows are these twenty-eight, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -26,6 +26,19 @@ fn each_setting_has_a_default_from_the_start() {
             ("push_expiry_s", "86400"),
             ("push_priority", "10"),
             ("push_timeout_s", "30"),
+            ("dns_zone", ""),
+            (
+                "acme_directory",
+                "https://acme-v02.api.letsencrypt.org/directory"
+            ),
+            ("acme_contact", ""),
+            ("dns_ttl_s", "600"),
+            ("dns_poll_s", "15"),
+            ("dns_timeout_s", "600"),
+            ("dns_settle_s", "60"),
+            ("acme_timeout_s", "300"),
+            ("tls_check_s", "300"),
+            ("tls_retry_s", "3600"),
             ("installs", "[]"),
             ("proxy_wait_s", "10"),
             ("proxy_redirects", "3"),
@@ -166,6 +179,132 @@ fn a_list_setting_reads_as_numbers_and_falls_back_to_its_default() {
     assert_eq!(list_of(&set, "nothing"), Vec::<u32>::new());
 }
 
+/// Proves: `dns_zone` takes a DNS name of two or more labels in lower case (upper case is folded)
+/// or nothing, and refuses one label, an empty label, a label that starts or ends with `-`, a
+/// character outside letters, digits and `-`, a label over 63 bytes and a name over 253.
+///
+/// Catches: a zone that would be put into the provider's URL path unchecked.
+#[test]
+fn the_dns_zone_takes_a_dns_name_or_nothing() {
+    assert_eq!(
+        check("dns_zone", "Example.NET").as_deref(),
+        Some("example.net")
+    );
+    assert_eq!(check("dns_zone", "").as_deref(), Some(""));
+    assert_eq!(
+        check("dns_zone", "mdm-1.example.net").as_deref(),
+        Some("mdm-1.example.net")
+    );
+    for bad in [
+        "example",
+        "a..b",
+        "-a.example.net",
+        "a-.example.net",
+        "a_b.example.net",
+        "a/b.example.net",
+        "a b.example.net",
+    ] {
+        assert_eq!(check("dns_zone", bad), None, "{bad}");
+    }
+    let label = "a".repeat(64);
+    assert_eq!(check("dns_zone", &format!("{label}.net")), None);
+    let long = format!("{}.net", vec!["a".repeat(60); 5].join("."));
+    assert_eq!(check("dns_zone", &long), None);
+}
+
+/// Proves: `acme_directory` takes an `https://` URL with a host and no credentials in it, and
+/// refuses plain http, a URL with no host, one with a space, one with an `@`, and one over 512
+/// bytes; `acme_contact` takes an address or nothing and refuses text with no `@`, two, a space,
+/// a domain with no dot or with a dot at an end, and no name before the `@`.
+#[test]
+fn the_acme_directory_and_contact_take_a_url_and_an_address() {
+    let staging = "https://acme-staging-v02.api.letsencrypt.org/directory";
+    assert_eq!(check("acme_directory", staging).as_deref(), Some(staging));
+    for bad in [
+        "http://acme.test/",
+        "https://",
+        "https:///x",
+        "https://acme.test/a b",
+        "https://u:p@acme.test/",
+    ] {
+        assert_eq!(check("acme_directory", bad), None, "{bad}");
+    }
+    assert_eq!(
+        check(
+            "acme_directory",
+            &format!("https://acme.test/{}", "a".repeat(512))
+        ),
+        None
+    );
+    assert_eq!(
+        check("acme_contact", "ops@example.net").as_deref(),
+        Some("ops@example.net")
+    );
+    assert_eq!(check("acme_contact", "").as_deref(), Some(""));
+    for bad in [
+        "ops",
+        "a@b@example.net",
+        "o ps@example.net",
+        "ops@example",
+        "ops@.net",
+        "ops@net.",
+        "@example.net",
+    ] {
+        assert_eq!(check("acme_contact", bad), None, "{bad}");
+    }
+    assert_eq!(
+        check("acme_contact", &format!("{}@example.net", "a".repeat(250))),
+        None
+    );
+}
+
+/// Proves: the timing settings of the certificate take whole seconds within their bounds and
+/// refuse a value outside them.
+#[test]
+fn the_certificate_timing_settings_have_bounds() {
+    for (name, low, high) in [
+        ("dns_ttl_s", 60, 86_400),
+        ("dns_poll_s", 1, 300),
+        ("dns_timeout_s", 30, 3600),
+        ("dns_settle_s", 0, 600),
+        ("acme_timeout_s", 30, 3600),
+        ("tls_check_s", 10, 86_400),
+        ("tls_retry_s", 60, 604_800),
+    ] {
+        assert!(
+            check(name, &low.to_string()).is_some(),
+            "{name} takes {low}"
+        );
+        assert!(
+            check(name, &high.to_string()).is_some(),
+            "{name} takes {high}"
+        );
+        if low > 0 {
+            assert!(
+                check(name, &(low - 1).to_string()).is_none(),
+                "{name} refuses {}",
+                low - 1
+            );
+        }
+        assert!(
+            check(name, &(high + 1).to_string()).is_none(),
+            "{name} refuses {}",
+            high + 1
+        );
+    }
+}
+
+/// Proves: the text of a setting is what was set or its default, and empty for a name this
+/// release does not know.
+#[test]
+fn text_of_reads_the_set_value_or_the_default() {
+    let mut set = BTreeMap::new();
+    assert_eq!(super::text_of(&set, "dns_zone"), "");
+    set.insert("dns_zone".to_owned(), "example.net".to_owned());
+    assert_eq!(super::text_of(&set, "dns_zone"), "example.net");
+    assert_eq!(super::text_of(&set, "mdm_name"), "");
+}
+
 /// Proves: the setting `installs` takes the JSON of named installs the gate reads, keeps it as
 /// the gate writes it back (an unknown key from a later release dropped, the order kept), and
 /// refuses text the gate would refuse; its default is no install.
@@ -262,7 +401,7 @@ fn the_counts_of_the_abm_sync_are_judged_within_their_range() {
 
 /// Proves: the profile name is 1 to 64 printable characters (space and non-ASCII letters allowed),
 /// kept as written but for the whitespace around it, and refused empty, over 64 characters or with
-/// a control character; `text_of` reads a setting's text, its default when unset, and none for a
+/// a control character; `text_of` reads a setting's text, its default when unset, and empty for a
 /// name this release does not know.
 ///
 /// Catches: a profile name ABM would refuse and a sync that then fails every five minutes.
@@ -280,8 +419,8 @@ fn the_profile_name_is_a_short_printable_text() {
         assert_eq!(check("ade_profile_name", bad), None, "{bad:?}");
     }
     let mut set = BTreeMap::new();
-    assert_eq!(text_of(&set, "ade_profile_name"), Some("Komira MDM"));
+    assert_eq!(text_of(&set, "ade_profile_name"), "Komira MDM");
     set.insert("ade_profile_name".to_owned(), "Other".to_owned());
-    assert_eq!(text_of(&set, "ade_profile_name"), Some("Other"));
-    assert_eq!(text_of(&set, "nothing"), None);
+    assert_eq!(text_of(&set, "ade_profile_name"), "Other");
+    assert_eq!(text_of(&set, "nothing"), "");
 }

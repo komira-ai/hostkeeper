@@ -647,8 +647,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                         devices,
                         Arc::new(SystemClock),
                         os_random(),
-                        queue,
                         coordinator.mdm_setup(),
+                        queue,
                     )?
                 }
                 None => None,

@@ -304,7 +304,7 @@ impl Mdm {
         random: Random,
         setup: &MdmSetup,
     ) -> Result<Option<Self>, MdmError> {
-        Self::open_with(flags, devices, clock, random, None, setup)
+        Self::open_with(flags, devices, clock, random, setup, None)
     }
 
     /// [`Self::open`], with the gate's commands queued in `queue` (the coordinator's own, with
@@ -318,8 +318,8 @@ impl Mdm {
         devices: Devices<'_>,
         clock: Arc<dyn UnixClock>,
         random: Random,
-        queue: Option<Arc<dyn CommandQueue>>,
         setup: &MdmSetup,
+        queue: Option<Arc<dyn CommandQueue>>,
     ) -> Result<Option<Self>, MdmError> {
         let (queue, webhook_listen): (Arc<dyn CommandQueue>, Option<SocketAddr>) = match queue {
             Some(queue) => (queue, None),

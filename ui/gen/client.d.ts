@@ -227,7 +227,9 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_STORE_UNREACHABLE"
     | "ALERT_KIND_TRUSTED_ROOT"
-    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY";
+    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
+    | "ALERT_KIND_MDM_TLS_RENEWAL_FAILED"
+    | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";

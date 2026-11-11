@@ -78,6 +78,8 @@ http-body-util.workspace = true
 # The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }
+# The ACME client of the certificate for the MDM name (`src/mdm_acme`).
+instant-acme.workspace = true
 # `O_NOFOLLOW`, for reading the files of a snapshot without following a link (`src/backup.rs`).
 libc.workspace = true
 # The Postgres store of `--database-dsn-file` (`src/store/postgres`), on the store's own threads.
@@ -116,6 +118,10 @@ x509-parser.workspace = true
 [dev-dependencies]
 # `builder`: the test makes the CMS envelope the ABM token is delivered in.
 cms = { workspace = true, features = ["builder"] }
+# The CSR the fake ACME CA reads to issue a certificate for the key the order made, and the
+# validity it gives it (`src/mdm_acme/testkit.rs`).
+rcgen = { workspace = true, features = ["x509-parser"] }
+time.workspace = true
 # The fakes of the clock, the APNs sender and the mdmcert.download transport, and the keys and
 # certificates the push tests make.
 hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push", features = ["testkit"] }
