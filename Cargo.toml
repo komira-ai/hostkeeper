@@ -25,10 +25,8 @@ base64 = "0.23.1"
 boa_engine = "=0.22.0"
 # The byte buffers of HTTP bodies and of gRPC messages.
 bytes = "1.12.1"
-# CBC mode over `aes` and `des`, the content ciphers of that reply.
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
-# Single and triple DES, the other content ciphers a CMS reply may use (hostkeeper-mdm-push).
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 futures = "0.3.34"
 # The operating system's random bytes, from which hostkeeper-enroll makes the host's key. Already in
@@ -83,10 +81,6 @@ prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
 # hostkeeper-ui-tests and hostkeeper-testkit add `serde` to read a message's canonical JSON against
 # its descriptor.
-# The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
-rand_core = { version = "0.6.4", features = ["getrandom"] }
-# The RSA key of a push request, its CSR's and encryption certificate's signing key, and the
-# PKCS#1 decryption of the reply's content key (hostkeeper-mdm-push). MIT OR Apache-2.0.
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.

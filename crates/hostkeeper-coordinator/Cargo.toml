@@ -116,7 +116,6 @@ plist.workspace = true
 prost-types.workspace = true
 # The RSA keys of the push tests, read back from the sealed records to make a certificate or a
 # reply for them.
-# The release hostkeeper-mdm-push is written against (its tests make the keys); see that crate.
 rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 # The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
 # that release's daemon does (tests/move_v0_1_221.rs).

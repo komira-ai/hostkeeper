@@ -3,8 +3,8 @@
 //!
 //! - [`CommandQueue`]: where the gate puts a command for a Mac. [`NanoHub`] is one: the client of
 //!   NanoHUB's command queue, on loopback, with the API key read from a file ([`ApiKey`]); it
-//!   sends only the five [`COMMAND_TYPES`]. The coordinator's own queue (`--mdm-listen`) is the
 //!   sends only the eight [`COMMAND_TYPES`]. The coordinator's own queue (`--mdm-listen`) is the
+//!   other, and the Macs' check-ins then reach [`Gate::handle`] directly.
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
 //!   command result to; a thin adapter that reads the body ([`parse_event`]) and calls
 //!   [`Gate::handle`], the one entry point for events.

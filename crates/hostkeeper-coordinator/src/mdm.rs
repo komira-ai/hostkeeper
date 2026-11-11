@@ -37,15 +37,15 @@
 //! install `hostkeeper`, and the file is not read again. The other installs of the setting are
 //! sent by the baseline.
 //!
+//! With `--mdm-listen` instead (`docs/design/coordinator-mdm.md`, CM11a) the gate's commands go
+//! into the coordinator's own queue ([`crate::mdm_server`]) and the Macs' check-ins and results
+//! reach the gate from the listener; NanoHUB's three flags are not read and no webhook is served.
+//!
 //! With `--mdm-baseline-file` as well (and `--mac-serial-allowlist`), the enrollment side also
 //! sets up each Mac at enrollment ([`hostkeeper_mdm_gate::baseline`]): per host group, Screen
 //! Sharing for a supervised Mac, the group's profiles, the Mac's name and the installs, kept by a `ProfileList` check every
 //! `--mdm-baseline-check-s` seconds. The file and its profiles must be root's alone; each of its
 //! host groups must be the role of some allowlist entry; `Mdm.ListDevices` shows each Mac's state.
-//!
-//! With `--mdm-listen` instead (`docs/design/coordinator-mdm.md`, CM11a) the gate's commands go
-//! into the coordinator's own queue ([`crate::mdm_server`]) and the Macs' check-ins and results
-//! reach the gate from the listener; NanoHUB's three flags are not read and no webhook is served.
 //!
 //! Without the three flags or `--mdm-listen` the coordinator runs no gate: its port is
 //! [`NoDeviceState`], and `Mdm.ListDevices` answers no device.

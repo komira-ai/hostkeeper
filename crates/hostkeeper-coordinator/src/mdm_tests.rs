@@ -101,6 +101,85 @@ pub(crate) fn mdm_with(dir: &Scratch, records: &[DeviceRecord]) -> Mdm {
     .expect("the flags name a gate")
 }
 
+/// The enrollment of a coordinator whose every Mac is allowed and in host group `group`: all the
+/// gate's baseline asks of it. It issues no nonce and has no request waiting.
+struct InGroup(&'static str);
+
+impl hostkeeper_mdm_gate::Enrollments for InGroup {
+    fn allowed(&self, _serial: &str) -> bool {
+        true
+    }
+
+    fn waiting(
+        &self,
+        _serial: &str,
+    ) -> Result<Vec<hostkeeper_mdm_gate::Waiting>, hostkeeper_mdm_gate::EnrollmentsError> {
+        Ok(Vec::new())
+    }
+
+    fn last_approval_unix(
+        &self,
+        _serial: &str,
+    ) -> Result<Option<u64>, hostkeeper_mdm_gate::EnrollmentsError> {
+        Ok(None)
+    }
+
+    fn host_group(&self, _serial: &str) -> Option<String> {
+        Some(self.0.to_owned())
+    }
+
+    fn host_name(&self, _serial: &str) -> Option<String> {
+        None
+    }
+
+    fn issue_nonce(
+        &self,
+        _serial: &str,
+        _request_id: &hostkeeper_enrollment::names::KeyHash,
+    ) -> Result<hostkeeper_mdm_gate::Nonce, hostkeeper_mdm_gate::EnrollmentsError> {
+        Err(hostkeeper_mdm_gate::EnrollmentsError(
+            "this test's enrollment issues no nonce".to_owned(),
+        ))
+    }
+
+    fn audit(&self, _action: &str, _reason: &str) {}
+}
+
+/// A gate over `records` with the enrollment baseline that turns Screen Sharing on for host group
+/// `group`, and an enrollment that puts every Mac in that group.
+pub(crate) fn mdm_with_baseline(
+    dir: &Scratch,
+    records: &[DeviceRecord],
+    group: &'static str,
+) -> Mdm {
+    use hostkeeper_mdm_gate::{
+        Baseline, ConfigProfile, DaemonProfile, EnrollSide, ProfileIdentifier,
+    };
+    let mdm = mdm_with(dir, records);
+    let identifier = ProfileIdentifier::parse("com.example.hostkeeper.mdm").expect("an identifier");
+    let text =
+        format!("[[group]]\nhost_group = \"{group}\"\n[[group.entry]]\nremote_desktop = true\n");
+    let baseline = Baseline::parse(&text, &RealFs, &identifier).expect("a baseline");
+    let daemon = "coordinator = \"https://coordinator.example:8443\"\n\
+        ca_sha256 = \"9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08\"\n\
+        release_channel = \"https://releases.example\"\n\n\
+        [trusted_signers]\norganisation = \"komira-ai\"\nworkflow = \".github/workflows/release.yml\"\n\
+        refs = [\"refs/tags/*\"]\nhosted_runner = true\n";
+    let side = EnrollSide {
+        identifier,
+        config: ConfigProfile::new(DaemonProfile::from_toml(daemon).expect("the daemon config")),
+        enrollments: Arc::new(InGroup(group)),
+    };
+    let gate = Arc::try_unwrap(mdm.gate)
+        .expect("the only hold")
+        .with_baseline(Some(baseline))
+        .with_enrollment(side);
+    Mdm {
+        gate: Arc::new(gate),
+        ..mdm
+    }
+}
+
 /// The device status the gate says of `serial` through the coordinator's port.
 fn said(mdm: &Mdm, serial: &str) -> Result<DeviceStatus, DeviceStateError> {
     Mdm::device_state(Some(mdm)).status(serial)

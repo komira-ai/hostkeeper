@@ -807,8 +807,9 @@ fn device_information(uuid: &str) -> Vec<u8> {
     .expect("json")
 }
 
-/// Makes the state files hold the host group `build`, which an allowlist entry's role names.
-async fn hold_group_build(files: &Files) {
+/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
+/// coordinator started over them, which is stopped again.
+async fn put_build_group(files: &Files) {
     let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
     let first = build(&flags_of(files.args(&enrollment())), roots).expect("started");
     first
@@ -826,6 +827,7 @@ async fn hold_group_build(files: &Files) {
             },
         )
         .expect("put");
+    drop(first);
 }
 
 /// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
@@ -837,23 +839,7 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
     let files = Files::new("mdm-side-start");
     let roots = || Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
     // The allowlist's entry names the host group `build`, which the state files must hold.
-    let first = build(&flags_of(files.args(&enrollment())), roots()).expect("started");
-    first
-        .coordinator
-        .host_groups_put(
-            &first.coordinator.caller(Some(OPERATOR)).await,
-            proto::PutHostGroupRequest {
-                host_group: Some(proto::HostGroup {
-                    name: "build".to_owned(),
-                    packages: vec!["hostkeeper".to_owned()],
-                    policy: None,
-                }),
-                if_generation: None,
-                reason: "the Mac builders".to_owned(),
-            },
-        )
-        .expect("put");
-    drop(first);
+    put_build_group(&files).await;
     let parts = build(&flags_of(side_args(&files, &hub.url)), roots()).expect("started");
     let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
 
@@ -1030,7 +1016,7 @@ fn serve_help_lists_the_macs_listener_flags() {
 #[tokio::test]
 async fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
     let files = Files::new("mdm-baseline-flags");
-    hold_group_build(&files).await;
+    put_build_group(&files).await;
     files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
     files.put(
         "mac.toml",
