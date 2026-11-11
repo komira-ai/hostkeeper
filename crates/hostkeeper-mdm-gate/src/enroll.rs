@@ -152,6 +152,11 @@ pub trait Enrollments: Send + Sync {
     /// ([`crate::baseline`]); `None` when the serial is not on the allowlist.
     fn host_group(&self, serial: &str) -> Option<String>;
 
+    /// The name the Mac of `serial` is given (its host id, lower-case and DNS-safe), which the
+    /// baseline's `Settings` sets as `DeviceName` and `HostName`; `None` when the enrollment
+    /// names nothing for the serial, and then the Mac keeps its name.
+    fn host_name(&self, serial: &str) -> Option<String>;
+
     /// A new nonce for `serial`, bound to the waiting request `request_id`.
     ///
     /// # Errors

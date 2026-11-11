@@ -321,6 +321,7 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("abm_alert_days", "60", true),
             ("tls_renew_days", "30", true),
             ("secret_grace_days", "7", true),
+            ("installs", "[]", true),
             ("push_retry_s", "3600", true),
             ("push_expiry_s", "86400", true),
             ("push_priority", "10", true),
