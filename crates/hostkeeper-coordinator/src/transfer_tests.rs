@@ -15,6 +15,7 @@ use hostkeeper_testkit::Scratch;
 use hostkeeper_mdm_gate::{DeviceStore as _, FileDeviceStore};
 
 use super::{Export, TransferError};
+use crate::accounts::accounts_path;
 use crate::audit_file::{self, AuditLine, AuditLog, DEFAULT_ROTATION, Detail, Rotation, UnixClock};
 use crate::backup::StatePaths;
 use crate::jti_file::jti_path;
@@ -115,7 +116,7 @@ pub(super) fn dsn_file(dir: &Path, database: &TestDatabase) -> PathBuf {
 
 /// Everything the file store `store` holds, read by the readers a start uses, the single-state
 /// desired file read as the state of `legacy` and CI's spent ids past at [`AT`] left out: the
-/// desired state, the operations state, the verdicts and the spent ids; the whole audit history and
+/// desired state, the operations state, the verdicts, the accounts and the spent ids; the whole audit history and
 /// the time of its oldest line when older ones were deleted; and, with its enrollment directory,
 /// the enrollment records and the MDM gate's device records in the order of their enrollment ids.
 pub(super) fn stored(store: &Store, legacy: Option<&str>) -> Moved {
@@ -124,6 +125,7 @@ pub(super) fn stored(store: &Store, legacy: Option<&str>) -> Moved {
     let files = Files::default()
         .with_desired(state, legacy)
         .with_verdicts(&verdicts_path(state))
+        .with_accounts(&accounts_path(state))
         .with_ops(&ops, DEFAULT_ROTATION)
         .expect("the ops files")
         .with_jti(&jti_path(state), Arc::new(|| AT))
