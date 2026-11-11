@@ -228,10 +228,17 @@ pub(crate) enum Transport<'a> {
     },
 }
 
+/// The path of `Mdm.PutSecret`, whose request holds a secret's value of up to 32 KiB.
+const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
+/// The path of `Mdm.PutSetting`.
+const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
-/// service, when it must not be done by a token a script holds; none is yet.
-pub(crate) const SESSION_ONLY: &[&str] = &[];
+/// service, when it must not be done by a token a script holds: the writes of the MDM setup,
+/// which handle the credentials the coordinator can erase every Mac with
+/// (`docs/design/coordinator-mdm.md`, section 4.9).
+pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
 /// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
@@ -407,12 +414,12 @@ where
 }
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
-/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put` and
+/// `Mdm.PutSecret`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT {
+    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES
@@ -422,7 +429,7 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 4 KiB for every other
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put` and `Mdm.PutSecret`, 4 KiB for every other
 /// operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
@@ -485,7 +492,7 @@ where
         }
         Some(MDM) => {
             let server = MdmServer::new(MdmService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(REPOSITORIES) => {
@@ -565,7 +572,9 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// private listener, a `POST` of a path that names a method of the operator API is the
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
 /// heartbeat listener a path under `/repositories/` is a private repository's
-/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// ([`crate::repository_serve`]), whose body is streamed. On the MDM surface nothing is the API's:
+/// every request is [`handle`]'s, which serves the routes of the MDM table and answers `404` to
+/// the rest. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
 /// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
@@ -579,7 +588,12 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
+    let answered = if surface == Surface::Mdm {
+        // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
+        handle(coordinator, surface, peer, request, patience)
+            .await
+            .map(Either::Left)
+    } else if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
         grpc(coordinator, surface, peer, request, patience)
             .await
             .map(Either::Right)

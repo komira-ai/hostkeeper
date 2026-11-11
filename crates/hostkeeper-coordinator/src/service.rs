@@ -254,6 +254,8 @@ pub struct Coordinator {
     enrollment: Option<Arc<Enrollment>>,
     /// The MDM policy gate; `None` without `--mdm-api-url`.
     pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
+    /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
+    pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -311,6 +313,7 @@ impl Coordinator {
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
+            mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             initial_admin: None,
             login: None,
             verifier,

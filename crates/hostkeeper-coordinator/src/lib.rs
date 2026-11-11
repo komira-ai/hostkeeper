@@ -161,6 +161,9 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
+pub mod mdm_secrets;
+pub mod mdm_settings;
+pub mod mdm_setup;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -169,6 +172,10 @@ pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
+pub mod operator_mdm_setup;
+#[cfg(test)]
+#[path = "operator_mdm_setup_tests.rs"]
+mod operator_mdm_setup_tests;
 pub mod operator_repositories;
 pub mod ops;
 pub(crate) mod ops_file;
