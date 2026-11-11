@@ -5,10 +5,9 @@
 // the TLS step's `tls_key`, `tls_cert` and `dns_credential`).
 //
 // The status panel is what the coordinator computes from its records: *configured*, or what is
-// missing, in words; the name; and, for the push certificate and key, the ABM token and the TLS
-// certificate and key, what is held, when it expires and the days left, coloured once the days
-// left cross a threshold of the setting that names it (`push_alert_days`, `abm_alert_days`,
-// `tls_renew_days`). The page has no logic of its own beyond that: the coordinator checks every
+// missing, in words; the name; and for the push certificate and key, the ABM token and the TLS
+// certificate and key, what is held, when it expires and the days left, coloured once they cross
+// a threshold (`push_alert_days`, `abm_alert_days`, `tls_renew_days`). The coordinator checks every
 // upload and its refusal is shown exactly as it answers (`CODE reason`).
 //
 // The push step has three buttons in order. *Create request* makes the CSR (the email goes into
@@ -560,6 +559,7 @@ function verifySection(ctx, flow) {
       return "Verified. See what each part found.";
     }),
     flow.verified === null ? null : verifyResult(flow.verified));
+}
 
 // A file or nothing: the bytes of the chosen `file` within `limit`, else a sentence saying what is
 // missing or too long.
@@ -740,6 +740,8 @@ function nameSection(ctx, flow, status) {
           return `The MDM name is ${reply["name"]}. Macs enroll at ${reply.enrollmentUrl}.`;
         }),
       ]);
+}
+
 // The TLS step. ---------------------------------------------------------------------------------
 
 // What the renewal needs and lacks, in words, for the line that says why it is off: the MDM name,

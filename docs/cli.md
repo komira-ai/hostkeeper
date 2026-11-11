@@ -566,6 +566,7 @@ one), `audit_unavailable`, `store_failed`.
 | flag | value | meaning |
 |---|---|---|
 | `--enrollment-id` | STRING | The enrollment id of the enrolled Mac to send the test push to (as `ListDevices` lists it); empty sends none and checks the rest. |
+
 #### `hkctl mdm put-abm-token`
 
 `/hostkeeper.operator.v1.Mdm/PutAbmToken`

@@ -231,7 +231,7 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_TRUSTED_ROOT"
     | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_MDM_TLS_RENEWAL_FAILED"
-    | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED";
+    | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED"
     | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
@@ -936,6 +936,7 @@ export namespace hostkeeper_operator_v1 {
     createdUnix?: string;
     lastLoginUnix?: string;
     passwordValidUntilUnix?: string;
+  }
   export interface VerifyRequest { enrollmentId?: string; }
   export interface VerifyResponse {
     status?: hostkeeper_operator_v1.MdmStatusResponse;

@@ -151,7 +151,8 @@ fn a_chosen_enrolled_mac_is_pushed_and_only_enrolled_macs_are_offered() {
         "[]",
         &format!(
             r#"{RESULT}
-const options = (tree) => nodes(tree).filter((n) => n.tag === "option" && n.attrs["value"] !== undefined)
+const options = (tree) => nodes(nodes(tree).find((n) => n.tag === "select" && n.attrs["name"] === "verify-mac"))
+  .filter((n) => n.tag === "option" && n.attrs["value"] !== undefined)
   .map((n) => [n.attrs["value"], text(n)]);
 const before = options(tree);
 await click(tree, "load-macs");
