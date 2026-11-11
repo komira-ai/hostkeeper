@@ -258,6 +258,9 @@ pub struct Coordinator {
     pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
+    /// The ABM client: the sync, the token upload and the key pair ([`crate::abm`]); `None` in a
+    /// coordinator built without an MDM store.
+    pub(crate) abm: Option<Arc<crate::abm::Abm>>,
     /// Where the request for a push certificate is posted to mdmcert.download
     /// ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
@@ -278,6 +281,9 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
+    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write, so two calls do
+    /// not each make a pair and show a certificate whose key is then replaced.
+    pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -322,6 +328,7 @@ impl Coordinator {
             accounts: AccountStore::volatile(),
             mdm_server: None,
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
+            abm: None,
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             proxy_cache: None,
             initial_admin: None,
@@ -341,6 +348,7 @@ impl Coordinator {
             running: crate::running::Kept::default(),
             repository_origin: None,
             repository_naming: Mutex::new(()),
+            abm_pairing: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

@@ -126,6 +126,26 @@ service Mdm {
   // refusal. Refused `unauthorized`, `forbidden`, `invalid_request` (the enrollment id is not
   // one), `audit_unavailable`, `store_failed`.
   rpc Verify(VerifyRequest) returns (VerifyResponse);
+
+  // Takes the ABM server token (docs/design/coordinator-mdm.md, 4.5): either the JSON of its four
+  // OAuth parts and expiry, which is what a takeover of NanoDEP's token uploads, or the `.p7m` file
+  // ABM hands over, opened with the `abm_key` the coordinator holds. The token is proved to
+  // Apple before it is kept (a session is opened with it and `GET /account` is read), so that one
+  // that is not good is refused and nothing is stored. Session-only, as `PutSecret` is, and
+  // audited as `mdm_abm_token_put` with the fingerprint and the expiry, never the token. Refused
+  // `abm_unavailable` when this coordinator has no ABM client, `secrets_unavailable` with no
+  // master key, `invalid_request` for a token that is not five parts or a request that gives both
+  // forms or neither, `abm_key_missing` for a `.p7m` with no `abm_key` held, `abm_token_unreadable`
+  // for a `.p7m` that does not open with it, `abm_credential_refused` and `abm_clock_refused`
+  // for the two faults Apple names on the session, `abm_unreachable` when no answer came.
+  rpc PutAbmToken(PutAbmTokenRequest) returns (PutAbmTokenResponse);
+
+  // The certificate of the ABM server entry's key, in PEM, for the operator to add to the entry
+  // in ABM (the public-key download of the fallback path, when NanoDEP's key cannot be taken
+  // over). The key pair is made when none is held (RSA 2048, stored as `abm_key` and `abm_cert`),
+  // which is why the call is session-only; once made, the same certificate is answered. Audited as
+  // `mdm_abm_cert_get`. The private key is never returned.
+  rpc GetAbmPublicKey(GetAbmPublicKeyRequest) returns (GetAbmPublicKeyResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -170,6 +190,20 @@ enum MdmRefusal {
   // INVALID_ARGUMENT: the certificate in use has another topic: every enrollment carries it, so a
   // renewal keeps it.
   MDM_REFUSAL_TOPIC_CHANGED = 16;
+  // FAILED_PRECONDITION: this coordinator has no ABM client.
+  MDM_REFUSAL_ABM_UNAVAILABLE = 17;
+  // FAILED_PRECONDITION: a `.p7m` was uploaded and no `abm_key` is held to open it.
+  MDM_REFUSAL_ABM_KEY_MISSING = 18;
+  // INVALID_ARGUMENT: the `.p7m` is not a CMS message encrypted to the `abm_key` held.
+  MDM_REFUSAL_ABM_TOKEN_UNREADABLE = 19;
+  // FAILED_PRECONDITION: Apple refused the token's signature (`signature_invalid`): the parts do
+  // not belong together, or the token was revoked.
+  MDM_REFUSAL_ABM_CREDENTIAL_REFUSED = 20;
+  // FAILED_PRECONDITION: Apple refused the timestamp (`timestamp_refused`): the clock of the
+  // machine the coordinator runs on is an hour or more off.
+  MDM_REFUSAL_ABM_CLOCK_REFUSED = 21;
+  // UNAVAILABLE: no answer came from Apple, or it answered something the call cannot use.
+  MDM_REFUSAL_ABM_UNREACHABLE = 22;
 }
 
 // One condition of the setup that is not met, which keeps it from being `configured`. The token
@@ -218,6 +252,35 @@ enum MdmBaseline {
   MDM_BASELINE_APPLIED = 2;
   // The device answered with an error.
   MDM_BASELINE_FAILED = 3;
+}
+
+message PutAbmTokenRequest {
+  // The token as JSON: an object of `consumer_key`, `consumer_secret`, `access_token`,
+  // `access_secret` and `access_secret_expiry` (RFC 3339), each a non-empty string; up to 32768
+  // bytes. Exactly one of the two fields is given.
+  bytes token_json = 1;
+  // The `.p7m` file ABM gave (DER or S/MIME text), up to 32768 bytes.
+  bytes token_p7m = 2;
+}
+
+message PutAbmTokenResponse {
+  // The version made, as `ListSecrets` shows it; `not_after_unix` is the token's expiry.
+  SecretInfo secret = 1;
+  // The name of the MDM server entry in ABM that Apple says the token belongs to.
+  string server_name = 2;
+  // The organisation Apple says it belongs to.
+  string org_name = 3;
+}
+
+message GetAbmPublicKeyRequest {}
+
+message GetAbmPublicKeyResponse {
+  // The certificate, PEM.
+  string certificate_pem = 1;
+  // The SHA-256 of the key pair's certificate, 64 lower-case hex digits.
+  string fingerprint_sha256 = 2;
+  // Whether this call made the pair (false: one was held).
+  bool created = 3;
 }
 
 // Where a device is in its MDM enrollment.

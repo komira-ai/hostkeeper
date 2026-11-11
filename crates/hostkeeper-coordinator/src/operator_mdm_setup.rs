@@ -24,6 +24,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
 use hostkeeper_mdm_gate::Installs;
 
+use crate::abm::keys;
 use crate::audit_actions;
 use crate::mdm_name;
 use crate::mdm_secrets::{AbmToken, MAX_SECRET_BYTES, Secret, SecretKind};
@@ -96,7 +97,7 @@ impl Coordinator {
         };
         let wellformed = !material.is_empty()
             && material.len() <= MAX_SECRET_BYTES
-            && (kind != SecretKind::AbmToken || AbmToken::parse(material.expose()).is_ok());
+            && self.kind_takes(kind, &material);
         if !wellformed {
             return self.refused_put(by, Some(kind), MdmRefusal::InvalidRequest);
         }
@@ -123,6 +124,27 @@ impl Coordinator {
                 tracing::error!(%why, kind = kind.as_str(), "an MDM secret could not be stored");
                 self.refused_put(by, Some(kind), MdmRefusal::StoreFailed)
             }
+        }
+    }
+
+    /// Whether `material` is what `kind` holds, as far as it can be judged at upload: the ABM
+    /// token is its five parts, the ABM key an RSA private key in PEM, and the ABM certificate a
+    /// certificate in PEM that is the one of the ABM key held, when one is. The other kinds are
+    /// judged by the task that uses them.
+    fn kind_takes(&self, kind: SecretKind, material: &Secret) -> bool {
+        match kind {
+            SecretKind::AbmToken => AbmToken::parse(material.expose()).is_ok(),
+            SecretKind::AbmKey => keys::parse_key(material.expose()).is_ok(),
+            SecretKind::AbmCert => {
+                let held = self
+                    .mdm_setup
+                    .open(SecretKind::AbmKey)
+                    .ok()
+                    .flatten()
+                    .and_then(|pem| keys::parse_key(pem.expose()).ok());
+                keys::check_certificate(material.expose(), held.as_ref()).is_ok()
+            }
+            _ => true,
         }
     }
 

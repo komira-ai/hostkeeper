@@ -113,6 +113,7 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
+pub(crate) mod abm;
 pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
@@ -174,6 +175,7 @@ pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
+pub(crate) mod operator_abm;
 pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;

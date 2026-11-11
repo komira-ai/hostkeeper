@@ -20,9 +20,12 @@ use std::sync::Arc;
 use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_mdm_gate::DeviceStore;
-use hostkeeper_oidc::Clock;
+use hostkeeper_oidc::{Clock, Roots};
 
 use super::{Serve, StartError, take_lock};
+use crate::abm::Abm;
+use crate::abm::client::tokio_sleep;
+use crate::abm::transport::{ABM_BASE, HttpsTransport};
 use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
@@ -34,6 +37,7 @@ use crate::login::Login;
 use crate::mdm_secrets::MasterKey;
 use crate::mdm_setup::MdmSetup;
 use crate::ops::{Marker, OpsState, unlanded};
+use crate::origin_https::OriginUrl;
 use crate::service::Coordinator;
 use crate::store::mdm::MdmStore;
 use crate::store::mdm::files::FileMdm;
@@ -172,6 +176,22 @@ pub fn mdm_tables_dir(state: &Path) -> PathBuf {
     PathBuf::from(path)
 }
 
+/// The ABM client over the MDM tables `store`, speaking to Apple over HTTPS that trusts `roots`.
+///
+/// # Errors
+/// [`StartError::OriginTls`]: `roots` holds no usable certificate, or the TLS client is refused.
+pub(super) fn abm(store: Arc<dyn MdmStore>, roots: Roots) -> Result<Abm, StartError> {
+    // The address is a constant of the client, so it parses.
+    let base = OriginUrl::parse(ABM_BASE).map_err(|_| StartError::NoEnrollmentStore)?;
+    Ok(Abm::new(
+        store,
+        Arc::new(HttpsTransport::new(&base, roots)?),
+        hostkeeper_oidc::system_clock(),
+        os_random(),
+        tokio_sleep(),
+    ))
+}
+
 /// The MDM setup over `store`, sealing under the key of `--mdm-secrets-key-file`, under the start
 /// rules of [`MasterKey::load`]: the key file is made when it is not there and the store holds no
 /// sealed secret, and a start with sealed secrets and no key, or a key that opens none of the
@@ -285,6 +305,12 @@ fn open(
         settle_unfinished(ops, &numbers, &loaded.ops)?;
     }
     Ok((files, loaded))
+}
+
+impl From<crate::store::mdm::MdmError> for StartError {
+    fn from(why: crate::store::mdm::MdmError) -> Self {
+        Self::MdmSetupStore(why.to_string())
+    }
 }
 
 impl From<crate::store::mdm_setup::SetupError> for StartError {

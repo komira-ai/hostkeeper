@@ -142,6 +142,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
   (it refills from the origins) and is not shared between coordinators. Without the flag there is no
   cache. In this release nothing serves from it yet.
+  The MDM tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never
