@@ -522,7 +522,7 @@ fn the_old_flag_name_is_a_hidden_alias_and_both_together_are_refused() {
 }
 
 /// Proves that `--tokens-file` and `--operator-token-file` together are refused at start with
-/// the text of the refusal and exit 1, and that giving neither is refused with its own text.
+/// the text of the refusal and exit 1, and that giving none of the three token and initial-admin flags is refused with its own text.
 ///
 /// Catches: two sets of operator tokens in force at once (one of them unrevocable), or a start
 /// with no operator token at all.
@@ -547,7 +547,7 @@ fn both_token_flags_together_are_refused() {
     assert!(matches!(why, StartError::NoTokenFlag), "{why}");
     assert_eq!(
         why.to_string(),
-        "one of --tokens-file and --operator-token-file is required"
+        "one of --tokens-file, --operator-token-file and --initial-admin-file is required"
     );
     assert_eq!(exit_code(neither), ExitCode::from(1));
 }

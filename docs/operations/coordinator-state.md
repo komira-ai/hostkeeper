@@ -257,7 +257,7 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
-| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. Nothing in this release writes it yet. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The only writer in this release is `--initial-admin-file` (below); the sign-in routes, and the creation of users and API tokens in the UI, are later parts of the design. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
@@ -380,3 +380,36 @@ the backup is lost, and every other file of the state is likewise as it was at t
   refused until those tokens expire.
 
 So back up after each change you would not want to make again, and before any move.
+
+## The initial-admin file
+
+`serve --initial-admin-file <path>` makes the first operator user (`docs/design/operator-login.md`, komira-ai/hostkeeper#300,
+section 4). The file is TOML with four keys and no other, and is read under the rule of a secret file (a regular file owned by
+the coordinator's user, mode 0600 or 0400, at most 4096 bytes):
+
+```toml
+id = "k3x9..."           # one for each file; 1 to 128 visible ASCII bytes
+user = "admin"           # a name of 1 to 32 bytes of a-z, 0-9 and -
+password = "..."         # plain text; at least --password-min-length characters
+valid_until = 1800003600 # Unix seconds
+```
+
+The coordinator reads it at start and on every `--tls-reload-secs`, by its own wall clock, and:
+
+- file absent: nothing;
+- `valid_until` not in the future: deletes the file, marks the user's initial password void when this file's `id` made it and
+  it was not yet changed, and audits `initial_password_expired` by `coordinator`;
+- the user's record already holds this `id`: nothing, so a restart does not reset a password twice;
+- otherwise hashes the password with Argon2id and makes the user (or, for a name that exists, gives it the new hash and enables
+  it), with `must_change` on, the deadline `valid_until`, and the `id`; audits `user_bootstrap` by
+  `coordinator`. The plain password is in the file only, never in the store, the audit or a log.
+
+A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
+password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does
+not start, and on a tick it is logged as a warning and nothing changes. The file is deleted only when it has expired; deleting
+it when the password is changed belongs to the password-change call, which is not in this release.
+
+The start rule is: at least one of `--tokens-file`, `--operator-token-file` and `--initial-admin-file`, and not both token
+flags. With `--initial-admin-file` alone no bearer is an operator's; tokens of `--tokens-file` keep working beside it. The
+password hash is made under `--password-memory-kib` (19456), `--password-iterations` (2), `--password-parallelism` (1) and
+`--password-min-length` (12), which are the OWASP minimum for Argon2id by default.
