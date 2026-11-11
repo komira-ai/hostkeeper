@@ -658,6 +658,8 @@ export namespace hostkeeper_operator_v1 {
   export interface PolicyStage { percent?: number; advance?: hostkeeper_operator_v1.StageAdvance; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutNameRequest { name?: string; }
+  export interface PutNameResponse { name?: string; enrollmentUrl?: string; }
   export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }
   export interface PutPushCertificateResponse {
     topic?: string;
@@ -668,8 +670,6 @@ export namespace hostkeeper_operator_v1 {
   }
   export interface PutPushReplyRequest { reply?: string; }
   export interface PutPushReplyResponse { signedRequest?: string; }
-  export interface PutNameRequest { name?: string; }
-  export interface PutNameResponse { name?: string; enrollmentUrl?: string; }
   export interface PutRepositoryRequest { repository?: hostkeeper_release_v1.Repository; reason?: string; }
   export interface PutRepositoryResponse {
     repository?: hostkeeper_operator_v1.RegisteredRepository;
