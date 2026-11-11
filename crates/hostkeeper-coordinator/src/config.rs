@@ -67,6 +67,7 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::accounts::AccountStore;
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
@@ -78,16 +79,16 @@ use crate::fleet::{CLOCK_SKEW_AFTER, QUIET_START};
 use crate::health::{self, Serving};
 use crate::host_groups::GroupName;
 use crate::http::Surface;
+use crate::initial_admin::{LoginFlags, watch_every};
 use crate::inventory::RecordWindow;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, accept_tcp, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
-use crate::tokens::OperatorTokens;
 use crate::transfer::{Export, export};
 use crate::ui::UiDir;
 use crate::verdict_file::VerdictFile;
@@ -250,14 +251,16 @@ pub struct Serve {
     /// The operator's tokens: a TOML file with a `[[token]]` table for each, with its `name` (1
     /// to 32 bytes of a-z, 0-9 and -) and the `sha256` of the token as lowercase hex, so the
     /// file holds no secret; mode 0600, owned by the coordinator's user. It is read again
-    /// every `--tls-reload-secs`, so a token is revoked or replaced without a restart. Exactly
-    /// one of this and `--operator-token-file`.
+    /// every `--tls-reload-secs`, so a token is revoked or replaced without a restart. Not
+    /// beside `--operator-token-file`; one of the two or `--initial-admin-file` is required.
     #[arg(long)]
     pub tokens_file: Option<PathBuf>,
     /// A file holding one operator token, mode 0600, owned by the coordinator's user: the one
-    /// token, named `operator`. Read once, at start. Exactly one of this and `--tokens-file`.
+    /// token, named `operator`. Read once, at start. Not beside `--tokens-file`.
     #[arg(long)]
     pub operator_token_file: Option<PathBuf>,
+    #[command(flatten)]
+    pub login: LoginFlags,
     /// The ops file: what operators changed (exclusions, labels) and the audit ring, written
     /// by the coordinator and read back at start; created by the first change. Default: the
     /// state file's name with `.ops` added. Its directory must be writable by the
@@ -365,6 +368,16 @@ pub struct Serve {
     /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
     #[command(flatten)]
     pub mdm: MdmFlags,
+    /// The file that holds the key the MDM server's secrets (the push key, the ABM token and the
+    /// rest of the setup, `docs/design/coordinator-mdm.md` section 4.9) are sealed under in the
+    /// store: 64 hex digits, a regular file of the coordinator's user, mode 0600 or 0400. The
+    /// coordinator makes it (mode 0600) when it is not there and the store holds no sealed
+    /// secret. A file that is not there, or no flag, with sealed secrets in the store, and a key
+    /// that opens none of them, refuse the start: a new key would orphan every secret. Keep the
+    /// file apart from the store's backups. Without the flag the coordinator keeps no MDM secret
+    /// and `Mdm.PutSecret` is refused `secrets_unavailable`.
+    #[arg(long)]
+    pub mdm_secrets_key_file: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -504,14 +517,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
 
     let record_window = RecordWindow::new(flags.record_approve_for, flags.record_approve_max)?;
 
-    let tokens = match (&flags.tokens_file, &flags.operator_token_file) {
-        (Some(path), None) => OperatorTokens::from_file(path)?,
-        (None, Some(path)) => OperatorTokens::single(
-            &hostkeeper_wire::secret::read_token(path).map_err(StartError::OperatorToken)?,
-        ),
-        (Some(_), Some(_)) => return Err(StartError::TokenFlags),
-        (None, None) => return Err(StartError::NoTokenFlag),
-    };
+    let tokens = state::operator_tokens(flags)?;
     let oidc = AllowList::from_file(&flags.oidc_config)?;
     let prefixes = SanPrefixes::new(&flags.role_uri_prefix, &flags.host_role_uri_prefix)?;
     let legacy = flags.legacy_service.as_deref();
@@ -539,7 +545,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         held,
         records,
         devices,
+        setup: setup_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
+    let mdm_setup = state::mdm_setup(flags, setup_store)?;
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -551,6 +559,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
         .with_marker(marker)
         .with_record_window(record_window);
+    let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -569,9 +578,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)
+        .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
+    coordinator = state::with_initial_admin(coordinator, flags)?;
+    coordinator = state::with_login(coordinator, flags)?;
+    coordinator = coordinator.with_mdm_setup(mdm_setup).with_mdmcert(Arc::new(
+        hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
+    ));
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -718,7 +733,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     run_as(parts, bind, ready, Serving::default()).await
 }
@@ -735,7 +750,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let (health, probing) = match parts.health_listen {
         Some(addr) => {
@@ -775,7 +790,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     // The lock of the state files is held for as long as this serves.
     let _held = parts.lock;
@@ -819,6 +834,7 @@ where
     let coordinator = parts.coordinator;
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
+    let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -846,11 +862,12 @@ where
     );
     let all = together(
         together(serving, serving_lan),
-        together(reloading, together(observing, webhook)),
+        together(reloading, together(observing, together(webhook, adopting))),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).
-    match select(pin!(all), pin!(watching.deposed())).await {
+    // On the heap: the futures together are too large for a stack of a test's thread.
+    match select(Box::pin(all), pin!(watching.deposed())).await {
         Either::Left((never, _)) => match never {},
         Either::Right(((epoch, found), _)) => Err(StartError::Deposed { epoch, found }),
     }
@@ -898,7 +915,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
     let health = Serving::default();

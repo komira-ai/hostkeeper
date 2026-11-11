@@ -20,6 +20,7 @@
 //!   commit of unknown outcome is settled at the revival by the lease's counter, and what it
 //!   turned out to be is taken by the stores ([`Landing`]). Another epoch found deposes the store.
 
+mod accounts;
 mod at;
 mod devices;
 mod dsn;
@@ -30,6 +31,7 @@ mod groups;
     reason = "the MDM tables land before the code that uses them (CM6; CM11a, CM12c and CM13 call them)"
 )]
 pub(crate) mod mdm;
+pub(crate) mod mdm_setup;
 pub(crate) mod migrate;
 mod records;
 mod releases;
@@ -55,6 +57,7 @@ use self::rows::{Stmt, Tables, Val, changes, laid_over};
 use self::session::{Fail, Session, Worker, describe, ends_session, not_up};
 use self::writer::{Link, State, Tx, WriteFail, Writer, try_lock};
 use super::{Backend, BackendError, Commit, Health, Loaded};
+use crate::accounts::Accounts;
 use crate::audit_file::{Actor, AuditLine, Detail, Logged, Query, UnixClock};
 use crate::desired::{self, StoreError};
 use crate::ops::{AUDIT_RING, OpsError, OpsState};
@@ -132,6 +135,7 @@ pub(crate) struct Owned {
     desired: Option<(desired::Held, desired::Held)>,
     ops: Option<(OpsState, OpsState)>,
     verdicts: Option<(verdict_file::Held, verdict_file::Held)>,
+    accounts: Option<(Accounts, Accounts)>,
     audit: Vec<AuditLine>,
 }
 
@@ -141,6 +145,7 @@ impl Owned {
             desired: change.desired.map(|(b, a)| (b.clone(), a.clone())),
             ops: change.ops.map(|(b, a)| (b.clone(), a.clone())),
             verdicts: change.verdicts.map(|(b, a)| (b.clone(), a.clone())),
+            accounts: change.accounts.map(|(b, a)| (b.clone(), a.clone())),
             audit: change.audit.to_vec(),
         }
     }
@@ -202,6 +207,17 @@ impl Landing {
         let over = laid_over(&rows(memory)?, &rows(before)?, &rows(after)?);
         state::verdicts_of(&over).ok()
     }
+
+    /// `memory` with the accounts of the change laid over it, when it landed and had them.
+    pub(crate) fn accounts_over(&self, memory: &Accounts) -> Option<Accounts> {
+        let (before, after) = self.landed()?.accounts.as_ref()?;
+        let over = laid_over(
+            &accounts::rows(memory),
+            &accounts::rows(before),
+            &accounts::rows(after),
+        );
+        accounts::of_tables(&over).ok()
+    }
 }
 
 struct Inner {
@@ -247,6 +263,7 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
     let desired = state::desired_of(&read(session, &state::DESIRED)?)?;
     let mut ops = state::ops_of(&read(session, &state::OPS)?)?;
     let verdicts = state::verdicts_of(&read(session, &state::VERDICTS)?)?;
+    let accounts = accounts::of_tables(&read(session, &accounts::TABLES)?)?;
     let ring = session
         .query(
             "SELECT seq, at_unix, by_name, action, service, node_id, reason, host_group FROM audit \
@@ -275,6 +292,7 @@ fn load_all(session: &mut Session, now: u64) -> Result<Loaded, BackendError> {
         desired,
         ops,
         verdicts,
+        accounts,
         spent,
     })
 }
@@ -293,6 +311,8 @@ fn logged_of(row: &postgres::Row) -> Logged {
             node_id: row.get(5),
             host_group: row.get(7),
             reason: row.get(6),
+            subject: None,
+            source: None,
         },
     }
     .into_logged()
@@ -331,6 +351,13 @@ fn statements(change: &Commit<'_>) -> Result<Vec<Stmt>, BackendError> {
     if let Some((before, after)) = change.verdicts {
         let (b, a) = (state::verdicts_rows(before)?, state::verdicts_rows(after)?);
         out.extend(changes(&state::VERDICTS, &b, &a));
+    }
+    if let Some((before, after)) = change.accounts {
+        out.extend(changes(
+            &accounts::TABLES,
+            &accounts::rows(before),
+            &accounts::rows(after),
+        ));
     }
     for line in change.audit {
         out.push(audit_insert(line)?);

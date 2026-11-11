@@ -157,14 +157,11 @@ pub(crate) enum Admitted {
     },
     /// `SetDesired`, `Converge` and `WaitConverged` with CI's token: the verified token.
     Ci(Verified),
-    /// An operator method with the operator's token (`SetDesired`, `Converge` and
-    /// `WaitConverged` among them):
-    /// the operator, and the bearer it sent.
+    /// An operator method with the operator's token, or, on the JSON gateway, the session of a
+    /// signed-in user (`SetDesired`, `Converge` and `WaitConverged` among them): the operator.
     Operator {
         /// Who calls.
         caller: Caller,
-        /// The token, for the calls that check it themselves.
-        bearer: String,
     },
 }
 
@@ -182,10 +179,9 @@ impl fmt::Debug for Admitted {
                 .field("retiring", retiring)
                 .finish(),
             Self::Ci(verified) => f.debug_tuple("Ci").field(verified).finish(),
-            Self::Operator { caller, .. } => f
-                .debug_struct("Operator")
-                .field("caller", caller)
-                .finish_non_exhaustive(),
+            Self::Operator { caller } => {
+                f.debug_struct("Operator").field("caller", caller).finish()
+            }
         }
     }
 }
@@ -209,8 +205,49 @@ enum Served {
     Operator,
 }
 
+/// How a call reached the credential step: over gRPC, which reads the `Authorization` header
+/// and nothing else, or over the JSON gateway, the one place the session cookie of a signed-in
+/// browser is read (`docs/design/operator-login.md`, section 5.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Transport<'a> {
+    /// A gRPC call.
+    Grpc,
+    /// A call of the JSON gateway, made to `authority` (the `Host` of the request), which a
+    /// session's call is checked against.
+    Gateway {
+        /// The authority the request was made to.
+        authority: Option<&'a str>,
+    },
+}
+
+/// The path of `Mdm.PutSecret`, whose request holds a secret's value of up to 32 KiB.
+const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
+/// The path of `Mdm.PutSetting`.
+const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+/// The path of `Mdm.CreatePushRequest`.
+const MDM_CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+/// The path of `Mdm.PutPushReply`, whose request holds the emailed reply of mdmcert.download, hex
+/// text of up to 64 KiB.
+const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+/// The path of `Mdm.PutPushCertificate`, whose request holds a certificate and a key.
+const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+
+/// The methods only a signed-in person's session may call: a bearer is refused them as
+/// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
+/// service, when it must not be done by a token a script holds: the writes of the MDM setup,
+/// which handle the credentials the coordinator can erase every Mac with
+/// (`docs/design/coordinator-mdm.md`, section 4.9).
+pub(crate) const SESSION_ONLY: &[&str] = &[
+    MDM_PUT_SECRET,
+    MDM_PUT_SETTING,
+    MDM_CREATE_PUSH_REQUEST,
+    MDM_PUT_PUSH_REPLY,
+    MDM_PUT_PUSH_CERTIFICATE,
+];
+
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
-/// with `headers`: who the caller is, before any of the request is read.
+/// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
+/// the cookie read; for the gateway see [`admit_via`].
 ///
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
@@ -224,6 +261,40 @@ pub(crate) async fn admit(
     path: &str,
     peer: &Peer,
     headers: &HeaderMap,
+) -> Result<Admitted, Status> {
+    admit_via(
+        coordinator,
+        surface,
+        path,
+        peer,
+        headers,
+        Transport::Grpc,
+        SESSION_ONLY,
+    )
+    .await
+}
+
+/// [`admit`] for a call that came by `transport`, with the methods `session_only` held back from
+/// a bearer.
+///
+/// On the gateway, a request with no `Authorization` header and the cookie of a live session is
+/// the session's call: its user is the operator. It is refused `PERMISSION_DENIED` with `csrf`
+/// unless it passes the checks of a session's call ([`crate::login::session_request_ok`]), and
+/// with `password_change_required` while the session's user must choose a new password. A
+/// request with an `Authorization` header never has its cookie read, and a cookie that names no
+/// live session is no credential. A method of `session_only` refuses a bearer
+/// `PERMISSION_DENIED` `session_required`.
+///
+/// # Errors
+/// As [`admit`], and the two refusals of a session's call.
+pub(crate) async fn admit_via(
+    coordinator: &Coordinator,
+    surface: Surface,
+    path: &str,
+    peer: &Peer,
+    headers: &HeaderMap,
+    transport: Transport<'_>,
+    session_only: &[&str],
 ) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
@@ -245,21 +316,70 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator
-            if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) =>
-        {
-            // An operator's token is told before CI's is verified: it is no CI token and
-            // spends none.
-            if let Ok(name) = coordinator.operator(bearer(headers)) {
-                return Ok(Admitted::Operator {
-                    caller: Caller::Operator(name),
-                    bearer: bearer(headers).unwrap_or_default().to_owned(),
-                });
+        Served::Operator => {
+            if let Some(admitted) = session_call(coordinator, headers, transport)? {
+                return Ok(admitted);
             }
-            ci_token(coordinator, headers).await.map(Admitted::Ci)
+            let admitted = if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) {
+                // An operator's token is told before CI's is verified: it is no CI token and
+                // spends none.
+                match coordinator.operator(bearer(headers)) {
+                    Ok(name) => Admitted::Operator {
+                        caller: Caller::Operator(name),
+                    },
+                    Err(_) => Admitted::Ci(ci_token(coordinator, headers).await?),
+                }
+            } else {
+                operator_token(coordinator, headers).await?
+            };
+            match admitted {
+                Admitted::Operator { .. } | Admitted::Ci(_) if session_only.contains(&path) => {
+                    Err(token_status(Code::PermissionDenied, "session_required"))
+                }
+                admitted => Ok(admitted),
+            }
         }
-        Served::Operator => operator_token(coordinator, headers).await,
     }
+}
+
+/// The operator the session of a gateway call is, if the call is a session's: it has no
+/// `Authorization` header and its cookie names a live session.
+///
+/// # Errors
+/// `PERMISSION_DENIED`: `csrf` for a call that fails the checks of a session's call, and
+/// `password_change_required` for one of a user who must change the password first.
+fn session_call(
+    coordinator: &Coordinator,
+    headers: &HeaderMap,
+    transport: Transport<'_>,
+) -> Result<Option<Admitted>, Status> {
+    let Transport::Gateway { authority } = transport else {
+        return Ok(None);
+    };
+    let Some(held) = coordinator
+        .login()
+        .and_then(|login| crate::login::held(login, headers))
+    else {
+        return Ok(None);
+    };
+    if !crate::login::session_request_ok(&held.view, headers, authority) {
+        return Err(token_status(Code::PermissionDenied, "csrf"));
+    }
+    if held.view.must_change {
+        return Err(token_status(
+            Code::PermissionDenied,
+            "password_change_required",
+        ));
+    }
+    // A user's name is a token's name, so this holds for every user the store can make.
+    Ok(held
+        .view
+        .username
+        .parse()
+        .ok()
+        .map(|name| Admitted::Operator {
+            caller: Caller::Operator(name),
+        }))
 }
 
 /// CI's token in `headers`, verified.
@@ -278,12 +398,8 @@ async fn operator_token(
     coordinator: &Coordinator,
     headers: &HeaderMap,
 ) -> Result<Admitted, Status> {
-    let bearer = bearer(headers);
-    match coordinator.caller(bearer).await {
-        caller @ Caller::Operator(_) => Ok(Admitted::Operator {
-            caller,
-            bearer: bearer.unwrap_or_default().to_owned(),
-        }),
+    match coordinator.caller(bearer(headers)).await {
+        caller @ Caller::Operator(_) => Ok(Admitted::Operator { caller }),
         Caller::Ci => Err(token_status(Code::PermissionDenied, "forbidden")),
         Caller::Anonymous => Err(token_status(Code::Unauthenticated, "unauthorized")),
     }
@@ -304,11 +420,18 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// `Mdm.PutSecret`, `Mdm.PutPushReply` and `Mdm.PutPushCertificate`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT {
+    } else if [
+        HOST_GROUPS_PUT,
+        MDM_PUT_SECRET,
+        MDM_PUT_PUSH_REPLY,
+        MDM_PUT_PUSH_CERTIFICATE,
+    ]
+    .contains(&path)
+    {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES
@@ -318,7 +441,7 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, 4 KiB for every other
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put` and `Mdm.PutSecret`, 4 KiB for every other
 /// operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
@@ -381,7 +504,7 @@ where
         }
         Some(MDM) => {
             let server = MdmServer::new(MdmService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(REPOSITORIES) => {
@@ -451,7 +574,9 @@ fn is_grpc(headers: &HeaderMap) -> bool {
 /// private listener, a `POST` of a path that names a method of the operator API is the
 /// gateway's ([`gateway::answer`]), and any other method of such a path is a 405. On the
 /// heartbeat listener a path under `/repositories/` is a private repository's
-/// ([`crate::repository_serve`]), whose body is streamed. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
+/// ([`crate::repository_serve`]), whose body is streamed. On the MDM surface nothing is the API's:
+/// every request is [`handle`]'s, which serves the routes of the MDM table and answers `404` to
+/// the rest. Everything else is a JSON route ([`handle`]). A body that has not arrived whole after `patience` is a
 /// bad request, or a deadline exceeded for gRPC. Once it is answered, the held waits read again.
 pub async fn route<B>(
     coordinator: &Arc<Coordinator>,
@@ -465,7 +590,12 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    let answered = if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
+    let answered = if surface == Surface::Mdm {
+        // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
+        handle(coordinator, surface, peer, request, patience)
+            .await
+            .map(Either::Left)
+    } else if request.version() == Version::HTTP_2 && is_grpc(request.headers()) {
         grpc(coordinator, surface, peer, request, patience)
             .await
             .map(Either::Right)

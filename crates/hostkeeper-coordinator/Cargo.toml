@@ -39,6 +39,9 @@ hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 # The MDM policy gate's device side (`--mdm-api-url`): its records answer the Mac path's
 # `DeviceState`, and it serves NanoHUB's webhook.
 hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
+# The MDM push side: the push certificate and its request, the mdmcert.download request and the
+# APNs sender and push policy (`src/mdm_push.rs`).
+hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 # The messages and refusals of the operator's calls, the orders a typed heartbeat answer
 # carries, and the messages of `Enroll`, `Poll` and `Renew`.
@@ -48,13 +51,17 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The Argon2id hash of an operator password (`src/password.rs`).
+argon2.workspace = true
 # The PEM of the CA bundle and of the server certificate file.
 base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
-# The poll nonces.
+# The poll nonces, and the bytes of a new MDM master key.
 getrandom.workspace = true
+# The sealed MDM secrets in a file, and their fingerprints.
+hex.workspace = true
 http-body-util.workspace = true
 # The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
@@ -68,6 +75,8 @@ prost.workspace = true
 prost-reflect = { workspace = true, features = ["serde"] }
 # The key of the coordinator's server certificate.
 rcgen.workspace = true
+# AES-256-GCM, the seal of the MDM secrets (`src/mdm_secrets.rs`).
+ring.workspace = true
 # The TLS of the listeners.
 rustls.workspace = true
 rustls-native-certs.workspace = true
@@ -79,6 +88,8 @@ thiserror.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
+# NFKC of a password before it is hashed.
+unicode-normalization.workspace = true
 # The gRPC services: the generated servers, called in process by the listeners' router
 # (`src/grpc`), and the status of a refusal (`Code`, `Status`). No transport of tonic's: the
 # listeners are hyper's.
@@ -89,6 +100,9 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# The fakes of the clock, the APNs sender and the mdmcert.download transport, and the keys and
+# certificates the push tests make.
+hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push", features = ["testkit"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
@@ -97,6 +111,9 @@ hyper = { workspace = true, features = ["client"] }
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.
 prost-types.workspace = true
+# The RSA keys of the push tests, read back from the sealed records to make a certificate or a
+# reply for them.
+rsa.workspace = true
 # The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
 # that release's daemon does (tests/move_v0_1_221.rs).
 protox.workspace = true

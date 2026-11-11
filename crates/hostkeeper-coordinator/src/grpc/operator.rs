@@ -37,7 +37,7 @@ use crate::desired::{Desired, DesiredError};
 use crate::operator::{Caller, entry_proto};
 use crate::ops::OperateError;
 use crate::service::ci_calls::{ReleaseError, Setter};
-use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError};
+use crate::service::{CiRefused, ConvergenceError, Coordinator, SetError, Unauthorized};
 use crate::wait::{CallLimit, ConnectionWaits, MAX_WAIT_SECS, WaitRefused};
 use crate::write_record::{WriteAsk, WriteId, WriteRecord};
 
@@ -55,24 +55,17 @@ pub(crate) fn caller_of<T>(request: &Request<T>) -> Caller {
     }
 }
 
-/// The bearer token the router admitted for `request`, if it admitted one.
-pub(crate) fn bearer_of<T>(request: &Request<T>) -> Option<&str> {
-    match request.extensions().get::<Admitted>() {
-        Some(Admitted::Operator { bearer, .. }) => Some(bearer.as_str()),
-        _ => None,
-    }
-}
-
-/// Does the JSON operator action `action` as the holder of `bearer`, as `POST /v1/operator`
-/// does, and answers the audit entry it made.
+/// Does the JSON operator action `action` as `caller`, as `POST /v1/operator` does, and answers
+/// the audit entry it made.
 fn operate(
     coordinator: &Coordinator,
-    bearer: Option<&str>,
+    caller: &Caller,
     action: &Value,
 ) -> Result<proto::AuditEntry, OperateError> {
+    let by = caller.operator().map_err(|_| Unauthorized)?;
     let body = serde_json::to_vec(action).unwrap_or_default();
     coordinator
-        .operate(bearer, &body)
+        .operate_as(by, &body)
         .map(|entry| entry_proto(&entry))
 }
 
@@ -296,14 +289,14 @@ impl HostsApi for HostsService {
         &self,
         request: Request<proto::IncludeRequest>,
     ) -> Result<Response<proto::IncludeResponse>, Status> {
-        let bearer = bearer_of(&request).map(str::to_owned);
+        let caller = caller_of(&request);
         let message = request.into_inner();
         let action = json!({
             "action": "include",
             "service": message.service,
             "node_id": message.node_id,
         });
-        operate(&self.coordinator, bearer.as_deref(), &action)
+        operate(&self.coordinator, &caller, &action)
             .map(|entry| Response::new(proto::IncludeResponse { entry: Some(entry) }))
             .map_err(|why| refusal::hosts(hosts_refusal(why)))
     }
@@ -312,14 +305,14 @@ impl HostsApi for HostsService {
         &self,
         request: Request<proto::SetLabelsRequest>,
     ) -> Result<Response<proto::SetLabelsResponse>, Status> {
-        let bearer = bearer_of(&request).map(str::to_owned);
+        let caller = caller_of(&request);
         let message = request.into_inner();
         let action = json!({
             "action": "set_labels",
             "node_id": message.node_id,
             "labels": message.labels,
         });
-        operate(&self.coordinator, bearer.as_deref(), &action)
+        operate(&self.coordinator, &caller, &action)
             .map(|entry| Response::new(proto::SetLabelsResponse { entry: Some(entry) }))
             .map_err(|why| refusal::hosts(hosts_refusal(why)))
     }
@@ -569,14 +562,14 @@ impl ReleasesApi for ReleasesService {
         &self,
         request: Request<proto::ClearHaltRequest>,
     ) -> Result<Response<proto::ClearHaltResponse>, Status> {
-        let bearer = bearer_of(&request).map(str::to_owned);
+        let caller = caller_of(&request);
         let message = request.into_inner();
         let action = json!({
             "action": "clear_halt",
             "service": message.service,
             "reason": message.reason,
         });
-        operate(&self.coordinator, bearer.as_deref(), &action)
+        operate(&self.coordinator, &caller, &action)
             .map(|entry| Response::new(proto::ClearHaltResponse { entry: Some(entry) }))
             .map_err(|why| refusal::releases(releases_action_refusal(why)))
     }
@@ -585,11 +578,11 @@ impl ReleasesApi for ReleasesService {
         &self,
         request: Request<proto::StatusRequest>,
     ) -> Result<Response<proto::StatusResponse>, Status> {
-        let bearer = bearer_of(&request).map(str::to_owned);
+        let caller = caller_of(&request);
         let only = request.into_inner().service;
-        self.coordinator
-            .status(bearer.as_deref())
-            .map(|status| Response::new(report::status(&status, &only)))
+        caller
+            .operator()
+            .map(|_| Response::new(report::status(&self.coordinator.status_now(), &only)))
             .map_err(|_| refusal::releases(proto::ReleasesRefusal::Unauthorized))
     }
 
@@ -873,6 +866,84 @@ impl MdmApi for MdmService {
         let caller = caller_of(&request);
         self.coordinator
             .mdm_list_devices(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_secret(
+        &self,
+        request: Request<proto::PutSecretRequest>,
+    ) -> Result<Response<proto::PutSecretResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_secret(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_setting(
+        &self,
+        request: Request<proto::PutSettingRequest>,
+    ) -> Result<Response<proto::PutSettingResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_setting(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn list_secrets(
+        &self,
+        request: Request<proto::ListSecretsRequest>,
+    ) -> Result<Response<proto::ListSecretsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_secrets(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn list_settings(
+        &self,
+        request: Request<proto::ListSettingsRequest>,
+    ) -> Result<Response<proto::ListSettingsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_settings(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn create_push_request(
+        &self,
+        request: Request<proto::CreatePushRequestRequest>,
+    ) -> Result<Response<proto::CreatePushRequestResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_create_push_request(&caller, request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_push_reply(
+        &self,
+        request: Request<proto::PutPushReplyRequest>,
+    ) -> Result<Response<proto::PutPushReplyResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_push_reply(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_push_certificate(
+        &self,
+        request: Request<proto::PutPushCertificateRequest>,
+    ) -> Result<Response<proto::PutPushCertificateResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_push_certificate(&caller, request.into_inner())
             .map(Response::new)
             .map_err(refusal::mdm)
     }
