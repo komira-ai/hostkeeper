@@ -99,6 +99,7 @@ service Mdm {
   // `topic_changed`, `no_pending_request`, `secrets_unavailable`, `audit_unavailable`,
   // `store_failed`.
   rpc PutPushCertificate(PutPushCertificateRequest) returns (PutPushCertificateResponse);
+
   // Whether the MDM setup is complete (`configured`), and when it is not, which conditions are
   // missing; the name, its enrollment URL, and what is shown of the push certificate and key, the
   // ABM token and the TLS certificate and key in use, with the expiry and topic read from their
@@ -129,32 +130,32 @@ enum MdmRefusal {
   // FAILED_PRECONDITION: the coordinator holds no master key (`--mdm-secrets-key-file` is not
   // given), so it keeps no secret.
   MDM_REFUSAL_SECRETS_UNAVAILABLE = 6;
-  // UNAVAILABLE: mdmcert.download could not be reached, or answered that it did not take the
-  // request.
-  MDM_REFUSAL_MDMCERT_UNAVAILABLE = 7;
-  // FAILED_PRECONDITION: no push certificate request is pending: make one (`CreatePushRequest`),
-  // or give the key with the certificate.
-  MDM_REFUSAL_NO_PENDING_REQUEST = 8;
-  // INVALID_ARGUMENT: the upload does not decrypt with the pending request's encryption key: it is
-  // not an enveloped message, or is encrypted to another key.
-  MDM_REFUSAL_REPLY_UNDECRYPTABLE = 9;
-  // INVALID_ARGUMENT: the upload decrypts, and is not the signed request for the pending CSR.
-  MDM_REFUSAL_REPLY_NOT_FOR_REQUEST = 10;
-  // INVALID_ARGUMENT: the certificate is not a PEM certificate, has no topic (`UID` of its
-  // subject), or its topic does not start `com.apple.mgmt.External.`.
-  MDM_REFUSAL_CERTIFICATE_INVALID = 11;
-  // INVALID_ARGUMENT: the key is not a readable RSA private key.
-  MDM_REFUSAL_KEY_INVALID = 12;
-  // INVALID_ARGUMENT: the key is not the certificate's.
-  MDM_REFUSAL_KEY_MISMATCH = 13;
-  // INVALID_ARGUMENT: the certificate has expired.
-  MDM_REFUSAL_CERTIFICATE_EXPIRED = 14;
-  // INVALID_ARGUMENT: the certificate in use has another topic: every enrollment carries it, so a
-  // renewal keeps it.
-  MDM_REFUSAL_TOPIC_CHANGED = 15;
   // FAILED_PRECONDITION: a Mac has enrolled, and the enrollment profile it holds carries the
   // name, so the name cannot change (the Macs would have to enroll again).
-  MDM_REFUSAL_NAME_LOCKED = 16;
+  MDM_REFUSAL_NAME_LOCKED = 7;
+  // UNAVAILABLE: mdmcert.download could not be reached, or answered that it did not take the
+  // request.
+  MDM_REFUSAL_MDMCERT_UNAVAILABLE = 8;
+  // FAILED_PRECONDITION: no push certificate request is pending: make one (`CreatePushRequest`),
+  // or give the key with the certificate.
+  MDM_REFUSAL_NO_PENDING_REQUEST = 9;
+  // INVALID_ARGUMENT: the upload does not decrypt with the pending request's encryption key: it is
+  // not an enveloped message, or is encrypted to another key.
+  MDM_REFUSAL_REPLY_UNDECRYPTABLE = 10;
+  // INVALID_ARGUMENT: the upload decrypts, and is not the signed request for the pending CSR.
+  MDM_REFUSAL_REPLY_NOT_FOR_REQUEST = 11;
+  // INVALID_ARGUMENT: the certificate is not a PEM certificate, has no topic (`UID` of its
+  // subject), or its topic does not start `com.apple.mgmt.External.`.
+  MDM_REFUSAL_CERTIFICATE_INVALID = 12;
+  // INVALID_ARGUMENT: the key is not a readable RSA private key.
+  MDM_REFUSAL_KEY_INVALID = 13;
+  // INVALID_ARGUMENT: the key is not the certificate's.
+  MDM_REFUSAL_KEY_MISMATCH = 14;
+  // INVALID_ARGUMENT: the certificate has expired.
+  MDM_REFUSAL_CERTIFICATE_EXPIRED = 15;
+  // INVALID_ARGUMENT: the certificate in use has another topic: every enrollment carries it, so a
+  // renewal keeps it.
+  MDM_REFUSAL_TOPIC_CHANGED = 16;
 }
 
 // One condition of the setup that is not met, which keeps it from being `configured`. The token

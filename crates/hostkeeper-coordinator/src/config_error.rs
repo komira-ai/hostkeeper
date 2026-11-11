@@ -57,6 +57,14 @@ pub enum StartError {
     /// The tables of the MDM setup could not be opened or read.
     #[error("{0}")]
     MdmSetupStore(String),
+    /// `--proxy-cache-dir` could not be made or read.
+    #[error("--proxy-cache-dir {}: {source}", path.display())]
+    ProxyCache {
+        /// The directory.
+        path: PathBuf,
+        /// What failed.
+        source: io::Error,
+    },
     /// The password hash parameters of the login flags are outside what Argon2id takes.
     #[error(transparent)]
     Password(#[from] crate::password::PasswordError),

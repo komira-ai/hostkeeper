@@ -195,6 +195,8 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+pub mod proxy_cache;
+mod proxy_cache_disk;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;

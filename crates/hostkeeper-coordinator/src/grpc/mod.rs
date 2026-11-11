@@ -250,10 +250,10 @@ const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_SECRET,
     MDM_PUT_SETTING,
+    MDM_PUT_NAME,
     MDM_CREATE_PUSH_REQUEST,
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,
-    MDM_PUT_NAME,
 ];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`

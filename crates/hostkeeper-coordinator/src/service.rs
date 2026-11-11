@@ -259,6 +259,8 @@ pub struct Coordinator {
     /// Where the request for a push certificate is posted to mdmcert.download
     /// ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
+    /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
+    pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -318,6 +320,7 @@ impl Coordinator {
             accounts: AccountStore::volatile(),
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
+            proxy_cache: None,
             initial_admin: None,
             login: None,
             verifier,
