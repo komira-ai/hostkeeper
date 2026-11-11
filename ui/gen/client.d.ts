@@ -292,10 +292,10 @@ export namespace hostkeeper_operator_v1 {
     | "CONVERGENCE_STATE_IN_PROGRESS";
   export interface CreateApiTokenRequest { name?: string; }
   export interface CreateApiTokenResponse { token?: hostkeeper_operator_v1.ApiTokenInfo; secret?: string; }
-  export interface CreateUserRequest { name?: string; }
-  export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface CreatePushRequestRequest { email?: string; submit?: boolean; }
   export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }
+  export interface CreateUserRequest { name?: string; }
+  export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
   export interface DeleteUserRequest { name?: string; }
   export interface DeleteUserResponse {
@@ -554,12 +554,12 @@ export namespace hostkeeper_operator_v1 {
   export interface ListServicesRequest {
   }
   export interface ListServicesResponse { services?: hostkeeper_operator_v1.ServiceEntry[]; holds?: hostkeeper_operator_v1.HoldMark[]; }
-  export interface ListUsersRequest {
-  }
-  export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export interface ListSettingsRequest {
   }
   export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
+  export interface ListUsersRequest {
+  }
+  export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"

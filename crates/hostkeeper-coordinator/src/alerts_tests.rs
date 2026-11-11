@@ -631,6 +631,19 @@ async fn a_coordinator_alerts_on_the_push_certificate_it_holds() {
             .collect::<Vec<_>>()
     };
     assert!(alerts(&rig).is_empty(), "no certificate, no alert");
+    // A secret of another kind in the setup is not a certificate and raises nothing.
+    rig.world
+        .coordinator
+        .mdm_put_secret(
+            &alice(),
+            proto::PutSecretRequest {
+                kind: "push_key".to_owned(),
+                material: b"a key that is not a certificate".to_vec(),
+                not_after_unix: None,
+            },
+        )
+        .expect("stored");
+    assert!(alerts(&rig).is_empty(), "a key is not a certificate");
     let key = fixture_key(0);
     let now = rig.now();
     let nearly = push_certificate_pem(key, TOPIC, now - DAY, now + 20 * DAY);
