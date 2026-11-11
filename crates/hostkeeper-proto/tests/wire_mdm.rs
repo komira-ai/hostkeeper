@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 20] = [
+const FIELDS: [(&str, &[Field]); 24] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -45,6 +45,8 @@ const FIELDS: [(&str, &[Field]); 20] = [
             ("devices", 1, false),
             ("next_page_token", 2, false),
             ("gate", 3, false),
+            ("configured", 4, false),
+            ("missing", 5, false),
         ],
     ),
     (
@@ -79,6 +81,9 @@ const FIELDS: [(&str, &[Field]); 20] = [
             ("install_sha256", 19, false),
             ("baseline_state", 20, false),
             ("baseline_reason", 21, false),
+            ("host_id", 22, false),
+            ("group", 23, false),
+            ("baseline", 24, false),
         ],
     ),
     (
@@ -164,6 +169,36 @@ const FIELDS: [(&str, &[Field]); 20] = [
             ("renewal", 5, false),
         ],
     ),
+    ("hostkeeper.operator.v1.MdmStatusRequest", &[]),
+    (
+        "hostkeeper.operator.v1.MdmStatusResponse",
+        &[
+            ("configured", 1, false),
+            ("missing", 2, false),
+            ("name", 3, false),
+            ("enrollment_url", 4, false),
+            ("name_locked", 5, false),
+            ("sealing", 6, false),
+            ("push_cert", 7, true),
+            ("push_key", 8, true),
+            ("abm_token", 9, true),
+            ("tls_cert", 10, true),
+            ("tls_key", 11, true),
+            ("push_topic", 12, false),
+            ("push_not_after_unix", 13, true),
+            ("abm_not_after_unix", 14, true),
+            ("tls_not_after_unix", 15, true),
+            ("tls_names", 16, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutNameRequest",
+        &[("name", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutNameResponse",
+        &[("name", 1, false), ("enrollment_url", 2, false)],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -192,6 +227,8 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
             "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
             "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
+            "Status(MdmStatusRequest) MdmStatusResponse",
+            "PutName(PutNameRequest) PutNameResponse",
         ]
     );
 
@@ -208,15 +245,50 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("store_failed", 4),
             ("audit_unavailable", 5),
             ("secrets_unavailable", 6),
-            ("mdmcert_unavailable", 7),
-            ("no_pending_request", 8),
-            ("reply_undecryptable", 9),
-            ("reply_not_for_request", 10),
-            ("certificate_invalid", 11),
-            ("key_invalid", 12),
-            ("key_mismatch", 13),
-            ("certificate_expired", 14),
-            ("topic_changed", 15),
+            ("name_locked", 7),
+            ("mdmcert_unavailable", 8),
+            ("no_pending_request", 9),
+            ("reply_undecryptable", 10),
+            ("reply_not_for_request", 11),
+            ("certificate_invalid", 12),
+            ("key_invalid", 13),
+            ("key_mismatch", 14),
+            ("certificate_expired", 15),
+            ("topic_changed", 16),
+        ])
+    );
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmCondition",
+            "MDM_CONDITION_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("push_cert_missing", 1),
+            ("push_key_missing", 2),
+            ("push_pair_invalid", 3),
+            ("push_cert_expired", 4),
+            ("abm_token_missing", 5),
+            ("abm_token_unreadable", 6),
+            ("abm_token_expired", 7),
+            ("name_missing", 8),
+            ("tls_cert_missing", 9),
+            ("tls_key_missing", 10),
+            ("tls_pair_invalid", 11),
+            ("tls_cert_expired", 12),
+            ("tls_name_mismatch", 13),
+            ("push_cert_not_yet_valid", 14),
+            ("tls_cert_not_yet_valid", 15),
+        ])
+    );
+    assert_eq!(
+        tokens(&pool, "hostkeeper.operator.v1.MdmBaseline", "MDM_BASELINE_"),
+        owned(&[
+            ("unspecified", 0),
+            ("pending", 1),
+            ("applied", 2),
+            ("failed", 3),
         ])
     );
     assert_eq!(

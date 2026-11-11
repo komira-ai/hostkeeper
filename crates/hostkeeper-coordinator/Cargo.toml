@@ -90,6 +90,8 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+# The RFC 3339 expiry of the ABM token (`src/mdm_status.rs`).
+time = { workspace = true, features = ["parsing"] }
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
