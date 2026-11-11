@@ -466,6 +466,7 @@ async fn a_range_of_a_pkg_is_served_from_the_file() {
         "bytes=0-1,5-9",
         "bytes=9-3",
         "bytes=a-b",
+        "bytes=a-5",
         "bytes=",
         "bytes=5",
         "items=0-9",
@@ -668,24 +669,30 @@ async fn drained(body: crate::grpc::RouteBody) -> (Vec<u8>, bool) {
 #[tokio::test]
 async fn a_range_body_that_cannot_be_read_ends_in_an_error() {
     let data = bytes_of(3, 200_000);
-    let (bytes, failed) = drained(pkg::part(Faulty::new(data.clone()), 10, 150_000)).await;
+    let (bytes, failed) =
+        drained(pkg::part(Box::new(Faulty::new(data.clone())), 10, 150_000)).await;
     assert_eq!((bytes, failed), (data[10..150_010].to_vec(), false));
 
     let mut no_seek = Faulty::new(data.clone());
     no_seek.fail_seek = true;
     assert_eq!(
-        drained(pkg::part(no_seek, 10, 100)).await,
+        drained(pkg::part(Box::new(no_seek), 10, 100)).await,
         (Vec::new(), true)
     );
 
     let mut breaks = Faulty::new(data.clone());
     breaks.fail_read_after = Some(70_000);
-    let (bytes, failed) = drained(pkg::part(breaks, 0, 150_000)).await;
+    let (bytes, failed) = drained(pkg::part(Box::new(breaks), 0, 150_000)).await;
     assert!(failed);
     assert!(bytes.len() < 150_000);
     assert_eq!(bytes, data[..bytes.len()].to_vec());
 
-    let (bytes, failed) = drained(pkg::part(Faulty::new(data[..50].to_vec()), 0, 100)).await;
+    let (bytes, failed) = drained(pkg::part(
+        Box::new(Faulty::new(data[..50].to_vec())),
+        0,
+        100,
+    ))
+    .await;
     assert_eq!((bytes, failed), (data[..50].to_vec(), true));
 }
 
@@ -703,7 +710,7 @@ async fn a_read_error_while_streaming_or_hashing_is_not_a_whole_answer() {
     let mut breaks = Faulty::new(data.clone());
     breaks.fail_read_after = Some(100_000);
     let mut streaming = pkg::Streaming {
-        file: breaks,
+        file: Box::new(breaks),
         hasher: Sha256::new(),
         held: None,
         left: data.len() as u64,
@@ -727,6 +734,12 @@ async fn a_read_error_while_streaming_or_hashing_is_not_a_whole_answer() {
     let mut breaks = Faulty::new(data.clone());
     breaks.fail_read_after = Some(1000);
     assert!(pkg::hash_of(&mut breaks, 200_000).await.is_err());
+    let short = pkg::hash_of(&mut Faulty::new(data[..50].to_vec()), 100).await;
+    assert_eq!(
+        short.ok(),
+        Some(sha(&data[..50])),
+        "a file that ends early hashes what it has"
+    );
     assert_eq!(
         pkg::hash_of(&mut Faulty::new(data.clone()), 200_000)
             .await

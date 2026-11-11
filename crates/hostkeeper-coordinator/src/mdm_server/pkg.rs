@@ -55,6 +55,12 @@ use crate::http::error;
 use crate::mdm_setup::MdmSetup;
 use crate::service::Coordinator;
 
+/// A file as the route reads it. Only `File` is one in production; a test's reader that fails is
+/// the other. It is a trait object, not a type parameter, so the code that reads is one function.
+trait Source: AsyncRead + AsyncSeek + Send + Unpin {}
+
+impl<T: AsyncRead + AsyncSeek + Send + Unpin> Source for T {}
+
 /// The path every route of this module is under.
 pub(crate) const PREFIX: &str = "/pkg/";
 
@@ -238,7 +244,7 @@ fn matches_none(headers: &HeaderMap, etag: &str) -> bool {
 
 /// The SHA-256 of the next `len` bytes of `file`, read in chunks, in hex; of fewer bytes when the
 /// file ends before that.
-async fn hash_of<R: AsyncRead + Unpin>(file: &mut R, len: u64) -> io::Result<String> {
+async fn hash_of(file: &mut dyn Source, len: u64) -> io::Result<String> {
     let mut hasher = Sha256::new();
     let mut left = len;
     let mut buffer = vec![0u8; CHUNK];
@@ -255,8 +261,8 @@ async fn hash_of<R: AsyncRead + Unpin>(file: &mut R, len: u64) -> io::Result<Str
 }
 
 /// The state of the body of a full `GET`: the file read so far and the chunk held back.
-struct Streaming<R> {
-    file: R,
+struct Streaming {
+    file: Box<dyn Source>,
     hasher: Sha256,
     held: Option<Bytes>,
     left: u64,
@@ -266,7 +272,7 @@ struct Streaming<R> {
     server: Arc<MdmServer>,
 }
 
-impl<R: AsyncRead + Unpin> Streaming<R> {
+impl Streaming {
     /// The next frame of the body: the chunk read before this one, or at the end the held last
     /// chunk once the digest is found equal, or the error that cuts the connection.
     async fn next(&mut self) -> Option<io::Result<Frame<Bytes>>> {
@@ -316,11 +322,7 @@ impl<R: AsyncRead + Unpin> Streaming<R> {
 /// The body of `length` bytes of `file` from byte `start`, with nothing hashed: a range of a file
 /// that was checked whole. A seek or read that fails, or a file that ends early, ends the body in
 /// an error.
-fn part<R: AsyncRead + AsyncSeek + Send + Unpin + 'static>(
-    file: R,
-    start: u64,
-    length: u64,
-) -> RouteBody {
+fn part(file: Box<dyn Source>, start: u64, length: u64) -> RouteBody {
     let frames = stream::unfold(
         (file, length, Some(start)),
         |(mut file, left, from)| async move {
@@ -428,13 +430,11 @@ pub(crate) async fn serve(
             if !whole_get && !server.pkgs.is_checked(&digest, stamp) {
                 match hash_of(&mut file, len).await {
                     Ok(found) if found == digest => server.pkgs.record(&digest, stamp),
-                    Ok(_) => {
-                        tracing::error!(%digest, "the bytes of a pkg do not match its digest; it is not served");
+                    other => {
+                        // Bytes that are not the digest's, or that could not be read to the end:
+                        // either way the file is not shown to be the digest's.
+                        tracing::error!(?other, %digest, "a pkg could not be shown to match its digest; it is not served");
                         return failure(StatusCode::INTERNAL_SERVER_ERROR, "pkg_digest_mismatch");
-                    }
-                    Err(why) => {
-                        tracing::error!(%why, %digest, "a pkg could not be read");
-                        return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal");
                     }
                 }
             }
@@ -448,7 +448,7 @@ pub(crate) async fn serve(
                 Either::Left(Full::new(Bytes::new()))
             } else if whole_get {
                 let streaming = Streaming {
-                    file,
+                    file: Box::new(file),
                     hasher: Sha256::new(),
                     held: None,
                     left: len,
@@ -462,7 +462,7 @@ pub(crate) async fn serve(
                 });
                 Either::Right(tonic::body::Body::new(StreamBody::new(frames)))
             } else {
-                part(file, start, length)
+                part(Box::new(file), start, length)
             };
             let mut response = Response::new(body);
             *response.status_mut() = status;
