@@ -510,6 +510,7 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "certificate_expired",
             ),
             (MdmRefusal::TopicChanged, InvalidArgument, "topic_changed"),
+            (MdmRefusal::NameLocked, FailedPrecondition, "name_locked"),
         ],
         refusal::mdm,
     );
