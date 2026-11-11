@@ -8,6 +8,7 @@ use std::time::{Duration, SystemTime};
 
 use der::asn1::ObjectIdentifier;
 use der::{Any, Decode, Encode, Tag, TagNumber};
+use hostkeeper_mdm_ade::Device;
 use p256::ecdsa::{DerSignature, SigningKey as EcKey};
 use rsa::PrivateKey;
 use rsa::pkcs1v15::{Signature, SigningKey};
@@ -498,4 +499,26 @@ pub fn blob(spec: &Spec) -> Vec<u8> {
 
 fn set_bytes(content: &[u8]) -> Vec<u8> {
     tlv(Tag::Set, content)
+}
+
+/// Builds the blob of a leaf `signer_cert` (keyed `signer`) under the CA certificates `cas`.
+pub fn under(signer: &Key, signer_cert: &Certificate, cas: &[&Certificate]) -> Spec {
+    let mut certs = vec![signer_cert.clone()];
+    certs.extend(cas.iter().map(|ca| (*ca).clone()));
+    Spec {
+        signer: signer.clone(),
+        signer_cert: signer_cert.clone(),
+        certs,
+        ..Spec::default()
+    }
+}
+
+/// The device the default blob names.
+pub fn device() -> Device {
+    Device {
+        serial: SERIAL.to_owned(),
+        udid: UDID.to_owned(),
+        product: Some("Mac14,13".to_owned()),
+        version: Some("26A434".to_owned()),
+    }
 }

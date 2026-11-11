@@ -75,6 +75,7 @@ fn write_body(path: &str) -> String {
     match path {
         PUT_SECRET => secret_body(),
         PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
+        PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
         _ => "{}".to_owned(),
     }
 }

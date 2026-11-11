@@ -357,11 +357,6 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("identity_org", "hostkeeper", true),
             ("enroll_rate_per_min", "60", true),
             ("enroll_pending_max", "256", true),
-            ("proxy_wait_s", "10", true),
-            ("proxy_redirects", "3", true),
-            ("proxy_index_ttl_s", "300", true),
-            ("proxy_cache_max_bytes", "21474836480", true),
-            ("proxy_fetches", "8", true),
         ]
     );
 }

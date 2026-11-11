@@ -258,13 +258,11 @@ pub struct Coordinator {
     pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
-    /// The ABM client: the sync, the token upload and the key pair ([`crate::abm`]); `None` in a
-    /// coordinator built without an MDM store.
+    /// The ABM client ([`crate::abm`]); `None` in a coordinator built without an MDM store.
     pub(crate) abm: Option<Arc<crate::abm::Abm>>,
     /// The package proxy: its cache (`--proxy-cache-dir`) and its reads of public origins.
     pub(crate) proxy: crate::proxy_origin::Proxy,
-    /// Where the request for a push certificate is posted to mdmcert.download
-    /// ([`crate::mdm_push`]).
+    /// Where a push certificate's request is posted to mdmcert.download ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).

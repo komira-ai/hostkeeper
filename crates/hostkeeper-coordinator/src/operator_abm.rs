@@ -315,3 +315,7 @@ mod timer_tests;
 #[cfg(test)]
 #[path = "operator_abm_status_tests.rs"]
 mod status_tests;
+
+#[cfg(test)]
+#[path = "operator_abm_pair_tests.rs"]
+mod pair_tests;

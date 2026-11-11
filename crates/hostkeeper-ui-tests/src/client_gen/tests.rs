@@ -129,10 +129,10 @@ enum Kind {
   KIND_A = 1;
 }
 
-enum LongEnumNameForWrapping {
-  LONG_ENUM_NAME_FOR_WRAPPING_UNSPECIFIED = 0;
-  LONG_ENUM_NAME_FOR_WRAPPING_FIRST = 1;
-  LONG_ENUM_NAME_FOR_WRAPPING_SECOND = 2;
+enum LongEnumNameForWrappingPastTheWidth {
+  LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_UNSPECIFIED = 0;
+  LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_FIRST = 1;
+  LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND = 2;
 }
 
 message Holder {
@@ -143,7 +143,7 @@ message Holder {
 
 message Tree { repeated Tree children = 1; }
 
-message GetThingResponse { LongEnumNameForWrapping state = 1; }
+message GetThingResponse { LongEnumNameForWrappingPastTheWidth state = 1; }
 "#;
 
 fn fixture() -> DescriptorPool {
@@ -249,17 +249,17 @@ export namespace hostkeeper_operator_v1 {
       export type Deep = "DEEP_UNSPECIFIED" | "DEEP_ONE";
     }
   }
-  export interface GetThingResponse { state?: hostkeeper_operator_v1.LongEnumNameForWrapping; }
+  export interface GetThingResponse { state?: hostkeeper_operator_v1.LongEnumNameForWrappingPastTheWidth; }
   export namespace Holder {
     export interface Also {
     }
     export interface Nested { x?: string; }
   }
   export type Kind = "KIND_UNSPECIFIED" | "KIND_A";
-  export type LongEnumNameForWrapping =
-    | "LONG_ENUM_NAME_FOR_WRAPPING_UNSPECIFIED"
-    | "LONG_ENUM_NAME_FOR_WRAPPING_FIRST"
-    | "LONG_ENUM_NAME_FOR_WRAPPING_SECOND";
+  export type LongEnumNameForWrappingPastTheWidth =
+    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_UNSPECIFIED"
+    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_FIRST"
+    | "LONG_ENUM_NAME_FOR_WRAPPING_PAST_THE_WIDTH_SECOND";
   export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
 

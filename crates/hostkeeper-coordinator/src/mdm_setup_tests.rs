@@ -364,11 +364,6 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("identity_org", "hostkeeper".to_owned(), true),
             ("enroll_rate_per_min", "60".to_owned(), true),
             ("enroll_pending_max", "256".to_owned(), true),
-            ("proxy_wait_s", "10".to_owned(), true),
-            ("proxy_redirects", "3".to_owned(), true),
-            ("proxy_index_ttl_s", "300".to_owned(), true),
-            ("proxy_cache_max_bytes", "21474836480".to_owned(), true),
-            ("proxy_fetches", "8".to_owned(), true),
         ]
     );
     assert_eq!(
