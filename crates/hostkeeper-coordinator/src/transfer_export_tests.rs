@@ -4,18 +4,18 @@
 use std::fs;
 use std::path::PathBuf;
 
+use super::TransferError;
 use super::export;
 use super::tests::{
-    DESIRED_SINGLE, Store, audit, clock, count, export_flags, files_loaded, import_flags, imported,
-    loaded,
+    DESIRED_SINGLE, Store, audit, clock, count, export_flags, files_loaded, loaded, seeded, stored,
 };
-use super::{TransferError, import};
 use crate::backup::BackupError;
 use crate::enrollment::tests::support::{HostKey, Rig as Enrolling, enrolled};
 use crate::lock::FileLock;
 use crate::store::postgres::DatabaseError;
 use crate::store::postgres::tests::TestDatabase;
-use crate::store::postgres::transfer::{MoveError, STATE_TABLES};
+use crate::store::postgres::tests::seed::seed;
+use crate::store::postgres::transfer::STATE_TABLES;
 use crate::store::{Backend, Files, Loaded};
 
 /// Proves: an export writes into targets that hold no state, and refuses any that do (a state
@@ -27,7 +27,7 @@ use crate::store::{Backend, Files, Loaded};
 #[test]
 fn export_refuses_targets_that_hold_state() {
     let database = TestDatabase::new();
-    imported(&Store::recorded("transfer-export-from"), &database).expect("imported");
+    seeded(&Store::recorded("transfer-export-from"), &database);
     for name in [
         "desired.json",
         "desired.json.ops.audit.3",
@@ -49,9 +49,7 @@ fn export_refuses_targets_that_hold_state() {
     let into = Store::new("transfer-export-locked");
     assert!(matches!(
         export(&export_flags(&database, &into), &FileLock, &clock()),
-        Err(TransferError::Database(MoveError::Database(
-            DatabaseError::Locked
-        )))
+        Err(TransferError::Database(DatabaseError::Locked))
     ));
     serving.stop();
     assert!(into.files().is_empty());
@@ -69,7 +67,7 @@ fn export_refuses_to_leave_the_enrollment_store_behind() {
     let mut store = Store::recorded("transfer-export-enrolled-files");
     store.paths.enrollment_dir = Some(enrolling.files.store.clone());
     let database = TestDatabase::new();
-    imported(&store, &database).expect("imported");
+    seeded(&store, &database);
     let into = Store::new("transfer-export-no-dir");
     assert!(matches!(
         export(&export_flags(&database, &into), &FileLock, &clock()),
@@ -100,15 +98,16 @@ fn note_running(enrolling: &Enrolling, host: &str) {
         .expect("noted");
 }
 
-/// Proves: the files an export writes are the state the database holds: imported again into a
-/// second database, they give back every row of every table, the audit history with its numbers
-/// and the enrollment store (a host's record of what it runs among it); and a pruned history is written as a sealed segment past the first,
-/// so the file store says the same time of its oldest line.
+/// Proves: the files an export writes are the state the database holds: read back by the readers
+/// a start uses and written into a second database, they give back every row of every table, the
+/// audit history with its numbers and the enrollment store (a host's record of what it runs among
+/// it); and a pruned history is written as a sealed segment past the first, so the file store says
+/// the same time of its oldest line.
 ///
 /// Catches: a part an export leaves out or writes in a form the file store does not read, or an
 /// export that turns a pruned history into a whole one.
 #[test]
-fn an_export_imported_again_gives_back_every_row() {
+fn an_export_read_back_gives_back_every_row() {
     let enrolling = Enrolling::new("transfer-round-ca");
     enrolled(&enrolling.enrollment, &HostKey::new(), "m-1", "web-1");
     note_running(&enrolling, "web-1");
@@ -117,8 +116,9 @@ fn an_export_imported_again_gives_back_every_row() {
     audit(&store, 9, 1_850_000_000, 2);
     store.paths.enrollment_dir = Some(enrolling.files.store.clone());
     let first = TestDatabase::new();
-    imported(&store, &first).expect("imported");
+    seeded(&store, &first);
     assert_eq!(count(&first, "enrollment_host_running"), 1);
+    assert_eq!(count(&first, "spent_tokens"), 1);
 
     let mut out = Store::new("transfer-round-out");
     out.paths.enrollment_dir = Some(out.dir.path().join("enrollment"));
@@ -128,24 +128,15 @@ fn an_export_imported_again_gives_back_every_row() {
     assert!(crate::audit_file::segment_path(&active, 2).exists());
 
     let second = TestDatabase::new();
-    // The export holds the first import's row: the second import's row is one past it.
-    imported(&out, &second).expect("imported again");
+    seed(&second, &stored(&out, None));
     for table in STATE_TABLES {
-        let order = match table {
-            "audit" => " WHERE action <> 'state_imported'",
-            _ => "",
-        };
         let rows = |database: &TestDatabase| {
-            let mut rows = database.rows(&format!("SELECT * FROM {table}{order}"));
+            let mut rows = database.rows(&format!("SELECT * FROM {table}"));
             rows.sort();
             rows
         };
         assert_eq!(rows(&second), rows(&first), "{table}");
     }
-    assert_eq!(
-        second.rows("SELECT audit_pruned_before FROM imports"),
-        first.rows("SELECT audit_pruned_before FROM imports")
-    );
     let files = Files::default()
         .with_ops(&out.ops(), crate::audit_file::DEFAULT_ROTATION)
         .expect("the exported ops files");
@@ -167,11 +158,9 @@ fn export_writes_the_single_state_form_only_for_a_lone_legacy_service() {
     let single = Store::new("transfer-form-single");
     single.put("desired.json", DESIRED_SINGLE);
     let lone = TestDatabase::new();
-    let mut flags = import_flags(&single, &lone, true);
-    flags.legacy_service = Some("kbf".to_owned());
-    import(&flags, &FileLock, &clock()).expect("imported");
+    seed(&lone, &stored(&single, Some("kbf")));
     let several = TestDatabase::new();
-    imported(&Store::recorded("transfer-form-map"), &several).expect("imported");
+    seeded(&Store::recorded("transfer-form-map"), &several);
     let services = |database: &TestDatabase| count(database, "desired");
     assert_eq!(services(&lone), 1);
     assert!(services(&several) > 1);
@@ -209,7 +198,7 @@ fn export_prints_the_count_of_each_table() {
     enrolled(&enrolling.enrollment, &HostKey::new(), "m-1", "web-1");
     store.paths.enrollment_dir = Some(enrolling.files.store.clone());
     let database = TestDatabase::new();
-    imported(&store, &database).expect("imported");
+    seeded(&store, &database);
     let mut into = Store::new("transfer-counts-out");
     into.paths.enrollment_dir = Some(into.dir.path().join("enrollment"));
     let report = export(&export_flags(&database, &into), &FileLock, &clock())
@@ -228,11 +217,11 @@ fn export_prints_the_count_of_each_table() {
     );
 }
 
-/// Proves: a database that a coordinator started on and never imported into, so with no audit
+/// Proves: a database that a coordinator started on and that holds nothing, so with no audit
 /// row and no record, exports as a file store that holds nothing: the desired-state file and the
 /// ops file of no state, no audit file, no enrollment record; every table counted at 0.
 ///
-/// Catches: an export that needs an audit history or an import's record to be there.
+/// Catches: an export that needs an audit history or an import record to be there.
 #[test]
 fn an_empty_database_exports_an_empty_file_store() {
     let database = TestDatabase::new();
@@ -252,9 +241,9 @@ fn an_empty_database_exports_an_empty_file_store() {
 }
 
 /// Proves: the verdicts a file store holds (the verdict each host was last acknowledged, and the
-/// ones counted toward an automatic rollback) are imported and exported back as they were.
+/// ones counted toward an automatic rollback) in a database are exported back as they were.
 ///
-/// Catches: an import or an export that leaves the verdicts behind, so a host would be
+/// Catches: an export that leaves the verdicts behind, so a host would be
 /// acknowledged a verdict again, or a rollback counted twice.
 #[test]
 fn the_verdicts_move_both_ways() {
@@ -270,7 +259,7 @@ fn the_verdicts_move_both_ways() {
         .expect("the verdicts");
     assert_ne!(files, crate::verdict_file::Held::default());
     let database = TestDatabase::new();
-    imported(&store, &database).expect("imported");
+    seeded(&store, &database);
     assert_eq!(count(&database, "verdict_standing"), 1);
     assert_eq!(loaded(&database).verdicts, files);
 

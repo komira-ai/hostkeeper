@@ -42,7 +42,7 @@ holds on one machine only.
   database on a named volume and a health check (section 9).
 - Backups are `pg_dump` on a timer, taken while the coordinator runs, with a restore drill (section 10). The
   coordinator's own `backup` and `restore` verbs stay for the file store only.
-- The farm moves once: stop the file coordinator, run `hostkeeper-coordinator import`, start the compose stack. No host
+- The farm moved once (designed here; the verb was removed later, see section 11): stop the file coordinator, run `hostkeeper-coordinator import`, start the compose stack. No host
   enrolls again (section 11). The way back is `hostkeeper-coordinator export` and the file coordinator.
 
 **What does not change.** The rollout file, the operator tokens file, the OIDC allow-list, the TLS files, the CA key and
@@ -788,6 +788,8 @@ volumes:
   until one passes.
 
 ## 11. The move: import, cutover and back-out
+
+*Removed:* `hostkeeper-coordinator import` was removed after it was built; there is no conversion from the file store to the database, and a farm on the file store stays on it or starts a database coordinator and enrolls its hosts again. `export` stays ([coordinator-state.md](../operations/coordinator-state.md)). The rest of this section is the design as it was built, kept as history.
 
 **Built** (C4): `crates/hostkeeper-coordinator/src/transfer.rs`, the database's side in
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`, the enrollment store read and

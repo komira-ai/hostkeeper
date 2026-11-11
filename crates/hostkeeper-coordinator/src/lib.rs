@@ -99,9 +99,8 @@
 //! - [`backup`]: `backup` and `restore`, a copy of the state files and the enrollment store
 //!   taken under the same lock, with the SHA-256 of each file in its manifest, and putting one
 //!   back into targets that hold no state;
-//! - [`transfer`]: `import` and `export`, the state moved from the files into the database of
-//!   `--database-dsn-file` in one transaction that reads it back and compares it, and from the
-//!   database back into files that hold no state.
+//! - [`transfer`]: `export`, the state of the database of `--database-dsn-file` written into
+//!   files of the file store that hold no state.
 //!
 //! The wire types of the heartbeat and the reply are `hostkeeper_wire::wire`.
 
@@ -158,10 +157,6 @@ mod live;
 pub mod lock;
 pub mod mdm;
 pub mod membership;
-pub mod migrate;
-pub(crate) mod migrate_apply;
-pub(crate) mod migrate_plan;
-pub(crate) mod migrate_policy;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
@@ -358,28 +353,6 @@ mod marks_support;
 mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
-#[cfg(test)]
-mod migrate_apply_tests;
-#[cfg(test)]
-mod migrate_cli_tests;
-#[cfg(test)]
-mod migrate_orders_tests;
-#[cfg(test)]
-mod migrate_pg_tests;
-#[cfg(test)]
-mod migrate_plan_errors_tests;
-#[cfg(test)]
-mod migrate_plan_tests;
-#[cfg(test)]
-mod migrate_policy_tests;
-#[cfg(test)]
-mod migrate_refusal_tests;
-#[cfg(test)]
-mod migrate_roundtrip_tests;
-#[cfg(test)]
-mod migrate_support;
-#[cfg(test)]
-mod migrate_tests;
 #[cfg(test)]
 mod moving_facts_tests;
 #[cfg(test)]
