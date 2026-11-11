@@ -135,16 +135,6 @@ fn parse(path: &Path, now: u64) -> Result<Parsed, JtiError> {
     })
 }
 
-/// The ids the file at `path` holds that are not yet past at `now`, sorted, read as
-/// [`JtiFile::open`] reads them and without writing anything: a file that is not there holds
-/// none.
-///
-/// # Errors
-/// [`JtiError`]: the file cannot be read, or a line of it is malformed.
-pub(crate) fn read_live(path: &Path, now: u64) -> Result<Vec<(String, u64)>, JtiError> {
-    Ok(parse(path, now)?.live.into_iter().collect())
-}
-
 /// The text of a file holding the spent ids `spent`, as the file is written.
 pub(crate) fn text_of_spent(spent: &[(String, u64)]) -> String {
     text_of(&spent.iter().cloned().collect())
