@@ -389,6 +389,7 @@ async fn a_page_holds_at_most_the_cap_and_a_limit_of_zero_is_the_cap() {
         Devices::Files(dir.path()),
         crate::enrollment::tests::support::FixedClock::at(1),
         crate::enrollment::os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("opens")
     .expect("a gate");

@@ -50,16 +50,34 @@ profile = "/etc/hostkeeper/baseline/fskit-extension.mobileconfig"
    with the hostkeeper pkg, before the Mac's daemon has posted its request, and whether or not an
    operator has approved the Mac yet. Each send NanoHUB queued is audited `mdm_baseline` by
    `mdm-gate` with the serial, the group and the entry.
-2. **Kept.** The gate sends a `ProfileList` command once every profile entry is acknowledged, at
+2. **The name and the installs.** Besides the file's entries, the gate sends each Mac of a listed
+   group two things that are not in the file. The **device name**: a `Settings` command whose items
+   `DeviceName` and `HostName` are both the host id of the Mac's `--mac-serial-allowlist` entry
+   (its prefix and the serial in lower case), sent to a supervised Mac only (Apple: `DeviceName` is
+   for supervised devices; an unsupervised Mac shows `FAILED` with the reason `device name: the Mac
+   is not supervised, and DeviceName needs a supervised Mac`). It has no read-back here, so it is
+   sent once and again only when the host id changes (or, after an error answer, at the check
+   interval). **The installs**: each install of the MDM setting `installs`
+   ([enrollment-coordinator.md](../enrollment-coordinator.md)) except the one named `hostkeeper`,
+   which the pkg step sends, as an `InstallEnterpriseApplication` with an inline manifest (the pkg
+   served at `https://<--mdm-host>/pkg/<sha256>.pkg`), once the pkg file's bytes are its listed
+   digest; a file that is missing or differs is not sent and is kept as the device's last error. An
+   install is sent once, and again when its entry changes (name, bundle identifier, digest or
+   version; a change of `url` or `path` alone sends nothing) or, after an error answer, at the check
+   interval. The setting changes at runtime: after `Mdm.PutSetting installs` the Macs of every
+   listed group show `PENDING` until they acknowledge the new entry. Without `--mdm-host` there are
+   no installs to send, and a Mac the allowlist entry gives no name gets no `Settings`. Each send
+   is audited `mdm_baseline` (`device name <name>`, `install <name> <version>`).
+3. **Kept.** The gate sends a `ProfileList` command once every profile entry is acknowledged, at
    each of the Mac's `TokenUpdate`s and every `--mdm-baseline-check-s` seconds after its last
    answer. A profile the answer does not list is sent again. `EnableRemoteDesktop` has no read-back
    in Apple's schema (no `DeviceInformation` query reports Screen Sharing), so it is sent again at
    each interval after its last acknowledged answer. Apple's text says it enables Remote Desktop and
    leaves all other options unchanged; that a repeat is harmless is inferred from that sentence and
    not measured on a Mac.
-3. **Macs enrolled before this.** A Mac already enrolled, such as the farm's, is sent the baseline
+4. **Macs enrolled before this.** A Mac already enrolled, such as the farm's, is sent the baseline
    at the gate's next look after the coordinator starts with the flag; nothing is enrolled again.
-4. **A failure never fails enrollment.** The nonce, the approval and the pkg do not wait for the
+5. **A failure never fails enrollment.** The nonce, the approval and the pkg do not wait for the
    baseline, and a baseline that fails changes none of them. A command the Mac answered with an
    error is sent again after the check interval. A command NanoHUB did not queue is sent at the
    next look (once a minute), and one the Mac has not answered is never sent again, so a Mac that
@@ -75,7 +93,7 @@ profile = "/etc/hostkeeper/baseline/fskit-extension.mobileconfig"
 | absent (`MDM_BASELINE_STATE_UNSPECIFIED`) | No baseline applies: the coordinator has none, the device is not an enrolled Mac of the allowlist, or its group is not in the file. | Check the Mac's role in the allowlist. |
 | `MDM_BASELINE_STATE_PENDING` | An entry is not sent or not answered yet, or the Mac has no config profile yet. | Wait; the Mac fetches commands when it checks in. A Mac that stays pending is off, or its config profile is not acknowledged (the device's `last_error`). |
 | `MDM_BASELINE_STATE_APPLIED` | Every entry was acknowledged, and none is missing from the last profile list. | Nothing. |
-| `MDM_BASELINE_STATE_FAILED` | The Mac answered an entry with an error, or `remote_desktop` is listed for a Mac that is not supervised. `baseline_reason` says which. | An unsupervised Mac cannot take Screen Sharing from MDM: enable it in System Settings, or re-enroll the Mac through Automated Device Enrollment. An errored entry is sent again at the next check. |
+| `MDM_BASELINE_STATE_FAILED` | The Mac answered an entry (the name and an install included) with an error, or `remote_desktop` is listed, or the name is to be set, for a Mac that is not supervised. `baseline_reason` says which. | An unsupervised Mac cannot take Screen Sharing from MDM: enable it in System Settings, or re-enroll the Mac through Automated Device Enrollment. An errored entry is sent again at the next check. |
 
 A Mac whose Screen Sharing is off while its state is `APPLIED` was changed on the Mac after the
 last send; the next check turns it on again.
@@ -83,10 +101,14 @@ last send; the next check turns it on again.
 ## What changes, and what does not
 
 - **Format.** The gate's device record gains a baseline (field 21) and a list of unanswered
-  baseline commands (field 22), both new optional fields of schema 1. The unanswered
-  `EnableRemoteDesktop` and `ProfileList` are in field 22 and not in the list of field 15 because
-  the release before refuses a record with a sent command of a type it does not send; it skips
-  fields 21 and 22, so it reads every record this release writes, and this release reads a record
+  baseline commands (field 22) and of unanswered `Settings` commands (field 23), all new optional
+  fields of schema 1. The last `Settings` and the
+  last install of each name are fields 6 and 7 of the baseline message, new optional fields the
+  release before skips. The unanswered `EnableRemoteDesktop` and `ProfileList` are in field 22, and `Settings` in field
+  23, not in the list of field 15 and not together: a release refuses a record with a sent
+  command of a type it does not send, so each release must find a type it knows in each field it
+  reads. The release before the baseline skips fields 21 to 23, the release with the baseline
+  skips field 23, so it reads every record this release writes, and this release reads a record
   without them as one with no baseline sent. `Mdm.ListDevices` gains `baseline_state` (20) and
   `baseline_reason` (21) on `MdmDevice`, new optional fields.
 - **Flags.** Both flags are new. A coordinator started without them runs as before and sends no
@@ -98,10 +120,19 @@ last send; the next check turns it on again.
 
 ## Apple's commands
 
-The three commands are read from Apple's `apple/device-management` repository, `mdm/commands/`:
+The commands are read from Apple's `apple/device-management` repository, `mdm/commands/`:
 `remotedesktop.enable.yaml` (`RequestType` `EnableRemoteDesktop`, no payload keys, macOS 10.14.4
 and later, device channel, `supervised: true`, `requiresdep: false`), `profile.list.yaml`
 (`ProfileList`, optional `ManagedOnly`, the answer's `ProfileList` an array of dictionaries each
 with a `PayloadIdentifier`) and `profile.install.yaml` (`InstallProfile`, `Payload` the profile's
 data). The gate sends `ManagedOnly` false, so a profile the Mac holds from another source is
 listed too and a baseline profile is judged by its identifier alone.
+
+The `Settings` command (the device name) carries two items, `{Item: DeviceName, DeviceName: <name>}`
+and `{Item: HostName, HostName: <name>}`, as the design says Apple's `settings.yaml` has them
+(coordinator-mdm.md, section 4.6). It is tested against the gate's fake NanoHUB only; it has not
+been measured on a Mac, so the first Mac that takes it is the check. The answer's `Settings`
+array has one result per item; an acknowledged command with an item whose `Status` is not
+`Acknowledged` is an error answer, shown as `FAILED` and sent again at the next check. `InstallEnterpriseApplication`
+is the command of the pkg step, with the manifest of
+[enrollment-coordinator.md](../enrollment-coordinator.md).

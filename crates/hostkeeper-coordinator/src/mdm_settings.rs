@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use hostkeeper_mdm_gate::Installs;
+
 /// What a setting's value is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
@@ -18,6 +20,9 @@ enum Shape {
     Name,
     /// One to five whole numbers from 1 to 3650 that fall, separated by commas (`60,14`).
     FallingDays,
+    /// The named installs: a JSON array [`hostkeeper_mdm_gate::Installs`] reads, stored as the
+    /// canonical text it writes back.
+    Installs,
     /// One whole number between `min` and `max`, of seconds, bytes or a count.
     Whole { min: u64, max: u64 },
     /// One of the values listed.
@@ -35,7 +40,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 24] = [
+pub const SETTINGS: [Setting; 25] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -59,6 +64,13 @@ pub const SETTINGS: [Setting; 24] = [
         name: "secret_grace_days",
         default: "7",
         shape: Shape::Days { min: 0, max: 365 },
+    },
+    // The packages the gate may send a Mac by name; the hostkeeper pkg is the one named
+    // `hostkeeper`. Seeded once from the old `--mdm-pkg-allowlist` file.
+    Setting {
+        name: INSTALLS,
+        default: "[]",
+        shape: Shape::Installs,
     },
     // The floor, in seconds, between pushes to a Mac that has not connected since the last one
     // (docs/design/coordinator-mdm.md, section 4.3).
@@ -210,6 +222,9 @@ pub const SETTINGS: [Setting; 24] = [
     },
 ];
 
+/// The name of the setting of the named installs.
+pub const INSTALLS: &str = hostkeeper_mdm_gate::SETTING_NAME;
+
 /// The setting called `name`, if this release knows it.
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Setting> {
@@ -227,6 +242,9 @@ impl Setting {
                 let days = parse_days(value)?;
                 (min..=max).contains(&days).then(|| days.to_string())
             }
+            Shape::Installs => Installs::parse(value)
+                .ok()
+                .map(|installs| installs.to_json()),
             Shape::Whole { min, max } => {
                 let whole = parse_whole(value)?;
                 (min..=max).contains(&whole).then(|| whole.to_string())
