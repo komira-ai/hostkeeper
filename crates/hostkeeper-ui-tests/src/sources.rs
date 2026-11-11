@@ -54,6 +54,8 @@ ui_files![
     "pages/mdm.js",
     "pages/release.js",
     "pages/rollout.js",
+    "pages/tokens.js",
+    "pages/users.js",
 ];
 
 #[cfg(test)]
