@@ -22,7 +22,9 @@ sealed and offline, as [ca-backup.md](ca-backup.md) says.
 
 `serve --database-dsn-file <file> --halt-marker-file <file>` keeps everything the files of the file
 store hold in the tables of one Postgres database (16 or newer), in the schema `hostkeeper`: the
-desired state and its registry of digests, the spent CI token ids, the verdicts, every operator
+desired state and its registry of digests, the spent CI token ids, the verdicts, the operator's users
+(each with the Argon2id hash of its password, never the password) and the API tokens made in the UI
+(each with the SHA-256 of the token, never the token), every operator
 change (exclusions, labels, halts and their reports, holds, assignments, minimum versions,
 the repository `Services.SetRepository` set for a service, uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
 the host groups (each group's packages, policy, generation and desired versions, and each (group,
@@ -96,6 +98,14 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   ([hostgroups.md](hostgroups.md#where-a-packages-repository-and-minimum-version-come-from)). Older
   releases may run on it (`may-run`): they never read the column, and their writes of a service's
   row leave it as it is (a row an older release deletes takes the value with it).
+- **Users and API tokens.** Migration `0010` adds the tables `users` and `api_tokens`, one row each
+  per user and per token, keyed by name, holding the record as the accounts file holds it
+  (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9). A database that holds
+  no row holds no user and no token, which is how a coordinator of this release starts on a
+  database the release before migrated. `0010` says older releases may run on it: the release
+  before never reads either table, so going back below this release needs no restore for it.
+  Nothing writes these rows yet: the coordinator holds the store, `export` writes them to the accounts file, and the login and the `Users` and
+  `ApiTokens` services that use it land after.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a
@@ -153,6 +163,11 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
   service. The whole audit history is one audit file; a history the database holds as pruned is written
   as the sealed segment `<ops-file>.audit.2`, so the file store says the same time of its oldest
   line.
+- The rows of `users` and `api_tokens` are written as `<state-file>.accounts` (mode 0600, the file
+  the file store keeps), which a coordinator started on the files reads as the users and tokens the
+  database held, hashes and all; a database that holds neither is exported with no such file. There
+  is no import: a file store's accounts file does not reach a database by any verb, and a database
+  is filled by serving on it.
 - It prints the files it wrote, the rows of every table, and the lines of the audit file.
 
 To go back from the database to the files: stop the coordinator on the database, `export
@@ -171,6 +186,7 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. Nothing in this release writes it yet. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |

@@ -18,6 +18,7 @@ use clap::Args;
 use hostkeeper_enrollment::enroll::StoreError as RecordsError;
 use hostkeeper_mdm_gate::encode_record;
 
+use crate::accounts::{self, accounts_path};
 use crate::audit_file::{self, UnixClock};
 use crate::backup::{self, BackupError, Report, StatePaths};
 use crate::config::StartError;
@@ -130,6 +131,13 @@ fn render(
         let text = verdict_file::text_of(&path, &loaded.verdicts).map_err(StartError::from)?;
         files.push((path, text));
     }
+    if !loaded.accounts.is_empty() {
+        let path = accounts_path(state);
+        let text = accounts::encode_file(&loaded.accounts)
+            .map_err(io::Error::from)
+            .map_err(io_at(&path))?;
+        files.push((path, text));
+    }
     let (ops_text, halts) = ops_file::texts(&ops, &loaded.ops).map_err(StartError::from)?;
     files.push((ops.clone(), ops_text));
     files.extend(halts.map(|text| (ops_file::halts_path(&ops), text)));
@@ -201,6 +209,10 @@ mod export_tests;
 #[cfg(test)]
 #[path = "transfer_releases_tests.rs"]
 mod releases_tests;
+
+#[cfg(test)]
+#[path = "transfer_accounts_tests.rs"]
+mod accounts_tests;
 
 #[cfg(test)]
 #[path = "transfer_repositories_tests.rs"]

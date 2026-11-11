@@ -8,6 +8,7 @@ use hostkeeper_oidc::{ConfigError, KeySourceError};
 use hostkeeper_tls::TlsError;
 use hostkeeper_wire::identity::PrefixError;
 
+use crate::accounts::AccountsError;
 use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
 use crate::inventory::WindowAboveMax;
@@ -182,6 +183,9 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// The file of users and API tokens is refused.
+    #[error(transparent)]
+    Accounts(#[from] AccountsError),
     /// The TLS client for the repository origins could not be made.
     #[error("repository origins: {0}")]
     OriginTls(#[from] OriginTlsError),

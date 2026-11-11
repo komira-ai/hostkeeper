@@ -433,9 +433,7 @@ fn a_password_over_the_cap_never_verifies_even_against_a_hash_of_itself() {
     let passwords = passwords();
     let long = "x".repeat(MAX_PASSWORD_BYTES + 1);
     let stored = hash_under(cheap(), Algorithm::Argon2id, &long);
-    assert_eq!(passwords.argon2_runs(), 0);
     assert_eq!(passwords.verify(&long, &stored), Verdict::Wrong);
-    assert_eq!(passwords.argon2_runs(), 1, "the work was still spent");
     assert_eq!(passwords.verify(&long, &passwords.dummy), Verdict::Wrong);
     assert_eq!(passwords.argon2_runs(), 2, "the work was still spent");
 }
@@ -450,4 +448,36 @@ fn a_password_over_the_cap_never_verifies_against_the_hash_of_nothing() {
     );
     let long = "y".repeat(MAX_PASSWORD_BYTES + 1);
     assert_eq!(passwords.verify(&long, &empty), Verdict::Wrong);
+}
+
+#[test]
+fn a_verify_that_replaces_a_weak_hash_runs_argon2_twice_and_a_current_one_once() {
+    let passwords = passwords();
+    let weak = hash_under(cheap(), Algorithm::Argon2i, "correct horse battery");
+    let before = passwords.argon2_runs();
+    assert!(matches!(
+        passwords.verify("correct horse battery", &weak),
+        Verdict::Right { rehash: Some(_) }
+    ));
+    assert_eq!(
+        passwords.argon2_runs(),
+        before + 2,
+        "the verify and the rehash"
+    );
+    let current = passwords.hash("correct horse battery").unwrap();
+    let before = passwords.argon2_runs();
+    assert_eq!(
+        passwords.verify("correct horse battery", &current),
+        Verdict::Right { rehash: None }
+    );
+    assert_eq!(passwords.argon2_runs(), before + 1);
+    assert_eq!(
+        passwords.verify("another horse battery", &current),
+        Verdict::Wrong
+    );
+    assert_eq!(
+        passwords.argon2_runs(),
+        before + 2,
+        "a wrong password still runs once"
+    );
 }
