@@ -42,7 +42,7 @@ Facts, with the file that says them (paths under `crates/`).
   (`hostkeeper-config/src/daemon.rs`), so every host config still carries one.
 - **Not built, and not evidenced as done.** The operator's step in packages-native.md 10.5 item 3 (stop the sync, delete the channel's
   tree), which is a step on the farm and not in this repository, and A25 (deleting the last readers). Section 6 owns the first.
-- **Built, CM11c:** `GET`/`HEAD /pkg/<sha256>.pkg` from `--mdm-pkg-dir` alone (coordinator-mdm.md 4.7): streamed, digest-checked, with `Range` and `If-None-Match`, and 404 for a digest the current `installs` do not name.
+- **Built, CM11c:** `GET`/`HEAD /pkg/<sha256>.pkg` from `--mdm-pkg-dir` alone at that step (coordinator-mdm.md 4.7): streamed, digest-checked, with `Range` and `If-None-Match`, and 404 for a digest the current `installs` do not name.
 - **Not there:** any cache, any route for a public repository, any by-digest pkg route that fetches from an origin.
 
 ## 3. Components and where it listens
@@ -254,7 +254,7 @@ section 4 (https only, `proxy_redirects` hops, the digest check). Until the uplo
    certificate and key of the name, the MDM family needs that and a push identity, and a family that is not served answers `503` for each
    of its routes while the other is served (coordinator-mdm.md 4.1; test `the_mdm_routes_answer_503_while_the_package_routes_are_served`).
    `/apt/` is mounted by PP2 and joins the switch with no change to it (test `the_apt_routes_are_served_without_any_mdm_credential`: with the
-   certificate alone `/apt/...` is served and `/mdm` is `503`); `/pkg/` is served from `--mdm-pkg-dir` (CM11c).
+   certificate alone `/apt/...` is served and `/mdm` is `503`); `/pkg/` is served from `--mdm-pkg-dir` (CM11c), or pulled from the entry's `url` (PP3).
 
 ## 12. What PP2 built
 

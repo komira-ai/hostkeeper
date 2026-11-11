@@ -132,7 +132,9 @@ pub struct MdmFlags {
     /// The directory of the pkg files the host provides, `<sha256>.pkg` each, which the MDM
     /// listener serves at `GET /pkg/<sha256>.pkg` for the digests the setting `installs` names
     /// (`docs/design/coordinator-mdm.md` section 4.7). The files are read, never written, by the
-    /// coordinator's user. Without it `/pkg/` answers `404`.
+    /// coordinator's user. A digest the setting names that the directory lacks (or any digest,
+    /// without this flag) is fetched from the entry's `url` when `--proxy-cache-dir` is given;
+    /// `/pkg/` answers `404` for it when the entry has no `url` or there is no proxy cache.
     #[arg(long, requires = "mdm_listen")]
     pub mdm_pkg_dir: Option<PathBuf>,
     /// NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as
