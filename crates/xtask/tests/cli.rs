@@ -821,3 +821,50 @@ fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
     );
     assert!(!d.join("env").exists());
 }
+
+#[test]
+fn abm_takeover_token_writes_the_upload_file_and_prints_no_value() {
+    // Catches: the verb's flags reaching a different function than the one that reads the five
+    // parts, a report that repeats a part of the token, and a token file other users can read.
+    let d = dir("abm-takeover");
+    for (part, text) in [
+        ("consumer_key", "CK-secret-value"),
+        ("consumer_secret", "CS-secret-value"),
+        ("access_token", "AT-secret-value"),
+        ("access_secret", "AS-secret-value"),
+        ("access_token_expiry", "2027-10-31T22:01:36Z"),
+    ] {
+        std::fs::write(d.join(format!("{part}.js-mdm")), text).expect("write a part");
+    }
+    let out = d.join("token.json");
+    let args = [
+        "abm-takeover-token",
+        "--dep-dir",
+        d.to_str().expect("utf8"),
+        "--name",
+        "js-mdm",
+        "--out",
+        out.to_str().expect("utf8"),
+    ];
+    let o = run(&d, &args);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(stdout(&o).starts_with(&format!("wrote {}", out.display())));
+    for value in ["CK-secret-value", "AS-secret-value", "2027-10-31"] {
+        assert!(!stdout(&o).contains(value) && !stderr(&o).contains(value));
+    }
+    let written: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&out).expect("the file")).expect("json");
+    assert_eq!(written["access_secret"], "AS-secret-value");
+    assert_eq!(
+        std::os::unix::fs::PermissionsExt::mode(
+            &std::fs::metadata(&out).expect("metadata").permissions()
+        ) & 0o777,
+        0o600
+    );
+
+    // The output exists now: a second run refuses it, with status 1, and shows no value.
+    let again = run(&d, &args);
+    assert_eq!(again.status.code(), Some(1), "{}", stderr(&again));
+    assert!(stderr(&again).starts_with("xtask: "), "{}", stderr(&again));
+    assert!(!stderr(&again).contains("secret-value"));
+}

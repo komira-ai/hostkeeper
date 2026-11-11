@@ -62,11 +62,12 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
-    RolloutsService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, RolloutsService,
+    ServicesService,
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
+use self::operator_mdm::MdmService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -86,6 +87,7 @@ pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
 mod operator_host_groups;
+mod operator_mdm;
 mod operator_repositories;
 pub(crate) mod refusal;
 pub(crate) mod report;
@@ -232,15 +234,41 @@ pub(crate) enum Transport<'a> {
 const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 /// The path of `Mdm.PutSetting`.
 const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+/// The path of `Mdm.CreatePushRequest`.
+const MDM_CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+/// The path of `Mdm.PutPushReply`, whose request holds the emailed reply of mdmcert.download, hex
+/// text of up to 64 KiB.
+const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+/// The path of `Mdm.PutPushCertificate`, whose request holds a certificate and a key.
+const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+/// The path of `Mdm.PutAbmToken`, whose request holds a token or a `.p7m` of up to 32 KiB.
+const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
+/// The path of `Mdm.GetAbmPublicKey`, which makes the key pair when none is held.
+const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+/// The path of `Mdm.ConfirmEnrollment`, which lets a held `/enroll` request through.
+const MDM_CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 /// The path of `Mdm.PutName`.
 const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
+/// The path of `Mdm.Verify`, which sends a push and asks Apple about the ABM token.
+const MDM_VERIFY: &str = "/hostkeeper.operator.v1.Mdm/Verify";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
 /// service, when it must not be done by a token a script holds: the writes of the MDM setup,
 /// which handle the credentials the coordinator can erase every Mac with
 /// (`docs/design/coordinator-mdm.md`, section 4.9).
-pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING, MDM_PUT_NAME];
+pub(crate) const SESSION_ONLY: &[&str] = &[
+    MDM_PUT_SECRET,
+    MDM_PUT_SETTING,
+    MDM_PUT_NAME,
+    MDM_CREATE_PUSH_REQUEST,
+    MDM_PUT_PUSH_REPLY,
+    MDM_PUT_PUSH_CERTIFICATE,
+    MDM_VERIFY,
+    MDM_PUT_ABM_TOKEN,
+    MDM_GET_ABM_PUBLIC_KEY,
+    MDM_CONFIRM_ENROLLMENT,
+];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
 /// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
@@ -416,12 +444,20 @@ where
 }
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
-/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put` and
-/// `Mdm.PutSecret`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
+/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET {
+    } else if [
+        HOST_GROUPS_PUT,
+        MDM_PUT_SECRET,
+        MDM_PUT_PUSH_REPLY,
+        MDM_PUT_PUSH_CERTIFICATE,
+        MDM_PUT_ABM_TOKEN,
+    ]
+    .contains(&path)
+    {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES
@@ -431,8 +467,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put` and `Mdm.PutSecret`, 4 KiB for every other
-/// operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put` and the `Mdm` writes of
+/// [`operator_limit`], 4 KiB for every other operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,
@@ -590,8 +626,35 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    let answered = if surface == Surface::Mdm {
+    let answered = if surface == Surface::Mdm
+        && request
+            .uri()
+            .path()
+            .starts_with(crate::mdm_server::pkg::PREFIX)
+        && let Some(server) = coordinator.mdm_server()
+    {
+        // A pkg is streamed from a file, so it is not a [`handle`] answer.
+        crate::mdm_server::pkg::serve(
+            coordinator,
+            server,
+            request.method(),
+            request.uri().path(),
+            request.headers(),
+        )
+        .await
+    } else if surface == Surface::Mdm {
         // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
+        if let Some(proxied) = crate::proxy_apt::route(
+            coordinator,
+            request.method(),
+            request.uri().path(),
+            request.headers(),
+        )
+        .await
+        {
+            coordinator.waits.changed();
+            return proxied;
+        }
         handle(coordinator, surface, peer, request, patience)
             .await
             .map(Either::Left)

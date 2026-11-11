@@ -28,6 +28,11 @@ allow = [
     "ISC",
     "Unicode-3.0",
     "Zlib",
+    # The root certificates webpki-roots bundles (the APNs and mdmcert.download clients of
+    # hostkeeper-mdm-push) and webpki-root-certs, which Cargo.lock lists through instant-acme's
+    # optional hyper-rustls feature (the coordinator's ACME client, docs/design/coordinator-mdm.md,
+    # 4.10, turns it off and brings its own HTTPS); the owner allowed this permissive data licence.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
 

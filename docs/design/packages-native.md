@@ -176,7 +176,7 @@ packages are published.**
   in the one publish job, behind the attestation check, is what keeps the two apart.
 - What leaves the daemon (A25): `prove.rs`, its `gh attestation verify` call and the trusted root's report
   (`crates/hostkeeper-daemon/src/trusted_root.rs`; `trusted_root_age_secs` and `trusted_root_reason` stay in the
-  proto, unsent). The daemon stops reading `release_channel` and `[trusted_signers]`; the loader keeps accepting both,
+  proto, unsent). The daemon stops reading `release_channel` and `[trusted_signers]`; the loader keeps accepting both (`release_channel` may also be absent, since PP5),
   since an older binary requires them after a fallback, `pxe` reads `[trusted_signers]` from the same file,
   and the file is never rewritten. Host setup keeps writing both while a release that requires them may run.
 - What stays elsewhere: `pxe` (`pxe update-hook prepare`) checks the attestation of `netboot.json` and of the `.deb` it seeds
@@ -482,7 +482,7 @@ these items: whichever of S3 and A19 lands second carries the other's change to 
 | Maintainer scripts and paths | Allowed, with any paths; on `apt` a `policy-rc.d` that exits 101 is written around every dpkg run that can run a script; `package_scripts` is no longer produced | Hostkeeper installs any package; what it holds is integrity (pin, signature, hold, `package_not_ours`), and the hand-over stays hostkeeper's because no script starts a unit through `invoke-rc.d` or `deb-systemd-invoke` meanwhile |
 | Units a service's package installs | Any; hostkeeper never refuses a `run` unit, writes the `[Install]` links of one whose file is in the tree, and starts at `cutover` and at every daemon start each `run` unit with no such link | A unit with no `[Install]` is a valid way to ship a unit hostkeeper alone starts |
 | The attestation | Leaves the host; the publish job that alone holds the signing keys checks it before it signs; a `macos-pkg` entry carries none | The key and the pin bind the bytes on every platform; one trust model; the loss is stated in 10.3 |
-| `release_channel` and `[trusted_signers]` | Still accepted by the loader; the daemon stops reading them | An older binary requires them after a fallback, `pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
+| `release_channel` and `[trusted_signers]` | Accepted by the loader (`release_channel` also when absent); the daemon stops reading them | An older binary requires them after a fallback, `pxe` reads the signers, and `hostkeeper.toml` is never rewritten |
 | `hostkeeper-package` | Shrunk, not deleted: pxe's attestation check and `macos-pkg`'s fetch by digest stay | Both still have users; moving them would only rename them |
 | hostkeeper's own release | One native entry per platform, through the same installers | One way to install anything |
 | When hostkeeper's package is installed | After the new binary confirms, by that binary; a failure there leaves it running and reports drift | The unit starts `/usr/bin/hostkeeper`; it must always be a binary that started |

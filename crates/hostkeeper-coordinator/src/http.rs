@@ -223,6 +223,13 @@ where
     {
         return crate::login_routes::answer(coordinator, login, request, patience).await;
     }
+    if surface == Surface::Mdm
+        && let Some(server) = coordinator.mdm_server()
+        && let Some(family) = crate::mdm_server::family_of(&path)
+    {
+        return crate::mdm_server::answer(coordinator, server, family, peer, request, patience)
+            .await;
+    }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {
             heartbeat(coordinator, peer, request, patience).await

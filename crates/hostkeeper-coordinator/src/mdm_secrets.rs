@@ -59,6 +59,9 @@ pub enum SecretKind {
     PushCert,
     /// The encryption key of the push certificate request (the mdmcert.download route).
     PushEncryptionKey,
+    /// The key of the push certificate request that is pending, and its CSR, as two PEM blocks:
+    /// the key moves to [`Self::PushKey`] when the certificate Apple issues for it is uploaded.
+    PushPendingKey,
     /// The RSA key (PKCS#1 PEM) the ABM token is encrypted to.
     AbmKey,
     /// The certificate of the ABM key.
@@ -79,10 +82,11 @@ pub enum SecretKind {
 
 impl SecretKind {
     /// Every kind, in the order the status lists them.
-    pub const ALL: [SecretKind; 11] = [
+    pub const ALL: [SecretKind; 12] = [
         Self::PushKey,
         Self::PushCert,
         Self::PushEncryptionKey,
+        Self::PushPendingKey,
         Self::AbmKey,
         Self::AbmCert,
         Self::AbmToken,
@@ -100,6 +104,7 @@ impl SecretKind {
             Self::PushKey => "push_key",
             Self::PushCert => "push_cert",
             Self::PushEncryptionKey => "push_encryption_key",
+            Self::PushPendingKey => "push_pending_key",
             Self::AbmKey => "abm_key",
             Self::AbmCert => "abm_cert",
             Self::AbmToken => "abm_token",
@@ -127,9 +132,11 @@ impl SecretKind {
             Self::AcmeAccountKey | Self::DnsCredential => {
                 crate::audit_actions::MDM_ACME_CREDENTIAL_PUT
             }
-            Self::PushEncryptionKey | Self::AbmKey | Self::AbmCert | Self::MdmCaKey => {
-                crate::audit_actions::MDM_SECRET_PUT
-            }
+            Self::PushEncryptionKey
+            | Self::PushPendingKey
+            | Self::AbmKey
+            | Self::AbmCert
+            | Self::MdmCaKey => crate::audit_actions::MDM_SECRET_PUT,
         }
     }
 }

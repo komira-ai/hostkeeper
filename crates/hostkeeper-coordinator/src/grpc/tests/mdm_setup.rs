@@ -23,10 +23,18 @@ use crate::ui::UiDir;
 
 const PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 const PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+const CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+const PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+const PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+const PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
+const GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+const LIST_ENROLLMENT_REQUESTS: &str = "/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests";
+const CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const STATUS: &str = "/hostkeeper.operator.v1.Mdm/Status";
 const PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
+const VERIFY: &str = "/hostkeeper.operator.v1.Mdm/Verify";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
 
 const MATERIAL: &[u8] = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAgatewaymarker\n-----END RSA PRIVATE KEY-----\n";
@@ -64,12 +72,11 @@ fn bearer_post(path: &str, body: &str, token: &str) -> Request<Full<Bytes>> {
 
 /// The body of the call of `path` that a write of the setup takes.
 fn write_body(path: &str) -> String {
-    if path == PUT_SECRET {
-        secret_body()
-    } else if path == PUT_NAME {
-        json!({ "name": "mdm.example.com" }).to_string()
-    } else {
-        json!({ "name": "tls_renew_days", "value": "12" }).to_string()
+    match path {
+        PUT_SECRET => secret_body(),
+        PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
+        PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
+        _ => "{}".to_owned(),
     }
 }
 
@@ -101,8 +108,31 @@ fn mdm_paths() -> (Vec<&'static str>, Vec<&'static str>) {
 #[test]
 fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
     let (reads, writes) = mdm_paths();
-    assert_eq!(reads, [LIST_DEVICES, LIST_SECRETS, LIST_SETTINGS, STATUS]);
-    assert_eq!(writes, [PUT_SECRET, PUT_SETTING, PUT_NAME]);
+    assert_eq!(
+        reads,
+        [
+            LIST_DEVICES,
+            LIST_SECRETS,
+            LIST_SETTINGS,
+            STATUS,
+            LIST_ENROLLMENT_REQUESTS
+        ]
+    );
+    assert_eq!(
+        writes,
+        [
+            PUT_SECRET,
+            PUT_SETTING,
+            CREATE_PUSH_REQUEST,
+            PUT_PUSH_REPLY,
+            PUT_PUSH_CERTIFICATE,
+            PUT_NAME,
+            VERIFY,
+            PUT_ABM_TOKEN,
+            GET_ABM_PUBLIC_KEY,
+            CONFIRM_ENROLLMENT
+        ]
+    );
     for path in &writes {
         assert!(SESSION_ONLY.contains(path), "{path}");
     }
@@ -146,10 +176,11 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                     kind: "push_key".to_owned(),
                     material: MATERIAL.to_vec(),
                     not_after_unix: None,
+                    with_certificate: Vec::new(),
                 },
                 Some(OPERATOR),
             )
-        } else {
+        } else if *path == PUT_SETTING {
             grpc_request(
                 path,
                 proto::PutSettingRequest {
@@ -158,6 +189,19 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 },
                 Some(OPERATOR),
             )
+        } else if *path == PUT_ABM_TOKEN {
+            grpc_request(
+                path,
+                proto::PutAbmTokenRequest {
+                    token_json: b"{}".to_vec(),
+                    token_p7m: Vec::new(),
+                },
+                Some(OPERATOR),
+            )
+        } else if *path == GET_ABM_PUBLIC_KEY {
+            grpc_request(path, proto::GetAbmPublicKeyRequest {}, Some(OPERATOR))
+        } else {
+            grpc_request(path, (), Some(OPERATOR))
         };
         let answer = call(&world.coordinator, Surface::Control, &None, message).await;
         assert_eq!(
@@ -377,7 +421,11 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
     every.extend([
         PUT_SECRET,
         PUT_SETTING,
+        CREATE_PUSH_REQUEST,
+        PUT_PUSH_REPLY,
+        PUT_PUSH_CERTIFICATE,
         PUT_NAME,
+        VERIFY,
         LIST_SECRETS,
         LIST_SETTINGS,
         STATUS,
@@ -434,7 +482,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         .await;
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
-    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(10));
+    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(35));
 }
 
 /// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most
@@ -447,7 +495,20 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
 #[tokio::test]
 async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
     assert_eq!(operator_limit(PUT_SECRET), 65_536);
-    for path in [PUT_SETTING, LIST_SECRETS, LIST_SETTINGS, LIST_DEVICES] {
+    // The emailed reply of mdmcert.download, a certificate with its key and an ABM token are larger
+    // than 4 KiB once the gateway has them as base64.
+    assert_eq!(operator_limit(PUT_PUSH_REPLY), 65_536);
+    assert_eq!(operator_limit(PUT_PUSH_CERTIFICATE), 65_536);
+    assert_eq!(operator_limit(PUT_ABM_TOKEN), 65_536);
+    for path in [
+        PUT_SETTING,
+        CREATE_PUSH_REQUEST,
+        GET_ABM_PUBLIC_KEY,
+        LIST_SECRETS,
+        LIST_SETTINGS,
+        LIST_DEVICES,
+        GET_ABM_PUBLIC_KEY,
+    ] {
         assert_eq!(operator_limit(path), 4096, "{path}");
     }
     let world = world("mdm-setup-big");
@@ -477,4 +538,221 @@ async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
             .len(),
         1
     );
+}
+
+/// Proves: a signed-in user makes the three calls of the push certificate through the JSON gateway
+/// as themselves: the request is made (nothing is posted without `submit`), a reply that does not
+/// decrypt and a certificate that is none are refused with their tokens and the codes the proto
+/// names, each audited under the user's name, and the answers hold the CSR and the encryption
+/// certificate only.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, a refusal that has
+/// another status than its token says, and a key in an answer.
+#[tokio::test]
+async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
+    let world = world("mdm-setup-push-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let made = world
+        .send(alice.post(
+            CREATE_PUSH_REQUEST,
+            &json!({ "email": "ops@example.org" }).to_string(),
+        ))
+        .await;
+    assert_eq!(made.status, StatusCode::OK, "{made:?}");
+    let answer = made.json();
+    assert!(
+        answer["csrPem"]
+            .as_str()
+            .expect("a csr")
+            .starts_with("-----BEGIN CERTIFICATE REQUEST")
+    );
+    assert!(
+        answer["encryptionCertificatePem"]
+            .as_str()
+            .expect("a certificate")
+            .starts_with("-----BEGIN CERTIFICATE")
+    );
+    assert!(!String::from_utf8_lossy(&made.body).contains("PRIVATE KEY"));
+
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let reply = world
+        .send(alice.post(
+            PUT_PUSH_REPLY,
+            &json!({ "reply": b64(b"not a message") }).to_string(),
+        ))
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reply:?}");
+    assert_eq!(
+        reply.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "reply_undecryptable" })
+    );
+    let certificate = world
+        .send(alice.post(
+            PUT_PUSH_CERTIFICATE,
+            &json!({ "certificatePem": b64(b"not a certificate") }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        certificate.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "certificate_invalid" })
+    );
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_push_csr".to_owned()),
+            ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
+            ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user uploads an ABM token and asks for the public key through the JSON
+/// gateway as themselves, the answers hold what `ListSecrets` shows and who Apple says the
+/// token is for and no part of the token or of the key, the audit holds the user's name, and a
+/// token Apple refuses is answered with its own token, `abm_credential_refused`, as a precondition
+/// that failed.
+///
+/// Catches: an ABM call that only a script could make, and an Apple fault shown as a server
+/// error.
+#[tokio::test]
+async fn a_session_uploads_the_abm_token_and_asks_for_the_public_key() {
+    let (abm, sim, _fake, _dir) = crate::abm::fake::simulated_abm("mdm-abm-gateway");
+    let world = World::build(
+        "mdm-abm-gateway",
+        settings(),
+        counting(),
+        |coordinator, rig| {
+            std::fs::write(rig.dir.path().join("index.html"), "<html></html>").expect("an index");
+            coordinator
+                .with_mdm_setup(
+                    MdmSetup::volatile().with_key(MasterKey::from_bytes(&[5; 32]).expect("a key")),
+                )
+                .with_abm(abm)
+                .with_ui(Some(UiDir::new(rig.dir.path()).expect("a ui directory")))
+        },
+    );
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let token = br#"{"consumer_key":"CKGATEWAYMARK","consumer_secret":"b","access_token":"c","access_secret":"d","access_secret_expiry":"2027-10-31T22:01:36Z"}"#;
+    let body = |bytes: &[u8]| {
+        json!({ "tokenJson": base64::engine::general_purpose::STANDARD.encode(bytes) }).to_string()
+    };
+    let put = world.send(alice.post(PUT_ABM_TOKEN, &body(token))).await;
+    assert_eq!(put.status, StatusCode::OK, "{put:?}");
+    let answer = put.json();
+    assert_eq!(answer["secret"]["kind"], "abm_token");
+    assert_eq!(answer["secret"]["notAfterUnix"], "1825020096");
+    assert_eq!(answer["serverName"], "js-mdm");
+    assert_eq!(answer["orgName"], "Org");
+    assert!(!String::from_utf8_lossy(&put.body).contains("GATEWAYMARK"));
+
+    let key = world.send(alice.post(GET_ABM_PUBLIC_KEY, "{}")).await;
+    assert_eq!(key.status, StatusCode::OK, "{key:?}");
+    assert_eq!(key.json()["created"], true);
+    assert!(
+        key.json()["certificatePem"]
+            .as_str()
+            .expect("a certificate")
+            .starts_with("-----BEGIN CERTIFICATE-----")
+    );
+    assert!(!String::from_utf8_lossy(&key.body).contains("PRIVATE KEY"));
+
+    sim.state().session_fault = Some((403, "signature_invalid".to_owned()));
+    sim.state().session = None;
+    let refused = world.send(alice.post(PUT_ABM_TOKEN, &body(token))).await;
+    assert_eq!(
+        refused.json()["reason"],
+        "abm_credential_refused",
+        "{refused:?}"
+    );
+
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
+            ("alice".to_owned(), "mdm_abm_cert_get".to_owned()),
+            ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user's `Verify` through the gateway is answered with the status read back,
+/// the listener's state and the ABM check, and is audited under the user's name as `mdm_verify`;
+/// an operator token's is refused `session_required` before anything is audited or asked.
+#[tokio::test]
+async fn a_session_verifies_the_setup_through_the_gateway_and_a_token_cannot() {
+    let world = world("mdm-setup-verify");
+    let refused = world.send(bearer_post(VERIFY, "{}", OPERATOR)).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused.json(),
+        json!({ "code": "PERMISSION_DENIED", "reason": "session_required" })
+    );
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let verified = world.send(alice.post(VERIFY, "{}")).await;
+    assert_eq!(verified.status, StatusCode::OK, "{verified:?}");
+    let answer = verified.json();
+    assert_eq!(answer["status"]["sealing"], json!(true));
+    assert_eq!(answer["abm"]["result"], json!("MDM_ABM_RESULT_NO_TOKEN"));
+    assert!(answer.get("push").is_none(), "no Mac was named");
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_verify".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user reaches the two calls of the enrollment requests through the gateway as
+/// themselves: the list answers, and a confirmation on a coordinator with no MDM listener is
+/// refused `enrollment_unavailable` as a precondition that failed, with nothing audited but the
+/// login; a bearer token is refused the confirmation `session_required` and not the list.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, and a refusal
+/// shown with another status than its token says.
+#[tokio::test]
+async fn a_session_lists_and_confirms_enrollment_requests_through_the_gateway() {
+    let world = world("mdm-enroll-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let listed = world.send(alice.post(LIST_ENROLLMENT_REQUESTS, "{}")).await;
+    assert_eq!(listed.status, StatusCode::OK, "{listed:?}");
+    assert_eq!(listed.json(), json!({}));
+    let confirmed = world
+        .send(alice.post(
+            CONFIRM_ENROLLMENT,
+            &json!({ "serial": "P24LH9H6JT" }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        confirmed.json(),
+        json!({ "code": "FAILED_PRECONDITION", "reason": "enrollment_unavailable" })
+    );
+    let token = world
+        .send(bearer_post(CONFIRM_ENROLLMENT, "{}", OPERATOR))
+        .await;
+    assert_eq!(
+        token.json(),
+        json!({ "code": "PERMISSION_DENIED", "reason": "session_required" })
+    );
+    let token_list = world
+        .send(bearer_post(LIST_ENROLLMENT_REQUESTS, "{}", OPERATOR))
+        .await;
+    assert_eq!(token_list.status, StatusCode::OK);
 }

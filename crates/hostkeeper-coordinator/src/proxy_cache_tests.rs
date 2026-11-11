@@ -209,6 +209,9 @@ impl Plan {
         ));
         Ok(Fetched {
             validator: Some("\"v1\"".to_owned()),
+            last_modified: None,
+            unchanged: false,
+            slice: None,
             length: declared,
             body,
         })

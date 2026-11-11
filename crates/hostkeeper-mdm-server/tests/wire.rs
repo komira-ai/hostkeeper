@@ -233,6 +233,21 @@ fn token_update_reads_the_raw_token_and_the_push_magic() {
 }
 
 #[test]
+fn token_update_reads_the_user_id_of_a_user_channel() {
+    let ok = fixture!("checkin-tokenupdate");
+    let CheckIn::TokenUpdate(device) = CheckIn::parse(ok).unwrap() else {
+        panic!("not TokenUpdate");
+    };
+    assert_eq!(device.user_id, None);
+    let CheckIn::TokenUpdate(user) =
+        CheckIn::parse(&with(ok, "UserID", "ABCD-1234".into())).unwrap()
+    else {
+        panic!("not TokenUpdate");
+    };
+    assert_eq!(user.user_id.as_deref(), Some("ABCD-1234"));
+}
+
+#[test]
 fn token_update_is_refused_without_token_or_magic_and_with_an_empty_or_mistyped_token() {
     let ok = fixture!("checkin-tokenupdate");
     assert_eq!(

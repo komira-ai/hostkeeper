@@ -143,6 +143,7 @@ fn each_kind_has_one_spelling_and_one_audit_action() {
             "push_key",
             "push_cert",
             "push_encryption_key",
+            "push_pending_key",
             "abm_key",
             "abm_cert",
             "abm_token",
@@ -167,6 +168,7 @@ fn each_kind_has_one_spelling_and_one_audit_action() {
         [
             "mdm_push_cert_put",
             "mdm_push_cert_put",
+            "mdm_secret_put",
             "mdm_secret_put",
             "mdm_secret_put",
             "mdm_secret_put",

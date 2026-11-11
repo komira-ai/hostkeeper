@@ -118,3 +118,41 @@ async fn an_asker_that_does_not_read_does_not_stall_the_fill() {
 
     assert_eq!(read(leader).await, Err(FetchError::Behind));
 }
+
+/// Proves: `open_hit` opens a committed object's file and reads its bytes with no read of the
+/// origin, counts a hit, and is none for a key that is not committed; an object whose file was
+/// wiped is forgotten (no entry, no counted bytes) and the next ask fills it again.
+///
+/// Catches: a pkg served from a file the books no longer hold, and a wiped cache that is never
+/// refilled.
+#[tokio::test]
+async fn an_open_hit_is_the_committed_file_and_a_wiped_one_is_forgotten() {
+    use std::io::Read as _;
+
+    let dir = scratch("pp3-open-hit");
+    let cache = open(dir.path());
+    let fake = Fake::new();
+    let origin = origin(&fake, |_| Plan::whole(b"0123456789"));
+    assert!(cache.open_hit(&key("o")).is_none());
+    read(get(&cache, "o", &origin).await.expect("an answer"))
+        .await
+        .expect("the body");
+    let mut text = String::new();
+    cache
+        .open_hit(&key("o"))
+        .expect("a committed object")
+        .read_to_string(&mut text)
+        .expect("its bytes");
+    assert_eq!(text, "0123456789");
+    assert_eq!((fake.calls(), cache.stats().hits), (1, 1));
+    let files = dir.path().join("objects");
+    for entry in fs::read_dir(&files).expect("the objects") {
+        fs::remove_file(entry.expect("an entry").path()).expect("wiped");
+    }
+    assert!(cache.open_hit(&key("o")).is_none());
+    assert_eq!(cache.bytes(), 0);
+    let again = get(&cache, "o", &origin).await.expect("an answer");
+    assert_eq!(again.served, Served::Filled);
+    read(again).await.expect("the body");
+    assert!(cache.open_hit(&key("o")).is_some());
+}

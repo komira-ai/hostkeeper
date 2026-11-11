@@ -41,7 +41,14 @@ jaq-std = "3.0.4"
 # The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
 # hostkeeper-oidc); members turn on the parts they use.
 http-body-util = "0.1.5"
+# The dates of `Last-Modified` and `If-Modified-Since` (hostkeeper-coordinator's package proxy).
+httpdate = "1.0.3"
 hyper = { version = "1.12.0", default-features = false }
+# The ACME client of the coordinator's certificate for the MDM name (hostkeeper-coordinator,
+# docs/design/coordinator-mdm.md 4.10). Apache-2.0; ring only (no aws-lc), the same rustls as
+# above. No hyper-rustls: its HTTP is the coordinator's own (`mdm_acme::https`), one client for
+# the ACME directory and the DNS provider, and one fake for both in tests.
+instant-acme = { version = "0.8.5", default-features = false, features = ["ring", "rcgen"] }
 hyper-util = { version = "0.1.21", default-features = false }
 # The Linux daemon's reader of the BMC over `/dev/ipmi0` (hostkeeper-daemon's `ipmi`): the
 # kernel IPMI device's `ioctl`s behind a safe `File`, so the workspace keeps `unsafe` out. Only
@@ -60,6 +67,7 @@ nix = { version = "0.30.1", default-features = false, features = ["fs"] }
 # signature, so a reposted enrollment request is byte for byte the same) and its PKCS#8 encoding
 # (hostkeeper-enroll). Pure Rust: no OpenSSL, no C.
 p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
+p384 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # `proc_pidpath` and the start time of a process on macOS (hostkeeper-launchd's process probe), a
 # safe wrapper over libproc: a macOS-only target dependency, never compiled on Linux. Its build
 # script runs bindgen on macOS.
@@ -172,6 +180,9 @@ tonic-prost-build = "0.14.6"
 # fields; the coordinator's logs.
 tracing = "0.1.44"
 tracing-subscriber = "0.3.23"
+# The root certificates of the public web, which the APNs and mdmcert.download clients trust
+# (hostkeeper-mdm-push). Licence CDLA-Permissive-2.0, allowed in deny.toml.
+webpki-roots = "1.0.12"
 # Reads a CSR and a certificate (hostkeeper-enrollment), and its tests read issued certificates
 # back; a certificate's subjectAltNames and validity (hostkeeper-wire, hostkeeper-tls).
 x509-parser = "0.18.1"
@@ -179,7 +190,7 @@ x509-parser = "0.18.1"
 tower = { version = "0.5.3", default-features = false }
 # The package fetch's HTTPS client (hostkeeper-package): blocking, rustls with the ring provider and
 # the root certificates its caller gives it. No default features: no gzip, no cookies, no SOCKS,
-# and no webpki-roots (whose CDLA licence deny.toml does not allow). The ring provider is ureq's
+# and no webpki-roots (the package fetch trusts the roots its caller gives it, not a bundled set). The ring provider is ureq's
 # `_ring` feature, which its public `rustls` feature turns on together with webpki-roots; a
 # feature with a leading underscore is not covered by semver, so the version is exact.
 ureq = { version = "=3.4.2", default-features = false, features = ["rustls-no-provider", "_ring"] }
@@ -192,7 +203,8 @@ x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
 # builds the signed and enveloped replies, and everything it lacks (the verify and decrypt side) is
 # written in the crate.
 aes = "0.9.4"
-cbc = "0.2.1"
+# `block-padding` for the CBC content ciphers of the ABM server token (hostkeeper-coordinator `abm::p7m`).
+cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
 cipher = { version = "0.5.2", features = ["alloc", "block-padding"] }
 cms = { version = "=0.3.0-rc.2", default-features = false, features = ["builder", "std"] }
 const-oid = { version = "0.10.2", features = ["db"] }
@@ -200,7 +212,17 @@ der = { version = "0.8.3", features = ["alloc", "oid", "std"] }
 des = "0.9.0"
 # The tests of hostkeeper-mdm-scep draw their keys and nonces from the thread generator.
 rand = "0.10.3"
-rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+rsa = { version = "0.10.0", features = ["encoding", "pkcs1v15"] }
+# PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) of the ABM server entry, which rsa's `encoding` feature does not turn on.
+pkcs1 = { version = "0.8.0", features = ["pem"] }
+# The CMS reply of mdmcert.download (hostkeeper-mdm-push) is read with the RustCrypto 0.8-era
+# ciphers and rsa 0.9, which that crate was written against; the newer lines above belong to
+# hostkeeper-mdm-scep. The `-legacy` aliases keep both lines apart.
+aes-legacy = { package = "aes", version = "0.8.4" }
+cbc-legacy = { package = "cbc", version = "0.1.2", features = ["alloc"] }
+des-legacy = { package = "des", version = "0.8.1" }
+rand_core-legacy = { package = "rand_core", version = "0.6.4", features = ["getrandom"] }
+rsa-legacy = { package = "rsa", version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 signature = { version = "3.0.0", features = ["alloc", "digest"] }
 spki = { version = "0.8.1", features = ["alloc"] }
 
@@ -225,3 +247,11 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# The RSA keys of a push certificate request (hostkeeper-mdm-push) are generated with the `rsa`
+# crate's big-number arithmetic, which takes tens of seconds a key unoptimized; the tests make
+# keys, so these two packages are optimized in dev and test builds.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.test.package.num-bigint-dig]
+opt-level = 3

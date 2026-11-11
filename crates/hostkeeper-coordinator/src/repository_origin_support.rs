@@ -29,6 +29,9 @@ pub(crate) enum Then {
 /// What the origin does for a request path.
 pub(crate) type Answer = Arc<dyn Fn(&str) -> Then + Send + Sync>;
 
+/// What the origin does for a request's head (its request line and headers, as read).
+pub(crate) type AnswerHead = Arc<dyn Fn(&str) -> Then + Send + Sync>;
+
 /// A whole HTTP/1.1 answer: `status` (`200 OK`), a `Content-Length` of `body`'s length, `body`.
 pub(crate) fn response(status: &str, body: &[u8]) -> Vec<u8> {
     let mut bytes = format!(
@@ -38,6 +41,25 @@ pub(crate) fn response(status: &str, body: &[u8]) -> Vec<u8> {
     .into_bytes();
     bytes.extend_from_slice(body);
     bytes
+}
+
+/// An answer of `status` with `headers`, a `Content-Length` of the body's length, and `body`.
+pub(crate) fn reply(status: &str, headers: &[(&str, &str)], body: &[u8]) -> Then {
+    let mut text = format!("HTTP/1.1 {status}\r\n");
+    for (name, value) in headers {
+        text.push_str(&format!("{name}: {value}\r\n"));
+    }
+    text.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    let mut bytes = text.into_bytes();
+    bytes.extend_from_slice(body);
+    Then::Write(bytes)
+}
+
+/// An answer with exactly these `lines` as its head and `body` after it.
+pub(crate) fn bare(lines: &[&str], body: &[u8]) -> Then {
+    let mut bytes = format!("{}\r\n\r\n", lines.join("\r\n")).into_bytes();
+    bytes.extend_from_slice(body);
+    Then::Write(bytes)
 }
 
 /// An origin at [`HOST`] with a certificate of its own, and what it heard.
@@ -80,6 +102,14 @@ impl FakeOrigin {
 
     /// A dial whose every connection is served by this origin, answering `answer` by path.
     pub(crate) fn dial(&self, answer: Answer) -> Dial {
+        self.dial_heads(Arc::new(move |head: &str| {
+            answer(head.split_whitespace().nth(1).unwrap_or_default())
+        }))
+    }
+
+    /// A dial whose every connection is served by this origin, answering `answer` by the head of
+    /// the request: its method, path and headers.
+    pub(crate) fn dial_heads(&self, answer: AnswerHead) -> Dial {
         let (acceptor, heard, dialed, dials) = (
             self.acceptor.clone(),
             Arc::clone(&self.heard),
@@ -138,7 +168,7 @@ pub(crate) fn hanging_dial() -> Dial {
 async fn serve(
     acceptor: TlsAcceptor,
     server: DuplexStream,
-    answer: Answer,
+    answer: AnswerHead,
     heard: Arc<Mutex<Vec<String>>>,
 ) {
     let Ok(mut tls) = acceptor.accept(server).await else {
@@ -153,13 +183,8 @@ async fn serve(
         }
     }
     let head = String::from_utf8_lossy(&head).into_owned();
-    let path = head
-        .split_whitespace()
-        .nth(1)
-        .unwrap_or_default()
-        .to_owned();
-    heard.lock().expect("the heads").push(head);
-    match answer(&path) {
+    heard.lock().expect("the heads").push(head.clone());
+    match answer(&head) {
         Then::Write(bytes) => {
             let _ = tls.write_all(&bytes).await;
             let _ = tls.shutdown().await;
