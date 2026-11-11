@@ -297,6 +297,18 @@ impl Rig {
         )
     }
 
+    /// A queue as a restarted coordinator builds it before any push certificate is set: nothing
+    /// armed, and no pusher to ask.
+    pub(super) fn restarted_queue_without_pushers(&self) -> MdmQueue {
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(|| None),
+            Arc::clone(&self.setup),
+            86_400,
+        )
+    }
+
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
     pub(super) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
         let rig = Self::build(name, None, random);
@@ -815,10 +827,10 @@ pub(super) struct Spec {
     pub(super) sid_tag: Option<u8>,
     pub(super) flip_signature: bool,
     pub(super) drop_certificates: bool,
-    /// Only the first this many fields of the signer info are sent, when set.
-    pub(super) keep_fields: Option<usize>,
-    /// The signer is named by a sequence of one part, not issuer and serial.
-    pub(super) lone_sid: bool,
+    /// Keeps only this many of the six fields of the signer's info, when set.
+    pub(super) info_fields: Option<usize>,
+    /// Names the signer by its issuer alone, without a serial number.
+    pub(super) short_sid: bool,
 }
 
 impl Default for Spec {
@@ -837,8 +849,8 @@ impl Default for Spec {
             sid_tag: None,
             flip_signature: false,
             drop_certificates: false,
-            keep_fields: None,
-            lone_sid: false,
+            info_fields: None,
+            short_sid: false,
         }
     }
 }
@@ -893,7 +905,11 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
             } else {
                 parsed.raw_serial().to_vec()
             };
-            der(0x30, &[issuer, der(0x02, &serial)].concat())
+            if spec.short_sid {
+                der(0x30, &issuer)
+            } else {
+                der(0x30, &[issuer, der(0x02, &serial)].concat())
+            }
         }
     };
     let attributes_field = if !spec.attributes {
@@ -903,7 +919,7 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     } else {
         der(0xa0, &attributes)
     };
-    let fields = [
+    let mut fields = vec![
         der(0x02, &[1]),
         sid,
         algorithm(spec.digest),
@@ -911,10 +927,10 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
         algorithm(spec.signature),
         der(0x04, &signature),
     ];
-    let info = der(
-        0x30,
-        &fields[..spec.keep_fields.unwrap_or(fields.len())].concat(),
-    );
+    if let Some(keep) = spec.info_fields {
+        fields.truncate(keep);
+    }
+    let info = der(0x30, &fields.concat());
     let infos = vec![info; spec.signers].concat();
     let certificates = if spec.drop_certificates {
         Vec::new()

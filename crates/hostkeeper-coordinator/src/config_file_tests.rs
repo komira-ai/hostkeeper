@@ -9,7 +9,7 @@ use clap::Parser;
 
 use hostkeeper_testkit::Scratch;
 
-use super::{ConfigFileError, MAX_BYTES, expand, flags, read_file};
+use super::{ConfigFileError, MAX_BYTES, expand, flags, is_flag_name, read_file};
 use crate::config::{Cli, Command};
 
 fn os(args: &[&str]) -> Vec<OsString> {
@@ -389,4 +389,18 @@ fn the_file_turns_the_wildcard_private_listener_on_with_true_only() {
     };
     assert_eq!(parsed(WILDCARD_ON), ("0.0.0.0:8444".to_owned(), true));
     assert_eq!(parsed(WILDCARD_OFF), ("0.0.0.0:8444".to_owned(), false));
+}
+
+/// Proves: a flag name is lower-case letters, digits and `-`, starting with a lower-case letter,
+/// and each other character or an empty name is not one.
+///
+/// Catches: a name with a digit or a dash in it refused, or a name with another character taken.
+#[test]
+fn a_flag_name_is_lower_case_letters_digits_and_dashes_from_a_letter() {
+    for name in ["a", "a1", "a-1", "abc-def2", "tls-reload-secs"] {
+        assert!(is_flag_name(name), "{name}");
+    }
+    for name in ["", "1a", "-a", "A", "aB", "a_b", "a.b", "a b", "\u{e9}a"] {
+        assert!(!is_flag_name(name), "{name:?}");
+    }
 }
