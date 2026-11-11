@@ -107,15 +107,14 @@ async fn post(
         return Err(Decline::NotInAbm);
     }
     let confirmed = unverified.is_some();
-    if let Some(reason) = unverified {
-        if !server
+    if let Some(reason) = unverified
+        && !server
             .enroll
             .pending
             .spend(&device.serial, &device.udid, now)
-        {
-            hold(coordinator, server, &tune, &device, &reason, now)?;
-            return Err(Decline::Held);
-        }
+    {
+        hold(coordinator, server, &tune, &device, &reason, now)?;
+        return Err(Decline::Held);
     }
     // The CA is made here if this is the first need, so that the Mac's SCEP request finds it.
     ca::identity_ca(coordinator, server, &tune)
