@@ -235,22 +235,19 @@ impl Passwords {
         } else {
             normalise(password)
         };
-        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
         let Ok(parsed) = Phc::new(stored.as_str()) else {
             // Nothing to verify against: spend one hash's work so the time does not say so.
-            let _ = hash_with(&self.argon2, &password);
+            let _ = self.counted_hash(&password);
             return Verdict::Wrong;
         };
-        if oversize
-            || self
-                .argon2
-                .verify_password(password.as_bytes(), &parsed)
-                .is_err()
-        {
+        // The work is spent for an oversize password too (on the empty text); its answer is
+        // never taken.
+        let matched = self.counted_verify(password.as_bytes(), &parsed);
+        if oversize || !matched {
             return Verdict::Wrong;
         }
         let rehash = if self.is_weaker(&parsed) {
-            hash_with(&self.argon2, &password).ok()
+            self.counted_hash(&password).ok()
         } else {
             None
         };
@@ -270,12 +267,28 @@ impl Passwords {
         self.verifies.load(Ordering::Relaxed)
     }
 
-    /// How many times the Argon2 work ran inside verifies (a verify, or the same work spent
-    /// for a stored string that cannot be read). Counts work, where [`Passwords::verifies`]
+    /// How many Argon2 runs verifies have made, counted after each run returns: the verify
+    /// itself (also for a password over the cap), the work spent for a stored string that
+    /// cannot be read, and a rehash. Counts work, where [`Passwords::verifies`]
     /// counts calls.
     #[must_use]
     pub fn argon2_runs(&self) -> u64 {
         self.argon2_runs.load(Ordering::Relaxed)
+    }
+
+    /// The one place a verify runs Argon2; the count is taken after the algorithm returns.
+    fn counted_verify(&self, password: &[u8], parsed: &Phc) -> bool {
+        let matched = self.argon2.verify_password(password, parsed).is_ok();
+        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
+        matched
+    }
+
+    /// The one place a verify hashes (the rehash, or the work spent for an unreadable string);
+    /// the count is taken after the algorithm returns.
+    fn counted_hash(&self, normalised: &str) -> Result<StoredHash, PasswordError> {
+        let hashed = hash_with(&self.argon2, normalised);
+        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
+        hashed
     }
 
     fn is_weaker(&self, parsed: &Phc) -> bool {

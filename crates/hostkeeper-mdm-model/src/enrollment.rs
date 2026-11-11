@@ -9,6 +9,13 @@
 //! the device really is) as plain fields so the invariants can be judged against the truth. The
 //! rules the implementation must follow are fields of [`Rules`]; the tests turn each off and
 //! expect the invariant it protects to break.
+//!
+//! Owner decision B (2026-11-10): a serial in the ABM table replaces its live enrollment with no
+//! operator and without the old enrollment having checked out, so a wiped Mac enrolls again with
+//! no click. The accepted risk is the other side of the same rule: the peer's replay of a blob
+//! verifies as well, so the peer can take the serial's identity while the serial is in the ABM.
+//! The model does not call that a violation; a test walks it, and the nonce still never approves
+//! the peer's enrollment.
 
 use crate::explore::{Model, Violation};
 
@@ -23,9 +30,10 @@ pub const ONE_LIVE: &str = "a_serial_has_one_live_enrollment";
 pub const SUPERSEDED_NEVER_ACCEPTED: &str = "a_superseded_certificate_is_never_accepted";
 /// A certificate this CA did not issue is never accepted.
 pub const FOREIGN_NEVER_ACCEPTED: &str = "a_certificate_of_another_ca_is_never_accepted";
-/// A live enrollment of the device is not replaced by an identity of another key.
-pub const NO_HIJACK: &str =
-    "a_live_enrollment_is_never_superseded_by_a_key_that_is_not_the_devices";
+/// A live enrollment is replaced only while the serial is in the ABM table, or after an operator
+/// confirmed the Mac in front of them.
+pub const REPLACE_ONLY_IN_ABM: &str =
+    "a_live_enrollment_is_replaced_only_while_the_serial_is_in_the_abm_or_an_operator_confirmed";
 /// The stored push token belongs to the live enrollment.
 pub const TOKEN_IS_LIVE: &str = "the_push_token_is_the_live_enrollments";
 /// No challenge is issued on a blob that did not verify, without an operator.
@@ -50,14 +58,11 @@ pub struct Rules {
     pub challenge_needs_abm: bool,
     /// A blob that did not verify waits for an operator instead of getting a challenge.
     pub unverified_waits_for_operator: bool,
-    /// A blob that verified is not enough while the serial has a live enrollment: an operator
-    /// confirms, because the blob carries no freshness and a replay verifies as well. Checked
-    /// when `/enroll` arrives.
-    pub live_serial_needs_operator_at_enroll: bool,
-    /// The same, checked when the `Authenticate` that would replace the live enrollment arrives.
-    /// The check at `/enroll` alone is not enough: two requests can both arrive before either
-    /// `Authenticate`, while no enrollment is live.
-    pub live_serial_needs_operator_at_authenticate: bool,
+    /// A new `Authenticate` replaces the live enrollment of the serial only while the serial is
+    /// in the ABM table, read again at that moment (owner decision B of 2026-11-10): no operator
+    /// and no check-out of the old enrollment is needed, and a serial removed from the ABM since
+    /// the challenge was issued is refused unless an operator confirmed the Mac.
+    pub replace_needs_abm_at_authenticate: bool,
     /// A consumed challenge issues nothing new.
     pub consume_once: bool,
     /// The same key presenting a consumed challenge gets the stored certificate again.
@@ -77,14 +82,13 @@ pub struct Rules {
 }
 
 impl Rules {
-    /// The design, with the correction this model asked for: a serial with a live enrollment
-    /// needs an operator before it is replaced.
+    /// The design with owner decision B: a serial in the ABM table replaces its live enrollment
+    /// with no operator.
     pub fn design() -> Rules {
         Rules {
             challenge_needs_abm: true,
             unverified_waits_for_operator: true,
-            live_serial_needs_operator_at_enroll: true,
-            live_serial_needs_operator_at_authenticate: true,
+            replace_needs_abm_at_authenticate: true,
             consume_once: true,
             same_key_gets_stored_certificate: true,
             supersede_old: true,
@@ -192,7 +196,8 @@ pub enum Action {
     },
     OperatorConfirm,
     OperatorReject,
-    /// The operator confirms the Mac in front of them for an enrollment held at `Authenticate`.
+    /// The operator confirms the Mac in front of them for an enrollment held at `Authenticate`
+    /// because the serial is no longer in the ABM table.
     OperatorConfirmCert {
         cert: usize,
     },
@@ -320,7 +325,7 @@ impl Model for EnrollmentModel {
             let held = s.certs[cert].state == CertState::Issued
                 && s.certs[cert].key == 0
                 && !s.challenges[usize::from(s.certs[cert].challenge)].by_operator;
-            if held && s.live().is_some() {
+            if held && s.live().is_some() && s.abm == Abm::Removed {
                 out.push(Action::OperatorConfirmCert { cert });
             }
         }
@@ -464,9 +469,7 @@ impl EnrollmentModel {
         if n.abm != Abm::Assigned && self.rules.challenge_needs_abm {
             return Ok(());
         }
-        let wait = (!verified && self.rules.unverified_waits_for_operator)
-            || (n.live().is_some() && self.rules.live_serial_needs_operator_at_enroll);
-        if wait {
+        if !verified && self.rules.unverified_waits_for_operator {
             n.pending = Some(key);
             return Ok(());
         }
@@ -566,13 +569,13 @@ impl EnrollmentModel {
         }
         if let Some(old) = n.live() {
             let confirmed = n.challenges[usize::from(n.certs[cert].challenge)].by_operator;
-            if !confirmed && self.rules.live_serial_needs_operator_at_authenticate {
-                return Ok(());
-            }
-            if n.certs[old].key == 0 && n.certs[cert].key == 1 {
+            if n.abm == Abm::Removed && !confirmed {
+                if self.rules.replace_needs_abm_at_authenticate {
+                    return Ok(());
+                }
                 return Err(violation(
-                    NO_HIJACK,
-                    "the live enrollment of the Mac was replaced by an identity the LAN peer holds",
+                    REPLACE_ONLY_IN_ABM,
+                    "a live enrollment was replaced after the ABM removed the serial, with no operator",
                 ));
             }
             if self.rules.supersede_old {

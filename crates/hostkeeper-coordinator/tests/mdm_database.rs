@@ -104,7 +104,10 @@ fn the_gate_on_the_database_keeps_its_records_in_mdm_devices() {
         .build()
         .expect("a runtime");
     runtime
-        .block_on(mdm.webhook(&authenticate_event()))
+        .block_on(hostkeeper_mdm_gate::webhook::take(
+            &mdm,
+            &authenticate_event(),
+        ))
         .expect("the event is taken");
     let kept = mdm.records();
     assert_eq!(kept.len(), 1);
