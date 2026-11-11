@@ -389,48 +389,82 @@ fn a_failing_store_is_a_failure() {
     assert!(MdmSetup::holds_secrets(&*failing).expect("read"));
 }
 
-/// Proves: when the replacement is stored but the prune of old versions cannot be, and when the
-/// settings cannot be read for the grace, the upload answers the failure.
+/// Proves: when the replacement is stored but the settings cannot be read for the grace, or the
+/// prune of old versions fails, the upload still reports success with the new version, which is
+/// listed; the next upload prunes.
 ///
-/// Catches: a prune that fails silently and leaves replaced secrets for ever.
+/// Catches: an upload answered as failed (and audited as refused) when its version is stored and
+/// in use, which a retry would then store a second time.
 #[test]
-fn a_prune_that_fails_fails_the_upload() {
-    let store = Arc::new(Failing {
-        inner: FileSetup::volatile(),
-        reads: AtomicBool::new(false),
-        writes: AtomicBool::new(false),
-    });
-    // Succeeds at the put and fails at the prune: the put makes the writes flag flip itself.
-    struct FlipAfterPut(Arc<Failing>);
-    impl SetupStore for FlipAfterPut {
+fn a_prune_that_fails_does_not_fail_the_upload() {
+    /// Fails the settings read, the prune, or neither, as told; every other call is the file store's.
+    struct Partly {
+        inner: FileSetup,
+        settings: AtomicBool,
+        prune: AtomicBool,
+    }
+    impl SetupStore for Partly {
         fn put_secret(&self, row: &SecretRow) -> Result<(), SetupError> {
-            self.0.put_secret(row)?;
-            self.0.writes.store(true, Ordering::SeqCst);
-            Ok(())
+            self.inner.put_secret(row)
         }
         fn secrets(&self) -> Result<Vec<SecretRow>, SetupError> {
-            self.0.secrets()
+            self.inner.secrets()
         }
         fn prune_superseded(&self, at: i64) -> Result<u64, SetupError> {
-            self.0.prune_superseded(at)
+            if self.prune.load(Ordering::SeqCst) {
+                return Err(SetupError::Store("the disk is full".to_owned()));
+            }
+            self.inner.prune_superseded(at)
         }
         fn settings(&self) -> Result<std::collections::BTreeMap<String, String>, SetupError> {
-            self.0.settings()
+            if self.settings.load(Ordering::SeqCst) {
+                return Err(SetupError::Store("the disk is full".to_owned()));
+            }
+            self.inner.settings()
         }
         fn set_setting(&self, name: &str, value: &str) -> Result<(), SetupError> {
-            self.0.set_setting(name, value)
+            self.inner.set_setting(name, value)
         }
     }
+    let store = Arc::new(Partly {
+        inner: FileSetup::volatile(),
+        settings: AtomicBool::new(false),
+        prune: AtomicBool::new(true),
+    });
     let setup = MdmSetup::new(
-        Arc::new(FlipAfterPut(Arc::clone(&store))),
+        Arc::clone(&store) as Arc<dyn SetupStore>,
         Some(key()),
         crate::enrollment::os_random(),
     );
-    let why = setup
+    let first = setup
         .put_secret(SecretKind::TlsKey, &secret("x"), None, 1)
-        .expect_err("the prune failed");
-    assert_eq!(
-        why.to_string(),
-        "the MDM setup store failed: the disk is full"
-    );
+        .expect("the version is stored, so the upload is done");
+    assert_eq!(first.version, 1);
+    store.settings.store(true, Ordering::SeqCst);
+    let second = setup
+        .put_secret(SecretKind::TlsKey, &secret("y"), None, 2)
+        .expect("an unreadable grace setting falls to its default");
+    assert_eq!(second.version, 2);
+    let versions: Vec<u32> = setup
+        .list_secrets()
+        .expect("listed")
+        .iter()
+        .map(|info| info.version)
+        .collect();
+    assert_eq!(versions, [1, 2], "both are kept: nothing was pruned");
+
+    // The next upload that can prune does: version 1 was replaced at once and the grace is over.
+    store.settings.store(false, Ordering::SeqCst);
+    store.prune.store(false, Ordering::SeqCst);
+    let day = 86_400 * 8;
+    setup
+        .put_secret(SecretKind::TlsKey, &secret("z"), None, day)
+        .expect("stored");
+    let versions: Vec<u32> = setup
+        .list_secrets()
+        .expect("listed")
+        .iter()
+        .map(|info| info.version)
+        .collect();
+    assert_eq!(versions, [2, 3]);
 }

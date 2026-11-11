@@ -13,7 +13,7 @@ use tonic::Code;
 
 use super::credentials::operator_paths;
 use super::support::{call, grpc_request};
-use crate::grpc::SESSION_ONLY;
+use crate::grpc::{SESSION_ONLY, operator_limit};
 use crate::http::Surface;
 use crate::login_support::{PASSWORD, World, counting, settings};
 use crate::mdm_secrets::MasterKey;
@@ -395,4 +395,46 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
     assert_eq!(setup["settings"].as_array().map(Vec::len), Some(4));
+}
+
+/// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most
+/// a secret may be) and stores it, a value one byte over is refused `invalid_request` with nothing
+/// stored, a body past 64 KiB is refused `invalid_request`, and the operator limit of `PutSecret`
+/// is 64 KiB while every other method of the service reads 4 KiB.
+///
+/// Catches: a service that decodes with the 4 KiB limit of the other methods, which would refuse a
+/// TLS chain, a 4096-bit key with its certificate or an ABM token before the audit or the store.
+#[tokio::test]
+async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
+    assert_eq!(operator_limit(PUT_SECRET), 65_536);
+    for path in [PUT_SETTING, LIST_SECRETS, LIST_SETTINGS, LIST_DEVICES] {
+        assert_eq!(operator_limit(path), 4096, "{path}");
+    }
+    let world = world("mdm-setup-big");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let of = |size: usize| {
+        json!({
+            "kind": "tls_cert",
+            "material": base64::engine::general_purpose::STANDARD.encode(vec![b'a'; size]),
+        })
+        .to_string()
+    };
+    let at_most = world.send(alice.post(PUT_SECRET, &of(32 * 1024))).await;
+    assert_eq!(at_most.status, StatusCode::OK, "{at_most:?}");
+    assert_eq!(at_most.json()["secret"]["kind"], "tls_cert");
+    assert_eq!(at_most.json()["secret"]["version"], 1);
+
+    let over = world.send(alice.post(PUT_SECRET, &of(32 * 1024 + 1))).await;
+    assert_eq!(over.json()["reason"], "invalid_request", "{over:?}");
+    let too_long = world.send(alice.post(PUT_SECRET, &of(64 * 1024))).await;
+    assert_eq!(too_long.json()["reason"], "invalid_request", "{too_long:?}");
+    assert_eq!(
+        world
+            .coordinator
+            .mdm_setup()
+            .list_secrets()
+            .expect("listed")
+            .len(),
+        1
+    );
 }

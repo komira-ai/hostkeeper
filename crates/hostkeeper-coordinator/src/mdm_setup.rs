@@ -160,14 +160,19 @@ impl MdmSetup {
             superseded_unix: None,
         };
         self.store.put_secret(&row)?;
-        let grace = i64::from(mdm_settings::days_of(
-            &self.store.settings()?,
-            "secret_grace_days",
-            7,
-        ))
-        .saturating_mul(86_400);
-        self.store
-            .prune_superseded(now_unix.saturating_sub(grace))?;
+        // The new version is stored and in use: from here on the upload is done, and a failure
+        // only leaves replaced versions for the next upload to prune.
+        let days = match self.store.settings() {
+            Ok(set) => mdm_settings::days_of(&set, "secret_grace_days", 7),
+            Err(why) => {
+                tracing::error!(%why, "the settings could not be read: the default grace is used");
+                7
+            }
+        };
+        let grace = i64::from(days).saturating_mul(86_400);
+        if let Err(why) = self.store.prune_superseded(now_unix.saturating_sub(grace)) {
+            tracing::error!(%why, "replaced secrets could not be pruned: the next upload prunes");
+        }
         Ok(info_of(kind, &row))
     }
 

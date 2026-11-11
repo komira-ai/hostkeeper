@@ -484,7 +484,7 @@ where
         }
         Some(MDM) => {
             let server = MdmServer::new(MdmService::new(coordinator))
-                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+                .max_decoding_message_size(operator_limit(path));
             call(server, request).await
         }
         Some(REPOSITORIES) => {
