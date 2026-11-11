@@ -153,6 +153,16 @@ pub struct BaselineProfile {
     pub command: ProfileCommand,
 }
 
+/// The last `InstallEnterpriseApplication` of one baseline install, by its name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaselineInstall {
+    /// The install's name.
+    pub name: String,
+    /// The last command of it; its `settings_sha256` is the entry's digest
+    /// ([`crate::InstallEntry::digest`]), so an entry that changed is sent again.
+    pub command: ProfileCommand,
+}
+
 /// What the gate sent a device of its host group's baseline in this enrollment (design 6.4).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BaselineRecord {
@@ -162,6 +172,11 @@ pub struct BaselineRecord {
     pub profiles: Vec<BaselineProfile>,
     /// The last `ProfileList`.
     pub list: Option<ProfileCommand>,
+    /// The last `Settings` of the device name; its `settings_sha256` is the digest of the name
+    /// it carried, so a changed name is sent again.
+    pub name: Option<ProfileCommand>,
+    /// The last `InstallEnterpriseApplication` of each baseline install.
+    pub installs: Vec<BaselineInstall>,
     /// The `PayloadIdentifier`s of the profiles the last answered `ProfileList` named.
     pub installed: Vec<String>,
     /// When the last `ProfileList` was answered; `None` before one, and after a `TokenUpdate`,
@@ -179,6 +194,15 @@ impl BaselineRecord {
             .map(|profile| &profile.command)
     }
 
+    /// The last send of the install `name`.
+    #[must_use]
+    pub fn install(&self, name: &str) -> Option<&ProfileCommand> {
+        self.installs
+            .iter()
+            .find(|install| install.name == name)
+            .map(|install| &install.command)
+    }
+
     /// The command `uuid`, with the name it is shown by when it fails.
     fn command_mut(&mut self, uuid: &str) -> Option<(String, &mut ProfileCommand)> {
         let named = [
@@ -187,6 +211,7 @@ impl BaselineRecord {
                 self.remote_desktop.as_mut(),
             ),
             ("the baseline's profile list", self.list.as_mut()),
+            ("the baseline's device name", self.name.as_mut()),
         ]
         .into_iter()
         .find_map(|(name, command)| {
@@ -194,7 +219,7 @@ impl BaselineRecord {
                 .filter(|command| command.uuid.as_str() == uuid)
                 .map(|command| (name.to_owned(), command))
         });
-        named.or_else(|| {
+        let named = named.or_else(|| {
             self.profiles
                 .iter_mut()
                 .find(|profile| profile.command.uuid.as_str() == uuid)
@@ -202,6 +227,17 @@ impl BaselineRecord {
                     (
                         format!("the baseline profile {}", profile.identifier),
                         &mut profile.command,
+                    )
+                })
+        });
+        named.or_else(|| {
+            self.installs
+                .iter_mut()
+                .find(|install| install.command.uuid.as_str() == uuid)
+                .map(|install| {
+                    (
+                        format!("the baseline install {}", install.name),
+                        &mut install.command,
                     )
                 })
         })

@@ -2,7 +2,7 @@
 //! component linked into the coordinator.
 //!
 //! - [`NanoHub`]: the client of NanoHUB's command queue, on loopback, with the API key read
-//!   from a file ([`ApiKey`]); it sends only the seven [`COMMAND_TYPES`].
+//!   from a file ([`ApiKey`]); it sends only the eight [`COMMAND_TYPES`].
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
 //!   command result to; a thin adapter that reads the body ([`parse_event`]) and calls
 //!   [`Gate::handle`], the one entry point for events.
@@ -16,11 +16,13 @@
 //!   profile ([`ConfigProfile`]), sent again when its settings change, and the one-time nonce issued through the coordinator's
 //!   [`Enrollments`] and pushed in the nonce profile once the Mac's daemon has posted its
 //!   request; re-issue, re-push and removal.
-//! - [`install`]: the pkg, linked in with [`Gate::with_install`]: the allowlist of pkg digests
-//!   ([`PkgAllowlist`]), the `InstallEnterpriseApplication` with its inline manifest
+//! - [`install`]: the hostkeeper pkg, linked in with [`Gate::with_install`]: the named installs
+//!   ([`Installs`], the setting `installs`, seeded once from the old allowlist
+//!   [`PkgAllowlist`]), the `InstallEnterpriseApplication` with its inline manifest
 //!   ([`pkg::manifest`]), and its re-send an hour after the Mac's last answer.
 //! - [`baseline`]: the enrollment baseline, linked in with [`Gate::with_baseline`]: per host
-//!   group, Screen Sharing (`EnableRemoteDesktop`, supervised Macs only) and profiles, sent
+//!   group, the device name (`Settings`), Screen Sharing (`EnableRemoteDesktop`, supervised Macs
+//!   only), profiles and every install but the hostkeeper pkg, sent
 //!   once the config profile is acknowledged, kept by a `ProfileList` check, and reported per
 //!   device by [`Gate::baseline_status`].
 
@@ -33,6 +35,7 @@ mod event;
 mod gate;
 mod ids;
 pub mod install;
+mod installs;
 mod nanohub;
 pub mod pkg;
 mod profile;
@@ -48,12 +51,13 @@ pub use baseline::{
 pub use command::{
     COMMAND_TYPES, Command, DEVICE_INFORMATION, ENABLE_REMOTE_DESKTOP,
     INSTALL_ENTERPRISE_APPLICATION, INSTALL_PROFILE, PROFILE_LIST, QUERIES, REMOVE_PROFILE,
-    SECURITY_INFO,
+    SECURITY_INFO, SETTINGS,
 };
 pub use enroll::{EnrollSide, Enrollments, EnrollmentsError, Nonce, Waiting};
 pub use event::{Event, EventError, parse as parse_event};
 pub use gate::{DeviceStatus, Gate, Handled, Random, Unavailable};
 pub use ids::{CommandUuid, EnrollmentId, is_serial};
+pub use installs::{HOSTKEEPER_INSTALL, InstallEntry, Installs, InstallsError, SETTING_NAME};
 pub use nanohub::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CALL_TIMEOUT, EnqueueError, KEY_FLAG, NanoHub,
     Queued, URL_FLAG,
@@ -69,8 +73,8 @@ pub use profile::{
     STORES_FLAG, StoresProfile, StoresProfileError, nonce_profile,
 };
 pub use record::{
-    BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord, Phase,
-    ProfileAnswer, ProfileCommand, Sent,
+    BaselineInstall, BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord,
+    Phase, ProfileAnswer, ProfileCommand, Sent,
 };
 pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError, decode_record, encode_record};
 pub use webhook::WebhookError;

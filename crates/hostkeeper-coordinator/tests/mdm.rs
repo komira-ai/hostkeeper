@@ -600,10 +600,11 @@ fn the_stores_and_signers_flags_need_the_profile_and_are_checked_at_start() {
 }
 
 /// Catches: a pkg flag accepted without its partner or without the enrollment side
-/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` alone, both without
+/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` or both without
 /// `--mdm-profile-identifier`), a pkg allowlist that is not root's let through the start (it
 /// says what may be installed as root on every Mac), or a host name with a scheme; each
-/// refusal names its flag.
+/// refusal names its flag. The host alone, with the enrollment side, starts the gate with the
+/// installs of its setting (none yet), since the old allowlist only seeds them.
 #[test]
 fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let files = Files::new("mdm-pkg-flags");
@@ -626,7 +627,7 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let host = ["--mdm-host", "mdm.example.com"];
     let refused: [Vec<&str>; 3] = [
         good().into_iter().chain(side).chain(allowlist).collect(),
-        good().into_iter().chain(side).chain(host).collect(),
+        good().into_iter().chain(host).collect(),
         good().into_iter().chain(allowlist).chain(host).collect(),
     ];
     for args in refused {
@@ -636,6 +637,17 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
             "{args:?}"
         );
     }
+    let host_alone: Vec<&str> = good().into_iter().chain(side).chain(host).collect();
+    let parts = start(&files, &host_alone).expect("started");
+    let installs = parts
+        .coordinator
+        .mdm()
+        .expect("the gate")
+        .gate
+        .installs()
+        .expect("a pkg install");
+    assert!(installs.entries().is_empty());
+    drop(parts);
     let all: Vec<&str> = good()
         .into_iter()
         .chain(side)
