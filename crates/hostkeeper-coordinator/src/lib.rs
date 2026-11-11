@@ -164,6 +164,7 @@ pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
 pub(crate) mod mdm_enroll;
+pub(crate) mod mdm_lease;
 pub mod mdm_push;
 pub mod mdm_secrets;
 mod mdm_server;

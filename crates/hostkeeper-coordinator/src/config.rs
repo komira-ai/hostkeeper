@@ -86,6 +86,7 @@ use crate::listen::{
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
+use crate::mdm_lease::Lease;
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
@@ -547,7 +548,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
-    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup);
+    let lease = Lease::of_store(Arc::clone(&backend));
+    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup, &lease);
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),

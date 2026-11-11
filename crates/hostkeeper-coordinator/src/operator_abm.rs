@@ -286,13 +286,16 @@ fn expiry_unix(text: &str) -> Option<i64> {
     Some(at.unix_timestamp())
 }
 
-/// Runs the ABM sync of `coordinator` ([`crate::abm::sync_every`]) for as long as it is polled;
-/// a coordinator with no ABM client never finishes and does nothing.
+/// Runs the ABM sync of `coordinator` ([`crate::abm::sync_every`]) for as long as it is polled,
+/// while the coordinator leads its store; a coordinator with no ABM client never finishes and
+/// does nothing.
 pub async fn abm_sync_every(coordinator: std::sync::Arc<Coordinator>) -> std::convert::Infallible {
     match coordinator.abm.clone() {
         Some(abm) => {
             let setup = std::sync::Arc::clone(&coordinator.mdm_setup);
-            crate::abm::sync_every(abm, setup, crate::abm::client::tokio_sleep()).await
+            let lease =
+                crate::mdm_lease::Lease::of_store(std::sync::Arc::clone(coordinator.ops.backend()));
+            crate::abm::sync_every(abm, setup, crate::abm::client::tokio_sleep(), lease).await
         }
         None => std::future::pending().await,
     }

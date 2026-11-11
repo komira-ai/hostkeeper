@@ -19,9 +19,9 @@
 //! digest differs from the stored one, and every device that has no profile gets it
 //! (`POST /profile/devices`, `PUT` when ABM answers the `POST` with a `4xx`).
 //!
-//! **Single timer.** [`sync_every`] runs a pass every `abm_sync_s` seconds. Running it under the
-//! store's lease, so that two coordinators do not both sync, is CM19; the coordinator refuses to
-//! serve MDM beside another one until then.
+//! **Single timer, under the lease.** [`sync_every`] runs a pass every `abm_sync_s` seconds, and
+//! only while this node holds the MDM lease ([`crate::mdm_lease`], CM19): a node that does not
+//! asks nothing of ABM and writes nothing, and asks again at the next tick.
 //!
 //! **Not probed.** The assignment writes to ABM and the spike did not make one: its tests use the
 //! fake, and nothing here makes a write to Apple on its own before an operator has uploaded a
@@ -48,6 +48,7 @@ use self::profile::{AdeProfile, is_host_name};
 use self::transport::AbmTransport;
 use self::wire::{Account, DeviceRecord};
 use crate::enrollment::Random;
+use crate::mdm_lease::Lease;
 use crate::mdm_secrets::{AbmToken, SecretKind};
 use crate::mdm_settings;
 use crate::mdm_setup::{MdmSetup, SetupFailure};
@@ -421,14 +422,18 @@ fn wanted_profile(set: &BTreeMap<String, String>) -> Option<AdeProfile> {
     Some(AdeProfile::new(name, host))
 }
 
-/// Runs a pass every `abm_sync_s` seconds, for as long as it is polled.
+/// Runs a pass every `abm_sync_s` seconds while `lease` is held, for as long as it is polled; a
+/// tick at which it is not held runs no pass.
 pub(crate) async fn sync_every(
     abm: Arc<Abm>,
     setup: Arc<MdmSetup>,
     sleep: Sleep,
+    lease: Lease,
 ) -> std::convert::Infallible {
     loop {
-        abm.sync_noted(&setup).await;
+        if lease.held() {
+            abm.sync_noted(&setup).await;
+        }
         let secs = setup.settings().map_or(300, |set| {
             u64::from(mdm_settings::number_of(&set, "abm_sync_s", 300))
         });

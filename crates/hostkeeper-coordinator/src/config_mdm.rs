@@ -16,6 +16,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use super::Serve;
 use crate::enrollment::os_random;
 use crate::listen::{CLIENT_PATIENCE, MAX_CONNECTIONS, Remote, serve_mdm};
+use crate::mdm_lease::Lease;
 use crate::mdm_server::pushing::{SetupPushers, production_sender};
 use crate::mdm_server::queue::{MdmQueue, Pushers};
 use crate::mdm_server::tls::{MdmTls, Trust};
@@ -51,6 +52,7 @@ pub(super) fn wire(
     flags: &Serve,
     store: &Arc<dyn MdmStore>,
     setup: &Arc<MdmSetup>,
+    lease: &Lease,
 ) -> Option<Wiring> {
     let address = flags.mdm.mdm_listen?;
     let pushing = Arc::new(SetupPushers::new(
@@ -64,6 +66,7 @@ pub(super) fn wire(
         Arc::clone(store),
         clock,
         Arc::clone(&pushers),
+        lease.clone(),
         Arc::clone(setup),
         flags.mdm.mdm_command_timeout_s,
     ));

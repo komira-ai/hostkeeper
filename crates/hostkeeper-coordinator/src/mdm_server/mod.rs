@@ -380,6 +380,9 @@ where
 }
 
 #[cfg(test)]
+mod lease_tests;
+
+#[cfg(test)]
 #[path = "mod_tests.rs"]
 mod tests;
 
