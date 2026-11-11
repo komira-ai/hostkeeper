@@ -195,6 +195,11 @@ impl Sessions {
         self.table.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
+    /// Fills `buffer` from the table's source of random bytes; `false` when it gave none.
+    pub fn random_bytes(&self, buffer: &mut [u8]) -> bool {
+        (self.random)(buffer)
+    }
+
     fn secret(&self) -> Result<String, SessionError> {
         let mut bytes = [0u8; SECRET_BYTES];
         if !(self.random)(&mut bytes) {

@@ -225,7 +225,8 @@ export async function main() {{
         .iter()
         .map(|r| {
             assert_eq!(r.http_method(), "POST");
-            assert_eq!(r.header("authorization"), Some("Bearer tok_client_1"));
+            assert_eq!(r.header("x-hk-csrf"), Some("tok_client_1"));
+            assert_eq!(r.header("authorization"), None);
             assert_eq!(r.body(), json!({}));
             r.method().to_owned()
         })

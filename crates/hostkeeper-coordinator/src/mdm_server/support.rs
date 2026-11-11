@@ -297,6 +297,18 @@ impl Rig {
         )
     }
 
+    /// A queue as a restarted coordinator builds it before any push certificate is set: nothing
+    /// armed, and no pusher to ask.
+    pub(super) fn restarted_queue_without_pushers(&self) -> MdmQueue {
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(|| None),
+            Arc::clone(&self.setup),
+            86_400,
+        )
+    }
+
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
     pub(super) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
         let rig = Self::build(name, None, random);
