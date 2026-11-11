@@ -34,6 +34,12 @@
 //! read at start and must be root's alone, by `InstallEnterpriseApplication` with an inline
 //! manifest naming its digest, fetched from `https://<--mdm-host>/pkg/<sha256>.pkg`.
 //!
+//! With `--mdm-baseline-file` as well (and `--mac-serial-allowlist`), the enrollment side also
+//! sets up each Mac at enrollment ([`hostkeeper_mdm_gate::baseline`]): per host group, Screen
+//! Sharing for a supervised Mac and the group's profiles, kept by a `ProfileList` check every
+//! `--mdm-baseline-check-s` seconds. The file and its profiles must be root's alone; each of its
+//! host groups must be the role of some allowlist entry; `Mdm.ListDevices` shows each Mac's state.
+//!
 //! Without the three flags the coordinator runs no gate: its port is [`NoDeviceState`], and
 //! `Mdm.ListDevices` answers no device.
 
@@ -52,15 +58,16 @@ use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
-    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CONFIG_FLAG, ConfigProfile, DaemonProfile,
-    DaemonProfileError, DeviceStore, EnrollSide, Enrollments, EnrollmentsError, FileDeviceStore,
-    Gate, IdentifierError, Install, MACOS_PKG_FLAG, MacosPkgProfile, MacosPkgProfileError, MdmHost,
-    MdmHostError, NanoHub, Nonce, PkgAllowlist, PkgAllowlistError, ProfileIdentifier, Random,
-    STORES_FLAG, StoreError, StoresProfile, StoresProfileError, Waiting, enroll, webhook,
+    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, Baseline, BaselineError, CONFIG_FLAG, ConfigProfile,
+    DEFAULT_CHECK_SECS, DaemonProfile, DaemonProfileError, DeviceStore, EnrollSide, Enrollments,
+    EnrollmentsError, FileDeviceStore, Gate, IdentifierError, Install, MACOS_PKG_FLAG,
+    MacosPkgProfile, MacosPkgProfileError, MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist,
+    PkgAllowlistError, ProfileIdentifier, Random, STORES_FLAG, StoreError, StoresProfile,
+    StoresProfileError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
-    DeviceState, DeviceStateError, DeviceStatus, Enrollment, NoDeviceState, Posted,
+    DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, NoDeviceState, Posted,
 };
 
 /// The directory of the gate's device records in the enrollment store.
@@ -138,6 +145,27 @@ pub struct MdmFlags {
     /// --mdm-pkg-allowlist.
     #[arg(long, requires = "mdm_pkg_allowlist")]
     pub mdm_host: Option<String>,
+    /// The enrollment baseline: a TOML file of root's that no one else can write, of `[[group]]`
+    /// rows, each a `host_group` and `[[group.entry]]` rows, an entry being `remote_desktop =
+    /// true` (Screen Sharing, `EnableRemoteDesktop`, sent only to a supervised Mac) or `profile
+    /// = "<path>"` (an unsigned `.mobileconfig` of root's, installed by `InstallProfile`). A
+    /// Mac's host group is the role of its --mac-serial-allowlist entry, and each `host_group`
+    /// must be the role of some entry. The gate sends the group's entries once the Mac has
+    /// acknowledged its config profile, and sends again what a `ProfileList` check finds
+    /// missing; a failure never fails the enrollment, and `Mdm.ListDevices` shows it. Read at
+    /// start. Requires --mdm-profile-identifier and --mac-serial-allowlist.
+    #[arg(long, requires_all = ["mdm_profile_identifier", "mac_serial_allowlist"])]
+    pub mdm_baseline_file: Option<PathBuf>,
+    /// How often, in seconds, a Mac's baseline is checked, and `EnableRemoteDesktop` sent again
+    /// (the Mac answers no read-back of it): at least 1. A Mac is also checked at each of its
+    /// `TokenUpdate`s. Requires --mdm-baseline-file.
+    #[arg(
+        long,
+        requires = "mdm_baseline_file",
+        default_value_t = DEFAULT_CHECK_SECS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub mdm_baseline_check_s: u64,
 }
 
 /// Why the gate did not start.
@@ -186,6 +214,14 @@ pub enum MdmError {
     /// `--mdm-host` is not a DNS name.
     #[error(transparent)]
     Host(#[from] MdmHostError),
+    /// `--mdm-baseline-file` is refused.
+    #[error(transparent)]
+    Baseline(#[from] BaselineError),
+    /// `--mdm-baseline-file` names a host group no entry of `--mac-serial-allowlist` has.
+    #[error(
+        "--mdm-baseline-file names host group {0}, which no entry of --mac-serial-allowlist has (a Mac's host group is its entry's role)"
+    )]
+    BaselineGroup(String),
 }
 
 /// The running gate, and where its webhook is served.
@@ -227,6 +263,11 @@ impl Mdm {
         }
         let side = side_of(flags)?;
         let install = install_of(flags, Arc::new(RealFs))?;
+        let baseline = baseline_of(
+            flags,
+            &RealFs,
+            side.as_ref().map(|(identifier, _)| identifier),
+        )?;
         let store: Box<dyn DeviceStore> = match devices {
             Devices::Files(dir) => Box::new(FileDeviceStore::open(
                 Arc::new(RealFs),
@@ -234,7 +275,9 @@ impl Mdm {
             )?),
             Devices::Store(store) => store,
         };
-        let gate = Gate::open(store, NanoHub::new(url, key), clock, random)?.with_install(install);
+        let gate = Gate::open(store, NanoHub::new(url, key), clock, random)?
+            .with_install(install)
+            .with_baseline(baseline);
         let (gate, attached) = match side {
             Some((identifier, config)) => {
                 let attached = Arc::new(Attached::default());
@@ -252,6 +295,29 @@ impl Mdm {
             webhook_listen: listen,
             attached,
         }))
+    }
+
+    /// Refuses the baseline of `mdm`, when it has one, if it lists a host group that is no
+    /// entry's role in `allowlist`: the group would never be picked, which is a mistake in
+    /// either file (a Mac's host group is its allowlist entry's role).
+    ///
+    /// # Errors
+    /// [`MdmError::BaselineGroup`], naming the first such group.
+    pub fn check_baseline_groups(
+        mdm: Option<&Self>,
+        allowlist: &MacAllowlist,
+    ) -> Result<(), MdmError> {
+        let roles = allowlist.host_groups();
+        let groups = mdm
+            .map(|mdm| mdm.gate.baseline_groups())
+            .unwrap_or_default();
+        match groups
+            .into_iter()
+            .find(|group| !roles.contains(group.as_str()))
+        {
+            Some(unknown) => Err(MdmError::BaselineGroup(unknown)),
+            None => Ok(()),
+        }
     }
 
     /// Gives the gate's enrollment side `enrollment` to ask; before this it sends no profile.
@@ -358,6 +424,22 @@ fn install_of(flags: &MdmFlags, fs: Arc<dyn Fs>) -> Result<Option<Install>, MdmE
     }))
 }
 
+/// The enrollment baseline, when `--mdm-baseline-file` is given: the file read from `fs`, which
+/// must find it and its profiles root's alone, checked every `--mdm-baseline-check-s` seconds.
+fn baseline_of(
+    flags: &MdmFlags,
+    fs: &dyn Fs,
+    identifier: Option<&ProfileIdentifier>,
+) -> Result<Option<Baseline>, MdmError> {
+    let (Some(path), Some(identifier)) = (&flags.mdm_baseline_file, identifier) else {
+        // clap requires the identifier with the file: without the two there is no baseline.
+        return Ok(None);
+    };
+    Ok(Some(
+        Baseline::load(fs, path, identifier)?.with_check_secs(flags.mdm_baseline_check_s),
+    ))
+}
+
 /// The coordinator's enrollment, as the gate asks it once [`Mdm::attach`] gave it. Held weakly:
 /// the enrollment holds the gate (its device state), so a strong hold would be a cycle. Before
 /// it is attached, or once it is gone, no serial is allowed and nothing is answered.
@@ -376,6 +458,12 @@ impl Enrollments for Attached {
     fn allowed(&self, serial: &str) -> bool {
         self.get()
             .is_ok_and(|enrollment| enrollment.allowed(serial))
+    }
+
+    fn host_group(&self, serial: &str) -> Option<String> {
+        self.get()
+            .ok()
+            .and_then(|enrollment| enrollment.host_group(serial))
     }
 
     fn waiting(&self, serial: &str) -> Result<Vec<Waiting>, EnrollmentsError> {

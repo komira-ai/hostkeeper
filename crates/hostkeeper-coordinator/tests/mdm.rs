@@ -320,6 +320,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-macos-pkg <MDM_MACOS_PKG>",
         "--mdm-pkg-allowlist <MDM_PKG_ALLOWLIST>",
         "--mdm-host <MDM_HOST>",
+        "--mdm-baseline-file <MDM_BASELINE_FILE>",
+        "--mdm-baseline-check-s <MDM_BASELINE_CHECK_S>",
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }
@@ -873,5 +875,75 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
             .expect("a table")["hosted_runner"]
             .as_boolean(),
         Some(true)
+    );
+}
+
+/// Catches: a baseline flag accepted without its partners (`--mdm-baseline-file` without
+/// `--mdm-profile-identifier` or without `--mac-serial-allowlist`, the check interval without
+/// the file, an interval of 0), a baseline file that is not root's let through the start (it
+/// says what every Mac is configured with), and a default check interval other than six hours.
+#[test]
+fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
+    let files = Files::new("mdm-baseline-flags");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    files.put(
+        "mac.toml",
+        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\nservices = [\"kbf\"]\n",
+        0o600,
+    );
+    files.put(
+        "baseline.toml",
+        "[[group]]\nhost_group = \"build\"\n[[group.entry]]\nremote_desktop = true\n",
+        0o644,
+    );
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let allowlist = ["--mac-serial-allowlist", "=mac.toml"];
+    let baseline = ["--mdm-baseline-file", "=baseline.toml"];
+    let refused: [Vec<&str>; 4] = [
+        good()
+            .into_iter()
+            .chain(allowlist)
+            .chain(baseline)
+            .collect(),
+        good().into_iter().chain(side).chain(baseline).collect(),
+        good()
+            .into_iter()
+            .chain(side)
+            .chain(allowlist)
+            .chain(["--mdm-baseline-check-s", "60"])
+            .collect(),
+        good()
+            .into_iter()
+            .chain(side)
+            .chain(allowlist)
+            .chain(baseline)
+            .chain(["--mdm-baseline-check-s", "0"])
+            .collect(),
+    ];
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let all: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(allowlist)
+        .chain(baseline)
+        .collect();
+    assert_eq!(flags_of(files.args(&all)).mdm.mdm_baseline_check_s, 21_600);
+    assert_eq!(
+        refusal(&files, &all),
+        format!(
+            "--mdm-baseline-file {}: it is not owned by root; the baseline and its profiles must be files of root's that no one else can write",
+            files.path("baseline.toml").display()
+        )
     );
 }

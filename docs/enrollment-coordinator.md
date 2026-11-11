@@ -425,6 +425,14 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
 
   Without the two flags the gate sends no pkg, and the pkg is installed by hand.
 
+- **The baseline** (`--mdm-baseline-file`, `--mdm-baseline-check-s`; [operations/mdm-baseline.md](operations/mdm-baseline.md)).
+  Once the Mac has acknowledged the config profile, the gate sends it its host group's entries
+  (the group is the role of the Mac's allowlist entry): `EnableRemoteDesktop`, to a supervised Mac
+  only, and an `InstallProfile` for each profile file. It sends a `ProfileList` at each
+  `TokenUpdate` and every check interval, and sends again what is missing. Each send NanoHUB
+  queued is audited `mdm_baseline` by `mdm-gate`; a failure does not fail the enrollment, and
+  `hkctl mdm list-devices` shows `baseline_state` and `baseline_reason`.
+
 ## Backup
 
 Back up the CA key file and its `.cert` once, right after the CA is made, sealed and offline:

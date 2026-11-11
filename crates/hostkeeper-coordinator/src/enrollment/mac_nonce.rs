@@ -297,6 +297,12 @@ impl MacAllowlist {
         self.0.get(serial)
     }
 
+    /// The host group of every entry: its role, which is the group an MDM baseline is picked by.
+    #[must_use]
+    pub fn host_groups(&self) -> std::collections::BTreeSet<&str> {
+        self.0.values().map(|entry| entry.role.as_str()).collect()
+    }
+
     /// Every service an entry names, for the start to check that the coordinator manages each.
     pub fn services(&self) -> impl Iterator<Item = &ServiceName> {
         self.0.values().flat_map(|entry| entry.services.iter())

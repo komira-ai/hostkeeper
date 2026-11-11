@@ -9,14 +9,16 @@ use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::RequestState;
 use hostkeeper_enrollment::fs::RealFs;
-use hostkeeper_mdm_gate::{DeviceRecord, DeviceStore, EnrollmentId, FileDeviceStore, Phase};
+use hostkeeper_mdm_gate::{
+    DEFAULT_CHECK_SECS, DeviceRecord, DeviceStore, EnrollmentId, FileDeviceStore, Phase,
+};
 use hostkeeper_testkit::Scratch;
 
 use crate::enrollment::tests::support::{FixedClock, HostKey, NOW, Rig, SERIAL, mac_request};
 use crate::enrollment::{
     DeviceStateError, DeviceStatus, MacAllowlist, MacDecline, MacOutcome, MacPolicy, os_random,
 };
-use crate::mdm::{DEVICES_DIR, Devices, Mdm, MdmFlags};
+use crate::mdm::{DEVICES_DIR, Devices, Mdm, MdmError, MdmFlags};
 use crate::testutil::scratch;
 
 /// The allowlist entry of [`SERIAL`]: host id `mac-<serial>`, role `build`, service `kbf`.
@@ -68,6 +70,8 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_macos_pkg: None,
         mdm_pkg_allowlist: None,
         mdm_host: None,
+        mdm_baseline_file: None,
+        mdm_baseline_check_s: DEFAULT_CHECK_SECS,
     }
 }
 
@@ -333,5 +337,95 @@ fn the_pkg_flags_make_the_install_of_the_newest_entry() {
         super::install_of(&flags_in(&dir), Arc::new(RootFs))
             .expect("no flags")
             .is_none()
+    );
+}
+
+/// A baseline file of root's, as `baseline_of` reads it: one group `group` with Screen Sharing.
+fn baseline_flags(dir: &Scratch, group: &str) -> MdmFlags {
+    let path = dir.path().join("baseline.toml");
+    std::fs::write(
+        &path,
+        format!("[[group]]\nhost_group = \"{group}\"\n[[group.entry]]\nremote_desktop = true\n"),
+    )
+    .expect("written");
+    MdmFlags {
+        mdm_baseline_file: Some(path),
+        mdm_baseline_check_s: 77,
+        ..flags_in(dir)
+    }
+}
+
+/// Catches: the baseline read from another file than `--mdm-baseline-file` names, its check
+/// interval not the flag's, or one built without the file or without the farm's profile
+/// identifier (the enrollment side).
+#[test]
+fn the_baseline_is_built_from_its_file_and_check_interval() {
+    use hostkeeper_mdm_gate::ProfileIdentifier;
+    let dir = scratch("mdm-baseline-of");
+    let identifier = ProfileIdentifier::parse("com.example.hostkeeper.mdm").expect("an identifier");
+    let flags = baseline_flags(&dir, "build");
+    let baseline = super::baseline_of(&flags, &RootFs, Some(&identifier))
+        .expect("read")
+        .expect("a baseline");
+    assert_eq!(baseline.groups().collect::<Vec<_>>(), ["build"]);
+    let expected = hostkeeper_mdm_gate::Baseline::load(
+        &RootFs,
+        flags.mdm_baseline_file.as_deref().expect("a file"),
+        &identifier,
+    )
+    .expect("loads")
+    .with_check_secs(77);
+    assert_eq!(baseline, expected);
+    assert_ne!(
+        baseline,
+        expected.clone().with_check_secs(DEFAULT_CHECK_SECS)
+    );
+
+    assert_eq!(
+        super::baseline_of(&flags_in(&dir), &RootFs, Some(&identifier)).expect("read"),
+        None
+    );
+    assert_eq!(
+        super::baseline_of(&flags, &RootFs, None).expect("read"),
+        None
+    );
+    // The real file system finds the file the test's user wrote, not root's.
+    let error = super::baseline_of(&flags, &RealFs, Some(&identifier)).expect_err("not root's");
+    assert!(matches!(error, MdmError::Baseline(_)), "{error}");
+}
+
+/// Catches: a baseline group no allowlist entry has let through the start, or a group that one
+/// has refused; a coordinator with no gate, or a gate with no baseline, refused.
+#[test]
+fn a_baseline_group_must_be_the_role_of_an_allowlist_entry() {
+    use hostkeeper_mdm_gate::ProfileIdentifier;
+    let dir = scratch("mdm-baseline-groups");
+    let allowlist = MacAllowlist::parse(ALLOWED).expect("an allowlist");
+    let identifier = ProfileIdentifier::parse("com.example.hostkeeper.mdm").expect("an identifier");
+    let with = |group: &str| {
+        let flags = baseline_flags(&dir, group);
+        let baseline = super::baseline_of(&flags, &RootFs, Some(&identifier)).expect("read");
+        let mdm = mdm_with(&dir, &[]);
+        Mdm {
+            gate: Arc::new(
+                Arc::try_unwrap(mdm.gate)
+                    .expect("the only hold")
+                    .with_baseline(baseline),
+            ),
+            ..mdm
+        }
+    };
+    assert_eq!(
+        allowlist.host_groups().into_iter().collect::<Vec<_>>(),
+        ["build"]
+    );
+    Mdm::check_baseline_groups(None, &allowlist).expect("no gate");
+    Mdm::check_baseline_groups(Some(&mdm_with(&dir, &[])), &allowlist).expect("no baseline");
+    Mdm::check_baseline_groups(Some(&with("build")), &allowlist).expect("a role of the allowlist");
+    let error = Mdm::check_baseline_groups(Some(&with("farm")), &allowlist).expect_err("unknown");
+    assert!(matches!(error, MdmError::BaselineGroup(_)));
+    assert_eq!(
+        error.to_string(),
+        "--mdm-baseline-file names host group farm, which no entry of --mac-serial-allowlist has (a Mac's host group is its entry's role)"
     );
 }
