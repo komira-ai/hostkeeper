@@ -395,6 +395,10 @@ impl MdmStore for FileMdm {
         Ok(self.read(MdmState::enrollments_with_queued))
     }
 
+    fn identities_expiring(&self, before_unix: i64) -> Result<Vec<(String, i64)>, MdmError> {
+        Ok(self.read(|s| s.identities_expiring(before_unix)))
+    }
+
     fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError> {
         self.change(|s| {
             s.abm_apply(batch);

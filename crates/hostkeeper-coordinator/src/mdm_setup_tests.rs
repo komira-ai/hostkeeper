@@ -337,6 +337,13 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_request_timeout_s", "30".to_owned(), true),
             ("abm_retries", "3".to_owned(), true),
             ("ade_profile_name", "Komira MDM".to_owned(), true),
+            ("identity_days", "1095".to_owned(), true),
+            ("renew_alert_days", "90".to_owned(), true),
+            ("challenge_ttl_s", "3600".to_owned(), true),
+            ("ca_days", "3650".to_owned(), true),
+            ("identity_org", "hostkeeper".to_owned(), true),
+            ("enroll_rate_per_min", "60".to_owned(), true),
+            ("enroll_pending_max", "256".to_owned(), true),
         ]
     );
     assert_eq!(

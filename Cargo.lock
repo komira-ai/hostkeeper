@@ -1631,8 +1631,10 @@ dependencies = [
  "hex",
  "hostkeeper-config",
  "hostkeeper-enrollment",
+ "hostkeeper-mdm-ade",
  "hostkeeper-mdm-gate",
  "hostkeeper-mdm-push",
+ "hostkeeper-mdm-scep",
  "hostkeeper-mdm-server",
  "hostkeeper-oidc",
  "hostkeeper-proto",
@@ -1905,6 +1907,25 @@ dependencies = [
  "time",
  "ureq",
  "x509-parser",
+]
+
+[[package]]
+name = "hostkeeper-mdm-ade"
+version = "0.1.0"
+dependencies = [
+ "cms",
+ "const-oid 0.10.2",
+ "der 0.8.3",
+ "p256",
+ "plist",
+ "rand 0.10.3",
+ "rsa 0.10.0",
+ "sha1 0.11.0",
+ "sha2 0.11.0",
+ "signature 3.0.0",
+ "spki 0.8.1",
+ "thiserror",
+ "x509-cert",
 ]
 
 [[package]]

@@ -388,6 +388,13 @@ fn a_setting_is_judged_audited_and_listed() {
             ("abm_request_timeout_s", "30", true),
             ("abm_retries", "3", true),
             ("ade_profile_name", "Komira MDM", true),
+            ("identity_days", "1095", true),
+            ("renew_alert_days", "90", true),
+            ("challenge_ttl_s", "3600", true),
+            ("ca_days", "3650", true),
+            ("identity_org", "hostkeeper", true),
+            ("enroll_rate_per_min", "60", true),
+            ("enroll_pending_max", "256", true),
         ]
     );
     assert_eq!(

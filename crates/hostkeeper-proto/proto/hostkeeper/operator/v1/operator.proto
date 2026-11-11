@@ -1459,6 +1459,13 @@ enum AlertKind {
   // until the next threshold, and then a new one: its `version` is the threshold in days (`60`,
   // `14`), or `expired`. Log token `push_cert_near_expiry`.
   ALERT_KIND_PUSH_CERT_NEAR_EXPIRY = 12;
+  // The identity certificate of a Mac, or the CA that issues them, expires within the
+  // `renew_alert_days` setting (90 by default), or has expired. The message lists the serials. A
+  // Mac's identity is renewed by enrolling it again (a wipe, or an `InstallProfile` of a fresh
+  // enrollment profile); that macOS renews the identity inside the MDM payload by itself is not
+  // established. The alert's `version` is the `renew_alert_days` it was raised at, or `expired`.
+  // Log token `mdm_identity_near_expiry`.
+  ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY = 13;
 }
 
 // How soon an `Alert` needs a person.

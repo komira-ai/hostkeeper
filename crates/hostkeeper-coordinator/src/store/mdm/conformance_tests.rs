@@ -599,7 +599,45 @@ fn queued_commands_name_only_live_enrollments(subject: &dyn Subject) -> Outcome 
     })
 }
 
-const CLAUSES: [(&str, Clause); 10] = [
+fn expiring_identities_are_those_of_live_enrollments(subject: &dyn Subject) -> Outcome {
+    let s = subject.live();
+    let s = &*s;
+    // Four Macs issued and entered; one then left; a fifth identity was issued and never entered.
+    for (n, serial, not_after) in [
+        (1, "SER1", 100),
+        (2, "SER2", 50),
+        (3, "SER3", 300),
+        (4, "SER4", 10),
+        (5, "SER5", 20),
+    ] {
+        let hash = format!("h{n}");
+        let cert = format!("c{n}");
+        store(s.issue_challenge(&challenge(&hash, serial, 1_000)))?;
+        let issued = Issuance {
+            not_after_unix: not_after,
+            ..issuance(&cert, b"der")
+        };
+        store(s.consume_challenge(&hash, &format!("k{n}"), &issued, 5))?;
+        if n != 5 {
+            store(s.replace_live(&enrollment(&format!("e{n}"), serial, Some(&cert), 6)))?;
+        }
+    }
+    store(s.check_out("e4", 7))?;
+    let soon = store(s.identities_expiring(200))?;
+    let want = [("SER2".to_owned(), 50), ("SER1".to_owned(), 100)];
+    check(soon == want, || {
+        format!("listed {soon:?}: soonest first, only live Macs, only before the time")
+    })?;
+    check(store(s.identities_expiring(50))?.is_empty(), || {
+        "the time itself is not before it".to_owned()
+    })
+}
+
+const CLAUSES: [(&str, Clause); 11] = [
+    (
+        "expiring_identities_are_those_of_live_enrollments",
+        expiring_identities_are_those_of_live_enrollments,
+    ),
     (
         "queued_commands_name_only_live_enrollments",
         queued_commands_name_only_live_enrollments,
@@ -677,6 +715,7 @@ impl MdmStore for Handle {
         command(id: &str) -> Result<Option<Command>, MdmError>;
         commands(id: &str) -> Result<Vec<Command>, MdmError>;
         enrollments_with_queued() -> Result<Vec<String>, MdmError>;
+        identities_expiring(before: i64) -> Result<Vec<(String, i64)>, MdmError>;
         abm_apply(b: &AbmBatch) -> Result<(), MdmError>;
         abm_device(serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         abm_devices() -> Result<Vec<AbmDevice>, MdmError>;
@@ -851,6 +890,7 @@ impl MdmStore for Flawed {
         command(id: &str) -> Result<Option<Command>, MdmError>;
         commands(id: &str) -> Result<Vec<Command>, MdmError>;
         enrollments_with_queued() -> Result<Vec<String>, MdmError>;
+        identities_expiring(before: i64) -> Result<Vec<(String, i64)>, MdmError>;
         abm_apply(b: &AbmBatch) -> Result<(), MdmError>;
         abm_device(serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         abm_devices() -> Result<Vec<AbmDevice>, MdmError>;

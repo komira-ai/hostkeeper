@@ -62,6 +62,12 @@ use auth::Refused;
 use queue::{MdmQueue, Pushers};
 use tls::MdmTls;
 
+/// The path of the enrollment URL the ADE profile sends a Mac to.
+pub const ENROLL_PATH: &str = "/enroll";
+
+/// The path of the SCEP URL the enrollment profile names.
+pub const SCEP_PATH: &str = "/scep";
+
 /// The path of the check-in URL.
 pub const CHECKIN_PATH: &str = "/checkin";
 
@@ -86,7 +92,7 @@ pub(crate) enum Family {
 /// The family a path belongs to; none for a path the listener does not serve.
 pub(crate) fn family_of(path: &str) -> Option<Family> {
     match path {
-        "/enroll" | "/scep" | CHECKIN_PATH | MDM_PATH => Some(Family::Mdm),
+        ENROLL_PATH | SCEP_PATH | CHECKIN_PATH | MDM_PATH => Some(Family::Mdm),
         _ if path.starts_with("/apt/") || path.starts_with("/pkg/") => Some(Family::Proxy),
         _ => None,
     }
@@ -105,7 +111,7 @@ pub(crate) enum ClientCert {
 /// The rule of a path; none for a path that is not an MDM route.
 pub(crate) fn client_cert(path: &str) -> Option<ClientCert> {
     match path {
-        "/enroll" | "/scep" => Some(ClientCert::Ignored),
+        ENROLL_PATH | SCEP_PATH => Some(ClientCert::Ignored),
         CHECKIN_PATH | MDM_PATH => Some(ClientCert::Required),
         _ => None,
     }
@@ -222,6 +228,8 @@ pub(crate) struct MdmServer {
     sweep: Duration,
     /// One `Authenticate` at a time: the live enrollment of a serial is read, then replaced.
     pub(crate) authenticating: tokio::sync::Mutex<()>,
+    /// What `/enroll` and `/scep` keep between requests.
+    pub(crate) enroll: crate::mdm_enroll::Enroller,
 }
 
 impl MdmServer {
@@ -246,12 +254,33 @@ impl MdmServer {
             tls,
             sweep,
             authenticating: tokio::sync::Mutex::new(()),
+            enroll: crate::mdm_enroll::Enroller::new(hostkeeper_mdm_ade::roots::apple()),
         }
+    }
+
+    /// The same server, whose device blobs must chain to `roots` (DER) and not to Apple's: the
+    /// tests' fake Apple.
+    #[cfg(test)]
+    pub(crate) fn with_apple_roots(mut self, roots: Vec<Vec<u8>>) -> Self {
+        self.enroll.roots = roots;
+        self
     }
 
     /// The TLS of the listener.
     pub(crate) fn tls(&self) -> &Arc<MdmTls> {
         &self.tls
+    }
+
+    /// Whether the ABM table lists `serial` and has not marked it removed: the one reading of
+    /// "this Mac is ours" that `/enroll`, the operator's confirmation and `Authenticate` share.
+    ///
+    /// # Errors
+    /// The store failed.
+    pub(crate) fn serial_in_abm(&self, serial: &str) -> Result<bool, MdmError> {
+        Ok(self
+            .store
+            .abm_device(serial)?
+            .is_some_and(|device| device.removed_unix.is_none()))
     }
 
     /// The time, in seconds.
@@ -307,18 +336,36 @@ where
     if !server.serves(family) {
         return Refusal::Unavailable.answer();
     }
-    if client_cert(&path) != Some(ClientCert::Required) {
-        // The routes whose task has not landed: `/enroll` and `/scep` (CM12c), which read no
-        // certificate, and the proxy's (PP2).
+    let Some(rule) = client_cert(&path) else {
+        // The proxy's routes (PP2) have not landed.
         return error(StatusCode::NOT_FOUND, "not_found");
-    }
-    if request.method() != Method::PUT {
+    };
+    if rule == ClientCert::Required && request.method() != Method::PUT {
         return error(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed");
     }
     let (parts, body) = request.into_parts();
     let Some(body) = read_body(body, MAX_BODY_BYTES, patience).await else {
         return Refusal::BadRequest.answer();
     };
+    if rule == ClientCert::Ignored {
+        let from = parts
+            .extensions
+            .get::<crate::http::PeerAddr>()
+            .map(|addr| addr.0.ip());
+        return if path == ENROLL_PATH {
+            crate::mdm_enroll::enroll::answer(coordinator, server, from, &parts.method, &body).await
+        } else {
+            crate::mdm_enroll::scep::answer(
+                coordinator,
+                server,
+                from,
+                &parts.method,
+                parts.uri.query(),
+                &body,
+            )
+            .await
+        };
+    }
     let tried = parts
         .extensions
         .get::<ConnectionTried>()

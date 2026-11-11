@@ -167,6 +167,7 @@ impl MdmStore for Flaky {
         fn command(&self, id: &str) -> Result<Option<Row>, MdmError>;
         fn commands(&self, enrollment_id: &str) -> Result<Vec<Row>, MdmError>;
         fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError>;
+        fn identities_expiring(&self, before_unix: i64) -> Result<Vec<(String, i64)>, MdmError>;
         fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError>;
         fn abm_device(&self, serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         fn abm_devices(&self) -> Result<Vec<AbmDevice>, MdmError>;

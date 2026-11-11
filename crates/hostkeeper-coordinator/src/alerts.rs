@@ -37,6 +37,8 @@
 //!   smallest of the `push_alert_days` thresholds its expiry has come within (60, then 14 by
 //!   default), or expired; the alert's version is the threshold in days, or `expired`, so that
 //!   crossing the next threshold is a new alert, logged again;
+//! - `mdm_identity_near_expiry`: an issued identity of a live Mac enrollment, or the CA that issues
+//!   them, expires within the setting `renew_alert_days`, or has; the message lists the serials;
 //! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
 //!   gives no facts rather than refusing the list, so the alert is seen;
@@ -118,6 +120,8 @@ pub enum Kind {
     TrustedRoot,
     /// The MDM push certificate expires within a threshold of `push_alert_days`, or has expired.
     PushCertNearExpiry,
+    /// A Mac's identity certificate or the CA that issues them expires within `renew_alert_days`.
+    MdmIdentityNearExpiry,
 }
 
 impl Kind {
@@ -139,6 +143,7 @@ impl Kind {
             Self::StoreUnreachable => "store_unreachable",
             Self::TrustedRoot => "trusted_root",
             Self::PushCertNearExpiry => "push_cert_near_expiry",
+            Self::MdmIdentityNearExpiry => "mdm_identity_near_expiry",
         }
     }
 
@@ -156,7 +161,8 @@ impl Kind {
             | Self::SilentHost
             | Self::CertNearExpiry
             | Self::TrustedRoot
-            | Self::PushCertNearExpiry => proto::AlertSeverity::Warning,
+            | Self::PushCertNearExpiry
+            | Self::MdmIdentityNearExpiry => proto::AlertSeverity::Warning,
         }
     }
 
@@ -176,6 +182,7 @@ impl Kind {
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
             Self::PushCertNearExpiry => proto::AlertKind::PushCertNearExpiry,
+            Self::MdmIdentityNearExpiry => proto::AlertKind::MdmIdentityNearExpiry,
         }
     }
 }
@@ -251,6 +258,13 @@ pub struct EnrollmentFacts {
     /// The days before that expiry at which the alert is raised, falling (the setting
     /// `push_alert_days`).
     pub push_alert_days: Vec<u32>,
+    /// The serials of the live Mac enrollments whose identity certificate expires within the
+    /// window, with the unix second it does, soonest first.
+    pub mdm_identities: Vec<(String, u64)>,
+    /// When the CA of the identities expires, unix seconds, when one is held.
+    pub mdm_ca_not_after: Option<u64>,
+    /// The window in days (the setting `renew_alert_days`); none when the setup was not read.
+    pub mdm_renew_alert_days: Option<u32>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -316,6 +330,7 @@ pub(crate) fn derive_in(
         thresholds.cert_window_secs,
     ));
     alerts.extend(push_cert_near_expiry(enrollment, at.unix));
+    alerts.extend(mdm_identity_near_expiry(enrollment, at.unix));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -658,6 +673,50 @@ fn push_cert_near_expiry(enrollment: &EnrollmentFacts, unix: u64) -> Vec<Alert> 
     }]
 }
 
+/// `mdm_identity_near_expiry`: the identities that expire within the window and the CA, when it
+/// does. Its version is the window in days, or `expired` once any of them has.
+fn mdm_identity_near_expiry(enrollment: &EnrollmentFacts, unix: u64) -> Vec<Alert> {
+    let Some(days) = enrollment.mdm_renew_alert_days else {
+        return Vec::new();
+    };
+    let window = unix.saturating_add(u64::from(days) * 86_400);
+    let ca = enrollment
+        .mdm_ca_not_after
+        .filter(|not_after| *not_after < window);
+    if enrollment.mdm_identities.is_empty() && ca.is_none() {
+        return Vec::new();
+    }
+    let expired = ca.is_some_and(|at| at <= unix)
+        || enrollment.mdm_identities.iter().any(|(_, at)| *at <= unix);
+    let mut subject = Subject::of(Kind::MdmIdentityNearExpiry);
+    subject.version = if expired {
+        "expired".to_owned()
+    } else {
+        days.to_string()
+    };
+    let mut parts = Vec::new();
+    if !enrollment.mdm_identities.is_empty() {
+        let serials: Vec<&str> = enrollment
+            .mdm_identities
+            .iter()
+            .map(|(serial, _)| serial.as_str())
+            .collect();
+        parts.push(format!(
+            "the identity certificates of {} expire within {days} days (or have): enroll each Mac              again before they do",
+            serials.join(", ")
+        ));
+    }
+    if let Some(at) = ca {
+        parts.push(format!(
+            "the CA that issues the Macs' identities expires at unix {at}: no identity issued              after that is valid"
+        ));
+    }
+    vec![Alert {
+        subject,
+        message: parts.join("; "),
+    }]
+}
+
 /// For a duplicate claim `view`, the enrolled host it collides with: the host it renews, else a
 /// host whose recorded approval has its machine id or one of its universally administered MACs.
 fn collides_with(view: &RequestView, approvals: &[RecordedApproval]) -> Option<String> {
@@ -803,6 +862,7 @@ impl Coordinator {
                 Err(why) => return Err(why),
             };
             self.note_push_certificate(&mut enrollment);
+            self.note_identities(&mut enrollment);
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),
@@ -839,6 +899,41 @@ impl Coordinator {
             (Err(why), _) | (_, Err(why)) => {
                 tracing::warn!(%why, "the push certificate's expiry is not read: the MDM setup could not be read");
             }
+        }
+    }
+
+    /// Notes in `facts` the identities of the Macs and the CA that expire within the window of
+    /// `renew_alert_days`; a store or a setup that cannot be read is logged and raises no alert of
+    /// its own.
+    fn note_identities(&self, facts: &mut EnrollmentFacts) {
+        let Some(server) = self.mdm_server() else {
+            return;
+        };
+        let setup = &self.mdm_setup;
+        let (Ok(secrets), Ok(settings)) = (setup.list_secrets(), setup.settings()) else {
+            tracing::warn!(
+                "the MDM identities' expiry is not read: the MDM setup could not be read"
+            );
+            return;
+        };
+        let days = mdm_settings::number_of(&settings, "renew_alert_days", 90);
+        facts.mdm_renew_alert_days = Some(days);
+        facts.mdm_ca_not_after = secrets
+            .iter()
+            .filter(|info| info.kind == SecretKind::MdmCaKey && info.superseded_unix.is_none())
+            .find_map(|info| info.not_after_unix)
+            .and_then(|at| u64::try_from(at).ok());
+        let window = i64::try_from(self.ops.unix_now())
+            .unwrap_or(i64::MAX)
+            .saturating_add(i64::from(days) * 86_400);
+        match server.store.identities_expiring(window) {
+            Ok(rows) => {
+                facts.mdm_identities = rows
+                    .into_iter()
+                    .filter_map(|(serial, at)| Some((serial, u64::try_from(at).ok()?)))
+                    .collect();
+            }
+            Err(why) => tracing::warn!(%why, "the MDM identities' expiry is not read"),
         }
     }
 

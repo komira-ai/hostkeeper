@@ -235,6 +235,8 @@ const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCerti
 const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
 /// The path of `Mdm.GetAbmPublicKey`, which makes the key pair when none is held.
 const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+/// The path of `Mdm.ConfirmEnrollment`, which lets a held `/enroll` request through.
+const MDM_CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -249,6 +251,7 @@ pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_PUSH_CERTIFICATE,
     MDM_PUT_ABM_TOKEN,
     MDM_GET_ABM_PUBLIC_KEY,
+    MDM_CONFIRM_ENROLLMENT,
 ];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`

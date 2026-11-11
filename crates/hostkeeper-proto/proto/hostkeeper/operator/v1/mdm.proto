@@ -119,6 +119,21 @@ service Mdm {
   // which is why the call is session-only; once made, the same certificate is answered. Audited as
   // `mdm_abm_cert_get`. The private key is never returned.
   rpc GetAbmPublicKey(GetAbmPublicKeyRequest) returns (GetAbmPublicKeyResponse);
+
+  // The enrollment requests that wait for an operator (docs/design/coordinator-mdm.md, 4.2): each
+  // is a Mac whose Setup Assistant posted a device blob to `/enroll` that the coordinator could not
+  // verify against Apple's roots, so it was given no challenge. The list is in memory (a restart
+  // empties it and the Mac's next post fills it again). Each entry says whether the ABM table lists
+  // the serial now. Changes nothing.
+  rpc ListEnrollmentRequests(ListEnrollmentRequestsRequest) returns (ListEnrollmentRequestsResponse);
+
+  // Confirms the waiting request of `serial`: the next post of that serial from the UDID that
+  // waited is given a challenge, once, for `challenge_ttl_s` seconds. The ABM table is read again
+  // here, and a serial it does not list (or lists as removed) is refused `serial_not_in_abm`. A
+  // confirmation says that the operator saw this Mac enroll; it cannot be made for a serial that
+  // is not waiting (`no_pending_enrollment`). Session-only; audited as `mdm_enroll_confirmed`.
+  // Refused also `enrollment_unavailable` when this coordinator has no MDM listener, `store_failed`.
+  rpc ConfirmEnrollment(ConfirmEnrollmentRequest) returns (ConfirmEnrollmentResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -174,6 +189,52 @@ enum MdmRefusal {
   MDM_REFUSAL_ABM_CLOCK_REFUSED = 20;
   // UNAVAILABLE: no answer came from Apple, or it answered something the call cannot use.
   MDM_REFUSAL_ABM_UNREACHABLE = 21;
+  // FAILED_PRECONDITION: this coordinator has no MDM listener, so no enrollment waits.
+  MDM_REFUSAL_ENROLLMENT_UNAVAILABLE = 22;
+  // NOT_FOUND: no request of that serial waits.
+  MDM_REFUSAL_NO_PENDING_ENROLLMENT = 23;
+  // FAILED_PRECONDITION: the ABM table does not list the serial, or lists it as removed.
+  MDM_REFUSAL_SERIAL_NOT_IN_ABM = 24;
+}
+
+message ListEnrollmentRequestsRequest {}
+
+message ListEnrollmentRequestsResponse {
+  // The waiting requests, by serial.
+  repeated EnrollmentRequest requests = 1;
+}
+
+// A Mac that is waiting for an operator.
+message EnrollmentRequest {
+  // The serial the blob claims. The blob was not verified, so this is what a stranger said.
+  string serial = 1;
+  // The UDID it claims.
+  string udid = 2;
+  // The product it claims, when it names one.
+  optional string product = 3;
+  // Why the blob was not verified (the verifier's text; no byte of the blob).
+  string reason = 4;
+  // When the first post was seen and when the last.
+  int64 first_unix = 5;
+  int64 last_unix = 6;
+  // How many posts.
+  uint32 count = 7;
+  // Whether the ABM table lists the serial now (a confirmation is refused when it does not).
+  bool in_abm = 8;
+  // Until when an operator's confirmation stands; absent before one.
+  optional int64 confirmed_until_unix = 9;
+}
+
+message ConfirmEnrollmentRequest {
+  // The serial, 1 to 64 ASCII letters and digits.
+  string serial = 1;
+}
+
+message ConfirmEnrollmentResponse {
+  string serial = 1;
+  // Until when the confirmation stands: the next post of the serial from the waiting UDID before
+  // this second is given a challenge.
+  int64 expires_unix = 2;
 }
 
 message PutAbmTokenRequest {

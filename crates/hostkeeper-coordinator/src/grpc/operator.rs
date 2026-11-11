@@ -960,6 +960,28 @@ impl MdmApi for MdmService {
             .map_err(refusal::mdm)
     }
 
+    async fn list_enrollment_requests(
+        &self,
+        request: Request<proto::ListEnrollmentRequestsRequest>,
+    ) -> Result<Response<proto::ListEnrollmentRequestsResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_list_enrollment_requests(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn confirm_enrollment(
+        &self,
+        request: Request<proto::ConfirmEnrollmentRequest>,
+    ) -> Result<Response<proto::ConfirmEnrollmentResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_confirm_enrollment(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
     async fn get_abm_public_key(
         &self,
         request: Request<proto::GetAbmPublicKeyRequest>,

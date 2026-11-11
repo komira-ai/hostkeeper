@@ -114,10 +114,7 @@ async fn authenticate(
         return Ok(ok());
     }
     if live.is_some() {
-        let listed = server
-            .store
-            .abm_device(&identity.serial)?
-            .is_some_and(|device| device.removed_unix.is_none());
+        let listed = server.serial_in_abm(&identity.serial)?;
         if !listed && !identity.confirmed {
             audit(
                 coordinator,

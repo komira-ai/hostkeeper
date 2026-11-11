@@ -546,6 +546,13 @@ pub(crate) trait MdmStore: Send + Sync {
     /// [`MdmError::Store`].
     fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError>;
 
+    /// The serial and the expiry (unix seconds) of each live enrollment's issued identity that
+    /// expires before `before_unix`, soonest first and by serial: what the renewal alert lists.
+    ///
+    /// # Errors
+    /// [`MdmError::Store`].
+    fn identities_expiring(&self, before_unix: i64) -> Result<Vec<(String, i64)>, MdmError>;
+
     /// Applies one page of the ABM sync in one change.
     ///
     /// # Errors

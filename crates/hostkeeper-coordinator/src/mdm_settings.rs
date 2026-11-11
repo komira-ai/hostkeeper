@@ -35,7 +35,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 12] = [
+pub const SETTINGS: [Setting; 19] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -120,6 +120,55 @@ pub const SETTINGS: [Setting; 12] = [
         name: "ade_profile_name",
         default: "Komira MDM",
         shape: Shape::Name,
+    },
+    // How many days an identity certificate of a Mac is valid (docs/design/coordinator-mdm.md,
+    // section 4.2). A change applies to the identities issued after it.
+    Setting {
+        name: "identity_days",
+        default: "1095",
+        shape: Shape::Whole { min: 1, max: 3650 },
+    },
+    // The days before an identity certificate or the CA expires at which an alert lists them.
+    Setting {
+        name: "renew_alert_days",
+        default: "90",
+        shape: Shape::Whole { min: 1, max: 3650 },
+    },
+    // How long, in seconds, the one-time challenge of an enrollment profile can be redeemed.
+    Setting {
+        name: "challenge_ttl_s",
+        default: "3600",
+        shape: Shape::Whole {
+            min: 60,
+            max: 86_400,
+        },
+    },
+    // How many days the CA of the identities is valid from the day it is made.
+    Setting {
+        name: "ca_days",
+        default: "3650",
+        shape: Shape::Whole {
+            min: 365,
+            max: 7300,
+        },
+    },
+    // The organisation named in the subject of the CA and of each identity, and in the profile.
+    Setting {
+        name: "identity_org",
+        default: "hostkeeper",
+        shape: Shape::Name,
+    },
+    // How many requests to `/enroll` and `/scep` one peer address may make in a minute.
+    Setting {
+        name: "enroll_rate_per_min",
+        default: "60",
+        shape: Shape::Whole { min: 1, max: 6000 },
+    },
+    // How many unverified enrollment requests wait for an operator at once.
+    Setting {
+        name: "enroll_pending_max",
+        default: "256",
+        shape: Shape::Whole { min: 1, max: 4096 },
     },
 ];
 

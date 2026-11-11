@@ -536,6 +536,19 @@ impl MdmStore for PgMdm {
         Ok(ids)
     }
 
+    fn identities_expiring(&self, before_unix: i64) -> Result<Vec<(String, i64)>, MdmError> {
+        let rows = self.read(move |s| {
+            s.query(
+                "SELECT e.serial, i.not_after_unix FROM mdm_identities i \
+                 JOIN mdm_enrollments e ON e.cert_sha256 = i.cert_sha256 \
+                 WHERE i.state = 'issued' AND e.state = 'live' AND i.not_after_unix < $1 \
+                 ORDER BY i.not_after_unix, e.serial",
+                &[&before_unix],
+            )
+        })?;
+        Ok(rows.iter().map(|row| (row.get(0), row.get(1))).collect())
+    }
+
     fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError> {
         let batch = batch.clone();
         self.write(move |tx| {
