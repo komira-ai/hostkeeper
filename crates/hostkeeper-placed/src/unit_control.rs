@@ -44,8 +44,9 @@ pub enum LaunchError {
     Failed(String),
 }
 
-/// Runs one command, given as its argument vector, to its end. An exit that is not 0, or a
-/// command that cannot start, is an error saying what happened.
+/// Runs one command, given as its argument vector, to its end. An exit that is not 0 is
+/// [`LaunchError::Exit`] with its code, which a caller may act on; a command that cannot start,
+/// passes its deadline or is ended by a signal is [`LaunchError::Failed`] saying which.
 pub trait CommandLauncher {
     fn run(&self, argv: &[&str]) -> Result<(), LaunchError>;
 }

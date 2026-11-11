@@ -197,8 +197,9 @@ impl Adapters {
 }
 
 /// A [`CommandLauncher`] over a [`CommandRunner`]: each command a child process the runner
-/// waits for at most its deadline. Exit 0 is success; another exit code, an end by a signal, or
-/// a run that failed (the program not started, the deadline passed) is an error saying which.
+/// waits for at most its deadline. Exit 0 is success; another exit code is
+/// [`LaunchError::Exit`] with that code, and an end by a signal or a run that failed (the program
+/// not started, the deadline passed) is [`LaunchError::Failed`] saying which.
 /// The child runs as the daemon does, as root, with its environment less the variables systemd
 /// set for the daemon's own process (`hostkeeper_observe::command`).
 #[derive(Clone, Debug)]

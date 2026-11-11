@@ -150,7 +150,7 @@ fn a_stop_of_a_unit_that_is_not_loaded_is_no_error() {
 
 /// Proves every other end of `systemctl stop` is still an error naming the command and the end:
 /// exit 4 (no permission), exit 1 (a stop that failed), and an end with no exit code (a signal,
-/// the deadline); and that exit 5 is forgiven for a stop only, never for a start or a reload.
+/// the deadline, even one whose text reads `exit status 5`); and that exit 5 is forgiven for a stop only, never for a start or a reload.
 ///
 /// Catches: a real stop failure read as stopped, or a start of a missing unit read as started.
 #[test]
@@ -165,6 +165,11 @@ fn a_stop_that_fails_otherwise_and_a_start_of_a_unit_not_loaded_are_errors() {
         (
             LaunchError::Failed("ended by a signal".to_owned()),
             "ended by a signal",
+        ),
+        // Only the code counts, never a text that reads like it.
+        (
+            LaunchError::Failed("exit status 5".to_owned()),
+            "exit status 5",
         ),
     ] {
         let systemctl = Systemctl::new(FakeLauncher::failing_with(error));

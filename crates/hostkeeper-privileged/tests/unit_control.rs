@@ -4,8 +4,8 @@
 //! of the hook fixture linked from the test's scratch directory: `start_unit` starts it and
 //! `is_active` reports it active, `daemon_reload` makes systemd read its changed unit file, then
 //! `stop_unit` stops it and `is_active` reports it not active; a start of a unit systemd does not
-//! know is an error naming the command and systemd's exit 5 for a unit it has not loaded, and a
-//! stop of that unit is no error.
+//! know is an error naming the command, with systemd's exit 5 for a unit it has not loaded; a stop
+//! of that unit is no error.
 
 mod support;
 
