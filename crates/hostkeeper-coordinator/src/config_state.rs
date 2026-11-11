@@ -283,8 +283,9 @@ pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> 
     Ok(())
 }
 
-/// Refuses to start over the marker of a `host-groups migrate --apply` that did not finish
-/// ([`crate::backup::migrate_marker`]): the state files may hold part of the migration only.
+/// Refuses to start over the marker of a `host-groups migrate --apply` of release 0.1.253 that did
+/// not finish ([`crate::backup::migrate_marker`]): the state files may hold part of the migration
+/// only.
 ///
 /// # Errors
 /// [`StartError::MigrateUnfinished`]: the marker is there.
