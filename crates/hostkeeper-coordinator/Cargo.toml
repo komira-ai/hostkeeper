@@ -122,7 +122,7 @@ plist.workspace = true
 prost-types.workspace = true
 # The RSA keys of the push tests, read back from the sealed records to make a certificate or a
 # reply for them.
-rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
+rsa-legacy.workspace = true
 # The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
 # that release's daemon does (tests/move_v0_1_221.rs).
 protox.workspace = true
