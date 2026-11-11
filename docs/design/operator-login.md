@@ -1,6 +1,8 @@
 # Operator login: a username and a password, a browser session, and tokens for automation
 
-Status: design, for the maintainers' comments. Nothing here is built. The tags are those of
+Status: the coordinator, the API and the UI are built by the pull requests of section 14 (L1 to L9); the deploy script's step
+(komira-ai/komira) is not. A **Designed** tag below on a coordinator, API or UI part is the tag the design was written with, and
+the pull request of section 14 that builds it is the record. The tags are those of
 [hostkeeper-design.md](hostkeeper-design.md): **Built** names code on `main` with a path, **Designed** means nothing
 implements it yet. This document changes one thing of [hostkeeper-design.md](hostkeeper-design.md) section 4.8 and
 [ui-serving.md](../ui-serving.md): the operator API is no longer reached only with a pasted bearer token, and the UI
