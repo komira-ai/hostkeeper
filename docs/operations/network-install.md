@@ -155,9 +155,9 @@ with the daemon's own loader, as if it were at `/etc/hostkeeper/repositories/`, 
 start on what the daemon would refuse (a `Trusted: yes`, a `Signed-By` naming `<dir>`, a file no
 entry names, a link, a keyring over 1 MiB, or armored without a `.asc` name), naming the file;
 on a directory that is missing or holds no entry; and on a file name a seed cannot carry (anything
-but `A-Za-z0-9._+-`, or a name starting with `.`). Check
-the loader's decision before the install window, not on the first machine:
-`hostkeeper check-repositories --dir <dir>`, run as root, judges `<dir>` the same way.
+but `A-Za-z0-9._+-`, or a name starting with `.`). `pxe serve`
+makes this check when it starts, so start it before the install window and a refusal shows then, not on the
+first machine.
 
 ### 4. Choose the boot host, and its token
 

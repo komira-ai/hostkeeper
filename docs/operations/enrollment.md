@@ -253,13 +253,10 @@ adopts the files when they are the same bytes, and replaces them otherwise. As r
 4. Make every file root's and closed to writes by others:
    `chown root:root /etc/hostkeeper/repositories/*` and
    `chmod 0644 /etc/hostkeeper/repositories/*`.
-5. Check the directory with the daemon's own loader:
-   `hostkeeper check-repositories`. It prints one line per entry (its name, its suite, its
-   keyring and the keyring's SHA-256) and exits 0, or prints the loader's refusal, naming the
-   file, and exits 1: fix that file before the daemon starts. To check the files before they are
-   in place, put them in another directory, with each `Signed-By` naming
-   `/etc/hostkeeper/repositories/<keyring>` as above, and run
-   `hostkeeper check-repositories --dir <that directory>`.
+5. Start the daemon. Its start refuses a defective directory, naming the file (see the journal,
+   or the log on a host without systemd): fix that file and start it again. To judge the files
+   before they are in place on a network install, `pxe serve` checks its directory at its start
+   ([network-install.md](network-install.md)).
 
 The directory holds those files and nothing else. The daemon checks it at its start and does not
 start on any defect: another file, a `.sources` whose name is not 1 to 32 bytes of `[a-z0-9-]`,
@@ -267,8 +264,7 @@ a stanza that is not exactly one `deb` stanza with one `https://` or `file:/` UR
 component and `Signed-By` a keyring of the directory, a key that turns off apt's checks
 (`Trusted`, `Allow-Insecure`, `Allow-Weak`, `Allow-Downgrade-To-Insecure`, `Check-Valid-Until:
 no`), a keyring over 1 MiB, empty, or not of its name's kind (armor is read only from a file
-named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. `hostkeeper check-repositories`
-refuses exactly what the start refuses. A host installed by network gets the
+named `.asc`, so fetch the `.gpg` for a `.gpg` name), or a file not root's or writable by group or others. A host installed by network gets the
 same files from the boot server's `repositories` setting ([network-install.md](network-install.md)).
 Rotating the key is [repository-keys.md](repository-keys.md).
 
