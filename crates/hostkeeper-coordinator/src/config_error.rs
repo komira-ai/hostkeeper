@@ -8,6 +8,7 @@ use hostkeeper_oidc::{ConfigError, KeySourceError};
 use hostkeeper_tls::TlsError;
 use hostkeeper_wire::identity::PrefixError;
 
+use crate::accounts::AccountsError;
 use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
 use crate::inventory::WindowAboveMax;
@@ -34,9 +35,15 @@ pub enum StartError {
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
     )]
     TokenFlags,
-    /// Neither is given.
-    #[error("one of --tokens-file and --operator-token-file is required")]
+    /// None of the three is given.
+    #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
+    /// The password hash parameters of the login flags are outside what Argon2id takes.
+    #[error(transparent)]
+    Password(#[from] crate::password::PasswordError),
+    /// The initial-admin file is refused, or its passwords cannot be set up.
+    #[error(transparent)]
+    InitialAdmin(#[from] crate::initial_admin::InitialAdminError),
     /// `--private-listen` is a wildcard address and `--private-listen-wildcard` is not given.
     #[error(
         "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
@@ -182,6 +189,9 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// The file of users and API tokens is refused.
+    #[error(transparent)]
+    Accounts(#[from] AccountsError),
     /// The TLS client for the repository origins could not be made.
     #[error("repository origins: {0}")]
     OriginTls(#[from] OriginTlsError),

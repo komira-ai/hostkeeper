@@ -12,7 +12,8 @@
 //!   audit ring is the entries of the lines committed with it, as a store keeps it, which a
 //!   backend may give back from the lines it holds. The desired state holds a release (targets
 //!   and an index digest), given back equal.
-//! - `failed_keeps`: a commit of one part that fails leaves that part as it was.
+//! - `failed_keeps`: a commit of one part (the verdicts, the accounts) that fails leaves that part
+//!   as it was.
 //! - `numbering_continues`: a backend started again holds every audit line, in order, and its
 //!   newest number ([`Backend::last_seq`]), so a store numbers on from it.
 //! - `audit_pages`: `audit_page` answers every filter, `since_seq` and `newest` alike, as the
@@ -29,6 +30,7 @@ use serde_json::json;
 
 use super::fake::store_failure;
 use super::{Backend, BackendError, Commit, Fake, Files, Loaded, Shared};
+use crate::accounts::{Accounts, accounts_path};
 use crate::audit_file::{Actor, AuditLine, DEFAULT_ROTATION, Filter, Logged, Query};
 use crate::desired::{self, Desired, StoreError};
 use crate::jti_file::jti_path;
@@ -207,6 +209,45 @@ pub(crate) fn rich_verdicts() -> verdict_file::Held {
     .expect("verdicts")
 }
 
+/// Accounts with two users and two tokens, out of name order: one user with every field set, one
+/// with none of the optional ones, one of them disabled.
+pub(crate) fn rich_accounts() -> Accounts {
+    use crate::accounts::{ApiToken, User};
+    let hash = |salt: char| format!("$argon2id$v=19$m=19456,t=2,p=1${salt}$hash");
+    let user = |name: &str, hash: String| User {
+        name: name.to_owned(),
+        hash,
+        enabled: true,
+        created_by: "coordinator".to_owned(),
+        created_at: 1_800_000_000,
+        ..User::default()
+    };
+    let token = |name: &str, fill: char| ApiToken {
+        name: name.to_owned(),
+        sha256: fill.to_string().repeat(64),
+        created_by: "zed".to_owned(),
+        created_at: 1_800_000_100,
+    };
+    Accounts::default()
+        .with_user(User {
+            must_change: true,
+            initial_expires_at: Some(1_800_003_600),
+            initial_id: Some("first".to_owned()),
+            initial_void: true,
+            last_login_at: Some(1_800_000_500),
+            ..user("zed", hash('b'))
+        })
+        .and_then(|held| {
+            held.with_user(User {
+                enabled: false,
+                ..user("alice", hash('a'))
+            })
+        })
+        .and_then(|held| held.with_token(token("ci-ops", 'c')))
+        .and_then(|held| held.with_token(token("backup", 'a')))
+        .expect("accounts")
+}
+
 /// The audit lines numbered `from` to `to`, varied in who, what, service and host.
 pub(crate) fn lines(from: u64, to: u64) -> Vec<AuditLine> {
     (from..=to)
@@ -331,10 +372,11 @@ fn with_host_groups(desired: &mut desired::Held, ops: &mut OpsState) {
 
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (mut desired, mut ops, verdicts) = (
+    let (mut desired, mut ops, verdicts, accounts) = (
         desired_with_release("2.0", 'c'),
         rich_ops(),
         rich_verdicts(),
+        rich_accounts(),
     );
     desired.repositories = Registry::default()
         .put(komira(1))
@@ -356,6 +398,11 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
         ..Commit::default()
     })
     .map_err(|why| format!("the verdicts' commit failed: {why}"))?;
+    live.commit(&Commit {
+        accounts: Some((&Accounts::default(), &accounts)),
+        ..Commit::default()
+    })
+    .map_err(|why| format!("the accounts' commit failed: {why}"))?;
     let back = loaded(&subject.restarted())?;
     check(back.desired == desired, || {
         format!("the desired state came back as {:?}", back.desired)
@@ -385,6 +432,9 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     })?;
     check(back.verdicts == verdicts, || {
         format!("the verdicts came back as {:?}", back.verdicts)
+    })?;
+    check(back.accounts == accounts, || {
+        format!("the accounts came back as {:?}", back.accounts)
     })
 }
 
@@ -409,9 +459,33 @@ fn failed_keeps(subject: &dyn Subject) -> Outcome {
     check(refused.is_err(), || {
         "a commit told to fail was taken".into()
     })?;
+    let (held, changed) = (
+        rich_accounts()
+            .without_token("ci-ops")
+            .and_then(|held| held.without_token("backup"))
+            .map_err(|why| format!("the accounts could not be made: {why}"))?,
+        Accounts::default(),
+    );
+    live.commit(&Commit {
+        accounts: Some((&changed, &held)),
+        ..Commit::default()
+    })
+    .map_err(|why| format!("the accounts' first commit failed: {why}"))?;
+    subject.failing(true);
+    let refused = live.commit(&Commit {
+        accounts: Some((&held, &changed)),
+        ..Commit::default()
+    });
+    subject.failing(false);
+    check(refused.is_err(), || {
+        "an accounts' commit told to fail was taken".into()
+    })?;
     let back = loaded(&subject.restarted())?;
     check(back.verdicts == first, || {
         format!("a failed commit changed the verdicts: {:?}", back.verdicts)
+    })?;
+    check(back.accounts == held, || {
+        format!("a failed commit changed the accounts: {:?}", back.accounts)
     })
 }
 
@@ -645,8 +719,8 @@ impl Subject for OnFake {
 }
 
 /// The files, in a scratch directory: started again by opening them again. A failing commit is a
-/// file system that fails the ops file's write, and a temporary file of the verdicts' that cannot
-/// be made.
+/// file system that fails the ops file's write, and a temporary file of the verdicts' or the
+/// accounts' that cannot be made.
 struct OnFiles {
     dir: Scratch,
     failing: Arc<AtomicBool>,
@@ -677,7 +751,8 @@ impl OnFiles {
             .with_desired(&state, None)
             .with_ops(&ops, DEFAULT_ROTATION)
             .expect("the ops files")
-            .with_verdicts(&verdicts_path(&state));
+            .with_verdicts(&verdicts_path(&state))
+            .with_accounts(&accounts_path(&state));
         let Some(failing) = failing else {
             return files;
         };
@@ -692,11 +767,14 @@ impl OnFiles {
         }))
     }
 
-    /// Where the verdicts' file is written before its rename.
-    fn verdicts_temp(&self) -> PathBuf {
-        let mut path = verdicts_path(&Self::state_file(&self.dir)).into_os_string();
-        path.push(".new");
-        PathBuf::from(path)
+    /// Where the verdicts' file and the accounts' file are written before their rename.
+    fn temps(&self) -> [PathBuf; 2] {
+        let state = Self::state_file(&self.dir);
+        [verdicts_path(&state), accounts_path(&state)].map(|path| {
+            let mut path = path.into_os_string();
+            path.push(".new");
+            PathBuf::from(path)
+        })
     }
 }
 
@@ -711,10 +789,12 @@ impl Subject for OnFiles {
 
     fn failing(&self, on: bool) {
         self.failing.store(on, Ordering::SeqCst);
-        if on {
-            fs::create_dir(self.verdicts_temp()).expect("a directory in the way");
-        } else {
-            fs::remove_dir(self.verdicts_temp()).expect("the way cleared");
+        for temp in self.temps() {
+            if on {
+                fs::create_dir(temp).expect("a directory in the way");
+            } else {
+                fs::remove_dir(temp).expect("the way cleared");
+            }
         }
     }
 }
@@ -724,8 +804,10 @@ impl Subject for OnFiles {
 enum Flaw {
     /// A failing commit of the desired state and more writes the desired state.
     WritesHalf,
-    /// A failing commit of the verdicts writes them.
+    /// A failing commit of the verdicts or the accounts writes them.
     KeepsFailed,
+    /// A load gives no API token back.
+    DropsTokens,
     /// A load gives the exclusions back in the other order.
     DropsOrder,
     /// A load gives no release back.
@@ -754,6 +836,17 @@ impl Backend for Flawed {
         if self.flaw == Flaw::DropsReleases {
             loaded.desired.releases.clear();
         }
+        if self.flaw == Flaw::DropsTokens {
+            loaded.accounts = Accounts::new(
+                loaded
+                    .accounts
+                    .users()
+                    .map(|user| (user.name.clone(), user.clone()))
+                    .collect(),
+                std::collections::BTreeMap::new(),
+            )
+            .map_err(BackendError::Accounts)?;
+        }
         Ok(loaded)
     }
 
@@ -766,8 +859,9 @@ impl Backend for Flawed {
                 desired: Some(part),
                 ..Commit::default()
             }),
-            Flaw::KeepsFailed => change.verdicts.map(|part| Commit {
-                verdicts: Some(part),
+            Flaw::KeepsFailed => Some(Commit {
+                verdicts: change.verdicts,
+                accounts: change.accounts,
                 ..Commit::default()
             }),
             _ => None,
@@ -851,6 +945,7 @@ fn the_suite_fails_against_a_backend_that_breaks_each_clause() {
         (Flaw::WritesHalf, "all_or_nothing"),
         (Flaw::DropsOrder, "load_gives_back"),
         (Flaw::DropsReleases, "load_gives_back"),
+        (Flaw::DropsTokens, "load_gives_back"),
         (Flaw::KeepsFailed, "failed_keeps"),
         (Flaw::ForgetsNumbers, "numbering_continues"),
         (Flaw::IgnoresNewest, "audit_pages"),
