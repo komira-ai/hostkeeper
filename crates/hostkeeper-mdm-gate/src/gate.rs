@@ -35,7 +35,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 
 use crate::answer;
 use crate::baseline::Baseline;
-use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO};
+use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO, SETTINGS};
 use crate::enroll::{EnrollSide, Held};
 use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
@@ -158,6 +158,21 @@ impl Gate {
     pub fn with_install(mut self, install: Option<Install>) -> Self {
         self.install = install;
         self
+    }
+
+    /// Replaces the installs of the pkg install ([`Install::set_installs`]): the next look sends
+    /// by them, and a Mac whose entry changed is sent it again. Without a pkg install (no MDM
+    /// host) there is nothing to send them from and it does nothing.
+    pub fn set_installs(&self, installs: crate::installs::Installs) {
+        if let Some(install) = &self.install {
+            install.set_installs(installs);
+        }
+    }
+
+    /// The installs the gate sends by now; `None` without a pkg install.
+    #[must_use]
+    pub fn installs(&self) -> Option<crate::installs::Installs> {
+        self.install.as_ref().map(Install::installs)
     }
 
     /// The same gate with the enrollment baseline `baseline` ([`crate::baseline`]), or without
@@ -441,6 +456,11 @@ fn result(
                 }
                 PROFILE_LIST => {
                     record.answer_profile_list(&uuid, answer::profile_list(payload, &uuid), now);
+                }
+                // The device acknowledged the command, but its items may each have failed.
+                SETTINGS => {
+                    let applied = answer::settings_applied(payload, &uuid);
+                    record.answer_profile(&uuid, applied, now);
                 }
                 // A profile command of the enrollment side.
                 _ => record.answer_profile(&uuid, true, now),

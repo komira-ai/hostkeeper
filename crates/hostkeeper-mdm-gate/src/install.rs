@@ -14,7 +14,9 @@
 //! - no `InstallEnterpriseApplication` of this enrollment is unanswered, and the last one was
 //!   never queued or was answered (`Acknowledged` or an error) at least
 //!   [`INSTALL_RESEND_SECS`] ago. A Mac that is off piles nothing up in NanoHUB's queue;
-//! - the newest pkg on the allowlist has a file whose bytes are its listed digest.
+//! - the install named `hostkeeper` ([`crate::HOSTKEEPER_INSTALL`]) is listed and has a file
+//!   whose bytes are its listed digest. Another install is a baseline entry
+//!   ([`crate::baseline`]), not this step.
 //!
 //! The device need not be supervised: Apple's schema marks the command `supervised: false`,
 //! and an unsupervised Mac is approved by an operator once its daemon posts. Each send NanoHUB
@@ -80,8 +82,11 @@ impl Gate {
         if !candidates(&record, &waiting, since).is_empty() {
             return false;
         }
-        let entry = match install.checked() {
-            Ok(entry) => entry.clone(),
+        let Some(entry) = install.installs().hostkeeper().cloned() else {
+            return false;
+        };
+        let entry = match install.check(&entry) {
+            Ok(()) => entry,
             Err(why) => {
                 tracing::warn!(enrollment_id = %record.enrollment_id, %why, "the pkg is not sent");
                 let error = Some(why.to_string());
