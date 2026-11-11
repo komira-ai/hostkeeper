@@ -286,13 +286,16 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
     store.stop();
     let (taken, before_loaded) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
-        let taken = migrate::refuse_newer(session, &before);
+        let taken = migrate::apply(session, &before);
         (
             taken,
             load_all(session, SPENT_NOW).expect("the state reads"),
         )
     });
-    assert!(taken.is_ok(), "0010 says older releases may run: {taken:?}");
+    assert_eq!(
+        taken.expect("0010 says older releases may run"),
+        Vec::<i32>::new()
+    );
     assert_eq!(before_loaded, loaded);
     assert_eq!(
         db.rows("SELECT enrollment_id FROM mdm_enrollments").len(),
