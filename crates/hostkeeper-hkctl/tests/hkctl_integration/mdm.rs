@@ -134,6 +134,10 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("abm_alert_days", "60", true),
             ("tls_renew_days", "30", true),
             ("secret_grace_days", "7", true),
+            ("abm_sync_s", "300", true),
+            ("abm_request_timeout_s", "30", true),
+            ("abm_retries", "3", true),
+            ("ade_profile_name", "Komira MDM", true),
         ]
     );
 }
