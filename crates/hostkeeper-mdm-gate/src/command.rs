@@ -9,10 +9,11 @@ use plist::{Dictionary, Value};
 
 use crate::ids::CommandUuid;
 
-/// The seven command types the gate sends (design section 3): the two queries it asks a new
-/// device, the profile and package commands the enrollment side sends, and the two commands of
-/// the enrollment baseline (design section 6.4).
-pub const COMMAND_TYPES: [&str; 7] = [
+/// The eight command types the gate sends (design section 3, coordinator-mdm.md section 4.8): the
+/// two queries it asks a new device, the profile and package commands the enrollment side sends,
+/// and the three commands of the enrollment baseline (design section 6.4): remote desktop, the
+/// profile list and the device name. A test pins this list; a ninth type is a change of it.
+pub const COMMAND_TYPES: [&str; 8] = [
     "DeviceInformation",
     "SecurityInfo",
     "InstallProfile",
@@ -20,6 +21,7 @@ pub const COMMAND_TYPES: [&str; 7] = [
     "InstallEnterpriseApplication",
     "EnableRemoteDesktop",
     "ProfileList",
+    "Settings",
 ];
 
 /// `DeviceInformation`, whose answer decides a device's serial and supervision.
@@ -45,6 +47,10 @@ pub const ENABLE_REMOTE_DESKTOP: &str = "EnableRemoteDesktop";
 /// `ProfileList`, which lists the profiles installed on a Mac (Apple's
 /// `mdm/commands/profile.list.yaml`); the baseline's check reads its `ProfileList` answer.
 pub const PROFILE_LIST: &str = "ProfileList";
+
+/// `Settings`, which sets the device's name and host name (Apple's `mdm/commands/settings.yaml`,
+/// the items `DeviceName` and `HostName`; a supervised device only for `DeviceName`).
+pub const SETTINGS: &str = "Settings";
 
 /// The queries of `DeviceInformation`: the serial, the UDID and the supervision.
 pub const QUERIES: [&str; 3] = ["SerialNumber", "UDID", "IsSupervised"];
@@ -100,6 +106,24 @@ impl Command {
         let mut fields = Dictionary::new();
         fields.insert("Identifier".to_owned(), Value::from(identifier));
         Self::new(REMOVE_PROFILE, uuid, fields)
+    }
+
+    /// `Settings` that sets the `DeviceName` and the `HostName` of the Mac to `name`: two
+    /// items, each `Item` with its own key, as Apple's schema has it.
+    #[must_use]
+    pub fn settings(uuid: CommandUuid, name: &str) -> Self {
+        let item = |item: &str| {
+            let mut dict = Dictionary::new();
+            dict.insert("Item".to_owned(), Value::from(item));
+            dict.insert(item.to_owned(), Value::from(name));
+            Value::Dictionary(dict)
+        };
+        let mut fields = Dictionary::new();
+        fields.insert(
+            "Settings".to_owned(),
+            Value::Array(vec![item("DeviceName"), item("HostName")]),
+        );
+        Self::new(SETTINGS, uuid, fields)
     }
 
     /// `InstallEnterpriseApplication` of the inline `manifest` ([`crate::pkg::manifest`]).

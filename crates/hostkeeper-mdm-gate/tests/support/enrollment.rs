@@ -48,6 +48,7 @@ force_start_secs       = 60
 struct State {
     allowed: BTreeSet<String>,
     groups: BTreeMap<String, String>,
+    names: BTreeMap<String, String>,
     waiting: BTreeMap<String, Vec<Waiting>>,
     approved: BTreeMap<String, u64>,
     fail_reads: bool,
@@ -76,6 +77,13 @@ impl FakeEnrollments {
         self.state()
             .groups
             .insert(serial.to_owned(), group.to_owned());
+    }
+
+    /// `serial`'s allowlist entry names the host `name`, the device name the baseline sets.
+    pub fn name(&self, serial: &str, name: &str) {
+        self.state()
+            .names
+            .insert(serial.to_owned(), name.to_owned());
     }
 
     /// `request` waits for an operator, claiming `serial`.
@@ -125,6 +133,10 @@ impl Enrollments for FakeEnrollments {
 
     fn host_group(&self, serial: &str) -> Option<String> {
         self.state().groups.get(serial).cloned()
+    }
+
+    fn host_name(&self, serial: &str) -> Option<String> {
+        self.state().names.get(serial).cloned()
     }
 
     fn waiting(&self, serial: &str) -> Result<Vec<Waiting>, EnrollmentsError> {
@@ -406,10 +418,14 @@ fn gate_on(
     config: &ConfigProfile,
     baseline: Option<Baseline>,
 ) -> Result<Gate, StoreError> {
-    let install = allowlist.map(|text| Install {
-        allowlist: PkgAllowlist::parse(text).expect("the allowlist parses"),
-        host: MdmHost::parse(HOST).expect("a host"),
-        fs: Arc::new(RealFs),
+    let install = allowlist.map(|text| {
+        Install::new(
+            PkgAllowlist::parse(text)
+                .expect("the allowlist parses")
+                .installs(),
+            MdmHost::parse(HOST).expect("a host"),
+            Arc::new(RealFs),
+        )
     });
     Ok(open_on(fs, &rig.dir(), &rig.hub, &rig.clock, random)?
         .with_enrollment(side_of(fake, config.clone()))

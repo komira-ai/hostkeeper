@@ -8,7 +8,7 @@ fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these nine, each with its default from the start
+/// Proves: the settings this release knows are these ten, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -22,6 +22,7 @@ fn each_setting_has_a_default_from_the_start() {
             ("abm_alert_days", "60"),
             ("tls_renew_days", "30"),
             ("secret_grace_days", "7"),
+            ("installs", "[]"),
             ("proxy_wait_s", "10"),
             ("proxy_redirects", "3"),
             ("proxy_index_ttl_s", "300"),
@@ -115,6 +116,30 @@ fn a_setting_not_set_is_its_default() {
     set.insert("secret_grace_days".to_owned(), "two".to_owned());
     assert_eq!(days_of(&set, "secret_grace_days", 99), 99);
     assert_eq!(days_of(&set, "nothing", 5), 5);
+}
+
+/// Proves: the setting `installs` takes the JSON of named installs the gate reads, keeps it as
+/// the gate writes it back (an unknown key from a later release dropped, the order kept), and
+/// refuses text the gate would refuse; its default is no install.
+///
+/// Catches: an installs value stored that the gate then fails to start with, or one stored in a
+/// form that differs from the form the gate reads back.
+#[test]
+fn the_installs_setting_takes_what_the_gate_reads() {
+    let sha = "a".repeat(64);
+    let entry = format!(
+        r#"{{"name":"hostkeeper","bundle_id":"dev.hostkeeper.hostkeeper","sha256":"{sha}","version":"0.1.66","path":"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg"}}"#
+    );
+    let with_extra = entry.replace(r#""name""#, r#""later":true,"name""#);
+    assert_eq!(
+        check("installs", &format!(" [{with_extra}] ")),
+        Some(format!("[{entry}]"))
+    );
+    assert_eq!(check("installs", "[]").as_deref(), Some("[]"));
+    for bad in ["", "{}", "[{}]", &format!("[{entry},{entry}]")] {
+        assert_eq!(check("installs", bad), None, "{bad:?}");
+    }
+    assert_eq!(super::INSTALLS, "installs");
 }
 
 /// Proves: each proxy setting takes a whole number within its range (the bounds included), written

@@ -329,6 +329,7 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_alert_days", "60".to_owned(), true),
             ("tls_renew_days", "10".to_owned(), false),
             ("secret_grace_days", "7".to_owned(), true),
+            ("installs", "[]".to_owned(), true),
             ("proxy_wait_s", "10".to_owned(), true),
             ("proxy_redirects", "3".to_owned(), true),
             ("proxy_index_ttl_s", "300".to_owned(), true),

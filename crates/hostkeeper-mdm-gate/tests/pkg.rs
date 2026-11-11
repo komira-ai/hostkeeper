@@ -127,15 +127,17 @@ fn the_newest_entry_is_sent_and_an_unknown_key_is_passed_over() {
 
     // What the coordinator's start shows of the install: the list and the host, not the file
     // system.
-    let install = hostkeeper_mdm_gate::Install {
-        allowlist: PkgAllowlist::parse(&entry(A, "0.1.66", &at(A))).expect("parses"),
-        host: MdmHost::parse("mdm.example.com").expect("a name"),
-        fs: std::sync::Arc::new(RealFs),
-    };
+    let install = hostkeeper_mdm_gate::Install::new(
+        PkgAllowlist::parse(&entry(A, "0.1.66", &at(A)))
+            .expect("parses")
+            .installs(),
+        MdmHost::parse("mdm.example.com").expect("a name"),
+        std::sync::Arc::new(RealFs),
+    );
     assert_eq!(
         format!("{install:?}"),
         format!(
-            "Install {{ allowlist: PkgAllowlist([PkgEntry {{ sha256: PkgDigest(\"{A}\"), version: Version(\"0.1.66\"), path: \"{}\" }}]), host: MdmHost(\"mdm.example.com\"), .. }}",
+            "Install {{ installs: Installs([InstallEntry {{ name: \"hostkeeper\", bundle_id: \"dev.hostkeeper.hostkeeper\", sha256: PkgDigest(\"{A}\"), version: Version(\"0.1.66\"), path: \"{}\", url: None }}]), host: MdmHost(\"mdm.example.com\"), .. }}",
             at(A)
         )
     );

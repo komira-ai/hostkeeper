@@ -229,11 +229,11 @@ async fn a_serial_under_two_enrollments_is_unavailable() {
     );
 }
 
-/// Catches: an eighth command type reaching NanoHUB, or the list of types changing without this
-/// test. Every type the gate sends in a whole enrollment is on the list; each of the seven is
+/// Catches: a ninth command type reaching NanoHUB, or the list of types changing without this
+/// test. Every type the gate sends in a whole enrollment is on the list; each of the eight is
 /// queued; `EraseDevice` (and any other type) is refused before NanoHUB is called.
 #[tokio::test]
-async fn the_gate_enqueues_only_its_seven_command_types() {
+async fn the_gate_enqueues_only_its_eight_command_types() {
     assert_eq!(
         COMMAND_TYPES,
         [
@@ -243,10 +243,11 @@ async fn the_gate_enqueues_only_its_seven_command_types() {
             "RemoveProfile",
             "InstallEnterpriseApplication",
             "EnableRemoteDesktop",
-            "ProfileList"
+            "ProfileList",
+            "Settings"
         ]
     );
-    let rig = Rig::new("seven-types").await;
+    let rig = Rig::new("eight-types").await;
     rig.enroll(UDID, SERIAL, true).await;
     let kinds: Vec<String> = rig
         .hub
@@ -263,7 +264,7 @@ async fn the_gate_enqueues_only_its_seven_command_types() {
         assert!(client.enqueue(&id(UDID), &command).await.is_ok(), "{kind}");
     }
     let heard = rig.hub.heard();
-    assert_eq!(heard.len(), 9);
+    assert_eq!(heard.len(), 10);
     for (kind, uuid) in ["EraseDevice", "DeviceLock", "deviceinformation", ""]
         .into_iter()
         .zip(10u8..)
@@ -278,7 +279,7 @@ async fn the_gate_enqueues_only_its_seven_command_types() {
             Err(EnqueueError::NotAllowed(kind.to_owned()))
         );
     }
-    assert_eq!(rig.hub.heard().len(), 9, "NanoHUB heard none of them");
+    assert_eq!(rig.hub.heard().len(), 10, "NanoHUB heard none of them");
     for (heard, kind) in heard.iter().skip(2).zip(COMMAND_TYPES) {
         assert_eq!(heard.command().0, kind);
         assert_eq!(heard.method, "PUT");
