@@ -30,7 +30,7 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 37] = [
+pub(crate) const STATE_TABLES: [&str; 39] = [
     "desired",
     "desired_digests",
     "releases",
@@ -68,6 +68,8 @@ pub(crate) const STATE_TABLES: [&str; 37] = [
     "enrollment_deny",
     "mac_nonces",
     "mdm_devices",
+    "users",
+    "api_tokens",
 ];
 
 /// The rows of each state table, in [`STATE_TABLES`]' order.
@@ -76,7 +78,7 @@ pub(crate) type Counts = Vec<(&'static str, i64)>;
 /// Everything the coordinator keeps durable, whole: what an export reads.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Moved {
-    /// The desired state, the operations state and the verdicts, with the spent ids not yet
+    /// The desired state, the operations state, the verdicts and the accounts, with the spent ids not yet
     /// past; the ring of the operations state is not part of it, which the audit history holds.
     pub(crate) loaded: Loaded,
     /// The whole audit history, oldest first.

@@ -21,9 +21,20 @@
 //!   change. With a UI directory (`--ui-dir`, or the binary's default,
 //!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
 //!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
-//!   are not found. The heartbeat surface never serves them. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   are not found. The heartbeat surface never serves them. A coordinator with a sign-in
+//!   ([`Coordinator::login`]) also answers `POST /v1/login`, `POST /v1/logout`, `GET /v1/session`
+//!   and `POST /v1/password` ([`crate::login_routes`]), which a browser signs in and out and
+//!   changes its password with; the heartbeat surface never serves those either, and an
+//!   operator's bearer never reads or sets the cookie they use. `GET /v1/version[?at_least=<X.Y.Z>]`
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
+//!
+//! - **MDM** (`Surface::Mdm`; `docs/design/coordinator-mdm.md`, section 4.1): the listener of
+//!   the Macs and of a host's apt, on the LAN. It serves exactly the routes of the table of 4.1
+//!   (`/enroll`, `/scep`, `/checkin`, `/mdm`, `/pkg/` and `/apt/`), each when its own task lands;
+//!   every other path, the operator API, its JSON gateway and its gRPC, `/v1/*`, the sign-in
+//!   routes, the heartbeat and `/ui/` among them, answers `404 not_found`, for any method and
+//!   whatever credential the request carries, and no request on it reads a cookie or a token.
 //!
 //! The heartbeat surface also serves `GET /repositories/<name>/{dists,pool}/<group>/<rest>` to the
 //! hosts of a group, the files of a private repository, which [`crate::grpc::route`] answers
@@ -52,6 +63,7 @@
 //! The heartbeat's caller check ([`beat_caller`]) and the reading and answering of its bytes
 //! ([`beat`]) are shared with the gRPC `Heartbeat`, so the two transports have one rule.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -115,7 +127,16 @@ pub enum Surface {
     Heartbeat,
     /// The private listener: the listener of CI and the operator.
     Control,
+    /// The listener of the MDM server and the package proxy: only the routes of the table of
+    /// `docs/design/coordinator-mdm.md`, section 4.1, and `404` for every other path.
+    Mdm,
 }
+
+/// The address a connection came from, put in the extensions of each request it carries by
+/// the listener, when its transport has one. It names the peer in the audit and nothing
+/// else decides on it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
 
 /// The leaf of the client certificate a connection presented, DER.
 pub type Peer = Option<Arc<[u8]>>;
@@ -196,6 +217,12 @@ where
         && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
     {
         return ui.answer(&method, rest).await;
+    }
+    if surface == Surface::Control
+        && crate::login_routes::is_route(&path)
+        && let Some(login) = coordinator.login()
+    {
+        return crate::login_routes::answer(coordinator, login, request, patience).await;
     }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {

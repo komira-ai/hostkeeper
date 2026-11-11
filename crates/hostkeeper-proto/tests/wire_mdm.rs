@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 4] = [
+const FIELDS: [(&str, &[Field]); 14] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -79,6 +79,55 @@ const FIELDS: [(&str, &[Field]); 4] = [
             ("install_sha256", 19, false),
         ],
     ),
+    (
+        "hostkeeper.operator.v1.PutSecretRequest",
+        &[
+            ("kind", 1, false),
+            ("material", 2, false),
+            ("not_after_unix", 3, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.SecretInfo",
+        &[
+            ("kind", 1, false),
+            ("version", 2, false),
+            ("fingerprint_sha256", 3, false),
+            ("not_after_unix", 4, true),
+            ("created_unix", 5, false),
+            ("superseded_unix", 6, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSecretResponse",
+        &[("secret", 1, true)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSettingRequest",
+        &[("name", 1, false), ("value", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutSettingResponse",
+        &[("name", 1, false), ("value", 2, false)],
+    ),
+    ("hostkeeper.operator.v1.ListSecretsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListSecretsResponse",
+        &[("secrets", 1, false), ("sealing", 2, false)],
+    ),
+    ("hostkeeper.operator.v1.ListSettingsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.MdmSetting",
+        &[
+            ("name", 1, false),
+            ("value", 2, false),
+            ("is_default", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ListSettingsResponse",
+        &[("settings", 1, false)],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -98,7 +147,13 @@ fn wire_names_of_the_mdm_api_are_pinned() {
         .collect();
     assert_eq!(
         rpcs,
-        ["ListDevices(ListDevicesRequest) ListDevicesResponse"]
+        [
+            "ListDevices(ListDevicesRequest) ListDevicesResponse",
+            "PutSecret(PutSecretRequest) PutSecretResponse",
+            "PutSetting(PutSettingRequest) PutSettingResponse",
+            "ListSecrets(ListSecretsRequest) ListSecretsResponse",
+            "ListSettings(ListSettingsRequest) ListSettingsResponse",
+        ]
     );
 
     let owned = |pairs: &[(&str, i32)]| -> Vec<(String, i32)> {
@@ -111,6 +166,9 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("unauthorized", 1),
             ("forbidden", 2),
             ("invalid_request", 3),
+            ("store_failed", 4),
+            ("audit_unavailable", 5),
+            ("secrets_unavailable", 6),
         ])
     );
     assert_eq!(

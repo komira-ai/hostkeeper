@@ -38,10 +38,9 @@ fn assert_refused<T: Debug>(result: Result<Response<T>, Status>, code: Code, tok
 /// A call that carries a bearer the router found to be CI's.
 fn as_ci_caller<T>(message: T) -> Request<T> {
     let mut request = Request::new(message);
-    request.extensions_mut().insert(Admitted::Operator {
-        caller: Caller::Ci,
-        bearer: String::new(),
-    });
+    request
+        .extensions_mut()
+        .insert(Admitted::Operator { caller: Caller::Ci });
     request
 }
 

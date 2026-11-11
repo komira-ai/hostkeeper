@@ -1,10 +1,16 @@
 # The routes the private listener answers, one `METHOD path` a line; `/ui/*` is `/ui/` and every
 # path below it, answered only when `--ui-dir` is given. A route added or removed changes this
-# list in the same change (`the_private_route_set_is_unchanged` in `ui.rs` beside it).
+# list in the same change (`the_private_route_set_is_the_committed_one` in `ui.rs` beside it). The four
+# sign-in routes (`/v1/login`, `/v1/logout`, `/v1/password`, `/v1/session`) are answered only by a
+# coordinator that has a sign-in.
 GET /ui/*
 GET /v1/convergence
+GET /v1/session
 GET /v1/status
 GET /v1/version
 HEAD /ui/*
 POST /v1/desired
+POST /v1/login
+POST /v1/logout
 POST /v1/operator
+POST /v1/password
