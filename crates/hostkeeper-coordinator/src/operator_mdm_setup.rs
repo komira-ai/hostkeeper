@@ -23,6 +23,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
 use crate::audit_actions;
+use crate::mdm_acme::dns::DnsCredential;
 use crate::mdm_secrets::{AbmToken, MAX_SECRET_BYTES, Secret, SecretKind};
 use crate::mdm_settings;
 use crate::mdm_setup::{MdmSetup, SecretInfo, SetupFailure};
@@ -74,7 +75,7 @@ impl Coordinator {
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (an unknown kind, a value that is empty or
-    /// over 32 KiB, an ABM token that is not its five parts), `secrets_unavailable` (no master
+    /// over 32 KiB, an ABM token that is not its five parts, a DNS credential that is not the JSON of one), `secrets_unavailable` (no master
     /// key), `audit_unavailable`, `store_failed`.
     pub fn mdm_put_secret(
         &self,
@@ -93,7 +94,9 @@ impl Coordinator {
         };
         let wellformed = !material.is_empty()
             && material.len() <= MAX_SECRET_BYTES
-            && (kind != SecretKind::AbmToken || AbmToken::parse(material.expose()).is_ok());
+            && (kind != SecretKind::AbmToken || AbmToken::parse(material.expose()).is_ok())
+            && (kind != SecretKind::DnsCredential
+                || DnsCredential::parse(material.expose()).is_ok());
         if !wellformed {
             return self.refused_put(by, Some(kind), MdmRefusal::InvalidRequest);
         }

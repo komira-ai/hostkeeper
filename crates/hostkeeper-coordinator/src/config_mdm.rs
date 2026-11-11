@@ -16,6 +16,11 @@ use tokio::io::{AsyncRead, AsyncWrite};
 use super::Serve;
 use crate::enrollment::os_random;
 use crate::listen::{CLIENT_PATIENCE, MAX_CONNECTIONS, Remote, serve_mdm};
+use crate::mdm_acme::Clock;
+use crate::mdm_acme::SystemClock as AcmeClock;
+use crate::mdm_acme::godaddy::GoDaddyProviders;
+use crate::mdm_acme::https::{Https, RealHttps};
+use crate::mdm_acme::renewal::{Parts as RenewerParts, TlsRenewer, renew_every};
 use crate::mdm_server::pushing::{SetupPushers, production_sender};
 use crate::mdm_server::queue::{MdmQueue, Pushers};
 use crate::mdm_server::tls::{MdmTls, Trust};
@@ -23,6 +28,9 @@ use crate::mdm_server::{MdmServer, Parts};
 use crate::mdm_setup::MdmSetup;
 use crate::service::Coordinator;
 use crate::store::mdm::MdmStore;
+
+/// How long a request to the ACME directory or the DNS provider, and its answer, may take.
+const ACME_REQUEST_TIMEOUT: Duration = Duration::from_secs(60);
 
 /// What `--mdm-listen` makes at start, before the gate: the queue, which the gate is opened over.
 pub(super) struct Wiring {
@@ -32,6 +40,7 @@ pub(super) struct Wiring {
     queue: Arc<MdmQueue>,
     pushers: Pushers,
     tls: Arc<MdmTls>,
+    renewer: Arc<TlsRenewer>,
 }
 
 /// The issuers a client certificate of the MDM listener may chain to. The CA of the Macs'
@@ -39,6 +48,23 @@ pub(super) struct Wiring {
 /// the handshake and a Mac authenticates by its `Mdm-Signature`.
 fn trusted_issuers() -> Trust {
     Arc::new(Vec::new)
+}
+
+/// The renewer of the certificate for the MDM name that reaches the real ACME directory and the
+/// real DNS provider: HTTPS to the public web, GoDaddy, the wall clock.
+fn production_renewer(setup: &Arc<MdmSetup>) -> TlsRenewer {
+    let https: Arc<dyn Https> = Arc::new(RealHttps::production(ACME_REQUEST_TIMEOUT));
+    let clock: Arc<dyn Clock> = Arc::new(AcmeClock);
+    TlsRenewer::new(RenewerParts {
+        setup: Arc::clone(setup),
+        providers: Arc::new(GoDaddyProviders::new(
+            Arc::clone(&https),
+            Arc::clone(&clock),
+        )),
+        https,
+        clock,
+        status: Arc::clone(setup.tls_status()),
+    })
 }
 
 /// The wiring of `flags`' MDM listener over `store` and `setup`; none without `--mdm-listen`.
@@ -69,6 +95,7 @@ pub(super) fn wire(
         queue,
         pushers,
         tls: Arc::new(MdmTls::new(Arc::clone(setup), trusted_issuers())),
+        renewer: Arc::new(production_renewer(setup)),
     })
 }
 
@@ -89,6 +116,7 @@ impl Wiring {
             pushers: self.pushers,
             tls: self.tls,
             sweep: self.sweep,
+            renewer: self.renewer,
         });
         (
             coordinator.with_mdm_server(Some(Arc::new(server))),
@@ -124,8 +152,10 @@ where
         return std::future::pending().await;
     };
     let serving = serve_mdm(accept, coordinator, CLIENT_PATIENCE, MAX_CONNECTIONS);
-    let sweeping = crate::mdm_server::sweep_every(server);
-    crate::listen::together(serving, sweeping).await
+    let sweeping = crate::mdm_server::sweep_every(Arc::clone(&server));
+    let queue = crate::listen::together(serving, sweeping);
+    let renewing = renew_every(Arc::clone(&server.renewer));
+    crate::listen::together(queue, renewing).await
 }
 
 #[cfg(test)]

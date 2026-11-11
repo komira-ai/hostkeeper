@@ -364,6 +364,7 @@ impl Rig {
             pushers: Arc::clone(&pushers),
             tls: Arc::new(MdmTls::new(Arc::clone(&setup), trust)),
             sweep: Duration::from_secs(60),
+            renewer: Arc::new(idle_renewer(&setup)),
         }));
         let fake = Fake::new();
         let coordinator = Arc::new(
@@ -932,4 +933,20 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
 
 pub(super) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
     STANDARD.encode(message(body, mac, spec))
+}
+
+/// A renewer over `setup` whose CA is down and whose clock is the test's: with no name set it
+/// does nothing.
+fn idle_renewer(setup: &Arc<MdmSetup>) -> crate::mdm_acme::renewal::TlsRenewer {
+    use crate::mdm_acme::testkit::{FakeAcme, FakeClock, FakeDns, FakeProviders, Mood};
+    let dns = FakeDns::new();
+    let ca = FakeAcme::new(&dns, "localhost", "_acme-challenge", NOW, 1);
+    ca.be(Mood::Down);
+    crate::mdm_acme::renewal::TlsRenewer::new(crate::mdm_acme::renewal::Parts {
+        setup: Arc::clone(setup),
+        https: ca,
+        providers: Arc::new(FakeProviders(dns)),
+        clock: FakeClock::at(NOW),
+        status: Arc::clone(setup.tls_status()),
+    })
 }

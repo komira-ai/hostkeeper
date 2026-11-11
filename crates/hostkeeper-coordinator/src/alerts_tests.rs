@@ -732,6 +732,8 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
         Kind::PushCertNearExpiry,
+        Kind::MdmTlsRenewalFailed,
+        Kind::MdmDnsCredentialRejected,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -748,11 +750,13 @@ fn alerts_come_by_kind_then_service_and_host() {
             "store_unreachable",
             "trusted_root",
             "push_cert_near_expiry",
+            "mdm_tls_renewal_failed",
+            "mdm_dns_credential_rejected",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     );
     let critical: Vec<Kind> = all
         .into_iter()

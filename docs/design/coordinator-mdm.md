@@ -610,6 +610,36 @@ DNS-01 authorization, a CSR, finalize and download, one HTTPS exchange each.
   `_acme-challenge.<name>` by CNAME to a zone the coordinator answers itself; that makes the coordinator a DNS server, so it is not chosen.
   (4) It adds an ACME and a GoDaddy client to the coordinator, with fakes behind ports for tests (T12): no network is touched by a test.
 
+**Built (CM17)**, `src/mdm_acme/`, on `instant-acme` 0.8.5 (Apache-2.0, features `ring` and `rcgen` only: no aws-lc, the workspace's rustls and
+ring; its `hyper-rustls` feature is off, so the one HTTPS client is the coordinator's own, `https.rs`, on the TLS client of `hostkeeper-mdm-push`).
+Four ports and a timer:
+
+- `Https` (`https.rs`): every request, to the CA and to the DNS provider, through one trait; tests answer both with fakes, so no test reaches a network,
+  and `instant-acme` is given an `HttpClient` that is an adapter over it (`order.rs`).
+- `DnsProvider` / `DnsProviders` (`dns.rs`), GoDaddy first (`godaddy.rs`): `publish`, `is_published`, `remove` of one TXT value at a name. **The zone is the
+  setting `dns_zone`**, never the name with a label taken off: `mdm.internal.example.net` lives in `example.net` and its record is `_acme-challenge.mdm.internal`.
+  GoDaddy's `PUT` on `records/TXT/<name>` replaces every TXT at that name, so `publish` reads them (`GET`) and writes them back with the new value, and
+  `remove` writes the rest back, or `DELETE`s the name when nothing else is there. Visibility is read back from the provider's `GET`, not from a resolver.
+  The credential is one sealed record whose JSON names the provider and the kind, `sso-key` now and `bearer` (a personal access token) later. A 401 or 403
+  is `Rejected`, told apart from a failure. At most 60 calls a minute (`RateLimit`, on the injected clock).
+- `Clock` (`mod.rs`): the time and the sleep of every wait, injected, so no test waits (T10).
+- `order.rs`: account (made once per directory, its credentials stored before the order is placed so a failed order still leaves it), new order, the dns-01
+  authorization published and polled until the provider shows it within `dns_timeout_s`, `dns_settle_s` more, `set_ready`, poll within `acme_timeout_s`,
+  finalize with a new key, read the chain. **The record is removed after the order on every path**; a removal that fails is logged and does not change the order's answer.
+- `renewal.rs`: a tick (every `tls_check_s`) reads the settings, does nothing until the name, zone and credential are set, and orders when no certificate is
+  held or the one in use (read from the stored certificate, not the upload's label) expires within `tls_renew_days`. One attempt at a time under a lock in the
+  process: **the store's lease of the design does not exist yet** (v1 has one coordinator on a store, the state lock refuses a second), so the lock is the single flight, and CM19 moves it
+  to the lease with the rest of the multi-node work. After a failure the next attempt waits `tls_retry_s`. A success stores the key and then the chain, as the next
+  versions of `tls_key` and `tls_cert`; the listener's resolver (`MdmTls::config`) reads the newest versions of both on each handshake, so the renewed certificate is
+  served from the next one (a window of a few microseconds between the two writes serves no configuration, since the key and the certificate do not match; a
+  handshake in it fails and the Mac retries). The certificate upload of 4.9 is unchanged and works until the certificate it stores is due.
+- Alerts: `mdm_tls_renewal_failed` (the attempts, since when, the message) and `mdm_dns_credential_rejected`, derived from the renewal's in-memory status, which a
+  restart clears (the first failed attempt after it raises the alert again).
+
+New settings, all with defaults: `dns_zone`, `acme_directory`, `acme_contact`, `dns_ttl_s` (600), `dns_poll_s` (15), `dns_timeout_s` (600), `dns_settle_s` (60),
+`acme_timeout_s` (300), `tls_check_s` (300), `tls_retry_s` (3600). The TTL, the time for a record to show and the add and delete calls were never run against the
+live zone (the spike was blocked from a DNS write), so they are settings and are measured at the cutover. `PutSecret` now refuses a `dns_credential` that is not the JSON above.
+
 With this, the `lego` unit is not in the plan: the table of 1.1 lists the coordinator alone. The task is CM17, now before the cutover
 (section 11).
 
@@ -957,7 +987,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |
 | CM12b | SCEP library: `GetCACaps`, `GetCACert`, `PKIOperation`, signed and enveloped `CertRep`, idempotent consumption, fixtures and the farm Mac. Consumption and the issue of a certificate never replace an enrollment (that is `Authenticate`, CM12c) | CM12a, CM5 | L |
 | CM12c | `/enroll` wiring: the verified blob, the per-serial challenge, the MDM CA (sealed key), renewal alert, fail-closed rules, and the replacement of 4.2 under owner decision B: `Authenticate` replaces a serial's live enrollment when the serial is in the ABM table, read again in that transaction, with no operator and no check-out; refused and audited when it is not; tests from the model's traces (a wiped Mac that never checked out, a serial removed from ABM between challenge and `Authenticate`, an operator-confirmed enrollment) | CM11a, CM12b, CM6, CM13 | M |
-| CM17 | **In-process ACME for the MDM name, moved ahead of the cutover.** Account key, DNS-01 through one DNS provider port with the owner's provider first, renewal timer under the lease, alerts, the credential and directory as setup data; the certificate upload of 4.9 works until it lands. Reads the crate and the provider first (section 12, item 14) | CM20, CM11a | L |
+| CM17 | (**Built**) **In-process ACME for the MDM name, moved ahead of the cutover.** Account key, DNS-01 through one DNS provider port with the owner's provider first, renewal timer under the lease, alerts, the credential and directory as setup data; the certificate upload of 4.9 works until it lands. Reads the crate and the provider first (section 12, item 14) | CM20, CM11a | L |
 | CM22c | UI: the TLS step, first upload of a certificate and key, then the DNS credential, ACME directory and renewal status | CM11a, CM21, CM22a (CM17 for the second half) | S |
 | CM9 | Approval from the ABM table, inventory name and group, the `default_group` setting, the three new tokens (family pinned), the allowlist as override. A Mac whose enrollment replaced another's (4.2, 5.4) is approved by the same conditions of 4.6 and its own nonce: a replacement is not an approval | CM3, CM6, CM13 | M |
 | CM23 | **UI Devices page, shown only when the setup says *configured***: ABM-synced Macs with enrollment state, host id, group and baseline status; before that, the page names what is missing | CM21, CM9 | M |

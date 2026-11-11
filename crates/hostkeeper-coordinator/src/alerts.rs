@@ -37,6 +37,9 @@
 //!   smallest of the `push_alert_days` thresholds its expiry has come within (60, then 14 by
 //!   default), or expired; the alert's version is the threshold in days, or `expired`, so that
 //!   crossing the next threshold is a new alert, logged again;
+//! - `mdm_tls_renewal_failed` and `mdm_dns_credential_rejected`: the renewal of the certificate for
+//!   the MDM name is failing, or its DNS provider refuses the credential ([`crate::mdm_acme`]);
+//!   each stands until an attempt ends in a certificate;
 //! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
 //!   gives no facts rather than refusing the list, so the alert is seen;
@@ -118,6 +121,10 @@ pub enum Kind {
     TrustedRoot,
     /// The MDM push certificate expires within a threshold of `push_alert_days`, or has expired.
     PushCertNearExpiry,
+    /// The certificate for the MDM name could not be renewed.
+    MdmTlsRenewalFailed,
+    /// The DNS provider refused the credential of the MDM name's challenge.
+    MdmDnsCredentialRejected,
 }
 
 impl Kind {
@@ -139,6 +146,8 @@ impl Kind {
             Self::StoreUnreachable => "store_unreachable",
             Self::TrustedRoot => "trusted_root",
             Self::PushCertNearExpiry => "push_cert_near_expiry",
+            Self::MdmTlsRenewalFailed => "mdm_tls_renewal_failed",
+            Self::MdmDnsCredentialRejected => "mdm_dns_credential_rejected",
         }
     }
 
@@ -156,7 +165,9 @@ impl Kind {
             | Self::SilentHost
             | Self::CertNearExpiry
             | Self::TrustedRoot
-            | Self::PushCertNearExpiry => proto::AlertSeverity::Warning,
+            | Self::PushCertNearExpiry
+            | Self::MdmTlsRenewalFailed
+            | Self::MdmDnsCredentialRejected => proto::AlertSeverity::Warning,
         }
     }
 
@@ -176,6 +187,8 @@ impl Kind {
             Self::StoreUnreachable => proto::AlertKind::StoreUnreachable,
             Self::TrustedRoot => proto::AlertKind::TrustedRoot,
             Self::PushCertNearExpiry => proto::AlertKind::PushCertNearExpiry,
+            Self::MdmTlsRenewalFailed => proto::AlertKind::MdmTlsRenewalFailed,
+            Self::MdmDnsCredentialRejected => proto::AlertKind::MdmDnsCredentialRejected,
         }
     }
 }
@@ -199,7 +212,7 @@ pub struct Subject {
 }
 
 impl Subject {
-    fn of(kind: Kind) -> Self {
+    pub(crate) fn of(kind: Kind) -> Self {
         Self {
             kind,
             service: String::new(),
@@ -251,6 +264,9 @@ pub struct EnrollmentFacts {
     /// The days before that expiry at which the alert is raised, falling (the setting
     /// `push_alert_days`).
     pub push_alert_days: Vec<u32>,
+    /// What the renewal of the certificate for the MDM name reports
+    /// ([`crate::mdm_acme::status`]).
+    pub tls: crate::mdm_acme::status::Snapshot,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -316,6 +332,7 @@ pub(crate) fn derive_in(
         thresholds.cert_window_secs,
     ));
     alerts.extend(push_cert_near_expiry(enrollment, at.unix));
+    alerts.extend(crate::mdm_acme::alerts::derive(&enrollment.tls));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -803,6 +820,7 @@ impl Coordinator {
                 Err(why) => return Err(why),
             };
             self.note_push_certificate(&mut enrollment);
+            enrollment.tls = self.mdm_setup.tls_status().snapshot();
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),

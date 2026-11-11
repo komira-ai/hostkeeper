@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use sha2::{Digest, Sha256};
 
 use crate::enrollment::Random;
+use crate::mdm_acme::status::TlsStatus;
 use crate::mdm_secrets::{MasterKey, SealError, Secret, SecretKind};
 use crate::mdm_settings;
 use crate::store::mdm_setup::files::FileSetup;
@@ -71,6 +72,7 @@ pub struct MdmSetup {
     key: Option<MasterKey>,
     random: Random,
     writing: Mutex<()>,
+    tls: Arc<TlsStatus>,
 }
 
 impl MdmSetup {
@@ -82,7 +84,14 @@ impl MdmSetup {
             key,
             random,
             writing: Mutex::new(()),
+            tls: Arc::default(),
         }
+    }
+
+    /// What the renewal of the certificate for the MDM name reports to the alerts.
+    #[must_use]
+    pub fn tls_status(&self) -> &Arc<TlsStatus> {
+        &self.tls
     }
 
     /// A setup in memory alone and without a key: for a coordinator built without a store.

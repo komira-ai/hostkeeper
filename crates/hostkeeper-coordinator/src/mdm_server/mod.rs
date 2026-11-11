@@ -56,6 +56,7 @@ use hyper::{Method, Request, Response, StatusCode};
 
 use crate::enrollment::Random;
 use crate::http::{BoxError, Peer, error, read_body};
+use crate::mdm_acme::renewal::TlsRenewer;
 use crate::service::Coordinator;
 use crate::store::mdm::{MdmError, MdmStore};
 use auth::Refused;
@@ -208,6 +209,8 @@ pub(crate) struct Parts {
     pub(crate) tls: Arc<MdmTls>,
     /// How often the queue looks at what is due ([`sweep_every`]).
     pub(crate) sweep: Duration,
+    /// The renewal of the certificate for the MDM name, run beside the listener.
+    pub(crate) renewer: Arc<TlsRenewer>,
 }
 
 /// The MDM server: what the routes of the Macs' listener use.
@@ -220,6 +223,7 @@ pub(crate) struct MdmServer {
     pushers: Pushers,
     tls: Arc<MdmTls>,
     sweep: Duration,
+    pub(crate) renewer: Arc<TlsRenewer>,
     /// One `Authenticate` at a time: the live enrollment of a serial is read, then replaced.
     pub(crate) authenticating: tokio::sync::Mutex<()>,
 }
@@ -235,6 +239,7 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            renewer,
         } = parts;
         Self {
             store,
@@ -245,6 +250,7 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            renewer,
             authenticating: tokio::sync::Mutex::new(()),
         }
     }
