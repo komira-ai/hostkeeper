@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Mdm, Repositories, HostGroups}` on the private one,
+//! Mdm, Repositories, HostGroups, Users, ApiTokens}` on the private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -40,6 +40,7 @@ use bytes::Bytes;
 use hostkeeper_oidc::Verified;
 use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServer;
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
+use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
@@ -49,6 +50,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
 use hyper::body::Body;
@@ -63,6 +65,7 @@ use self::operator::{
     AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
     RolloutsService, ServicesService,
 };
+use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
@@ -81,6 +84,7 @@ pub(crate) mod agent;
 mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
+mod operator_accounts;
 mod operator_host_groups;
 mod operator_repositories;
 pub(crate) mod refusal;
@@ -124,6 +128,10 @@ const MDM: &str = "hostkeeper.operator.v1.Mdm";
 const REPOSITORIES: &str = "hostkeeper.operator.v1.Repositories";
 /// The full name of the operator API's `HostGroups`.
 const HOST_GROUPS: &str = "hostkeeper.operator.v1.HostGroups";
+/// The full name of the operator API's `Users`.
+const USERS: &str = "hostkeeper.operator.v1.Users";
+/// The full name of the operator API's `ApiTokens`.
+const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -157,14 +165,11 @@ pub(crate) enum Admitted {
     },
     /// `SetDesired`, `Converge` and `WaitConverged` with CI's token: the verified token.
     Ci(Verified),
-    /// An operator method with the operator's token (`SetDesired`, `Converge` and
-    /// `WaitConverged` among them):
-    /// the operator, and the bearer it sent.
+    /// An operator method with the operator's token, or, on the JSON gateway, the session of a
+    /// signed-in user (`SetDesired`, `Converge` and `WaitConverged` among them): the operator.
     Operator {
         /// Who calls.
         caller: Caller,
-        /// The token, for the calls that check it themselves.
-        bearer: String,
     },
 }
 
@@ -182,10 +187,9 @@ impl fmt::Debug for Admitted {
                 .field("retiring", retiring)
                 .finish(),
             Self::Ci(verified) => f.debug_tuple("Ci").field(verified).finish(),
-            Self::Operator { caller, .. } => f
-                .debug_struct("Operator")
-                .field("caller", caller)
-                .finish_non_exhaustive(),
+            Self::Operator { caller } => {
+                f.debug_struct("Operator").field("caller", caller).finish()
+            }
         }
     }
 }
@@ -209,8 +213,29 @@ enum Served {
     Operator,
 }
 
+/// How a call reached the credential step: over gRPC, which reads the `Authorization` header
+/// and nothing else, or over the JSON gateway, the one place the session cookie of a signed-in
+/// browser is read (`docs/design/operator-login.md`, section 5.3).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Transport<'a> {
+    /// A gRPC call.
+    Grpc,
+    /// A call of the JSON gateway, made to `authority` (the `Host` of the request), which a
+    /// session's call is checked against.
+    Gateway {
+        /// The authority the request was made to.
+        authority: Option<&'a str>,
+    },
+}
+
+/// The methods only a signed-in person's session may call: a bearer is refused them as
+/// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
+/// service, when it must not be done by a token a script holds; none is yet.
+pub(crate) const SESSION_ONLY: &[&str] = &[];
+
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
-/// with `headers`: who the caller is, before any of the request is read.
+/// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
+/// the cookie read; for the gateway see [`admit_via`].
 ///
 /// # Errors
 /// `UNIMPLEMENTED` for a path whose service this surface does not serve. Otherwise the
@@ -225,13 +250,47 @@ pub(crate) async fn admit(
     peer: &Peer,
     headers: &HeaderMap,
 ) -> Result<Admitted, Status> {
+    admit_via(
+        coordinator,
+        surface,
+        path,
+        peer,
+        headers,
+        Transport::Grpc,
+        SESSION_ONLY,
+    )
+    .await
+}
+
+/// [`admit`] for a call that came by `transport`, with the methods `session_only` held back from
+/// a bearer.
+///
+/// On the gateway, a request with no `Authorization` header and the cookie of a live session is
+/// the session's call: its user is the operator. It is refused `PERMISSION_DENIED` with `csrf`
+/// unless it passes the checks of a session's call ([`crate::login::session_request_ok`]), and
+/// with `password_change_required` while the session's user must choose a new password. A
+/// request with an `Authorization` header never has its cookie read, and a cookie that names no
+/// live session is no credential. A method of `session_only` refuses a bearer
+/// `PERMISSION_DENIED` `session_required`.
+///
+/// # Errors
+/// As [`admit`], and the two refusals of a session's call.
+pub(crate) async fn admit_via(
+    coordinator: &Coordinator,
+    surface: Surface,
+    path: &str,
+    peer: &Peer,
+    headers: &HeaderMap,
+    transport: Transport<'_>,
+    session_only: &[&str],
+) -> Result<Admitted, Status> {
     let served = match (surface, service_of(path)) {
         (Surface::Heartbeat, Some(AGENT)) => Served::Agent,
         (
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM
-                | REPOSITORIES | HOST_GROUPS,
+                | REPOSITORIES | HOST_GROUPS | USERS | API_TOKENS,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -245,21 +304,70 @@ pub(crate) async fn admit(
             })
         }
         Served::Agent => Ok(Admitted::Peer(peer.clone())),
-        Served::Operator
-            if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) =>
-        {
-            // An operator's token is told before CI's is verified: it is no CI token and
-            // spends none.
-            if let Ok(name) = coordinator.operator(bearer(headers)) {
-                return Ok(Admitted::Operator {
-                    caller: Caller::Operator(name),
-                    bearer: bearer(headers).unwrap_or_default().to_owned(),
-                });
+        Served::Operator => {
+            if let Some(admitted) = session_call(coordinator, headers, transport)? {
+                return Ok(admitted);
             }
-            ci_token(coordinator, headers).await.map(Admitted::Ci)
+            let admitted = if [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE].contains(&path) {
+                // An operator's token is told before CI's is verified: it is no CI token and
+                // spends none.
+                match coordinator.operator(bearer(headers)) {
+                    Ok(name) => Admitted::Operator {
+                        caller: Caller::Operator(name),
+                    },
+                    Err(_) => Admitted::Ci(ci_token(coordinator, headers).await?),
+                }
+            } else {
+                operator_token(coordinator, headers).await?
+            };
+            match admitted {
+                Admitted::Operator { .. } | Admitted::Ci(_) if session_only.contains(&path) => {
+                    Err(token_status(Code::PermissionDenied, "session_required"))
+                }
+                admitted => Ok(admitted),
+            }
         }
-        Served::Operator => operator_token(coordinator, headers).await,
     }
+}
+
+/// The operator the session of a gateway call is, if the call is a session's: it has no
+/// `Authorization` header and its cookie names a live session.
+///
+/// # Errors
+/// `PERMISSION_DENIED`: `csrf` for a call that fails the checks of a session's call, and
+/// `password_change_required` for one of a user who must change the password first.
+fn session_call(
+    coordinator: &Coordinator,
+    headers: &HeaderMap,
+    transport: Transport<'_>,
+) -> Result<Option<Admitted>, Status> {
+    let Transport::Gateway { authority } = transport else {
+        return Ok(None);
+    };
+    let Some(held) = coordinator
+        .login()
+        .and_then(|login| crate::login::held(login, headers))
+    else {
+        return Ok(None);
+    };
+    if !crate::login::session_request_ok(&held.view, headers, authority) {
+        return Err(token_status(Code::PermissionDenied, "csrf"));
+    }
+    if held.view.must_change {
+        return Err(token_status(
+            Code::PermissionDenied,
+            "password_change_required",
+        ));
+    }
+    // A user's name is a token's name, so this holds for every user the store can make.
+    Ok(held
+        .view
+        .username
+        .parse()
+        .ok()
+        .map(|name| Admitted::Operator {
+            caller: Caller::Operator(name),
+        }))
 }
 
 /// CI's token in `headers`, verified.
@@ -278,12 +386,8 @@ async fn operator_token(
     coordinator: &Coordinator,
     headers: &HeaderMap,
 ) -> Result<Admitted, Status> {
-    let bearer = bearer(headers);
-    match coordinator.caller(bearer).await {
-        caller @ Caller::Operator(_) => Ok(Admitted::Operator {
-            caller,
-            bearer: bearer.unwrap_or_default().to_owned(),
-        }),
+    match coordinator.caller(bearer(headers)).await {
+        caller @ Caller::Operator(_) => Ok(Admitted::Operator { caller }),
         Caller::Ci => Err(token_status(Code::PermissionDenied, "forbidden")),
         Caller::Anonymous => Err(token_status(Code::Unauthenticated, "unauthorized")),
     }
@@ -392,6 +496,16 @@ where
         Some(HOST_GROUPS) => {
             let server = HostGroupsServer::new(HostGroupsService::new(coordinator))
                 .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
+        Some(USERS) => {
+            let server = UsersServer::new(UsersService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(API_TOKENS) => {
+            let server = ApiTokensServer::new(ApiTokensService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
         _ => Status::unimplemented("").into_http(),

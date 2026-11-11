@@ -7,8 +7,9 @@
 //! can never be refused with (`UNSPECIFIED`) is `INTERNAL`.
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal, HostsRefusal, MdmRefusal,
-    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
+    HostsRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
+    ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -218,4 +219,33 @@ pub(crate) fn host_groups(refusal: HostGroupsRefusal) -> Status {
         | HostGroupsRefusal::SameHostGroup => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOST_GROUPS_REFUSAL_")
+}
+
+/// The status of a refusal by `Users`.
+pub(crate) fn users(refusal: UsersRefusal) -> Status {
+    let code = match refusal {
+        UsersRefusal::Unspecified | UsersRefusal::StoreFailed => Code::Internal,
+        UsersRefusal::Unauthorized => Code::Unauthenticated,
+        UsersRefusal::Forbidden => Code::PermissionDenied,
+        UsersRefusal::InvalidRequest => Code::InvalidArgument,
+        UsersRefusal::NameTaken => Code::AlreadyExists,
+        UsersRefusal::UnknownUser => Code::NotFound,
+        UsersRefusal::LastEnabled | UsersRefusal::OwnPassword => Code::FailedPrecondition,
+        UsersRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "USERS_REFUSAL_")
+}
+
+/// The status of a refusal by `ApiTokens`.
+pub(crate) fn api_tokens(refusal: ApiTokensRefusal) -> Status {
+    let code = match refusal {
+        ApiTokensRefusal::Unspecified | ApiTokensRefusal::StoreFailed => Code::Internal,
+        ApiTokensRefusal::Unauthorized => Code::Unauthenticated,
+        ApiTokensRefusal::Forbidden => Code::PermissionDenied,
+        ApiTokensRefusal::InvalidRequest => Code::InvalidArgument,
+        ApiTokensRefusal::NameTaken => Code::AlreadyExists,
+        ApiTokensRefusal::UnknownToken => Code::NotFound,
+        ApiTokensRefusal::AuditUnavailable => Code::Unavailable,
+    };
+    refused(code, refusal.as_str_name(), "API_TOKENS_REFUSAL_")
 }

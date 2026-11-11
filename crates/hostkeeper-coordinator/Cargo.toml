@@ -48,6 +48,8 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
+# The Argon2id hash of an operator password (`src/password.rs`).
+argon2.workspace = true
 # The PEM of the CA bundle and of the server certificate file.
 base64.workspace = true
 bytes.workspace = true
@@ -79,6 +81,8 @@ thiserror.workspace = true
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
+# NFKC of a password before it is hashed.
+unicode-normalization.workspace = true
 # The gRPC services: the generated servers, called in process by the listeners' router
 # (`src/grpc`), and the status of a refusal (`Code`, `Status`). No transport of tonic's: the
 # listeners are hyper's.

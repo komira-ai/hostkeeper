@@ -25,7 +25,9 @@ sealed and offline, as [ca-backup.md](ca-backup.md) says.
 
 `serve --database-dsn-file <file> --halt-marker-file <file>` keeps everything the files of the file
 store hold in the tables of one Postgres database (16 or newer), in the schema `hostkeeper`: the
-desired state and its registry of digests, the spent CI token ids, the verdicts, every operator
+desired state and its registry of digests, the spent CI token ids, the verdicts, the operator's users
+(each with the Argon2id hash of its password, never the password) and the API tokens made in the UI
+(each with the SHA-256 of the token, never the token), every operator
 change (exclusions, labels, halts and their reports, holds, assignments, minimum versions,
 the repository `Services.SetRepository` set for a service, uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
 the host groups (each group's packages, policy, generation and desired versions, and each (group,
@@ -99,6 +101,14 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   ([hostgroups.md](hostgroups.md#where-a-packages-repository-and-minimum-version-come-from)). Older
   releases may run on it (`may-run`): they never read the column, and their writes of a service's
   row leave it as it is (a row an older release deletes takes the value with it).
+- **Users and API tokens.** Migration `0010` adds the tables `users` and `api_tokens`, one row each
+  per user and per token, keyed by name, holding the record as the accounts file holds it
+  (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9). A database that holds
+  no row holds no user and no token, which is how a coordinator of this release starts on a
+  database the release before migrated. `0010` says older releases may run on it: the release
+  before never reads either table, so going back below this release needs no restore for it.
+  Nothing writes these rows yet: the coordinator holds the store, and the login and the `Users` and
+  `ApiTokens` services that use it land after.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a
@@ -247,6 +257,7 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below); the pages of the web app for them are a later part of the design. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
@@ -369,3 +380,116 @@ the backup is lost, and every other file of the state is likewise as it was at t
   refused until those tokens expire.
 
 So back up after each change you would not want to make again, and before any move.
+
+## The initial-admin file
+
+`serve --initial-admin-file <path>` makes the first operator user (`docs/design/operator-login.md`, komira-ai/hostkeeper#300,
+section 4). The file is TOML with four keys and no other, and is read under the rule of a secret file (a regular file owned by
+the coordinator's user, mode 0600 or 0400, at most 4096 bytes):
+
+```toml
+id = "k3x9..."           # one for each file; 1 to 128 visible ASCII bytes
+user = "admin"           # a name of 1 to 32 bytes of a-z, 0-9 and -
+password = "..."         # plain text; at least --password-min-length characters
+valid_until = 1800003600 # Unix seconds
+```
+
+The coordinator reads it at start and on every `--tls-reload-secs`, by its own wall clock, and:
+
+- file absent: nothing;
+- `valid_until` not in the future: deletes the file, marks the user's initial password void when this file's `id` made it and
+  it was not yet changed, and audits `initial_password_expired` by `coordinator`;
+- the user's record already holds this `id`: nothing, so a restart does not reset a password twice;
+- otherwise hashes the password with Argon2id and makes the user (or, for a name that exists, gives it the new hash and enables
+  it), with `must_change` on, the deadline `valid_until`, and the `id`; audits `user_bootstrap` by
+  `coordinator`. The plain password is in the file only, never in the store, the audit or a log. The entry is written before
+  the user is stored, so an audit that cannot be written leaves the user unmade and the next look does both; a store that
+  cannot write after the entry repeats the entry at the next look. Expiry is in the same order (void, audit, delete), and a
+  file already gone when it is deleted counts as deleted.
+
+A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
+password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does
+not start, and on a tick it is logged as a warning and nothing changes. The file is deleted when it has expired, and when the
+user it made changes the password (`POST /v1/password`, below), if it is still the file whose `id` the record holds; a file of
+another `id` or user stays until it expires, and one that does not read is left for its expiry.
+
+The start rule is: at least one of `--tokens-file`, `--operator-token-file` and `--initial-admin-file`, and not both token
+flags. With `--initial-admin-file` alone no bearer is an operator's; tokens of `--tokens-file` keep working beside it. The
+password hash is made under `--password-memory-kib` (19456), `--password-iterations` (2), `--password-parallelism` (1) and
+`--password-min-length` (12), which are the OWASP minimum for Argon2id by default.
+
+## The sign-in
+
+A coordinator signs a person in with a user name and a password (`docs/design/operator-login.md`, sections 5 and 6.2). The
+four routes are on the private listener only; the heartbeat and LAN listeners answer them as any path they do not serve.
+
+- `POST /v1/login` takes `{"username", "password"}` as JSON (at most 4 KiB; the name is 1 to 32 bytes of a-z, 0-9 and -, the
+  password 1 to 256 bytes; any other body is a 400 `bad_request`). It answers `{"username", "csrf", "must_change"}` and
+  `Set-Cookie: __Host-hk_session=<id>; Secure; HttpOnly; SameSite=Strict; Path=/`, and audits `login` (the peer's address as its
+  source). An unknown name, a wrong password, a disabled user and an initial password past its hour are all 401
+  `invalid_credentials`, with the same bytes and the same one password verify. The first failure of a run is audited
+  `login_failed` and the lock `login_locked`, both by `coordinator`.
+- `GET /v1/session` answers the session of the cookie (`username`, `csrf`, `must_change`, and `must_change_until` while a
+  password must be changed); no session is 401 `sign_in_required`.
+- `POST /v1/logout` ends the session, answers `Set-Cookie: __Host-hk_session=; Max-Age=0` and audits `logout`.
+- `POST /v1/password` takes `{"current", "new"}`: it verifies the current password like a login (a wrong one counts as a failed
+  login), checks the policy (a refusal is 400 `password_policy` with the text of the rule), stores the new hash, clears
+  `must_change`, ends the user's other sessions and keeps this one, deletes the initial-admin file that made the old password,
+  and audits `password_changed`. An initial password is changed up to its deadline: after it, 401 `initial_password_expired`.
+
+`logout` and `password` need the header `X-HK-CSRF` with the session's `csrf` and a body of type `application/json`; an `Origin`
+header, when there is one, must be `https://` and the host asked, and `Sec-Fetch-Site`, when there is one, must be
+`same-origin` (`login` takes the last two as well); a call that fails one is 403 `csrf` and changes nothing. A call that
+carries an `Authorization` header never has its cookie read, and a gRPC call never does. On the JSON gateway
+(`docs/gateway.md`) a call with the cookie and no `Authorization` header is made as the signed-in user, under the same checks.
+A session that must change its password may call `/v1/password`, `/v1/logout` and `/v1/session` and nothing else.
+
+Sessions are kept in memory: a restart signs everyone out. They end 30 minutes after their last use, or 12 hours after the
+login. The flags, each with its default from the start:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--session-idle-secs` | 1800 | idle deadline |
+| `--session-max-secs` | 43200 | absolute deadline |
+| `--session-max-count` | 256 | sessions held; a login past it ends the session least recently used |
+| `--login-max-failures` | 5 | consecutive failures of a name before it is locked |
+| `--login-lockout-secs` | 900 | how long the lock lasts, and after which a run of failures is forgotten |
+| `--login-max-hashes` | 2 | password hashes at once; past it a login is 429 `try_later` and starts no hash |
+| `--login-max-tracked` | 4096 | names the limiter counts failures of at once |
+
+The password settings of the section above apply to every hash. A coordinator started from the flags always has a sign-in; the
+routes exist even with no user, and no one can sign in until `--initial-admin-file` makes one, or an operator makes one ("Users and API tokens", below).
+
+## Users and API tokens
+
+The operator API has two services for the accounts of the sign-in (`docs/design/operator-login.md`, section 7), served on the private
+listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hkctl users ...` and
+`hkctl api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
+call both, and the audit's `by` is the name of whichever called. A CI token is refused `forbidden`.
+
+- `Users.Create` takes a name and makes the user with a temporary password, which the answer carries once and the coordinator
+  keeps no copy of (the store holds its Argon2id hash). The password is 24 characters of letters and digits but `0`, `1`, `I`,
+  `O` and `l`, drawn from the system's random bytes. The user must choose another at the first sign-in, and the temporary one works
+  until `--initial-password-secs` (3600 by default) after it was made: the answer says the second. `Users.ResetPassword` does the
+  same for a user that exists: a new temporary password, `must_change` on, the user's sessions ended, the credential made good
+  again if it had been voided, and the initial-admin file that made the old password deleted if it is still there. An operator
+  cannot reset their own password (`own_password`): a person changes their own on the sign-in page.
+- `Users.Disable` and `Users.Delete` end the user's sessions at once; the last enabled user can be neither (`last_enabled`), so the
+  farm is not locked out by its own admin. `Users.Enable` lets a disabled user sign in again with the password they had. A deleted
+  user's audit rows stay. `Users.List` tells each user's name, whether it is enabled and must change its password, who made it and
+  when, when it last signed in and until when a temporary password works; never a hash.
+- `ApiTokens.Create` takes a name and makes a token of 32 random bytes, `hkt_` and 43 base64url characters (the prefix lets a secret
+  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, the creator and the time. The token is
+  an operator's bearer under its name from then on, and `ApiTokens.Revoke` ends that. A token cannot sign in: the login route
+  reads passwords only. `ApiTokens.List` tells each token's name, whether it comes from the store or the tokens file, and for a
+  stored one who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
+  `Revoke` answers `unknown_token` for.
+- A bearer is looked up in the tokens file and in the store in one pass, each compared in constant time. Users and tokens share one
+  name space, the tokens file's names in it: a name that is already a user's, a stored token's or the tokens file's is
+  `name_taken` (`ALREADY_EXISTS`), and `coordinator`, `ci` and the other names the audit uses are `invalid_request`.
+- Each call that changes something is audited by the caller, with the user or the token as the entry's `subject`: `user_create`,
+  `user_disable`, `user_enable`, `user_delete`, `password_reset`, `api_token_create`, `api_token_revoke`. A call whose audit line
+  cannot be written changes nothing (`audit_unavailable`). A call the store then cannot write is `store_failed` and changes
+  nothing, and leaves the audit entry written before it. No password, hash, token or session id is ever in an audit entry.
+
+A coordinator before this release has neither service: it answers the paths `UNIMPLEMENTED`, and never reads the accounts file.

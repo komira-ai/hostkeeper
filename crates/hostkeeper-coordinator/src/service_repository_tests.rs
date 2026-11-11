@@ -103,6 +103,8 @@ fn audited(seq: u64, service: &str, reason: &str) -> AuditEntry {
         node_id: None,
         host_group: None,
         reason: Some(reason.to_owned()),
+        subject: None,
+        source: None,
     }
 }
 

@@ -1,10 +1,12 @@
 //! The HTTP/JSON gateway of the operator API: `POST /<package>.<Service>/<Method>` on the
 //! control listener, with the request as proto3 canonical JSON and the token as
-//! `Authorization: Bearer <token>` (`docs/gateway.md`).
+//! `Authorization: Bearer <token>` (`docs/gateway.md`), or, from a signed-in browser, the session
+//! cookie and the CSRF header (`docs/design/operator-login.md`, section 5.3).
 //!
 //! The gateway has one rule of its own, the null step of `Releases.SetDesired`
 //! ([`without_null_targets`]). It checks the caller as a gRPC call of the same path is
-//! checked ([`admit`]), before the body is read; reads a body of at most the method's limit
+//! checked ([`admit_via`]), before the body is read; the gateway is the one place the session
+//! cookie of a signed-in browser is read; reads a body of at most the method's limit
 //! ([`operator_limit`]); turns the JSON into the method's request message with the protobuf
 //! descriptors; calls the same in-process gRPC service a gRPC call
 //! reaches ([`serve_admitted`]); and turns the response message back into JSON. A refusal is
@@ -29,7 +31,7 @@ use prost_reflect::{
 };
 use tonic::{Code, Status};
 
-use super::{SET_DESIRED, admit, operator_limit, serve_admitted};
+use super::{SESSION_ONLY, SET_DESIRED, Transport, admit_via, operator_limit, serve_admitted};
 use crate::http::{BoxError, Peer, Surface, read_body};
 use crate::service::Coordinator;
 
@@ -111,7 +113,20 @@ where
     let Some(method) = is_method(path) else {
         return refusal(&Status::not_found(""));
     };
-    let admitted = match admit(coordinator, Surface::Control, path, peer, &parts.headers).await {
+    let transport = Transport::Gateway {
+        authority: crate::login::authority(&parts.headers, &parts.uri),
+    };
+    let admitted = match admit_via(
+        coordinator,
+        Surface::Control,
+        path,
+        peer,
+        &parts.headers,
+        transport,
+        SESSION_ONLY,
+    )
+    .await
+    {
         Ok(admitted) => admitted,
         Err(status) => return refusal(&status),
     };

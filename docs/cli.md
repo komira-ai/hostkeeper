@@ -52,6 +52,39 @@ The service `Alerts` of the package `hostkeeper.operator.v1`. The conditions tha
 Every condition that needs a person now, by kind, then service, host and version. Changes
 nothing.
 
+### `api-tokens`
+
+The service `ApiTokens` of the package `hostkeeper.operator.v1`. The tokens a script calls with. A token acts as the operator it is named for and cannot sign in. Each mutating call is audited under the caller's name, with the token as the entry's subject: `api_token_create` and `api_token_revoke`.
+
+#### `hkctl api-tokens list`
+
+`/hostkeeper.operator.v1.ApiTokens/List`
+
+Every token, by name: the coordinator's tokens file's, which are read-only, and those made
+here. Changes nothing. No token and no digest is ever in the answer.
+
+#### `hkctl api-tokens create`
+
+`/hostkeeper.operator.v1.ApiTokens/Create`
+
+Makes a token of 32 random bytes, `hkt_` and 43 base64url characters, which the answer carries
+once: the coordinator keeps its SHA-256 only.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The new token's name. |
+
+#### `hkctl api-tokens revoke`
+
+`/hostkeeper.operator.v1.ApiTokens/Revoke`
+
+Removes a token made here: it is refused from then on. A token of the tokens file is removed
+by editing the file.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The token's name. |
+
 ### `audit`
 
 The service `Audit` of the package `hostkeeper.operator.v1`. The coordinator's audit log.
@@ -726,3 +759,70 @@ heartbeat.
 | `--reason` | STRING |  |
 
 Through `--request` only: `scope` (hostkeeper.operator.v1.HoldScope).
+
+### `users`
+
+The service `Users` of the package `hostkeeper.operator.v1`. The people who sign in with a name and a password. A user is an operator, as a token is: there are no roles. Each mutating call is audited under the caller's name, with the user it concerned as the entry's subject: `user_create`, `user_disable`, `user_enable`, `user_delete` and `password_reset`.
+
+#### `hkctl users list`
+
+`/hostkeeper.operator.v1.Users/List`
+
+Every user, by name. Changes nothing. No password and no hash is ever in the answer.
+
+#### `hkctl users create`
+
+`/hostkeeper.operator.v1.Users/Create`
+
+Makes a user with a generated temporary password, which the answer carries once: the
+coordinator keeps its hash only. The user must choose a new password at the first sign-in,
+and the temporary one stops working an hour after it was made.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The new user's name. |
+
+#### `hkctl users disable`
+
+`/hostkeeper.operator.v1.Users/Disable`
+
+Stops a user signing in, and ends their sessions at once. The last enabled user cannot be
+disabled. Disabling a disabled user changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The user's name. |
+
+#### `hkctl users enable`
+
+`/hostkeeper.operator.v1.Users/Enable`
+
+Lets a disabled user sign in again, with the password they had. Enabling an enabled user
+changes nothing.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The user's name. |
+
+#### `hkctl users reset-password`
+
+`/hostkeeper.operator.v1.Users/ResetPassword`
+
+Gives a user a new temporary password, which the answer carries once, makes them choose
+another at the next sign-in, and ends their sessions. Refused for the caller's own name: a
+person changes their own password on the coordinator's page.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The user's name. |
+
+#### `hkctl users delete`
+
+`/hostkeeper.operator.v1.Users/Delete`
+
+Removes a user and ends their sessions. The audit entries that name them stay. The last
+enabled user cannot be deleted.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The user's name. |

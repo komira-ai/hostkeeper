@@ -64,6 +64,11 @@
 //!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
+//! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once;
+//! - [`session`]: the browser sessions and the login limiter, in memory;
+//! - [`login`] and [`login_routes`]: the operator's sign-in: `POST /v1/login`, `POST /v1/logout`,
+//!   `GET /v1/session` and `POST /v1/password` on the private surface, and the session cookie
+//!   the JSON gateway accepts beside a bearer token;
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
@@ -109,11 +114,13 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
+pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
 pub mod assign;
 pub mod assignment;
+pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
@@ -144,6 +151,7 @@ pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
+pub mod initial_admin;
 pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
@@ -151,6 +159,8 @@ pub mod jti_file;
 pub mod listen;
 mod live;
 pub mod lock;
+pub mod login;
+pub(crate) mod login_routes;
 pub mod mdm;
 pub mod membership;
 pub mod migrate;
@@ -160,6 +170,7 @@ pub(crate) mod migrate_policy;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
+pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
@@ -169,6 +180,7 @@ pub(crate) mod ops_file;
 pub mod order_terms;
 pub mod orders;
 pub mod origin_https;
+pub mod password;
 pub(crate) mod picks;
 pub mod reconcile;
 pub mod registry;
@@ -183,6 +195,7 @@ mod running;
 pub mod service;
 pub(crate) mod service_repository;
 pub mod services;
+pub mod session;
 pub mod stages;
 pub mod stamp;
 pub mod status;
@@ -210,6 +223,8 @@ mod assigned_counts_tests;
 #[cfg(test)]
 mod assignment_tests;
 #[cfg(test)]
+mod audit_actions_tests;
+#[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
@@ -217,6 +232,8 @@ mod audit_list_tests;
 mod audit_refusal_tests;
 #[cfg(test)]
 mod audit_rotation_tests;
+#[cfg(test)]
+pub(crate) mod backup_accounts_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
@@ -343,6 +360,8 @@ mod live_converged_tests;
 #[cfg(test)]
 mod live_tests;
 #[cfg(test)]
+pub(crate) mod login_support;
+#[cfg(test)]
 mod marks_support;
 #[cfg(test)]
 mod marks_tests;
@@ -396,6 +415,8 @@ mod ops_tests;
 mod order_terms_tests;
 #[cfg(test)]
 mod origin_https_tests;
+#[cfg(test)]
+mod password_tests;
 #[cfg(test)]
 mod picks_private_tests;
 #[cfg(test)]
@@ -469,6 +490,8 @@ mod service_tests;
 mod services_repository_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod session_tests;
 #[cfg(test)]
 mod stages_edge_tests;
 #[cfg(test)]

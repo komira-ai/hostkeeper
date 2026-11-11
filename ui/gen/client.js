@@ -13,6 +13,11 @@ export function createClient(call) {
     alerts: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Alerts/List", request),
     }),
+    apiTokens: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.ApiTokens/List", request),
+      create: (request) => call("hostkeeper.operator.v1.ApiTokens/Create", request),
+      revoke: (request) => call("hostkeeper.operator.v1.ApiTokens/Revoke", request),
+    }),
     audit: Object.freeze({
       list: (request) => call("hostkeeper.operator.v1.Audit/List", request),
     }),
@@ -76,6 +81,14 @@ export function createClient(call) {
       setRepository: (request) => call("hostkeeper.operator.v1.Services/SetRepository", request),
       hold: (request) => call("hostkeeper.operator.v1.Services/Hold", request),
       unhold: (request) => call("hostkeeper.operator.v1.Services/Unhold", request),
+    }),
+    users: Object.freeze({
+      list: (request) => call("hostkeeper.operator.v1.Users/List", request),
+      create: (request) => call("hostkeeper.operator.v1.Users/Create", request),
+      disable: (request) => call("hostkeeper.operator.v1.Users/Disable", request),
+      enable: (request) => call("hostkeeper.operator.v1.Users/Enable", request),
+      resetPassword: (request) => call("hostkeeper.operator.v1.Users/ResetPassword", request),
+      delete: (request) => call("hostkeeper.operator.v1.Users/Delete", request),
     }),
   });
 }

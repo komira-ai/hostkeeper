@@ -258,6 +258,13 @@ impl OperatorTokens {
         Self::of(vec![token], None)
     }
 
+    /// No token: nothing is an operator's bearer. What a coordinator has when it is started with
+    /// `--initial-admin-file` alone, whose users sign in with a password.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::of(Vec::new(), None)
+    }
+
     /// The tokens of the file at `path`, which [`Self::reload`] reads again.
     ///
     /// # Errors
@@ -268,20 +275,78 @@ impl OperatorTokens {
         read(path).map(|tokens| Self::of(tokens, Some(path.to_owned())))
     }
 
-    /// The name of the token `presented`, if it is one: its SHA-256 is compared with each
-    /// token's in constant time.
+    /// The name of the token `presented`, if it is one of the tokens file's: its SHA-256 is
+    /// compared with each token's in constant time.
     #[must_use]
     pub fn name_of(&self, presented: &str) -> Option<TokenName> {
+        self.name_of_among(presented, std::iter::empty())
+    }
+
+    /// The name of the token `presented`, if it is one of the tokens file's or one of `stored`,
+    /// the API tokens of the store, each given as its name and its SHA-256: one pass over both
+    /// lists, each compared in constant time. A digest the file and the store share (the file was
+    /// edited after the store's token was made) answers the file's name, so the answer does not
+    /// depend on the order the store lists its tokens in.
+    #[must_use]
+    pub fn name_of_among<'a>(
+        &self,
+        presented: &str,
+        stored: impl Iterator<Item = (&'a str, &'a str)>,
+    ) -> Option<TokenName> {
         let hash = digest(presented.as_bytes());
         let tokens = self
             .inner
             .tokens
             .read()
             .unwrap_or_else(PoisonError::into_inner);
-        tokens
+        let mut found: Option<String> = None;
+        let mut consider = |name: &str, sha256: &str| {
+            if bool::from(sha256.as_bytes().ct_eq(hash.as_bytes())) && found.is_none() {
+                found = Some(name.to_owned());
+            }
+        };
+        for token in tokens.iter() {
+            consider(&token.name.0, &token.sha256);
+        }
+        for (name, sha256) in stored {
+            consider(name, sha256);
+        }
+        // A stored name was judged when it was made or read; a name that is not a name finds none.
+        found.and_then(|name| name.parse().ok())
+    }
+
+    /// The names of the tokens of the file in use, in the file's order.
+    #[must_use]
+    pub fn names(&self) -> Vec<String> {
+        self.inner
+            .tokens
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
             .iter()
-            .find(|token| bool::from(token.sha256.as_bytes().ct_eq(hash.as_bytes())))
-            .map(|token| token.name.clone())
+            .map(|token| token.name.0.clone())
+            .collect()
+    }
+
+    /// Whether the tokens file in use names a token `name`.
+    #[must_use]
+    pub fn has_name(&self, name: &str) -> bool {
+        self.inner
+            .tokens
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|token| token.name.0 == name)
+    }
+
+    /// Whether the tokens file in use holds the SHA-256 `sha256`.
+    #[must_use]
+    pub fn has_digest(&self, sha256: &str) -> bool {
+        self.inner
+            .tokens
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .any(|token| token.sha256 == sha256)
     }
 
     /// Reads the tokens file again. Tokens that changed are in use from now on (a token that is
