@@ -127,10 +127,10 @@ would widen the gate's API URL to HTTPS with a pinned CA, and it is not built sp
 enrolled Mac, and it can erase a Mac. So whoever holds the NanoHUB API key holds root on the Macs.
 Under design section 5.1 a compromised coordinator can already order any verb on any host. Linking
 the gate adds erase to that list, plus the install of any pkg the Mac accepts (a Developer ID pkg,
-if section 7 ends there). The gate's own code enqueues only seven command types: `DeviceInformation`,
+if section 7 ends there). The gate's own code enqueues only eight command types: `DeviceInformation`,
 `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`,
-`EnableRemoteDesktop` and `ProfileList`. A test
-pins that list (**Built**: `the_gate_enqueues_only_its_seven_command_types` in
+`EnableRemoteDesktop`, `ProfileList` and `Settings`. A test
+pins that list (**Built**: `the_gate_enqueues_only_its_eight_command_types` in
 `crates/hostkeeper-mdm-gate/tests/gate.rs`). This bounds the code, not a thief of the key.
 The key is a file, mode 0600 and owned by the coordinator's user, named by a flag (rule S2).
 

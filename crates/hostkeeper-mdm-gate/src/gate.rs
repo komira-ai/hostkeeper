@@ -157,6 +157,21 @@ impl Gate {
         self
     }
 
+    /// Replaces the installs of the pkg install ([`Install::set_installs`]): the next look sends
+    /// by them, and a Mac whose entry changed is sent it again. Without a pkg install (no MDM
+    /// host) there is nothing to send them from and it does nothing.
+    pub fn set_installs(&self, installs: crate::installs::Installs) {
+        if let Some(install) = &self.install {
+            install.set_installs(installs);
+        }
+    }
+
+    /// The installs the gate sends by now; `None` without a pkg install.
+    #[must_use]
+    pub fn installs(&self) -> Option<crate::installs::Installs> {
+        self.install.as_ref().map(Install::installs)
+    }
+
     /// The same gate with the enrollment baseline `baseline` ([`crate::baseline`]), or without
     /// one for `None`. It acts only with the enrollment side too.
     #[must_use]

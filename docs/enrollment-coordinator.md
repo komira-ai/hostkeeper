@@ -331,9 +331,10 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   API (`PUT /api/v1/nanomdm/enqueue/<id>`, basic authentication as `nanohub`). A command the device
   has not answered is never sent again, so a Mac that is off piles nothing up; a query NanoHUB did
   not queue, or never confirmed it queued (the coordinator stopped while asking), is sent again at
-  the device's next event, and one the device answered with an error at its next `TokenUpdate`. The gate's code sends only five command types (`DeviceInformation`,
-  `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`); any other is
-  refused before NanoHUB is called. This bounds the code, not a holder of the key.
+  the device's next event, and one the device answered with an error at its next `TokenUpdate`. The gate's code sends only eight command types (`DeviceInformation`,
+  `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`,
+  `EnableRemoteDesktop`, `ProfileList`, `Settings`); any other is refused before NanoHUB is
+  called. This bounds the code, not a holder of the key.
 - **What it believes.** A result is read only when its command UUID is one the gate sent that
   device and the device has not answered (NanoHUB's webhook carries no signature). A device is
   enrolled from its first `TokenUpdate` until a `CheckOut`; an `Authenticate` begins a new
@@ -387,10 +388,12 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   The daemon posts the nonce back with its request ([docs/operations/enrollment.md](operations/enrollment.md)),
   and the request is approved as above.
 
-- **Its install of the pkg.** With `--mdm-pkg-allowlist` and `--mdm-host` as well, the gate
-  installs the hostkeeper pkg on each Mac it acts on (design sections 7.1 and 5.4). The
-  allowlist is a TOML file, a regular file of root's that its group and others cannot write,
-  read at start (a defect stops it; a new entry takes a restart):
+- **Its install of the pkg.** With `--mdm-host` as well, the gate installs the hostkeeper pkg on
+  each Mac it acts on (design sections 7.1 and 5.4). The pkgs it may send are the MDM setting
+  `installs` (below, "The installs setting"); the old form, `--mdm-pkg-allowlist`, is read once to
+  seed it. The old allowlist is a TOML file, a regular file of root's that its group and others
+  cannot write, read at start (a defect stops it) only while the setting was never set; after
+  that the setting rules and a change of the file changes nothing:
 
   ```toml
   [[pkg]]
@@ -404,7 +407,8 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   its line of the release's `SHA256SUMS`, and the file goes into the pkg directory unchanged,
   named by that digest ([macos.md](macos.md), "The installer's signature").
   A path is absolute and named `<sha256>.pkg`, a digest is listed once and so are a version's
-  release numbers, and a list with no entry is refused. The gate sends the newest entry: an
+  release numbers, and a list with no entry is refused. The newest entry is the one that seeds
+  the setting, as the install named `hostkeeper`, which the gate sends: an
   `InstallEnterpriseApplication` with an inline manifest, one `software-package` asset whose
   `url` is `https://<--mdm-host>/pkg/<sha256>.pkg` and whose `sha256` is the digest the Mac
   checks, and the metadata `bundle-identifier` `dev.hostkeeper.hostkeeper`, `bundle-version`,
@@ -423,13 +427,29 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     (`install_sends`), the last send (`install_last_sent_unix`) and its digest
     (`install_sha256`). A new enrollment starts the count again.
 
-  Without the two flags the gate sends no pkg, and the pkg is installed by hand.
+  Without `--mdm-host` the gate sends no pkg, and the pkg is installed by hand.
+
+  **The installs setting.** `installs` is a setting of the MDM setup (`Mdm.PutSetting`, a
+  signed-in user; default `[]`), a JSON array of named installs: `name` (1 to 32 lower-case
+  letters, digits and `-`, listed once), `bundle_id`, `sha256`, `version`, `path` (absolute, named
+  `<sha256>.pkg`, the digest listed once) and an optional `url`, the origin the package proxy
+  pulls the file from (the gate keeps and shows it; nothing fetches it yet). A key the coordinator
+  does not know is passed over. The install named `hostkeeper` is the pkg of the paragraphs
+  above; every other install is a baseline entry (below). A change of the setting reaches the
+  running gate at once, with no restart. At the first start with `--mdm-host`, when the setting
+  was never set and `--mdm-pkg-allowlist` is given, the allowlist's newest pkg is stored as the
+  install `hostkeeper`; the file is not read again. An old allowlist therefore works as before,
+  and the flag can be dropped once the coordinator has started with it once.
 
 - **The baseline** (`--mdm-baseline-file`, `--mdm-baseline-check-s`; [operations/mdm-baseline.md](operations/mdm-baseline.md)).
   Once the Mac has acknowledged the config profile, the gate sends it its host group's entries
   (the group is the role of the Mac's allowlist entry): `EnableRemoteDesktop`, to a supervised Mac
-  only, and an `InstallProfile` for each profile file. It sends a `ProfileList` at each
-  `TokenUpdate` and every check interval, and sends again what is missing. Each send NanoHUB
+  only, and an `InstallProfile` for each profile file; a `Settings` that sets `DeviceName` and
+  `HostName` to the host id of the Mac's allowlist entry, to a supervised Mac only; and an
+  `InstallEnterpriseApplication` for each install of the setting `installs` but the hostkeeper
+  pkg. It sends a `ProfileList` at each `TokenUpdate` and every check interval, and sends again
+  what is missing. A changed host id, or a changed `installs` entry (its digest, version, bundle
+  identifier or name), is sent again; a changed `url` or `path` is not. Each send NanoHUB
   queued is audited `mdm_baseline` by `mdm-gate`; a failure does not fail the enrollment, and
   `hkctl mdm list-devices` shows `baseline_state` and `baseline_reason`.
 

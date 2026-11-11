@@ -22,9 +22,10 @@
 //! without them as one with no profile sent and no nonce issued. The pkg sends of an enrollment
 //! (task M14) are field 20, added to schema 1 the same way: a record without it is one with no
 //! pkg sent. The enrollment baseline's sends (design 6.4) are field 21 the same way; its
-//! unanswered `EnableRemoteDesktop` and `ProfileList` commands are written to field 22, not to
+//! unanswered `EnableRemoteDesktop`, `ProfileList` and `Settings` commands are written to field 22, not to
 //! the list of field 15, because a release before them refuses a sent command of a type it does
-//! not send, and so would refuse the whole record.
+//! not send, and so would refuse the whole record. The device name's last `Settings` and the
+//! baseline installs are fields 6 and 7 of the baseline message, added the same way.
 //!
 //! Under the coordinator's file store, the directory is `mdm-devices` in the enrollment store
 //! (`--enrollment-dir`), so `hostkeeper-coordinator backup` and `restore` copy it with the
@@ -38,12 +39,12 @@ use hostkeeper_enrollment::names::KeyHash;
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 
-use crate::command::{COMMAND_TYPES, ENABLE_REMOTE_DESKTOP, PROFILE_LIST};
+use crate::command::{COMMAND_TYPES, ENABLE_REMOTE_DESKTOP, PROFILE_LIST, SETTINGS};
 use crate::ids::{CommandUuid, EnrollmentId};
 use crate::pkg::PkgDigest;
 use crate::record::{
-    BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord, Phase,
-    ProfileAnswer, ProfileCommand, Sent,
+    BaselineInstall, BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord,
+    Phase, ProfileAnswer, ProfileCommand, Sent,
 };
 
 /// The schema this release writes and the newest it reads.
@@ -190,6 +191,14 @@ struct BaselineProfilePb {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct BaselineInstallPb {
+    #[prost(string, tag = "1")]
+    name: String,
+    #[prost(message, optional, tag = "2")]
+    command: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct BaselinePb {
     #[prost(message, optional, tag = "1")]
     remote_desktop: Option<ProfilePb>,
@@ -201,6 +210,12 @@ struct BaselinePb {
     installed: Vec<String>,
     #[prost(uint64, optional, tag = "5")]
     checked_unix: Option<u64>,
+    /// The device name's `Settings` and the baseline installs: added to the baseline message
+    /// as fields 6 and 7, so a release before them skips both and reads the rest.
+    #[prost(message, optional, tag = "6")]
+    name: Option<ProfilePb>,
+    #[prost(message, repeated, tag = "7")]
+    installs: Vec<BaselineInstallPb>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -337,6 +352,15 @@ fn baseline_pb(baseline: &BaselineRecord) -> BaselinePb {
         list: baseline.list.as_ref().map(profile_pb),
         installed: baseline.installed.clone(),
         checked_unix: baseline.checked_unix,
+        name: baseline.name.as_ref().map(profile_pb),
+        installs: baseline
+            .installs
+            .iter()
+            .map(|install| BaselineInstallPb {
+                name: install.name.clone(),
+                command: Some(profile_pb(&install.command)),
+            })
+            .collect(),
     }
 }
 
@@ -353,10 +377,22 @@ fn baseline_of(pb: BaselinePb) -> Option<BaselineRecord> {
             })
         })
         .collect::<Option<Vec<_>>>()?;
+    let installs = pb
+        .installs
+        .into_iter()
+        .map(|install| {
+            Some(BaselineInstall {
+                name: install.name,
+                command: profile_of(install.command?)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
     Some(BaselineRecord {
         remote_desktop: command(pb.remote_desktop)?,
         profiles,
         list: command(pb.list)?,
+        name: command(pb.name)?,
+        installs,
         installed: pb.installed,
         checked_unix: pb.checked_unix,
     })
@@ -364,7 +400,7 @@ fn baseline_of(pb: BaselinePb) -> Option<BaselineRecord> {
 
 /// Whether a command of `request_type` is kept in `baseline_sent` (field 22), not in `sent`.
 fn is_baseline_type(request_type: &str) -> bool {
-    [ENABLE_REMOTE_DESKTOP, PROFILE_LIST].contains(&request_type)
+    [ENABLE_REMOTE_DESKTOP, PROFILE_LIST, SETTINGS].contains(&request_type)
 }
 
 fn sent_pb(sent: &Sent) -> SentPb {
