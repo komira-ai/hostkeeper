@@ -42,7 +42,7 @@ use hostkeeper_launchd::{
 use hostkeeper_observe::{CommandRunner, ProcessProbe, ProcessRunner, ServiceManager};
 use hostkeeper_openrc::manager::OPENRC_RUN_DIR;
 use hostkeeper_openrc::{OpenrcLauncher, OpenrcServiceManager, RcService};
-use hostkeeper_placed::{CommandLauncher, Systemctl, UnitControl};
+use hostkeeper_placed::{CommandLauncher, LaunchError, Systemctl, UnitControl};
 use hostkeeper_steps::{BootIdSource, StepLauncher, SystemClock, SystemdLauncher};
 
 use crate::hook_log::log_hook_output;
@@ -220,16 +220,16 @@ impl<R: CommandRunner> RunnerLauncher<R> {
 }
 
 impl<R: CommandRunner> CommandLauncher for RunnerLauncher<R> {
-    fn run(&self, argv: &[&str]) -> Result<(), String> {
+    fn run(&self, argv: &[&str]) -> Result<(), LaunchError> {
         let argv: Vec<String> = argv.iter().map(|arg| (*arg).to_owned()).collect();
         let output = self
             .runner
             .run(&argv, self.deadline)
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| LaunchError::Failed(error.to_string()))?;
         match output.exit_code {
             Some(0) => Ok(()),
-            Some(code) => Err(format!("exit status {code}")),
-            None => Err("ended by a signal".to_owned()),
+            Some(code) => Err(LaunchError::Exit(code)),
+            None => Err(LaunchError::Failed("ended by a signal".to_owned())),
         }
     }
 }

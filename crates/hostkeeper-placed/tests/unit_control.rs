@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 
 use hostkeeper_placed::testing::{Event, FakeLauncher, FakeUnitControl, Log, UnitCall};
-use hostkeeper_placed::{Systemctl, UnitControl, UnitControlError};
+use hostkeeper_placed::{LaunchError, Systemctl, UnitControl, UnitControlError};
 
 fn argv(words: &[&str]) -> Vec<String> {
     words.iter().map(|word| (*word).to_owned()).collect()
@@ -131,4 +131,66 @@ fn the_fake_fails_the_calls_it_was_told_to() {
         Err(every("IsActive(\"a.service\")"))
     );
     assert_eq!(failing.active(), BTreeSet::new());
+}
+
+/// Proves a stop of a unit the service manager has not loaded (`systemctl stop` exits 5, as for
+/// the run unit of a first install whose package was never installed) is a stop that succeeded:
+/// one command, the exact argument vector, no error.
+///
+/// Catches: the rollback of a first install failing because its unit does not exist yet.
+#[test]
+fn a_stop_of_a_unit_that_is_not_loaded_is_no_error() {
+    let systemctl = Systemctl::new(FakeLauncher::failing_with(LaunchError::Exit(5)));
+    assert_eq!(systemctl.stop_unit("js-agent-crun.service"), Ok(()));
+    assert_eq!(
+        systemctl.launcher().runs(),
+        vec![argv(&["systemctl", "stop", "--", "js-agent-crun.service"])]
+    );
+}
+
+/// Proves every other end of `systemctl stop` is still an error naming the command and the end:
+/// exit 4 (no permission), exit 1 (a stop that failed), and an end with no exit code (a signal,
+/// the deadline); and that exit 5 is forgiven for a stop only, never for a start or a reload.
+///
+/// Catches: a real stop failure read as stopped, or a start of a missing unit read as started.
+#[test]
+fn a_stop_that_fails_otherwise_and_a_start_of_a_unit_not_loaded_are_errors() {
+    let stop = |why: &str| UnitControlError {
+        action: "systemctl stop -- web.service".to_owned(),
+        why: why.to_owned(),
+    };
+    for (error, why) in [
+        (LaunchError::Exit(4), "exit status 4"),
+        (LaunchError::Exit(1), "exit status 1"),
+        (
+            LaunchError::Failed("ended by a signal".to_owned()),
+            "ended by a signal",
+        ),
+    ] {
+        let systemctl = Systemctl::new(FakeLauncher::failing_with(error));
+        assert_eq!(systemctl.stop_unit("web.service"), Err(stop(why)));
+        assert_eq!(
+            systemctl
+                .stop_unit("web.service")
+                .expect_err("still fails")
+                .to_string(),
+            format!("systemctl stop -- web.service failed: {why}")
+        );
+    }
+    let absent = Systemctl::new(FakeLauncher::failing_with(LaunchError::Exit(5)));
+    assert_eq!(
+        absent.start_unit("web.service"),
+        Err(UnitControlError {
+            action: "systemctl start -- web.service".to_owned(),
+            why: "exit status 5".to_owned(),
+        })
+    );
+    assert_eq!(
+        absent.daemon_reload(),
+        Err(UnitControlError {
+            action: "systemctl daemon-reload".to_owned(),
+            why: "exit status 5".to_owned(),
+        })
+    );
+    assert_eq!(absent.is_active("web.service"), Ok(false));
 }

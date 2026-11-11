@@ -32,11 +32,28 @@ pub trait UnitControl {
     fn is_active(&self, unit: &str) -> Result<bool, UnitControlError>;
 }
 
+/// Why a command a [`CommandLauncher`] ran did not succeed.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LaunchError {
+    /// The command ran to its end and exited with this code, which is not 0.
+    #[error("exit status {0}")]
+    Exit(i32),
+    /// The command did not exit with a code: it could not start, passed its deadline, or was
+    /// ended by a signal; the text says which.
+    #[error("{0}")]
+    Failed(String),
+}
+
 /// Runs one command, given as its argument vector, to its end. An exit that is not 0, or a
 /// command that cannot start, is an error saying what happened.
 pub trait CommandLauncher {
-    fn run(&self, argv: &[&str]) -> Result<(), String>;
+    fn run(&self, argv: &[&str]) -> Result<(), LaunchError>;
 }
+
+/// The exit code of `systemctl stop` for a unit systemd has not loaded, so that nothing of it
+/// runs: "Unit ... not loaded", systemd's `EXIT_NOTINSTALLED` for its bus error `NoSuchUnit`.
+/// Every other failure of a stop has another code (4 for no permission, 1 for the rest).
+const SYSTEMCTL_NOT_LOADED: i32 = 5;
 
 /// [`UnitControl`] by `systemctl`, each call one command through the launcher.
 #[derive(Debug)]
@@ -55,10 +72,17 @@ impl<L: CommandLauncher> Systemctl<L> {
     }
 
     fn run(&self, argv: &[&str]) -> Result<(), UnitControlError> {
-        self.launcher.run(argv).map_err(|why| UnitControlError {
-            action: argv.join(" "),
-            why,
-        })
+        self.launcher
+            .run(argv)
+            .map_err(|error| failure(argv, &error))
+    }
+}
+
+/// The error of the command `argv`, which the launcher ended with `error`.
+fn failure(argv: &[&str], error: &LaunchError) -> UnitControlError {
+    UnitControlError {
+        action: argv.join(" "),
+        why: error.to_string(),
     }
 }
 
@@ -68,9 +92,15 @@ impl<L: CommandLauncher> UnitControl for Systemctl<L> {
         self.run(&["systemctl", "daemon-reload"])
     }
 
-    /// `systemctl stop -- <unit>`.
+    /// `systemctl stop -- <unit>`. Its exit 5 is no error: systemd has not loaded the unit (the
+    /// run unit of a first install whose package was never installed), so it is not running.
+    /// Every other failure is.
     fn stop_unit(&self, unit: &str) -> Result<(), UnitControlError> {
-        self.run(&["systemctl", "stop", "--", unit])
+        let argv = ["systemctl", "stop", "--", unit];
+        match self.launcher.run(&argv) {
+            Ok(()) | Err(LaunchError::Exit(SYSTEMCTL_NOT_LOADED)) => Ok(()),
+            Err(error) => Err(failure(&argv, &error)),
+        }
     }
 
     /// `systemctl start -- <unit>`.

@@ -245,7 +245,7 @@ fn log_is_shared_and_clearable() {
 /// Catches a launcher fake that forgets runs or fails when it should not.
 #[test]
 fn fake_launcher_records_every_run() {
-    use hostkeeper_placed::CommandLauncher;
+    use hostkeeper_placed::{CommandLauncher, LaunchError};
     let launcher = FakeLauncher::new();
     assert!(launcher.runs().is_empty());
     assert_eq!(launcher.run(&["a", "b"]), Ok(()));
@@ -255,8 +255,14 @@ fn fake_launcher_records_every_run() {
         vec![vec!["a".to_owned(), "b".to_owned()], vec!["c".to_owned()]]
     );
     let failing = FakeLauncher::failing();
-    assert_eq!(failing.run(&["a"]), Err("exit status 1".to_owned()));
+    assert_eq!(failing.run(&["a"]), Err(LaunchError::Exit(1)));
     assert_eq!(failing.runs(), vec![vec!["a".to_owned()]]);
+    let signalled = FakeLauncher::failing_with(LaunchError::Failed("ended by a signal".to_owned()));
+    assert_eq!(
+        signalled.run(&["b"]),
+        Err(LaunchError::Failed("ended by a signal".to_owned()))
+    );
+    assert_eq!(signalled.runs(), vec![vec!["b".to_owned()]]);
 }
 
 /// Catches a FaultFs that does not pass each operation through to disk under the root, or
