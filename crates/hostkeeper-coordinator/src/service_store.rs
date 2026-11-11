@@ -110,6 +110,7 @@ impl Coordinator {
                 self.desired.take_landed(&landing);
                 self.ops.take_landed(&landing);
                 self.verdicts.take_landed(&landing);
+                self.accounts.take_landed(&landing);
             }
             tracing::warn!(
                 alert = "store_unreachable",

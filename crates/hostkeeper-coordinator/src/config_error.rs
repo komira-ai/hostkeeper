@@ -8,6 +8,7 @@ use hostkeeper_oidc::{ConfigError, KeySourceError};
 use hostkeeper_tls::TlsError;
 use hostkeeper_wire::identity::PrefixError;
 
+use crate::accounts::AccountsError;
 use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
 use crate::inventory::WindowAboveMax;
@@ -19,6 +20,13 @@ use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
 use crate::ui::UiDirError;
 use crate::verdict_file::VerdictsError;
+
+impl StartError {
+    /// The refusal of a setup store that could not be read.
+    pub(crate) fn mdm_setup_store(why: crate::mdm_setup::SetupFailure) -> Self {
+        Self::MdmSetupStore(why.to_string())
+    }
+}
 
 /// Why the coordinator did not start, for the operator.
 #[derive(Debug, thiserror::Error)]
@@ -34,9 +42,27 @@ pub enum StartError {
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
     )]
     TokenFlags,
-    /// Neither is given.
-    #[error("one of --tokens-file and --operator-token-file is required")]
+    /// None of the three is given.
+    #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
+    /// The MDM secrets key of `--mdm-secrets-key-file` is refused, or the store holds sealed
+    /// secrets and none is given.
+    #[error(transparent)]
+    MdmSecretsKey(#[from] crate::mdm_secrets::KeyError),
+    /// The key of `--mdm-secrets-key-file` does not open the secret of these kinds in the store.
+    #[error(
+        "--mdm-secrets-key-file: the key does not open the sealed secrets of {0}: it is not the key they were sealed under"
+    )]
+    MdmSecretsUnopened(String),
+    /// The tables of the MDM setup could not be opened or read.
+    #[error("{0}")]
+    MdmSetupStore(String),
+    /// The password hash parameters of the login flags are outside what Argon2id takes.
+    #[error(transparent)]
+    Password(#[from] crate::password::PasswordError),
+    /// The initial-admin file is refused, or its passwords cannot be set up.
+    #[error(transparent)]
+    InitialAdmin(#[from] crate::initial_admin::InitialAdminError),
     /// `--private-listen` is a wildcard address and `--private-listen-wildcard` is not given.
     #[error(
         "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
@@ -182,6 +208,9 @@ pub enum StartError {
     /// The file of verdicts is refused.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// The file of users and API tokens is refused.
+    #[error(transparent)]
+    Accounts(#[from] AccountsError),
     /// The TLS client for the repository origins could not be made.
     #[error("repository origins: {0}")]
     OriginTls(#[from] OriginTlsError),

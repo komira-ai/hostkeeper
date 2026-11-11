@@ -3,7 +3,8 @@
 //! This is a file server and nothing else: it parses no token, holds no state between requests,
 //! builds no page and caches nothing. The operator web app it serves is plain files that call the
 //! operator API on the same listener with the operator's token, so the app is same-origin and
-//! needs no cross-origin access, no cookie and no session (`docs/ui-serving.md`).
+//! needs no cross-origin access (`docs/ui-serving.md`). The file server itself reads no token
+//! and no cookie; the sign-in routes of the same listener are [`crate::login_routes`].
 //!
 //! A request is answered from the directory only when every part of the path below
 //! [`PREFIX`] is one plain name: after percent-decoding, a part that is empty (`//`, an
