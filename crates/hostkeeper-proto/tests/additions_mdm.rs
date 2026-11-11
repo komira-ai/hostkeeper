@@ -259,7 +259,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 21);
+    assert_eq!(messages.len(), 22);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
