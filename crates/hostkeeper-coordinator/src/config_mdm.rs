@@ -21,6 +21,7 @@ use crate::mdm_acme::SystemClock as AcmeClock;
 use crate::mdm_acme::godaddy::GoDaddyProviders;
 use crate::mdm_acme::https::{Https, RealHttps};
 use crate::mdm_acme::renewal::{Parts as RenewerParts, TlsRenewer, renew_every};
+use crate::mdm_lease::Lease;
 use crate::mdm_server::pushing::{SetupPushers, production_sender};
 use crate::mdm_server::queue::{MdmQueue, Pushers};
 use crate::mdm_server::tls::{MdmTls, Trust};
@@ -78,6 +79,7 @@ pub(super) fn wire(
     flags: &Serve,
     store: &Arc<dyn MdmStore>,
     setup: &Arc<MdmSetup>,
+    lease: &Lease,
 ) -> Option<Wiring> {
     let address = flags.mdm.mdm_listen?;
     let pushing = Arc::new(SetupPushers::new(
@@ -91,6 +93,7 @@ pub(super) fn wire(
         Arc::clone(store),
         clock,
         Arc::clone(&pushers),
+        lease.clone(),
         Arc::clone(setup),
         flags.mdm.mdm_command_timeout_s,
     ));

@@ -445,8 +445,7 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`,
-/// [`MAX_OPERATOR_BYTES`] for every other method.
+/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
@@ -468,8 +467,8 @@ pub(crate) fn operator_limit(path: &str) -> usize {
 /// Serves the gRPC call `request` with the tonic server of its service, in process, with
 /// `admitted` in its extensions for the adapter. The service's message limit applies to the
 /// request: 16 KiB for a heartbeat, 8 KiB for `Enroll`, `Poll` and `Renew`, 256 KiB for
-/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put`, `Mdm.PutSecret`,
-/// `Mdm.PutPushReply` and `Mdm.PutPushCertificate`, 4 KiB for every other operator's call. A path of a
+/// `SetDesired` and `Repositories.Put`, 64 KiB for `HostGroups.Put` and the `Mdm` writes of
+/// [`operator_limit`], 4 KiB for every other operator's call. A path of a
 /// service this coordinator does not serve is `UNIMPLEMENTED`.
 pub(crate) async fn serve_admitted<B>(
     coordinator: &Arc<Coordinator>,

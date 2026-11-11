@@ -35,6 +35,7 @@ use super::queue::{MdmQueue, Pushers};
 use super::tls::{MdmTls, Trust};
 use super::{MdmServer, Parts};
 use crate::host_groups_support::coordinator_listed;
+use crate::mdm_lease::Lease;
 use crate::mdm_secrets::{MasterKey, Secret, SecretKind};
 use crate::mdm_setup::MdmSetup;
 use crate::service::Coordinator;
@@ -243,6 +244,12 @@ impl Rig {
     /// A queue as a restarted coordinator builds it: new pushers and nothing armed, over the same
     /// tables, setup, clock and fake APNs.
     pub(crate) fn restarted_queue(&self) -> MdmQueue {
+        self.queue_under(Lease::new(|| true))
+    }
+
+    /// A queue of another node over the same tables, setup, clock and fake APNs, which pushes only
+    /// while `lease` is held.
+    pub(crate) fn queue_under(&self, lease: Lease) -> MdmQueue {
         let apns = Arc::clone(&self.apns);
         let factory: SenderFactory = Box::new(move |_, _| {
             Some(Arc::clone(&apns) as Arc<dyn hostkeeper_mdm_push::apns::PushSender>)
@@ -253,6 +260,19 @@ impl Rig {
             Arc::clone(&self.store) as Arc<dyn MdmStore>,
             Arc::clone(&self.time) as Arc<dyn UnixClock>,
             Arc::new(move || pushing.get()),
+            lease,
+            Arc::clone(&self.setup),
+            86_400,
+        )
+    }
+
+    /// A queue of a node that holds no push identity, over the same tables and setup.
+    pub(crate) fn queue_without_push_identity(&self, lease: Lease) -> MdmQueue {
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(|| None),
+            lease,
             Arc::clone(&self.setup),
             86_400,
         )
@@ -264,6 +284,7 @@ impl Rig {
             Arc::clone(&self.store) as Arc<dyn MdmStore>,
             Arc::clone(&self.time) as Arc<dyn UnixClock>,
             Arc::new(|| None),
+            Lease::new(|| true),
             Arc::clone(&self.setup),
             86_400,
         )
@@ -344,6 +365,7 @@ impl Rig {
             Arc::clone(&store) as Arc<dyn MdmStore>,
             Arc::clone(&time) as Arc<dyn UnixClock>,
             Arc::clone(&pushers),
+            Lease::new(|| true),
             Arc::clone(&setup),
             86_400,
         ));

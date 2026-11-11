@@ -417,11 +417,11 @@ a cursor error, otherwise `POST /devices/sync` with the cursor; the devices, the
 (`abm_apply`). Then, when the setting `mdm_name` names a host name, the ADE profile (`profile.rs`: the live profile's flags, `url` `https://<mdm_name>/enroll`, named by `ade_profile_name`) is defined at ABM when its digest differs
 from the stored one (`POST /profile`), and every device that has no profile is given it (`POST /profile/devices`, `PUT` when the `POST` is answered with a `4xx`); a device ABM does not give it (`NOT_ACCESSIBLE`) is tried again by the next pass; a device already on a profile is left on it. **Nothing is written to ABM
 until an operator has uploaded a token and named the MDM host; the assignment write was not probed in the spike and runs only against the fake in the tests.** A single timer (`abm_sync_every`, the setting `abm_sync_s`, default 300) runs the passes;
-taking them under the store's lease is CM19. `Abm::serial_in_abm` (and `Coordinator::serial_in_abm`) is the read the approval (CM9) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
+a pass runs only while the node holds the MDM lease (4.9, **Built** CM19: `crates/hostkeeper-coordinator/src/mdm_lease.rs`). `Abm::serial_in_abm` (and `Coordinator::serial_in_abm`) is the read the approval (CM9) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
 The two `Mdm` rpcs, both session-only: `PutAbmToken` (the JSON of the four parts and `access_secret_expiry`, or a `.p7m` opened with the `abm_key` held by CMS key transport, RSAES-PKCS1-v1_5 or RSAES-OAEP, and AES-CBC or 3DES-CBC content; the token is proved to Apple with a session and `GET /account` before it is kept, its expiry is the token's own,
 and the answer names the server entry and the organisation Apple says it belongs to) and `GetAbmPublicKey` (the certificate of the key pair, made once, RSA 2048, when none is held; calls are serialized, and a certificate held without its key is refused `abm_key_missing`, never replaced). `PutSecret` judges `abm_key` (an RSA private key in PEM, PKCS#1 or PKCS#8) and `abm_cert` (a certificate, made for the key when one is held) at upload.
 The `.p7m` decryption rests on the CMS and S/MIME standards and a round trip with a synthetic token; no `.p7m` that Apple made was available. The one-off reader of the takeover is `cargo xtask abm-takeover-token` ([the runbook](../operations/abm-takeover.md)).
-The MDM tables are opened only when the database is used or, with files, `--mdm-secrets-key-file` is given (`<state-file>.mdm/`), so a farm that does not use MDM gets no directory. Not built here: the status of the sync for the setup page (`Abm::status` is kept for CM21), the setting `mdm_name` itself (CM21 declares it; the sync reads it as a plain setting until then), and the lease (CM19).
+The MDM tables are opened only when the database is used or, with files, `--mdm-secrets-key-file` is given (`<state-file>.mdm/`), so a farm that does not use MDM gets no directory. Not built here: the status of the sync for the setup page (`Abm::status` is kept for CM21), the setting `mdm_name` itself (CM21 declares it; the sync reads it as a plain setting until then), and, left to the task that builds it, the renewal of the certificate under the lease (CM17).
 
 **Cost.** One external request every five minutes when nothing changed, one more per page of changes, one per profile assignment batch.
 That is 288 requests a day idle. The interval is a tunable so the cost and the window below can be traded.
@@ -600,7 +600,7 @@ and `--mdm-pkg-dir` (a file of key material and a directory of files the host pr
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
 setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
-new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, with CM13 for `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`, with CM12c for `identity_days`, `renew_alert_days`, `challenge_ttl_s`, `ca_days`, `identity_org`, `enroll_rate_per_min` and `enroll_pending_max`, and for the proxy's `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`) and
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`, and for the proxy's `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
 
@@ -648,6 +648,22 @@ exception of `Abm::status`: `abm_last_sync_unix` (the last pass that ended witho
 coordinator started*) and `abm_sync_error` (the words of the last failure, empty after a good pass; a token ABM accepts clears it at once) and `abm_unavailable` (this coordinator runs no ABM client, which the row says). They are not part of *configured*. The numbers of the ABM refusals are 17 to 22, after `topic_changed` (16), because
 CM7 holds 8 to 16, after main's `name_locked` (7); none of them is released. Not verified: the browser glue in `ui/main.js` (the blob download), a real file chooser, and ABM's own pages.
 
+**Second node and the lease** (**Built**, CM19: `crates/hostkeeper-coordinator/src/mdm_lease.rs`). The sync, the push sender and the
+renewal of the TLS certificate (4.10) act on the outside world, so one node does them at a time: the one that holds **the MDM lease**,
+which is the store's own, the advisory lock of the database at the node's epoch (`coordinator-storage.md` sections 4.4 and 5), seen as
+the writing session being up. A lost session or a store another coordinator led is a lease not held; the files, with one writer by
+`flock`, always hold it. Before each act the node asks `Lease::held`: a push to APNs (the enqueue of a command, the timeout return, the
+floor, a Mac's `NotNow`), a pass of the ABM sync, and, when CM17 lands, a renewal. A node that does not hold the lease does none of
+them and asks again at its next tick, so a node whose session is revived goes on by itself, and a node that took the lease over starts its
+push floor at its first sweep, one floor before its first push. A sweep without the lease drops what the node armed and what its push policy held for those Macs, so a node whose lease came back starts its floors anew from the store instead of pushing at a floor, or for a Mac, it knew before the gap. No
+second lock is made, so the lease that fences the store's writes is the lease that fences the timers. An act that began while the lease
+was held is not cut short; its writes are fenced by the database (`lease_fenced`) and what it sent to Apple is repeatable. The
+earlier plan, a refusal to start the MDM listener beside a lease holder that serves MDM, is not built: what keeps two coordinators off one
+database is the advisory lock, which refuses the second one's start, and that is what stays until the standby (`coordinator-storage.md`
+section 7, not built) lets a second node wait. Because the secrets are in the store, a second node needs only the same key file; a node
+given none refuses to start when the store holds a sealed row, and one given a key that opens none of them refuses too (4.9, "The master
+key"; tests `no_flag_is_no_key_unless_secrets_are_sealed` and `serve_over_the_database_keeps_the_same_rules`).
+
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not
 expired; the ABM token is held, reads, and its `access_secret_expiry` (RFC 3339, as the spike read `2027-10-31T22:01:36Z`) is in the future; the name is set; and a TLS certificate whose subject alternative
@@ -661,11 +677,6 @@ enrolled before this setup hold the name they enrolled at and the operator sets 
 same name is taken again. The lock reads the gate's records only and the check and the write are not one transaction: a coordinator with no gate (no `--mdm-api-url`) holds no Mac, so it never locks, and a Mac whose first `TokenUpdate` lands between the check and the write is not seen. CM11a makes the lock a durable store fact set at the first enrollment and checked in the same transaction as the name write. The name is kept among the settings' rows under `mdm_name`, which `PutSetting` refuses and `ListSettings` does not list. `Mdm.ListDevices` still lists the gate's devices whether or not the setup is
 configured, so the farm's existing view does not vanish at the upgrade; it adds `configured` and `missing`, which the Devices page (CM23) reads to show *not configured* and what is missing, and per device the `host_id` and `group` of
 the one inventory record with its serial and a `baseline` that follows the config profile in this enrollment (none sent, pending, applied, failed). The reconciler's richer baseline states join the enum when it lands. `hkctl` has `mdm status` and `mdm put-name` from the generated table.
-
-**Single node.** The sync, the push sender and the listener are single-node in v1: the coordinator refuses to start the MDM listener
-when the store's lease is held by another coordinator that serves MDM (the lease record names whether it does). Because the secrets are
-in the store, a second node needs only the same key file, so the earlier "secrets in the store for a second node" task shrinks to lifting
-that refusal (CM19).
 
 ### 4.10 The TLS certificate for the MDM name, with no separate stack
 
@@ -860,7 +871,7 @@ operator action are involved.
 | The serial was removed from ABM after its challenge was issued, and it enrolls | the ABM table is read at the replacement; the enrollment is refused, audited and waits for the operator's confirmation (4.2) |
 | `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key gets the stored certificate, whatever the `transactionID`, a different key is refused; tests for both |
 | Identity certificate's serial differs from `Authenticate.SerialNumber` | refused, audited `mdm_serial_mismatch` |
-| Two coordinators on one Postgres | MDM is single-node in v1 (4.9): a second coordinator serving MDM refuses to start while the lease holder serves it; the gate's saves run under the lease (**Built**) |
+| Two coordinators on one Postgres | the advisory lock refuses the second coordinator's start; the MDM timers (push, ABM sync) act only under the lease, which a node that lost its session or a deposed one does not hold (4.9, **Built**, CM19), and the gate's saves run under it too |
 | The push certificate expires | `403` from APNs raises the alert; commands queue; the Macs still `Idle` on their own, so nothing is lost, only delayed |
 | The ABM token expires | alert at 60 days and the status panel; the sync fails closed with a named error and the setup goes back to *not configured*; enrolled Macs are unaffected; the operator uploads a new token in the UI |
 | The TLS certificate for the name expires, or the DNS credential is revoked | the renewal alerts from 30 days; the listener serves the expired certificate until replaced, which a new Mac refuses, so new enrollments fail and existing Macs, which hold their identity, are unaffected; the status says *not configured, TLS expired* |
@@ -1088,7 +1099,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM14c | Remove the three NanoHUB flags and the allowlist flag | one release after CM14a and CM9 | S |
 | CM15 | DDM: declaration store, sync token, status ingest, model-checked first | CM11a | L |
 | CM16 | ACME identity with attestation, behind the identity port, after a farm-Mac test of `IdentityCertificateUUID` | CM12c | M |
-| CM19 | Second node for MDM: lift the single-node refusal (the secrets are already in the store under the shared key file, 4.9) and run the push sender and sync under the lease | CM12c, CM20 | S |
+| CM19 | (**Built**, except the ACME timer, which waits for CM17) Second node for MDM: the push sender and the ABM sync run under the lease (4.9); the secrets are already in the store under the shared key file; there is no MDM-specific refusal to lift | CM12c, CM20 | S |
 
 **Smallest usable slice.** L1 to L6b, L8a and K1 (an operator signs in as `admin`), then CM20, CM7, CM21, CM22a: an operator sets the push certificate up in the UI and sees its status, which is all
 the interim milestone needs. Then CM13 and CM22b (ABM and the name), CM11a and CM22c's upload (TLS), after which the status reads

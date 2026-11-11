@@ -281,7 +281,7 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
-    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write (one pair at a time).
+    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write: one pair is made.
     pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.

@@ -23,11 +23,11 @@
 //! request ([`MdmServer::serves`]), so a Linux-only farm that never uploads an Apple credential
 //! serves its packages. In this task the MDM family's prerequisite is a push identity; the CA of
 //! the Macs' identities (CM12c) and the ABM token (CM13) add theirs there. `/enroll` and `/scep`
-//! stay with the old stack until CM12c (Caddy routes them): a request for either answers `404` once its
-//! family is served. `/apt/...` is the package proxy's ([`crate::proxy_apt`]), served by
-//! [`crate::grpc::route`] before this module is asked, and answers `503` while its family is not
-//! served. `/pkg/<sha256>.pkg` is served from `--mdm-pkg-dir` ([`pkg`], CM11c); it is answered by the
-//! router (`grpc::route`), since its body is streamed. Every other path answers `404`, whoever asks.
+//! are answered here by the enrollment and SCEP handlers (CM12c). `/apt/...` is the package proxy's
+//! ([`crate::proxy_apt`]), served by [`crate::grpc::route`] before this module is asked, and answers
+//! `503` while its family is not served. `/pkg/<sha256>.pkg` is served from `--mdm-pkg-dir`
+//! ([`pkg`], CM11c); it is answered by the router (`grpc::route`), since its body is streamed.
+//! Every other path answers `404`, whoever asks.
 //!
 //! **What an unknown enrollment is answered** (section 6, lesson 3; section 12 item 12, not
 //! verified): `401` with `{"error":"unauthorized"}`, for a request without a certificate or a
@@ -409,6 +409,9 @@ where
     };
     answered.unwrap_or_else(Refusal::answer)
 }
+
+#[cfg(test)]
+mod lease_tests;
 
 #[cfg(test)]
 #[path = "mod_tests.rs"]

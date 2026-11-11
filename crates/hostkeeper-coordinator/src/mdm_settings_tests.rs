@@ -56,6 +56,11 @@ fn each_setting_has_a_default_from_the_start() {
             ("identity_org", "hostkeeper"),
             ("enroll_rate_per_min", "60"),
             ("enroll_pending_max", "256"),
+            ("proxy_wait_s", "10"),
+            ("proxy_redirects", "3"),
+            ("proxy_index_ttl_s", "300"),
+            ("proxy_cache_max_bytes", "21474836480"),
+            ("proxy_fetches", "8"),
         ]
     );
     for setting in SETTINGS {

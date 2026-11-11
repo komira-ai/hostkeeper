@@ -15,6 +15,8 @@ use crate::abm::fake::{
 };
 use crate::abm::transport::AbmRequest;
 use crate::abm::{Abm, Pass, SyncError, SyncReport, sync_every};
+use crate::mdm_lease::Lease;
+use crate::mdm_lease::seat::Seat;
 use crate::mdm_secrets::{MasterKey, Secret, SecretKind};
 use crate::mdm_setup::MdmSetup;
 use crate::store::mdm::files::FileMdm;
@@ -816,7 +818,7 @@ async fn the_timer_runs_a_pass_and_waits_the_interval_of_the_setting() {
         Box::pin(async {})
     });
     let abm = Arc::clone(&rig.abm);
-    let timer = sync_every(abm, Arc::clone(&rig.setup), sleep);
+    let timer = sync_every(abm, Arc::clone(&rig.setup), sleep, Lease::new(|| true));
     tokio::select! {
         never = timer => match never {},
         () = reached.notified() => {}
@@ -859,7 +861,7 @@ async fn an_unreadable_interval_is_the_default() {
         Box::pin(std::future::pending())
     });
     // A pass with a setup whose token cannot be read ends in an error, which the timer logs.
-    let timer = sync_every(Arc::clone(&rig.abm), broken, sleep);
+    let timer = sync_every(Arc::clone(&rig.abm), broken, sleep, Lease::new(|| true));
     tokio::select! {
         never = timer => match never {},
         () = reached.notified() => {}
@@ -897,4 +899,69 @@ async fn a_coordinator_without_a_master_key_has_nothing_to_sync() {
     assert!(!keyless.has_key());
     assert_eq!(rig.abm.sync_once(&keyless).await, Ok(Pass::NoToken));
     assert!(rig.fake.seen().is_empty());
+}
+
+/// Runs the timer of `abm` under `lease` until it has waited `waits` times.
+async fn timer_for(rig: &Rig, abm: &Arc<Abm>, lease: Lease, waits: usize) {
+    let reached = Arc::new(tokio::sync::Notify::new());
+    let count = Arc::new(AtomicU64::new(0));
+    let (wake, seen) = (Arc::clone(&reached), Arc::clone(&count));
+    let limit = u64::try_from(waits).expect("a count");
+    let sleep: Sleep = Arc::new(move |_| {
+        if seen.fetch_add(1, Ordering::SeqCst) + 1 == limit {
+            wake.notify_one();
+            return Box::pin(std::future::pending());
+        }
+        Box::pin(async {})
+    });
+    let timer = sync_every(Arc::clone(abm), Arc::clone(&rig.setup), sleep, lease);
+    tokio::select! {
+        never = timer => match never {},
+        () = reached.notified() => {}
+    }
+}
+
+/// Proves: of two nodes' timers over the same tables, each asking its own connection to ABM, only
+/// the node that holds the lease asks ABM anything; when the lease moves the other one syncs and
+/// the first stops; with the lease lost neither does.
+///
+/// Catches: two coordinators both reading the device list and assigning the profile, or a node
+/// whose link was lost going on syncing beside the one that took over.
+#[tokio::test]
+async fn only_the_node_that_holds_the_lease_syncs() {
+    let rig = simulated("abm-lease", true, false, |sim| {
+        sim.device("A", "pushed", Some("P"))
+    });
+    let second = FakeAbm::new(rig.sim.handler());
+    let (sleep, _) = recording_sleep();
+    let ticking = Arc::clone(&rig.clock);
+    let node_b = Arc::new(Abm::new(
+        Arc::clone(&rig.store) as _,
+        Arc::clone(&second) as _,
+        Arc::new(move || ticking.load(Ordering::SeqCst)),
+        counting_random(),
+        sleep,
+    ));
+    let seat = Seat::empty();
+    let (lease_a, lease_b) = (seat.node("a"), seat.node("b"));
+    let asked = |fake: &Arc<FakeAbm>| fake.seen().len();
+
+    seat.give_to("a");
+    timer_for(&rig, &rig.abm, lease_a.clone(), 2).await;
+    timer_for(&rig, &node_b, lease_b.clone(), 2).await;
+    let (first, other) = (asked(&rig.fake), asked(&second));
+    assert!(first > 0, "the holder synced");
+    assert_eq!(other, 0, "the other node asked ABM nothing");
+
+    seat.give_to("b");
+    timer_for(&rig, &rig.abm, lease_a.clone(), 2).await;
+    assert_eq!(asked(&rig.fake), first, "the old holder stopped");
+    timer_for(&rig, &node_b, lease_b.clone(), 2).await;
+    assert!(asked(&second) > 0, "the new holder syncs");
+
+    seat.lose();
+    let (first, other) = (asked(&rig.fake), asked(&second));
+    timer_for(&rig, &rig.abm, lease_a, 2).await;
+    timer_for(&rig, &node_b, lease_b, 2).await;
+    assert_eq!((asked(&rig.fake), asked(&second)), (first, other));
 }

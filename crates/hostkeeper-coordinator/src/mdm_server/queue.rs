@@ -33,6 +33,7 @@ use hostkeeper_mdm_push::apns::PushError;
 use hostkeeper_mdm_push::pusher::{Outcome, PushSettings, Pusher, Target};
 use hostkeeper_mdm_push::token::DeviceToken;
 
+use crate::mdm_lease::Lease;
 use crate::mdm_setup::MdmSetup;
 use crate::store::mdm::{
     Answer, Answered, Command, CommandState, Enqueued, Enrollment, MdmError, MdmStore, NewCommand,
@@ -54,6 +55,8 @@ pub(crate) struct MdmQueue {
     store: Arc<dyn MdmStore>,
     clock: Arc<dyn UnixClock>,
     pushers: Pushers,
+    /// Whether this node may push now: only the holder of the lease does (CM19).
+    lease: Lease,
     setup: Arc<MdmSetup>,
     timeout_s: u64,
     /// The enrollments whose push floor may be armed: the sweep looks at them.
@@ -70,12 +73,14 @@ impl std::fmt::Debug for MdmQueue {
 
 impl MdmQueue {
     /// A queue over `store`. A `Sent` command with no answer after `timeout_s` seconds on
-    /// `clock` is queued again by [`Self::sweep`]; `pushers` says who pushes, and the push
-    /// settings are read from `setup`.
+    /// `clock` is queued again by [`Self::sweep`]; `pushers` says who pushes, `lease` whether this
+    /// node may (a node that does not hold it pushes nothing and returns no command to the queue),
+    /// and the push settings are read from `setup`.
     pub(crate) fn new(
         store: Arc<dyn MdmStore>,
         clock: Arc<dyn UnixClock>,
         pushers: Pushers,
+        lease: Lease,
         setup: Arc<MdmSetup>,
         timeout_s: u64,
     ) -> Self {
@@ -83,9 +88,19 @@ impl MdmQueue {
             store,
             clock,
             pushers,
+            lease,
             setup,
             timeout_s,
             armed: Mutex::new(BTreeSet::new()),
+        }
+    }
+
+    /// The pusher, when this node holds the lease and a push identity is held.
+    fn pusher(&self) -> Option<Arc<Pusher>> {
+        if self.lease.held() {
+            (self.pushers)()
+        } else {
+            None
         }
     }
 
@@ -138,7 +153,7 @@ impl MdmQueue {
     /// [`MdmError::Store`].
     pub(crate) fn contact(&self, enrollment_id: &str) -> Result<(), MdmError> {
         self.store.record_contact(enrollment_id, self.now_i64())?;
-        if let Some(pusher) = (self.pushers)() {
+        if let Some(pusher) = self.pusher() {
             pusher.mac_connected(enrollment_id);
         }
         Ok(())
@@ -161,7 +176,7 @@ impl MdmQueue {
             .store
             .answer(enrollment_id, id, answer, Some(response), self.now_i64())?;
         if taken == Answered::Taken && answer == Answer::NotNow {
-            if let Some(pusher) = (self.pushers)() {
+            if let Some(pusher) = self.pusher() {
                 pusher.command_deferred(enrollment_id, self.settings());
             }
             self.arm(enrollment_id);
@@ -172,7 +187,7 @@ impl MdmQueue {
     /// The enrollment `enrollment_id` ended: the push policy forgets it.
     pub(crate) fn forget(&self, enrollment_id: &str) {
         self.disarm(enrollment_id);
-        if let Some(pusher) = (self.pushers)() {
+        if let Some(pusher) = self.pusher() {
             pusher.forget(enrollment_id);
         }
     }
@@ -180,7 +195,7 @@ impl MdmQueue {
     /// Pushes `enrollment_id` for the reason `why`, when the policy allows and the Mac has a push
     /// token. The text of a failure is the answer.
     async fn push(&self, enrollment_id: &str, why: Why) -> Option<String> {
-        let pusher = (self.pushers)()?;
+        let pusher = self.pusher()?;
         let enrollment = match self.store.enrollment(enrollment_id) {
             Ok(Some(enrollment)) => enrollment,
             Ok(None) => return None,
@@ -230,6 +245,18 @@ impl MdmQueue {
     /// # Errors
     /// [`MdmError::Store`]: the timed-out commands could not be returned.
     pub(crate) async fn sweep(&self) -> Result<(), MdmError> {
+        if !self.lease.held() {
+            // A gap in the lease is a gap in what this node saw (connections, ended enrollments):
+            // what it armed is dropped, and the store names what waits when the lease is back.
+            let dropped =
+                std::mem::take(&mut *self.armed.lock().unwrap_or_else(PoisonError::into_inner));
+            if let Some(pusher) = (self.pushers)() {
+                for enrollment_id in &dropped {
+                    pusher.forget(enrollment_id);
+                }
+            }
+            return Ok(());
+        }
         let before = self
             .now_i64()
             .saturating_sub(i64::try_from(self.timeout_s).unwrap_or(i64::MAX));
@@ -248,7 +275,7 @@ impl MdmQueue {
                     // Newly known to this process: the push policy has no floor for it either,
                     // so it is armed there too, and the push comes one floor from now.
                     if self.arm(enrollment_id)
-                        && let Some(pusher) = (self.pushers)()
+                        && let Some(pusher) = self.pusher()
                     {
                         pusher.command_deferred(enrollment_id, self.settings());
                     }

@@ -166,6 +166,7 @@ pub mod mdm;
 pub(crate) mod mdm_acme;
 pub(crate) mod mdm_certs;
 pub(crate) mod mdm_enroll;
+pub(crate) mod mdm_lease;
 pub(crate) mod mdm_name;
 pub mod mdm_push;
 pub mod mdm_secrets;

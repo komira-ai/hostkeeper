@@ -86,6 +86,7 @@ use crate::listen::{
 };
 use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
+use crate::mdm_lease::Lease;
 use crate::ops::OpsStore;
 use crate::proxy_origin::Proxy;
 use crate::service::{Clock, Coordinator};
@@ -559,7 +560,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
     let proxy = Proxy::start(flags.proxy_cache_dir.as_deref(), &mdm_setup, roots.clone())?;
-    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup);
+    let lease = Lease::of_store(Arc::clone(&backend));
+    let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup, &lease);
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -853,19 +855,10 @@ where
         Some((_, accept)) => Either::Left(mdm_listener::serve(accept, Arc::clone(&coordinator))),
         None => Either::Right(std::future::pending()),
     };
+    let (for_heartbeat, for_control) = (Arc::clone(&coordinator), Arc::clone(&coordinator));
     let serving = together(
-        serve(
-            heartbeat,
-            Arc::clone(&coordinator),
-            CLIENT_PATIENCE,
-            MAX_CONNECTIONS,
-        ),
-        serve(
-            control,
-            Arc::clone(&coordinator),
-            CLIENT_PATIENCE,
-            MAX_CONNECTIONS,
-        ),
+        serve(heartbeat, for_heartbeat, CLIENT_PATIENCE, MAX_CONNECTIONS),
+        serve(control, for_control, CLIENT_PATIENCE, MAX_CONNECTIONS),
     );
     let reloading = reload_every(
         enrollment,

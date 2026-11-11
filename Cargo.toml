@@ -16,11 +16,6 @@ publish = false
 # Argon2id, the operator password hash of hostkeeper-coordinator (docs/design/operator-login.md
 # section 6.1). Pure Rust, MIT OR Apache-2.0; the PHC string format comes with it.
 argon2 = "0.6.0"
-# The ABM server token's CMS envelope (hostkeeper-coordinator `abm::p7m`) is decrypted with the ciphers
-# and `cms` pinned below for hostkeeper-mdm-scep; the RSA key of the ABM server entry is PKCS#1 PEM
-# as Apple's tooling and NanoDEP write it, read with `rsa`'s `encoding` feature.
-# PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`), which rsa's `encoding` feature does not turn on.
-pkcs1 = { version = "0.8.0", features = ["pem"] }
 # The JWT segments of a CI token (hostkeeper-oidc); the attestation bundle's DSSE payload and
 # certificate (hostkeeper-package).
 base64 = "0.23.1"
@@ -208,6 +203,7 @@ x509-cert = { version = "0.3.0", features = ["builder", "pem"] }
 # builds the signed and enveloped replies, and everything it lacks (the verify and decrypt side) is
 # written in the crate.
 aes = "0.9.4"
+# `block-padding` for the CBC content ciphers of the ABM server token (hostkeeper-coordinator `abm::p7m`).
 cbc = { version = "0.2.1", features = ["alloc", "block-padding"] }
 cipher = { version = "0.5.2", features = ["alloc", "block-padding"] }
 cms = { version = "=0.3.0-rc.2", default-features = false, features = ["builder", "std"] }
@@ -217,6 +213,8 @@ des = "0.9.0"
 # The tests of hostkeeper-mdm-scep draw their keys and nonces from the thread generator.
 rand = "0.10.3"
 rsa = { version = "0.10.0", features = ["encoding", "pkcs1v15"] }
+# PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`) of the ABM server entry, which rsa's `encoding` feature does not turn on.
+pkcs1 = { version = "0.8.0", features = ["pem"] }
 # The CMS reply of mdmcert.download (hostkeeper-mdm-push) is read with the RustCrypto 0.8-era
 # ciphers and rsa 0.9, which that crate was written against; the newer lines above belong to
 # hostkeeper-mdm-scep. The `-legacy` aliases keep both lines apart.
