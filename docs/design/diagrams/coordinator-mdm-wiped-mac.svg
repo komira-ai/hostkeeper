@@ -1,0 +1,71 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 637" width="1200" height="637" role="img" aria-label="A Mac that was erased and set up again gets a new MDM identity and a new daemon key, and the coordinator replaces its old enrollment and host certificate.">
+<title>A wiped Mac re-enrolling</title>
+<desc>After an erase the Mac has no profile and no key. ABM still lists its serial, so Activate returns the ADE profile again. The coordinator issues a new SCEP challenge for the serial, supersedes the old enrollment row on the new Authenticate, and the daemon enrollment replaces the old host id because the new MDM enrollment is newer than the old approval.</desc>
+<defs><marker id="coordinator-mdm-wiped-mac-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-wiped-mac-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="637" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">A wiped Mac re-enrolling</text>
+<rect x="30" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="136" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="136" y="80" class="t-m" text-anchor="middle">Setup Assistant, then macOS</text>
+<path d="M136,92 L136,623" class="life"/>
+<rect x="262" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="368" y="64" class="b" text-anchor="middle">Apple ABM</text>
+<text x="368" y="80" class="t-m" text-anchor="middle"></text>
+<path d="M368,92 L368,623" class="life"/>
+<rect x="494" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="600" y="64" class="b" text-anchor="middle">Coordinator: MDM</text>
+<text x="600" y="80" class="t-m" text-anchor="middle">listener, queue, SCEP, APNs</text>
+<path d="M600,92 L600,623" class="life"/>
+<rect x="726" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="832" y="64" class="b" text-anchor="middle">Coordinator: gate</text>
+<text x="832" y="80" class="t-m" text-anchor="middle">device record, baseline</text>
+<path d="M832,92 L832,623" class="life"/>
+<rect x="958" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="1064" y="64" class="b" text-anchor="middle">Coordinator: enrollment</text>
+<text x="1064" y="80" class="t-m" text-anchor="middle">inventory, approvals, CA</text>
+<path d="M1064,92 L1064,623" class="life"/>
+<path d="M136,128 L182,128 L182,140 L138,140" class="ln" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="190" y="136" class="t-m lbl" text-anchor="start">1. erase (Erase All Content and Settings, or an EraseDevice)</text>
+<path d="M136,176 L368,176" class="ln" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="252" y="170" class="t-m lbl" text-anchor="middle">2. Activate: serial still in ABM, profile still assigned</text>
+<path d="M368,216 L136,216" class="ln-d" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="252" y="210" class="t-m lbl" text-anchor="middle">3. ADE profile</text>
+<path d="M136,256 L600,256" class="ln" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="368" y="250" class="t-m lbl" text-anchor="middle">4. POST /enroll, SCEP (challenge for this serial again)</text>
+<rect x="364" y="272" width="472" height="25" rx="4" class="box-o"/>
+<text x="600" y="287" class="t-m" text-anchor="middle">new certificate, same subject, new serial number; challenge single use</text>
+<path d="M136,329 L600,329" class="ln" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="368" y="323" class="t-m lbl" text-anchor="middle">5. Authenticate (same UDID or new), TokenUpdate</text>
+<rect x="361" y="345" width="478" height="40" rx="4" class="box-o"/>
+<text x="600" y="360" class="t-m" text-anchor="middle">supersede: the serial has one live enrollment; old row marked replaced,</text>
+<text x="600" y="375" class="t-m" text-anchor="middle">its certificate hash no longer accepted</text>
+<path d="M600,417 L832,417" class="ln" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="716" y="411" class="t-m lbl" text-anchor="middle">6. Event::Authenticate resets the device record</text>
+<path d="M832,457 L136,457" class="ln-d" marker-end="url(#coordinator-mdm-wiped-mac-ak)"/>
+<text x="484" y="451" class="t-m lbl" text-anchor="middle">7. baseline, pkg (no old state assumed)</text>
+<path d="M136,497 L1064,497" class="ln-o" marker-end="url(#coordinator-mdm-wiped-mac-ao)"/>
+<text x="600" y="491" class="t-m lbl" text-anchor="middle">8. daemon: Enroll request with a new key and nonce</text>
+<rect x="755" y="513" width="421" height="40" rx="4" class="box-o"/>
+<text x="966" y="528" class="t-m" text-anchor="middle">enrolled_since newer than the old approval and serial matches:</text>
+<text x="966" y="543" class="t-m" text-anchor="middle">old host id replaced, old host certificate stops being renewed</text>
+<path d="M1064,585 L136,585" class="ln-od" marker-end="url(#coordinator-mdm-wiped-mac-ao)"/>
+<text x="600" y="579" class="t-m lbl" text-anchor="middle">9. new host certificate</text>
+</svg>

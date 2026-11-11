@@ -29,7 +29,7 @@ fn kinds(rig: &Rig) -> Vec<String> {
 }
 
 async fn handled(rig: &Rig, body: &[u8]) -> Handled {
-    rig.gate.webhook(body).await.expect("the event is taken")
+    support::handle(&rig.gate, body).await
 }
 
 /// Catches: a result for a UUID the gate never sent, or one it sent to another device, changing
@@ -641,7 +641,7 @@ async fn a_write_failing_when_a_command_is_taken_back_is_logged_and_the_event_ta
     // The first write (the record with its two commands) works; the takings back do not.
     fs.fail_writes_from(2);
     let body = token_update(UDID, 1);
-    assert_eq!(gate.webhook(&body).await.expect("taken"), Handled::Recorded);
+    assert_eq!(support::handle(&gate, &body).await, Handled::Recorded);
     let record = &gate.records()[0];
     assert_eq!(record.sent.len(), 2);
     assert_eq!(record.last_error, None);
@@ -676,7 +676,7 @@ async fn a_command_is_taken_back_from_what_was_kept() {
         json!({"command_error": "down"}).to_string(),
     ));
     fs.fail_write(2);
-    gate.webhook(&token_update(UDID, 1)).await.expect("taken");
+    support::handle(&gate, &token_update(UDID, 1)).await;
     let record = &gate.records()[0];
     let left: Vec<&str> = record
         .sent
@@ -795,7 +795,7 @@ async fn a_queued_command_whose_confirmation_is_not_written_is_asked_again() {
         support::open_on(fs.clone(), &dir, &hub, &clock, support::counting()).expect("opens");
     // The first write (the record with its two commands) works; the first confirmation does not.
     fs.fail_write(2);
-    gate.webhook(&token_update(UDID, 1)).await.expect("taken");
+    support::handle(&gate, &token_update(UDID, 1)).await;
     let record = &gate.records()[0];
     let queued: Vec<(&str, bool)> = record
         .sent
@@ -807,7 +807,7 @@ async fn a_queued_command_whose_confirmation_is_not_written_is_asked_again() {
         [("DeviceInformation", false), ("SecurityInfo", true)]
     );
     assert_eq!(hub.commands().len(), 2);
-    gate.webhook(&idle(UDID)).await.expect("taken");
+    support::handle(&gate, &idle(UDID)).await;
     let kinds: Vec<String> = hub.commands().into_iter().map(|(kind, _)| kind).collect();
     assert_eq!(
         kinds,

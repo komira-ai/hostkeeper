@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" width="1200" height="720" role="img" aria-label="The package proxy: an apt index is revalidated against the origin and streamed to the host while cached; a package file is fetched once per key and streamed; a Mac's pkg is fetched by digest and committed only if the digest matches.">
+<title>Package proxy: index, pool file and pkg by digest</title>
+<desc>A client on the lab LAN asks the coordinator for an apt index, a package file or a pkg by digest. The coordinator answers from its cache directory when the entry is fresh or immutable, and otherwise fetches from the public origin once per key, streaming to the client while it writes a temporary file that is renamed into place. The pkg is committed only when its SHA-256 equals the digest in the path. The client verifies signatures and digests itself.</desc>
+<defs><marker id="package-proxy-fetch-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="720" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Package proxy: an apt index, a pool file, and a Mac's pkg by digest</text>
+<rect x="30" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="165" y="64" class="b" text-anchor="middle">Host's apt, daemon, or a Mac</text>
+<text x="165" y="80" class="t-m" text-anchor="middle">lab LAN, no client certificate</text>
+<path d="M165,92 L165,700" class="life"/>
+<rect x="320" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="455" y="64" class="b" text-anchor="middle">Coordinator, package proxy</text>
+<text x="455" y="80" class="t-m" text-anchor="middle">public-CA name, port 443</text>
+<path d="M455,92 L455,700" class="life"/>
+<rect x="610" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="745" y="64" class="b" text-anchor="middle">Cache directory</text>
+<text x="745" y="80" class="t-m" text-anchor="middle">tmp/ and objects/ on one filesystem</text>
+<path d="M745,92 L745,700" class="life"/>
+<rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="1035" y="64" class="b" text-anchor="middle">Origin, public internet</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">packages.komira.ai, GitHub releases</text>
+<path d="M1035,92 L1035,700" class="life"/>
+<path d="M165,132 L455,132" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="310" y="126" class="t-m lbl" text-anchor="middle">1. GET /apt/komira/dists/stable/InRelease</text>
+<path d="M455,170 L1035,170" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="745" y="164" class="t-m lbl" text-anchor="middle">2. entry older than the index TTL: conditional GET</text>
+<path d="M1035,208 L455,208" class="ln-d" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="745" y="202" class="t-m lbl" text-anchor="middle">3. 304, or 200 with the body</text>
+<path d="M455,246 L745,246" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="600" y="240" class="t-m lbl" text-anchor="middle">4. body to tmp, fsync, rename</text>
+<path d="M455,284 L165,284" class="ln-d" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="310" y="278" class="t-m lbl" text-anchor="middle">5. streamed with the length, never held whole</text>
+<path d="M165,330 L455,330" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="310" y="324" class="t-m lbl" text-anchor="middle">6. GET /apt/komira/pool/main/x.deb</text>
+<path d="M455,368 L745,368" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="600" y="362" class="t-m lbl" text-anchor="middle">7. lookup: miss</text>
+<path d="M455,406 L1035,406" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="745" y="400" class="t-m lbl" text-anchor="middle">8. one origin fetch per key; later askers wait</text>
+<rect x="190" y="430" width="880" height="25" rx="4" class="box-o"/>
+<text x="630" y="446" class="t-m" text-anchor="middle">the body is streamed to the first asker while it is written; a waiter reads the committed file; a failed fetch lets the next waiter try</text>
+<path d="M165,496 L455,496" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="310" y="490" class="t-m lbl" text-anchor="middle">9. GET /pkg/&lt;sha256&gt;.pkg  (a Mac)</text>
+<path d="M455,534 L1035,534" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="745" y="528" class="t-m lbl" text-anchor="middle">10. only a digest named in installs; redirects: https, few</text>
+<path d="M455,572 L745,572" class="ln" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="600" y="566" class="t-m lbl" text-anchor="middle">11. hash while writing; rename if equal</text>
+<path d="M455,610 L165,610" class="ln-d" marker-end="url(#package-proxy-fetch-ak)"/>
+<text x="310" y="604" class="t-m lbl" text-anchor="middle">12. streamed; on a mismatch, 502, nothing kept</text>
+<rect x="190" y="640" width="880" height="25" rx="4" class="box-o"/>
+<text x="630" y="656" class="t-m" text-anchor="middle">the proxy is untrusted: apt checks the Release signature, the daemon the digest and attestation, the Mac the pkg signature</text>
+<rect x="190" y="674" width="880" height="25" rx="4" class="box-o"/>
+<text x="630" y="690" class="t-m" text-anchor="middle">cache full or disk error: the answer is still streamed from the origin, nothing is stored, a counter in Status says so</text>
+</svg>

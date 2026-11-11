@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 626" width="1200" height="626" role="img" aria-label="Time runs down the page across the browser with the noVNC viewer, the coordinator and the Mac. The coordinator carries RFB bytes unread; opening touches no MDM state.">
+<title>Desktop open: Screen Sharing in the page, the Mac's own login, no MDM call</title>
+<desc>Time runs down the page across the browser with the noVNC viewer, the coordinator and the Mac. The coordinator carries RFB bytes unread; opening touches no MDM state.</desc>
+<defs><marker id="console-mac-screen-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="626" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Desktop open: Screen Sharing in the page, the Mac's own login, no MDM call</text>
+<path d="M200,92 L200,586" class="life"/>
+<path d="M600,92 L600,586" class="life"/>
+<path d="M1000,92 L1000,586" class="life"/>
+<rect x="90" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="200" y="64" class="b" text-anchor="middle">Operator's browser</text>
+<text x="200" y="82" class="t-m" text-anchor="middle">noVNC in the page</text>
+<rect x="490" y="44" width="220" height="48" rx="5" class="box-b"/>
+<text x="600" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="600" y="82" class="t-m" text-anchor="middle">operator API + console module</text>
+<rect x="890" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="1000" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="1000" y="82" class="t-m" text-anchor="middle">TCP 5900, lab LAN</text>
+<path d="M200,140 L600,140" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="400" y="133" class="t-m lbl" text-anchor="middle">1. POST Console/Open(host) + Bearer   [T + F]</text>
+<rect x="425.65" y="174" width="348.7" height="28" rx="5" class="box-o"/>
+<text x="600" y="192" class="t-m" text-anchor="middle">2. token, operators file, target address, audit line</text>
+<path d="M600,236 L200,236" class="ln-d" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="400" y="229" class="t-m lbl" text-anchor="middle">3. session id, expires_in_s</text>
+<path d="M200,284 L600,284" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="400" y="277" class="t-m lbl" text-anchor="middle">4. WebSocket upgrade, bearer in subprotocol   [3T]</text>
+<path d="M600,332 L1000,332" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="800" y="325" class="t-m lbl" text-anchor="middle">5. TCP connect to address:5900   [R]</text>
+<path d="M1000,380 L600,380" class="ln-d" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="800" y="373" class="t-m lbl" text-anchor="middle">6. RFB version string</text>
+<path d="M200,428 L1000,428" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="600" y="421" class="t-m lbl" text-anchor="middle">7. RFB through the coordinator: security type, login typed in the page</text>
+<path d="M1000,476 L200,476" class="ln-d" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="600" y="469" class="t-m lbl" text-anchor="middle">8. framebuffer updates (black if Screen Sharing is off)</text>
+<path d="M200,524 L600,524" class="ln" marker-end="url(#console-mac-screen-sequence-ak)"/>
+<text x="400" y="517" class="t-m lbl" text-anchor="middle">9. close: close line</text>
+<text x="20" y="608" class="t-m" text-anchor="start">Screen Sharing was enabled at enrollment by the MDM baseline (diagram 5). A hung or unbooted Mac has no console: this path needs a running macOS.</text>
+</svg>

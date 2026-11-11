@@ -1,0 +1,69 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 614" width="1200" height="614" role="img" aria-label="The gate enqueues a command, the MDM server pushes through APNs, the Mac connects and receives it, and the result reaches the gate.">
+<title>A command round trip with push</title>
+<desc>The gate writes its record, then the command row. The MDM server sends one APNs push if no push is outstanding. The Mac connects and sends Idle, takes each queued command in turn, and answers Acknowledged, Error or NotNow. Results go to the gate by call, matched by command UUID.</desc>
+<defs><marker id="coordinator-mdm-command-round-trip-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-command-round-trip-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="614" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">A command round trip with push</text>
+<rect x="30" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="136" y="64" class="b" text-anchor="middle">Gate</text>
+<text x="136" y="80" class="t-m" text-anchor="middle">device record</text>
+<path d="M136,92 L136,600" class="life"/>
+<rect x="262" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="368" y="64" class="b" text-anchor="middle">Queue + store</text>
+<text x="368" y="80" class="t-m" text-anchor="middle">commands, enrollments</text>
+<path d="M368,92 L368,600" class="life"/>
+<rect x="494" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="600" y="64" class="b" text-anchor="middle">APNs sender</text>
+<text x="600" y="80" class="t-m" text-anchor="middle">HTTP/2, push cert</text>
+<path d="M600,92 L600,600" class="life"/>
+<rect x="726" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="832" y="64" class="b" text-anchor="middle">Apple APNs</text>
+<text x="832" y="80" class="t-m" text-anchor="middle">api.push.apple.com</text>
+<path d="M832,92 L832,600" class="life"/>
+<rect x="958" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="1064" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="1064" y="80" class="t-m" text-anchor="middle">Setup Assistant, then macOS</text>
+<path d="M1064,92 L1064,600" class="life"/>
+<path d="M136,128 L182,128 L182,140 L138,140" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="190" y="136" class="t-m lbl" text-anchor="start">1. write record (Sent), then enqueue</text>
+<path d="M136,176 L368,176" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="252" y="170" class="t-m lbl" text-anchor="middle">2. INSERT command (uuid, type, payload)</text>
+<path d="M368,216 L600,216" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="484" y="210" class="t-m lbl" text-anchor="middle">3. wake(enrollment)</text>
+<rect x="367" y="232" width="466" height="25" rx="4" class="box-o"/>
+<text x="600" y="247" class="t-m" text-anchor="middle">skip if a push is outstanding for this enrollment (push-retry window)</text>
+<path d="M600,289 L832,289" class="ln-o" marker-end="url(#coordinator-mdm-command-round-trip-ao)"/>
+<text x="716" y="283" class="t-m lbl" text-anchor="middle">4. POST /3/device/&lt;token&gt;  apns-push-type: mdm</text>
+<path d="M832,329 L1064,329" class="ln-od" marker-end="url(#coordinator-mdm-command-round-trip-ao)"/>
+<text x="948" y="323" class="t-m lbl" text-anchor="middle">5. silent wake</text>
+<path d="M1064,369 L368,369" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="716" y="363" class="t-m lbl" text-anchor="middle">6. PUT /mdm  Status: Idle</text>
+<path d="M368,409 L1064,409" class="ln-d" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="716" y="403" class="t-m lbl" text-anchor="middle">7. next command plist (Sent)</text>
+<path d="M1064,449 L368,449" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="716" y="443" class="t-m lbl" text-anchor="middle">8. Status: Acknowledged | Error | NotNow, CommandUUID</text>
+<rect x="142" y="465" width="453" height="25" rx="4" class="box-o"/>
+<text x="368" y="480" class="t-m" text-anchor="middle">NotNow: keep the command, no re-push until the window; Error: final</text>
+<path d="M368,522 L136,522" class="ln" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="252" y="516" class="t-m lbl" text-anchor="middle">9. Event::Result (UUID must be one the gate sent)</text>
+<path d="M368,562 L1064,562" class="ln-d" marker-end="url(#coordinator-mdm-command-round-trip-ak)"/>
+<text x="716" y="556" class="t-m lbl" text-anchor="middle">10. next command, or an empty body</text>
+</svg>
