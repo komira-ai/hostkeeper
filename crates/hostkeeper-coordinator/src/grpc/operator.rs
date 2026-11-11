@@ -926,17 +926,6 @@ impl MdmApi for MdmService {
             .map_err(refusal::mdm)
     }
 
-    async fn status(
-        &self,
-        request: Request<proto::MdmStatusRequest>,
-    ) -> Result<Response<proto::MdmStatusResponse>, Status> {
-        let caller = caller_of(&request);
-        self.coordinator
-            .mdm_status(&caller)
-            .map(Response::new)
-            .map_err(refusal::mdm)
-    }
-
     async fn put_push_reply(
         &self,
         request: Request<proto::PutPushReplyRequest>,
@@ -955,6 +944,17 @@ impl MdmApi for MdmService {
         let caller = caller_of(&request);
         self.coordinator
             .mdm_put_push_certificate(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn status(
+        &self,
+        request: Request<proto::MdmStatusRequest>,
+    ) -> Result<Response<proto::MdmStatusResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_status(&caller)
             .map(Response::new)
             .map_err(refusal::mdm)
     }

@@ -123,15 +123,6 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (the release before never reads these tables). The file store keeps the same rows in the directory
   `<state-file>.mdm-setup/` (`secrets.json`, `settings.json`), made by the first change and not by a
   start; a file store's setup does not reach a database by any verb.
-- **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
-  (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
-  committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, fetch time,
-  length), and `tmp/` the fills in progress. A fill is written to `tmp/` and renamed into place, the
-  sidecar first. No file is synced: at start every file of `tmp/`, a body whose length is not its
-  sidecar's and a sidecar with no body are deleted, and the objects past `proxy_cache_max_bytes`
-  (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
-  (it refills from the origins) and is not shared between coordinators. Without the flag there is no
-  cache. In this release nothing serves from it yet.
 - **The push certificate.** Its records are in `mdm_secrets`: `push_pending_key` (the key of the request
   being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
   encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is
@@ -142,6 +133,15 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
   push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
   reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).
+- **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
+  (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
+  committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, fetch time,
+  length), and `tmp/` the fills in progress. A fill is written to `tmp/` and renamed into place, the
+  sidecar first. No file is synced: at start every file of `tmp/`, a body whose length is not its
+  sidecar's and a sidecar with no body are deleted, and the objects past `proxy_cache_max_bytes`
+  (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
+  (it refills from the origins) and is not shared between coordinators. Without the flag there is no
+  cache. In this release nothing serves from it yet.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

@@ -285,3 +285,55 @@ return {
         })
     );
 }
+
+#[test]
+fn the_mdm_setup_page_is_in_the_frame_and_its_downloads_reach_the_browser() {
+    // Catches: the page missing from the frame's list, the frame not handing the browser's
+    // download to a page, and a file offered with other bytes or name than the page gave.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    let held = json!({"configured": true, "sealing": true});
+    let settings = json!({"settings": []});
+    ui.reply(&m("Mdm/Status"), held.clone());
+    ui.reply(&m("Mdm/ListSettings"), settings.clone());
+    ui.reply(
+        &m("Mdm/CreatePushRequest"),
+        json!({"csrPem": "CSRPEM", "encryptionCertificatePem": "ENCPEM", "submitted": true}),
+    );
+    ui.reply(&m("Mdm/Status"), held);
+    ui.reply(&m("Mdm/ListSettings"), settings);
+    ui.run(
+        r#"
+import { fakeDocument, domNamed, fire, settle } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  globalThis.saved = [];
+  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
+             download: (file) => globalThis.saved.push(file) });
+  await settle();
+  fire(domNamed(doc.root, "page-mdm"), "click", {});
+  await settle();
+  fire(domNamed(doc.root, "push-email"), "input", { target: { value: "ops@example.org" } });
+  fire(domNamed(doc.root, "create-request"), "click", {});
+  await settle();
+  fire(domNamed(doc.root, "download-csr"), "click", {});
+}"#,
+    );
+    let out = ui.run(&steps(
+        r#"return { text: text(), saved: globalThis.saved, status: status() };"#,
+    ));
+    assert!(
+        out["text"].as_str().expect("text").contains("MDM setup"),
+        "{out}"
+    );
+    assert_eq!(
+        out["saved"],
+        json!([{"name": "push-request.csr", "mime": "text/plain", "text": "CSRPEM"}])
+    );
+    assert_eq!(
+        out["status"],
+        "Request made and sent to mdmcert.download: it emails the signed request to ops@example.org."
+    );
+}

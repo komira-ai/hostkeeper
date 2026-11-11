@@ -55,7 +55,7 @@ export const NOW = 1800000000;
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
 // reads `now` (NOW when absent).
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [] };
+  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], downloads: [] };
   const left = (answers || []).slice();
   const ctx = {
     api: client,
@@ -78,6 +78,9 @@ export function recorder(client, params, answers, now) {
     },
     show(tree) {
       seen.shown.push(tree);
+    },
+    download(file) {
+      seen.downloads.push(file);
     },
   };
   return { ctx, seen };
