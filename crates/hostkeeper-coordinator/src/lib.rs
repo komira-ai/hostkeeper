@@ -161,10 +161,13 @@ pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
 pub mod mdm;
+pub(crate) mod mdm_certs;
+pub(crate) mod mdm_name;
 pub mod mdm_push;
 pub mod mdm_secrets;
 pub mod mdm_settings;
 pub mod mdm_setup;
+pub mod mdm_status;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
@@ -192,6 +195,8 @@ pub mod orders;
 pub mod origin_https;
 pub mod password;
 pub(crate) mod picks;
+pub mod proxy_cache;
+mod proxy_cache_disk;
 pub mod reconcile;
 pub mod registry;
 pub(crate) mod releases;
@@ -376,6 +381,8 @@ mod marks_support;
 #[cfg(test)]
 mod marks_tests;
 #[cfg(test)]
+pub(crate) mod mdm_pki_support;
+#[cfg(test)]
 mod membership_tests;
 #[cfg(test)]
 mod moving_facts_tests;
@@ -387,6 +394,10 @@ mod one_live_update_coordinator_tests;
 mod one_live_update_release_tests;
 #[cfg(test)]
 mod one_live_update_tests;
+#[cfg(test)]
+mod operator_mdm_devices_tests;
+#[cfg(test)]
+mod operator_mdm_name_tests;
 #[cfg(test)]
 mod operator_repositories_tests;
 #[cfg(test)]

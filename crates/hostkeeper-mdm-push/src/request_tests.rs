@@ -2,7 +2,7 @@ use rustls::pki_types::CertificateSigningRequestDer;
 use rustls::pki_types::pem::PemObject as _;
 use x509_parser::prelude::{FromDer as _, X509CertificationRequest};
 
-use rsa09::RsaPublicKey;
+use rsa_legacy::RsaPublicKey;
 
 use super::*;
 
@@ -65,7 +65,7 @@ fn the_csr_is_rsa_2048_signed_by_the_push_key_with_the_email_in_its_subject() {
     // The signing key is the one of the request, and it is 2048 bits.
     let spki = csr.certification_request_info.subject_pki.raw.to_vec();
     let expected = {
-        use rsa09::pkcs8::EncodePublicKey as _;
+        use rsa_legacy::pkcs8::EncodePublicKey as _;
         RsaPublicKey::from(key)
             .to_public_key_der()
             .unwrap()
@@ -73,7 +73,7 @@ fn the_csr_is_rsa_2048_signed_by_the_push_key_with_the_email_in_its_subject() {
             .to_vec()
     };
     assert_eq!(spki, expected);
-    assert_eq!(rsa09::traits::PublicKeyParts::size(key) * 8, KEY_BITS);
+    assert_eq!(rsa_legacy::traits::PublicKeyParts::size(key) * 8, KEY_BITS);
 }
 
 #[test]
@@ -147,7 +147,7 @@ fn a_time_out_of_range_is_a_crypto_error_and_not_a_panic() {
 #[test]
 fn a_key_too_small_to_sign_with_is_a_crypto_error_and_not_a_panic() {
     // ring signs with RSA keys of 2048 bits or more.
-    let small = RsaPrivateKey::new(&mut rand_core::OsRng, 1024).unwrap();
+    let small = RsaPrivateKey::new(&mut rand_core_legacy::OsRng, 1024).unwrap();
     assert!(matches!(
         csr_pem(&small, EMAIL),
         Err(RequestError::Crypto(_))

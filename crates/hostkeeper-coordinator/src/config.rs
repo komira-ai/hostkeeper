@@ -378,6 +378,15 @@ pub struct Serve {
     /// and `Mdm.PutSecret` is refused `secrets_unavailable`.
     #[arg(long)]
     pub mdm_secrets_key_file: Option<PathBuf>,
+    /// The package proxy's cache (`docs/design/package-proxy.md`): a directory of the
+    /// coordinator's own, made when missing, holding `objects/` (the committed files, each with
+    /// its sidecar) and `tmp/` (the fills in progress). At start every file of `tmp/` and every
+    /// partial object a crash left is deleted, and the objects past `proxy_cache_max_bytes`
+    /// (a setting, 20 GiB by default) are evicted, the least recently fetched first. No file
+    /// is synced to disk. The directory is the coordinator's alone: not shared with another
+    /// coordinator. Without the flag there is no cache.
+    #[arg(long)]
+    pub proxy_cache_dir: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -548,6 +557,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         setup: setup_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = state::mdm_setup(flags, setup_store)?;
+    let proxy_cache =
+        crate::proxy_cache::open_at_start(flags.proxy_cache_dir.as_deref(), &mdm_setup)?;
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -584,9 +595,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
-    coordinator = coordinator.with_mdm_setup(mdm_setup).with_mdmcert(Arc::new(
+    coordinator = coordinator.with_mdm_setup(mdm_setup);
+    coordinator = coordinator.with_mdmcert(Arc::new(
         hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
     ));
+    coordinator = coordinator.with_proxy_cache(proxy_cache);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
