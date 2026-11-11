@@ -79,6 +79,16 @@ Sign out ends the session on the coordinator.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.
+- **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
+  of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
+  second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
+  password under the table once, until "I have copied it" is pressed or the page is left (it is held in the page's memory
+  only and is not in the status line, so a reload of the page or the list never shows it again). Disable, Reset password
+  and Delete ask to confirm first, as each ends the user's sessions. The coordinator refuses to disable or delete the last
+  enabled user and to reset the password of the user who asks; the page shows the refusal as the API gives it.
+- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
+  takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
+  store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
 - **MDM setup** (`MDM setup` in the page list; the status panel, the push certificate step and the TLS step, `docs/design/coordinator-mdm.md`
   sections 4.4 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
   because:* and each missing condition in words; the push certificate and key, the ABM token and the TLS certificate and key with the
@@ -98,7 +108,7 @@ Sign out ends the session on the coordinator.
   which the coordinator keeps in memory only); saves the settings `dns_zone`, `acme_directory` and `acme_contact`, sending each that
   changed; and stores the DNS credential (the provider's API key and secret, or a personal access token) from password fields, which
   are emptied whatever the answer is. No value of a secret is shown. The writes need a signed-in user's session: a bearer is refused them.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name or the token's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
