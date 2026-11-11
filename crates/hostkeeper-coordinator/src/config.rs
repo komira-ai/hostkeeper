@@ -633,9 +633,13 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 StoreAt::Records(_) => devices.map(Devices::Store),
             };
             let mdm = match devices {
-                Some(devices) => {
-                    Mdm::open(&flags.mdm, devices, Arc::new(SystemClock), os_random())?
-                }
+                Some(devices) => Mdm::open(
+                    &flags.mdm,
+                    devices,
+                    Arc::new(SystemClock),
+                    os_random(),
+                    coordinator.mdm_setup(),
+                )?,
                 None => None,
             };
             Mdm::check_baseline_groups(mdm.as_ref(), &allowlist)?;

@@ -7,9 +7,9 @@ mod support;
 use std::path::Path;
 
 use hostkeeper_mdm_gate::{
-    Baseline, BaselineError, BaselineProfile, BaselineRecord, CommandUuid, DEFAULT_CHECK_SECS,
-    DeviceRecord, Item, ProfileAnswer, ProfileCommand, Sent, StoreError, decode_record,
-    encode_record,
+    Baseline, BaselineError, BaselineInstall, BaselineProfile, BaselineRecord, CommandUuid,
+    DEFAULT_CHECK_SECS, DeviceRecord, Item, ProfileAnswer, ProfileCommand, Sent, StoreError,
+    decode_record, encode_record,
 };
 use plist::Value;
 use prost::Message as _;
@@ -308,11 +308,24 @@ struct BaselineProfilePb {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct BaselineInstallPb {
+    #[prost(string, tag = "1")]
+    name: String,
+    #[prost(message, optional, tag = "2")]
+    command: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct BaselinePb {
     #[prost(message, optional, tag = "1")]
     remote_desktop: Option<ProfilePb>,
     #[prost(message, repeated, tag = "2")]
     profiles: Vec<BaselineProfilePb>,
+    /// Fields 6 and 7 are the device name's `Settings` and the installs.
+    #[prost(message, optional, tag = "6")]
+    name: Option<ProfilePb>,
+    #[prost(message, repeated, tag = "7")]
+    installs: Vec<BaselineInstallPb>,
 }
 
 /// A record as the release before reads it (`sent` only) and as this release also writes it.
@@ -334,12 +347,16 @@ struct RecordPb {
     baseline: Option<BaselinePb>,
     #[prost(message, repeated, tag = "22")]
     baseline_sent: Vec<SentPb>,
+    #[prost(message, repeated, tag = "23")]
+    settings_sent: Vec<SentPb>,
 }
 
 const UUID_A: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AB";
 const UUID_B: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AC";
 const UUID_C: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AD";
 const UUID_D: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AE";
+const UUID_E: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AF";
+const UUID_F: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789B0";
 
 fn uuid(text: &str) -> CommandUuid {
     CommandUuid::parse(text).expect("a UUID")
@@ -376,7 +393,7 @@ fn file_of(record: &RecordPb) -> Vec<u8> {
 }
 
 /// Catches: a record this release writes that the release before refuses or misreads (B8): its
-/// unanswered `EnableRemoteDesktop` and `ProfileList` are in a field that release skips, and
+/// unanswered `EnableRemoteDesktop` and `ProfileList` are in a field that release skips, and an unanswered `Settings` in a field the release with the baseline skips, and
 /// every other field it reads is as it was; a record the release before wrote (no baseline)
 /// read as one with none; a baseline whose command UUID is malformed taken as whole.
 #[test]
@@ -388,8 +405,10 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
     record.sent = vec![
         unanswered(UUID_A, "DeviceInformation"),
         unanswered(UUID_B, "InstallProfile"),
+        unanswered(UUID_F, "InstallEnterpriseApplication"),
         unanswered(UUID_C, "EnableRemoteDesktop"),
         unanswered(UUID_D, "ProfileList"),
+        unanswered(UUID_E, "Settings"),
     ];
     let answered = ProfileCommand {
         answer: Some(ProfileAnswer {
@@ -405,6 +424,11 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
             command: answered,
         }],
         list: Some(command(UUID_D)),
+        name: Some(command(UUID_E).with_settings("a".repeat(64))),
+        installs: vec![BaselineInstall {
+            name: "tools".to_owned(),
+            command: command(UUID_F).with_settings("b".repeat(64)),
+        }],
         installed: vec![PROFILE_ID.to_owned()],
         checked_unix: Some(11),
     });
@@ -421,8 +445,32 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
         .iter()
         .map(|sent| sent.request_type.as_str())
         .collect();
-    assert_eq!(types, ["DeviceInformation", "InstallProfile"]);
+    assert_eq!(
+        types,
+        [
+            "DeviceInformation",
+            "InstallProfile",
+            "InstallEnterpriseApplication"
+        ]
+    );
+    // `EnableRemoteDesktop` and `ProfileList`; `Settings` is in field 23, which the release with
+    // the baseline but not `Settings` skips.
     assert_eq!(old.baseline_sent.len(), 2);
+    assert_eq!(old.settings_sent.len(), 1);
+    // The release with the baseline (seven types) refuses a type off its list in fields 15 and
+    // 22: every command of those fields is one of the seven.
+    let seven = [
+        "DeviceInformation",
+        "SecurityInfo",
+        "InstallProfile",
+        "InstallEnterpriseApplication",
+        "EnableRemoteDesktop",
+        "ProfileList",
+        "ProfileList",
+    ];
+    for one in old.sent.iter().chain(&old.baseline_sent) {
+        assert!(seven.contains(&one.request_type.as_str()), "{one:?}");
+    }
 
     // A record the release before wrote.
     let before = RecordPb {
@@ -468,7 +516,7 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
         corrupt(&with(BaselinePb {
             profiles: vec![BaselineProfilePb {
                 identifier: "x".to_owned(),
-                command: Some(bad),
+                command: Some(bad.clone()),
             }],
             ..BaselinePb::default()
         })),
@@ -484,6 +532,31 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
         })),
         "a baseline command's UUID is malformed"
     );
+    for baseline in [
+        BaselinePb {
+            name: Some(bad.clone()),
+            ..BaselinePb::default()
+        },
+        BaselinePb {
+            installs: vec![BaselineInstallPb {
+                name: "tools".to_owned(),
+                command: Some(bad.clone()),
+            }],
+            ..BaselinePb::default()
+        },
+        BaselinePb {
+            installs: vec![BaselineInstallPb {
+                name: "tools".to_owned(),
+                command: None,
+            }],
+            ..BaselinePb::default()
+        },
+    ] {
+        assert_eq!(
+            corrupt(&with(baseline)),
+            "a baseline command's UUID is malformed"
+        );
+    }
     let sent = |uuid: &str, kind: &str| SentPb {
         uuid: uuid.to_owned(),
         request_type: kind.to_owned(),
@@ -496,6 +569,20 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
             ..before.clone()
         }),
         "a sent command's UUID is malformed"
+    );
+    assert_eq!(
+        corrupt(&RecordPb {
+            settings_sent: vec![sent("short", "Settings")],
+            ..before.clone()
+        }),
+        "a sent command's UUID is malformed"
+    );
+    assert_eq!(
+        corrupt(&RecordPb {
+            settings_sent: vec![sent(UUID_A, "EraseDevice")],
+            ..before.clone()
+        }),
+        "a sent command's type is not one the gate sends"
     );
     assert_eq!(
         corrupt(&RecordPb {
