@@ -36,6 +36,9 @@
 //! - `compare-images` ([`compare_images`]): two OCI image tarballs are byte for byte equal.
 //! - `image-index`, `image-layout` ([`image_index`]): the coordinator's multi-platform image
 //!   index, made of the two image tarballs, and the OCI layout a registry push copies from.
+//! - `image-digest` ([`image_index`]): what a deploy of the linux-x86_64 image tarball to the
+//!   control plane is given: its manifest's digest and the release's addresses of it and its
+//!   bundle.
 //! - `push-image` ([`image_push`]): that layout pushed to the registry and read back by its
 //!   digest, byte for byte, an attempt that fails tried again after a wait.
 //! - `check-image-ui` ([`check_image_ui`]): the coordinator's image holds the operator web app
@@ -411,6 +414,22 @@ pub(crate) enum Verb {
         #[arg(long)]
         env_file: Option<PathBuf>,
     },
+    /// Print what a deploy of the linux-x86_64 image tarball of the version in `dir` is given:
+    /// `digest=` the digest of the one manifest its index.json names, `image-url=` and
+    /// `bundle-url=` the release's download addresses of the tarball and of its bundle.
+    ImageDigest {
+        /// The release's files: the image tarball and its bundle.
+        dir: PathBuf,
+        /// The release's version.
+        #[arg(long)]
+        version: Version,
+        /// The repository the release is published in, `owner/name`.
+        #[arg(long)]
+        repo: Repo,
+        /// A file the three lines are appended to (on Actions, `GITHUB_OUTPUT`).
+        #[arg(long)]
+        output: Option<PathBuf>,
+    },
     /// Push the layout of `image-layout` to the registry, tagged with the version, and refuse
     /// it unless the registry then serves the release's image index by its digest, byte for
     /// byte; an attempt that fails is tried again after a wait.
@@ -526,6 +545,12 @@ pub(crate) fn run<A: Adapters>(
             out,
             env_file,
         } => image_index::write_layout(&dir, &version, &out, env_file.as_deref()),
+        Verb::ImageDigest {
+            dir,
+            version,
+            repo,
+            output,
+        } => image_index::deploy_inputs(&dir, &version, &repo, output.as_deref()),
         Verb::CheckImageUi { image, ui } => check_image_ui::check_image_ui(&image, &ui),
         Verb::Netboot { pins, version, dir } => netboot::write_netboot(&pins, &version, &dir),
         Verb::Hkctl {
@@ -736,6 +761,7 @@ fn run_with(verb: Verb, ports: &Ports<'_>) -> Result<Vec<String>, Error> {
         | Verb::CompareImages { .. }
         | Verb::ImageIndex { .. }
         | Verb::ImageLayout { .. }
+        | Verb::ImageDigest { .. }
         | Verb::CheckImageUi { .. }
         | Verb::Netboot { .. }
         | Verb::Hkctl { .. }
