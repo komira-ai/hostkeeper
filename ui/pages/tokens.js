@@ -23,7 +23,7 @@ function told(shown, again) {
     return null;
   }
   return h("section", { class: "secret", role: "alert" },
-    h("p", {}, `The token ${shown.name}. It is shown once and the coordinator keeps its digest only.`),
+    h("p", {}, `The token ${shown.who}. It is shown once and the coordinator keeps its digest only.`),
     h("p", {}, h("code", { name: "secret" }, shown.secret)),
     h("button", {
       type: "button",
@@ -51,9 +51,9 @@ async function view(ctx, shown) {
     return h("div", { class: "page" }, secret, errorView("API tokens", failure));
   }
   const tokens = list(listed, "tokens");
-  const form = { name: "" };
+  const form = { entry: "" };
   const rows = tokens.map((token) => {
-    const name = token.name;
+    const { name } = token;
     return h("tr", {},
       h("td", {}, name),
       h("td", {}, sourceLabel(token.source)),
@@ -83,14 +83,14 @@ async function view(ctx, shown) {
     tokens.length === 0 ? h("p", {}, "No token.") : table(["Name", "Source", "Made by", "Made at", ""], rows),
     h("fieldset", {},
       h("legend", {}, "Make a token"),
-      field("Name (lower-case letters, digits and -)", "token-name", form, "name", { maxlength: 32 }),
+      field("Name (lower-case letters, digits and -)", "token-name", form, "entry", { maxlength: 32 }),
       action(ctx, "Create", "create", async () => {
-        const name = trimmed(form.name);
+        const name = trimmed(form.entry);
         if (name === "") {
           return "Name the token.";
         }
         const reply = await ctx.api.apiTokens.create({ name });
-        shown.name = name;
+        shown.who = name;
         shown.secret = typeof reply.secret === "string" ? reply.secret : "";
         await again();
         return `Made the token ${name}.`;
@@ -98,5 +98,5 @@ async function view(ctx, shown) {
 }
 
 export async function render(ctx) {
-  return view(ctx, { name: "", secret: "" });
+  return view(ctx, { who: "", secret: "" });
 }

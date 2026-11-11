@@ -16,7 +16,7 @@ function told(shown, again) {
     return null;
   }
   return h("section", { class: "secret", role: "alert" },
-    h("p", {}, `Temporary password of ${shown.name}. It is shown once and the coordinator keeps no copy.`),
+    h("p", {}, `Temporary password of ${shown.who}. It is shown once and the coordinator keeps no copy.`),
     h("p", {}, h("code", { name: "secret" }, shown.secret)),
     h("p", {}, shown.expires),
     h("button", {
@@ -45,11 +45,11 @@ async function view(ctx, shown) {
     return h("div", { class: "page" }, secret, errorView("Users", failure));
   }
   const users = list(listed, "users");
-  const form = { name: "" };
+  const form = { entry: "" };
   // What is told of a temporary password: whose it is, the password and, when the reply names
   // it, the second after which it no longer signs in.
   const tell = (name, reply) => {
-    shown.name = name;
+    shown.who = name;
     shown.secret = typeof reply.password === "string" ? reply.password : "";
     const until = fmtUnix(reply.user && reply.user.passwordValidUntilUnix);
     shown.expires = until === "-"
@@ -57,7 +57,7 @@ async function view(ctx, shown) {
       : `The user must choose another password at the first sign-in; this one stops working after ${until}.`;
   };
   const rows = users.map((user) => {
-    const name = user.name;
+    const { name } = user;
     const enabled = user.enabled === true;
     return h("tr", {},
       h("td", {}, name),
@@ -111,9 +111,9 @@ async function view(ctx, shown) {
       : table(["Name", "Enabled", "Must change password", "Made by", "Made at", "Last sign-in", "Temporary password valid until", ""], rows),
     h("fieldset", {},
       h("legend", {}, "Make a user"),
-      field("Name (lower-case letters, digits and -)", "user-name", form, "name", { maxlength: 32 }),
+      field("Name (lower-case letters, digits and -)", "user-name", form, "entry", { maxlength: 32 }),
       action(ctx, "Create", "create", async () => {
-        const name = trimmed(form.name);
+        const name = trimmed(form.entry);
         if (name === "") {
           return "Name the user.";
         }
@@ -125,5 +125,5 @@ async function view(ctx, shown) {
 }
 
 export async function render(ctx) {
-  return view(ctx, { name: "", secret: "", expires: "" });
+  return view(ctx, { who: "", secret: "", expires: "" });
 }
