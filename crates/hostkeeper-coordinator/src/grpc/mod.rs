@@ -224,13 +224,22 @@ pub(crate) enum Transport<'a> {
 const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 /// The path of `Mdm.PutSetting`.
 const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+/// The path of `Mdm.PutAbmToken`, whose request holds a token or a `.p7m` of up to 32 KiB.
+const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
+/// The path of `Mdm.GetAbmPublicKey`, which makes the key pair when none is held.
+const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
 /// service, when it must not be done by a token a script holds: the writes of the MDM setup,
 /// which handle the credentials the coordinator can erase every Mac with
 /// (`docs/design/coordinator-mdm.md`, section 4.9).
-pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING];
+pub(crate) const SESSION_ONLY: &[&str] = &[
+    MDM_PUT_SECRET,
+    MDM_PUT_SETTING,
+    MDM_PUT_ABM_TOKEN,
+    MDM_GET_ABM_PUBLIC_KEY,
+];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
 /// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
@@ -407,11 +416,11 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put` and
-/// `Mdm.PutSecret`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `Mdm.PutSecret` and `Mdm.PutAbmToken`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET {
+    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET || path == MDM_PUT_ABM_TOKEN {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES

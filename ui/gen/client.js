@@ -48,6 +48,8 @@ export function createClient(call) {
       putSetting: (request) => call("hostkeeper.operator.v1.Mdm/PutSetting", request),
       listSecrets: (request) => call("hostkeeper.operator.v1.Mdm/ListSecrets", request),
       listSettings: (request) => call("hostkeeper.operator.v1.Mdm/ListSettings", request),
+      putAbmToken: (request) => call("hostkeeper.operator.v1.Mdm/PutAbmToken", request),
+      getAbmPublicKey: (request) => call("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", request),
     }),
     releases: Object.freeze({
       setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),

@@ -50,13 +50,22 @@ hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The Argon2id hash of an operator password (`src/password.rs`).
 argon2.workspace = true
+# The expiry of the ABM token, an RFC 3339 time (`src/operator_abm.rs`).
+time = { workspace = true, features = ["parsing"] }
+# The ABM token's CMS envelope and the RSA key it is encrypted to (`src/abm/p7m.rs`).
+aes.workspace = true
+cbc.workspace = true
+cms.workspace = true
+des.workspace = true
+pkcs1.workspace = true
+rsa.workspace = true
 # The PEM of the CA bundle and of the server certificate file.
 base64.workspace = true
 bytes.workspace = true
 clap.workspace = true
 futures.workspace = true
 # The poll nonces, and the bytes of a new MDM master key.
-getrandom.workspace = true
+getrandom = { workspace = true, features = ["sys_rng"] }
 # The sealed MDM secrets in a file, and their fingerprints.
 hex.workspace = true
 http-body-util.workspace = true
@@ -78,6 +87,7 @@ ring.workspace = true
 rustls.workspace = true
 rustls-native-certs.workspace = true
 serde.workspace = true
+sha1.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
@@ -97,6 +107,8 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# `builder`: the test makes the CMS envelope the ABM token is delivered in.
+cms = { workspace = true, features = ["builder"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.

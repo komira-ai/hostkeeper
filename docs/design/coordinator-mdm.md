@@ -67,7 +67,7 @@ and the rules). Any signed-in user may do the setup; every step is audited under
    Apple's push portal and *uploads the certificate* Apple returns. An Apple MDM vendor certificate is the alternative route (4.4). For
    the migration, *upload an existing certificate and key* instead.
 2. **Apple Business Manager.** For the org's existing server entry (`js-mdm`), *upload the existing key pair* (the one NanoDEP holds) and
-   the *server token* (`.p7m`, which is encrypted to that key): ABM needs no change. Only if the key pair cannot be had, *download the
+   the *server token* (NanoDEP keeps it decrypted, as its four parts and their expiry; `cargo xtask abm-takeover-token` assembles the JSON the page takes): ABM needs no change. Only if the key pair cannot be had, *download the
    coordinator's new public key*, add it in ABM as the MDM server's key, and upload the token ABM gives back.
 3. **Name.** Set the MDM name (for example `mdm.example.com`). The page shows the enrollment URL the ADE profile will carry, and the DNS
    record the name needs.
@@ -310,9 +310,10 @@ caches and refreshes. Every call carries `X-Server-Protocol-Version`; a `429` is
 error refreshes the session once. These protocol details rest on NanoDEP's source and are unverified (section 12, item 1). HMAC-SHA1 is about sixty lines on `ring`; no OAuth crate is needed.
 
 - **Token and key.** ABM hands over a `.p7m` encrypted to the server entry's public key. **The coordinator takes over NanoDEP's existing key
-  pair and token** (section 7): the operator uploads the private key and certificate and the token, the coordinator decrypts the `.p7m`
-  with `cms` and `rsa`, and keeps the key and the four token parts encrypted in the store (4.9); `GET /account` proves them before the
-  upload is accepted. Because the token is encrypted to that key, ABM's entry (`js-mdm`) needs no change at all. Only as a fallback, when
+  pair and token** (section 7): the operator uploads the private key and certificate and the token, and the coordinator keeps the key and the four token parts
+  encrypted in the store (4.9); `GET /account` proves them before the upload is accepted. **The token's takeover input is not a `.p7m`** (spike abm, 1):
+  NanoDEP keeps the four decrypted parts and the expiry, so the token upload takes a small JSON of them, and the `.p7m` (decrypted with `cms` and `rsa`
+  under the coordinator's own key) is the input of the fallback path alone. Because the token is encrypted to that key, ABM's entry (`js-mdm`) needs no change at all. Only as a fallback, when
   the key pair cannot be read out of NanoDEP, the coordinator generates a new RSA key and self-signed certificate (the page's *Download the
   public key* returns the certificate to add in ABM) and the operator uploads the token ABM then returns. Expiry is read from the token and
   alerted at `abm_alert_days` (default 60). The live token expires 2027-10-31.
@@ -329,6 +330,24 @@ error refreshes the session once. These protocol details rest on NanoDEP's sourc
   (it points at `js-mdm`, the MDM server entry of the current stack). So a purchase reaches that server's device list with no operator
   action, and the sync then assigns the ADE profile (lesson 1). The coordinator holds `js-mdm`'s own key pair and token, so ABM's default
   assignment needs no change.
+
+**Built (CM13)** (`crates/hostkeeper-coordinator/src/abm/` and `operator_abm.rs`). The transport is a port (`AbmTransport`) with an HTTPS implementation
+(`HttpsTransport`, HTTP/1.1 over rustls, one connection a request, the host's roots, answers read to 16 MiB) and a scripted fake and a simulated ABM for the tests,
+so that no test opens a socket. `oauth.rs` signs `GET /session` as the spike measured it (HMAC-SHA1 over `GET&enc(url)&enc(sorted params)`, key
+`enc(consumer_secret)&enc(access_secret)`, RFC 3986 encoding). `client.rs` keeps the `X-ADM-Auth-Session` for the token it was made for and sends
+`X-Server-Protocol-Version: 3` on every call; a `403`, or a `200` whose body is not JSON, refreshes the session once and repeats the call, and a second one is
+surfaced; on `/session` a `403` that says `signature_invalid` is a fault of the credential and one that says `timestamp_refused` a fault of this machine's clock (the upload
+answers `abm_credential_refused` and `abm_clock_refused`); a `429` that names `Retry-After` is repeated after it (the setting `abm_retries`, each wait cut to `abm_sync_s`), and a `400 INVALID_CURSOR` is its own error.
+`sync` is `Abm::sync_once`: a full fetch (`POST /server/devices`, pages of 1000) when there is no cursor, the last pass is older than seven days or ABM answers
+`INVALID_CURSOR`, otherwise `POST /devices/sync` with the cursor; the devices, the serials a full fetch no longer lists (marked removed), and the cursor are written in one change
+(`abm_apply`). Then, when the setting `mdm_name` names a host name, the ADE profile (`profile.rs`: the live profile's flags, `url` `https://<mdm_name>/enroll`, named by `ade_profile_name`) is defined at ABM when its digest differs
+from the stored one (`POST /profile`), and every device that has no profile is given it (`POST /profile/devices`, `PUT` when the `POST` is answered with a `4xx`); a device ABM does not give it (`NOT_ACCESSIBLE`) is tried again by the next pass; a device already on a profile is left on it. **Nothing is written to ABM
+until an operator has uploaded a token and named the MDM host; the assignment write was not probed in the spike and runs only against the fake in the tests.** A single timer (`abm_sync_every`, the setting `abm_sync_s`, default 300) runs the passes;
+taking them under the store's lease is CM19. `Abm::serial_in_abm` (and `Coordinator::serial_in_abm`) is the read the approval (CM9) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
+The two `Mdm` rpcs, both session-only: `PutAbmToken` (the JSON of the four parts and `access_secret_expiry`, or a `.p7m` opened with the `abm_key` held by CMS key transport, RSAES-PKCS1-v1_5 or RSAES-OAEP, and AES-CBC or 3DES-CBC content; the token is proved to Apple with a session and `GET /account` before it is kept, its expiry is the token's own,
+and the answer names the server entry and the organisation Apple says it belongs to) and `GetAbmPublicKey` (the certificate of the key pair, made once, RSA 2048, when none is held). `PutSecret` judges `abm_key` (an RSA private key in PEM, PKCS#1 or PKCS#8) and `abm_cert` (a certificate, made for the key when one is held) at upload.
+The `.p7m` decryption rests on the CMS and S/MIME standards and a round trip with a synthetic token; no `.p7m` that Apple made was available. The one-off reader of the takeover is `cargo xtask abm-takeover-token` ([the runbook](../operations/abm-takeover.md)).
+The MDM tables are opened only when the database is used or, with files, `--mdm-secrets-key-file` is given (`<state-file>.mdm/`), so a farm that does not use MDM gets no directory. Not built here: the status of the sync for the setup page (`Abm::status` is kept for CM21), the setting `mdm_name` itself (CM21 declares it; the sync reads it as a plain setting until then), and the lease (CM19).
 
 **Cost.** One external request every five minutes when nothing changed, one more per page of changes, one per profile assignment batch.
 That is 288 requests a day idle. The interval is a tunable so the cost and the window below can be traded.
@@ -438,7 +457,7 @@ pages; `ui/calls.json` is generated from the API, **Built**).
 | 1b' (migration) | uploads an existing certificate and key | stores both | the pair matches; the topic is the one in section 4.4; the key is never returned |
 | 2a | uploads the existing ABM key pair (the migration, section 7) | stores the key and certificate sealed; the key is never returned | the key and certificate match |
 | 2a' (fallback) | *Download the public key* | generates the ABM server key and a self-signed certificate once, returns the certificate to register in ABM | none |
-| 2b | uploads the `.p7m` (the existing token, or the one ABM returned for a new key) | decrypts it with the ABM key, stores the four parts, runs `GET /account` | the file decrypts; Apple accepts the session; expiry read |
+| 2b | uploads the token JSON (the takeover: NanoDEP's four parts and expiry) or the `.p7m` (the one ABM returned for a new key) | for a `.p7m`, decrypts it with the ABM key; stores the four parts, after `GET /session` and `GET /account` | the file decrypts; Apple accepts the session; expiry read from the token |
 | 3 | sets the MDM name | stores it, shows the enrollment URL `https://<name>/enroll` and the DNS record the name needs | a DNS-safe name; refused once any Mac has enrolled (the enrollment profile carries the name; a change is a re-enrollment of every Mac, so it is an explicit later task, not a field) |
 | 4 | uploads the GoDaddy API key and secret, or a certificate and key | 4.10 | the certificate chains to a public root, names the MDM name, matches the key, is not expired |
 
@@ -499,7 +518,7 @@ and `--mdm-pkg-dir` (a file of key material and a directory of files the host pr
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
 setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
-new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`) and
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
 
@@ -693,7 +712,7 @@ topic, and everything else is a fresh upload on the setup page (4.9):
 | Item | Where it is today | How |
 |---|---|---|
 | Push certificate and key | NanoHUB's storage (the audit: "inside NanoHUB storage") | the operator takes the PEM pair from there once and uploads it in step 1b'; the page checks the pair matches and that the topic is the one the Mac was enrolled under, and the key is never shown again |
-| ABM key pair and server token | NanoDEP's storage | **taken over.** The operator reads NanoDEP's key pair and the token (encrypted to that key) out of its storage once and uploads both (steps 2a and 2b); `js-mdm` in ABM needs no change, so no device moves and the default assignment stays. A new key (step 2a', and the token ABM returns for it) is the fallback if the pair cannot be read out; whether ABM then accepts a replaced key for the entry is not read (section 12, item 16). The old stack keeps working with the same token until it is stopped, which is what the rollback of step 5 below relies on |
+| ABM key pair and server token | NanoDEP's storage | **taken over.** The operator reads NanoDEP's key pair and the token (which NanoDEP keeps decrypted, as four parts and an expiry, not as a `.p7m`) out of its storage once and uploads both (steps 2a and 2b); the token as the JSON that `cargo xtask abm-takeover-token` assembles; `js-mdm` in ABM needs no change, so no device moves and the default assignment stays. A new key (step 2a', and the token ABM returns for it) is the fallback if the pair cannot be read out; whether ABM then accepts a replaced key for the entry is not read (section 12, item 16). The old stack keeps working with the same token until it is stopped, which is what the rollback of step 5 below relies on |
 | ADE profile | NanoDEP's storage under the DEP name | not copied: the coordinator defines its own (4.5) and assigns it to the devices it lists |
 
 The one thing outside the UI is that the operator reads the push pair out of NanoHUB's storage and the key pair and token out of NanoDEP's,
@@ -865,7 +884,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub`, signature or certificate checks, the unknown-enrollment answer | CM2, CM5, CM6, CM7, CM20 | L |
 | CM11b | `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
 | CM11c | `GET /pkg/<sha256>.pkg`, streamed and digest-checked | CM11a, CM8 | S |
-| CM13 | ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
+| CM13 | (**Built**) ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
 | CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |
 | CM12b | SCEP library: `GetCACaps`, `GetCACert`, `PKIOperation`, signed and enveloped `CertRep`, idempotent consumption, fixtures and the farm Mac | CM12a, CM5 | L |
 | CM12c | `/enroll` wiring: the verified blob, the per-serial challenge, the MDM CA (sealed key), renewal alert, fail-closed rules | CM11a, CM12b, CM6, CM13 | M |
@@ -900,7 +919,7 @@ repository ([package-proxy.md](package-proxy.md) section 10).
 Not verified. A claim in this document that depends on one of these is marked, and none is stated as fact elsewhere.
 
 1. Apple's own text for APNs, Device Assignment and the MDM protocol reference was not reachable; the endpoint details rest on the
-   Apple schema, NanoDEP and `a2` source.
+   Apple schema, NanoDEP and `a2` source. For ABM, what spike abm measured is **verified** (OAuth session, the `403` that is not `401`, `timestamp_refused`, `INVALID_CURSOR`, the page limit, the record keys, `GET /account`); what stays unverified is the assignment write (`POST` or `PUT /profile/devices`, never run against ABM), `429` and `Retry-After`, the lifetime of a session, and a `.p7m` that Apple made.
 2. Whether `IdentityCertificateUUID` accepts an ACME identity during ADE (CM16).
 3. Whether macOS renews a SCEP identity inside the MDM payload on its own (4.2).
 4. Whether the signature of the ADE POST can be verified against Apple's root with what the Mac sends (4.2).
@@ -917,7 +936,7 @@ Not verified. A claim in this document that depends on one of these is marked, a
 13. Whether a Mac polls on any schedule of its own (4.3); the design does not depend on it.
 14. `instant-acme`'s TLS backend and licence under the workspace's `ring` provider, and GoDaddy's API for TXT records (the call, its minimum
     TTL and how long a record takes to be visible), which `lego` already uses with the org's credential (4.10).
-15. That NanoDEP's key pair and token can be read out of its storage and uploaded as they are, so that `js-mdm` needs no change in ABM (7).
+15. ~~That NanoDEP's key pair and token can be read out of its storage and uploaded as they are~~ **Verified** (spike abm, 2026-11-10): the four decrypted parts, used unchanged, authenticate to Apple, the PKCS#1 key and its certificate are readable, and the certificate's expiry is irrelevant to the token. The token's input is the JSON of its parts, not a `.p7m` (4.5).
 16. If they cannot: whether ABM lets a server entry's public key be replaced, and whether the old stack's token still works afterwards (7).
 17. Which of the per-container sysctl, the host sysctl or a capability gives the coordinator port 443 on the farm's networking (4.1).
 18. The licence and `cargo deny` result of the Argon2 and password-hash crates (R6), run first in L3 before any code, and that the `__Host-` cookie prefix is accepted by the

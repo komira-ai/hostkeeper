@@ -477,6 +477,32 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "secrets_unavailable",
             ),
+            (
+                MdmRefusal::AbmUnavailable,
+                FailedPrecondition,
+                "abm_unavailable",
+            ),
+            (
+                MdmRefusal::AbmKeyMissing,
+                FailedPrecondition,
+                "abm_key_missing",
+            ),
+            (
+                MdmRefusal::AbmTokenUnreadable,
+                InvalidArgument,
+                "abm_token_unreadable",
+            ),
+            (
+                MdmRefusal::AbmCredentialRefused,
+                FailedPrecondition,
+                "abm_credential_refused",
+            ),
+            (
+                MdmRefusal::AbmClockRefused,
+                FailedPrecondition,
+                "abm_clock_refused",
+            ),
+            (MdmRefusal::AbmUnreachable, Unavailable, "abm_unreachable"),
         ],
         refusal::mdm,
     );

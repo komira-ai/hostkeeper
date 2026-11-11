@@ -913,6 +913,30 @@ impl MdmApi for MdmService {
             .map(Response::new)
             .map_err(refusal::mdm)
     }
+
+    async fn put_abm_token(
+        &self,
+        request: Request<proto::PutAbmTokenRequest>,
+    ) -> Result<Response<proto::PutAbmTokenResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_abm_token(&caller, request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn get_abm_public_key(
+        &self,
+        request: Request<proto::GetAbmPublicKeyRequest>,
+    ) -> Result<Response<proto::GetAbmPublicKeyResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_get_abm_public_key(&caller, request.get_ref())
+            .await
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
 }
 
 /// `Rollouts` over the coordinator.

@@ -546,6 +546,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         records,
         devices,
         setup: setup_store,
+        mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = state::mdm_setup(flags, setup_store)?;
     let verifier = Verifier::new(
@@ -581,10 +582,15 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
-        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
+            roots.clone(),
+        )?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator.with_mdm_setup(mdm_setup);
+    if let Some(mdm_store) = mdm_store {
+        coordinator = coordinator.with_abm(state::abm(mdm_store, roots.clone())?);
+    }
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -833,6 +839,7 @@ where
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
+    let syncing = crate::operator_abm::abm_sync_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -860,7 +867,10 @@ where
     );
     let all = together(
         together(serving, serving_lan),
-        together(reloading, together(observing, together(webhook, adopting))),
+        together(
+            reloading,
+            together(observing, together(webhook, together(adopting, syncing))),
+        ),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).

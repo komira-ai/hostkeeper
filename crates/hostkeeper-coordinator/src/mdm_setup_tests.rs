@@ -329,6 +329,10 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_alert_days", "60".to_owned(), true),
             ("tls_renew_days", "10".to_owned(), false),
             ("secret_grace_days", "7".to_owned(), true),
+            ("abm_sync_s", "300".to_owned(), true),
+            ("abm_request_timeout_s", "30".to_owned(), true),
+            ("abm_retries", "3".to_owned(), true),
+            ("ade_profile_name", "Komira MDM".to_owned(), true),
         ]
     );
     assert_eq!(
