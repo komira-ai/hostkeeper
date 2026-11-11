@@ -495,6 +495,8 @@ fn the_enrollment_answers_the_gate_from_its_store() {
     let e = &rig.enrollment;
     assert!(e.allowed(SERIAL));
     assert!(!e.allowed("C02OTHER0001"));
+    assert_eq!(e.host_group(SERIAL), Some("build".to_owned()));
+    assert_eq!(e.host_group("C02OTHER0001"), None);
 
     let (first, twin, other) = (HostKey::new(), HostKey::new(), HostKey::new());
     e.enroll(mac_request(&first, "machine-mac", SERIAL, &[]))
@@ -707,4 +709,36 @@ async fn a_mac_with_older_settings_is_sent_the_profile_with_the_stores_and_signe
             "dev.hostkeeper.macos-pkg"
         ]
     );
+}
+
+/// Catches: the gate asking an enrollment that is not attached, or one that is gone, for a host
+/// group and getting one (its baseline then applied to a Mac the enrollment never allowed); the
+/// attached enrollment's answer changed on its way: a Mac's host group is its entry's role.
+#[test]
+fn the_gate_asks_the_attached_enrollment_for_a_host_group() {
+    use hostkeeper_mdm_gate::Enrollments as _;
+    let dir = scratch("mdm-host-group");
+    let mdm = Mdm::open(
+        &side_flags(&dir, "http://127.0.0.1:9"),
+        Devices::Files(dir.path()),
+        FixedClock::at(NOW),
+        os_random(),
+    )
+    .expect("opens")
+    .expect("a gate");
+    let attached = mdm.attached.clone().expect("the side");
+    assert_eq!(attached.host_group(SERIAL), None, "not attached");
+    let policy = MacPolicy {
+        allowlist: MacAllowlist::parse(ALLOWED).expect("an allowlist"),
+        ..MacPolicy::default()
+    };
+    let rig = Rig::configured(
+        "mdm-host-group-rig",
+        Arc::new(RealFs),
+        os_random(),
+        |enrollment| enrollment.with_mac(policy),
+    );
+    mdm.attach(&rig.enrollment);
+    assert_eq!(attached.host_group(SERIAL), Some("build".to_owned()));
+    assert_eq!(attached.host_group("C02OTHER0001"), None);
 }

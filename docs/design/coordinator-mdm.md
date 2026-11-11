@@ -831,8 +831,7 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 
 - Two migrations add tables only. The login one, first (operator-login.md): `users` and `api_tokens`; sessions are in memory. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
   `mdm_identities`, `abm_devices`, `abm_state`; `mdm_secrets` and `mdm_settings` are the migration of CM20's own, as 4.9 says. Each table has a file-store family, because both backends exist
-  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0010_mdm.sql` (it takes the next free number; the login migration is not on `main`, and
-  whichever of the two lands second is renumbered before it merges, since no MDM table refers to a login table), the port `MdmStore`
+  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0011_mdm.sql` (it takes the next free number, after the login migration `0010_accounts.sql`, which landed first; no MDM table refers to a login table), the port `MdmStore`
   (`crates/hostkeeper-coordinator/src/store/mdm/`) with its two stores, `FileMdm` (one `<family>.json` file per table in a directory, each
   `{"schema": 1, "rows": [...]}`, replaced whole, the commands written before the enrollments so that a change that stops half way leaves
   commands cancelled under an enrollment that still stands and never the reverse) and `PgMdm`
