@@ -35,9 +35,12 @@ pub enum StartError {
         "--tokens-file and --operator-token-file are both given: name the operator's tokens one way"
     )]
     TokenFlags,
-    /// Neither is given.
-    #[error("one of --tokens-file and --operator-token-file is required")]
+    /// None of the three is given.
+    #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
+    /// The initial-admin file is refused, or its passwords cannot be set up.
+    #[error(transparent)]
+    InitialAdmin(#[from] crate::initial_admin::InitialAdminError),
     /// `--private-listen` is a wildcard address and `--private-listen-wildcard` is not given.
     #[error(
         "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"

@@ -239,6 +239,8 @@ pub struct Coordinator {
     pub(crate) ops: Arc<OpsStore>,
     pub(crate) verdicts: VerdictFile,
     accounts: AccountStore,
+    /// The initial-admin file of `--initial-admin-file` ([`crate::initial_admin`]).
+    pub(crate) initial_admin: Option<crate::initial_admin::InitialAdmin>,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
     pub(crate) clock: Clock,
@@ -306,6 +308,7 @@ impl Coordinator {
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
+            initial_admin: None,
             verifier,
             tokens: operator.into(),
             clock,
@@ -408,6 +411,13 @@ impl Coordinator {
     #[must_use]
     pub fn with_accounts(mut self, accounts: AccountStore) -> Self {
         self.accounts = accounts;
+        self
+    }
+
+    /// The same coordinator looking at `initial_admin` ([`Coordinator::look_at_initial_admin`]).
+    #[must_use]
+    pub fn with_initial_admin(mut self, initial_admin: crate::initial_admin::InitialAdmin) -> Self {
+        self.initial_admin = Some(initial_admin);
         self
     }
 

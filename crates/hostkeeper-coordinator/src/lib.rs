@@ -148,6 +148,7 @@ pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
+pub mod initial_admin;
 pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
