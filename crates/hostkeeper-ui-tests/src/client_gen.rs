@@ -43,7 +43,7 @@ pub const PACKAGE: &str = "hostkeeper.operator.v1";
 
 /// The longest line of an enum's or a message's declaration on one line; a longer one has a line per
 /// value or field.
-const WIDTH: usize = 100;
+const WIDTH: usize = 140;
 
 /// What the header of both files says about where they come from.
 const HEADER: &str = "\

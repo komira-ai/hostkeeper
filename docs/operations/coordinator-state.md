@@ -186,7 +186,7 @@ The rest of this page is the file store.
 | `<state-file>.repositories` | The registry of package repositories ([packages-repositories.md](../design/packages-repositories.md) section 3): each repository with its keyring and the registry generation it was last put at, and the registry's generation. Written whole when an operator's `Repositories.Put` or `Repositories.Remove` changes it. A coordinator before the registry does not read it. | The registry is empty: no host is sent a repository until an operator puts each one again, and a `SetDesired` with a repository entry is refused `repository_unknown`. |
 | `<state-file>.jti` | The ids of CI's OIDC tokens already spent, each with the second until which it is refused. | A CI token spent before the loss can be used again until it expires. |
 | `<state-file>.verdicts` | Per service and host, the last release verdict the coordinator acknowledged, and the verdicts it counts toward an automatic rollback. | A host whose daemon stopped resending its verdict is no longer read as having failed it, so it can be ordered that version again; the count toward an automatic rollback starts again. |
-| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The only writer in this release is `--initial-admin-file` (below); the sign-in routes, and the creation of users and API tokens in the UI, are later parts of the design. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
+| `<state-file>.accounts` | The operator's users and API tokens (`docs/design/operator-login.md`, komira-ai/hostkeeper#300, sections 6, 7 and 9): per user, the Argon2id hash of the password, whether the user is enabled, whether it must change its password, the deadline of an initial or reset password, who made the user and when, and when it last signed in; per token, the SHA-256 of the token, who made it and when. Written whole, mode 0600, when a change of a user or a token is made, and only then. A coordinator before the users does not read it; a key this release does not know is skipped, and a value it cannot read stops the start, naming the file. The writers are `--initial-admin-file` (below), a password change at sign-in, and the `Users` and `ApiTokens` calls ("Users and API tokens", below), by the Users and API tokens pages of the web app and by `hkctl`. | No user and no API token made in the UI exists; the tokens of `--tokens-file` still work. |
 | `<state-file>.lock` | Nothing: the lock `serve` holds while it runs, so a second coordinator on the same files is refused. | Nothing. It is not backed up. |
 | `--ops-file` | What operators changed: exclusions, labels, halts and their clears, holds, assignments, minimum versions, the `repository` key of a service (the repository `Services.SetRepository` set; written only while set; a coordinator before it passes over it), uninstall intents, the host inventory (each record's host group among it), the marks of last good and bad versions, and the audit ring; and, under `host_groups`, each (host group, package)'s minimum version, last good version, halt with its reports and generation, force, and plan position, all in this file (none in the halts file). `host_groups`, and a record's or an entry's `host_group`, are written only when there are any, and a coordinator before groups refuses the file then. | All of it. |
 | `<ops-file>.audit` | Every change to the ops file, one JSON line each; a change of a host group says it in its `detail` as `host_group`, which a coordinator before groups passes over. | The audit history. |
@@ -387,4 +387,38 @@ login. The flags, each with its default from the start:
 | `--login-max-tracked` | 4096 | names the limiter counts failures of at once |
 
 The password settings of the section above apply to every hash. A coordinator started from the flags always has a sign-in; the
-routes exist even with no user, and no one can sign in until `--initial-admin-file` or a later release makes one.
+routes exist even with no user, and no one can sign in until `--initial-admin-file` makes one, or an operator makes one ("Users and API tokens", below).
+
+## Users and API tokens
+
+The operator API has two services for the accounts of the sign-in (`docs/design/operator-login.md`, section 7), served on the private
+listener as every operator call is, by gRPC and on the JSON gateway (`docs/gateway.md`), and by `hkctl users ...` and
+`hkctl api-tokens ...` (`docs/cli.md`). Every operator is equal: a token of the tokens file, a stored API token and a signed-in user
+call both, and the audit's `by` is the name of whichever called. A CI token is refused `forbidden`.
+
+- `Users.Create` takes a name and makes the user with a temporary password, which the answer carries once and the coordinator
+  keeps no copy of (the store holds its Argon2id hash). The password is 24 characters of letters and digits but `0`, `1`, `I`,
+  `O` and `l`, drawn from the system's random bytes. The user must choose another at the first sign-in, and the temporary one works
+  until `--initial-password-secs` (3600 by default) after it was made: the answer says the second. `Users.ResetPassword` does the
+  same for a user that exists: a new temporary password, `must_change` on, the user's sessions ended, the credential made good
+  again if it had been voided, and the initial-admin file that made the old password deleted if it is still there. An operator
+  cannot reset their own password (`own_password`): a person changes their own on the sign-in page.
+- `Users.Disable` and `Users.Delete` end the user's sessions at once; the last enabled user can be neither (`last_enabled`), so the
+  farm is not locked out by its own admin. `Users.Enable` lets a disabled user sign in again with the password they had. A deleted
+  user's audit rows stay. `Users.List` tells each user's name, whether it is enabled and must change its password, who made it and
+  when, when it last signed in and until when a temporary password works; never a hash.
+- `ApiTokens.Create` takes a name and makes a token of 32 random bytes, `hkt_` and 43 base64url characters (the prefix lets a secret
+  scanner find a leaked one), which the answer carries once; the store holds its SHA-256, the creator and the time. The token is
+  an operator's bearer under its name from then on, and `ApiTokens.Revoke` ends that. A token cannot sign in: the login route
+  reads passwords only. `ApiTokens.List` tells each token's name, whether it comes from the store or the tokens file, and for a
+  stored one who made it and when; tokens of the tokens file are read-only, and removing one means editing the file, which
+  `Revoke` answers `unknown_token` for.
+- A bearer is looked up in the tokens file and in the store in one pass, each compared in constant time. Users and tokens share one
+  name space, the tokens file's names in it: a name that is already a user's, a stored token's or the tokens file's is
+  `name_taken` (`ALREADY_EXISTS`), and `coordinator`, `ci` and the other names the audit uses are `invalid_request`.
+- Each call that changes something is audited by the caller, with the user or the token as the entry's `subject`: `user_create`,
+  `user_disable`, `user_enable`, `user_delete`, `password_reset`, `api_token_create`, `api_token_revoke`. A call whose audit line
+  cannot be written changes nothing (`audit_unavailable`). A call the store then cannot write is `store_failed` and changes
+  nothing, and leaves the audit entry written before it. No password, hash, token or session id is ever in an audit entry.
+
+A coordinator before this release has neither service: it answers the paths `UNIMPLEMENTED`, and never reads the accounts file.

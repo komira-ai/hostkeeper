@@ -50,6 +50,9 @@ pub struct LoginSettings {
     pub max_hashes: usize,
     /// The password hash parameters and the length rule.
     pub passwords: PasswordSettings,
+    /// How long a temporary password an admin made is good, in seconds
+    /// (`--initial-password-secs`).
+    pub temporary_secs: u64,
 }
 
 impl Default for LoginSettings {
@@ -59,6 +62,7 @@ impl Default for LoginSettings {
             limiter: LimiterSettings::default(),
             max_hashes: 2,
             passwords: PasswordSettings::default(),
+            temporary_secs: crate::initial_admin::MAX_VALID_SECS,
         }
     }
 }
@@ -68,6 +72,7 @@ pub struct Login {
     pub(crate) sessions: Sessions,
     pub(crate) limiter: LoginLimiter,
     pub(crate) passwords: Arc<Passwords>,
+    temporary_secs: u64,
     clock: Arc<dyn UnixClock>,
     /// A test's progress event: told after a password was hashed and before what it decides is
     /// acted on, so a test can change the user in that window instead of waiting for a race.
@@ -102,6 +107,7 @@ impl Login {
             sessions: Sessions::new(settings.sessions, Arc::clone(&clock), random),
             limiter: LoginLimiter::new(settings.limiter, Arc::clone(&clock), slots),
             passwords: Arc::new(Passwords::new(settings.passwords)?),
+            temporary_secs: settings.temporary_secs,
             clock,
             #[cfg(test)]
             hashed: std::sync::Mutex::new(None),
@@ -154,6 +160,16 @@ impl Login {
         {
             hook();
         }
+    }
+
+    /// How long a temporary password is good, in seconds.
+    pub(crate) fn temporary_secs(&self) -> u64 {
+        self.temporary_secs
+    }
+
+    /// Fills `buffer` with random bytes, as the session ids are drawn; `false` when it could not.
+    pub(crate) fn fill(&self, buffer: &mut [u8]) -> bool {
+        self.sessions.random_bytes(buffer)
     }
 
     /// The time now, in Unix seconds, by the injected clock.

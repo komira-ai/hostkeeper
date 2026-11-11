@@ -52,6 +52,8 @@ ui_files![
     "pages/inventory.js",
     "pages/release.js",
     "pages/rollout.js",
+    "pages/tokens.js",
+    "pages/users.js",
 ];
 
 #[cfg(test)]
