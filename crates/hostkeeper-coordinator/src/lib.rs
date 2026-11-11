@@ -115,6 +115,7 @@ pub(crate) mod agent_service;
 pub mod alerts;
 pub mod assign;
 pub mod assignment;
+pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
@@ -207,6 +208,8 @@ mod assign_support;
 mod assigned_counts_tests;
 #[cfg(test)]
 mod assignment_tests;
+#[cfg(test)]
+mod audit_actions_tests;
 #[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
