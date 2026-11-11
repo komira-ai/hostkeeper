@@ -28,7 +28,7 @@ It is made of two programs:
   host asks the coordinator to enroll it, and an operator approves the request. Macs are to be
   managed through a self-hosted MDM server; of that part the pure core and the host-step layer of
   its install kit, and the policy gate linked into the coordinator (without the pkg install yet,
-  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md)).
+  and on the file store only for now), are built ([macOS](docs/macos.md), [design](docs/design/hostkeeper-mdm.md); the server is designed to move into the coordinator, [coordinator-mdm.md](docs/design/coordinator-mdm.md), with the LAN package proxy in [package-proxy.md](docs/design/package-proxy.md)).
 
 Every API is a protobuf service, and the command line is generated from those definitions.
 
@@ -69,6 +69,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | [`hostkeeper-coordinator`](crates/hostkeeper-coordinator) | the update coordinator: the host groups (the packages, rollout policy and hosts of each), the desired version of each package per group, the repository of each package (`Services.SetRepository`), the heartbeat endpoint, the operator endpoint, the convergence of a fleet, and its state in Postgres (the migrations, the advisory lock and `export`) or in the file store kept as the way back |
 | [`hostkeeper-enrollment`](crates/hostkeeper-enrollment) | the coordinator's certificate authority (profile, certificates, key file, CA bundle) and its durable enrollment store |
 | [`hostkeeper-mdm-gate`](crates/hostkeeper-mdm-gate) | the MDM policy gate, linked into the coordinator: NanoHUB's command queue and webhook on loopback, a durable record per Mac, whether a Mac is enrolled and supervised, and the config profile and one-time nonce it installs on each allowlisted Mac ([design](docs/design/hostkeeper-mdm.md) sections 4 to 6) |
+| [`hostkeeper-mdm-server`](crates/hostkeeper-mdm-server) | the wire layer of the coordinator's MDM server: the property-list types of the check-in messages a Mac sends, of its command results, and of the commands sent, tested against Apple's published schemas; nothing calls it yet ([design](docs/design/coordinator-mdm.md), task CM5) |
 | [`hostkeeper-oidc`](crates/hostkeeper-oidc) | the verifier of OIDC tokens (CI tokens) against an allow-list, with its issuer keys fetched over HTTPS |
 | [`hostkeeper-mdm-core`](crates/hostkeeper-mdm-core) | the pure core of the MDM kit: its settings, the enrollment and ADE profiles, the systemd units and Caddyfile of the MDM services, and the pinned upstream tools ([design](docs/design/hostkeeper-mdm.md) section 8) |
 | [`hostkeeper-release`](crates/hostkeeper-release) | the pure checks of a release, shared by the coordinator and the daemon: each platform's list of artifacts, one per installer, with digests, sizes, attestation and locations, and each entry's manifest, by the rules every manifest keeps and those of its installer, against the daemon's version and installers and against the staged tree ([design](docs/design/packages.md), item A1); nothing calls it yet |
