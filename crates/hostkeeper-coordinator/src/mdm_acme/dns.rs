@@ -6,7 +6,7 @@
 //! provider's code and not the caller's.
 //!
 //! **The zone is a setting** (`dns_zone`), never worked out by taking a label off the name: the
-//! name `mdm.internal.komira.dev` lives in the zone `komira.dev`, and its challenge record is
+//! name `mdm.internal.example.net` lives in the zone `example.net`, and its challenge record is
 //! `_acme-challenge.mdm.internal` in that zone ([`challenge_record`]).
 //!
 //! **The credential** is one sealed record (`dns_credential`), JSON that names the provider and

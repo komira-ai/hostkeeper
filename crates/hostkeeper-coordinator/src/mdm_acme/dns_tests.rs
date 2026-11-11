@@ -89,7 +89,7 @@ fn a_credential_that_is_not_one_is_refused_without_echoing_it() {
 /// bare dot) has none.
 ///
 /// Catches: a zone worked out by removing a label from the name, and a suffix match that takes
-/// `xexample.net` for a name in `example.net`.
+/// `mdm.example.net` for a name in the zone `dm.example.net`.
 #[test]
 fn the_challenge_record_is_named_inside_the_zone_setting() {
     assert_eq!(
@@ -105,7 +105,7 @@ fn the_challenge_record_is_named_inside_the_zone_setting() {
         Some("_acme-challenge")
     );
     assert_eq!(challenge_record("mdm.example.org", "example.net"), None);
-    assert_eq!(challenge_record("mdm.xexample.net", "example.net"), None);
+    assert_eq!(challenge_record("mdm.example.net", "dm.example.net"), None);
     assert_eq!(challenge_record(".example.net", "example.net"), None);
 }
 

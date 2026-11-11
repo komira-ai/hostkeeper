@@ -194,7 +194,7 @@ pub async fn open_account(
     Ok((account, Some(json)))
 }
 
-/// Orders `plan.name` on `account`, proving it through `dns`, and removes the record afterwards.
+/// Orders the plan's name on `account`, proving it through `dns`, and removes the record afterwards.
 ///
 /// # Errors
 /// [`OrderError`]; the record is removed on every one.

@@ -22,11 +22,13 @@ description = "The coordinator's MDM push side: the APNs sender, the push policy
 testkit = []
 
 [dependencies]
-aes.workspace = true
+# The CMS reply of mdmcert.download uses these RustCrypto versions (aes 0.8, cbc 0.1, des 0.8, rsa 0.9),
+# which differ from the workspace's, the SCEP library's (hostkeeper-mdm-scep); the two do not share keys.
+aes = "0.8.4"
 base64.workspace = true
 bytes.workspace = true
-cbc.workspace = true
-des.workspace = true
+cbc = { version = "0.1.2", features = ["alloc"] }
+des = "0.8.1"
 hex.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
@@ -34,7 +36,7 @@ hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
 rand_core.workspace = true
 rcgen.workspace = true
-rsa.workspace = true
+rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 rustls = { workspace = true, features = ["tls12"] }
 rustls-pki-types.workspace = true
 serde.workspace = true
