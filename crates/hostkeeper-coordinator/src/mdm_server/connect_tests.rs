@@ -185,7 +185,7 @@ async fn an_error_ends_the_command_and_a_result_for_a_command_not_sent_is_droppe
     let (_, body) = mac.put("/mdm", &[], &malformed).await;
     assert_eq!(state(&rig, 2), CommandState::Errored);
     assert!(body.is_empty());
-    let unknown = result("Acknowledged", Some("11111111-2222-3333-4444-555555555555"));
+    let unknown = result("Acknowledged", Some("9f3c1a7e-5b42-4d86-a0c9-7e2d84b61f35"));
     let (_, body) = mac.put("/mdm", &[], &unknown).await;
     assert!(body.is_empty());
     assert_eq!(state(&rig, 3), CommandState::Sent);
