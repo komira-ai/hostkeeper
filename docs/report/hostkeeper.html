@@ -201,7 +201,7 @@ main>section>figure.wide,main>section>.tblw.wide{width:min(72rem,calc(100vw - 3r
 <thead><tr><th>Piece</th><th>State on <code>main</code></th></tr></thead>
 <tbody>
 <tr><td>Coordinator: rollout gate, desired versions, holds, halts, force, audit, CA and enrollment</td><td>Built and tested in process</td></tr>
-<tr><td>Coordinator&rsquo;s state in Postgres: migrations, the advisory lock, <code>import</code> and <code>export</code></td><td>Built, tested against a real Postgres in CI, and the lab&rsquo;s coordinator runs on it; the file store it moved from is kept as the way back (<a href="#coordinator-state">its state</a>)</td></tr>
+<tr><td>Coordinator&rsquo;s state in Postgres: migrations, the advisory lock and <code>export</code></td><td>Built, tested against a real Postgres in CI, and the lab&rsquo;s coordinator runs on it; the file store it moved from is kept as the way back (<a href="#coordinator-state">its state</a>)</td></tr>
 <tr><td>Operator API over gRPC and the HTTP/JSON gateway; generated <code>hkctl</code>; web UI</td><td>Built; every declared method has a handler (<a href="#apis">the two APIs</a>)</td></tr>
 <tr><td>Placement of hosts in host groups, each group listing the packages its hosts run; <code>install</code> and <code>uninstall</code> orders</td><td>Built in the coordinator, which sends them only to a daemon that announces <code>install-v1</code>; the daemon&rsquo;s heartbeat loop announces it and runs both over its link (below)</td></tr>
 <tr><td>Daemon: start-up, boot pass, step runner, dead-man, enrollment loop</td><td>Built and running in the shipped binary; the enrollment loop&rsquo;s certificate request carries the subject <code>CN=host:pending</code> the CA accepts (<a href="#n-h5">h5</a>)</td></tr>
@@ -646,7 +646,7 @@ the file <code>--halt-marker-file</code> names until it lands
 The file store it moved from is still built and can be chosen instead, as the way back, until it is
 removed: the desired state in <code>--state-file</code>, the operator&rsquo;s changes in the ops file with
 the halts file and an append-only audit file beside it, and an exclusive lock file.
-<code>hostkeeper-coordinator import</code> and <code>export</code> move the state between the two. The fleet
+<code>hostkeeper-coordinator export</code> writes the database&rsquo;s state back into files; no verb converts the file store into a database. The fleet
 itself (each host&rsquo;s last heartbeat, outstanding orders, bake counts) is in memory and is rebuilt
 from heartbeats after a restart
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/design/hostkeeper-design.md#10-state-where-each-thing-lives-and-who-writes-it">design: State</a>).</p>
@@ -916,8 +916,9 @@ services (<a href="https://github.com/komira-ai/hostkeeper/blob/main/crates/host
 <code>HostGroups.Put</code> creates or replaces a group with its name, its ordered packages (<code>hostkeeper</code> among them) and one
 rollout policy, and <code>HostGroups.Move</code> moves a host; an enrollment approval names the host&rsquo;s group
 (<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/hostgroups.md">docs/operations/hostgroups.md</a>).
-The coordinator no longer reads a rollout file: <code>serve</code> refuses <code>--rollout-file</code>, and the offline verb
-<code>hostkeeper-coordinator host-groups migrate</code> converts one into groups once.
+The coordinator no longer reads a rollout file: <code>serve</code> refuses <code>--rollout-file</code>, and a fleet placed by roles
+moves to groups through the operator API
+(<a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups">moving a fleet from roles</a>).
 <code>Services.Assign</code> and <code>Services.Unassign</code> are refused as <code>placed_by_host_group</code>, and an approval that names services
 as <code>services_retired</code>. <code>Services.SetRepository</code> sets a package&rsquo;s repository, and <code>Services.SetMinVersion</code> sets a
 floor for a host or for a group named as the role. A host whose group lists a package it does not
@@ -1216,7 +1217,7 @@ paths (the CA bundle, <code>gh</code> and the trusted root use their Linux paths
 <text x="350" y="482" class="t-s t-acc t-b">storage network</text>
 <text x="480" y="482" class="t-s t-m">between the six Linux nodes only</text>
 </svg></div><figcaption><strong>The lab.</strong> The blue line is the only path from outside the lab to the coordinator, and it reaches only the private listener; how the lab routes it is the lab&rsquo;s choice and not hostkeeper&rsquo;s. The hosts fetch packages from the release channel, and only inside an order.</figcaption></figure>
-<aside class="note case" aria-label="Case study: the lab"><p class="card-k">Case study</p><p>The coordinator in a container is the shipped image (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>): a distroless image that runs as a non-root user, takes all its configuration as arguments and sets no environment variable. Its database is a Postgres server in another container on the development machine, which the lab&rsquo;s other services share: the coordinator reaches it by the server&rsquo;s Unix socket, mounted into its container, and reads the connection string, with the password, from a secret file (<code>--database-dsn-file</code>), never from its arguments. The coordinator moved there from its file store with <code>hostkeeper-coordinator import</code>; its CA key and server certificate are still files on its volume. Its private listener refuses a wildcard address, so it binds one interface of the development machine. The reusable workflow that CI calls is described in <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>.</p></aside>
+<aside class="note case" aria-label="Case study: the lab"><p class="card-k">Case study</p><p>The coordinator in a container is the shipped image (<a href="https://github.com/komira-ai/hostkeeper/blob/main/packaging/container/Dockerfile">packaging/container/Dockerfile</a>): a distroless image that runs as a non-root user, takes all its configuration as arguments and sets no environment variable. Its database is a Postgres server in another container on the development machine, which the lab&rsquo;s other services share: the coordinator reaches it by the server&rsquo;s Unix socket, mounted into its container, and reads the connection string, with the password, from a secret file (<code>--database-dsn-file</code>), never from its arguments. The coordinator moved there from its file store with a verb since removed; its CA key and server certificate are still files on its volume. Its private listener refuses a wildcard address, so it binds one interface of the development machine. The reusable workflow that CI calls is described in <a href="https://github.com/komira-ai/hostkeeper/blob/main/docs/deploy/ci-client.md">docs/deploy/ci-client.md</a>.</p></aside>
 
 <h3 id="labels">How machines are labelled: MAC address, host record, role, services</h3>
 <p>A machine is known to hostkeeper in four steps, each kept by a different hand:</p>

@@ -22,7 +22,7 @@ fn with_rollout(files: &Files, path: &str) -> Vec<OsString> {
 }
 
 /// Proves: `serve` given `--rollout-file`, whether the file exists or not, is refused with the
-/// exact text naming `host-groups migrate`, as exit code 1, and opens nothing: no state file is
+/// exact text naming the operator API's calls that place the hosts instead, as exit code 1, and opens nothing: no state file is
 /// made and no lock file is taken.
 ///
 /// Catches: a stale unit file whose rollout file is read again, or one whose refusal comes after
@@ -41,8 +41,10 @@ fn serve_given_a_rollout_file_is_refused_before_any_file_is_opened() {
         assert!(matches!(why, StartError::RolloutFileRetired), "{why}");
         assert_eq!(
             why.to_string(),
-            "--rollout-file is not read by serve: convert it once with hostkeeper-coordinator \
-             host-groups migrate (docs/operations/hostgroups.md)"
+            "--rollout-file is not read by serve: start serve without it and place hosts with \
+             the operator API: HostGroups.Put each group, HostGroups.Move each host, \
+             Services.SetRepository and Services.SetMinVersion where needed, Releases.SetDesired \
+             per group (docs/operations/hostgroups.md)"
         );
         assert_eq!(exit_code(args), ExitCode::from(1));
         assert!(!files.path("desired.json").exists());

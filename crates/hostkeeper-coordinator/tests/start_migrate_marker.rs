@@ -1,4 +1,5 @@
-//! `serve`'s start over the marker of a `host-groups migrate --apply` that stopped partway
+//! `serve`'s start over the marker of a `host-groups migrate --apply` of release 0.1.253, a verb
+//! this release does not have, that stopped partway
 //! (`<state-file>.migrate-unfinished`): the whole start (`config::build`) refuses with the exact
 //! text, and the start goes on once the operator has removed the marker.
 
@@ -9,7 +10,7 @@ use support::serve::{Files, build_given, flags_of, refusal};
 
 /// Proves: with `<state-file>.migrate-unfinished` beside the state file, a full `serve` start is
 /// refused with `StartError::MigrateUnfinished` naming the marker and saying to restore the
-/// backup taken before the migration and run it again, and the marker stays; once it is removed
+/// backup taken before the migration, and the marker stays; once it is removed
 /// the same flags start.
 ///
 /// Catches: a start over state files that hold part of a migration, or a refusal that removes the
@@ -29,8 +30,8 @@ fn serve_refuses_to_start_while_the_migrate_marker_is_there() {
     assert_eq!(
         why.to_string(),
         format!(
-            "{}: a host-groups migrate --apply stopped partway; restore the backup taken before \
-             it and run it again",
+            "{}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the \
+             backup taken before it",
             marker.display()
         )
     );
