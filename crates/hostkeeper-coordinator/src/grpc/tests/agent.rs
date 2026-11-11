@@ -644,6 +644,7 @@ async fn an_enroll_approved_by_its_nonce_assigns_the_entry_services() {
             enrolled: true,
             supervised: true,
             enrolled_since_unix: None,
+            enrolled_via_dep: None,
         }),
     );
     let policy = MacPolicy {

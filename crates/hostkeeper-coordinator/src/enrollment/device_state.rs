@@ -18,6 +18,9 @@ pub struct DeviceStatus {
     /// before this time over (docs/design/hostkeeper-mdm.md, section 5.1); with `None` it
     /// takes none over.
     pub enrolled_since_unix: Option<u64>,
+    /// The device's `SecurityInfo` says it enrolled through Automated Device Enrollment; `None`
+    /// when no answer came. What the Mac says about itself: evidence only, never an identity.
+    pub enrolled_via_dep: Option<bool>,
 }
 
 /// The gate could not say: it does not know the device, or could not be asked. Nothing is
