@@ -568,7 +568,7 @@ and `--mdm-pkg-dir` (a file of key material and a directory of files the host pr
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
 setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
-new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`) and
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and for the proxy's `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
 
@@ -884,8 +884,7 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 
 - Two migrations add tables only. The login one, first (operator-login.md): `users` and `api_tokens`; sessions are in memory. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
   `mdm_identities`, `abm_devices`, `abm_state`; `mdm_secrets` and `mdm_settings` are the migration of CM20's own, as 4.9 says. Each table has a file-store family, because both backends exist
-  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0010_mdm.sql` (it takes the next free number; the login migration is not on `main`, and
-  whichever of the two lands second is renumbered before it merges, since no MDM table refers to a login table), the port `MdmStore`
+  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0011_mdm.sql` (it takes the next free number, after the login migration `0010_accounts.sql`, which landed first; no MDM table refers to a login table), the port `MdmStore`
   (`crates/hostkeeper-coordinator/src/store/mdm/`) with its two stores, `FileMdm` (one `<family>.json` file per table in a directory, each
   `{"schema": 1, "rows": [...]}`, replaced whole, the commands written before the enrollments so that a change that stops half way leaves
   commands cancelled under an enrollment that still stands and never the reverse) and `PgMdm`
@@ -1018,7 +1017,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM9 | Approval from the ABM table, inventory name and group, the `default_group` setting, the three new tokens (family pinned), the allowlist as override. A Mac whose enrollment replaced another's (4.2, 5.4) is approved by the same conditions of 4.6 and its own nonce: a replacement is not an approval | CM3, CM6, CM13 | M |
 | CM23 | **UI Devices page, shown only when the setup says *configured***: ABM-synced Macs with enrollment state, host id, group and baseline status; before that, the page names what is missing | CM21, CM9 | M |
 | PP1 to PP6 | **Package proxy on the LAN and the end of the download server**: the cache, the apt and pkg routes on the MDM listener, the docs, the loader, the farm step. Tasks, sizes and order are in [package-proxy.md](package-proxy.md) section 9 | CM20 and CM11a, then each as listed there | S to M |
-| CM10 | The cutover runbook: the UI steps of section 7, the port 443 change of the held script, the wipe, the rollback limit; the held script is the owner's | CM7, CM11a, CM12c, CM13, CM17, CM22c, PP3, L7, L8b | S |
+| CM10 | The cutover runbook, written as [operations/mdm-cutover.md](../operations/mdm-cutover.md): the UI steps of section 7, the port 443 change of the held script, the wipe, the rollback limit; the held script is the owner's | CM7, CM11a, CM12c, CM13, CM17, CM22c, PP3, L7, L8b | S |
 | CM14a | Accept and ignore the NanoHUB client flags with a deprecation; delete the NanoHUB client and webhook | CM11a and a week of green on the farm | S |
 | CM14b | Delete the kit crates, the pins, the `mdm` deb and kit tarball and their workflow lines, with the supersession table of section 8 | CM14a, CM17 | M |
 | CM14c | Remove the three NanoHUB flags and the allowlist flag | one release after CM14a and CM9 | S |

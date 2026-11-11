@@ -79,9 +79,11 @@ const FIELDS: [(&str, &[Field]); 28] = [
             ("install_sends", 17, false),
             ("install_last_sent_unix", 18, true),
             ("install_sha256", 19, false),
-            ("host_id", 20, false),
-            ("group", 21, false),
-            ("baseline", 22, false),
+            ("baseline_state", 20, false),
+            ("baseline_reason", 21, false),
+            ("host_id", 22, false),
+            ("group", 23, false),
+            ("baseline", 24, false),
         ],
     ),
     (
@@ -270,22 +272,16 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("store_failed", 4),
             ("audit_unavailable", 5),
             ("secrets_unavailable", 6),
-            ("mdmcert_unavailable", 7),
-            ("no_pending_request", 8),
-            ("reply_undecryptable", 9),
-            ("reply_not_for_request", 10),
-            ("certificate_invalid", 11),
-            ("key_invalid", 12),
-            ("key_mismatch", 13),
-            ("certificate_expired", 14),
-            ("topic_changed", 15),
-            ("name_locked", 16),
-            ("abm_unavailable", 17),
-            ("abm_key_missing", 18),
-            ("abm_token_unreadable", 19),
-            ("abm_credential_refused", 20),
-            ("abm_clock_refused", 21),
-            ("abm_unreachable", 22),
+            ("name_locked", 7),
+            ("mdmcert_unavailable", 8),
+            ("no_pending_request", 9),
+            ("reply_undecryptable", 10),
+            ("reply_not_for_request", 11),
+            ("certificate_invalid", 12),
+            ("key_invalid", 13),
+            ("key_mismatch", 14),
+            ("certificate_expired", 15),
+            ("topic_changed", 16),
         ])
     );
     assert_eq!(
@@ -329,6 +325,19 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("authenticated", 1),
             ("enrolled", 2),
             ("checked_out", 3),
+        ])
+    );
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmBaselineState",
+            "MDM_BASELINE_STATE_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("pending", 1),
+            ("applied", 2),
+            ("failed", 3),
         ])
     );
 

@@ -471,7 +471,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         .await;
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
-    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(12));
+    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(13));
 }
 
 /// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most

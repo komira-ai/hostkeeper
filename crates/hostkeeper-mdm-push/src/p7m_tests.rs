@@ -210,7 +210,7 @@ fn a_content_that_does_not_decrypt_under_its_key_is_refused() {
 #[test]
 fn a_content_with_no_algorithm_or_no_encrypted_part_is_refused() {
     let wrapped_key = {
-        use rsa::RsaPublicKey;
+        use rsa09::RsaPublicKey;
         RsaPublicKey::from(fixture_key(1))
             .encrypt(&mut rand_core::OsRng, Pkcs1v15Encrypt, &[1_u8; 16])
             .unwrap()

@@ -10,15 +10,18 @@
 //! - `host_groups`: the `HostGroups` calls, `--host-group`, and an `UNIMPLEMENTED` answer;
 //! - `secrets`: the token never in an argument list, a child's environment or stderr, and a
 //!   token file others can read refused;
+//! - `mdm`: the MDM setup commands, their bodies, the `session_required` refusal of a write by bearer and the reads;
 //! - `oidc`: `--github-oidc-audience` against a fake token endpoint;
 //! - `older`: the probe of the coordinator's version after a refusal `invalid_request`;
 //! - `surface`: the curl arguments, the hold of a `wait_secs` field, the help, the version, the
 //!   global flags' usage errors, and a new RPC of the fixture appearing with no edit.
 
+mod accounts;
 mod answers;
 mod flags;
 mod gateway;
 mod host_groups;
+mod mdm;
 mod oidc;
 mod older;
 mod rig;

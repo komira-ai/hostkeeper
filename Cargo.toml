@@ -15,6 +15,10 @@ publish = false
 [workspace.dependencies]
 # Argon2id, the operator password hash of hostkeeper-coordinator (docs/design/operator-login.md
 # section 6.1). Pure Rust, MIT OR Apache-2.0; the PHC string format comes with it.
+# AES-CBC, one of the content ciphers of the CMS reply of mdmcert.download (hostkeeper-mdm-push).
+# The `aes08`, `cbc01`, `des08` and `rsa09` keys are the 0.8, 0.1 and 0.9 lines that crate was written
+# against; the unsuffixed `aes`, `cbc`, `des` and `rsa` below are the newer lines of hostkeeper-mdm-scep.
+aes08 = { package = "aes", version = "0.8.4" }
 argon2 = "0.6.0"
 # PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`), which rsa's `encoding` feature does not turn on.
 pkcs1 = { version = "0.8.0", features = ["pem"] }
@@ -27,8 +31,12 @@ base64 = "0.23.1"
 boa_engine = "=0.22.0"
 # The byte buffers of HTTP bodies and of gRPC messages.
 bytes = "1.12.1"
+# CBC mode over `aes` and `des`, the content ciphers of that reply.
+cbc01 = { package = "cbc", version = "0.1.2", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
+# Single and triple DES, the other content ciphers a CMS reply may use (hostkeeper-mdm-push).
+des08 = { package = "des", version = "0.8.1" }
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 futures = "0.3.34"
 # The operating system's random bytes, from which hostkeeper-enroll makes the host's key. Already in
@@ -85,6 +93,9 @@ prost-types = "0.14.4"
 # its descriptor.
 # The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
 rand_core = { version = "0.6.4", features = ["getrandom"] }
+# The RSA key of a push request, its CSR's and encryption certificate's signing key, and the
+# PKCS#1 decryption of the reply's content key (hostkeeper-mdm-push). MIT OR Apache-2.0.
+rsa09 = { package = "rsa", version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.

@@ -22,16 +22,11 @@ description = "The coordinator's MDM push side: the APNs sender, the push policy
 testkit = []
 
 [dependencies]
-# The crypto of mdmcert.download's reply and of the push request, on the 0.8 / 0.9 line of the RustCrypto
-# crates (rand_core 0.6): the workspace table holds the newer line the coordinator's ABM client uses
-# (`aes` 0.9, `cbc` 0.2, `des` 0.9, `rsa` 0.10), so these four are declared here with their own
-# versions until this crate moves to the newer line.
-aes = "0.8.4"
-cbc = { version = "0.1.2", features = ["alloc"] }
-des = "0.8.1"
-rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
+aes08.workspace = true
 base64.workspace = true
 bytes.workspace = true
+cbc01.workspace = true
+des08.workspace = true
 hex.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
@@ -39,6 +34,7 @@ hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
 rand_core.workspace = true
 rcgen.workspace = true
+rsa09.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
 rustls-pki-types.workspace = true
 serde.workspace = true

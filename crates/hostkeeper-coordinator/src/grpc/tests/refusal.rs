@@ -4,8 +4,9 @@
 use std::fmt::Debug;
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
-    AlertsRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal, HostsRefusal, MdmRefusal,
-    ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal, ServicesRefusal,
+    AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
+    HostsRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
+    ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
 
@@ -35,7 +36,7 @@ where
 }
 
 /// Proves that each value of `HostsRefusal`, `ReleasesRefusal`, `ServicesRefusal`,
-/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal`, `RepositoriesRefusal` and `HostGroupsRefusal` becomes the status
+/// `EnrollmentRefusal`, `AuditRefusal`, `AlertsRefusal`, `RolloutsRefusal`, `MdmRefusal`, `RepositoriesRefusal`, `HostGroupsRefusal`, `UsersRefusal` and `ApiTokensRefusal` becomes the status
 /// its proto comment names: the code of the comment and the
 /// value's name, without its prefix and in lower case, as the whole message; and that
 /// `UNSPECIFIED`, which no caller is refused with, is `INTERNAL`. A value the enum gains that
@@ -477,6 +478,7 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "secrets_unavailable",
             ),
+            (MdmRefusal::NameLocked, FailedPrecondition, "name_locked"),
             (
                 MdmRefusal::MdmcertUnavailable,
                 Unavailable,
@@ -510,33 +512,6 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "certificate_expired",
             ),
             (MdmRefusal::TopicChanged, InvalidArgument, "topic_changed"),
-            (MdmRefusal::NameLocked, FailedPrecondition, "name_locked"),
-            (
-                MdmRefusal::AbmUnavailable,
-                FailedPrecondition,
-                "abm_unavailable",
-            ),
-            (
-                MdmRefusal::AbmKeyMissing,
-                FailedPrecondition,
-                "abm_key_missing",
-            ),
-            (
-                MdmRefusal::AbmTokenUnreadable,
-                InvalidArgument,
-                "abm_token_unreadable",
-            ),
-            (
-                MdmRefusal::AbmCredentialRefused,
-                FailedPrecondition,
-                "abm_credential_refused",
-            ),
-            (
-                MdmRefusal::AbmClockRefused,
-                FailedPrecondition,
-                "abm_clock_refused",
-            ),
-            (MdmRefusal::AbmUnreachable, Unavailable, "abm_unreachable"),
         ],
         refusal::mdm,
     );
@@ -655,6 +630,64 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
             ),
         ],
         refusal::host_groups,
+    );
+
+    assert_table(
+        &[
+            (UsersRefusal::Unspecified, Internal, "unspecified"),
+            (UsersRefusal::Unauthorized, Unauthenticated, "unauthorized"),
+            (UsersRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                UsersRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (UsersRefusal::NameTaken, AlreadyExists, "name_taken"),
+            (UsersRefusal::UnknownUser, NotFound, "unknown_user"),
+            (
+                UsersRefusal::LastEnabled,
+                FailedPrecondition,
+                "last_enabled",
+            ),
+            (
+                UsersRefusal::OwnPassword,
+                FailedPrecondition,
+                "own_password",
+            ),
+            (UsersRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                UsersRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::users,
+    );
+
+    assert_table(
+        &[
+            (ApiTokensRefusal::Unspecified, Internal, "unspecified"),
+            (
+                ApiTokensRefusal::Unauthorized,
+                Unauthenticated,
+                "unauthorized",
+            ),
+            (ApiTokensRefusal::Forbidden, PermissionDenied, "forbidden"),
+            (
+                ApiTokensRefusal::InvalidRequest,
+                InvalidArgument,
+                "invalid_request",
+            ),
+            (ApiTokensRefusal::NameTaken, AlreadyExists, "name_taken"),
+            (ApiTokensRefusal::UnknownToken, NotFound, "unknown_token"),
+            (ApiTokensRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                ApiTokensRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+        ],
+        refusal::api_tokens,
     );
 }
 

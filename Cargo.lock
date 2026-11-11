@@ -1652,7 +1652,6 @@ dependencies = [
  "protox",
  "rcgen",
  "ring",
- "rsa 0.10.0",
  "rsa 0.9.10",
  "rustls",
  "rustls-native-certs",

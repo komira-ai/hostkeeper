@@ -86,6 +86,15 @@ const SESSION_ONLY_CALLS: &[&str] = &[
 const REQUESTS: &[(&str, &str)] = &[
     ("hostkeeper.operator.v1.Alerts/List", "{}"),
     (
+        "hostkeeper.operator.v1.ApiTokens/Create",
+        r#"{"name": "build-script"}"#,
+    ),
+    ("hostkeeper.operator.v1.ApiTokens/List", "{}"),
+    (
+        "hostkeeper.operator.v1.ApiTokens/Revoke",
+        r#"{"name": "build-script"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Audit/List",
         r#"{"sinceSeq": "0", "limit": 100, "service": "kbf"}"#,
     ),
@@ -249,6 +258,27 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Services/Unhold",
         r#"{"scope": {"host": "storage-1"}, "service": "kbf", "reason": "swapped"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Users/Create",
+        r#"{"name": "alice"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Users/Delete",
+        r#"{"name": "alice"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Users/Disable",
+        r#"{"name": "alice"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Users/Enable",
+        r#"{"name": "alice"}"#,
+    ),
+    ("hostkeeper.operator.v1.Users/List", "{}"),
+    (
+        "hostkeeper.operator.v1.Users/ResetPassword",
+        r#"{"name": "alice"}"#,
     ),
 ];
 

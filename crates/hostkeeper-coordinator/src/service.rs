@@ -27,7 +27,7 @@ use crate::orders::Order;
 use crate::reconcile::reconcile;
 use crate::services::{ServiceDef, Services};
 use crate::status::host_status;
-use crate::tokens::{OperatorTokens, TokenName};
+use crate::tokens::OperatorTokens;
 use crate::ui::UiDir;
 use crate::verdict_file::{self, VerdictFile};
 use enrollment_calls::Turn;
@@ -245,7 +245,7 @@ pub struct Coordinator {
     /// sign-in routes are not served and no cookie is read.
     login: Option<crate::login::Login>,
     verifier: Arc<Verifier>,
-    tokens: OperatorTokens,
+    pub(crate) tokens: OperatorTokens,
     pub(crate) clock: Clock,
     services_dropped: AtomicU64,
     extras: Mutex<ExtrasDropped>,
@@ -259,9 +259,8 @@ pub struct Coordinator {
     /// Where the request for a push certificate is posted to mdmcert.download
     /// ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
-    /// The ABM client: the sync, the token upload and the key pair ([`crate::abm`]); `None` in a
-    /// coordinator built without an MDM store.
-    pub(crate) abm: Option<Arc<crate::abm::Abm>>,
+    /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
+    pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -324,7 +323,7 @@ impl Coordinator {
             accounts: AccountStore::volatile(),
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
-            abm: None,
+            proxy_cache: None,
             initial_admin: None,
             login: None,
             verifier,
@@ -855,18 +854,6 @@ impl Coordinator {
     ) -> Result<Set, SetError> {
         let verified = self.ci(bearer).await?;
         self.set_desired_verified(&verified, body).await
-    }
-
-    /// The name of the operator token in `bearer`: the token is compared by its SHA-256 in
-    /// constant time ([`OperatorTokens::name_of`]). CI's token is no operator token and an
-    /// operator token is no CI token.
-    ///
-    /// # Errors
-    /// [`Unauthorized`]: no bearer, or not a token.
-    pub fn operator(&self, bearer: Option<&str>) -> Result<TokenName, Unauthorized> {
-        bearer
-            .and_then(|presented| self.tokens.name_of(presented))
-            .ok_or(Unauthorized)
     }
 
     /// Does the operator action in `body` (`docs/design/host-updates.md`, section 5), if

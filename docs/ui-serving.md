@@ -93,17 +93,17 @@ Sign out ends the session on the coordinator.
   or PKCS#8, in one call (the migration). A file is read when the button is pressed, sent and dropped; a key can only be chosen as a
   file, never typed, and the page shows no value of a secret. A refusal is shown as the API says it (`CODE reason`) in the status
   line. The writes need a signed-in user's session: a bearer is refused them.
-  The ABM step takes the token of a takeover (the JSON of its four parts and expiry, `Mdm.PutAbmToken`) or the `.p7m` ABM hands
-  over, each as a file that the coordinator proves to Apple before it keeps it (the answer names the server entry, the
-  organisation and the expiry); the existing key pair of the server entry (`Mdm.PutSecret`, the key and its certificate
-  together as files, stored only when the certificate is the key's); and *Get public key* (`Mdm.GetAbmPublicKey`), for a new server entry only, which shows the
-  certificate of the key pair the coordinator holds, makes one when it holds none, and offers it as a download. A token or a key
-  can only be chosen as a file. The status panel adds the time of the last ABM sync that ended well and, when the last sync
-  failed, Apple's words for it; for the two faults Apple names (`timestamp_refused`, `signature_invalid`) and for the same
-  refusals of an upload (`abm_clock_refused`, `abm_credential_refused`) the page says what to do. The name step sets the host
-  name the Macs enroll at (`Mdm.PutName`) and shows the enrollment URL; the name needs a DNS record that resolves, on the LAN, to
-  the coordinator's MDM listener, and once a Mac has enrolled at it the coordinator locks it and the page shows no form for it.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name. A refused call
+- **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
+  of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
+  second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
+  password under the table once, until "I have copied it" is pressed or the page is left (it is held in the page's memory
+  only and is not in the status line, so a reload of the page or the list never shows it again). Disable, Reset password
+  and Delete ask to confirm first, as each ends the user's sessions. The coordinator refuses to disable or delete the last
+  enabled user and to reset the password of the user who asks; the page shows the refusal as the API gives it.
+- **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
+  takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
+  store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
+- Each action is one API call, and the Audit page shows it by the signed-in user's name or the token's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
