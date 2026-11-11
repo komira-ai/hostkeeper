@@ -21,7 +21,7 @@ use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
-use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, recorded, scratch};
+use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, scratch};
 
 /// The `index.html` of the default directory.
 const DEFAULT_INDEX: &str = "<!doctype html><title>the default</title>";
@@ -51,7 +51,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("clients CA").pem);
         files.put("oidc.toml", &config_text(STATIC_ISSUER));
         files.put("operator.token", OPERATOR);
-        files.put("rollout.toml", &recorded("services.toml"));
         files
     }
 
@@ -90,8 +89,6 @@ impl Files {
             path("oidc.toml"),
             "--operator-token-file".into(),
             path("operator.token"),
-            "--rollout-file".into(),
-            path("rollout.toml"),
             "--legacy-service".into(),
             "kbf".into(),
         ]);

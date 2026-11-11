@@ -159,7 +159,7 @@ fn a_serve_starts_on_the_database_and_holds_its_lock() {
         .coordinator
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"bad disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("an operator's change");
     assert_eq!(
@@ -227,7 +227,7 @@ fn a_marker_of_an_epoch_another_coordinator_led_after_refuses_the_start() {
         .coordinator
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"bad disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("an operator's change");
     drop(parts);
@@ -279,7 +279,7 @@ fn a_marker_whose_changes_all_landed_is_removed_at_start_on_the_database() {
         .coordinator
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"bad disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("an operator's change");
     drop(parts);

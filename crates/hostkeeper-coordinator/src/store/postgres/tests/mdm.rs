@@ -1,6 +1,6 @@
-//! The MDM tables of migration `0009` on Postgres: the rules the schema keeps by itself, a claim
+//! The MDM tables of migration `0010` on Postgres: the rules the schema keeps by itself, a claim
 //! that skips a row another transaction holds, what the store says of rows it cannot read or a
-//! database it cannot reach, and the release before on a database holding `0009`, and this release
+//! database it cannot reach, and the release before on a database holding `0010`, and this release
 //! on the release before's.
 
 use super::{SPENT_NOW, TestDatabase};
@@ -267,17 +267,17 @@ fn every_call_answers_an_error_when_the_tables_are_gone() {
     }
 }
 
-/// Proves: `0009` does not stop the release before it (migrations `0001` to `0008`, whose start
+/// Proves: `0010` does not stop the release before it (migrations `0001` to `0009`, whose start
 /// never reads the MDM tables) on a database this release migrated and whose MDM tables hold an
 /// enrollment: its runner takes the database, and the state reads as this release loads it. And the
-/// other way: this release starts on a database the release before migrated, runs `0009`, and the
+/// other way: this release starts on a database the release before migrated, runs `0010`, and the
 /// MDM tables are empty.
 ///
 /// Catches: an MDM table that makes the previous coordinator refuse to start (the back-out of a
 /// release would need the database restored), or a migration this release does not run on a
 /// database of the release before.
 #[test]
-fn the_release_before_starts_on_a_database_with_0009_and_this_one_on_its() {
+fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
     let db = TestDatabase::new();
     let (store, loaded) = db.open("this release").expect("the store opens");
     PgMdm::over(&store)
@@ -285,14 +285,14 @@ fn the_release_before_starts_on_a_database_with_0009_and_this_one_on_its() {
         .expect("an enrollment");
     store.stop();
     let (taken, before_loaded) = with_session(&db, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
         let taken = migrate::refuse_newer(session, &before);
         (
             taken,
             load_all(session, SPENT_NOW).expect("the state reads"),
         )
     });
-    assert!(taken.is_ok(), "0009 says older releases may run: {taken:?}");
+    assert!(taken.is_ok(), "0010 says older releases may run: {taken:?}");
     assert_eq!(before_loaded, loaded);
     assert_eq!(
         db.rows("SELECT enrollment_id FROM mdm_enrollments").len(),
@@ -301,10 +301,10 @@ fn the_release_before_starts_on_a_database_with_0009_and_this_one_on_its() {
 
     let older = TestDatabase::new();
     let ran = with_session(&older, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
         migrate::apply(session, &before).expect("the release before migrates")
     });
-    assert_eq!(ran, (1..=8).collect::<Vec<_>>());
+    assert_eq!(ran, (1..=9).collect::<Vec<_>>());
     let (store, _) = older.open("this release").expect("this release starts");
     assert_eq!(PgMdm::over(&store).abm_devices(), Ok(Vec::new()));
     assert_eq!(PgMdm::over(&store).live_enrollment("S1"), Ok(None));

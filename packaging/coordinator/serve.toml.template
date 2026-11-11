@@ -17,10 +17,9 @@ tls-key = "/etc/hostkeeper-coordinator/tls.key"
 client-ca = "/etc/hostkeeper-coordinator/client-ca.pem"
 
 # CI's OIDC issuer and audiences, the operator's tokens (owned by hostkeeper-coordinator, mode
-# 0600) and the services the coordinator manages.
+# 0600).
 oidc-config = "/etc/hostkeeper-coordinator/oidc.toml"
 tokens-file = "/etc/hostkeeper-coordinator/tokens.toml"
-rollout-file = "/etc/hostkeeper-coordinator/rollout.toml"
 
 # The state: files in the coordinator's directory. For Postgres, replace this line with
 # database-dsn-file and halt-marker-file.

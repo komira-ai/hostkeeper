@@ -15,7 +15,6 @@ use crate::jti_file::JtiError;
 use crate::mdm::MdmError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
-use crate::services::ServicesError;
 use crate::store::postgres::DatabaseError;
 use crate::tokens::TokensError;
 use crate::ui::UiDirError;
@@ -56,28 +55,17 @@ pub enum StartError {
     /// The allow-list of CI's OIDC token is refused.
     #[error(transparent)]
     Oidc(#[from] ConfigError),
-    /// The rollout file is refused.
-    #[error("--rollout-file: {0}")]
-    Services(#[from] ServicesError),
     /// The two certificate URI prefixes are refused.
     #[error("--role-uri-prefix and --host-role-uri-prefix: {0}")]
     Prefixes(#[from] PrefixError),
-    /// `--legacy-service` names a service the rollout file does not define.
-    #[error("--legacy-service names {0}, which --rollout-file does not define")]
-    LegacyService(String),
+    /// `--rollout-file` is given: `serve` does not read it.
+    #[error(
+        "--rollout-file is not read by serve: convert it once with hostkeeper-coordinator host-groups migrate (docs/operations/hostgroups.md)"
+    )]
+    RolloutFileRetired,
     /// An allow-list entry names no services and there is no legacy service for it to stand for.
     #[error("--oidc-config: entry {0} names no services and --legacy-service is not set")]
     OidcEntryUnnamed(usize),
-    /// An allow-list entry names a service the rollout file does not define.
-    #[error(
-        "--oidc-config: entry {entry} names the service {service}, which is not defined by --rollout-file"
-    )]
-    OidcEntryService {
-        /// The entry, counting from 1.
-        entry: usize,
-        /// The service it names.
-        service: String,
-    },
     /// An allow-list entry's `host_groups` holds a name that is not a host group name.
     #[error(
         "--oidc-config: entry {entry} names the host group {name:?}, which is not a host group name (1 to 32 bytes of a-z, 0-9 and -, starting with a letter, not ending with - or holding --)"
@@ -106,17 +94,13 @@ pub enum StartError {
     /// The Mac serial allowlist is refused.
     #[error(transparent)]
     MacAllowlist(#[from] AllowlistError),
-    /// The Mac serial allowlist names a service the rollout file does not define.
-    #[error("--mac-serial-allowlist names service {0}, which --rollout-file does not define")]
-    MacService(String),
-    /// An entry of the Mac serial allowlist names services, which a coordinator that holds host
-    /// groups refuses: the entry's group decides what the Mac runs.
+    /// An entry of the Mac serial allowlist names services, which the coordinator refuses: it
+    /// places hosts by host group, and the entry's group decides what the Mac runs.
     #[error(
-        "--mac-serial-allowlist: the entry of serial {0} names services; the coordinator holds host groups, and the Mac's group decides what it runs: name its host_group alone"
+        "--mac-serial-allowlist: the entry of serial {0} names services; the coordinator places hosts by host group, and the Mac's group decides what it runs: name its host_group alone"
     )]
     MacServicesRetired(String),
-    /// An entry of the Mac serial allowlist names a host group the coordinator does not hold,
-    /// while it holds some.
+    /// An entry of the Mac serial allowlist names a host group the coordinator does not hold.
     #[error("--mac-serial-allowlist names host group {0}, which the coordinator does not hold")]
     MacHostGroup(String),
     /// `--ui-dir` does not name a directory.
@@ -170,6 +154,14 @@ pub enum StartError {
         "{path}: a restore into these state files stopped before it finished, so they may hold part of a snapshot; remove them and this file, and restore again"
     )]
     RestoreUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
+    /// A `host-groups migrate --apply` on these state files stopped before it finished.
+    #[error(
+        "{path}: a host-groups migrate --apply stopped partway; restore the backup taken before it and run it again"
+    )]
+    MigrateUnfinished {
         /// The marker file.
         path: PathBuf,
     },

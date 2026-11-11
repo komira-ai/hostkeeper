@@ -676,7 +676,9 @@ impl OnFiles {
     }
 
     fn blocker(&self) -> PathBuf {
-        self.dir.path().join("mdm").join("commands.json.new")
+        let mut name = std::ffi::OsString::from("commands.json");
+        name.push(".new");
+        self.dir.path().join("mdm").join(name)
     }
 }
 

@@ -241,6 +241,7 @@ mod repositories;
 mod running;
 mod schema;
 mod serve;
+mod service_repository;
 mod serving;
 mod session;
 mod start;

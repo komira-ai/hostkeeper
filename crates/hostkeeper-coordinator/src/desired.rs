@@ -551,6 +551,9 @@ pub struct DesiredStore {
     /// Held across a whole replacement, so that writers wait for each other and not readers:
     /// `current` is only locked to read or to swap, never across the backend's commit.
     writing: Mutex<()>,
+    /// Whether hosts are placed by host group even while no group is held
+    /// ([`DesiredStore::by_groups_only`]).
+    by_groups: bool,
 }
 
 impl std::fmt::Debug for DesiredStore {
@@ -638,6 +641,7 @@ impl DesiredStore {
             backend,
             current: Mutex::new(held),
             writing: Mutex::new(()),
+            by_groups: false,
         }
     }
 

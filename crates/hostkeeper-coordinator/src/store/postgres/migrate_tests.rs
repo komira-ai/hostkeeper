@@ -4,7 +4,7 @@ use super::*;
 
 /// The SHA-256 of each shipped migration file, in hex. A shipped migration is never edited: a
 /// change is a migration of its own, so these only grow.
-const PINNED: [(i32, &str, &str); 9] = [
+const PINNED: [(i32, &str, &str); 10] = [
     (
         1,
         "state",
@@ -47,6 +47,11 @@ const PINNED: [(i32, &str, &str); 9] = [
     ),
     (
         9,
+        "service_repository",
+        "b4ad7fd88245f9047d58d41dec88dc8cae678a51cfdab4180568c4fc8819abaf",
+    ),
+    (
+        10,
         "mdm",
         "d3656f75d7e6b204b0a7edfe8512ad74ea9c33098561f6f671b006ee864fdfa0",
     ),
@@ -93,7 +98,8 @@ fn the_shipped_migrations_are_unchanged() {
             (6, "host_running"),
             (7, "repositories"),
             (8, "host_groups"),
-            (9, "mdm")
+            (9, "service_repository"),
+            (10, "mdm")
         ]
     );
     let hashes: Vec<(i32, &str, String)> = SHIPPED
@@ -119,7 +125,8 @@ fn the_shipped_migrations_are_unchanged() {
             (6, "host_running", OlderReleases::MayRun),
             (7, "repositories", OlderReleases::MayRun),
             (8, "host_groups", OlderReleases::Refuse),
-            (9, "mdm", OlderReleases::MayRun),
+            (9, "service_repository", OlderReleases::MayRun),
+            (10, "mdm", OlderReleases::MayRun),
         ]
     );
 }

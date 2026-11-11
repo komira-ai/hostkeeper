@@ -191,7 +191,8 @@ named, and every change is audited to a file.
 
 ## What changed
 
-- **The rollout file is data.** `--rollout-file` names the TOML file that defines every service
+- **The rollout file is data** (superseded by HG8: `serve` now refuses `--rollout-file`; see
+  [From roles to host groups](#from-roles-to-host-groups)). `--rollout-file` names the TOML file that defines every service
   (it was `--services-file`: the old name is still accepted, hidden, and giving both is refused).
   No definition is built in, `Services::default()` is empty, and an empty file defines none; the
   first service no longer has to be `kbf`. A `[[service]]` table has `name`, `version_scheme`
@@ -272,7 +273,8 @@ named, and every change is audited to a file.
   `layering_refuses_a_closed_role_enum` refuses the closed set coming back.
 - **The legacy service is a parameter, `--legacy-service <name>`.** kbf read the top level of a
   heartbeat as the heartbeat of the service `kbf`. Here that service is the one named by the flag,
-  and it must be defined in the rollout file. It decides, and with no flag none of these applies:
+  and it had to be defined in the rollout file (no longer checked since
+  [host groups](#from-roles-to-host-groups): `serve` reads no rollout file). It decides, and with no flag none of these applies:
   - the top-level version, health, last update and updating fields of a heartbeat belong to it;
     with no legacy service they belong to no service and only the `services` list counts;
   - a heartbeat with no `services` list (absent, or dropped as bad) is refused with `400
@@ -329,7 +331,7 @@ named, and every change is audited to a file.
 - The container unit test and the packaging of kbf's coordinator image.
 - gRPC: the coordinator speaks the HTTP and JSON endpoints above only.
 - The embedded service definitions (kbf's and tierstore's): they are data a deployment passes in
-  `--rollout-file`, and the copies the tests use are recorded in
+  `--rollout-file` (read since HG8 only by `host-groups migrate`), and the copies the tests use are recorded in
   `crates/hostkeeper-coordinator/tests/fixtures/recorded/`.
 
 ## The back-out rule
@@ -346,6 +348,9 @@ and require, against which what this coordinator writes is checked. The audit fi
 read; `by` in the ring is the token's name, and kbf reads any text there.
 
 ## Starting this coordinator on kbf's files
+
+Superseded by HG8: `serve` refuses `--rollout-file` now, so the command below no longer starts;
+convert the store first ([From roles to host groups](#from-roles-to-host-groups)).
 
 A kbf deployment starts `hostkeeper-coordinator serve` on its old files with its old certificates
 by adding four flags to the flags it already passes:
@@ -375,8 +380,9 @@ service the deployment served). The old `--services-file` spelling still works.
 - `the_legacy_single_token_flag_is_one_token_named_operator` and
   `both_token_flags_together_are_refused`: the old token flag and the new one.
 - `a_wildcard_private_listen_is_refused_at_start` and
-  `the_old_flag_names_are_hidden_aliases_and_both_together_are_refused`: the listener and the
-  renamed flags.
+  `the_old_flag_name_is_a_hidden_alias_and_both_together_are_refused`: the listener and the
+  renamed `--control-listen` (the old name of `--rollout-file`, `--services-file`, is gone with
+  that flag: [host groups](#from-roles-to-host-groups)).
 - `state_files_written_by_kbf_are_read_and_the_reverse_holds_by_schema_rules`: the files kbf wrote
   are read here, and what is written here passes kbf's strict readers.
 - `legacy_single_service_heartbeat_belongs_to_the_named_service`: with `--legacy-service`, the
@@ -596,6 +602,111 @@ M6a deletes it. Its `erase-request` verb is not ported: the design leaves erase 
   that is not a JSON object**, where kbf sent the file whole and printed `?`
   (`upload_token_refuses_an_empty_or_oversized_file`,
   `upload_token_fails_on_an_account_answer_that_is_not_json`).
+
+## From roles to host groups
+
+Build item HG8 of [hostgroups.md](docs/design/hostgroups.md) (design sections 9.1 and 10) retires
+the rollout file, the roles and the operator's assignments as ways to place a service. A store
+that placed hosts by them is converted once, offline, by
+
+```
+hostkeeper-coordinator host-groups migrate --rollout-file FILE <the store's flags> [--apply]
+```
+
+and the `serve` of this release is always in group mode. This section is what the verb and the
+refusal do; the older sections below say what the coordinator import did when it was built, and
+where they tell an operator to start `serve` with `--rollout-file` they are superseded by this one.
+
+- **The verb.** It takes the store's flags as `serve` names them (`--state-file`, `--ops-file`,
+  `--enrollment-dir`, or `--database-dsn-file`, exactly one store), `--rollout-file` (read once,
+  with the strict reader `serve` used to use), `--legacy-service`, `--live-rollouts`, an optional
+  `--mac-serial-allowlist`, and `--apply`. Without `--apply` it prints the whole plan and writes
+  nothing (exit 0, or 1 when the plan holds an error); with it, it prints the same plan and writes
+  it in one commit of the files or one transaction of the database. `--apply` refuses while a
+  coordinator holds the store, writes nothing when the plan has an error, and refuses a store that
+  already holds a host group. A host whose role no group takes is an error naming it.
+- **`serve` refuses `--rollout-file`.** It fails at start, before any file is opened, with
+  `--rollout-file is not read by serve: convert it once with hostkeeper-coordinator host-groups migrate
+  (docs/operations/hostgroups.md)`. `--services-file`, its old name, is no argument. A coordinator
+  that `serve` builds places by host group from its first start, also while it holds no group: a host
+  in no group is ordered nothing, `Services.Assign` and `Services.Unassign` are refused
+  `placed_by_host_group`, an approval naming `services` is refused `services_retired`, and the Mac
+  allowlist's entry naming `services`, or a group the store does not hold, stops the start.
+- **Groups are named after roles.** The hosts of a role are split by the set of packages placed
+  on them today (the rollout file's roles and selectors, the role and host entries, plus
+  `hostkeeper`). The most common set takes the role's name, each other set is `<role>-2`,
+  `<role>-3`, in the order of the node id of its first host (a tie goes to the set whose first host
+  sorts first). A derived name over 32 bytes, or one that is already a role's name, is an error
+  naming the role. A group's packages are its set ordered by the rollout file's `priority`, then
+  by name. A role only a record, a pending approval or an allowlist entry names gets a group too.
+  A denied host is in no group. The plan checks that no host's placement differs after the
+  conversion; a difference is an error.
+- **The policy merge.** A group's policy is the rollout file's keys when its services agree. When
+  they differ the most careful value of each key is taken and each choice printed: `stages` and
+  `canary` of the service whose first stage holds the fewest hosts, the highest `bake_beats`,
+  `manual` over `automatic`, the lowest `rollback_after_failed` percent and `min_hosts`, the
+  longest `defer_backoff` of each field, and from the desired state's per-role limits the lowest
+  `max_updating` and the highest `min_up`. `live_rollouts` stays unset, following `--live-rollouts`,
+  now counted within each group; the plan says how many groups may roll at once.
+- **What is carried.** Each group's desired version of each package it lists, with its generation
+  and write id; `last_good`, the halt and its acknowledgements, and the force (kept for the group
+  when it orders a host of it); the plan's position, with its done hosts split by the group each
+  is in; holds of a role scope, copied to the role's other groups; minimum versions, the higher of
+  the role's and the rollout file's, one `set_min_version` audit entry each; the repository of
+  every service whose rollout-file `repository` is not `komira`, written as `Services.SetRepository`
+  would (one `set_repository` entry each; a repository the registry does not hold is an error);
+  uninstall intents, host exclusions, host holds and host minimums as they were. Every enrolled
+  host's record, each approved request still unpolled and each inventory record gets its group. One
+  `host_group_put` audit entry per group, by `migration`, comes first. What the verb only reads
+  (roles, assignments, per-service desired state, the plan's own rows) is not dropped.
+- **The repository of a package is `Services.SetRepository`.** With the rollout file gone, a
+  package's repository is coordinator state set through the operator API (operator token only,
+  audited, an empty value clears it back to `komira`), not a serve flag and not a field of a group.
+  Its minimum version stays `Services.SetMinVersion`.
+- **The window and the way back.** Stop the coordinator, take the backup, run the verb with
+  `--apply`, drop `--rollout-file` from the coordinator's command and fix the Mac allowlist, start
+  the new release. The back-out rule of the coordinator import (the last kbf coordinator reads
+  what this one wrote) ends here: a release before refuses the migrated store (Postgres migration
+  `0008`, and the `host_groups` keys of the state and ops files). To go back, restore the backup
+  taken before `--apply`. A file-store `--apply` that stops partway leaves a marker,
+  `<state-file>.migrate-unfinished`, and `serve`, `import`, `backup` and the verb itself refuse to
+  start while it exists, saying to restore the backup and run the verb again.
+- **Departures from additive formats (design 9.1) that this build item makes.** `serve` refuses
+  `--rollout-file` and has no `--services-file`; a release before refuses the migrated store
+  instead of reading it; and `Services.Assign`, `Services.Unassign`, an approval's `services` and
+  the Mac allowlist's `services` are refused by name. The wire gains only `Services.SetRepository`
+  (with its messages and the refusal `repository_unknown`), in the file
+  `services_repository.proto`; no field or call is renumbered or removed.
+
+Tests that hold it:
+
+- `the_hosts_of_a_role_are_split_by_the_set_of_packages_placed_on_them`: the split, the names
+  `<role>` and `<role>-2`, and the package order.
+- `a_derived_name_that_is_a_role_is_an_error_naming_the_role` and
+  `the_check_of_every_hosts_placement_names_a_difference`: the refusals of the plan.
+- `a_group_of_services_that_disagree_takes_the_most_careful_value_of_each_key`: the policy merge.
+- `desired_versions_are_carried_with_their_generation`,
+  `marks_halts_and_forces_are_carried_to_the_groups_that_hold_the_hosts`,
+  `a_plan_position_is_copied_with_its_done_hosts_split_by_group`,
+  `a_hold_of_a_role_is_copied_to_the_other_groups_of_the_role`,
+  `minimum_versions_are_the_higher_of_the_role_and_the_file` and
+  `the_repository_of_a_service_is_carried_and_must_be_in_the_registry`: what is carried.
+- `a_dry_run_prints_the_plan_and_writes_nothing` and
+  `apply_writes_the_groups_the_records_and_the_audit`: the dry run and the file-store apply.
+- `a_plan_with_an_error_is_printed_and_apply_writes_nothing`,
+  `the_marker_of_a_stopped_apply_refuses_every_verb_that_reads_the_files` and
+  `a_write_that_fails_leaves_the_marker_and_the_later_files_as_they_were`: the refusals and the
+  marker.
+- `apply_on_a_database_writes_one_transaction_that_reads_back` and
+  `a_failed_statement_a_difference_or_a_refusal_leaves_the_database_as_it_was`: the database apply.
+- `a_host_is_ordered_after_the_migration_what_it_was_ordered_before`: a coordinator over the old
+  store and one over the migrated store answer the same heartbeat alike.
+- `serve_given_a_rollout_file_is_refused_before_any_file_is_opened`,
+  `the_old_name_of_the_flag_is_no_argument_and_the_flag_is_not_in_the_help`,
+  `with_no_group_a_host_is_ordered_nothing`, `with_no_group_an_assignment_is_refused` and
+  `with_no_group_an_approval_naming_services_or_an_unheld_group_is_refused`: `serve` and group mode.
+- `a_restart_keeps_the_repository`, `a_repository_the_registry_lacks_is_refused_and_changes_nothing`
+  and `a_config_package_set_to_a_private_repository_deploys_to_its_group`: `Services.SetRepository`.
 
 ## New in hostkeeper
 

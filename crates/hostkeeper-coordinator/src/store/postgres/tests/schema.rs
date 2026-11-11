@@ -27,7 +27,8 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("6", "host_running", "may-run"),
         row("7", "repositories", "may-run"),
         row("8", "host_groups", "refuse"),
-        row("9", "mdm", "may-run"),
+        row("9", "service_repository", "may-run"),
+        row("10", "mdm", "may-run"),
     ]
 }
 
@@ -118,7 +119,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
 
     // A migration that works is run, once, and its number answered.
     let good = Migration {
-        version: 10,
+        version: 11,
         name: "later",
         older: OlderReleases::MayRun,
         sql: "CREATE TABLE later (x int)",
@@ -129,10 +130,10 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
         let ran = migrate::apply(session, &set).expect("the set applies");
         (ran, migrate::apply(session, &set).expect("and again"))
     });
-    assert_eq!((ran, again), (vec![10], Vec::<i32>::new()));
+    assert_eq!((ran, again), (vec![11], Vec::<i32>::new()));
     assert_eq!(
         versions(&db),
-        [shipped_rows(), vec![row("10", "later", "may-run")]].concat()
+        [shipped_rows(), vec![row("11", "later", "may-run")]].concat()
     );
 }
 
@@ -176,16 +177,16 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
     let (store, _) = db.open("first").expect("the store opens");
     store.stop();
     db.run(
-        "INSERT INTO schema_version (version, name, older_releases) VALUES (10, 'later', 'refuse')",
+        "INSERT INTO schema_version (version, name, older_releases) VALUES (11, 'later', 'refuse')",
     )
     .expect("a later migration is recorded");
     let error = db.open("older").err().expect("an older release is refused");
     assert!(matches!(error, DatabaseError::Schema(_)));
     assert_eq!(
         error.to_string(),
-        "the database's schema is newer than this coordinator (migration 10, later)"
+        "the database's schema is newer than this coordinator (migration 11, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 10")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 11")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();

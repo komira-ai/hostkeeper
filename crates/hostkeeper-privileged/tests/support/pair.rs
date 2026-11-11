@@ -13,6 +13,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
+use hostkeeper_proto::hostkeeper::operator::v1::HostGroup;
 use rcgen::{
     BasicConstraints, CertificateParams, CertifiedIssuer, DistinguishedName, DnType,
     ExtendedKeyUsagePurpose, IsCa, KeyPair, KeyUsagePurpose, SanType,
@@ -32,11 +33,11 @@ pub const DAEMON: &str = env!("CARGO_BIN_EXE_hostkeeper-device-daemon");
 
 /// Where the daemon keeps its key and certificates: a path it fixes, with no flag.
 pub const PKI_DIR: &str = "/etc/updater/pki";
-/// The role every test host is approved for.
+/// The host group every test host is approved into: an approval's role is read as the group's
+/// name.
 pub const ROLE: &str = "ci";
-/// The service the rollout file runs on [`ROLE`], which CI's allow-list names (an entry names
-/// services the rollout file defines); no test sets a desired version of it, so the coordinator
-/// orders nothing for it.
+/// The service the tests list in the group [`ROLE`], which CI's allow-list names; no test sets a
+/// desired version of it, so the coordinator orders nothing for it.
 pub const BEACON: &str = "beacon";
 /// The operator's token.
 const OPERATOR_TOKEN: &str = "operator-token-of-the-first-boot-tests-0123456789";
@@ -188,11 +189,6 @@ impl TestCa {
     }
 }
 
-/// The rollout file: [`BEACON`] on [`ROLE`], and `more` (TOML `[[service]]` tables) after it.
-pub fn rollout(more: &str) -> String {
-    format!("[[service]]\nname = \"{BEACON}\"\nroles = [\"{ROLE}\"]\n{more}")
-}
-
 /// Whether `host`, as `hosts list` gives it, was heard since the coordinator started: it has a
 /// heartbeat time. A host listed from its enrollment alone has none (proto3 JSON leaves the 0
 /// out), and may still carry the daemon its enrollment kept in `heartbeat.agent`.
@@ -216,33 +212,23 @@ pub struct Coordinator {
 }
 
 impl Coordinator {
-    /// Writes the coordinator's files (the rollout file is `rollout`) and starts it with
-    /// enrollment, making its CA (`--ca-init`), on ports of loopback the system picks; `extra`
-    /// are more flags of `serve`, given at every start.
-    pub fn start(scratch: &Path, rollout: &str, extra: &[&str]) -> Coordinator {
-        Coordinator::start_with(scratch, rollout, extra, Ipv4Addr::LOCALHOST, false)
+    /// Writes the coordinator's files and starts it with enrollment, making its CA
+    /// (`--ca-init`), on ports of loopback the system picks; `extra` are more flags of `serve`,
+    /// given at every start. It holds no host group: the test puts its groups ([`Self::put_group`])
+    /// before it approves a host.
+    pub fn start(scratch: &Path, extra: &[&str]) -> Coordinator {
+        Coordinator::start_with(scratch, extra, Ipv4Addr::LOCALHOST, false)
     }
 
     /// [`Self::start`], with the private listener on `address` (its certificate for that
     /// address) and a LAN listener there too (`--lan-listen`), each on a port the system picks:
     /// the coordinator of the network-install tests, which `hostkeeper-pxe` reads over the
     /// farm LAN and a network-installed host dials.
-    pub fn start_on_lan(
-        scratch: &Path,
-        rollout: &str,
-        extra: &[&str],
-        address: Ipv4Addr,
-    ) -> Coordinator {
-        Coordinator::start_with(scratch, rollout, extra, address, true)
+    pub fn start_on_lan(scratch: &Path, extra: &[&str], address: Ipv4Addr) -> Coordinator {
+        Coordinator::start_with(scratch, extra, address, true)
     }
 
-    fn start_with(
-        scratch: &Path,
-        rollout: &str,
-        extra: &[&str],
-        address: Ipv4Addr,
-        lan: bool,
-    ) -> Coordinator {
+    fn start_with(scratch: &Path, extra: &[&str], address: Ipv4Addr, lan: bool) -> Coordinator {
         let dir = scratch.join("coordinator");
         let ca = TestCa::new("private listener CA");
         let leaf = ca.server_for(address);
@@ -261,7 +247,6 @@ impl Coordinator {
             OPERATOR_TOKEN.as_bytes(),
             0o600,
         );
-        put(&dir.join("rollout.toml"), rollout.as_bytes(), 0o600);
         // CI's allow-list: required, and no test presents a CI token.
         put(
             &dir.join("oidc.toml"),
@@ -312,8 +297,6 @@ impl Coordinator {
             &path("oidc.toml"),
             "--operator-token-file",
             &path("operator.token"),
-            "--rollout-file",
-            &path("rollout.toml"),
             "--enrollment-dir",
             &path("enrollment"),
             "--ca-key-file",
@@ -460,6 +443,63 @@ impl Coordinator {
     pub fn pending(&self) -> Result<Vec<Value>, String> {
         let list = self.api().pending().map_err(|e| e.to_string())?;
         Ok(list["requests"].as_array().cloned().unwrap_or_default())
+    }
+
+    /// Puts the host group `name` listing `packages` after `hostkeeper` (which every group
+    /// lists), with every policy key at its default: creates it, or replaces the group of that
+    /// name. The coordinator holds host groups from the first one.
+    pub fn put_group(&self, name: &str, packages: &[&str]) {
+        let packages = std::iter::once("hostkeeper")
+            .chain(packages.iter().copied().filter(|p| *p != "hostkeeper"))
+            .map(str::to_owned)
+            .collect();
+        must(
+            "host-groups put",
+            self.api().put_host_group(HostGroup {
+                name: name.to_owned(),
+                packages,
+                policy: None,
+            }),
+        );
+    }
+
+    /// Adds `service` to the end of the packages of the group `group` (its policy at the
+    /// defaults, as [`Self::put_group`] puts it), and sets the repository of the registry it
+    /// comes from to `repository` (which the registry holds): the operator putting a package on
+    /// the hosts of the group.
+    pub fn add_package(&self, group: &str, service: &str, repository: &str) {
+        let mut packages = self.group_packages(group);
+        packages.push(service.to_owned());
+        self.put_group(
+            group,
+            &packages.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+        must(
+            "services set-repository",
+            self.api().set_repository(service, repository),
+        );
+    }
+
+    /// Takes `service` out of the packages of the group `group` (its policy at the defaults, as
+    /// [`Self::put_group`] puts it): the group's hosts are ordered to uninstall it.
+    pub fn remove_package(&self, group: &str, service: &str) {
+        let mut packages = self.group_packages(group);
+        packages.retain(|p| p != service);
+        self.put_group(
+            group,
+            &packages.iter().map(String::as_str).collect::<Vec<_>>(),
+        );
+    }
+
+    /// The packages the group `group` lists now, in its order.
+    fn group_packages(&self, group: &str) -> Vec<String> {
+        let held = must("host-groups get", self.api().get_host_group(group));
+        held["hostGroup"]["group"]["packages"]
+            .as_array()
+            .unwrap_or_else(|| panic!("the group {group} lists no packages: {held}"))
+            .iter()
+            .map(|p| p.as_str().expect("a package name").to_owned())
+            .collect()
     }
 
     /// The entry of `service` in `services list`.

@@ -1,4 +1,4 @@
-//! The MDM tables of migration `0009` behind [`MdmStore`]: `mdm_enrollments`, `mdm_identities`,
+//! The MDM tables of migration `0010` behind [`MdmStore`]: `mdm_enrollments`, `mdm_identities`,
 //! `mdm_commands`, `abm_devices` and `abm_state` (`docs/design/coordinator-mdm.md`, 9.1).
 //!
 //! A change is one transaction on the writing session, fenced by the lease as every commit is. A
@@ -444,11 +444,11 @@ impl MdmStore for PgMdm {
                 &format!(
                     "UPDATE mdm_commands SET state = 'sent', deferred = false, \
                      deliveries = deliveries + 1, sent_unix = $3 WHERE id = \
-                     (SELECT c.id FROM mdm_commands c \
-                      JOIN mdm_enrollments e ON e.enrollment_id = c.enrollment_id \
-                      WHERE c.enrollment_id = $1 AND e.state = 'live' AND c.state = 'queued' \
-                      AND NOT (c.id = ANY($2)) ORDER BY c.seq LIMIT 1 \
-                      FOR UPDATE OF c SKIP LOCKED) RETURNING {COMMAND}"
+                     (SELECT id FROM mdm_commands \
+                      WHERE enrollment_id = $1 AND state = 'queued' AND NOT (id = ANY($2)) \
+                      AND EXISTS (SELECT 1 FROM mdm_enrollments \
+                                  WHERE enrollment_id = $1 AND state = 'live') \
+                      ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED) RETURNING {COMMAND}"
                 ),
                 &[&id, &tried, &now_unix],
             )

@@ -137,7 +137,7 @@ impl Scenario {
             coordinator.ca_sha256(),
         ));
         let daemon = host.start_daemon(&format!("hostkeeper-ci-{tag}-{}-daemon", process::id()));
-        coordinator.approve_enrollment(HOST_ID, SERVICE);
+        coordinator.approve_enrollment(HOST_ID);
         Scenario {
             daemon,
             coordinator,

@@ -441,7 +441,7 @@ fn the_committed_setup_makes_the_database_the_committed_command_starts_on_and_lo
         .coordinator
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"bad disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("an operator's change");
     let why = refusal(args);
@@ -516,9 +516,8 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
     let database = Database::new();
     let parts = build_given(&flags_of(serve_on(&files, &database))).expect("a start");
     for node in ["d1", "d2"] {
-        let body = format!(
-            r#"{{"action":"exclude","service":"kbf","node_id":"{node}","reason":"bad disk"}}"#
-        );
+        let body =
+            format!(r#"{{"action":"set_labels","node_id":"{node}","labels":{{"rack":"r1"}}}}"#);
         parts
             .coordinator
             .operate(Some(OPERATOR), body.as_bytes())
@@ -573,7 +572,7 @@ fn counts_sql_prints_the_rows_of_each_table_as_export_prints_them() {
         "{counted:?}"
     );
     assert!(
-        counted.contains(&"  exclusions: 2 rows".to_owned()),
+        counted.contains(&"  host_labels: 2 rows".to_owned()),
         "{counted:?}"
     );
     assert!(

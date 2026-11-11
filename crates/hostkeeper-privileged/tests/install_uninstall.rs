@@ -1,15 +1,15 @@
 #![cfg(all(target_os = "linux", feature = "privileged"))]
-//! A package assigned to an enrolled host, updated and taken off it, with the real programs: the
+//! A package put on an enrolled host by its host group, updated and taken off it, with the real programs: the
 //! coordinator and the daemon as child processes on loopback (`support::pair`), and a signed apt
 //! repository on disk the daemon installs the package from through its `apt` entry
 //! (`support::aptrepo`), as root against the host's systemd, apt and dpkg. The operator acts
 //! through the operator API only; what the tests read is the coordinator's `hosts list` (and
-//! `services list` for the hosts uninstalling a service), the daemon's log (each line a hook step
+//! the host's heartbeat for the service it runs), the daemon's log (each line a hook step
 //! wrote, under its step's unit), and the host: the file the package installs, its unit file and
 //! the link that enables it.
 //!
-//! What they assert: a host assigned the fixture service is ordered to install it and does, once,
-//! when the coordinator is killed after the assignment, again while the install runs and again
+//! What they assert: a host whose group lists the fixture service is ordered to install it and does, once,
+//! when the coordinator is killed after the group is put, again while the install runs and again
 //! after it; a daemon killed and started again (its boot pass) keeps the service as it was,
 //! reports it and runs none of its steps again; a new desired version is installed over it, also
 //! by a coordinator restarted with no word of the install (its verdicts file gone); the
@@ -35,12 +35,12 @@ use hostkeeper_proto::hostkeeper::release::v1::{StepBounds, Target};
 use serde_json::Value;
 use support::aptrepo::{self, AptRepo, Deb, File, Service};
 use support::operator_api::must;
-use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, rollout};
+use support::pair::{BEACON, Coordinator, Daemon, HostPaths, PACKAGES_DIR, ROLE};
 use support::spawn::poll;
 use support::{Bench, FIXTURE};
 
-/// The fixture service, which is also its package; the rollout file runs it on a role no test host
-/// has ([`NO_HOST_ROLE`]): only the operator's assignment brings it to a host.
+/// The fixture service, which is also its package; the host group of the test host lists it only
+/// once the operator adds it ([`Coordinator::add_package`]).
 const SERVICE: &str = "hostkeeper-ci-fixture";
 /// Its one unit.
 const UNIT: &str = "hostkeeper-ci-fixture.service";
@@ -59,8 +59,6 @@ const NO_CHANNEL: &str = "https://releases.example";
 const SERVICE_UNIT: &str = "[Unit]\nDescription=the first-boot tests' fixture service\n\n[Service]\n\
      Type=exec\nExecStart=/usr/bin/hostkeeper-ci-fixture serve\n\n[Install]\n\
      WantedBy=multi-user.target\n";
-/// The role of the fixture service in the rollout file (a service runs on at least one).
-const NO_HOST_ROLE: &str = "unused";
 /// The host.
 const NODE: &str = "ci-host-3";
 /// The steps of an install and of an update, in the order the daemon runs them.
@@ -138,9 +136,9 @@ struct Installed {
 }
 
 impl Installed {
-    /// Enrolls a host, sets the desired version 1.0.0 of the fixture service and assigns it to the
-    /// host, and waits until the install has finished once: the coordinator is killed and started
-    /// again right after the assignment, once the install's first step has run, and once after
+    /// Enrolls a host, adds the fixture service to its group, sets its desired version 1.0.0,
+    /// and waits until the install has finished once: the coordinator is killed and started
+    /// again right after the group is put, once the install's first step has run, and once after
     /// the install.
     fn new(test: &str) -> Installed {
         let bench = Bench::new(test);
@@ -169,12 +167,8 @@ impl Installed {
         );
 
         // 1. An enrolled host that heartbeats.
-        let services = format!(
-            "[[service]]\nname = \"{SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n\
-             repository = \"{}\"\n",
-            aptrepo::REGISTRY_NAME
-        );
-        let mut coordinator = Coordinator::start(&scratch, &rollout(&services), &[]);
+        let mut coordinator = Coordinator::start(&scratch, &[]);
+        coordinator.put_group(ROLE, &[BEACON]);
         must(
             "repositories put",
             coordinator
@@ -185,11 +179,11 @@ impl Installed {
         coordinator.approve_first(NODE, &mut daemon);
         coordinator.wait_heard(NODE, &mut daemon);
 
-        // 2. The operator sets the desired version and assigns the service to the host; the
-        // coordinator is killed and started again at once, so the assignment and the desired
-        // version it orders by are the ones it reads back.
+        // 2. The operator adds the service to the host's group (from the registry's repository)
+        // and sets the desired version; the coordinator is killed and started again at once, so
+        // the group and the desired version it orders by are the ones it reads back.
+        coordinator.add_package(ROLE, SERVICE, aptrepo::REGISTRY_NAME);
         set_desired(&coordinator, &v1);
-        must("services assign", coordinator.api().assign(NODE, SERVICE));
         coordinator.restart();
 
         // 5. Once the install runs, the coordinator is killed and started again: the order
@@ -263,15 +257,13 @@ impl Installed {
         }
     }
 
-    /// The operator takes the service off the host with an uninstall; waits until the hook has
-    /// run `uninstall` once, the coordinator lists no host as uninstalling the service and the
-    /// package is gone, and asserts the host and the coordinator's listing hold nothing of it.
+    /// The operator takes the service out of the host's group, which orders the host to uninstall
+    /// it; waits until the hook has run `uninstall` once, the host's last heartbeat lists no such
+    /// service and the package is gone, and asserts the host and the coordinator's listing hold
+    /// nothing of it.
     fn uninstall(&mut self) {
         let package = Path::new(PACKAGES_DIR).join(SERVICE);
-        must(
-            "services unassign",
-            self.coordinator.api().unassign(NODE, SERVICE, true),
-        );
+        self.coordinator.remove_package(ROLE, SERVICE);
         let Installed {
             daemon,
             coordinator,
@@ -280,15 +272,14 @@ impl Installed {
         poll(&format!("{NODE} reporting {SERVICE} gone"), || {
             coordinator.assert_running();
             daemon.assert_running();
-            let entry = coordinator.service(SERVICE)?;
-            let uninstalling = entry["uninstalling"]
-                .as_array()
-                .cloned()
-                .unwrap_or_default();
-            if ran(daemon, "uninstall") == 1 && uninstalling.is_empty() && !package.exists() {
+            let host = coordinator
+                .host(NODE)?
+                .ok_or_else(|| format!("hosts list lists no {NODE}"))?;
+            let beat = beat(&host);
+            if ran(daemon, "uninstall") == 1 && beat.is_null() && !package.exists() {
                 Ok(())
             } else {
-                Err(format!("{entry}"))
+                Err(format!("{NODE} reports {SERVICE} as {beat}"))
             }
         });
         let listed = coordinator

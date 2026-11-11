@@ -27,7 +27,7 @@ fn text(path: &Path) -> &str {
 }
 
 /// The flags of a `serve`; parsing reads none of the files.
-const SERVE: [&str; 17] = [
+const SERVE: [&str; 15] = [
     "serve",
     "--heartbeat-listen",
     "192.0.2.1:1",
@@ -43,13 +43,12 @@ const SERVE: [&str; 17] = [
     "desired.json",
     "--oidc-config",
     "oidc.toml",
-    "--rollout-file",
-    "rollout.toml",
 ];
 
-/// Catches: a verb missing or one too many, or a `serve` that can start without the services
-/// it manages: the verbs are `serve`, `backup`, `restore`, `import` and `export`, any other is
-/// refused, and `serve`'s `--rollout-file` is required. An import writes only with `--apply`.
+/// Catches: a verb missing or one too many, or a `serve` that can start without the CI
+/// allow-list it admits callers by: the verbs are `serve`, `backup`, `restore`, `import` and
+/// `export`, any other is refused, and `serve`'s `--oidc-config` is required. An import writes
+/// only with `--apply`.
 #[test]
 fn the_verbs_are_serve_backup_restore_import_and_export() {
     assert!(matches!(
@@ -124,9 +123,9 @@ fn the_verbs_are_serve_backup_restore_import_and_export() {
         ErrorKind::InvalidSubcommand
     );
     let missing = Cli::try_parse_from(args(&SERVE[..SERVE.len() - 2]))
-        .expect_err("--rollout-file is required");
+        .expect_err("--oidc-config is required");
     assert_eq!(missing.kind(), ErrorKind::MissingRequiredArgument);
-    assert!(missing.to_string().contains("--rollout-file"), "{missing}");
+    assert!(missing.to_string().contains("--oidc-config"), "{missing}");
 }
 
 /// Catches: a restore or an export that runs without saying it writes only into empty targets,
