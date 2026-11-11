@@ -575,6 +575,7 @@ Refused also `enrollment_unavailable` when this coordinator has no MDM listener,
 | flag | value | meaning |
 |---|---|---|
 | `--serial` | STRING | The serial, 1 to 64 ASCII letters and digits. |
+
 #### `hkctl mdm status`
 
 `/hostkeeper.operator.v1.Mdm/Status`
