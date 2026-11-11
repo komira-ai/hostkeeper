@@ -42,6 +42,7 @@ Facts, with the file that says them (paths under `crates/`).
   (`hostkeeper-config/src/daemon.rs`), so every host config still carries one.
 - **Not built, and not evidenced as done.** The operator's step in packages-native.md 10.5 item 3 (stop the sync, delete the channel's
   tree), which is a step on the farm and not in this repository, and A25 (deleting the last readers). Section 6 owns the first.
+- **Built, CM11c:** `GET`/`HEAD /pkg/<sha256>.pkg` from `--mdm-pkg-dir` alone (coordinator-mdm.md 4.7): streamed, digest-checked, with `Range` and `If-None-Match`, and 404 for a digest the current `installs` do not name.
 - **Not there:** any cache, any route for a public repository, any by-digest pkg route that fetches from an origin.
 
 ## 3. Components and where it listens
@@ -228,5 +229,8 @@ fallback origin.
    one host before PP6).
 3. That a GitHub release asset's redirect chain stays within https and three hops (only if the fallback origin is used).
 4. That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host before PP6.
-5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3); the
-   listener's route-family switch is read in CM11a.
+5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3):
+   **yes, built in CM11a** (read in the listener): `MdmServer::serves(family)` is decided for each request; the proxy family needs the
+   certificate and key of the name, the MDM family needs that and a push identity, and a family that is not served answers `503` for each
+   of its routes while the other is served (coordinator-mdm.md 4.1; test `the_mdm_routes_answer_503_while_the_package_routes_are_served`).
+   `/pkg/` is served from `--mdm-pkg-dir` (CM11c) and `/apt/` answers `404` until PP2; both join the switch with no change to it.

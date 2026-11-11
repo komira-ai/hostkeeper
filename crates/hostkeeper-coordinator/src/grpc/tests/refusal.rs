@@ -478,6 +478,39 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "secrets_unavailable",
             ),
+            (
+                MdmRefusal::MdmcertUnavailable,
+                Unavailable,
+                "mdmcert_unavailable",
+            ),
+            (
+                MdmRefusal::NoPendingRequest,
+                FailedPrecondition,
+                "no_pending_request",
+            ),
+            (
+                MdmRefusal::ReplyUndecryptable,
+                InvalidArgument,
+                "reply_undecryptable",
+            ),
+            (
+                MdmRefusal::ReplyNotForRequest,
+                InvalidArgument,
+                "reply_not_for_request",
+            ),
+            (
+                MdmRefusal::CertificateInvalid,
+                InvalidArgument,
+                "certificate_invalid",
+            ),
+            (MdmRefusal::KeyInvalid, InvalidArgument, "key_invalid"),
+            (MdmRefusal::KeyMismatch, InvalidArgument, "key_mismatch"),
+            (
+                MdmRefusal::CertificateExpired,
+                InvalidArgument,
+                "certificate_expired",
+            ),
+            (MdmRefusal::TopicChanged, InvalidArgument, "topic_changed"),
         ],
         refusal::mdm,
     );

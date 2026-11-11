@@ -35,11 +35,11 @@ use hostkeeper_enrollment::validity::UnixClock;
 
 use crate::answer;
 use crate::baseline::Baseline;
-use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO};
+use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO, SETTINGS};
 use crate::enroll::{EnrollSide, Held};
 use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
-use crate::nanohub::{EnqueueError, NanoHub};
+use crate::nanohub::{CommandQueue, EnqueueError};
 use crate::pkg::Install;
 use crate::record::{DeviceRecord, NonceRecord, Phase, Sent};
 use crate::store::{DeviceStore, StoreError};
@@ -86,7 +86,7 @@ pub enum Handled {
 /// The gate's device side.
 pub struct Gate {
     store: Box<dyn DeviceStore>,
-    nanohub: NanoHub,
+    queue: Box<dyn CommandQueue>,
     clock: Arc<dyn UnixClock>,
     random: Random,
     devices: Mutex<BTreeMap<EnrollmentId, DeviceRecord>>,
@@ -107,20 +107,20 @@ pub struct Gate {
 impl std::fmt::Debug for Gate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Gate")
-            .field("nanohub", &self.nanohub)
+            .field("queue", &self.queue)
             .finish_non_exhaustive()
     }
 }
 
 impl Gate {
-    /// The gate over the records of `store`, queueing commands through `nanohub`, reading the
+    /// The gate over the records of `store`, queueing commands through `queue`, reading the
     /// time from `clock` and drawing command UUIDs from `random`.
     ///
     /// # Errors
     /// [`StoreError`]: a record cannot be read or is not whole; the gate does not start.
     pub fn open(
         store: Box<dyn DeviceStore>,
-        nanohub: NanoHub,
+        queue: impl CommandQueue + 'static,
         clock: Arc<dyn UnixClock>,
         random: Random,
     ) -> Result<Self, StoreError> {
@@ -131,7 +131,7 @@ impl Gate {
             .collect();
         Ok(Self {
             store,
-            nanohub,
+            queue: Box::new(queue),
             clock,
             random,
             devices: Mutex::new(devices),
@@ -158,6 +158,21 @@ impl Gate {
     pub fn with_install(mut self, install: Option<Install>) -> Self {
         self.install = install;
         self
+    }
+
+    /// Replaces the installs of the pkg install ([`Install::set_installs`]): the next look sends
+    /// by them, and a Mac whose entry changed is sent it again. Without a pkg install (no MDM
+    /// host) there is nothing to send them from and it does nothing.
+    pub fn set_installs(&self, installs: crate::installs::Installs) {
+        if let Some(install) = &self.install {
+            install.set_installs(installs);
+        }
+    }
+
+    /// The installs the gate sends by now; `None` without a pkg install.
+    #[must_use]
+    pub fn installs(&self) -> Option<crate::installs::Installs> {
+        self.install.as_ref().map(Install::installs)
     }
 
     /// The same gate with the enrollment baseline `baseline` ([`crate::baseline`]), or without
@@ -322,7 +337,7 @@ impl Gate {
         id: &EnrollmentId,
         command: &Command,
     ) -> Result<(), EnqueueError> {
-        let queued = self.nanohub.enqueue(id, command).await.inspect_err(|why| {
+        let queued = self.queue.enqueue(id, command).await.inspect_err(|why| {
             tracing::warn!(enrollment_id = %id, command = command.request_type(), %why,
                 "NanoHUB did not queue the command; it is asked again at the device's next check-in");
         })?;
@@ -441,6 +456,11 @@ fn result(
                 }
                 PROFILE_LIST => {
                     record.answer_profile_list(&uuid, answer::profile_list(payload, &uuid), now);
+                }
+                // The device acknowledged the command, but its items may each have failed.
+                SETTINGS => {
+                    let applied = answer::settings_applied(payload, &uuid);
+                    record.answer_profile(&uuid, applied, now);
                 }
                 // A profile command of the enrollment side.
                 _ => record.answer_profile(&uuid, true, now),

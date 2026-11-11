@@ -232,13 +232,26 @@ pub(crate) enum Transport<'a> {
 const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 /// The path of `Mdm.PutSetting`.
 const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+/// The path of `Mdm.CreatePushRequest`.
+const MDM_CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+/// The path of `Mdm.PutPushReply`, whose request holds the emailed reply of mdmcert.download, hex
+/// text of up to 64 KiB.
+const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+/// The path of `Mdm.PutPushCertificate`, whose request holds a certificate and a key.
+const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
 /// service, when it must not be done by a token a script holds: the writes of the MDM setup,
 /// which handle the credentials the coordinator can erase every Mac with
 /// (`docs/design/coordinator-mdm.md`, section 4.9).
-pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING];
+pub(crate) const SESSION_ONLY: &[&str] = &[
+    MDM_PUT_SECRET,
+    MDM_PUT_SETTING,
+    MDM_CREATE_PUSH_REQUEST,
+    MDM_PUT_PUSH_REPLY,
+    MDM_PUT_PUSH_CERTIFICATE,
+];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
 /// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
@@ -414,12 +427,19 @@ where
 }
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
-/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put` and
-/// `Mdm.PutSecret`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
+/// `Mdm.PutSecret`, `Mdm.PutPushReply` and `Mdm.PutPushCertificate`, [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET {
+    } else if [
+        HOST_GROUPS_PUT,
+        MDM_PUT_SECRET,
+        MDM_PUT_PUSH_REPLY,
+        MDM_PUT_PUSH_CERTIFICATE,
+    ]
+    .contains(&path)
+    {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES
@@ -588,7 +608,23 @@ where
     B::Data: Send,
     B::Error: Into<BoxError> + Send + 'static,
 {
-    let answered = if surface == Surface::Mdm {
+    let answered = if surface == Surface::Mdm
+        && request
+            .uri()
+            .path()
+            .starts_with(crate::mdm_server::pkg::PREFIX)
+        && let Some(server) = coordinator.mdm_server()
+    {
+        // A pkg is streamed from a file, so it is not a [`handle`] answer.
+        crate::mdm_server::pkg::serve(
+            coordinator,
+            server,
+            request.method(),
+            request.uri().path(),
+            request.headers(),
+        )
+        .await
+    } else if surface == Surface::Mdm {
         // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
         handle(coordinator, surface, peer, request, patience)
             .await

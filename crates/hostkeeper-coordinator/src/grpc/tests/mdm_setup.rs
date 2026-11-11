@@ -23,6 +23,9 @@ use crate::ui::UiDir;
 
 const PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 const PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+const CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+const PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+const PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
@@ -62,10 +65,10 @@ fn bearer_post(path: &str, body: &str, token: &str) -> Request<Full<Bytes>> {
 
 /// The body of the call of `path` that a write of the setup takes.
 fn write_body(path: &str) -> String {
-    if path == PUT_SECRET {
-        secret_body()
-    } else {
-        json!({ "name": "tls_renew_days", "value": "12" }).to_string()
+    match path {
+        PUT_SECRET => secret_body(),
+        PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
+        _ => "{}".to_owned(),
     }
 }
 
@@ -93,7 +96,16 @@ fn mdm_paths() -> (Vec<&'static str>, Vec<&'static str>) {
 fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
     let (reads, writes) = mdm_paths();
     assert_eq!(reads, [LIST_DEVICES, LIST_SECRETS, LIST_SETTINGS]);
-    assert_eq!(writes, [PUT_SECRET, PUT_SETTING]);
+    assert_eq!(
+        writes,
+        [
+            PUT_SECRET,
+            PUT_SETTING,
+            CREATE_PUSH_REQUEST,
+            PUT_PUSH_REPLY,
+            PUT_PUSH_CERTIFICATE
+        ]
+    );
     for path in &writes {
         assert!(SESSION_ONLY.contains(path), "{path}");
     }
@@ -132,7 +144,7 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 },
                 Some(OPERATOR),
             )
-        } else {
+        } else if *path == PUT_SETTING {
             grpc_request(
                 path,
                 proto::PutSettingRequest {
@@ -141,6 +153,8 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 },
                 Some(OPERATOR),
             )
+        } else {
+            grpc_request(path, (), Some(OPERATOR))
         };
         let answer = call(&world.coordinator, Surface::Control, &None, message).await;
         assert_eq!(
@@ -341,7 +355,15 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         }
     }
     let mut every = operator_paths();
-    every.extend([PUT_SECRET, PUT_SETTING, LIST_SECRETS, LIST_SETTINGS]);
+    every.extend([
+        PUT_SECRET,
+        PUT_SETTING,
+        CREATE_PUSH_REQUEST,
+        PUT_PUSH_REPLY,
+        PUT_PUSH_CERTIFICATE,
+        LIST_SECRETS,
+        LIST_SETTINGS,
+    ]);
     for path in every {
         let json_call = bearer_post(path, "{}", OPERATOR);
         let sent = world.send_on(Surface::Mdm, json_call).await;
@@ -407,7 +429,17 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
 #[tokio::test]
 async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
     assert_eq!(operator_limit(PUT_SECRET), 65_536);
-    for path in [PUT_SETTING, LIST_SECRETS, LIST_SETTINGS, LIST_DEVICES] {
+    // The emailed reply of mdmcert.download and a certificate with its key are larger than 4 KiB
+    // once the gateway has them as base64.
+    assert_eq!(operator_limit(PUT_PUSH_REPLY), 65_536);
+    assert_eq!(operator_limit(PUT_PUSH_CERTIFICATE), 65_536);
+    for path in [
+        PUT_SETTING,
+        CREATE_PUSH_REQUEST,
+        LIST_SECRETS,
+        LIST_SETTINGS,
+        LIST_DEVICES,
+    ] {
         assert_eq!(operator_limit(path), 4096, "{path}");
     }
     let world = world("mdm-setup-big");
@@ -436,5 +468,77 @@ async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
             .expect("listed")
             .len(),
         1
+    );
+}
+
+/// Proves: a signed-in user makes the three calls of the push certificate through the JSON gateway
+/// as themselves: the request is made (nothing is posted without `submit`), a reply that does not
+/// decrypt and a certificate that is none are refused with their tokens and the codes the proto
+/// names, each audited under the user's name, and the answers hold the CSR and the encryption
+/// certificate only.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, a refusal that has
+/// another status than its token says, and a key in an answer.
+#[tokio::test]
+async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
+    let world = world("mdm-setup-push-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let made = world
+        .send(alice.post(
+            CREATE_PUSH_REQUEST,
+            &json!({ "email": "ops@example.org" }).to_string(),
+        ))
+        .await;
+    assert_eq!(made.status, StatusCode::OK, "{made:?}");
+    let answer = made.json();
+    assert!(
+        answer["csrPem"]
+            .as_str()
+            .expect("a csr")
+            .starts_with("-----BEGIN CERTIFICATE REQUEST")
+    );
+    assert!(
+        answer["encryptionCertificatePem"]
+            .as_str()
+            .expect("a certificate")
+            .starts_with("-----BEGIN CERTIFICATE")
+    );
+    assert!(!String::from_utf8_lossy(&made.body).contains("PRIVATE KEY"));
+
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let reply = world
+        .send(alice.post(
+            PUT_PUSH_REPLY,
+            &json!({ "reply": b64(b"not a message") }).to_string(),
+        ))
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reply:?}");
+    assert_eq!(
+        reply.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "reply_undecryptable" })
+    );
+    let certificate = world
+        .send(alice.post(
+            PUT_PUSH_CERTIFICATE,
+            &json!({ "certificatePem": b64(b"not a certificate") }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        certificate.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "certificate_invalid" })
+    );
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_push_csr".to_owned()),
+            ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
+            ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
+        ]
     );
 }

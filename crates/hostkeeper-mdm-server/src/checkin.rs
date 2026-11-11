@@ -88,6 +88,8 @@ pub struct TokenUpdate {
     pub not_on_console: Option<bool>,
     /// `EnrollmentUserID`, set on a user channel's update.
     pub enrollment_user_id: Option<String>,
+    /// `UserID`, set on the update of a user channel.
+    pub user_id: Option<String>,
 }
 
 impl std::fmt::Debug for TokenUpdate {
@@ -104,6 +106,7 @@ impl std::fmt::Debug for TokenUpdate {
             .field("awaiting_configuration", &self.awaiting_configuration)
             .field("not_on_console", &self.not_on_console)
             .field("enrollment_user_id", &self.enrollment_user_id)
+            .field("user_id", &self.user_id)
             .finish()
     }
 }
@@ -212,6 +215,7 @@ impl CheckIn {
                 awaiting_configuration: opt_bool(&d, "AwaitingConfiguration")?,
                 not_on_console: opt_bool(&d, "NotOnConsole")?,
                 enrollment_user_id: opt_string(&d, "EnrollmentUserID")?,
+                user_id: opt_string(&d, "UserID")?,
             }),
             "CheckOut" => Self::CheckOut(CheckOut {
                 id: DeviceId::read(&d)?,

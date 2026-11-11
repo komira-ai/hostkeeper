@@ -41,7 +41,11 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--mdm-api-url <url>` | NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as `http://127.0.0.1:9004`; a name (even `localhost`), another address, `https://`, a path or a query stops the start. With it the coordinator runs the MDM policy gate (below). Requires the two below and enrollment (`--ca-key-file`, with `--enrollment-dir` or `--database-dsn-file`); the gate's device records are kept with the enrollment store, in `--enrollment-dir` or in the database's table `mdm_devices`. |
 | `--mdm-api-key-file <file>` | NanoHUB's API key (NanoHUB's `-api-key`): one key of visible ASCII, in a file of mode 0600 or 0400 owned by the coordinator's user; a link, another mode or owner, or an empty file stops the start, and the message names the flag, never the path or the key. Requires `--mdm-api-url`. |
 | `--mdm-webhook-listen <addr>` | Where the gate serves NanoHUB's webhook: a loopback address and port, as `127.0.0.1:9100`; another address stops the start. Requires `--mdm-api-url`. |
-| `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` and `--mdm-daemon-config`. |
+| `--mdm-listen <addr>` | The listener of the Macs and of a host's apt (`docs/design/coordinator-mdm.md` section 4.1): the address of one interface of the LAN and its port (443 on the farm), as `192.0.2.7:443`; a wildcard stops the start. It serves `PUT /checkin` and `PUT /mdm` over TLS with the certificate of the MDM name that the setup holds (answering no handshake until one is stored, and serving a renewed one from the next handshake), and `404` for every other path. With it the gate's commands are queued in the coordinator and the Macs' check-ins and results reach the gate directly: NanoHUB's three flags are not read and no webhook is served, so the gate needs none of them (its enrollment side flags below go with `--mdm-listen` as with `--mdm-api-url`). `/enroll` and `/scep` are not served yet; Caddy keeps routing them to the old stack. Requires the enrollment store, as the gate does. |
+| `--mdm-command-timeout-s <n>` | How long a command sent to a Mac that has not answered waits before it is queued again and the Mac is pushed (default 86400). Delivery is at least once: a Mac that answers later sees the command twice. Requires `--mdm-listen`. |
+| `--mdm-pkg-dir <dir>` | The directory of pkg files the host provides, `<sha256>.pkg` each, that the MDM listener serves at `GET /pkg/<sha256>.pkg` (and `HEAD`, `Range`, `If-None-Match`) for the digests the MDM setting `installs` names, each streamed with its length and checked against its digest; any other digest, and a request when the flag is not given, is `404`. The coordinator only reads the directory. Requires `--mdm-listen`. |
+| `--mdm-queue-sweep-s <n>` | How often, in seconds, the coordinator looks for commands whose timeout passed and for pushes whose floor elapsed (default 60). Requires `--mdm-listen`. |
+| `--mdm-profile-identifier <id>` | The farm's MDM profile identifier, as the kit's settings say it (`com.komira.hostkeeper.mdm`): two to sixteen labels of letters, digits and `-`, at most 200 characters; anything else stops the start. With it and `--mdm-daemon-config` the gate runs its enrollment side (below): it installs the config profile `<id>.config` and pushes the nonce profile `<id>.nonce`. Requires `--mdm-api-url` or `--mdm-listen`, and `--mdm-daemon-config`. |
 | `--mdm-daemon-config <file>` | The daemon config the config profile carries: a `hostkeeper.toml` of the farm (`coordinator`, `ca_sha256`, `release_channel`, `trusted_signers`, optional `bounds`). It is read at start and judged by the daemon's own loader; a file that does not read, or that the loader refuses, stops the start with the loader's reason. It holds no secret. Requires `--mdm-profile-identifier`. |
 | `--mdm-stores <file>` | Optional: the `stores.toml` of the farm's Macs, carried in the config profile as the domain `dev.hostkeeper.stores`, which a Mac's daemon writes to `/etc/hostkeeper/stores.toml`, replacing a file that differs. It is read at start and judged by the daemon's own stores loader; a file the loader refuses, or a store that names a credential file (a profile carries no secret), stops the start. Requires `--mdm-profile-identifier`. |
 | `--mdm-macos-pkg <file>` | Optional: the `macos-pkg.toml` of the farm's Macs, the signers of the `macos-pkg` installer, carried as the domain `dev.hostkeeper.macos-pkg` and written to `/etc/hostkeeper/macos-pkg.toml` the same way. Judged at start by the installer's own signers loader. Requires `--mdm-profile-identifier`. Rotation: [repository-keys.md](operations/repository-keys.md). |
@@ -331,9 +335,10 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   API (`PUT /api/v1/nanomdm/enqueue/<id>`, basic authentication as `nanohub`). A command the device
   has not answered is never sent again, so a Mac that is off piles nothing up; a query NanoHUB did
   not queue, or never confirmed it queued (the coordinator stopped while asking), is sent again at
-  the device's next event, and one the device answered with an error at its next `TokenUpdate`. The gate's code sends only five command types (`DeviceInformation`,
-  `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`); any other is
-  refused before NanoHUB is called. This bounds the code, not a holder of the key.
+  the device's next event, and one the device answered with an error at its next `TokenUpdate`. The gate's code sends only eight command types (`DeviceInformation`,
+  `SecurityInfo`, `InstallProfile`, `RemoveProfile`, `InstallEnterpriseApplication`,
+  `EnableRemoteDesktop`, `ProfileList`, `Settings`); any other is refused before NanoHUB is
+  called. This bounds the code, not a holder of the key.
 - **What it believes.** A result is read only when its command UUID is one the gate sent that
   device and the device has not answered (NanoHUB's webhook carries no signature). A device is
   enrolled from its first `TokenUpdate` until a `CheckOut`; an `Authenticate` begins a new
@@ -388,10 +393,12 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   The daemon posts the nonce back with its request ([docs/operations/enrollment.md](operations/enrollment.md)),
   and the request is approved as above.
 
-- **Its install of the pkg.** With `--mdm-pkg-allowlist` and `--mdm-host` as well, the gate
-  installs the hostkeeper pkg on each Mac it acts on (design sections 7.1 and 5.4). The
-  allowlist is a TOML file, a regular file of root's that its group and others cannot write,
-  read at start (a defect stops it; a new entry takes a restart):
+- **Its install of the pkg.** With `--mdm-host` as well, the gate installs the hostkeeper pkg on
+  each Mac it acts on (design sections 7.1 and 5.4). The pkgs it may send are the MDM setting
+  `installs` (below, "The installs setting"); the old form, `--mdm-pkg-allowlist`, is read once to
+  seed it. The old allowlist is a TOML file, a regular file of root's that its group and others
+  cannot write, read at start (a defect stops it) only while the setting was never set; after
+  that the setting rules and a change of the file changes nothing:
 
   ```toml
   [[pkg]]
@@ -405,7 +412,8 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   its line of the release's `SHA256SUMS`, and the file goes into the pkg directory unchanged,
   named by that digest ([macos.md](macos.md), "The installer's signature").
   A path is absolute and named `<sha256>.pkg`, a digest is listed once and so are a version's
-  release numbers, and a list with no entry is refused. The gate sends the newest entry: an
+  release numbers, and a list with no entry is refused. The newest entry is the one that seeds
+  the setting, as the install named `hostkeeper`, which the gate sends: an
   `InstallEnterpriseApplication` with an inline manifest, one `software-package` asset whose
   `url` is `https://<--mdm-host>/pkg/<sha256>.pkg` and whose `sha256` is the digest the Mac
   checks, and the metadata `bundle-identifier` `dev.hostkeeper.hostkeeper`, `bundle-version`,
@@ -424,13 +432,29 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     (`install_sends`), the last send (`install_last_sent_unix`) and its digest
     (`install_sha256`). A new enrollment starts the count again.
 
-  Without the two flags the gate sends no pkg, and the pkg is installed by hand.
+  Without `--mdm-host` the gate sends no pkg, and the pkg is installed by hand.
+
+  **The installs setting.** `installs` is a setting of the MDM setup (`Mdm.PutSetting`, a
+  signed-in user; default `[]`), a JSON array of named installs: `name` (1 to 32 lower-case
+  letters, digits and `-`, listed once), `bundle_id`, `sha256`, `version`, `path` (absolute, named
+  `<sha256>.pkg`, the digest listed once) and an optional `url`, the origin the package proxy
+  pulls the file from (the gate keeps and shows it; nothing fetches it yet). A key the coordinator
+  does not know is passed over. The install named `hostkeeper` is the pkg of the paragraphs
+  above; every other install is a baseline entry (below). A change of the setting reaches the
+  running gate at once, with no restart. At the first start with `--mdm-host`, when the setting
+  was never set and `--mdm-pkg-allowlist` is given, the allowlist's newest pkg is stored as the
+  install `hostkeeper`; the file is not read again. An old allowlist therefore works as before,
+  and the flag can be dropped once the coordinator has started with it once.
 
 - **The baseline** (`--mdm-baseline-file`, `--mdm-baseline-check-s`; [operations/mdm-baseline.md](operations/mdm-baseline.md)).
   Once the Mac has acknowledged the config profile, the gate sends it its host group's entries
   (the group is the role of the Mac's allowlist entry): `EnableRemoteDesktop`, to a supervised Mac
-  only, and an `InstallProfile` for each profile file. It sends a `ProfileList` at each
-  `TokenUpdate` and every check interval, and sends again what is missing. Each send NanoHUB
+  only, and an `InstallProfile` for each profile file; a `Settings` that sets `DeviceName` and
+  `HostName` to the host id of the Mac's allowlist entry, to a supervised Mac only; and an
+  `InstallEnterpriseApplication` for each install of the setting `installs` but the hostkeeper
+  pkg. It sends a `ProfileList` at each `TokenUpdate` and every check interval, and sends again
+  what is missing. A changed host id, or a changed `installs` entry (its digest, version, bundle
+  identifier or name), is sent again; a changed `url` or `path` is not. Each send NanoHUB
   queued is audited `mdm_baseline` by `mdm-gate`; a failure does not fail the enrollment, and
   `hkctl mdm list-devices` shows `baseline_state` and `baseline_reason`.
 

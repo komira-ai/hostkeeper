@@ -73,6 +73,7 @@ async fn a_serve_whose_store_is_deposed_ends_with_the_epochs() {
         heartbeat_listen: "127.0.0.1:1".parse().expect("an address"),
         control_listen: "127.0.0.1:2".parse().expect("an address"),
         lan_listen: None,
+        mdm_listen: None,
         health_listen: None,
         reload: Duration::from_secs(3_600),
         lock: LockGuard::new(()),

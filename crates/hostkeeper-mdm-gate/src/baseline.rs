@@ -17,6 +17,18 @@
 //! enrollment, queued with the pkg, and each send NanoHUB queued is audited
 //! [`ACTION_BASELINE`]. A Mac enrolled before the baseline existed is sent it at its next look.
 //!
+//! **The name and the installs** are not in the file: the gate adds them to every group's
+//! entries. The device name is a `Settings` command that sets `DeviceName` and `HostName` to the
+//! host id of the Mac's allowlist entry ([`crate::Enrollments::host_name`]), for a supervised Mac
+//! (Apple: `DeviceName` is for supervised devices); a Mac the enrollment names nothing for gets
+//! none, and a changed name is sent again. Each install of the setting `installs`
+//! ([`crate::Installs`]) except the hostkeeper pkg, which [`crate::install`] sends, is an
+//! `InstallEnterpriseApplication` of its inline manifest, sent once per entry
+//! ([`crate::InstallEntry::digest`]) and again when the entry changes, or, after an error answer,
+//! at the check interval. A Mac's baseline is therefore changed by changing the setting, and
+//! shows `Pending` until the new entry is acknowledged. A pkg file that is missing or whose bytes
+//! are not its digest is not sent and is kept as the record's last error.
+//!
 //! **How it is kept.** A `ProfileList` command is sent when every profile entry has been
 //! acknowledged and none is outstanding, at the Mac's next `TokenUpdate` and every
 //! [`DEFAULT_CHECK_SECS`] (`--mdm-baseline-check-s`) after its last answer. A profile entry whose
@@ -46,8 +58,10 @@ use crate::command::Command;
 use crate::enroll::EnrollSide;
 use crate::gate::Gate;
 use crate::ids::shown;
+use crate::installs::InstallEntry;
+use crate::pkg::{Install, manifest};
 use crate::profile::ProfileIdentifier;
-use crate::record::{BaselineRecord, DeviceRecord, ProfileCommand};
+use crate::record::{BaselineInstall, BaselineRecord, DeviceRecord, ProfileCommand};
 
 /// The coordinator flag that names the baseline file.
 pub const FILE_FLAG: &str = "--mdm-baseline-file";
@@ -462,6 +476,71 @@ fn desktop_verdict(record: &DeviceRecord, now: u64, check: u64) -> Verdict {
     }
 }
 
+/// The SHA-256 of `text` in lower-case hex: the digest a name's `Settings` is kept under.
+fn text_digest(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+/// How a command that carries one value stands against the value's `digest`: one answered
+/// with another digest is to be sent again, as is an error answer at the check interval.
+fn valued_verdict(
+    record: &DeviceRecord,
+    command: Option<&ProfileCommand>,
+    digest: &str,
+    now: u64,
+    check: u64,
+    failed: &str,
+) -> Verdict {
+    let changed = command.and_then(|command| command.settings_sha256.as_deref()) != Some(digest);
+    match standing(record, command, now, check) {
+        Standing::Unanswered => Verdict::pending(false),
+        Standing::NeverQueued => Verdict::pending(true),
+        Standing::Error { retry } => Verdict::failed(failed.to_owned(), retry || changed),
+        Standing::Acknowledged(_) if changed => Verdict::pending(true),
+        Standing::Acknowledged(_) => Verdict::applied(false),
+    }
+}
+
+fn name_verdict(record: &DeviceRecord, name: &str, now: u64, check: u64) -> Verdict {
+    if record.supervised != Some(true) {
+        return Verdict::failed(
+            "device name: the Mac is not supervised, and DeviceName needs a supervised Mac"
+                .to_owned(),
+            false,
+        );
+    }
+    let command = record.baseline.as_ref().and_then(|base| base.name.as_ref());
+    valued_verdict(
+        record,
+        command,
+        &text_digest(name),
+        now,
+        check,
+        "device name: the device answered an error",
+    )
+}
+
+fn install_verdict(record: &DeviceRecord, entry: &InstallEntry, now: u64, check: u64) -> Verdict {
+    let command = record
+        .baseline
+        .as_ref()
+        .and_then(|base| base.install(&entry.name));
+    valued_verdict(
+        record,
+        command,
+        &entry.digest(),
+        now,
+        check,
+        &shown(&format!(
+            "install {}: the device answered an error",
+            entry.name
+        )),
+    )
+}
+
 /// Whether a `ProfileList` is to be sent: some profile entry exists, every one was
 /// acknowledged (an entry not yet sent is sent without asking), none is outstanding, and the
 /// last list is due again.
@@ -502,14 +581,39 @@ fn configured(record: &DeviceRecord) -> bool {
         .is_some()
 }
 
-/// What the entries `items` say of the device of `record` at `now`.
-fn status_of(record: &DeviceRecord, items: &[Item], now: u64, check: u64) -> BaselineStatus {
+/// What the gate adds to a group's entries for one Mac: the device name, when the enrollment
+/// has one, and the baseline installs.
+struct Added {
+    name: Option<String>,
+    installs: Vec<InstallEntry>,
+}
+
+/// What the entries `items` and `added` say of the device of `record` at `now`.
+fn status_of(
+    record: &DeviceRecord,
+    items: &[Item],
+    added: &Added,
+    now: u64,
+    check: u64,
+) -> BaselineStatus {
     let verdicts: Vec<Verdict> = items
         .iter()
         .map(|item| match item {
             Item::RemoteDesktop => desktop_verdict(record, now, check),
             Item::Profile(profile) => profile_verdict(record, profile, now, check),
         })
+        .chain(
+            added
+                .name
+                .iter()
+                .map(|name| name_verdict(record, name, now, check)),
+        )
+        .chain(
+            added
+                .installs
+                .iter()
+                .map(|entry| install_verdict(record, entry, now, check)),
+        )
         .collect();
     let failed = verdicts
         .iter()
@@ -538,6 +642,8 @@ fn status_of(record: &DeviceRecord, items: &[Item], now: u64, check: u64) -> Bas
 enum Step<'a> {
     Profile(&'a ProfileItem),
     RemoteDesktop,
+    Name(&'a str),
+    Install(&'a InstallEntry, &'a Install),
     List,
 }
 
@@ -550,7 +656,25 @@ impl Gate {
         let (baseline, side) = (self.baseline()?, self.enroll_side()?);
         let serial = record.serial.as_deref().filter(|_| record.is_enrolled())?;
         let items = baseline.group(&side.enrollments.host_group(serial)?)?;
-        Some(status_of(record, items, self.now(), baseline.check_secs))
+        let added = self.added(side, serial);
+        Some(status_of(
+            record,
+            items,
+            &added,
+            self.now(),
+            baseline.check_secs,
+        ))
+    }
+
+    /// The device name of `serial` and the baseline installs, as they are now.
+    fn added(&self, side: &EnrollSide, serial: &str) -> Added {
+        Added {
+            name: side.enrollments.host_name(serial),
+            installs: self
+                .install()
+                .map(|install| install.installs().baseline().cloned().collect())
+                .unwrap_or_default(),
+        }
     }
 
     /// The baseline entries of the device of `record` (whose serial is `serial`) that are due,
@@ -586,6 +710,21 @@ impl Gate {
                 _ => {}
             }
         }
+        let added = self.added(side, serial);
+        if let Some(name) = added
+            .name
+            .as_deref()
+            .filter(|name| name_verdict(&record, name, now, check).due)
+        {
+            plan.push(Step::Name(name));
+        }
+        if let Some(install) = self.install() {
+            for entry in &added.installs {
+                if install_verdict(&record, entry, now, check).due {
+                    plan.push(Step::Install(entry, install));
+                }
+            }
+        }
         // A profile sent now is checked at a later look.
         let installing = plan.iter().any(|step| matches!(step, Step::Profile(_)));
         if !installing && list_due(&record, items, now, check) {
@@ -613,6 +752,14 @@ impl Gate {
         send: &Step<'_>,
         now: u64,
     ) -> bool {
+        if let Step::Install(entry, install) = send
+            && let Err(why) = install.check(entry)
+        {
+            tracing::warn!(enrollment_id = %record.enrollment_id, install = %entry.name, %why, "the install is not sent");
+            record.last_error = Some(format!("install {}: {why}", entry.name));
+            self.kept(record);
+            return true;
+        }
         let Some([uuid]) = self.uuids(record) else {
             return false;
         };
@@ -652,6 +799,29 @@ impl Gate {
                 (
                     "remote_desktop".to_owned(),
                     Command::enable_remote_desktop(uuid),
+                )
+            }
+            Step::Name(name) => {
+                base.name = Some(sent.with_settings(text_digest(name)));
+                (format!("device name {name}"), Command::settings(uuid, name))
+            }
+            Step::Install(entry, install) => {
+                let sent = sent.with_settings(entry.digest());
+                let record = BaselineInstall {
+                    name: entry.name.clone(),
+                    command: sent,
+                };
+                match base
+                    .installs
+                    .iter_mut()
+                    .find(|other| other.name == entry.name)
+                {
+                    Some(other) => *other = record,
+                    None => base.installs.push(record),
+                }
+                (
+                    format!("install {} {}", entry.name, entry.version.as_str()),
+                    Command::install_application(uuid, manifest(entry, &install.host)),
                 )
             }
             Step::List => {

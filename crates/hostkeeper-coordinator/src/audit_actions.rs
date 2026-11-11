@@ -57,6 +57,15 @@ pub const MDM_SECRET_PUT: &str = "mdm_secret_put";
 /// An MDM setting was set.
 pub const MDM_SETTING_SET: &str = "mdm_setting_set";
 
+/// A new enrollment replaced the live enrollment of the serial `subject` (owner decision B):
+/// the serial is in the ABM table, or an operator confirmed the identity.
+pub const MDM_ENROLLMENT_REPLACED: &str = "mdm_enrollment_replaced";
+/// A new enrollment of the serial `subject` was refused: a live enrollment stands, the serial is not
+/// in the ABM table and no operator confirmed the identity.
+pub const MDM_REPLACE_REFUSED: &str = "mdm_replace_refused";
+/// An `Authenticate` named another serial than the identity's, which is `subject`.
+pub const MDM_SERIAL_MISMATCH: &str = "mdm_serial_mismatch";
+
 /// The entry of `action` by `by` concerning `subject`.
 #[must_use]
 pub fn about(by: &str, action: &str, subject: &str) -> AuditEntry {

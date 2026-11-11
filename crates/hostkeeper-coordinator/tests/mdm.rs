@@ -250,7 +250,7 @@ fn the_webhook_address_must_be_on_loopback() {
         let mdm = parts.coordinator.mdm().expect("the gate");
         assert_eq!(
             mdm.webhook_listen,
-            listen.parse::<SocketAddr>().expect("address")
+            Some(listen.parse::<SocketAddr>().expect("address"))
         );
     }
 }
@@ -292,7 +292,7 @@ fn the_flags_start_the_gate_and_without_them_there_is_none() {
     let mdm = parts.coordinator.mdm().expect("the gate");
     assert_eq!(
         mdm.webhook_listen,
-        WEBHOOK.parse::<SocketAddr>().expect("an address")
+        Some(WEBHOOK.parse::<SocketAddr>().expect("an address"))
     );
     assert!(files.path("enrollment").join("mdm-devices").is_dir());
     drop(parts);
@@ -588,10 +588,11 @@ fn the_stores_and_signers_flags_need_the_profile_and_are_checked_at_start() {
 }
 
 /// Catches: a pkg flag accepted without its partner or without the enrollment side
-/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` alone, both without
+/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` or both without
 /// `--mdm-profile-identifier`), a pkg allowlist that is not root's let through the start (it
 /// says what may be installed as root on every Mac), or a host name with a scheme; each
-/// refusal names its flag.
+/// refusal names its flag. The host alone, with the enrollment side, starts the gate with the
+/// installs of its setting (none yet), since the old allowlist only seeds them.
 #[test]
 fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let files = Files::new("mdm-pkg-flags");
@@ -614,7 +615,7 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let host = ["--mdm-host", "mdm.example.com"];
     let refused: [Vec<&str>; 3] = [
         good().into_iter().chain(side).chain(allowlist).collect(),
-        good().into_iter().chain(side).chain(host).collect(),
+        good().into_iter().chain(host).collect(),
         good().into_iter().chain(allowlist).chain(host).collect(),
     ];
     for args in refused {
@@ -624,6 +625,17 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
             "{args:?}"
         );
     }
+    let host_alone: Vec<&str> = good().into_iter().chain(side).chain(host).collect();
+    let parts = start(&files, &host_alone).expect("started");
+    let installs = parts
+        .coordinator
+        .mdm()
+        .expect("the gate")
+        .gate
+        .installs()
+        .expect("a pkg install");
+    assert!(installs.entries().is_empty());
+    drop(parts);
     let all: Vec<&str> = good()
         .into_iter()
         .chain(side)
@@ -883,6 +895,118 @@ async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
             .as_boolean(),
         Some(true)
     );
+}
+
+/// The address `--mdm-listen` names in these tests: one interface of the LAN.
+const MACS: &str = "192.0.2.7:443";
+
+/// The flags of a coordinator with the Macs' listener: enrollment, the gate's records and the queue.
+fn macs() -> Vec<&'static str> {
+    let mut flags = enrollment();
+    flags.extend(["--mdm-listen", MACS]);
+    flags
+}
+
+/// Catches: `--mdm-listen` accepted without the enrollment store the gate's records live in, a
+/// wildcard address (the Macs reach the server by the address of one interface), the timeout and
+/// sweep and pkg directory flags accepted without the listener, and a timeout of 0.
+#[test]
+fn the_macs_listener_needs_enrollment_and_a_named_interface() {
+    let files = Files::new("mdm-listen-flags");
+    for args in [
+        vec!["--mdm-listen", MACS],
+        vec!["--mdm-command-timeout-s", "60"],
+        vec!["--mdm-queue-sweep-s", "5"],
+        vec!["--mdm-pkg-dir", "=pkgs"],
+    ] {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let mut zero = macs();
+    zero.extend(["--mdm-command-timeout-s", "0"]);
+    assert_eq!(
+        hostkeeper_coordinator::config::main(files.args(&zero)),
+        ExitCode::from(2)
+    );
+    for wildcard in ["0.0.0.0:443", "[::]:443", "[::ffff:0.0.0.0]:443"] {
+        let mut flags = enrollment();
+        flags.extend(["--mdm-listen", wildcard]);
+        assert_eq!(
+            refusal(&files, &flags),
+            format!("--mdm-listen: {wildcard} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address").replace("[::ffff:0.0.0.0]:443", "[::ffff:0.0.0.0]:443"),
+        );
+    }
+}
+
+/// Catches: the gate not running over the coordinator's own queue with `--mdm-listen` (it needs no
+/// NanoHUB flag), a webhook served all the same, the NanoHUB flags of an old unit not being
+/// ignored when both are given, and the listener bound before `ready` or not told to the operator
+/// in the start line.
+#[tokio::test]
+async fn run_binds_the_macs_listener_and_serves_no_webhook() {
+    let files = Files::new("mdm-listen-run");
+    let parts = start(&files, &macs()).expect("started");
+    let mdm = parts
+        .coordinator
+        .mdm()
+        .expect("the gate runs over the coordinator's queue");
+    assert_eq!(mdm.webhook_listen, None);
+    assert_eq!(parts.mdm_listen, Some(MACS.parse().expect("an address")));
+    let (net, asked, bound, serving) = serve(parts).await;
+    let macs: SocketAddr = MACS.parse().expect("an address");
+    assert_eq!(
+        asked.last(),
+        Some(&macs),
+        "bound before ready, after the control listener"
+    );
+    assert_eq!(bound.mdm, Some(macs));
+    assert!(hostkeeper_coordinator::config::start_line(&bound).contains(" mdm=192.0.2.7:443"));
+    // No certificate of the name is stored: the connection is closed without a handshake.
+    let mut stream = net.connect(macs).expect("connected");
+    stream
+        .write_all(b"\x16\x03\x01\x00\x00")
+        .await
+        .expect("sent");
+    let mut raw = Vec::new();
+    let _ = stream.read_to_end(&mut raw).await;
+    assert!(raw.is_empty(), "nothing is answered");
+    serving.abort();
+    let _ = serving.await;
+
+    // With NanoHUB's flags beside it the listener wins: no webhook is bound.
+    let mut both = good();
+    both.extend(["--mdm-listen", MACS]);
+    let parts = start(&files, &both).expect("started");
+    assert_eq!(
+        parts.coordinator.mdm().expect("the gate").webhook_listen,
+        None
+    );
+    let (_net, asked, _bound, serving) = serve(parts).await;
+    assert!(
+        !asked.contains(&WEBHOOK.parse().expect("an address")),
+        "{asked:?}"
+    );
+    serving.abort();
+    let _ = serving.await;
+}
+
+/// Catches: the new flags missing from the usage, or read from the environment.
+#[test]
+fn serve_help_lists_the_macs_listener_flags() {
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    for flag in [
+        "--mdm-listen <MDM_LISTEN>",
+        "--mdm-command-timeout-s <MDM_COMMAND_TIMEOUT_S>",
+        "--mdm-queue-sweep-s <MDM_QUEUE_SWEEP_S>",
+        "--mdm-pkg-dir <MDM_PKG_DIR>",
+    ] {
+        assert!(help.contains(flag), "{flag}: {help}");
+    }
 }
 
 /// Catches: a baseline flag accepted without its partners (`--mdm-baseline-file` without

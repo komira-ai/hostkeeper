@@ -29,19 +29,26 @@
 //! enrollment is built ([`Mdm::attach`]), is told of each new request, and looks at every
 //! device once a minute besides ([`hostkeeper_mdm_gate::enroll::run`]).
 //!
-//! With `--mdm-pkg-allowlist` and `--mdm-host` as well, the enrollment side installs the
-//! hostkeeper pkg ([`hostkeeper_mdm_gate::install`]): the newest pkg on the allowlist, which is
-//! read at start and must be root's alone, by `InstallEnterpriseApplication` with an inline
-//! manifest naming its digest, fetched from `https://<--mdm-host>/pkg/<sha256>.pkg`.
+//! With `--mdm-host` as well, the enrollment side installs the hostkeeper pkg
+//! ([`hostkeeper_mdm_gate::install`]): the install named `hostkeeper` of the MDM setting
+//! `installs`, by `InstallEnterpriseApplication` with an inline manifest naming its digest,
+//! fetched from `https://<--mdm-host>/pkg/<sha256>.pkg`. The old `--mdm-pkg-allowlist` seeds the
+//! setting once, while it was never set: its newest pkg, which must be root's alone, becomes the
+//! install `hostkeeper`, and the file is not read again. The other installs of the setting are
+//! sent by the baseline.
+//!
+//! With `--mdm-listen` instead (`docs/design/coordinator-mdm.md`, CM11a) the gate's commands go
+//! into the coordinator's own queue ([`crate::mdm_server`]) and the Macs' check-ins and results
+//! reach the gate from the listener; NanoHUB's three flags are not read and no webhook is served.
 //!
 //! With `--mdm-baseline-file` as well (and `--mac-serial-allowlist`), the enrollment side also
 //! sets up each Mac at enrollment ([`hostkeeper_mdm_gate::baseline`]): per host group, Screen
-//! Sharing for a supervised Mac and the group's profiles, kept by a `ProfileList` check every
+//! Sharing for a supervised Mac, the group's profiles, the Mac's name and the installs, kept by a `ProfileList` check every
 //! `--mdm-baseline-check-s` seconds. The file and its profiles must be root's alone; each of its
 //! host groups must be the role of some allowlist entry; `Mdm.ListDevices` shows each Mac's state.
 //!
-//! Without the three flags the coordinator runs no gate: its port is [`NoDeviceState`], and
-//! `Mdm.ListDevices` answers no device.
+//! Without the three flags or `--mdm-listen` the coordinator runs no gate: its port is
+//! [`NoDeviceState`], and `Mdm.ListDevices` answers no device.
 
 use std::convert::Infallible;
 use std::future::Future;
@@ -58,17 +65,24 @@ use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
-    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, Baseline, BaselineError, CONFIG_FLAG, ConfigProfile,
-    DEFAULT_CHECK_SECS, DaemonProfile, DaemonProfileError, DeviceStore, EnrollSide, Enrollments,
-    EnrollmentsError, FileDeviceStore, Gate, IdentifierError, Install, MACOS_PKG_FLAG,
-    MacosPkgProfile, MacosPkgProfileError, MdmHost, MdmHostError, NanoHub, Nonce, PkgAllowlist,
-    PkgAllowlistError, ProfileIdentifier, Random, STORES_FLAG, StoreError, StoresProfile,
-    StoresProfileError, Waiting, enroll, webhook,
+    ApiKey, ApiKeyError, ApiUrl, ApiUrlError, Baseline, BaselineError, CONFIG_FLAG, CommandQueue,
+    ConfigProfile, DEFAULT_CHECK_SECS, DaemonProfile, DaemonProfileError, DeviceStore, EnrollSide,
+    Enrollments, EnrollmentsError, FileDeviceStore, Gate, IdentifierError, Install, Installs,
+    InstallsError, MACOS_PKG_FLAG, MacosPkgProfile, MacosPkgProfileError, MdmHost, MdmHostError,
+    NanoHub, Nonce, PkgAllowlist, PkgAllowlistError, ProfileIdentifier, Random, SETTING_NAME,
+    STORES_FLAG, StoreError, StoresProfile, StoresProfileError, Waiting, enroll, webhook,
 };
 
 use crate::enrollment::{
     DeviceState, DeviceStateError, DeviceStatus, Enrollment, MacAllowlist, NoDeviceState, Posted,
 };
+use crate::mdm_setup::{MdmSetup, SetupFailure};
+
+/// How long a command waits for the Mac's answer before it is queued again, in seconds.
+pub const DEFAULT_COMMAND_TIMEOUT_S: u64 = 86_400;
+
+/// How often the queue looks at what is due, in seconds.
+pub const DEFAULT_QUEUE_SWEEP_S: u64 = 60;
 
 /// The directory of the gate's device records in the enrollment store.
 pub const DEVICES_DIR: &str = "mdm-devices";
@@ -82,9 +96,45 @@ pub enum Devices<'a> {
     Store(Box<dyn DeviceStore>),
 }
 
-/// The flags of the MDM policy gate, all three or none.
+/// The flags of the MDM policy gate: NanoHUB's three, all or none, and the listener of the Macs.
 #[derive(Clone, Debug, Args)]
+#[command(group(clap::ArgGroup::new("mdm_gate").args(["mdm_api_url", "mdm_listen"]).multiple(true)))]
 pub struct MdmFlags {
+    /// The MDM listener of the Macs and of a host's apt: the address of one interface of the LAN
+    /// (no wildcard) and its port, as `192.0.2.7:443`. It serves `PUT /checkin` and `PUT /mdm`
+    /// over TLS with the certificate of the MDM name that the setup holds
+    /// (`docs/design/coordinator-mdm.md` section 4.1), and answers nothing until that certificate
+    /// is stored. With it the commands of the gate are queued in the coordinator and the Macs'
+    /// check-ins reach the gate directly: NanoHUB, its flags and its webhook are not used. The
+    /// port is the default 443 when it is omitted from the address by the held script that sets it.
+    /// Requires the enrollment store, as the gate does.
+    #[arg(long, requires_all = ["ca_key_file", "records_store"])]
+    pub mdm_listen: Option<SocketAddr>,
+    /// How long, in seconds, a command sent to a Mac that has not answered waits before it is
+    /// queued again and pushed (`docs/design/coordinator-mdm.md` section 5.2). Delivery is at
+    /// least once: a Mac that answers later sees the command twice.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_COMMAND_TIMEOUT_S,
+        value_parser = clap::value_parser!(u64).range(1..),
+        requires = "mdm_listen"
+    )]
+    pub mdm_command_timeout_s: u64,
+    /// How often, in seconds, the coordinator looks for commands whose timeout passed and for
+    /// pushes whose floor elapsed.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_QUEUE_SWEEP_S,
+        value_parser = clap::value_parser!(u64).range(1..),
+        requires = "mdm_listen"
+    )]
+    pub mdm_queue_sweep_s: u64,
+    /// The directory of the pkg files the host provides, `<sha256>.pkg` each, which the MDM
+    /// listener serves at `GET /pkg/<sha256>.pkg` for the digests the setting `installs` names
+    /// (`docs/design/coordinator-mdm.md` section 4.7). The files are read, never written, by the
+    /// coordinator's user. Without it `/pkg/` answers `404`.
+    #[arg(long, requires = "mdm_listen")]
+    pub mdm_pkg_dir: Option<PathBuf>,
     /// NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as
     /// `http://127.0.0.1:9004`. With it the coordinator runs the MDM policy gate: it keeps a
     /// record per MDM device and answers whether a Mac is enrolled and supervised, so a Mac on
@@ -110,7 +160,7 @@ pub struct MdmFlags {
     /// config profile `<identifier>.config` on each Mac on --mac-serial-allowlist and pushes
     /// its one-time nonce in `<identifier>.nonce`. Requires --mdm-api-url and
     /// --mdm-daemon-config.
-    #[arg(long, requires_all = ["mdm_api_url", "mdm_daemon_config"])]
+    #[arg(long, requires_all = ["mdm_gate", "mdm_daemon_config"])]
     pub mdm_profile_identifier: Option<String>,
     /// The daemon config the config profile carries: a `hostkeeper.toml` of the farm
     /// (coordinator, ca_sha256, bounds, and release_channel and trusted_signers, which the
@@ -137,13 +187,17 @@ pub struct MdmFlags {
     /// MDM kit's pkg directory). With it the gate sends each Mac on --mac-serial-allowlist the
     /// newest pkg on the list by `InstallEnterpriseApplication`, once the Mac has its config
     /// profile and until its daemon has posted, again an hour after the Mac's last answer.
-    /// Read at start. Requires --mdm-profile-identifier and --mdm-host.
+    /// It is the old form of the setting `installs` (the MDM setup's named installs): read once,
+    /// only when that setting was never set, as its install named `hostkeeper`; after that the
+    /// setting rules and the file is not read. Requires --mdm-profile-identifier and --mdm-host.
     #[arg(long, requires_all = ["mdm_profile_identifier", "mdm_host"])]
     pub mdm_pkg_allowlist: Option<PathBuf>,
     /// The MDM host's DNS name, as its proxy's certificate names it, as `mdm.example.com`:
-    /// the Mac fetches the pkg from `https://<this name>/pkg/<sha256>.pkg`. Requires
-    /// --mdm-pkg-allowlist.
-    #[arg(long, requires = "mdm_pkg_allowlist")]
+    /// the Mac fetches a pkg from `https://<this name>/pkg/<sha256>.pkg`. With it the gate
+    /// sends the installs of the setting `installs`: the install named `hostkeeper` as above,
+    /// and each other one to the Macs of a host group that has a baseline. Requires
+    /// --mdm-profile-identifier.
+    #[arg(long, requires = "mdm_profile_identifier")]
     pub mdm_host: Option<String>,
     /// The enrollment baseline: a TOML file of root's that no one else can write, of `[[group]]`
     /// rows, each a `host_group` and `[[group.entry]]` rows, an entry being `remote_desktop =
@@ -214,6 +268,12 @@ pub enum MdmError {
     /// `--mdm-host` is not a DNS name.
     #[error(transparent)]
     Host(#[from] MdmHostError),
+    /// The setting `installs` does not parse: the store was edited by hand.
+    #[error(transparent)]
+    Installs(#[from] InstallsError),
+    /// The MDM setup's settings cannot be read, or the installs cannot be stored.
+    #[error(transparent)]
+    Setup(#[from] SetupFailure),
     /// `--mdm-baseline-file` is refused.
     #[error(transparent)]
     Baseline(#[from] BaselineError),
@@ -229,8 +289,9 @@ pub enum MdmError {
 pub struct Mdm {
     /// The gate.
     pub gate: Arc<Gate>,
-    /// Where NanoHUB's webhook is served.
-    pub webhook_listen: SocketAddr,
+    /// Where NanoHUB's webhook is served; none when the gate's commands go through the
+    /// coordinator's own queue (`--mdm-listen`), where the Macs' check-ins reach the gate directly.
+    pub webhook_listen: Option<SocketAddr>,
     /// The enrollment the gate's enrollment side asks, once attached; `None` without the side.
     attached: Option<Arc<Attached>>,
 }
@@ -247,22 +308,46 @@ impl Mdm {
         devices: Devices<'_>,
         clock: Arc<dyn UnixClock>,
         random: Random,
+        setup: &MdmSetup,
     ) -> Result<Option<Self>, MdmError> {
-        let (Some(url), Some(key), Some(listen)) = (
-            &flags.mdm_api_url,
-            &flags.mdm_api_key_file,
-            flags.mdm_webhook_listen,
-        ) else {
-            // clap requires the three together: without them there is no gate.
-            return Ok(None);
+        Self::open_with(flags, devices, clock, random, None, setup)
+    }
+
+    /// [`Self::open`], with the gate's commands queued in `queue` (the coordinator's own, with
+    /// `--mdm-listen`) in place of NanoHUB's: the NanoHUB flags are not read, and no webhook is
+    /// served. `None` is [`Self::open`].
+    ///
+    /// # Errors
+    /// As [`Self::open`].
+    pub fn open_with(
+        flags: &MdmFlags,
+        devices: Devices<'_>,
+        clock: Arc<dyn UnixClock>,
+        random: Random,
+        queue: Option<Arc<dyn CommandQueue>>,
+        setup: &MdmSetup,
+    ) -> Result<Option<Self>, MdmError> {
+        let (queue, webhook_listen): (Arc<dyn CommandQueue>, Option<SocketAddr>) = match queue {
+            Some(queue) => (queue, None),
+            None => {
+                let (Some(url), Some(key), Some(listen)) = (
+                    &flags.mdm_api_url,
+                    &flags.mdm_api_key_file,
+                    flags.mdm_webhook_listen,
+                ) else {
+                    // clap requires the three together: without them there is no gate.
+                    return Ok(None);
+                };
+                let url = ApiUrl::parse(url)?;
+                let key = ApiKey::read(key)?;
+                if !webhook::is_loopback(&listen) {
+                    return Err(MdmError::Listen(listen));
+                }
+                (Arc::new(NanoHub::new(url, key)), Some(listen))
+            }
         };
-        let url = ApiUrl::parse(url)?;
-        let key = ApiKey::read(key)?;
-        if !webhook::is_loopback(&listen) {
-            return Err(MdmError::Listen(listen));
-        }
         let side = side_of(flags)?;
-        let install = install_of(flags, Arc::new(RealFs))?;
+        let install = install_of(flags, Arc::new(RealFs), setup)?;
         let baseline = baseline_of(
             flags,
             &RealFs,
@@ -275,7 +360,7 @@ impl Mdm {
             )?),
             Devices::Store(store) => store,
         };
-        let gate = Gate::open(store, NanoHub::new(url, key), clock, random)?
+        let gate = Gate::open(store, queue, clock, random)?
             .with_install(install)
             .with_baseline(baseline);
         let (gate, attached) = match side {
@@ -292,7 +377,7 @@ impl Mdm {
         };
         Ok(Some(Self {
             gate: Arc::new(gate),
-            webhook_listen: listen,
+            webhook_listen,
             attached,
         }))
     }
@@ -358,6 +443,13 @@ impl Mdm {
         match never {}
     }
 
+    /// Has `gate` look at every device once a minute and at each wake
+    /// ([`hostkeeper_mdm_gate::enroll::run`]), forever: the gate of the coordinator's own queue,
+    /// which hears no webhook.
+    pub async fn looks(gate: Arc<Gate>) -> Infallible {
+        enroll::run(gate, enroll::TICK).await
+    }
+
     /// What the enrollment calls after a new request is recorded: a wake of the gate of `mdm`,
     /// or nothing without one.
     #[must_use]
@@ -408,20 +500,36 @@ fn text_of(flag: &'static str, path: &Path) -> Result<String, MdmError> {
     })
 }
 
-/// The pkg install, when `--mdm-pkg-allowlist` and `--mdm-host` are given: the allowlist read
-/// from `fs`, which must find it root's alone.
-fn install_of(flags: &MdmFlags, fs: Arc<dyn Fs>) -> Result<Option<Install>, MdmError> {
-    let (Some(allowlist), Some(host)) = (&flags.mdm_pkg_allowlist, &flags.mdm_host) else {
-        // clap requires the two together: without them the gate sends no pkg.
+/// The pkg install, when `--mdm-host` is given: the installs of the setting `installs`. When the
+/// setting was never set, the old file `--mdm-pkg-allowlist` names, if given, is read from `fs`
+/// (it must be root's alone) and its newest pkg becomes the install `hostkeeper`, which is
+/// stored as the setting: that is the one time the file is read, so a later start never opens
+/// it, and a change of the setting is not undone by it.
+fn install_of(
+    flags: &MdmFlags,
+    fs: Arc<dyn Fs>,
+    setup: &MdmSetup,
+) -> Result<Option<Install>, MdmError> {
+    let Some(host) = &flags.mdm_host else {
+        // Without the host there is no URL for a pkg: the gate sends none.
         return Ok(None);
     };
     let host = MdmHost::parse(host)?;
-    let allowlist = PkgAllowlist::load(&*fs, allowlist)?;
-    Ok(Some(Install {
-        allowlist,
-        host,
-        fs,
-    }))
+    let set = setup.settings()?;
+    let installs = match set.get(SETTING_NAME) {
+        Some(text) => Installs::parse(text)?,
+        None => {
+            let seeded = match &flags.mdm_pkg_allowlist {
+                Some(path) => PkgAllowlist::load(&*fs, path)?.installs(),
+                None => Installs::empty(),
+            };
+            if flags.mdm_pkg_allowlist.is_some() {
+                setup.set_setting(SETTING_NAME, &seeded.to_json())?;
+            }
+            seeded
+        }
+    };
+    Ok(Some(Install::new(installs, host, fs)))
 }
 
 /// The enrollment baseline, when `--mdm-baseline-file` is given: the file read from `fs`, which
@@ -464,6 +572,12 @@ impl Enrollments for Attached {
         self.get()
             .ok()
             .and_then(|enrollment| enrollment.host_group(serial))
+    }
+
+    fn host_name(&self, serial: &str) -> Option<String> {
+        self.get()
+            .ok()
+            .and_then(|enrollment| enrollment.host_name(serial))
     }
 
     fn waiting(&self, serial: &str) -> Result<Vec<Waiting>, EnrollmentsError> {

@@ -70,6 +70,10 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_macos_pkg: None,
         mdm_pkg_allowlist: None,
         mdm_host: None,
+        mdm_listen: None,
+        mdm_command_timeout_s: crate::mdm::DEFAULT_COMMAND_TIMEOUT_S,
+        mdm_queue_sweep_s: crate::mdm::DEFAULT_QUEUE_SWEEP_S,
+        mdm_pkg_dir: None,
         mdm_baseline_file: None,
         mdm_baseline_check_s: DEFAULT_CHECK_SECS,
     }
@@ -91,6 +95,7 @@ pub(crate) fn mdm_with(dir: &Scratch, records: &[DeviceRecord]) -> Mdm {
         Devices::Files(dir.path()),
         FixedClock::at(NOW),
         os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("the gate opens")
     .expect("the flags name a gate")
@@ -121,6 +126,10 @@ impl hostkeeper_mdm_gate::Enrollments for InGroup {
 
     fn host_group(&self, _serial: &str) -> Option<String> {
         Some(self.0.to_owned())
+    }
+
+    fn host_name(&self, _serial: &str) -> Option<String> {
+        None
     }
 
     fn issue_nonce(
@@ -401,19 +410,151 @@ fn the_pkg_flags_make_the_install_of_the_newest_entry() {
         mdm_host: Some("MDM.example.com".to_owned()),
         ..flags_in(&dir)
     };
-    let install = super::install_of(&flags, Arc::new(RootFs))
+    let setup = crate::mdm_setup::MdmSetup::volatile();
+    let install = super::install_of(&flags, Arc::new(RootFs), &setup)
         .expect("read")
         .expect("an install");
-    assert_eq!(install.allowlist.newest().sha256.as_str(), b);
+    let installs = install.installs();
+    let hostkeeper = installs.hostkeeper().expect("the install hostkeeper");
+    assert_eq!(hostkeeper.sha256.as_str(), b);
     assert_eq!(
-        install.host.pkg_url(&install.allowlist.newest().sha256),
+        install.host.pkg_url(&hostkeeper.sha256),
         format!("https://mdm.example.com/pkg/{b}.pkg")
     );
     assert!(
-        super::install_of(&flags_in(&dir), Arc::new(RootFs))
+        super::install_of(&flags_in(&dir), Arc::new(RootFs), &setup)
             .expect("no flags")
             .is_none()
     );
+}
+
+/// A setup store that cannot read its settings or cannot write one, and holds nothing.
+struct BrokenSettings {
+    reads: bool,
+}
+
+impl crate::store::mdm_setup::SetupStore for BrokenSettings {
+    fn put_secret(
+        &self,
+        _: &crate::store::mdm_setup::SecretRow,
+    ) -> Result<(), crate::store::mdm_setup::SetupError> {
+        Ok(())
+    }
+    fn secrets(
+        &self,
+    ) -> Result<Vec<crate::store::mdm_setup::SecretRow>, crate::store::mdm_setup::SetupError> {
+        Ok(Vec::new())
+    }
+    fn prune_superseded(&self, _: i64) -> Result<u64, crate::store::mdm_setup::SetupError> {
+        Ok(0)
+    }
+    fn settings(
+        &self,
+    ) -> Result<std::collections::BTreeMap<String, String>, crate::store::mdm_setup::SetupError>
+    {
+        if self.reads {
+            Err(crate::store::mdm_setup::SetupError::Store(
+                "unreadable".to_owned(),
+            ))
+        } else {
+            Ok(std::collections::BTreeMap::new())
+        }
+    }
+    fn set_setting(&self, _: &str, _: &str) -> Result<(), crate::store::mdm_setup::SetupError> {
+        Err(crate::store::mdm_setup::SetupError::Store(
+            "the disk is full".to_owned(),
+        ))
+    }
+}
+
+/// Catches: the old allowlist read at every start instead of once (a changed or deleted file
+/// moving the installs, or undoing an operator's change of the setting `installs`), or not
+/// read when the setting was never set; a host with no old file and no setting seeding the
+/// setting with nothing (so the old file, given later, would be ignored); a setting that does
+/// not parse starting the gate; a setting that cannot be read or stored passed over.
+#[test]
+fn the_installs_setting_is_seeded_from_the_old_file_once() {
+    let dir = scratch("mdm-installs-seed");
+    let (a, b, c) = ("a".repeat(64), "b".repeat(64), "c".repeat(64));
+    let entry = |sha: &str, version: &str| {
+        format!(
+            "[[pkg]]\nsha256 = \"{sha}\"\nversion = \"{version}\"\npath = \"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg\"\n"
+        )
+    };
+    let list = dir.path().join("pkgs.toml");
+    std::fs::write(&list, entry(&a, "0.1.9") + &entry(&b, "0.1.66")).expect("written");
+    let flags = MdmFlags {
+        mdm_pkg_allowlist: Some(list.clone()),
+        mdm_host: Some("mdm.example.com".to_owned()),
+        ..flags_in(&dir)
+    };
+    let hostkeeper = |install: &hostkeeper_mdm_gate::Install| {
+        install
+            .installs()
+            .hostkeeper()
+            .map(|entry| entry.sha256.as_str().to_owned())
+    };
+    let open = |flags: &MdmFlags, setup: &crate::mdm_setup::MdmSetup| {
+        super::install_of(flags, Arc::new(RootFs), setup)
+    };
+
+    // The first start: the setting was never set, so the file seeds it.
+    let setup = crate::mdm_setup::MdmSetup::volatile();
+    let first = open(&flags, &setup).expect("seeded").expect("an install");
+    assert_eq!(hostkeeper(&first), Some(b.clone()));
+    let seeded = setup.settings().expect("read")["installs"].clone();
+    assert_eq!(seeded, first.installs().to_json());
+
+    // A later start reads the setting; the file, changed and then gone, is not read.
+    std::fs::write(&list, entry(&c, "0.2.0")).expect("changed");
+    let second = open(&flags, &setup).expect("read").expect("an install");
+    assert_eq!(
+        hostkeeper(&second),
+        Some(b.clone()),
+        "the file is not read again"
+    );
+    std::fs::remove_file(&list).expect("removed");
+    let third = open(&flags, &setup).expect("read").expect("an install");
+    assert_eq!(
+        hostkeeper(&third),
+        Some(b),
+        "a missing file is not an error"
+    );
+
+    // An operator's change wins over the file, however it is set.
+    setup.set_setting("installs", "[]").expect("set");
+    let emptied = open(&flags, &setup).expect("read").expect("an install");
+    assert_eq!(hostkeeper(&emptied), None);
+    assert!(emptied.installs().entries().is_empty());
+
+    // With the host and no old file, nothing is seeded and the setting stays unset.
+    let bare = crate::mdm_setup::MdmSetup::volatile();
+    let no_file = MdmFlags {
+        mdm_pkg_allowlist: None,
+        ..flags.clone()
+    };
+    let install = open(&no_file, &bare).expect("read").expect("an install");
+    assert!(install.installs().entries().is_empty());
+    assert!(!bare.settings().expect("read").contains_key("installs"));
+
+    // A setting that does not parse, and a store that cannot be read or written.
+    bare.set_setting("installs", "not json").expect("set");
+    assert!(matches!(
+        open(&no_file, &bare).expect_err("refused"),
+        MdmError::Installs(_)
+    ));
+    let broken = |reads| {
+        crate::mdm_setup::MdmSetup::new(Arc::new(BrokenSettings { reads }), None, os_random())
+    };
+    assert!(matches!(
+        open(&no_file, &broken(true)).expect_err("unreadable"),
+        MdmError::Setup(_)
+    ));
+    std::fs::write(&list, entry(&a, "0.1.9")).expect("written");
+    assert!(matches!(
+        open(&flags, &broken(false)).expect_err("not stored"),
+        MdmError::Setup(_)
+    ));
 }
 
 /// A baseline file of root's, as `baseline_of` reads it: one group `group` with Screen Sharing.

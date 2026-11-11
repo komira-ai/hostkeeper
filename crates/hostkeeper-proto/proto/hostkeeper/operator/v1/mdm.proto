@@ -27,6 +27,13 @@
 // shows of one is its kind, version, SHA-256 fingerprint and times, and no refusal, log line or
 // audit row holds it either.
 //
+// The push certificate (`CreatePushRequest`, `PutPushReply`, `PutPushCertificate`;
+// docs/design/coordinator-mdm.md section 4.4): the three calls that make a push certificate for the
+// coordinator, all session-only as the setup writes are, each audited as `mdm_push_csr`,
+// `mdm_push_reply_put` or `mdm_push_cert_put`, a refusal after the caller is known with its token as
+// the reason. A key or a decryption key is never returned; what is returned is public (a CSR, a
+// certificate request's signed form, the encryption certificate).
+//
 // Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
 // rename, retype or remove one, and never reuse a number.
 syntax = "proto3";
@@ -61,6 +68,37 @@ service Mdm {
   // Every setting this release knows, with its value and whether that is its default. Changes
   // nothing.
   rpc ListSettings(ListSettingsRequest) returns (ListSettingsResponse);
+
+  // Makes a push certificate request: an RSA 2048 key, a CSR over it with the `email` in its
+  // subject, and a second key and self-signed certificate that mdmcert.download encrypts its
+  // reply to. Both keys are sealed and kept; a request pending before is replaced. With `submit`
+  // the coordinator posts the CSR and the encryption certificate to mdmcert.download, which
+  // **emails** the signed request to `email`: the reply is not in this answer, the operator
+  // uploads the attachment with `PutPushReply`. Without `submit` nothing is sent, and the CSR is
+  // for a vendor certificate or a signer of the operator's own. Session-only; audited as
+  // `mdm_push_csr`. Refused `invalid_request` (the email is not one address),
+  // `secrets_unavailable`, `mdmcert_unavailable` (the service could not be reached or did not
+  // take it; the request stays pending), `audit_unavailable`, `store_failed`.
+  rpc CreatePushRequest(CreatePushRequestRequest) returns (CreatePushRequestResponse);
+
+  // Decrypts the reply of mdmcert.download (the attachment of its email, as the mail has it, hex
+  // text, or its raw bytes) with the pending request's encryption key and checks that it is the
+  // signed request for the pending CSR; answers it, for the operator to upload to Apple's push
+  // portal, which returns the certificate for `PutPushCertificate`. Stores nothing. Session-only;
+  // audited as `mdm_push_reply_put`. Refused `no_pending_request`, `reply_undecryptable` (not a
+  // message encrypted to the pending request's key), `reply_not_for_request`, `audit_unavailable`.
+  rpc PutPushReply(PutPushReplyRequest) returns (PutPushReplyResponse);
+
+  // Stores a push certificate. Without `key_pem` the certificate must match the pending request's
+  // key (what Apple returned for the request); with it, the pair is stored as it is (the
+  // migration of an existing certificate and key; PKCS#1 `BEGIN RSA PRIVATE KEY` and PKCS#8 are
+  // both read). It must match its key, be unexpired, carry a topic that starts
+  // `com.apple.mgmt.External.`, and, when a certificate is already in use, the same topic.
+  // Session-only; audited as `mdm_push_cert_put` with the topic and the expiry, never the key.
+  // Refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expired`,
+  // `topic_changed`, `no_pending_request`, `secrets_unavailable`, `audit_unavailable`,
+  // `store_failed`.
+  rpc PutPushCertificate(PutPushCertificateRequest) returns (PutPushCertificateResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -79,6 +117,29 @@ enum MdmRefusal {
   // FAILED_PRECONDITION: the coordinator holds no master key (`--mdm-secrets-key-file` is not
   // given), so it keeps no secret.
   MDM_REFUSAL_SECRETS_UNAVAILABLE = 6;
+  // UNAVAILABLE: mdmcert.download could not be reached, or answered that it did not take the
+  // request.
+  MDM_REFUSAL_MDMCERT_UNAVAILABLE = 7;
+  // FAILED_PRECONDITION: no push certificate request is pending: make one (`CreatePushRequest`),
+  // or give the key with the certificate.
+  MDM_REFUSAL_NO_PENDING_REQUEST = 8;
+  // INVALID_ARGUMENT: the upload does not decrypt with the pending request's encryption key: it is
+  // not an enveloped message, or is encrypted to another key.
+  MDM_REFUSAL_REPLY_UNDECRYPTABLE = 9;
+  // INVALID_ARGUMENT: the upload decrypts, and is not the signed request for the pending CSR.
+  MDM_REFUSAL_REPLY_NOT_FOR_REQUEST = 10;
+  // INVALID_ARGUMENT: the certificate is not a PEM certificate, has no topic (`UID` of its
+  // subject), or its topic does not start `com.apple.mgmt.External.`.
+  MDM_REFUSAL_CERTIFICATE_INVALID = 11;
+  // INVALID_ARGUMENT: the key is not a readable RSA private key.
+  MDM_REFUSAL_KEY_INVALID = 12;
+  // INVALID_ARGUMENT: the key is not the certificate's.
+  MDM_REFUSAL_KEY_MISMATCH = 13;
+  // INVALID_ARGUMENT: the certificate has expired.
+  MDM_REFUSAL_CERTIFICATE_EXPIRED = 14;
+  // INVALID_ARGUMENT: the certificate in use has another topic: every enrollment carries it, so a
+  // renewal keeps it.
+  MDM_REFUSAL_TOPIC_CHANGED = 15;
 }
 
 // Where a device is in its MDM enrollment.
@@ -187,7 +248,7 @@ message MdmDevice {
 }
 
 message PutSecretRequest {
-  // The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `abm_key`, `abm_cert`,
+  // The kind of secret: `push_key`, `push_cert`, `push_encryption_key`, `push_pending_key`, `abm_key`, `abm_cert`,
   // `abm_token`, `mdm_ca_key`, `acme_account_key`, `dns_credential`, `tls_key` or `tls_cert`;
   // else `invalid_request`.
   string kind = 1;
@@ -257,4 +318,54 @@ message MdmSetting {
 
 message ListSettingsResponse {
   repeated MdmSetting settings = 1;
+}
+
+message CreatePushRequestRequest {
+  // The address the request is made for: it is in the CSR's subject, and mdmcert.download emails
+  // its reply to it. One plain address (`local@domain`), up to 254 bytes; else `invalid_request`.
+  string email = 1;
+  // Whether the coordinator posts the request to mdmcert.download.
+  bool submit = 2;
+}
+
+message CreatePushRequestResponse {
+  // The CSR, PEM: public.
+  string csr_pem = 1;
+  // The self-signed certificate mdmcert.download encrypts its reply to, PEM: public.
+  string encryption_certificate_pem = 2;
+  // Whether the request was posted to mdmcert.download: its reply is then in the email.
+  bool submitted = 3;
+}
+
+message PutPushReplyRequest {
+  // The attachment of mdmcert.download's email as the mail has it (hex text), or its raw bytes:
+  // 1 to 32768 bytes, else `invalid_request`.
+  bytes reply = 1;
+}
+
+message PutPushReplyResponse {
+  // The signed push certificate request, a property list: what Apple's push portal takes.
+  bytes signed_request = 1;
+}
+
+message PutPushCertificateRequest {
+  // The certificate, PEM (a chain is read as its first certificate and kept whole): 1 to 16384
+  // bytes, else `invalid_request`.
+  bytes certificate_pem = 1;
+  // The certificate's private key, PEM, for an existing certificate and key; empty for the
+  // certificate of the pending request. At most 16384 bytes, else `invalid_request`.
+  bytes key_pem = 2;
+}
+
+message PutPushCertificateResponse {
+  // The topic of the certificate.
+  string topic = 1;
+  // When it starts to be valid.
+  int64 not_before_unix = 2;
+  // When it stops being valid.
+  int64 not_after_unix = 3;
+  // What `ListSecrets` shows of the version stored.
+  SecretInfo secret = 4;
+  // Whether it replaced a certificate that was in use.
+  bool renewal = 5;
 }

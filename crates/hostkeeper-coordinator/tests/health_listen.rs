@@ -203,6 +203,7 @@ async fn the_health_listener_says_starting_until_every_listener_is_bound_then_ok
             heartbeat,
             control,
             lan: None,
+            mdm: None,
             health: Some(health),
         }
     );

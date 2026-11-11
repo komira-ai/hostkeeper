@@ -4,10 +4,12 @@
 //! have their default.
 //!
 //! Each setting says what it takes, so a value is judged once, when it is set: a number of days,
-//! or a list of them that falls. A later release adds names and a store keeps a name this release
+//! a list of them that falls, a number of seconds, or one of a few values. A later release adds names and a store keeps a name this release
 //! does not know as it was written.
 
 use std::collections::BTreeMap;
+
+use hostkeeper_mdm_gate::Installs;
 
 /// What a setting's value is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -18,6 +20,11 @@ enum Shape {
     FallingDays,
     /// One whole number between `min` and `max`, of seconds, bytes or a count.
     Whole { min: u64, max: u64 },
+    /// One of the values listed.
+    OneOf(&'static [&'static str]),
+    /// The named installs: a JSON array [`hostkeeper_mdm_gate::Installs`] reads, stored as the
+    /// canonical text it writes back.
+    Installs,
 }
 
 /// One setting: its name, its default and what it takes.
@@ -31,7 +38,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 9] = [
+pub const SETTINGS: [Setting; 14] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -55,6 +62,45 @@ pub const SETTINGS: [Setting; 9] = [
         name: "secret_grace_days",
         default: "7",
         shape: Shape::Days { min: 0, max: 365 },
+    },
+    // The floor, in seconds, between pushes to a Mac that has not connected since the last one
+    // (docs/design/coordinator-mdm.md, section 4.3).
+    Setting {
+        name: "push_retry_s",
+        default: "3600",
+        shape: Shape::Whole {
+            min: 1,
+            max: 2_592_000,
+        },
+    },
+    // How long, in seconds, APNs keeps a push for a Mac that is asleep: `apns-expiration` is this
+    // long after the push; 0 asks APNs to try once and keep nothing.
+    Setting {
+        name: "push_expiry_s",
+        default: "86400",
+        shape: Shape::Whole {
+            min: 0,
+            max: 2_592_000,
+        },
+    },
+    // `apns-priority` of a push: 10 sends at once, 5 when the power allows.
+    Setting {
+        name: "push_priority",
+        default: "10",
+        shape: Shape::OneOf(&["5", "10"]),
+    },
+    // How long, in seconds, a connection to APNs or to mdmcert.download, and its answer, may take.
+    Setting {
+        name: "push_timeout_s",
+        default: "30",
+        shape: Shape::Whole { min: 1, max: 300 },
+    },
+    // The packages the gate may send a Mac by name; the hostkeeper pkg is the one named
+    // `hostkeeper`. Seeded once from the old `--mdm-pkg-allowlist` file.
+    Setting {
+        name: INSTALLS,
+        default: "[]",
+        shape: Shape::Installs,
     },
     // The package proxy's cache (docs/design/package-proxy.md, section 4).
     // How long a waiter for a file another request is fetching waits for it before it is passed
@@ -96,6 +142,9 @@ pub const SETTINGS: [Setting; 9] = [
     },
 ];
 
+/// The name of the setting of the named installs.
+pub const INSTALLS: &str = hostkeeper_mdm_gate::SETTING_NAME;
+
 /// The setting called `name`, if this release knows it.
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Setting> {
@@ -117,6 +166,10 @@ impl Setting {
                 let whole = parse_whole(value)?;
                 (min..=max).contains(&whole).then(|| whole.to_string())
             }
+            Shape::OneOf(values) => values.contains(&value).then(|| value.to_owned()),
+            Shape::Installs => Installs::parse(value)
+                .ok()
+                .map(|installs| installs.to_json()),
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =
                     value.split(',').map(|d| parse_days(d.trim())).collect();
@@ -157,10 +210,10 @@ pub fn value_of<'a>(set: &'a BTreeMap<String, String>, setting: &'a Setting) -> 
         .map_or(setting.default, String::as_str)
 }
 
-/// The days of the setting `name` among the `set` ones, as a number: `fallback` for a name this
-/// release does not know or a value that is not one (a store edited by hand).
+/// The value of the setting `name` among the `set` ones, as a number (days, seconds or a
+/// count): `fallback` for a name this release does not know or a value that is not one (a store edited by hand).
 #[must_use]
-pub fn days_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32 {
+pub fn number_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32 {
     find(name)
         .and_then(|setting| parse_days(value_of(set, setting)))
         .unwrap_or(fallback)
@@ -173,6 +226,19 @@ pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u6
     find(name)
         .and_then(|setting| parse_whole(value_of(set, setting)))
         .unwrap_or(fallback)
+}
+
+/// The numbers of the list setting `name` (`60,14`) among the `set` ones, in order: the default
+/// for a name this release does not know, or a value that is not a list (a store edited by hand),
+/// and none for a name with no default list.
+#[must_use]
+pub fn list_of(set: &BTreeMap<String, String>, name: &str) -> Vec<u32> {
+    let parse = |text: &str| -> Option<Vec<u32>> {
+        text.split(',').map(|d| parse_days(d.trim())).collect()
+    };
+    find(name)
+        .and_then(|setting| parse(value_of(set, setting)).or_else(|| parse(setting.default)))
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -22,6 +22,8 @@ use std::sync::Arc;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
+use hostkeeper_mdm_gate::Installs;
+
 use crate::audit_actions;
 use crate::mdm_secrets::{AbmToken, MAX_SECRET_BYTES, Secret, SecretKind};
 use crate::mdm_settings;
@@ -33,8 +35,14 @@ use crate::service::Coordinator;
 impl Coordinator {
     /// The same coordinator keeping the MDM setup in `setup`.
     #[must_use]
-    pub fn with_mdm_setup(mut self, setup: MdmSetup) -> Self {
-        self.mdm_setup = Arc::new(setup);
+    pub fn with_mdm_setup(self, setup: MdmSetup) -> Self {
+        self.with_shared_mdm_setup(Arc::new(setup))
+    }
+
+    /// The same coordinator keeping the MDM setup in `setup`, which the MDM server shares.
+    #[must_use]
+    pub fn with_shared_mdm_setup(mut self, setup: Arc<MdmSetup>) -> Self {
+        self.mdm_setup = setup;
         self
     }
 
@@ -45,7 +53,7 @@ impl Coordinator {
     }
 
     /// One audit entry, `action` by `by` about `subject`, with `reason`.
-    fn audit_setup(
+    pub(crate) fn audit_setup(
         &self,
         by: &str,
         action: &str,
@@ -173,6 +181,11 @@ impl Coordinator {
             )?;
             return Err(MdmRefusal::StoreFailed);
         }
+        // The gate sends by the installs as they are now. `value` is what `check` made of the
+        // text, which parses.
+        if let (Some(mdm), true) = (&self.mdm, setting.name == mdm_settings::INSTALLS) {
+            let _ = Installs::parse(&value).map(|installs| mdm.gate.set_installs(installs));
+        }
         Ok(proto::PutSettingResponse {
             name: setting.name.to_owned(),
             value,
@@ -225,7 +238,7 @@ fn read_failed(why: SetupFailure) -> MdmRefusal {
 }
 
 /// The answer's row of `info`.
-fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
+pub(crate) fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
     proto::SecretInfo {
         kind: info.kind.as_str().to_owned(),
         version: info.version,
