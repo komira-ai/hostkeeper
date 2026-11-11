@@ -21,10 +21,11 @@ use clap::Parser;
 use hostkeeper_coordinator::config::{Bound, Cli, Command, Parts, Serve, StartError, build, run};
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
 use serde_json::{Value, json};
-use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, recorded, scratch};
+use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, scratch};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
 
 /// The URL of NanoHUB's API: loopback, and nothing listens there.
@@ -51,7 +52,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         files.put("mdm.key", "a-nanohub-api-key-for-the-tests\n", 0o600);
         files
     }
@@ -87,8 +87,6 @@ impl Files {
             "=oidc.toml",
             "--operator-token-file",
             "=operator.token",
-            "--rollout-file",
-            "=rollout.toml",
             "--legacy-service",
             "kbf",
         ];
@@ -802,14 +800,36 @@ fn device_information(uuid: &str) -> Vec<u8> {
 async fn the_enrollment_side_flags_make_the_gate_install_the_config_profile() {
     let hub = Hub::start().await;
     let files = Files::new("mdm-side-start");
-    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
-    let parts = build(&flags_of(side_args(&files, &hub.url)), roots).expect("started");
+    let roots = || Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    // The allowlist's entry names the host group `build`, which the state files must hold.
+    let first = build(&flags_of(files.args(&enrollment())), roots()).expect("started");
+    first
+        .coordinator
+        .host_groups_put(
+            &first.coordinator.caller(Some(OPERATOR)).await,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
+    drop(first);
+    let parts = build(&flags_of(side_args(&files, &hub.url)), roots()).expect("started");
     let gate = Arc::clone(&parts.coordinator.mdm().expect("the gate").gate);
 
-    gate.webhook(&authenticate_event()).await.expect("taken");
-    gate.webhook(&token_update()).await.expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &authenticate_event())
+        .await
+        .expect("taken");
+    hostkeeper_mdm_gate::webhook::take(&gate, &token_update())
+        .await
+        .expect("taken");
     let uuid = hub.uuid_of("DeviceInformation");
-    gate.webhook(&device_information(&uuid))
+    hostkeeper_mdm_gate::webhook::take(&gate, &device_information(&uuid))
         .await
         .expect("taken");
 

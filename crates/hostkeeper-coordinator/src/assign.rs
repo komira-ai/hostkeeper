@@ -489,7 +489,7 @@ impl Coordinator {
             roles: rules::roles_of(def, entries),
             assignments,
             assigned,
-            repository: def.repository.clone(),
+            repository: state.repository_of(&self.services, &def.name),
             uninstalling: entries
                 .into_iter()
                 .flat_map(|e| e.uninstall.keys().cloned())

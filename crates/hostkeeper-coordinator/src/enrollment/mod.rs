@@ -127,6 +127,9 @@ pub struct Enrollment {
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
     mac: MacPolicy,
+    /// A Mac is approved only when the gate says it enrolled through ADE (`device_not_via_dep`
+    /// otherwise); off by default.
+    mac_require_dep: bool,
     /// How long a request waits for an operator before it expires, in seconds.
     request_ttl_secs: u64,
     /// Set when a coordinator takes this enrollment ([`Enrollment::audit_to`]).
@@ -179,6 +182,7 @@ impl Enrollment {
             clock,
             nonces: Nonces::new(random),
             mac: MacPolicy::default(),
+            mac_require_dep: false,
             request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
             audit: Mutex::new(None),
             desired: Mutex::new(None),
@@ -242,6 +246,15 @@ impl Enrollment {
     #[must_use]
     pub fn with_mac(mut self, mac: MacPolicy) -> Self {
         self.mac = mac;
+        self
+    }
+
+    /// The same enrollment, declining `device_not_via_dep` a Mac whose `SecurityInfo` did not say
+    /// `EnrolledViaDEP` true (also one that has not answered). Off by default, so an allowlisted
+    /// Mac enrolled by hand is approved as before.
+    #[must_use]
+    pub fn with_mac_require_dep(mut self, require: bool) -> Self {
+        self.mac_require_dep = require;
         self
     }
 

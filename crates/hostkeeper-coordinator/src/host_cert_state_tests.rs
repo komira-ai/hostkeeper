@@ -175,7 +175,6 @@ fn skew_flag(extra: &[&str]) -> u64 {
         "--state-file",
         "--oidc-config",
         "--operator-token-file",
-        "--rollout-file",
     ] {
         args.push(flag);
         args.push(if flag.ends_with("listen") {

@@ -270,8 +270,8 @@ is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervi
 is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
 stored before the request field names no request and is judged without it. The nonce is consumed
 in the approval's own write. Any condition false leaves the request pending for an operator and is
-audited `mac_auto_approve_declined` with one of `serial_not_allowed`, `device_state_unavailable`,
-`device_not_enrolled`, `device_not_supervised`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
+audited `mac_auto_approve_declined` (`device_not_via_dep` only when the coordinator is set to require it, `Enrollment::with_mac_require_dep`; off by default) with one of `serial_not_allowed`, `device_state_unavailable`,
+`device_not_enrolled`, `device_not_supervised`, `device_not_via_dep`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
 `nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
 that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.
 
@@ -301,17 +301,17 @@ host_group = "build"        # a group the coordinator holds
 
 A file that does not read, a serial listed twice, an entry that names no `host_group`, or a
 serial, host id or group that breaks its rule stops the start. An entry written before groups
-names `role` instead, read as the group's name (with both, they must be one name), and may name
-`services`. A coordinator that holds a host group at its start refuses an entry that names
+names `role` instead, read as the group's name (with both, they must be one name); `services` is
+no longer allowed. `serve` always places by host group, so its start refuses an entry that names
 `services` (`--mac-serial-allowlist: the entry of serial <serial> names services; ...`) or a
 group it does not hold (`--mac-serial-allowlist names host group <name>, which the coordinator
-does not hold`), and `HostGroups.Remove` refuses a group an entry names (`not_empty`). A
-coordinator that holds no group approves the Mac as its entry's role and assigns its
-`services`, one `assign` entry per service by `mdm-nonce`, each a service the rollout file
-defines, or the start stops; should it come to hold groups while it runs, an entry with
-`services`, or naming a group it does not hold, is refused as an operator's approval would be
-(`services_retired`, `unknown_host_group`) until the file is fixed and the coordinator started
-again.
+does not hold`), also when it holds no group at all: every entry needs a `host_group` the
+coordinator holds, put before the start. `HostGroups.Remove` refuses a group an entry names
+(`not_empty`). Should the coordinator lose a group while it runs, an entry naming it is refused
+as an operator's approval would be (`unknown_host_group`) until the file is fixed and the
+coordinator started again. An entry written before groups needs its `host_group` and loses its
+`services`, once the group exists
+([Moving a fleet from roles to host groups](operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups)).
 
 ## The MDM policy gate
 
@@ -339,8 +339,9 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   enrolled from its first `TokenUpdate` until a `CheckOut`; an `Authenticate` begins a new
   enrollment and forgets the serial and supervision the device gave in the last. The serial is the
   one its `DeviceInformation` answer gave, never the `Authenticate`'s alone, and the device is
-  supervised only when that answer says `IsSupervised` true. `SecurityInfo`'s `EnrolledViaDEP` and
-  `UserApprovedEnrollment` are shown and decide nothing.
+  supervised only when that answer says `IsSupervised` true. `SecurityInfo`'s `EnrolledViaDEP` is carried in the device's status
+  (`enrolled_via_dep`, `None` until the answer) and decides only where the coordinator requires it
+  (`device_not_via_dep`); `UserApprovedEnrollment` is shown and decides nothing. Both are what the Mac says of itself: evidence, not an identity.
 - **What it says.** The enrollment's question about a serial is answered from the records, never by
   asking the device: a serial no record has, or one two enrollments that have not checked out
   have, is `device_state_unavailable`; a checked-out device is `device_not_enrolled`; an

@@ -28,7 +28,9 @@ use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::{TokioIo, TokioTimer};
 use tokio::io::{AsyncRead, AsyncWrite};
 
-use crate::gate::{Gate, WebhookError};
+use crate::event::{self, EventError};
+use crate::gate::{Gate, Handled};
+use crate::store::StoreError;
 
 /// The largest event body taken. A `DeviceInformation` answer is a few kilobytes; a result of a
 /// command another client of NanoHUB sent may be larger, and is passed over anyway.
@@ -81,6 +83,29 @@ where
     }
 }
 
+/// Why a webhook body was not taken.
+#[derive(Debug, thiserror::Error)]
+pub enum WebhookError {
+    /// The body is not an event the gate reads.
+    #[error(transparent)]
+    Event(#[from] EventError),
+    /// The device's record could not be written: the event is not taken, and NanoHUB is told.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
+/// Reads the NanoHUB webhook `body` into an event and hands it to [`Gate::handle`]; a body of a
+/// topic or channel the gate does not read is passed over.
+///
+/// # Errors
+/// [`WebhookError`]: the body is no event, or the record cannot be written.
+pub async fn take(gate: &Gate, body: &[u8]) -> Result<Handled, WebhookError> {
+    match event::parse(body)? {
+        Some(event) => Ok(gate.handle(event).await?),
+        None => Ok(Handled::PassedOver),
+    }
+}
+
 fn reply(status: StatusCode) -> Response<Full<Bytes>> {
     let mut response = Response::new(Full::new(Bytes::new()));
     *response.status_mut() = status;
@@ -104,7 +129,7 @@ async fn answer(gate: &Gate, request: Request<Incoming>) -> Response<Full<Bytes>
         }
         Ok(Err(_)) | Err(_) => return reply(StatusCode::BAD_REQUEST),
     };
-    match gate.webhook(&body).await {
+    match take(gate, &body).await {
         Ok(_) => reply(StatusCode::OK),
         Err(WebhookError::Event(why)) => {
             tracing::warn!(%why, "an MDM webhook event was refused");

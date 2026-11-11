@@ -235,9 +235,8 @@ a binary OpenPGP keyring otherwise (an empty file, or armor in a `.gpg`, is refu
 are refused: an entry that turns off apt's signature checks is never used. A daemon that refuses to start runs no
 self-update either, which is why the daemon judges a set the coordinator sends with this same loader before it
 replaces the directory (section 3.2), and host setup checks a directory it places with it too, as it does
-`hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judges a staged directory as
-the daemon would take it here (a `Signed-By` of this directory names the file of `DIR`), exits 0 listing each entry,
-and 1 with the loader's refusal (README, "Checking a repositories directory").
+`hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judged a staged directory as
+the daemon would take it here. Removed: the daemon's start and `pxe serve`'s start make this check.
 
 These files are hostkeeper's and not the system's: they are not in `/etc/apt/sources.list.d/`, so the host's own
 `apt-get upgrade` and unattended upgrades never see the repository through them. An operator may list the same

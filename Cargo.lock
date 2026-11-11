@@ -1439,7 +1439,6 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-launchd",
  "hostkeeper-testkit",
- "rustix",
 ]
 
 [[package]]
@@ -1767,6 +1766,10 @@ dependencies = [
  "toml",
  "tracing",
 ]
+
+[[package]]
+name = "hostkeeper-mdm-model"
+version = "0.1.0"
 
 [[package]]
 name = "hostkeeper-mdm-server"

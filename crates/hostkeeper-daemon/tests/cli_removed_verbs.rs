@@ -9,8 +9,8 @@ use hostkeeper_daemon::cli::Cli;
 
 /// The command lines the removed verbs were called with: the plumbing verbs of the fallback and
 /// the seed, the Mac config, the hook of hostkeeper's own package and the step words a launcher
-/// ran it with.
-const REMOVED: [&[&str]; 10] = [
+/// ran it with, and the check of a repositories directory.
+const REMOVED: [&[&str]; 11] = [
     &["self-update-protocol"],
     &["self-update-fallback", "--dir", "/x"],
     &["self-update-seed", "--state-dir", "/x", "--binary", "/y"],
@@ -21,6 +21,7 @@ const REMOVED: [&[&str]; 10] = [
     &["verify", "extra"],
     &["rollback"],
     &["cleanup"],
+    &["check-repositories", "--dir", "/x"],
 ];
 
 /// Proves: each removed verb, with the arguments it was called with, is clap's unknown

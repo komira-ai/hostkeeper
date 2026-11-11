@@ -576,7 +576,7 @@ Through `--request` only: `repository` (hostkeeper.release.v1.Repository).
 
 `/hostkeeper.operator.v1.Repositories/Remove`
 
-Removes a repository no service of the rollout file names. The registry's generation grows
+Removes a repository no package comes from. The registry's generation grows
 by one. Writes the audit entry `repository_remove`.
 
 | flag | value | meaning |
@@ -673,14 +673,28 @@ is.
 `/hostkeeper.operator.v1.Services/SetMinVersion`
 
 Set the version below which the rollout gate orders the service to no host of a role, or to
-one host: no update, install or automatic rollback. A host's own minimum stands before its
-role's, and neither goes below the rollout file's.
+one host: no update, install or automatic rollback. A role names a host group: the minimum of
+the package in that group. A host's own minimum stands before its group's.
 
 | flag | value | meaning |
 |---|---|---|
 | `--service` | STRING |  |
 
 Through `--request` only: `min_version` (hostkeeper.operator.v1.MinVersion).
+
+#### `hkctl services set-repository`
+
+`/hostkeeper.operator.v1.Services/SetRepository`
+
+Set the repository of the registry the service's package comes from; empty goes back to the
+default, `komira`. The coordinator sends each host the repositories of its packages, and a
+release names channels of the package's repository. The registry must hold the repository.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package. |
+| `--repository` | STRING | The registry's name of the repository the package comes from. Empty clears the setting: the package goes back to the default repository, `komira`. |
+| `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
 #### `hkctl services hold`
 

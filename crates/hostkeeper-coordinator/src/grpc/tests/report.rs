@@ -537,6 +537,7 @@ fn service_marks_carry_halts_acks_versions_and_generations() {
         force: None,
         force_generation: 3,
         bad_by_force: vec![version("2.9")],
+        repository: None,
     };
 
     let out = mapped(svc(vec![]), ops_with("web", marks))

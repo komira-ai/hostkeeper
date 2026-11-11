@@ -56,8 +56,6 @@ services:
       - /etc/hostkeeper-coordinator/oidc.toml
       - --tokens-file
       - /etc/hostkeeper-coordinator/tokens.toml
-      - --rollout-file
-      - /etc/hostkeeper-coordinator/rollout.toml
       - --database-dsn-file
       - /run/secrets/hostkeeper-db-dsn
       - --halt-marker-file
@@ -72,7 +70,7 @@ services:
     volumes:
       # The CA key and its certificate, the server certificate and the marker, owned by 65532.
       - hostkeeper-coordinator:/var/lib/hostkeeper-coordinator
-      # The TLS files, the client CA, the OIDC allow-list, the tokens and the rollout file.
+      # The TLS files, the client CA, the OIDC allow-list and the tokens.
       - ./etc:/etc/hostkeeper-coordinator:ro
     restart: unless-stopped
 

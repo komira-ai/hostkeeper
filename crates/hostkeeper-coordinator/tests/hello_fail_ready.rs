@@ -3,7 +3,7 @@
 //! release is set with the entry of the repository `komira-testing`; the failing build
 //! (`1.2.3-fail-ready`) with the entry of the repository `komira-testing-fail`, package version
 //! `1.2.3~fail.ready`. A host that fails the failing build is rolled back by the coordinator
-//! under hello's rollout (`examples/hello/rollout.toml`), and another service keeps rolling.
+//! under hello's rollout entry, and another service keeps rolling.
 //! The registry's repository `komira` lists the suites `testing`, `stable` and `testing-fail`.
 
 mod support;
@@ -26,12 +26,24 @@ use support::targets::{
 };
 use support::{OPERATOR, ci_token};
 
-/// hello's rollout entry as the example file has it (role `farm`), and a second service on
-/// hosts of the role `edge`.
-const SERVICES: &str = concat!(
-    include_str!("../../../examples/hello/rollout.toml"),
-    "\n[[service]]\nname = \"other\"\nroles = [\"edge\"]\n"
-);
+/// hello's rollout entry (role `farm`: a lone canary, two baked beats, automatic rollback after
+/// one failed host), and a second service on hosts of the role `edge`.
+const SERVICES: &str = r#"
+[[service]]
+name = "hello"
+roles = ["farm"]
+bake_beats = 2
+canary = { count = 1 }
+rollback = "automatic"
+rollback_after_failed = { percent = 25, min_hosts = 1 }
+
+[service.selector]
+roles = ["farm"]
+
+[[service]]
+name = "other"
+roles = ["edge"]
+"#;
 
 const X86: agent::Platform = agent::Platform::LinuxX8664;
 const APT: &str = "apt";
