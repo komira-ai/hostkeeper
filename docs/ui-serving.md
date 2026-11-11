@@ -92,7 +92,12 @@ Sign out ends the session on the coordinator.
   (`Mdm.PutPushCertificate` with the certificate Apple returned). A separate form takes an existing certificate and its key, PKCS#1
   or PKCS#8, in one call (the migration). A file is read when the button is pressed, sent and dropped; a key can only be chosen as a
   file, never typed, and the page shows no value of a secret. A refusal is shown as the API says it (`CODE reason`) in the status
-  line. The writes need a signed-in user's session: a bearer is refused them.
+  line. The writes need a signed-in user's session: a bearer is refused them. *Verify* (`Mdm.Verify`) reads the setup back and proves its
+  parts work: whether the Macs' listener runs and which names the certificate it serves holds, whether Apple accepts the ABM token
+  (while the coordinator has an ABM client; without one the page says it could not ask) and, for the Mac chosen from the enrolled
+  ones (*Load enrolled Macs*, `Mdm.ListDevices`, asked only when that button is pressed), one test push. A failed push is worded by
+  its class, so that a refused topic, a dead token and a certificate of the wrong environment read differently. The push carries no
+  command and records nothing against the Mac.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary

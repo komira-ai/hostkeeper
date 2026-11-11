@@ -169,6 +169,7 @@ pub(crate) mod mdm_server;
 pub mod mdm_settings;
 pub mod mdm_setup;
 pub mod mdm_status;
+pub mod mdm_verify;
 pub mod membership;
 pub(crate) mod moving;
 pub mod operate;

@@ -139,6 +139,29 @@ impl Pusher {
             .next_floor()
     }
 
+    /// One push to `target` that the policy knows nothing of: it neither waits for a floor nor arms
+    /// one, and leaves no push outstanding. It is how the setup proves the push certificate (the
+    /// topic, the environment and a token) without disturbing the pushes of the queue. APNs keeps
+    /// it for no time (`apns-expiration` 0): a test push that the Mac gets later proves nothing.
+    ///
+    /// # Errors
+    /// [`PushError`]: what APNs, or the connection to it, answered.
+    pub async fn test_push(
+        &self,
+        target: Target<'_>,
+        settings: PushSettings,
+    ) -> Result<Delivered, PushError> {
+        self.sender
+            .send(&Push {
+                token: target.token.clone(),
+                magic: target.magic.to_owned(),
+                topic: self.topic.clone(),
+                priority: settings.priority,
+                expiration_unix: 0,
+            })
+            .await
+    }
+
     /// Sends the push the policy allowed (`push`), or says it held.
     async fn finish(
         &self,

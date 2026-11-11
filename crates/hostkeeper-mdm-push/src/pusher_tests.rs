@@ -198,3 +198,68 @@ async fn a_forgotten_enrollment_is_pushed_as_a_new_one() {
         Outcome::Sent(_)
     ));
 }
+
+/// Proves: a test push is sent at once whatever the policy holds, with the topic, the token, the
+/// magic and the priority of a push and an expiration of 0, and it neither arms a floor nor
+/// leaves a push outstanding, so the next queued command is still pushed at once.
+#[tokio::test]
+async fn a_test_push_is_sent_outside_the_policy_and_leaves_it_untouched() {
+    let rig = rig();
+    // A push is outstanding: the policy holds the next one.
+    assert!(matches!(
+        rig.pusher
+            .command_queued(MAC, rig.target(), settings())
+            .await,
+        Outcome::Sent(_)
+    ));
+    assert!(matches!(
+        rig.pusher
+            .command_queued(MAC, rig.target(), settings())
+            .await,
+        Outcome::Held
+    ));
+    let floor = rig.pusher.next_floor();
+    let delivered = rig
+        .pusher
+        .test_push(rig.target(), settings())
+        .await
+        .expect("sent");
+    assert_eq!(delivered.apns_id.as_deref(), Some("fake-apns-id"));
+    let sent = rig.apns.sent();
+    assert_eq!(sent.len(), 2);
+    assert_eq!(sent[1].topic, TOPIC);
+    assert_eq!(sent[1].token, rig.token);
+    assert_eq!(sent[1].magic, "magic-1");
+    assert_eq!(sent[1].priority, 10);
+    assert_eq!(sent[1].expiration_unix, 0);
+    // The policy is as it was: still one outstanding, and the test push armed no floor.
+    assert!(matches!(
+        rig.pusher
+            .command_queued(MAC, rig.target(), settings())
+            .await,
+        Outcome::Held
+    ));
+    assert_eq!(rig.pusher.next_floor(), floor);
+}
+
+/// Proves: what APNs refuses a test push with is returned as it is, and the policy is not told
+/// the push failed (a failed test push must not arm the retry floor of a Mac).
+#[tokio::test]
+async fn a_test_push_that_fails_returns_the_error_and_arms_nothing() {
+    let rig = rig();
+    rig.apns.answer_next(Err(PushError::TopicDisallowed));
+    let error = rig
+        .pusher
+        .test_push(rig.target(), settings())
+        .await
+        .expect_err("refused");
+    assert_eq!(error, PushError::TopicDisallowed);
+    assert_eq!(rig.pusher.next_floor(), None);
+    // A queued command is pushed at once afterwards.
+    assert!(matches!(
+        rig.pusher
+            .command_queued(MAC, rig.target(), settings())
+            .await,
+        Outcome::Sent(_)
+    ));
+}

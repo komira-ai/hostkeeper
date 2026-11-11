@@ -276,7 +276,7 @@ impl Rig {
 
     /// A rig with nothing in the setup but the master key.
     pub(super) fn bare(name: &str) -> Self {
-        Self::build(name, None, counting())
+        Self::build(name, None, counting(), None)
     }
 
     /// A queue as a restarted coordinator builds it: new pushers and nothing armed, over the same
@@ -309,9 +309,18 @@ impl Rig {
         )
     }
 
+    /// A rig whose server asks Apple about the ABM token through `abm`, with the certificate and the
+    /// push identity.
+    pub(super) fn asking(name: &str, abm: Arc<dyn crate::mdm_verify::AbmAccountCheck>) -> Self {
+        let rig = Self::build(name, None, counting(), Some(abm));
+        rig.store_tls();
+        rig.store_push();
+        rig
+    }
+
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
     pub(super) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
-        let rig = Self::build(name, None, random);
+        let rig = Self::build(name, None, random, None);
         rig.store_tls();
         rig.store_push();
         rig
@@ -323,7 +332,7 @@ impl Rig {
         gate: impl FnOnce(Arc<MdmQueue>, &Scratch, Arc<Time>) -> Arc<hostkeeper_mdm_gate::Gate>
         + 'static,
     ) -> Self {
-        let rig = Self::build(name, Some(Box::new(gate)), counting());
+        let rig = Self::build(name, Some(Box::new(gate)), counting(), None);
         rig.store_tls();
         rig.store_push();
         rig
@@ -333,7 +342,12 @@ impl Rig {
         clippy::type_complexity,
         reason = "a test builder takes a closure that builds the gate over the queue"
     )]
-    fn build(name: &str, gate: Option<GateBuilder>, random: crate::enrollment::Random) -> Self {
+    fn build(
+        name: &str,
+        gate: Option<GateBuilder>,
+        random: crate::enrollment::Random,
+        abm: Option<Arc<dyn crate::mdm_verify::AbmAccountCheck>>,
+    ) -> Self {
         let dir = scratch(name);
         let tables = FileMdm::open(&dir.path().join("mdm")).expect("the tables open");
         let store = Arc::new(Flaky::new(tables));
@@ -376,13 +390,10 @@ impl Rig {
             pushers: Arc::clone(&pushers),
             tls: Arc::new(MdmTls::new(Arc::clone(&setup), trust)),
             sweep: Duration::from_secs(60),
+            abm,
         }));
         let fake = Fake::new();
-        let coordinator = Arc::new(
-            coordinator_listed(&fake, &Arc::new(AtomicU64::new(1_000)), None, "")
-                .with_shared_mdm_setup(Arc::clone(&setup))
-                .with_mdm_server(Some(Arc::clone(&server))),
-        );
+        let coordinator = Arc::new(coordinator_over(&fake, &setup, Some(&server)));
         Self {
             store,
             setup,
@@ -396,6 +407,11 @@ impl Rig {
             server_ca: Ca::new(),
             dir,
         }
+    }
+
+    /// A coordinator over the rig's setup that runs no Macs' listener.
+    pub(super) fn coordinator_without_listener(&self) -> Coordinator {
+        coordinator_over(&self.fake, &self.setup, None)
     }
 
     /// The rig's scratch directory.
@@ -522,6 +538,17 @@ impl Rig {
             .map(|entry| entry.action.clone())
             .collect()
     }
+}
+
+/// A coordinator over `fake` that keeps `setup` and serves the Macs with `server`, if any.
+fn coordinator_over(
+    fake: &Fake,
+    setup: &Arc<MdmSetup>,
+    server: Option<&Arc<MdmServer>>,
+) -> Coordinator {
+    coordinator_listed(fake, &Arc::new(AtomicU64::new(1_000)), None, "")
+        .with_shared_mdm_setup(Arc::clone(setup))
+        .with_mdm_server(server.map(Arc::clone))
 }
 
 /// Random bytes that count: 1, 2, 3, ... in each byte, so two ids differ.
@@ -894,6 +921,7 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     }
     let (_, parsed) = x509_parser::parse_x509_certificate(&mac.der).expect("a certificate");
     let sid = match (&spec.ski, spec.sid_tag) {
+        (_, Some(0x30)) => der(0x30, &der(0x02, &[1])),
         (_, Some(tag)) => der(tag, b"x"),
         (Some(ski), None) => der(0x80, ski),
         (None, None) => {

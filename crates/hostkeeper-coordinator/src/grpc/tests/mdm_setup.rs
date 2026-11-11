@@ -30,6 +30,7 @@ const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const STATUS: &str = "/hostkeeper.operator.v1.Mdm/Status";
 const PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
+const VERIFY: &str = "/hostkeeper.operator.v1.Mdm/Verify";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
 
 const MATERIAL: &[u8] = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAgatewaymarker\n-----END RSA PRIVATE KEY-----\n";
@@ -71,7 +72,6 @@ fn write_body(path: &str) -> String {
         PUT_SECRET => secret_body(),
         PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
         PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
-        PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
         _ => "{}".to_owned(),
     }
 }
@@ -113,7 +113,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             CREATE_PUSH_REQUEST,
             PUT_PUSH_REPLY,
             PUT_PUSH_CERTIFICATE,
-            PUT_NAME
+            PUT_NAME,
+            VERIFY
         ]
     );
     for path in &writes {
@@ -396,6 +397,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         PUT_PUSH_REPLY,
         PUT_PUSH_CERTIFICATE,
         PUT_NAME,
+        VERIFY,
         LIST_SECRETS,
         LIST_SETTINGS,
         STATUS,
@@ -575,6 +577,39 @@ async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
             ("alice".to_owned(), "mdm_push_csr".to_owned()),
             ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
             ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user's `Verify` through the gateway is answered with the status read back,
+/// the listener's state and the ABM check, and is audited under the user's name as `mdm_verify`;
+/// an operator token's is refused `session_required` before anything is audited or asked.
+#[tokio::test]
+async fn a_session_verifies_the_setup_through_the_gateway_and_a_token_cannot() {
+    let world = world("mdm-setup-verify");
+    let refused = world.send(bearer_post(VERIFY, "{}", OPERATOR)).await;
+    assert_eq!(refused.status, StatusCode::FORBIDDEN);
+    assert_eq!(
+        refused.json(),
+        json!({ "code": "PERMISSION_DENIED", "reason": "session_required" })
+    );
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let verified = world.send(alice.post(VERIFY, "{}")).await;
+    assert_eq!(verified.status, StatusCode::OK, "{verified:?}");
+    let answer = verified.json();
+    assert_eq!(answer["status"]["sealing"], json!(true));
+    assert_eq!(answer["abm"]["result"], json!("MDM_ABM_RESULT_NO_TOKEN"));
+    assert!(answer.get("push").is_none(), "no Mac was named");
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_verify".to_owned()),
         ]
     );
 }

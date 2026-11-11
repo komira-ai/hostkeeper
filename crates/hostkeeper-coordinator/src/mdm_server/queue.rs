@@ -43,7 +43,7 @@ use crate::store::mdm::{
 pub(crate) type Pushers = Arc<dyn Fn() -> Option<Arc<Pusher>> + Send + Sync>;
 
 /// The push settings when the settings cannot be read: the defaults of `mdm_settings`.
-const DEFAULT_PUSH: PushSettings = PushSettings {
+pub(crate) const DEFAULT_PUSH: PushSettings = PushSettings {
     retry_s: 3600,
     expiry_s: 86_400,
     priority: 10,
@@ -311,7 +311,7 @@ enum Why {
 }
 
 /// The push token and magic of an enrollment, when it has both and the token is a token.
-fn target_of(enrollment: &Enrollment) -> Option<(DeviceToken, String)> {
+pub(crate) fn target_of(enrollment: &Enrollment) -> Option<(DeviceToken, String)> {
     let token = DeviceToken::from_raw(enrollment.push_token.as_deref()?).ok()?;
     Some((token, enrollment.push_magic.clone()?))
 }

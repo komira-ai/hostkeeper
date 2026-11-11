@@ -56,6 +56,7 @@ use hyper::{Method, Request, Response, StatusCode};
 
 use crate::enrollment::Random;
 use crate::http::{BoxError, Peer, error, read_body};
+use crate::mdm_verify::AbmAccountCheck;
 use crate::service::Coordinator;
 use crate::store::mdm::{MdmError, MdmStore};
 use auth::Refused;
@@ -208,6 +209,9 @@ pub(crate) struct Parts {
     pub(crate) tls: Arc<MdmTls>,
     /// How often the queue looks at what is due ([`sweep_every`]).
     pub(crate) sweep: Duration,
+    /// What asks Apple whether the ABM token is accepted (`Mdm.Verify`); the ABM client gives one,
+    /// and none says the token cannot be checked.
+    pub(crate) abm: Option<Arc<dyn AbmAccountCheck>>,
 }
 
 /// The MDM server: what the routes of the Macs' listener use.
@@ -220,6 +224,7 @@ pub(crate) struct MdmServer {
     pushers: Pushers,
     tls: Arc<MdmTls>,
     sweep: Duration,
+    abm: Option<Arc<dyn AbmAccountCheck>>,
     /// One `Authenticate` at a time: the live enrollment of a serial is read, then replaced.
     pub(crate) authenticating: tokio::sync::Mutex<()>,
 }
@@ -235,6 +240,7 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            abm,
         } = parts;
         Self {
             store,
@@ -245,8 +251,19 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            abm,
             authenticating: tokio::sync::Mutex::new(()),
         }
+    }
+
+    /// What asks Apple about the ABM token, if the server has it.
+    pub(crate) fn abm(&self) -> Option<&Arc<dyn AbmAccountCheck>> {
+        self.abm.as_ref()
+    }
+
+    /// The pusher for the push certificate in use; none while there is none.
+    pub(crate) fn pusher(&self) -> Option<Arc<hostkeeper_mdm_push::pusher::Pusher>> {
+        (self.pushers)()
     }
 
     /// The TLS of the listener.
@@ -338,6 +355,9 @@ mod tests;
 
 #[cfg(test)]
 mod support;
+
+#[cfg(test)]
+mod verify_tests;
 
 /// A queued `DeviceInformation` number `n` for the enrollment `enrollment_id`, as the store takes it.
 #[cfg(test)]

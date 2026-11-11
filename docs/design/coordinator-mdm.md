@@ -602,7 +602,7 @@ its enrollment URL, the push topic and the TLS names. The push step is `CreatePu
 attachment as a file or its pasted hex text, sent as bytes) with the signed request downloadable, `PutPushCertificate` for the certificate Apple returns, and one form that sends an existing certificate and a key
 file (PKCS#1 or PKCS#8) in one call. The page reads a file when its button is pressed, sends it and drops it, takes a key only as a file, and shows nothing of a secret; a refusal is the API's `CODE reason`
 unchanged. The request made in the page is kept in the page only: after a reload the coordinator still holds it pending, and the reply can be checked without it; the CSR is shown again only by making a new request.
-The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder.
+The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder. The CM11b setup check is in `coordinator-mdm-cm11b.md`: the ABM check answers `not_checked` until CM13 (#328) gives the client.
 
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not
@@ -994,7 +994,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM22a | (**Built**) **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, L8a | M |
 | CM8 | Named installs (the `installs` setting, with the old file read once), `Settings` and the device name in the baseline, the pinned command list of eight | CM2, CM20 | M |
 | CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub` with the rules of 4.3 and 5.2 (a claim skips what the connection tried, `NotNow` and a timeout return arm the push, delivery is at least once) and the replacement of an enrollment under 4.2 (the ABM table read at `Authenticate`), signature or certificate checks, the unknown-enrollment answer. **Built.** The webhook is not used with `--mdm-listen` (CM14a deletes it) | CM2, CM5, CM6, CM7, CM20 | L |
-| CM11b | `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
+| CM11b | (**Built**) `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
 | CM11c | `GET /pkg/<sha256>.pkg`, streamed and digest-checked | CM11a, CM8 | S |
 | CM13 | ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
 | CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |

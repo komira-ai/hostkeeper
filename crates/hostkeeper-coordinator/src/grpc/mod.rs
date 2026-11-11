@@ -62,11 +62,12 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
-    RolloutsService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, RolloutsService,
+    ServicesService,
 };
 use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
+use self::operator_mdm::MdmService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -86,6 +87,7 @@ pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_accounts;
 mod operator_host_groups;
+mod operator_mdm;
 mod operator_repositories;
 pub(crate) mod refusal;
 pub(crate) mod report;
@@ -241,6 +243,8 @@ const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 /// The path of `Mdm.PutName`.
 const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
+/// The path of `Mdm.Verify`, which sends a push and asks Apple about the ABM token.
+const MDM_VERIFY: &str = "/hostkeeper.operator.v1.Mdm/Verify";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -254,6 +258,7 @@ pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_CREATE_PUSH_REQUEST,
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,
+    MDM_VERIFY,
 ];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
