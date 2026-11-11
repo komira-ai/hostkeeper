@@ -4,9 +4,12 @@
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::ServicesRefusal as Refusal;
 
+use super::TestDatabase;
 use super::coordinator::Farm;
+use super::devices::with_session;
 use crate::marks_support::{WEB, operator};
 use crate::repositories_support::repository;
+use crate::store::postgres::migrate;
 
 /// `Services.SetRepository` of `service` to `repository`, as the operator.
 fn set(farm: &Farm, service: &str, repository: &str) -> Result<(), Refusal> {
@@ -57,4 +60,95 @@ fn a_repository_set_survives_the_store_being_opened_again() {
     let (store, loaded) = farm.database.open("again").expect("opened again");
     assert_eq!(loaded.ops.services[WEB].repository.as_deref(), Some("acme"));
     store.stop();
+}
+
+/// Proves: this release starts on a database the release before (0.1.252, migrations `0001` to
+/// `0008`) migrated and wrote a service, a host and an audit line into, as that release writes them
+/// (naming the columns it knows): the start runs `0009` alone (the rows of `0001` to `0008` in
+/// `schema_version` are as they were, `0009` is added, the table now has the column), the service
+/// loads with no repository, and the host and the audit line are intact.
+///
+/// Catches: a start that refuses or fails on the database of the release before, one that runs a
+/// migration again, or a service row read as naming a repository it never set.
+#[test]
+fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_alone() {
+    const COLUMN: &str = "SELECT count(*) FROM information_schema.columns WHERE \
+         table_schema = 'hostkeeper' AND table_name = 'services' AND column_name = 'repository'";
+    let db = TestDatabase::new();
+    let ran = with_session(&db, |session| {
+        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
+        migrate::apply(session, &before).expect("the release before migrates")
+    });
+    assert_eq!(ran, (1..=8).collect::<Vec<i32>>());
+    db.run(
+        "INSERT INTO services (service, halt_generation) VALUES ('web', 2); \
+         INSERT INTO enrollment_hosts (host_id, key_hash, machine_id, role, services, duplicate, \
+         first_heartbeat_unix, first_serving_unix) \
+         VALUES ('web-1', '\\x07', 'm-1', 'web', '{}', false, NULL, NULL); \
+         INSERT INTO audit (seq, at_unix, by_name, action, service, node_id, reason) \
+         VALUES (1, 1800000000, 'op', 'exclude', 'web', 'web-1', 'disk')",
+    )
+    .expect("the release before's rows");
+    assert_eq!(db.rows(COLUMN), vec![vec![Some("0".to_owned())]]);
+    let migrated = "SELECT version, name, applied_unix FROM schema_version ORDER BY version";
+    let before = db.rows(migrated);
+    assert_eq!(before.len(), 8);
+
+    let (store, loaded) = db.open("this release").expect("this release starts");
+    assert_eq!(loaded.ops.services[WEB].repository, None);
+    assert_eq!(loaded.ops.services[WEB].halt_generation, 2);
+    assert_eq!(loaded.ops.audit.len(), 1);
+    store.stop();
+
+    let after = db.rows(migrated);
+    assert_eq!(after.len(), 9, "{after:?}");
+    assert_eq!(after[..8], before[..], "0001 to 0008 were not run again");
+    assert_eq!(
+        after[8][..2],
+        [Some("9".to_owned()), Some("service_repository".to_owned())]
+    );
+    assert_eq!(db.rows(COLUMN), vec![vec![Some("1".to_owned())]]);
+    assert_eq!(
+        db.rows("SELECT service, halt_generation, repository FROM services"),
+        vec![vec![Some("web".to_owned()), Some("2".to_owned()), None]]
+    );
+    assert_eq!(
+        db.rows("SELECT host_id FROM enrollment_hosts"),
+        vec![vec![Some("web-1".to_owned())]]
+    );
+    assert_eq!(
+        db.rows("SELECT seq FROM audit"),
+        vec![vec![Some("1".to_owned())]]
+    );
+}
+
+/// Proves: the release before (migrations `0001` to `0008`) is accepted on a database this release
+/// migrated, because `0009` says `-- older-releases: may-run`: its runner runs nothing and answers
+/// no error, and the database keeps `0001` to `0009` and the repository a service was given.
+///
+/// Catches: a `0009` marked `refuse`, which would stop a rollback to 0.1.252 that the column alone
+/// does not need.
+#[test]
+fn the_release_before_runs_on_a_database_this_release_migrated() {
+    let db = TestDatabase::new();
+    let (store, _) = db.open("this release").expect("the store opens");
+    store.stop();
+    db.run("INSERT INTO services (service, halt_generation, repository) VALUES ('web', 1, 'acme')")
+        .expect("a repository set");
+    let ran = with_session(&db, |session| {
+        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
+        migrate::refuse_newer(session, &before).expect("not refused before it runs");
+        migrate::apply(session, &before).expect("the release before is accepted")
+    });
+    assert_eq!(ran, Vec::<i32>::new());
+    assert_eq!(
+        db.rows("SELECT version FROM schema_version ORDER BY version"),
+        (1..=9)
+            .map(|n| vec![Some(n.to_string())])
+            .collect::<Vec<_>>()
+    );
+    assert_eq!(
+        db.rows("SELECT repository FROM services WHERE service = 'web'"),
+        vec![vec![Some("acme".to_owned())]]
+    );
 }

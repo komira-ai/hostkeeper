@@ -14,7 +14,7 @@ use std::process::ExitCode;
 
 use hostkeeper_coordinator::config::{Parts, StartError};
 use support::OPERATOR;
-use support::database::Database;
+use support::database::{Database, client};
 use support::serve::{Files, build_given, exit_code, flags_of, refusal, without};
 
 /// The arguments of a `serve` on `database`: the recorded flags without `--state-file`, the
@@ -297,4 +297,113 @@ fn a_marker_whose_changes_all_landed_is_removed_at_start_on_the_database() {
         database.audit_numbers(),
         [i64::try_from(done.seq).expect("a number")]
     );
+}
+
+/// Runs `sql` on the database, as the test's own client.
+fn run(database: &Database, sql: &str) {
+    client(Some(database.name()))
+        .batch_execute(sql)
+        .expect("the statements run");
+}
+
+/// The versions `schema_version` holds.
+fn schema_versions(database: &Database) -> Vec<i32> {
+    client(Some(database.name()))
+        .query(
+            "SELECT version FROM hostkeeper.schema_version ORDER BY version",
+            &[],
+        )
+        .expect("schema_version")
+        .iter()
+        .map(|row| row.get(0))
+        .collect()
+}
+
+/// Whether `services` has the column `repository`.
+fn services_have_repository(database: &Database) -> bool {
+    client(Some(database.name()))
+        .query_one(
+            "SELECT count(*) > 0 FROM information_schema.columns WHERE table_schema = \
+             'hostkeeper' AND table_name = 'services' AND column_name = 'repository'",
+            &[],
+        )
+        .expect("the columns")
+        .get(0)
+}
+
+/// Proves: a `serve` with no `--rollout-file` starts on a database at the schema of the release
+/// before (0.1.252: migrations `0001` to `0008`, no `repository` column on `services`): it runs
+/// `0009`, so `schema_version` holds 1 to 9 and the column is there, and an operator's change is
+/// held by the audit table.
+///
+/// Catches: a release that cannot start on the database the release before left, or that starts
+/// without bringing its schema up to date.
+#[test]
+fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
+    let files = Files::new("database-release-before");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    assert!(
+        !args.iter().any(|arg| arg == "--rollout-file"),
+        "the start is given no --rollout-file"
+    );
+
+    drop(start(args.clone()));
+    database.lock_is_free();
+    // The schema of 0.1.252: `0009` taken back, its column and its `schema_version` row.
+    run(
+        &database,
+        "ALTER TABLE hostkeeper.services DROP COLUMN repository; \
+         DELETE FROM hostkeeper.schema_version WHERE version = 9",
+    );
+    assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
+    assert!(!services_have_repository(&database));
+
+    let parts = start(args);
+    assert_eq!(schema_versions(&database), (1..=9).collect::<Vec<i32>>());
+    assert!(services_have_repository(&database));
+    let done = parts
+        .coordinator
+        .operate(
+            Some(OPERATOR),
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
+        )
+        .expect("an operator's change");
+    assert_eq!(
+        database.audit_numbers(),
+        [i64::try_from(done.seq).expect("a number")]
+    );
+}
+
+/// Proves: a `serve` is refused on a database that holds a migration newer than this release's
+/// that says `refuse`, with the exact text of the database's refusal naming migration 10; a newer
+/// one that says `may-run` is taken.
+///
+/// Catches: a coordinator that starts on, and writes to, a schema a newer release changed in a
+/// way this one would act wrongly on.
+#[test]
+fn a_serve_refuses_a_database_newer_than_this_release() {
+    let files = Files::new("database-newer");
+    let database = Database::new();
+    let args = database_args(&files, &database);
+    drop(start(args.clone()));
+    database.lock_is_free();
+
+    let put = "INSERT INTO hostkeeper.schema_version (version, name, older_releases) \
+               VALUES (10, 'from_the_future', ";
+    run(&database, &format!("{put}'refuse')"));
+    let why = refusal(args.clone());
+    assert!(matches!(&why, StartError::Database(_)), "{why}");
+    assert_eq!(
+        why.to_string(),
+        "the database's schema is newer than this coordinator (migration 10, from_the_future)"
+    );
+    database.lock_is_free();
+
+    run(
+        &database,
+        "DELETE FROM hostkeeper.schema_version WHERE version = 10",
+    );
+    run(&database, &format!("{put}'may-run')"));
+    drop(start(args));
 }
