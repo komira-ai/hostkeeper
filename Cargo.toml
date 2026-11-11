@@ -204,6 +204,14 @@ des = "0.9.0"
 # The tests of hostkeeper-mdm-scep draw their keys and nonces from the thread generator.
 rand = "0.10.3"
 rsa = { version = "0.10.0", features = ["pkcs1v15"] }
+# The CMS reply of mdmcert.download (hostkeeper-mdm-push) is read with the RustCrypto 0.8-era
+# ciphers and rsa 0.9, which that crate was written against; the newer lines above belong to
+# hostkeeper-mdm-scep. The `-legacy` aliases keep both lines apart.
+aes-legacy = { package = "aes", version = "0.8.4" }
+cbc-legacy = { package = "cbc", version = "0.1.2", features = ["alloc"] }
+des-legacy = { package = "des", version = "0.8.1" }
+rand_core-legacy = { package = "rand_core", version = "0.6.4", features = ["getrandom"] }
+rsa-legacy = { package = "rsa", version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 signature = { version = "3.0.0", features = ["alloc", "digest"] }
 spki = { version = "0.8.1", features = ["alloc"] }
 
