@@ -100,6 +100,19 @@ service Mdm {
   // `store_failed`.
   rpc PutPushCertificate(PutPushCertificateRequest) returns (PutPushCertificateResponse);
 
+  // Whether the MDM setup is complete (`configured`), and when it is not, which conditions are
+  // missing; the name, its enrollment URL, and what is shown of the push certificate and key, the
+  // ABM token and the TLS certificate and key in use, with the expiry and topic read from their
+  // material. Computed from the records at each call and never stored, so it cannot go stale.
+  // Never returns a value of a secret. Changes nothing.
+  rpc Status(MdmStatusRequest) returns (MdmStatusResponse);
+
+  // Sets the MDM name, the host name the Macs enroll at (`https://<name>/enroll`). Session-only,
+  // as `PutSecret` is. Audited as `mdm_name_set` with the name. The first name is always taken
+  // (Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
+  // another is refused `name_locked`, and the same name is taken again.
+  rpc PutName(PutNameRequest) returns (PutNameResponse);
+
   // Takes the ABM server token (docs/design/coordinator-mdm.md, 4.5): either the JSON of its four
   // OAuth parts and expiry, which is what a takeover of NanoDEP's token uploads, or the `.p7m` file
   // ABM hands over, opened with the `abm_key` the coordinator holds. The token is proved to
@@ -134,19 +147,6 @@ service Mdm {
   // is not waiting (`no_pending_enrollment`). Session-only; audited as `mdm_enroll_confirmed`.
   // Refused also `enrollment_unavailable` when this coordinator has no MDM listener, `store_failed`.
   rpc ConfirmEnrollment(ConfirmEnrollmentRequest) returns (ConfirmEnrollmentResponse);
-
-  // Whether the MDM setup is complete (`configured`), and when it is not, which conditions are
-  // missing; the name, its enrollment URL, and what is shown of the push certificate and key, the
-  // ABM token and the TLS certificate and key in use, with the expiry and topic read from their
-  // material. Computed from the records at each call and never stored, so it cannot go stale.
-  // Never returns a value of a secret. Changes nothing.
-  rpc Status(MdmStatusRequest) returns (MdmStatusResponse);
-
-  // Sets the MDM name, the host name the Macs enroll at (`https://<name>/enroll`). Session-only,
-  // as `PutSecret` is. Audited as `mdm_name_set` with the name. The first name is always taken
-  // (Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
-  // another is refused `name_locked`, and the same name is taken again.
-  rpc PutName(PutNameRequest) returns (PutNameResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.

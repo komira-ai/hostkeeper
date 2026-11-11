@@ -113,8 +113,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             LIST_DEVICES,
             LIST_SECRETS,
             LIST_SETTINGS,
-            LIST_ENROLLMENT_REQUESTS,
-            STATUS
+            STATUS,
+            LIST_ENROLLMENT_REQUESTS
         ]
     );
     assert_eq!(
@@ -125,10 +125,10 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             CREATE_PUSH_REQUEST,
             PUT_PUSH_REPLY,
             PUT_PUSH_CERTIFICATE,
+            PUT_NAME,
             PUT_ABM_TOKEN,
             GET_ABM_PUBLIC_KEY,
-            CONFIRM_ENROLLMENT,
-            PUT_NAME
+            CONFIRM_ENROLLMENT
         ]
     );
     for path in &writes {

@@ -54,12 +54,12 @@ export interface Client {
     createPushRequest(request: hostkeeper_operator_v1.CreatePushRequestRequest): Promise<hostkeeper_operator_v1.CreatePushRequestResponse>;
     putPushReply(request: hostkeeper_operator_v1.PutPushReplyRequest): Promise<hostkeeper_operator_v1.PutPushReplyResponse>;
     putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
+    status(request: hostkeeper_operator_v1.MdmStatusRequest): Promise<hostkeeper_operator_v1.MdmStatusResponse>;
+    putName(request: hostkeeper_operator_v1.PutNameRequest): Promise<hostkeeper_operator_v1.PutNameResponse>;
     putAbmToken(request: hostkeeper_operator_v1.PutAbmTokenRequest): Promise<hostkeeper_operator_v1.PutAbmTokenResponse>;
     getAbmPublicKey(request: hostkeeper_operator_v1.GetAbmPublicKeyRequest): Promise<hostkeeper_operator_v1.GetAbmPublicKeyResponse>;
     listEnrollmentRequests(request: hostkeeper_operator_v1.ListEnrollmentRequestsRequest): Promise<hostkeeper_operator_v1.ListEnrollmentRequestsResponse>;
     confirmEnrollment(request: hostkeeper_operator_v1.ConfirmEnrollmentRequest): Promise<hostkeeper_operator_v1.ConfirmEnrollmentResponse>;
-    status(request: hostkeeper_operator_v1.MdmStatusRequest): Promise<hostkeeper_operator_v1.MdmStatusResponse>;
-    putName(request: hostkeeper_operator_v1.PutNameRequest): Promise<hostkeeper_operator_v1.PutNameResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;

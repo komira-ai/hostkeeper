@@ -16,23 +16,25 @@
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
 
 use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_mdm_gate::DeviceStore;
 use hostkeeper_oidc::{Clock, Roots};
 
-use super::{Serve, StartError, take_lock};
+use super::{Serve, StartError};
 use crate::abm::Abm;
 use crate::abm::client::tokio_sleep;
 use crate::abm::transport::{ABM_BASE, HttpsTransport};
 use crate::accounts::accounts_path;
+use crate::alerts::Thresholds;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
 use crate::jti_file::jti_path;
-use crate::lock::{LockGuard, StateLock, lock_path};
+use crate::lock::{LockError, LockGuard, StateLock, lock_path};
 use crate::login::Login;
 use crate::mdm_secrets::MasterKey;
 use crate::mdm_setup::MdmSetup;
@@ -477,4 +479,26 @@ pub(super) fn with_login(
         os_random(),
     )?;
     Ok(coordinator.with_login(login))
+}
+
+/// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
+/// `--alert-cert-window-secs`.
+pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
+    Thresholds {
+        silent_after: Duration::from_secs(flags.alert_silent_host_secs),
+        cert_window_secs: flags.alert_cert_window_secs,
+    }
+}
+
+/// The lock of `path`, taken by `lock`.
+pub(super) fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError> {
+    lock.acquire(path).map_err(|why| match why {
+        LockError::Held => StartError::Locked {
+            path: path.to_owned(),
+        },
+        LockError::Io(source) => StartError::Lock {
+            path: path.to_owned(),
+            source,
+        },
+    })
 }
