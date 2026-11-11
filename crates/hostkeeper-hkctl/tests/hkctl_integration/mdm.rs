@@ -134,6 +134,11 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("abm_alert_days", "60", true),
             ("tls_renew_days", "30", true),
             ("secret_grace_days", "7", true),
+            ("proxy_wait_s", "10", true),
+            ("proxy_redirects", "3", true),
+            ("proxy_index_ttl_s", "300", true),
+            ("proxy_cache_max_bytes", "21474836480", true),
+            ("proxy_fetches", "8", true),
         ]
     );
 }

@@ -16,6 +16,8 @@ enum Shape {
     Days { min: u32, max: u32 },
     /// One to five whole numbers from 1 to 3650 that fall, separated by commas (`60,14`).
     FallingDays,
+    /// One whole number between `min` and `max`, of seconds, bytes or a count.
+    Whole { min: u64, max: u64 },
 }
 
 /// One setting: its name, its default and what it takes.
@@ -29,7 +31,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 4] = [
+pub const SETTINGS: [Setting; 9] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -54,6 +56,44 @@ pub const SETTINGS: [Setting; 4] = [
         default: "7",
         shape: Shape::Days { min: 0, max: 365 },
     },
+    // The package proxy's cache (docs/design/package-proxy.md, section 4).
+    // How long a waiter for a file another request is fetching waits for it before it is passed
+    // through to the origin on its own.
+    Setting {
+        name: "proxy_wait_s",
+        default: "10",
+        shape: Shape::Whole { min: 1, max: 3600 },
+    },
+    // How many redirects the proxy follows from an origin.
+    Setting {
+        name: "proxy_redirects",
+        default: "3",
+        shape: Shape::Whole { min: 0, max: 10 },
+    },
+    // How long a cached index is served without asking the origin.
+    Setting {
+        name: "proxy_index_ttl_s",
+        default: "300",
+        shape: Shape::Whole {
+            min: 0,
+            max: 86_400,
+        },
+    },
+    // The most bytes of committed objects the cache keeps (20 GiB).
+    Setting {
+        name: "proxy_cache_max_bytes",
+        default: "21474836480",
+        shape: Shape::Whole {
+            min: 1,
+            max: 1 << 50,
+        },
+    },
+    // How many origin fetches run at once.
+    Setting {
+        name: "proxy_fetches",
+        default: "8",
+        shape: Shape::Whole { min: 1, max: 1024 },
+    },
 ];
 
 /// The setting called `name`, if this release knows it.
@@ -72,6 +112,10 @@ impl Setting {
             Shape::Days { min, max } => {
                 let days = parse_days(value)?;
                 (min..=max).contains(&days).then(|| days.to_string())
+            }
+            Shape::Whole { min, max } => {
+                let whole = parse_whole(value)?;
+                (min..=max).contains(&whole).then(|| whole.to_string())
             }
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =
@@ -98,6 +142,14 @@ fn parse_days(text: &str) -> Option<u32> {
     text.parse().ok()
 }
 
+/// A whole number written with digits only.
+fn parse_whole(text: &str) -> Option<u64> {
+    if text.is_empty() || !text.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    text.parse().ok()
+}
+
 /// The value of the setting `name` among the `set` ones: what was set, or its default.
 #[must_use]
 pub fn value_of<'a>(set: &'a BTreeMap<String, String>, setting: &'a Setting) -> &'a str {
@@ -111,6 +163,15 @@ pub fn value_of<'a>(set: &'a BTreeMap<String, String>, setting: &'a Setting) -> 
 pub fn days_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32 {
     find(name)
         .and_then(|setting| parse_days(value_of(set, setting)))
+        .unwrap_or(fallback)
+}
+
+/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
+/// does not know or a value that is not one (a store edited by hand).
+#[must_use]
+pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
+    find(name)
+        .and_then(|setting| parse_whole(value_of(set, setting)))
         .unwrap_or(fallback)
 }
 

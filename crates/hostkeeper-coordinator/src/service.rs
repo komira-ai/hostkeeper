@@ -256,6 +256,8 @@ pub struct Coordinator {
     pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
+    /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
+    pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -314,6 +316,7 @@ impl Coordinator {
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
+            proxy_cache: None,
             initial_admin: None,
             login: None,
             verifier,
