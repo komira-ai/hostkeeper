@@ -19,6 +19,8 @@ import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
 import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
+import * as users from "./pages/users.js";
+import * as tokens from "./pages/tokens.js";
 
 const PAGES = [
   ["fleet", "Fleet", fleet],
@@ -29,6 +31,8 @@ const PAGES = [
   ["enrollment", "Enrollment", enrollment],
   ["inventory", "Inventory", inventory],
   ["audit", "Audit", audit],
+  ["users", "Users", users],
+  ["tokens", "API tokens", tokens],
 ];
 
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
