@@ -343,7 +343,7 @@ a cursor error, otherwise `POST /devices/sync` with the cursor; the devices, the
 (`abm_apply`). Then, when the setting `mdm_name` names a host name, the ADE profile (`profile.rs`: the live profile's flags, `url` `https://<mdm_name>/enroll`, named by `ade_profile_name`) is defined at ABM when its digest differs
 from the stored one (`POST /profile`), and every device that has no profile is given it (`POST /profile/devices`, `PUT` when the `POST` is answered with a `4xx`); a device ABM does not give it (`NOT_ACCESSIBLE`) is tried again by the next pass; a device already on a profile is left on it. **Nothing is written to ABM
 until an operator has uploaded a token and named the MDM host; the assignment write was not probed in the spike and runs only against the fake in the tests.** A single timer (`abm_sync_every`, the setting `abm_sync_s`, default 300) runs the passes;
-taking them under the store's lease is CM19. `Abm::serial_in_abm` (and `Coordinator::serial_in_abm`) is the read the approval (CM9) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
+taking them under the store's lease is CM19. `Abm::serial_in_abm` is the read the approval (CM9, built) and the enrollment (CM12c) ask: a serial in `abm_devices` and not marked removed; one that is not is declined `serial_not_in_abm`.
 The two `Mdm` rpcs, both session-only: `PutAbmToken` (the JSON of the four parts and `access_secret_expiry`, or a `.p7m` opened with the `abm_key` held by CMS key transport, RSAES-PKCS1-v1_5 or RSAES-OAEP, and AES-CBC or 3DES-CBC content; the token is proved to Apple with a session and `GET /account` before it is kept, its expiry is the token's own,
 and the answer names the server entry and the organisation Apple says it belongs to) and `GetAbmPublicKey` (the certificate of the key pair, made once, RSA 2048, when none is held; calls are serialized, and a certificate held without its key is refused `abm_key_missing`, never replaced). `PutSecret` judges `abm_key` (an RSA private key in PEM, PKCS#1 or PKCS#8) and `abm_cert` (a certificate, made for the key when one is held) at upload.
 The `.p7m` decryption rests on the CMS and S/MIME standards and a round trip with a synthetic token; no `.p7m` that Apple made was available. The one-off reader of the takeover is `cargo xtask abm-takeover-token` ([the runbook](../operations/abm-takeover.md)).
@@ -384,6 +384,17 @@ from allowlist entries.
 **What the owner gives up.** Every Mac in the org's ABM that reaches the MDM server is eligible. The safeguard is `default_group`:
 leave it unset and a Mac with no inventory record is declined `no_group` and waits for an operator, which is today's behaviour for an
 unlisted Mac, one click instead of a redeploy.
+
+**Built (CM9)** (`enrollment/mac_abm.rs`, `abm_approval.rs`). `mac_auto_approve` takes the serial's identity from the allowlist entry when one lists it (the
+override: host id, group and services of the entry, `device_not_via_dep` only when `with_mac_require_dep` is set, as before) and otherwise, when the coordinator has an
+ABM client, from our ABM, in the order of the conditions above: `serial_not_in_abm`, then the gate (`device_state_unavailable`, `device_not_enrolled`,
+`device_not_supervised`, and `device_not_via_dep`, which the ABM path always requires and for which an unanswered `SecurityInfo` is not a yes), then `no_group`, then the nonce.
+A group resolves only on a coordinator that holds host groups, from the group of the inventory record of the serial (matched without case), else the setting
+`default_group`, and only when a group of that name is held; a configured group that is not held is `no_group`, not a refusal, so the Mac waits for an operator.
+The host id is the record's `host_id`, else `host_id_prefix` and the serial in lower case. A Mac of our ABM is assigned no service. A table or settings store that
+cannot be read is refused `store_failed` (audited `enroll_approve_refused`), never a decline. A coordinator with no ABM client declines an unlisted serial
+`serial_not_allowed`, as before. The twelve tokens are pinned by `the_twelve_decline_tokens_are_pinned`. `Enrollment::confirm_in_abm` is the read-again of the operator's
+confirmation (model finding 6): it answers `serial_not_in_abm` for a serial the table dropped since the Mac asked; CM12c calls it when it builds the confirmation.
 
 ### 4.7 The hostkeeper pkg, the LAN-only Mac and extra profiles
 
@@ -518,7 +529,7 @@ and `--mdm-pkg-dir` (a file of key material and a directory of files the host pr
 revisions named for tunables and paths (`--mdm-dir`, `--mdm-host`, `--mdm-tls-*`, `--mdm-default-group`, `--mdm-host-id-prefix`,
 `--mdm-installs-file`, `--mdm-push-*`, `--mdm-abm-*`, `--mdm-baseline-check-s`, `--mdm-command-timeout-s` and the like) are **settings of the
 setup page**, each with its default from the start (the numbers stay as written in this document), kept in `mdm_settings` (one row per setting that was set, a setting with no row having its default, which is what keeps a later release's
-new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`) and
+new setting additive; **Built** for `push_alert_days`, `abm_alert_days`, `tls_renew_days` and `secret_grace_days`, and, with CM13, `abm_sync_s`, `abm_request_timeout_s`, `abm_retries` and `ade_profile_name`, and, with CM9, `default_group` (default empty: no group) and `host_id_prefix` (default `mac-`)) and
 audited. Nothing was shipped under those flag names, so there is nothing to keep compatible (B8); the NanoHUB client flags of the shipped
 coordinator are retired as section 8 says.
 

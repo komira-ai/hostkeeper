@@ -267,10 +267,17 @@ preferences the MDM installed and posts its pending request once more with it
 pending, and the daemon's next `Poll` brings the certificate. The request is approved, as the
 allowlist entry of its serial says and by the approver `mdm-nonce`, only when the serial it claims
 is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervised, and the nonce
-is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
+is known, unexpired, unused, was issued for that serial and was issued for that request. A serial
+the allowlist does not list is approved from Apple Business Manager instead, on a coordinator
+that runs the ABM client and holds host groups: its serial is in the ABM table (`serial_not_in_abm`
+otherwise), the gate says it is enrolled, supervised and enrolled through ADE (`device_not_via_dep`
+is then always required), and a group resolves (`no_group` otherwise): the group of the serial's
+inventory record, else the setting `default_group`, which is empty until it is set. Its host id is
+the record's, else the setting `host_id_prefix` (default `mac-`) and the serial in lower case. The
+allowlist stays as an override that wins for the serials it lists. A nonce
 stored before the request field names no request and is judged without it. The nonce is consumed
 in the approval's own write. Any condition false leaves the request pending for an operator and is
-audited `mac_auto_approve_declined` (`device_not_via_dep` only when the coordinator is set to require it, `Enrollment::with_mac_require_dep`; off by default) with one of `serial_not_allowed`, `device_state_unavailable`,
+audited `mac_auto_approve_declined` (`device_not_via_dep` only when the coordinator is set to require it, `Enrollment::with_mac_require_dep`; off by default) with one of `serial_not_allowed`, `serial_not_in_abm`, `no_group`, `device_state_unavailable`,
 `device_not_enrolled`, `device_not_supervised`, `device_not_via_dep`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
 `nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
 that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.

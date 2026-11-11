@@ -34,6 +34,7 @@ impl Coordinator {
     #[must_use]
     pub(crate) fn with_abm(mut self, abm: Abm) -> Self {
         self.abm = Some(std::sync::Arc::new(abm));
+        self.link_abm_approval();
         self
     }
 
@@ -232,26 +233,6 @@ impl Coordinator {
             format!("refused: {}", refusal.as_str_name()),
         )?;
         Err(refusal)
-    }
-
-    /// Whether `serial` is in our ABM now: in the table `abm_devices` of the sync and not marked
-    /// removed (`docs/design/coordinator-mdm.md`, 4.6). The approval of a Mac and its enrollment
-    /// ask it, and decline `serial_not_in_abm` when it is not. A coordinator with no ABM client
-    /// has no table: no serial is.
-    ///
-    /// # Errors
-    /// The store failed: the caller declines nothing on a store it could not read.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "asked by the approval and the enrollment, tasks CM9 and CM12c"
-        )
-    )]
-    pub(crate) fn serial_in_abm(&self, serial: &str) -> Result<bool, crate::store::mdm::MdmError> {
-        self.abm
-            .as_ref()
-            .map_or(Ok(false), |abm| abm.serial_in_abm(serial))
     }
 }
 

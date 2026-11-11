@@ -36,6 +36,7 @@ impl Coordinator {
     #[must_use]
     pub fn with_mdm_setup(mut self, setup: MdmSetup) -> Self {
         self.mdm_setup = Arc::new(setup);
+        self.link_abm_approval();
         self
     }
 

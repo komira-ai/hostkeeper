@@ -20,7 +20,6 @@ use crate::mdm_setup::MdmSetup;
 use crate::operator::Caller;
 use crate::store::audit_failure;
 use crate::store::mdm::files::FileMdm;
-use crate::store::mdm::{AbmBatch, AbmDevice, MdmStore};
 use crate::store::mdm_setup::files::FileSetup;
 use crate::store::mdm_setup::{SecretRow, SetupError, SetupStore};
 use crate::testutil::{Log, scratch};
@@ -76,7 +75,6 @@ struct Rig {
     world: World,
     sim: Sim,
     fake: Arc<FakeAbm>,
-    store: Arc<FileMdm>,
     _dir: hostkeeper_testkit::Scratch,
 }
 
@@ -124,7 +122,6 @@ fn start_over(name: &str, keyed: bool, abm: bool, setup_store: Option<Arc<dyn Se
         world,
         sim,
         fake,
-        store,
         _dir: dir,
     }
 }
@@ -913,46 +910,6 @@ fn the_key_pair_of_a_takeover_is_judged_at_upload() {
         put("abm_key", &[0xff, 0xfe]).err(),
         Some(MdmRefusal::InvalidRequest)
     );
-}
-
-/// Proves: the question "is this serial in our ABM" is true for a serial in the table that is not
-/// marked removed, false for one that is, and false for one that is not there, and false for a
-/// coordinator with no ABM client; a table that cannot be read is an error and not a no.
-///
-/// Catches: a Mac that was disowned and is approved anyway, and a store fault that declines every
-/// Mac as not ours.
-#[test]
-fn a_serial_is_in_abm_while_the_table_lists_it_and_has_not_removed_it() {
-    let rig = start("abm-serial", true, true);
-    let device = |serial: &str, removed: Option<i64>| AbmDevice {
-        serial: serial.to_owned(),
-        model: None,
-        description: None,
-        profile_status: "pushed".to_owned(),
-        profile_uuid: None,
-        first_seen_unix: 1,
-        synced_unix: 1,
-        removed_unix: removed,
-    };
-    rig.store
-        .abm_apply(&AbmBatch {
-            upserts: vec![device("HERE", None), device("GONE", None)],
-            ..AbmBatch::default()
-        })
-        .expect("rows");
-    rig.store
-        .abm_apply(&AbmBatch {
-            removed: vec!["GONE".to_owned()],
-            removed_unix: 5,
-            ..AbmBatch::default()
-        })
-        .expect("removed");
-    let coordinator = &rig.world.coordinator;
-    assert_eq!(coordinator.serial_in_abm("HERE"), Ok(true));
-    assert_eq!(coordinator.serial_in_abm("GONE"), Ok(false));
-    assert_eq!(coordinator.serial_in_abm("NEVER"), Ok(false));
-    let none = start("abm-serial-none", true, false);
-    assert_eq!(none.world.coordinator.serial_in_abm("HERE"), Ok(false));
 }
 
 /// Proves: the coordinator's timer does nothing and never ends without an ABM client, and with one

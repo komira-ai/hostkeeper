@@ -384,6 +384,8 @@ fn a_setting_is_judged_audited_and_listed() {
             ("abm_request_timeout_s", "30", true),
             ("abm_retries", "3", true),
             ("ade_profile_name", "Komira MDM", true),
+            ("default_group", "", true),
+            ("host_id_prefix", "mac-", true),
         ]
     );
     assert_eq!(

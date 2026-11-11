@@ -20,6 +20,7 @@ mod inventory;
 mod inventory_approve;
 mod list;
 mod mac;
+mod mac_abm;
 mod mac_binding;
 mod mac_groups;
 mod mac_restart;

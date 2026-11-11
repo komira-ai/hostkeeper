@@ -114,6 +114,7 @@
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
 pub(crate) mod abm;
+pub(crate) mod abm_approval;
 pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;

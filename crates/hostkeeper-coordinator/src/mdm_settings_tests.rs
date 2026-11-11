@@ -8,7 +8,7 @@ fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these eight, each with its default from the start
+/// Proves: the settings this release knows are these ten, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -26,6 +26,8 @@ fn each_setting_has_a_default_from_the_start() {
             ("abm_request_timeout_s", "30"),
             ("abm_retries", "3"),
             ("ade_profile_name", "Komira MDM"),
+            ("default_group", ""),
+            ("host_id_prefix", "mac-"),
         ]
     );
     for setting in SETTINGS {
@@ -167,4 +169,31 @@ fn the_profile_name_is_a_short_printable_text() {
     set.insert("ade_profile_name".to_owned(), "Other".to_owned());
     assert_eq!(text_of(&set, "ade_profile_name"), Some("Other"));
     assert_eq!(text_of(&set, "nothing"), None);
+}
+
+/// Proves: `default_group` takes nothing (no default group) or a group's name, and refuses a name
+/// no group can have; `host_id_prefix` takes 0 to 16 characters that make a host id before a
+/// serial, and refuses capitals, spaces, a leading dot and 17 characters.
+///
+/// Catches: a default group that no host group can have, which would decline every Mac `no_group`
+/// without the operator seeing why, and a prefix that makes host ids the store refuses.
+#[test]
+fn the_default_group_and_the_host_id_prefix_take_only_names_that_work() {
+    assert_eq!(check("default_group", "").as_deref(), Some(""));
+    assert_eq!(check("default_group", " build ").as_deref(), Some("build"));
+    for bad in ["Build", "1build", "bu ild", "build!"] {
+        assert_eq!(check("default_group", bad), None, "{bad:?}");
+    }
+    assert_eq!(check("host_id_prefix", "").as_deref(), Some(""));
+    assert_eq!(check("host_id_prefix", "lab-").as_deref(), Some("lab-"));
+    assert_eq!(
+        check("host_id_prefix", &"p".repeat(16)).as_deref(),
+        Some(&*"p".repeat(16))
+    );
+    for bad in ["Mac-", "m ac", ".mac", &"p".repeat(17)] {
+        assert_eq!(check("host_id_prefix", bad), None, "{bad:?}");
+    }
+    let set = BTreeMap::new();
+    assert_eq!(text_of(&set, "default_group"), Some(""));
+    assert_eq!(text_of(&set, "host_id_prefix"), Some("mac-"));
 }

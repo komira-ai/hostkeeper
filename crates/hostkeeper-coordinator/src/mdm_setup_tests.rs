@@ -333,6 +333,8 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_request_timeout_s", "30".to_owned(), true),
             ("abm_retries", "3".to_owned(), true),
             ("ade_profile_name", "Komira MDM".to_owned(), true),
+            ("default_group", String::new(), true),
+            ("host_id_prefix", "mac-".to_owned(), true),
         ]
     );
     assert_eq!(

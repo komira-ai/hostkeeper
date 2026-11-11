@@ -20,6 +20,10 @@ enum Shape {
     Name,
     /// One to five whole numbers from 1 to 3650 that fall, separated by commas (`60,14`).
     FallingDays,
+    /// Nothing, or the name of a host group (the rule of a group's name).
+    GroupOrNone,
+    /// The start of a host id: 0 to 16 characters that, before a serial, make a host id.
+    HostIdPrefix,
 }
 
 /// One setting: its name, its default and what it takes.
@@ -33,7 +37,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 8] = [
+pub const SETTINGS: [Setting; 10] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -87,6 +91,21 @@ pub const SETTINGS: [Setting; 8] = [
         default: "Komira MDM",
         shape: Shape::Name,
     },
+    // The host group a Mac of our ABM joins when its inventory record names none
+    // (`docs/design/coordinator-mdm.md`, 4.6). Empty: none, and such a Mac waits for an operator
+    // (`no_group`).
+    Setting {
+        name: "default_group",
+        default: "",
+        shape: Shape::GroupOrNone,
+    },
+    // What a Mac's host id starts with when its inventory record names no host id: the prefix
+    // and the serial in lower case.
+    Setting {
+        name: "host_id_prefix",
+        default: "mac-",
+        shape: Shape::HostIdPrefix,
+    },
 ];
 
 /// The setting called `name`, if this release knows it.
@@ -113,6 +132,16 @@ impl Setting {
             Shape::Name => {
                 let printable = value.chars().all(|c| !c.is_control());
                 ((1..=64).contains(&value.chars().count()) && printable).then(|| value.to_owned())
+            }
+            Shape::GroupOrNone => {
+                let is_group = value.parse::<hostkeeper_wire::RoleName>().is_ok()
+                    && hostkeeper_enrollment::names::Role::parse(value).is_ok();
+                (value.is_empty() || is_group).then(|| value.to_owned())
+            }
+            Shape::HostIdPrefix => {
+                let makes_id =
+                    hostkeeper_enrollment::names::HostId::parse(&format!("{value}a")).is_ok();
+                (value.chars().count() <= 16 && makes_id).then(|| value.to_owned())
             }
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =

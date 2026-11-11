@@ -43,6 +43,7 @@
 //! [`Enrollment::report_live`] which machine speaks for it, and [`Enrollment::is_duplicate`]
 //! whether it is ordered nothing ([`crate::service::Coordinator`]).
 
+mod abm_port;
 mod approve;
 mod by_record;
 mod device_state;
@@ -50,6 +51,7 @@ mod expiry;
 mod gate_port;
 pub(crate) mod groups;
 mod list;
+mod mac_abm;
 mod mac_nonce;
 mod nonce;
 mod refusal;
@@ -65,6 +67,7 @@ use hostkeeper_enrollment::names::HostId;
 use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 
+pub use abm_port::{AbmDevices, AbmNaming, AbmUnavailable};
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
 pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
 #[cfg(test)]
@@ -73,6 +76,7 @@ pub use device_state::{DeviceState, DeviceStateError, DeviceStatus, NoDeviceStat
 pub use expiry::DEFAULT_REQUEST_TTL_SECS;
 pub use gate_port::GATE_AUDITOR;
 pub use list::MAX_PENDING_PAGE;
+pub use mac_abm::ConfirmRefusal;
 pub use mac_nonce::{
     ACTION_DECLINED, AllowlistError, MAC_APPROVER, MAC_NONCE_BYTES, MacAllowEntry, MacAllowlist,
     MacDecline, MacNonce, MacNonceError, MacOutcome, MacPolicy,
@@ -139,6 +143,8 @@ pub struct Enrollment {
     desired: Mutex<Option<Arc<DesiredStore>>>,
     /// Called after each new request is recorded ([`Enrollment::with_posted`]).
     posted: Option<Posted>,
+    /// The ABM side of the coordinator that took this enrollment ([`Enrollment::abm_by`]).
+    abm: Mutex<Option<Arc<dyn AbmDevices>>>,
 }
 
 /// What [`Enrollment::with_posted`] calls.
@@ -187,6 +193,7 @@ impl Enrollment {
             audit: Mutex::new(None),
             desired: Mutex::new(None),
             posted: None,
+            abm: Mutex::new(None),
         }
     }
 

@@ -7,14 +7,16 @@
 //!   approval of that request. The gate is a component linked into the coordinator, so this is
 //!   a library call and no RPC.
 //! - On an `Enroll` that carries a nonce, [`Enrollment::mac_auto_approve`] approves the request
-//!   only when the serial the request claims is on the allowlist (`--mac-serial-allowlist`),
-//!   the gate says the device is enrolled and supervised, and the nonce is known, unexpired,
+//!   only when the serial the request claims is on the allowlist (`--mac-serial-allowlist`) or,
+//!   when it is not and the coordinator has an ABM side, in our ABM table with a group that
+//!   resolves (`mac_abm.rs` has those conditions and their tokens), the gate says the device is enrolled and supervised, and the nonce is known, unexpired,
 //!   unused, issued for that serial and issued for that request, checked in that order (a
 //!   nonce stored before the request field names none and is judged without it). The nonce is
 //!   checked under the store's lock, in the approval itself, so two requests racing with one
-//!   nonce cannot both win; the gate is asked only about a serial the allowlist names. It
+//!   nonce cannot both win; the gate is asked only about a serial the allowlist names or our ABM table holds. It
 //!   approves through the same recorded approval as an operator's, by [`MAC_APPROVER`], with
-//!   the host id, role and services of the serial's allowlist entry, and the nonce is consumed
+//!   the host id, role and services of the serial's allowlist entry (a Mac of our ABM: its derived
+//!   host id and group, and no service), and the nonce is consumed
 //!   in that approval's write. The coordinator then assigns the entry's services to the host
 //!   as it does an operator approval's ([`crate::service::Coordinator::enroll`]).
 //! - From a coordinator that holds host groups (`docs/design/hostgroups.md` section 1.2), the
@@ -64,7 +66,6 @@ use serde::Deserialize;
 use super::Enrollment;
 use super::approve::{Checked, refusal_of};
 use super::device_state::{DeviceState, NoDeviceState};
-use super::groups::group_in;
 use crate::ops::AuditEntry;
 
 /// The approver a Mac approved by its nonce is recorded under.
@@ -92,6 +93,8 @@ pub enum MacDecline {
     DeviceNotViaDep,
     SerialNotAllowed,
     DeviceStateUnavailable,
+    SerialNotInAbm,
+    NoGroup,
 }
 
 impl MacDecline {
@@ -109,6 +112,8 @@ impl MacDecline {
             MacDecline::DeviceNotViaDep => "device_not_via_dep",
             MacDecline::SerialNotAllowed => "serial_not_allowed",
             MacDecline::DeviceStateUnavailable => "device_state_unavailable",
+            MacDecline::SerialNotInAbm => "serial_not_in_abm",
+            MacDecline::NoGroup => "no_group",
         }
     }
 }
@@ -128,7 +133,8 @@ impl From<MacNonceRefusal> for MacDecline {
 /// What became of a nonce-bearing request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MacOutcome {
-    /// Approved as the allowlist entry says: its host id, role and services.
+    /// Approved as the allowlist entry says (or, for a Mac of our ABM, as derived): its host id,
+    /// role and services.
     Approved(MacAllowEntry),
     /// A condition was false: the request stays pending.
     Declined(MacDecline),
@@ -405,39 +411,17 @@ impl Enrollment {
             }
         };
         let serial = pending.claims.mac_serial.as_str();
-        let Some(entry) = self.mac.allowlist.get(serial) else {
-            return self.decline(request_id, serial, MacDecline::SerialNotAllowed);
-        };
-        let host_group = match self.held_groups() {
-            None => None,
-            Some(_) if !entry.services.is_empty() => {
-                return self.mac_refused(
-                    request_id,
-                    Some(&entry.host_id),
-                    EnrollmentRefusal::ServicesRetired,
-                );
-            }
-            Some(held) => match group_in(entry.role.as_str(), "", &held) {
-                Ok(group) => group.map(|group| group.to_string()),
-                Err(refusal) => return self.mac_refused(request_id, Some(&entry.host_id), refusal),
+        let (entry, host_group, status) = match self.mac.allowlist.get(serial) {
+            Some(entry) => match self.listed(request_id, serial, entry) {
+                Ok(found) => found,
+                Err(outcome) => return outcome,
+            },
+            None => match self.abm_found(request_id, serial) {
+                Ok(found) => found,
+                Err(outcome) => return outcome,
             },
         };
-        let status = match self.mac.device_state.status(serial) {
-            Err(why) => {
-                tracing::warn!(%why, "the device-state gate gave no answer");
-                return self.decline(request_id, serial, MacDecline::DeviceStateUnavailable);
-            }
-            Ok(status) if !status.enrolled => {
-                return self.decline(request_id, serial, MacDecline::DeviceNotEnrolled);
-            }
-            Ok(status) if !status.supervised => {
-                return self.decline(request_id, serial, MacDecline::DeviceNotSupervised);
-            }
-            Ok(status) if self.mac_require_dep && status.enrolled_via_dep != Some(true) => {
-                return self.decline(request_id, serial, MacDecline::DeviceNotViaDep);
-            }
-            Ok(status) => status,
-        };
+        let entry = &entry;
         let mut checked = Checked {
             request_id: *request_id,
             key_sha256: *request_id,
@@ -491,7 +475,7 @@ impl Enrollment {
 
     /// The automatic approval of `request_id` (as `host_id`, when one was chosen) refused as an
     /// operator's would be: audited by [`MAC_APPROVER`], and the request stays as it was.
-    fn mac_refused(
+    pub(super) fn mac_refused(
         &self,
         request_id: &KeyHash,
         host_id: Option<&HostId>,
@@ -502,7 +486,12 @@ impl Enrollment {
     }
 
     /// Declines the automatic approval of `request_id` for `why`: logged and audited.
-    fn decline(&self, request_id: &KeyHash, serial: &str, why: MacDecline) -> MacOutcome {
+    pub(super) fn decline(
+        &self,
+        request_id: &KeyHash,
+        serial: &str,
+        why: MacDecline,
+    ) -> MacOutcome {
         tracing::warn!(request_id = %request_id, reason = why.token(), "a Mac was not approved by its nonce");
         let mut entry = AuditEntry::new(MAC_APPROVER, ACTION_DECLINED);
         let serial: String = serial

@@ -107,6 +107,7 @@ impl Coordinator {
         enrollment.audit_to(Arc::clone(&self.ops));
         enrollment.place_by(Arc::clone(&self.desired));
         self.enrollment = Some(enrollment);
+        self.link_abm_approval();
         self
     }
 
