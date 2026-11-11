@@ -71,7 +71,9 @@ async fn redeem(session: &mut Session, challenge: &str, transaction: &str) -> Id
         index: 0,
         der: identity.to_der().expect("DER"),
         key_der: key_der.as_bytes().to_vec(),
-        key: Some(rsa_legacy::RsaPrivateKey::from_pkcs8_der(key_der.as_bytes()).expect("the key reads")),
+        key: Some(
+            rsa_legacy::RsaPrivateKey::from_pkcs8_der(key_der.as_bytes()).expect("the key reads"),
+        ),
     }
 }
 

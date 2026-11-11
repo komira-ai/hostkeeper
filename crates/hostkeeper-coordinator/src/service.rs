@@ -258,11 +258,12 @@ pub struct Coordinator {
     pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
-    /// Where the request for a push certificate is posted to mdmcert.download
-    /// ([`crate::mdm_push`]).
+    /// Where a push certificate's request is posted to mdmcert.download ([`crate::mdm_push`]).
     pub(crate) mdmcert: Arc<dyn hostkeeper_mdm_push::mdmcert::MdmcertTransport>,
     /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
     pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
+    /// The ABM client ([`crate::abm`]); `None` in a coordinator built without an MDM store.
+    pub(crate) abm: Option<Arc<crate::abm::Abm>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -278,6 +279,8 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
+    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write (one pair at a time).
+    pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -324,6 +327,7 @@ impl Coordinator {
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             proxy_cache: None,
+            abm: None,
             initial_admin: None,
             login: None,
             verifier,
@@ -341,6 +345,7 @@ impl Coordinator {
             running: crate::running::Kept::default(),
             repository_origin: None,
             repository_naming: Mutex::new(()),
+            abm_pairing: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }
