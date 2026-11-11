@@ -1,10 +1,12 @@
 //! The job `coordinator` of `release.yml` (docs/deploy/github-actions.md, "Wait for the
 //! coordinator"): the release waits until the coordinator runs at least that release, before
-//! `set-desired` sends it fields an older coordinator refuses. The coordinator's own machine
-//! updates it (docs/deploy/coordinator-update.md); this job only asks, once, with curl's own
+//! `set-desired` sends it fields an older coordinator refuses. The coordinator is updated by its own
+//! machine (docs/deploy/coordinator-update.md) or, once its repository variable is set, by the job
+//! [`super::deploy::JOB`]; this job only asks, once, with curl's own
 //! retries, `GET /v1/version?at_least=<version>` on the private listener over the tailnet. It
 //! takes no token. [`problems`] refuses the job when:
-//! - it needs other than exactly `plan` and `targets`, runs on another runner than
+//! - it needs other than exactly `deploy`, `plan` and `targets` (the deploy of the coordinator to
+//!   its Docker Swarm service, [`super::deploy`], skipped while its variable is empty), runs on another runner than
 //!   [`RUNNER`], has another timeout than [`TIMEOUT_MINUTES`], or has a key outside [`JOB_KEYS`]
 //!   (an `env`, `outputs`, `container`, `services` or `uses` that could run or carry something
 //!   else); its `if:` is held to [`super::desired::SET_IF`] by [`super::desired::problems`], and
@@ -85,8 +87,10 @@ pub fn problems(coordinator: Option<&Node>) -> Vec<String> {
         return vec![format!("{who} is missing")];
     };
     let got = needs(Some(job));
-    if got != ["plan", "targets"] {
-        problems.push(format!("{who} needs {got:?}, not [\"plan\", \"targets\"]"));
+    if got != ["deploy", "plan", "targets"] {
+        problems.push(format!(
+            "{who} needs {got:?}, not [\"deploy\", \"plan\", \"targets\"]"
+        ));
     }
     if text(Some(job), "runs-on") != Some(RUNNER) {
         problems.push(format!("{who} must run on `{RUNNER}`"));

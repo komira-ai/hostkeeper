@@ -228,6 +228,29 @@ of the old one, so `docker compose` still sees it as the service. The compose fi
 still names the old version: update it (version and digest) before the next `docker compose up`,
 or compose will recreate the container from the old image.
 
+## On Docker Swarm
+
+A coordinator that runs as a Docker Swarm service is not updated by the timer above: nothing on
+its machine runs `hostkeeper-coordinator-update`. Its release run updates it instead. The job
+`deploy` of [release.yml](../../.github/workflows/release.yml) calls the reusable deploy workflow
+of `komira-ai/docker-swarm-updater` with an OIDC token, naming the release's version, the digest
+of its `linux/amd64` image manifest and the download URLs of its image tarball and bundle, and the
+job `coordinator` then waits until the coordinator answers that version, as it does for the timer
+(`GET /v1/version`). The job `deploy` replaces the timer on such a machine; the two are not run
+together on one coordinator.
+
+The deploy is off until the repository variable `CP_DEPLOY_ENDPOINT` is not empty. Empty or unset,
+the jobs `deploy-digest` and `deploy` are skipped, and the coordinator is updated as before, by
+whatever updates it (the timer, or an operator). Before setting the variable an admin creates the
+environment `controlplane` (deployment branches `main` only, no required reviewer, no wait timer)
+and the variables `CP_DEPLOY_AUDIENCE`, `CP_DEPLOY_TAILSCALE_CLIENT_ID` and
+`CP_DEPLOY_TAILSCALE_AUDIENCE`; [github-actions.md](github-actions.md#deploying-the-coordinator-to-docker-swarm)
+has the whole list and what each job does.
+
+The failure text of the job `coordinator` still says `is the timer installed?` after a 409 or a
+404; on a Swarm coordinator the timer is not the cause, so read the log of the job `deploy`
+instead.
+
 ## Why the machine pulls
 
 The incident: a release rolled every host to new versions while the coordinator's container stayed

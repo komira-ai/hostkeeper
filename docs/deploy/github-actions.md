@@ -10,8 +10,9 @@ token. The call names no host group, so it is one deployment to each group that 
 update plan rolls the release out over that group's hosts stage by stage, the canary or first
 stage of hosts first, then more hosts once each stage has baked.
 
-The release also waits for the coordinator. CI never changes the coordinator: its own machine
-updates it from each published release
+The release also waits for the coordinator. Unless the deploy of the coordinator
+([below](#deploying-the-coordinator-to-docker-swarm)) is on, CI never changes the coordinator: its
+own machine updates it from each published release
 ([coordinator-update.md](coordinator-update.md)), and the deploy sets the hosts' desired version
 only once the coordinator runs that release, because a coordinator older than the release refuses
 the fields the release sends (`invalid_request`).
@@ -49,7 +50,9 @@ one credential is the OIDC token GitHub issues to the job.
 5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
    the same condition as `targets`, plus that its release is the newest published). The coordinator is updated by its own machine
    (`hostkeeper-coordinator-update`, a release asset, on a timer there, [coordinator-update.md](coordinator-update.md)),
-   not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
+   not by CI, unless the repository variable `CP_DEPLOY_ENDPOINT` is not empty: then the job
+   `deploy` updates it first, this job needs `deploy`, and a failed `deploy` skips it (with the
+   variable empty `deploy` is skipped and this job runs as it does without it; [below](#deploying-the-coordinator-to-docker-swarm)). The job joins the tailnet as `set-desired` does (the same pinned action and the
    same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from
    `HOSTKEEPER_COORDINATOR_CA`, and asks the private listener, with one `curl` that retries for
    30 minutes, `GET /v1/version?at_least=<X.Y.Z>`. The route takes no token: it answers 200 when
@@ -119,6 +122,55 @@ one credential is the OIDC token GitHub issues to the job.
 
 Watch the roll on the UI's Rollout page, or with `hkctl releases converge --service hostkeeper`.
 
+## Deploying the coordinator to Docker Swarm
+
+A coordinator that runs as a Docker Swarm service has no timer on its machine to update it. For
+it, `release.yml` has two more jobs, `deploy-digest` and `deploy`, which update the service from
+the release. They run only while the repository variable `CP_DEPLOY_ENDPOINT` is not empty, and
+only for the newest release of the run once `targets` has found it the newest published (so
+`targets` runs, which needs `RELEASE_SETS_DESIRED` to be `true`). Empty or unset, both are
+skipped and nothing else in the workflow changes.
+
+- **`deploy-digest`** reads the repository (`contents: read`) and nothing else: no checkout, no
+  code of ours. It takes the release's files from the run's own `release-v<X.Y.Z>` artifact, checks
+  them against `SHA256SUMS` once more, and reads the digest of the `linux/amd64` manifest from the
+  release's image index (`hostkeeper-coordinator-<X.Y.Z>.image.json`, which `release check` holds
+  to the two image tarballs) with `jq`, to its output `digest`. The step fails unless the index
+  lists exactly one `linux/amd64` manifest by a `sha256:` digest.
+- **`deploy`** calls the reusable workflow `deploy.yml` of `komira-ai/docker-swarm-updater`,
+  pinned by commit like any action (`c1fcc47610e2886d4d9e561be3c0c76f0452d1f6`, version comment
+  `v0.1.3`), with exactly `id-token: write` and no secret. It passes the service
+  `hostkeeper-coordinator`, the release's version and that digest, the release's download URLs of
+  the `linux-x86_64` image tarball and its Sigstore bundle, the endpoint and audience from the
+  repository variables, the environment `controlplane`, and the tailnet join (the client ID and
+  audience from the repository variables, the tag `tag:cp-deploy`). The called workflow joins the
+  tailnet, asks GitHub for an OIDC token for every request, sends the deploy to the endpoint, and
+  polls its status until the deploy reaches a final state (up to 60 minutes); the job passes when
+  the deploy `converged` and fails otherwise. The updater, not this workflow, checks the image's
+  attestation, against `artifacts.yml` of this repository on `main`. The run is a `workflow_run` of
+  `main`, so the token's `ref` is `refs/heads/main`.
+- **`coordinator`** needs `deploy`. It runs when `deploy` succeeded or was skipped, and not after
+  a failure of `deploy` or of any job it needs. So a failed deploy leaves the wait, the
+  `no-downgrade` check and `set-desired` skipped: the hosts' desired version is not set. The wait
+  then confirms the new coordinator answers `GET /v1/version`.
+
+An admin sets these up once, before setting `CP_DEPLOY_ENDPOINT`:
+
+1. The environment `controlplane` of this repository, with deployment branches limited to `main`,
+   no required reviewer and no wait timer. The called workflow's job runs in it, and the OIDC
+   token's `environment` claim exists only for a job of that environment.
+2. The repository variables `CP_DEPLOY_ENDPOINT` (the deploy front's address),
+   `CP_DEPLOY_AUDIENCE` (the audience every token is minted for, as the front's proxy is
+   configured), `CP_DEPLOY_TAILSCALE_CLIENT_ID` and `CP_DEPLOY_TAILSCALE_AUDIENCE` (the
+   workload-identity client the job joins the tailnet with, whose trust credential must issue the
+   tag `tag:cp-deploy`, and whose ACL must let that tag reach the front). The deploy workflow joins
+   the tailnet only when the client ID is set.
+3. Set `CP_DEPLOY_ENDPOINT` last: it is the switch.
+
+To turn the deploy off, delete `CP_DEPLOY_ENDPOINT` (or set it empty); a `deploy` job already
+running goes on. [coordinator-update.md](coordinator-update.md#on-docker-swarm) says how this
+relates to the timer.
+
 ## Turning it on and off
 
 The deploy runs only while the repository variable `RELEASE_SETS_DESIRED` is `true`, exactly:
@@ -148,6 +200,10 @@ federation's client ID are all public values, so they are variables, not secrets
 | `HOSTKEEPER_TAILNET_CLIENT_ID` | The client ID of the tailnet's federated identity (shared). Set: both calls of the CI client and the job `coordinator` join the tailnet. Empty: none joins, and the coordinator must be reachable from the runner some other way. |
 | `HOSTKEEPER_TAILNET_AUDIENCE` | The audience of that federated identity (shared). |
 | `HOSTKEEPER_TAILNET_COORDINATOR` | The coordinator's name on the tailnet, which the CI client's join pings until it answers (shared). |
+| `CP_DEPLOY_ENDPOINT` | The deploy front of the coordinator's Docker Swarm service, `http[s]://host[:port]`. Not empty turns the jobs `deploy-digest` and `deploy` on ([above](#deploying-the-coordinator-to-docker-swarm)); empty or unset skips them. |
+| `CP_DEPLOY_AUDIENCE` | The audience of the OIDC token `deploy` sends, as the front's proxy is configured. |
+| `CP_DEPLOY_TAILSCALE_CLIENT_ID` | The client ID of the workload identity `deploy` joins the tailnet with; empty, it does not join. |
+| `CP_DEPLOY_TAILSCALE_AUDIENCE` | The audience of that workload identity. The tag it asks for, `tag:cp-deploy`, is written in the workflow. |
 | `HOSTKEEPER_TAILNET_TAG` | The tag the join gives the runner's node, the one the federation's trust credential issues: `tag:ci` (shared). Both callers pass it as `tailnet_tag`. It must be set, even with `HOSTKEEPER_TAILNET_CLIENT_ID` empty: the CI client checks the tag at its first step, with or without the join, and an empty one ends the job there, before anything is downloaded or set. |
 
 The tailnet, its tag (`HOSTKEEPER_TAILNET_TAG`, `tag:ci`), its ACL and its federation
@@ -249,7 +305,7 @@ new commit (above).
 
 ## When it fails
 
-A failure of any of the four jobs (`targets`, `coordinator`, `no-downgrade`, `set-desired`) leaves the release published; only the deploy did not happen.
+A failure of any of these jobs (`targets`, `deploy-digest`, `deploy`, `coordinator`, `no-downgrade`, `set-desired`) leaves the release published; only the deploy did not happen.
 Once the cause is fixed, use **Re-run failed jobs** on the release run: it runs the jobs that
 failed and those that depend on them (`no-downgrade` among them, which checks again that no newer
 release is published, then `set-desired`), and the call gets a new token. When `set-desired`
@@ -261,6 +317,8 @@ which re-runs `set-desired` after it.
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
 | `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
+| `deploy-digest`: The manifest digest of the linux/amd64 image | The release's image index does not list exactly one `linux/amd64` manifest by a `sha256:` digest, or a file of the release does not check against `SHA256SUMS`. Nothing is deployed, and `coordinator` and `set-desired` are skipped. | Fix the release (a new commit releases again). |
+| `deploy` | The updater refused the deploy, did not converge, or was not reached (the tailnet join, the endpoint, the audience, or the `controlplane` environment missing or not admitting `main`); the called workflow's log says which. `coordinator` and `set-desired` are skipped: nothing is set. | Fix the cause, then **Re-run failed jobs**. |
 | `testing-apt-write`, `testing-apt-write-3` or `testing-pkg-upload` | A package channel was not written (the last apt attempt lost the race for the index too, or a write failed), so `set-desired` did not run: nothing is set. A channel without its settings ends green with a notice, and `set-desired` is skipped too. | Fix the channel ([package-repositories.md](package-repositories.md)), then **Re-run failed jobs**. |
 | `no-downgrade`: Say that an older release is not set | A newer release than this run's is published (this run is a re-run of an older release's jobs, or a late run), so `set-desired` was skipped and nothing is set; the job is green. | Nothing: the newest release's own run sets the fleet. A move back is an operator's step on the coordinator. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin, then **Re-run job** on `no-downgrade`. |
@@ -278,8 +336,9 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
 - It does not wait for the fleet to converge: a roll by stages, each baked before the next, takes
   longer than a release run should hold the release group, and a slow roll is not a failed
   release.
-- It never changes the coordinator, not its version, allow-list, host groups, holds or marks:
-  the coordinator's own machine updates it ([coordinator-update.md](coordinator-update.md)), and
-  CI only waits until it runs the release.
+- It never changes the coordinator's allow-list, host groups, holds or marks. Its version is
+  updated by the coordinator's own machine ([coordinator-update.md](coordinator-update.md)), or by
+  the job `deploy` while `CP_DEPLOY_ENDPOINT` is set; CI otherwise only waits until the coordinator
+  runs the release.
 - It sets only `hostkeeper`. The hello proof run stays a dispatch by hand
   ([docs/hello.md](../hello.md)).

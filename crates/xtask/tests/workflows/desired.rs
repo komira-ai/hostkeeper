@@ -25,7 +25,9 @@
 //!   would run;
 //! - [`COORDINATOR_JOB`] lacks the exact `if:` [`SET_IF`] or has `continue-on-error`, or breaks
 //!   the rules of [`super::coordinator_wait`] (it waits until the coordinator runs the release,
-//!   and holds `id-token: write` for the tailnet join alone);
+//!   and holds `id-token: write` for the tailnet join alone), or does not need exactly `plan`,
+//!   [`TARGETS_JOB`] and [`super::deploy::JOB`] (the deploy of the coordinator to its Docker Swarm
+//!   service, [`super::deploy`], which is skipped while its repository variable is empty);
 //! - [`JOB`] lacks the exact `if:` [`SET_DESIRED_IF`] ([`SET_IF`], and only once a write of each
 //!   channel the targets point at has landed), or does not need exactly `plan`, [`TARGETS_JOB`],
 //!   [`COORDINATOR_JOB`], the jobs of [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`] (it
@@ -63,9 +65,14 @@ pub const GATE: &str = "RELEASE_SETS_DESIRED";
 /// The `if:` of [`TARGETS_JOB`]: a release of main was planned, and [`GATE`] is `true`.
 pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' }}";
 
-/// The `if:` of [`JOB`]: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release the newest
-/// published, so that a late run of an older commit never moves the fleet back.
-pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}";
+/// The `if:` of [`COORDINATOR_JOB`]: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release
+/// the newest published, so that a late run of an older commit never moves the fleet back.
+/// `!cancelled() && !failure()` in place of the implicit `success()`: the job needs
+/// [`super::deploy::JOB`], which is skipped while the repository variable
+/// [`super::deploy::GATE`] is empty, and a skipped job it needs would otherwise skip this one. A
+/// failed deploy, or any failed job it needs at any depth, still stops it, so with the variable
+/// empty the job runs exactly when it did before the deploy existed.
+pub const SET_IF: &str = "${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}";
 
 /// The `if:` of [`JOB`]: [`SET_IF`], once [`COORDINATOR_JOB`] succeeded and a write of each
 /// channel of [`CHANNEL_WRITES`] has landed: one of the three attempts of the apt write reported
