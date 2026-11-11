@@ -775,6 +775,7 @@ fn wire_names_are_pinned() {
                 "cert_near_expiry",
                 "store_unreachable",
                 "trusted_root",
+                "push_cert_near_expiry",
             ],
         ),
         (

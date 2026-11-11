@@ -914,6 +914,62 @@ impl MdmApi for MdmService {
             .map_err(refusal::mdm)
     }
 
+    async fn create_push_request(
+        &self,
+        request: Request<proto::CreatePushRequestRequest>,
+    ) -> Result<Response<proto::CreatePushRequestResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_create_push_request(&caller, request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn status(
+        &self,
+        request: Request<proto::MdmStatusRequest>,
+    ) -> Result<Response<proto::MdmStatusResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_status(&caller)
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_push_reply(
+        &self,
+        request: Request<proto::PutPushReplyRequest>,
+    ) -> Result<Response<proto::PutPushReplyResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_push_reply(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_push_certificate(
+        &self,
+        request: Request<proto::PutPushCertificateRequest>,
+    ) -> Result<Response<proto::PutPushCertificateResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_push_certificate(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
+    async fn put_name(
+        &self,
+        request: Request<proto::PutNameRequest>,
+    ) -> Result<Response<proto::PutNameResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .mdm_put_name(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::mdm)
+    }
+
     async fn put_abm_token(
         &self,
         request: Request<proto::PutAbmTokenRequest>,

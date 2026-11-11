@@ -1,0 +1,57 @@
+[package]
+name = "hostkeeper-mdm-push"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The coordinator's MDM push side: the APNs sender, the push policy, the push certificate and its request through mdmcert.download."
+
+# docs/design/coordinator-mdm.md sections 4.3 and 4.4 (task CM7). The APNs sender is an HTTP/2
+# client on hyper and tokio-rustls (ring, webpki-roots) behind the `PushSender` port; the policy
+# that says when a Mac is pushed is a plain state machine over an injected `Clock`; the push
+# certificate side makes the key and the CSR of a request, posts it to mdmcert.download behind
+# the `MdmcertTransport` port, decrypts the reply and checks a certificate against its key. It
+# depends on no other crate of this workspace (crates/xtask/tests/layering keeps it so), and the
+# coordinator keeps the secrets and the audit.
+#
+# The `testkit` feature adds the fakes the coordinator's tests use: a clock, an APNs sender and an
+# mdmcert transport that answer as told, and the reply of mdmcert.download built for a key.
+[features]
+testkit = []
+
+[dependencies]
+# The CMS reply of mdmcert.download is read with the RustCrypto 0.8-era ciphers and rsa 0.9, which
+# this crate was written against (the `-legacy` aliases of the root manifest).
+aes-legacy.workspace = true
+base64.workspace = true
+bytes.workspace = true
+cbc-legacy.workspace = true
+des-legacy.workspace = true
+hex.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "http2"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+plist.workspace = true
+rand_core-legacy.workspace = true
+rcgen.workspace = true
+rsa-legacy.workspace = true
+rustls = { workspace = true, features = ["tls12"] }
+rustls-pki-types.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
+tokio = { workspace = true, features = ["io-util", "net", "rt", "sync", "time"] }
+tokio-rustls.workspace = true
+webpki-roots.workspace = true
+x509-parser.workspace = true
+
+[dev-dependencies]
+ring.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "test-util", "time"] }
+
+[lints]
+workspace = true

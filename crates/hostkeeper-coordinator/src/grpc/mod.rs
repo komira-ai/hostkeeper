@@ -236,6 +236,15 @@ const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
 const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
 /// The path of `Mdm.GetAbmPublicKey`, which makes the key pair when none is held.
 const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+/// The path of `Mdm.CreatePushRequest`.
+const MDM_CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushRequest";
+/// The path of `Mdm.PutPushReply`, whose request holds the emailed reply of mdmcert.download, hex
+/// text of up to 64 KiB.
+const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
+/// The path of `Mdm.PutPushCertificate`, whose request holds a certificate and a key.
+const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+/// The path of `Mdm.PutName`.
+const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -245,6 +254,10 @@ const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKe
 pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_SECRET,
     MDM_PUT_SETTING,
+    MDM_PUT_NAME,
+    MDM_CREATE_PUSH_REQUEST,
+    MDM_PUT_PUSH_REPLY,
+    MDM_PUT_PUSH_CERTIFICATE,
     MDM_PUT_ABM_TOKEN,
     MDM_GET_ABM_PUBLIC_KEY,
 ];
@@ -423,12 +436,21 @@ where
 }
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
-/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put` and
-/// `Mdm.PutSecret` and `Mdm.PutAbmToken`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
+/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`,
+/// [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
-    } else if path == HOST_GROUPS_PUT || path == MDM_PUT_SECRET || path == MDM_PUT_ABM_TOKEN {
+    } else if [
+        HOST_GROUPS_PUT,
+        MDM_PUT_SECRET,
+        MDM_PUT_PUSH_REPLY,
+        MDM_PUT_PUSH_CERTIFICATE,
+        MDM_PUT_ABM_TOKEN,
+    ]
+    .contains(&path)
+    {
         MAX_HOST_GROUPS_PUT_BYTES
     } else {
         MAX_OPERATOR_BYTES

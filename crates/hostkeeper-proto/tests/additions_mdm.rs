@@ -61,6 +61,9 @@ fn device() -> op::MdmDevice {
         install_sha256: "ab".repeat(32),
         baseline_state: op::MdmBaselineState::Failed.into(),
         baseline_reason: "profile com.example.fskit: the device answered an error".to_owned(),
+        host_id: "lab-mac-1".to_owned(),
+        group: "mac-builders".to_owned(),
+        baseline: op::MdmBaseline::Applied.into(),
     }
 }
 
@@ -80,6 +83,8 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 devices: vec![device()],
                 next_page_token: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
                 gate: true,
+                configured: true,
+                missing: vec![op::MdmCondition::NameMissing.into()],
             }),
         ),
         (
@@ -145,6 +150,84 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         (
+            "hostkeeper.operator.v1.CreatePushRequestRequest",
+            round_trip(&op::CreatePushRequestRequest {
+                email: "ops@example.org".to_owned(),
+                submit: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.CreatePushRequestResponse",
+            round_trip(&op::CreatePushRequestResponse {
+                csr_pem: "-----BEGIN CERTIFICATE REQUEST-----".to_owned(),
+                encryption_certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                submitted: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyRequest",
+            round_trip(&op::PutPushReplyRequest {
+                reply: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushReplyResponse",
+            round_trip(&op::PutPushReplyResponse {
+                signed_request: b"<plist/>".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateRequest",
+            round_trip(&op::PutPushCertificateRequest {
+                certificate_pem: b"-----BEGIN CERTIFICATE-----".to_vec(),
+                key_pem: b"-----BEGIN RSA PRIVATE KEY-----".to_vec(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutPushCertificateResponse",
+            round_trip(&op::PutPushCertificateResponse {
+                topic: "com.apple.mgmt.External.d1801ae1".to_owned(),
+                not_before_unix: 1_800_000_000,
+                not_after_unix: 1_900_000_000,
+                secret: Some(secret_info()),
+                renewal: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmStatusResponse",
+            round_trip(&op::MdmStatusResponse {
+                configured: true,
+                missing: vec![op::MdmCondition::TlsNameMismatch.into()],
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+                name_locked: true,
+                sealing: true,
+                push_cert: Some(secret_info()),
+                push_key: Some(secret_info()),
+                abm_token: Some(secret_info()),
+                tls_cert: Some(secret_info()),
+                tls_key: Some(secret_info()),
+                push_topic: "com.apple.mgmt.External.0a1b2c3d".to_owned(),
+                push_not_after_unix: Some(1_900_000_000),
+                abm_not_after_unix: Some(1_825_020_096),
+                tls_not_after_unix: Some(1_850_000_000),
+                tls_names: vec!["mdm.example.com".to_owned()],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameRequest",
+            round_trip(&op::PutNameRequest {
+                name: "mdm.example.com".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameResponse",
+            round_trip(&op::PutNameResponse {
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+            }),
+        ),
+        (
             "hostkeeper.operator.v1.PutAbmTokenRequest",
             round_trip(&op::PutAbmTokenRequest {
                 token_json: b"{}".to_vec(),
@@ -181,7 +264,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 15);
+    assert_eq!(messages.len(), 24);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");
@@ -191,6 +274,8 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     for name in [
         "hostkeeper.operator.v1.MdmRefusal",
         "hostkeeper.operator.v1.MdmPhase",
+        "hostkeeper.operator.v1.MdmCondition",
+        "hostkeeper.operator.v1.MdmBaseline",
         "hostkeeper.operator.v1.MdmBaselineState",
     ] {
         assert!(older.get_enum_by_name(name).is_none(), "{name} is new");

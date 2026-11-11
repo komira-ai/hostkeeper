@@ -7,7 +7,12 @@
 //! device and not NanoHUB; nothing is audited, since nothing changes. A coordinator without
 //! the gate answers no device, with `gate` false. Each row says where the device is in applying
 //! its host group's enrollment baseline ([`hostkeeper_mdm_gate::baseline`]), from the records
-//! and the baseline file alone.
+//! and the baseline file alone (`baseline_state`, `baseline_reason`).
+//!
+//! Each answer also says whether the MDM setup is complete (`configured`) and, when it is not,
+//! what is missing ([`Coordinator::setup_status`]); the devices are listed either way. A device's
+//! host id and group are those of the one inventory record that has its serial, and its
+//! `baseline` is how far the config profile has got in its enrollment.
 
 use std::sync::Arc;
 
@@ -15,6 +20,7 @@ use hostkeeper_mdm_gate::{BaselineState, BaselineStatus, DeviceRecord, Enrollmen
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
+use crate::inventory::InventoryRecord;
 use crate::mdm::Mdm;
 use crate::operator::Caller;
 use crate::service::Coordinator;
@@ -28,6 +34,22 @@ impl Coordinator {
     pub fn with_mdm(mut self, mdm: Option<Mdm>) -> Self {
         self.mdm = mdm.map(Arc::new);
         self
+    }
+
+    /// The same coordinator serving the Macs' listener with `server`.
+    #[must_use]
+    pub(crate) fn with_mdm_server(
+        mut self,
+        server: Option<Arc<crate::mdm_server::MdmServer>>,
+    ) -> Self {
+        self.mdm_server = server;
+        self
+    }
+
+    /// The MDM server of the Macs' listener, if the coordinator has one.
+    #[must_use]
+    pub(crate) fn mdm_server(&self) -> Option<&Arc<crate::mdm_server::MdmServer>> {
+        self.mdm_server.as_ref()
     }
 
     /// The MDM policy gate, if the coordinator runs it.
@@ -50,8 +72,19 @@ impl Coordinator {
             "" => None,
             token => Some(EnrollmentId::parse(token).ok_or(MdmRefusal::InvalidRequest)?),
         };
+        // The setup is told for the Devices page, not needed for it: a setup that cannot be read
+        // now leaves the list as it was before the setup existed, with `configured` false and
+        // nothing named.
+        let status = self.setup_status().unwrap_or_else(|why| {
+            tracing::warn!(?why, "the MDM setup is not read for the device list");
+            proto::MdmStatusResponse::default()
+        });
         let Some(mdm) = self.mdm() else {
-            return Ok(proto::ListDevicesResponse::default());
+            return Ok(proto::ListDevicesResponse {
+                configured: status.configured,
+                missing: status.missing,
+                ..proto::ListDevicesResponse::default()
+            });
         };
         let limit = match request.limit as usize {
             0 => MAX_DEVICE_PAGE,
@@ -70,14 +103,61 @@ impl Coordinator {
             Some(last) if more => last.enrollment_id.as_str().to_owned(),
             _ => String::new(),
         };
-        Ok(proto::ListDevicesResponse {
-            devices: records
+        let devices = self.ops.read(|state| {
+            records
                 .iter()
-                .map(|record| device_proto(record, mdm.gate.baseline_status(record)))
-                .collect(),
+                .map(|record| {
+                    let mut device = device_proto(record, mdm.gate.baseline_status(record));
+                    if let Some(inventory) = record
+                        .serial
+                        .as_deref()
+                        .and_then(|serial| inventory_of(&state.inventory, serial))
+                    {
+                        device.host_id.clone_from(&inventory.host_id);
+                        device.group = inventory.group().to_owned();
+                    }
+                    device
+                })
+                .collect()
+        });
+        Ok(proto::ListDevicesResponse {
+            devices,
             next_page_token,
             gate: true,
+            configured: status.configured,
+            missing: status.missing,
         })
+    }
+
+    /// Whether any Mac has enrolled: the gate has seen a device's first `TokenUpdate`. The MDM
+    /// name is locked from then on, since the enrollment profile a Mac holds carries it.
+    pub(crate) fn macs_enrolled(&self) -> bool {
+        self.mdm().is_some_and(|mdm| {
+            mdm.gate
+                .records()
+                .iter()
+                .any(|record| record.enrolled_since_unix.is_some())
+        })
+    }
+}
+
+/// The one inventory record whose serial is `serial` (letters compared without case); none when
+/// no record, or more than one, has it.
+fn inventory_of<'a>(records: &'a [InventoryRecord], serial: &str) -> Option<&'a InventoryRecord> {
+    let mut found = records
+        .iter()
+        .filter(|record| !record.serial.is_empty() && record.serial.eq_ignore_ascii_case(serial));
+    let one = found.next()?;
+    found.next().is_none().then_some(one)
+}
+
+/// How far the config profile has got.
+fn config_profile_proto(record: &DeviceRecord) -> proto::MdmBaseline {
+    match record.config_profile.as_ref().map(|sent| sent.answer) {
+        None => proto::MdmBaseline::Unspecified,
+        Some(None) => proto::MdmBaseline::Pending,
+        Some(Some(answer)) if answer.acknowledged => proto::MdmBaseline::Applied,
+        Some(Some(_)) => proto::MdmBaseline::Failed,
     }
 }
 
@@ -140,6 +220,9 @@ fn device_proto(record: &DeviceRecord, baseline: Option<BaselineStatus>) -> prot
             .unwrap_or_default(),
         baseline_state: baseline_state.into(),
         baseline_reason,
+        host_id: String::new(),
+        group: String::new(),
+        baseline: config_profile_proto(record).into(),
     }
 }
 

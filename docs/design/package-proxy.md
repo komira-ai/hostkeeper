@@ -104,7 +104,7 @@ settings add the origin list (section 4). The path passes the locator grammar `r
 - *The cache* is a directory flag, `--proxy-cache-dir` (a directory the host provides; unset means the proxy answers 404 to the routes
   above, which is the state before a deployment opts in). Files are written to `tmp/` and renamed into `objects/` in the same
   filesystem, named by the SHA-256 of the key (origin and path); a sidecar holds the origin's validator, the fetch time and the length.
-  Leftover `tmp/` files are removed at start.
+  Leftover `tmp/` files are removed at start, and so are a body whose length is not its sidecar's and a sidecar with no body (nothing is synced to disk, so a crash can leave them). A commit renames the sidecar first and the body last. Recency is kept in memory; a start orders the objects by fetch time.
 - *Eviction* is least recently used when a commit would pass `proxy_cache_max_bytes` (default 20 GiB), deleting only committed objects.
   Every number here is a setting of the setup page with its default from the start (coordinator-mdm.md 4.9): `proxy_index_ttl_s`,
   `proxy_cache_max_bytes`, `proxy_fetches` (concurrent origin fetches, default 8), `proxy_redirects` (default 3), `proxy_wait_s`.
@@ -147,7 +147,7 @@ is task PP5.
 | One slow fill and fifty waiters | each waiter waits `proxy_wait_s` at most, then is passed through directly; the fill still commits |
 | An arbitrary digest asked of `/pkg/` | 404, and no origin request is made, since only digests of the current manifest's `installs` are fetched |
 | The origin serves a poisoned or truncated file | apt rejects a bad hash or signature; the daemon rejects a bad digest; the coordinator rejects a pkg whose digest differs from its path; a truncated body (length short) is not committed |
-| A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start |
+| A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start; a client that stays connected but stops reading is cut when its eight-frame buffer is full (its body ends with an error, `FetchError::Behind`) and the fill goes on, so one stuck client holds neither the flight nor a place of `proxy_fetches` |
 | Two coordinators on one cache directory | not supported: the proxy is part of the single-node MDM listener (coordinator-mdm.md 4.9); the directory is the coordinator's |
 | A request for an arbitrary URL, or a `..` segment | the route shape and the locator grammar refuse it with 404 or 400; nothing is fetched |
 | The origin is slow | 30 s to headers and 30 s per frame, as `repository_origin.rs` has them; waiters share one fetch; `proxy_fetches` caps concurrent origin pulls and the next request gets `503` |
@@ -207,7 +207,7 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 
 | # | Task | After | Size |
 |---|---|---|---|
-| PP1 | The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults | coordinator-mdm.md CM20 | M |
+| PP1 | (**Built**, `hostkeeper-coordinator/src/proxy_cache.rs` and `proxy_cache_disk.rs`) The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults. It is a library with `--proxy-cache-dir` opening it at start; no route uses it until PP2. The settings built are `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`; `proxy_origins` comes with PP2 | coordinator-mdm.md CM20 | M |
 | PP2 | `GET /apt/<repo>/...` on the MDM listener: public-repository routes, index TTL and revalidation, redirect-following origin client | PP1, CM11a | M |
 | PP3 | `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit | PP1, CM11c | S |
 | PP4 | Docs: the packages-native.md and hostkeeper-design.md statements about the channel | none | S |
@@ -228,5 +228,8 @@ fallback origin.
    one host before PP6).
 3. That a GitHub release asset's redirect chain stays within https and three hops (only if the fallback origin is used).
 4. That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host before PP6.
-5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3); the
-   listener's route-family switch is read in CM11a.
+5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3):
+   **yes, built in CM11a** (read in the listener): `MdmServer::serves(family)` is decided for each request; the proxy family needs the
+   certificate and key of the name, the MDM family needs that and a push identity, and a family that is not served answers `503` for each
+   of its routes while the other is served (coordinator-mdm.md 4.1; test `the_mdm_routes_answer_503_while_the_package_routes_are_served`).
+   No proxy route is mounted yet, so `/apt/` and `/pkg/` answer `404` until PP2 and CM11c; they join the switch with no change to it.
