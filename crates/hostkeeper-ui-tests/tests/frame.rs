@@ -8,31 +8,30 @@ use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{m, status_reply};
 
-/// A driver that starts the app in a fake document kept as `globalThis.doc`, signs in with
-/// `token` through the form, and opens `page` from the page list.
-fn start(token: &str, page: &str) -> String {
+/// A driver that starts the app in a fake document kept as `globalThis.doc`, lets it read the
+/// session the browser holds (scripted by [`Ui::session`]), and opens `page` from the page list.
+fn start(page: &str) -> String {
     format!(
         r#"
-import {{ fakeDocument, domNamed, fire }} from "../test/kit.js";
+import {{ fakeDocument, domNamed, fire, settle }} from "../test/kit.js";
 import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
   startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
-  fire(domNamed(doc.root, "token"), "input", {{ target: {{ value: "{token}" }} }});
-  fire(doc.root.children[0], "submit", {{ preventDefault() {{}} }});
+  await settle();
   fire(domNamed(doc.root, "page-{page}"), "click", {{}});
 }}"#
     )
 }
 
 /// A driver that runs `steps` (JavaScript with `doc`, `fire`, `domNamed`, `domTexts`, `elements`
-/// and `getToken` in scope) and returns what they return.
+/// `settle` and `getCsrf` in scope) and returns what they return.
 fn steps(steps: &str) -> String {
     format!(
         r#"
-import {{ domNamed, domTexts, elements, fire }} from "../test/kit.js";
-import {{ getToken }} from "./session.js";
+import {{ domNamed, domTexts, elements, fire, settle }} from "../test/kit.js";
+import {{ getCsrf }} from "./session.js";
 export async function main() {{
   const doc = globalThis.doc;
   const text = () => domTexts(doc.root).join(" ");
@@ -55,8 +54,8 @@ fn bodies_of(ui: &Ui, method: &str) -> Vec<Value> {
 
 #[test]
 fn a_late_answer_from_a_previous_sign_in_changes_nothing() {
-    // Catches: a refusal of the old token that signs out the operator who has since signed in
-    // with another, and an old page's success reported, or refreshed, under the new sign-in.
+    // Catches: a refusal of the old session that signs out the operator who has since signed in
+    // again, and an old page's success reported, or refreshed, under the new sign-in.
     let converged =
         json!({"convergence": {"desired": "1.4.0", "state": "CONVERGENCE_STATE_IN_PROGRESS"}});
     for (status, body) in [
@@ -67,25 +66,34 @@ fn a_late_answer_from_a_previous_sign_in_changes_nothing() {
         (200, converged),
     ] {
         let mut ui = Ui::start();
+        ui.session("tok_a");
+        ui.reply_raw(
+            support::LOGIN,
+            200,
+            r#"{"username":"operator","csrf":"tok_b","must_change":false}"#,
+        );
+        ui.reply_raw(support::LOGOUT, 200, "{}");
         ui.reply(&m("Releases/Status"), status_reply());
         ui.reply(&m("Releases/Status"), status_reply());
         ui.hold(&m("Releases/Converge"), status, &body.to_string());
-        ui.run(&start("tok_a", "rollout"));
+        ui.run(&start("rollout"));
         ui.run(&steps(
             r#"
 click("converge");
 click("sign-out");
-type("token", "tok_b");
-fire(doc.root.children[0], "submit", { preventDefault() {} });"#,
+type("username", "operator");
+type("password", "a long enough password");
+fire(doc.root.children[0], "submit", { preventDefault() {} });
+await settle();"#,
         ));
         let released = ui.run(&steps(
             r#"return gatewayRelease("hostkeeper.operator.v1.Releases/Converge");"#,
         ));
         assert_eq!(released, true);
         let after = ui.run(&steps(
-            r#"return { token: getToken(), text: text(), status: status() };"#,
+            r#"return { csrf: getCsrf(), text: text(), status: status() };"#,
         ));
-        assert_eq!(after["token"], "tok_b", "{status}");
+        assert_eq!(after["csrf"], "tok_b", "{status}");
         assert_eq!(after["status"], "", "{status}");
         let shown = after["text"].as_str().expect("the frame's text");
         assert!(
@@ -122,7 +130,8 @@ fn audit_pages_follow_the_cursor_through_the_frame() {
     );
     ui.reply(&m("Audit/List"), json!({"nextSeq": second}));
     ui.refuse(&m("Audit/List"), 503, "UNAVAILABLE", "store_failed");
-    ui.run(&start("tok_a", "audit"));
+    ui.session("tok_a");
+    ui.run(&start("audit"));
     let filtered = ui.run(&steps(
         r#"
 type("service", "api");
@@ -201,7 +210,8 @@ fn enrollment_pages_follow_the_token_to_the_last_page() {
         json!({"requests": [pending("2e", "cd")]}),
     );
     ui.refuse(&m("Enrollment/List"), 500, "INTERNAL", "store_failed");
-    ui.run(&start("tok_a", "enrollment"));
+    ui.session("tok_a");
+    ui.run(&start("enrollment"));
     let first = ui.run(&steps(
         r#"
 const shown = text();
@@ -244,7 +254,8 @@ fn the_elements_show_what_was_typed_after_the_frame_draws_again() {
     // message, shows the old value while the page would send the new one.
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
-    ui.run(&start("tok_a", "rollout"));
+    ui.session("tok_a");
+    ui.run(&start("rollout"));
     let shown = ui.run(&steps(
         r#"
 type("reason", "crash loop");
@@ -272,5 +283,57 @@ return {
             "role": "web",
             "target": [false, true, false],
         })
+    );
+}
+
+#[test]
+fn the_mdm_setup_page_is_in_the_frame_and_its_downloads_reach_the_browser() {
+    // Catches: the page missing from the frame's list, the frame not handing the browser's
+    // download to a page, and a file offered with other bytes or name than the page gave.
+    let mut ui = Ui::start();
+    ui.session("tok_a");
+    let held = json!({"configured": true, "sealing": true});
+    let settings = json!({"settings": []});
+    ui.reply(&m("Mdm/Status"), held.clone());
+    ui.reply(&m("Mdm/ListSettings"), settings.clone());
+    ui.reply(
+        &m("Mdm/CreatePushRequest"),
+        json!({"csrPem": "CSRPEM", "encryptionCertificatePem": "ENCPEM", "submitted": true}),
+    );
+    ui.reply(&m("Mdm/Status"), held);
+    ui.reply(&m("Mdm/ListSettings"), settings);
+    ui.run(
+        r#"
+import { fakeDocument, domNamed, fire, settle } from "../test/kit.js";
+import { startApp } from "./app.js";
+export async function main() {
+  const doc = fakeDocument();
+  globalThis.doc = doc;
+  globalThis.saved = [];
+  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
+             download: (file) => globalThis.saved.push(file) });
+  await settle();
+  fire(domNamed(doc.root, "page-mdm"), "click", {});
+  await settle();
+  fire(domNamed(doc.root, "push-email"), "input", { target: { value: "ops@example.org" } });
+  fire(domNamed(doc.root, "create-request"), "click", {});
+  await settle();
+  fire(domNamed(doc.root, "download-csr"), "click", {});
+}"#,
+    );
+    let out = ui.run(&steps(
+        r#"return { text: text(), saved: globalThis.saved, status: status() };"#,
+    ));
+    assert!(
+        out["text"].as_str().expect("text").contains("MDM setup"),
+        "{out}"
+    );
+    assert_eq!(
+        out["saved"],
+        json!([{"name": "push-request.csr", "mime": "text/plain", "text": "CSRPEM"}])
+    );
+    assert_eq!(
+        out["status"],
+        "Request made and sent to mdmcert.download: it emails the signed request to ops@example.org."
     );
 }

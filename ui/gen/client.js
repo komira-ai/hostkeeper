@@ -51,6 +51,8 @@ export function createClient(call) {
       createPushRequest: (request) => call("hostkeeper.operator.v1.Mdm/CreatePushRequest", request),
       putPushReply: (request) => call("hostkeeper.operator.v1.Mdm/PutPushReply", request),
       putPushCertificate: (request) => call("hostkeeper.operator.v1.Mdm/PutPushCertificate", request),
+      status: (request) => call("hostkeeper.operator.v1.Mdm/Status", request),
+      putName: (request) => call("hostkeeper.operator.v1.Mdm/PutName", request),
     }),
     releases: Object.freeze({
       setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),

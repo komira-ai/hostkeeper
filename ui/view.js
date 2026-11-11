@@ -202,6 +202,22 @@ export function area(label, name, state, key, extra) {
   return h("label", {}, label, input);
 }
 
+// A file chooser whose choice is kept in `state[key]` (the file, not its contents: nothing is read
+// until the operator acts); none is `null`. A tree mounted again names the choice beside the
+// control, which the browser has reset.
+export function filePicker(label, name, state, key) {
+  const input = h("input", { type: "file", name });
+  input.on = {
+    change: (e) => {
+      const files = e.target.files;
+      state[key] = files && files.length > 0 ? files[0] : null;
+    },
+  };
+  const chosen = state[key];
+  return h("label", {}, label, input,
+    h("span", { class: "note", name: `${name}-chosen` }, chosen ? `Still chosen: ${chosen["name"]}` : ""));
+}
+
 // A checkbox bound to `state[key]`, off unless set.
 export function checkbox(label, name, state, key) {
   const box = h("input", { type: "checkbox", name, checked: state[key] === true });

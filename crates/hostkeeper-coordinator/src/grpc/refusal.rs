@@ -178,7 +178,9 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
         MdmRefusal::StoreFailed => Code::Internal,
         MdmRefusal::AuditUnavailable => Code::Unavailable,
-        MdmRefusal::SecretsUnavailable | MdmRefusal::NoPendingRequest => Code::FailedPrecondition,
+        MdmRefusal::SecretsUnavailable | MdmRefusal::NoPendingRequest | MdmRefusal::NameLocked => {
+            Code::FailedPrecondition
+        }
         MdmRefusal::MdmcertUnavailable => Code::Unavailable,
         MdmRefusal::ReplyUndecryptable
         | MdmRefusal::ReplyNotForRequest
