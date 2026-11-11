@@ -211,7 +211,7 @@ impl TlsRenewer {
 
     /// Whether no usable certificate is held: none, the one in use expires within the renew
     /// window, or the key in use is not the key of its leaf (a renewal that stopped between its
-    /// two writes leaves that, and the listener serves nothing until it is repaired).
+    /// two writes leaves that, and the pair that was in use keeps being served until it is repaired).
     fn due(&self, config: &Config, now: u64) -> bool {
         let window = u64::from(config.renew_days).saturating_mul(86_400);
         match self.parts.setup.open(SecretKind::TlsCert) {

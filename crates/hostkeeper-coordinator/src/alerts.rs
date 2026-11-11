@@ -946,6 +946,10 @@ pub async fn observe_every(coordinator: Arc<Coordinator>, interval: Duration) ->
 mod tests;
 
 #[cfg(test)]
+#[path = "alerts_book_tests.rs"]
+mod book_tests;
+
+#[cfg(test)]
 #[path = "alerts_coordinator_tests.rs"]
 mod coordinator_tests;
 
