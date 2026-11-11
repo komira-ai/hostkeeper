@@ -138,7 +138,7 @@ skipped and nothing else in the workflow changes.
   to the two image tarballs) with `jq`, to its output `digest`. The step fails unless the index
   lists exactly one `linux/amd64` manifest by a `sha256:` digest.
 - **`deploy`** calls the reusable workflow `deploy.yml` of `komira-ai/docker-swarm-updater`,
-  pinned by commit like any action (`c1fcc47610e2886d4d9e561be3c0c76f0452d1f`, version comment
+  pinned by commit like any action (`c1fcc47610e2886d4d9e561be3c0c76f0452d1f6`, version comment
   `v0.1.3`), with exactly `id-token: write` and no secret. It passes the service
   `hostkeeper-coordinator`, the release's version and that digest, the release's download URLs of
   the `linux-x86_64` image tarball and its Sigstore bundle, the endpoint and audience from the
