@@ -649,3 +649,28 @@ fn accounts_made_with_a_token_whose_name_is_not_a_name_are_refused() {
         "Ci Ops: a token name is 1 to 32 bytes of a-z, 0-9 and -"
     );
 }
+
+/// Proves: a stored token record that does not read is refused naming the place and the record,
+/// as a user's is, and the store prints no account in its `Debug` text.
+///
+/// Catches: a token row read as an empty token, or a log line that lists the accounts of a store.
+#[test]
+fn a_token_record_that_does_not_read_is_refused_naming_the_record() {
+    let refused = Accounts::of_records(
+        Path::new("database/accounts"),
+        std::iter::empty(),
+        [(
+            "ci-ops".to_owned(),
+            serde_json::json!({"sha256": 7, "created_by": "x", "created_at": 1}),
+        )],
+    )
+    .expect_err("a token that does not read");
+    assert_eq!(
+        refused.to_string(),
+        "database/accounts: the record ci-ops: a field has a value of the wrong type or form; the coordinator does not guess which users and tokens exist, so fix or remove the file to start"
+    );
+    assert_eq!(
+        format!("{:?}", AccountStore::volatile()),
+        "AccountStore { .. }"
+    );
+}
