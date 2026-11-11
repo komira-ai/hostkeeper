@@ -387,7 +387,7 @@ pub fn blob(spec: &Spec) -> Vec<u8> {
     fields.push(alg(spec.signature_alg));
     fields.push(octets(&signature));
     if spec.unsigned_attributes {
-        fields.push(context(1, true, &attr("1.2.3.4", octets(b"x"))));
+        fields.push(context(1, true, &attr("1.2.3.4.5", octets(b"x"))));
     }
     let signer = seq(&fields);
     let signers: Vec<Vec<u8>> = (0..spec.signer_count).map(|_| signer.clone()).collect();

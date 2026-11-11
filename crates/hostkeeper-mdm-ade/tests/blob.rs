@@ -298,7 +298,7 @@ fn algorithms_that_are_not_implemented_are_unsupported() {
         Err(Error::Unsupported("digest algorithm"))
     );
     let unknown = Spec {
-        signature_alg: "1.2.3.4",
+        signature_alg: "1.2.3.4.5",
         ..Spec::default()
     };
     assert_eq!(
