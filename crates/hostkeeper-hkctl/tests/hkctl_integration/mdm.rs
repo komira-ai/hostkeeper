@@ -122,7 +122,8 @@ fn list_settings_prints_every_setting_at_its_default() {
         .map(|s| {
             (
                 s["name"].as_str().expect("a name"),
-                s["value"].as_str().expect("a value"),
+                // proto3 JSON leaves out an empty string.
+                s["value"].as_str().unwrap_or(""),
                 s["isDefault"].as_bool().expect("is_default"),
             )
         })
@@ -134,6 +135,24 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("abm_alert_days", "60", true),
             ("tls_renew_days", "30", true),
             ("secret_grace_days", "7", true),
+            ("push_retry_s", "3600", true),
+            ("push_expiry_s", "86400", true),
+            ("push_priority", "10", true),
+            ("push_timeout_s", "30", true),
+            ("dns_zone", "", true),
+            (
+                "acme_directory",
+                "https://acme-v02.api.letsencrypt.org/directory",
+                true
+            ),
+            ("acme_contact", "", true),
+            ("dns_ttl_s", "600", true),
+            ("dns_poll_s", "15", true),
+            ("dns_timeout_s", "600", true),
+            ("dns_settle_s", "60", true),
+            ("acme_timeout_s", "300", true),
+            ("tls_check_s", "300", true),
+            ("tls_retry_s", "3600", true),
         ]
     );
 }
