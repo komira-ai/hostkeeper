@@ -94,13 +94,13 @@ pub type Layer = (
 /// the loaders the Mac's daemon reads them with (`hostkeeper-package`'s stores parser and
 /// `hostkeeper-install`'s signers parser), so a profile the daemon would refuse is refused when
 /// the coordinator starts; neither depends on the gate or the coordinator.
-pub const LAYERS: [Layer; 35] = [
+pub const LAYERS: [Layer; 36] = [
     (BINARY, &[DAEMON], &[LAUNCHD]),
     (CONFIG, &[], &[]),
     (
         COORDINATOR,
         &[
-            CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, OIDC, PROTO, RELEASE, TLS, WIRE,
+            CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, MDM_SERVER, OIDC, PROTO, RELEASE, TLS, WIRE,
         ],
         &[MDM_PUSH, OIDC],
     ),

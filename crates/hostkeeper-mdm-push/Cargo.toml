@@ -34,7 +34,7 @@ http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
-rand_core.workspace = true
+rand_core = { version = "0.6.4", features = ["getrandom"] }
 rcgen.workspace = true
 rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 rustls = { workspace = true, features = ["tls12"] }

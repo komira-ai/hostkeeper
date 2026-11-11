@@ -337,6 +337,23 @@ impl MdmState {
         all
     }
 
+    pub(crate) fn enrollments_with_queued(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self
+            .commands
+            .values()
+            .filter(|c| c.state == CommandState::Queued)
+            .filter(|c| {
+                self.enrollments
+                    .get(&c.enrollment_id)
+                    .is_some_and(|e| e.state == EnrollmentState::Live)
+            })
+            .map(|c| c.enrollment_id.clone())
+            .collect();
+        ids.sort();
+        ids.dedup();
+        ids
+    }
+
     pub(crate) fn abm_apply(&mut self, batch: &AbmBatch) {
         for device in &batch.upserts {
             let first_seen_unix = self

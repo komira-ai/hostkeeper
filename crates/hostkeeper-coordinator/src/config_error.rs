@@ -73,6 +73,11 @@ pub enum StartError {
         "--lan-listen: {0} is a wildcard address; the LAN listener's address is named in the server certificate, so name the address of one interface"
     )]
     LanListen(SocketAddr),
+    /// `--mdm-listen` is a wildcard address.
+    #[error(
+        "--mdm-listen: {0} is a wildcard address; the Macs' listener is reached by the name of the MDM server, which is the address of one interface of the LAN, so name that address"
+    )]
+    MdmListen(SocketAddr),
     /// `--health-listen` is not a loopback address.
     #[error(
         "--health-listen: {0} is not a loopback address; the health listener answers with no token and no TLS, so name an address of 127.0.0.0/8 or ::1"

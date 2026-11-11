@@ -35,8 +35,11 @@ use crate::mdm_secrets::MasterKey;
 use crate::mdm_setup::MdmSetup;
 use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
+use crate::store::mdm::MdmStore;
+use crate::store::mdm::files::FileMdm;
 use crate::store::mdm_setup::SetupStore;
 use crate::store::mdm_setup::files::FileSetup;
+use crate::store::postgres::mdm::PgMdm;
 use crate::store::postgres::mdm_setup::PgSetup;
 use crate::store::postgres::{DatabaseError, Dsn, PgDevices, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
@@ -56,6 +59,9 @@ pub(super) struct Opened {
     pub(super) devices: Option<Box<dyn DeviceStore>>,
     /// The tables of the MDM setup: the directory beside the state file, or the database's.
     pub(super) setup: Arc<dyn SetupStore>,
+    /// The MDM tables (enrollments, identities, commands): the directory beside the state file,
+    /// or the database's.
+    pub(super) mdm: Arc<dyn MdmStore>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -88,6 +94,10 @@ pub(super) fn open_store(
             records: None,
             devices: None,
             setup: Arc::new(FileSetup::open(&mdm_setup_dir(&state))?),
+            mdm: Arc::new(
+                FileMdm::open(&mdm_tables_dir(&state))
+                    .map_err(|why| StartError::MdmSetupStore(why.to_string()))?,
+            ),
         });
     };
     let file_flags = [
@@ -129,11 +139,11 @@ pub(super) fn open_store(
         None => None,
     };
     // The gate's device records are the table `mdm_devices` when the gate runs.
-    let devices: Option<Box<dyn DeviceStore>> = match flags.mdm.mdm_api_url {
-        Some(_) => Some(Box::new(PgDevices::over(&store))),
-        None => None,
-    };
+    let devices: Option<Box<dyn DeviceStore>> = (flags.mdm.mdm_api_url.is_some()
+        || flags.mdm.mdm_listen.is_some())
+    .then(|| Box::new(PgDevices::over(&store)) as Box<dyn DeviceStore>);
     let setup = Arc::new(PgSetup::over(&store));
+    let mdm = Arc::new(PgMdm::over(&store));
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
@@ -142,6 +152,7 @@ pub(super) fn open_store(
         records,
         devices,
         setup,
+        mdm,
     })
 }
 
@@ -150,6 +161,14 @@ pub(super) fn open_store(
 pub fn mdm_setup_dir(state: &Path) -> PathBuf {
     let mut path = state.as_os_str().to_owned();
     path.push(".mdm-setup");
+    PathBuf::from(path)
+}
+
+/// The directory of the MDM tables' files beside the state file `state`: `<state>.mdm`.
+#[must_use]
+pub fn mdm_tables_dir(state: &Path) -> PathBuf {
+    let mut path = state.as_os_str().to_owned();
+    path.push(".mdm");
     PathBuf::from(path)
 }
 

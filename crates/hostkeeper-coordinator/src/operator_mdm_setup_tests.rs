@@ -155,7 +155,10 @@ fn each_kind_is_audited_under_its_own_action() {
         ("push_cert", &b"cert"[..]),
         ("abm_token", token),
         ("tls_key", b"key"),
-        ("dns_credential", b"id:secret"),
+        (
+            "dns_credential",
+            br#"{"provider":"godaddy","kind":"sso-key","key":"k","secret":"s"}"#,
+        ),
         ("abm_key", b"abm key"),
     ] {
         world
@@ -191,18 +194,19 @@ fn each_kind_is_audited_under_its_own_action() {
 
 /// Proves: a request the call refuses is refused with its token and audited with the token as the
 /// reason, and stores nothing: an unknown kind, an empty value, one over 32 KiB, an ABM token that
-/// is not its five parts, and an upload to a coordinator that holds no master key.
+/// is not its five parts, a DNS credential that is not the JSON of one, and an upload to a coordinator that holds no master key.
 ///
 /// Catches: a malformed upload stored as good, or a refusal that leaves no trace in the audit.
 #[test]
 fn a_refused_upload_is_audited_with_its_reason_and_stores_nothing() {
     let world = world("mdm-setup-refused");
     let too_big = vec![b'x'; 32 * 1024 + 1];
-    let cases: [(&str, &[u8], Option<&str>); 4] = [
+    let cases: [(&str, &[u8], Option<&str>); 5] = [
         ("push_keys", b"x", None),
         ("push_key", b"", Some("push_key")),
         ("push_key", &too_big, Some("push_key")),
         ("abm_token", br#"{"consumer_key":"a"}"#, Some("abm_token")),
+        ("dns_credential", b"id:secret", Some("dns_credential")),
     ];
     for (kind, material, _) in cases {
         let refused = world
@@ -250,7 +254,7 @@ fn a_refused_upload_is_audited_with_its_reason_and_stores_nothing() {
 
     let said: Vec<(String, Option<String>, Option<String>)> = audit(&world)
         .into_iter()
-        .take(4)
+        .take(5)
         .map(|(_, action, subject, reason)| (action, subject, reason))
         .collect();
     assert_eq!(
@@ -274,6 +278,11 @@ fn a_refused_upload_is_audited_with_its_reason_and_stores_nothing() {
             (
                 "mdm_abm_token_put".to_owned(),
                 Some("abm_token".to_owned()),
+                Some("refused: MDM_REFUSAL_INVALID_REQUEST".to_owned())
+            ),
+            (
+                "mdm_acme_credential_put".to_owned(),
+                Some("dns_credential".to_owned()),
                 Some("refused: MDM_REFUSAL_INVALID_REQUEST".to_owned())
             ),
         ]
@@ -381,6 +390,20 @@ fn a_setting_is_judged_audited_and_listed() {
             ("push_expiry_s", "86400", true),
             ("push_priority", "10", true),
             ("push_timeout_s", "30", true),
+            ("dns_zone", "", true),
+            (
+                "acme_directory",
+                "https://acme-v02.api.letsencrypt.org/directory",
+                true
+            ),
+            ("acme_contact", "", true),
+            ("dns_ttl_s", "600", true),
+            ("dns_poll_s", "15", true),
+            ("dns_timeout_s", "600", true),
+            ("dns_settle_s", "60", true),
+            ("acme_timeout_s", "300", true),
+            ("tls_check_s", "300", true),
+            ("tls_retry_s", "3600", true),
         ]
     );
     assert_eq!(

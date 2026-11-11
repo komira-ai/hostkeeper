@@ -636,6 +636,17 @@ async fn a_coordinator_alerts_on_the_push_certificate_it_holds() {
     let nearly = push_certificate_pem(key, TOPIC, now - DAY, now + 20 * DAY);
     rig.certificate(&nearly, pkcs1_pem(key).expect("pem").expose())
         .expect("stored");
+    // A secret of another kind is not the push certificate, whatever its expiry.
+    rig.world
+        .coordinator
+        .mdm_setup
+        .put_secret(
+            crate::mdm_secrets::SecretKind::TlsCert,
+            &crate::mdm_secrets::Secret::new(b"not read".to_vec()),
+            Some(now + DAY),
+            1,
+        )
+        .expect("stored");
     let found = alerts(&rig);
     assert_eq!(found.len(), 1);
     assert_eq!(found[0].version, "60");
@@ -732,6 +743,8 @@ fn alerts_come_by_kind_then_service_and_host() {
         Kind::StoreUnreachable,
         Kind::TrustedRoot,
         Kind::PushCertNearExpiry,
+        Kind::MdmTlsRenewalFailed,
+        Kind::MdmDnsCredentialRejected,
     ];
     assert_eq!(
         all.map(Kind::log_token),
@@ -748,11 +761,13 @@ fn alerts_come_by_kind_then_service_and_host() {
             "store_unreachable",
             "trusted_root",
             "push_cert_near_expiry",
+            "mdm_tls_renewal_failed",
+            "mdm_dns_credential_rejected",
         ]
     );
     assert_eq!(
         all.map(|kind| kind.proto() as i32),
-        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]
+        [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14]
     );
     let critical: Vec<Kind> = all
         .into_iter()
