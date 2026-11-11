@@ -49,6 +49,12 @@ const KIT: &str = include_str!("kit.js");
 /// handler has not merged.
 pub const UNIMPLEMENTED: &str = r#"{"code":"UNIMPLEMENTED","reason":"unimplemented"}"#;
 
+/// The sign-in routes, as the fake gateway names a request (its URL without the leading `/`).
+pub const LOGIN: &str = "v1/login";
+pub const LOGOUT: &str = "v1/logout";
+pub const SESSION: &str = "v1/session";
+pub const PASSWORD: &str = "v1/password";
+
 /// How a scripted reply arrives.
 const PLAIN: u8 = 0;
 /// Its status arrives, and reading its body fails.
@@ -395,6 +401,26 @@ impl Ui {
     /// Scripts a reply of `method` with any status and body, as text.
     pub fn reply_raw(&self, method: &str, status: u16, body: &str) {
         self.script(method, status, body.to_owned());
+    }
+
+    /// Scripts the answer of `GET /v1/session` for a browser that holds a live session of user
+    /// `operator` with the CSRF token `csrf`, which the app reads when it starts.
+    pub fn session(&self, csrf: &str) {
+        self.reply_raw(
+            SESSION,
+            200,
+            &json!({"username": "operator", "csrf": csrf, "must_change": false}).to_string(),
+        );
+    }
+
+    /// Scripts the answer of `GET /v1/session` for a browser with no session.
+    pub fn no_session(&self) {
+        self.reply_raw(SESSION, 401, r#"{"error":"sign_in_required"}"#);
+    }
+
+    /// Scripts a refusal of one of the four sign-in routes: `{"error": "<token>"}`.
+    pub fn refuse_route(&self, route: &str, status: u16, token: &str) {
+        self.reply_raw(route, status, &json!({"error": token}).to_string());
     }
 
     /// Scripts a request of `method` that gets no reply: `fetch` rejects.
