@@ -64,6 +64,8 @@
 //!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
+//! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once
+//!   (not yet used by a route);
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
@@ -109,11 +111,13 @@
 /// `commit`.
 pub const BUILD_COMMIT: &str = stamp::BUILD_COMMIT;
 
+pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
 pub mod assign;
 pub mod assignment;
+pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
@@ -144,6 +148,7 @@ pub mod host_move;
 pub mod hosts;
 pub mod http;
 pub mod identity;
+pub mod initial_admin;
 pub(crate) mod install_order;
 pub(crate) mod intents;
 pub mod inventory;
@@ -169,6 +174,7 @@ pub(crate) mod ops_file;
 pub mod order_terms;
 pub mod orders;
 pub mod origin_https;
+pub mod password;
 pub(crate) mod picks;
 pub mod reconcile;
 pub mod registry;
@@ -210,6 +216,8 @@ mod assigned_counts_tests;
 #[cfg(test)]
 mod assignment_tests;
 #[cfg(test)]
+mod audit_actions_tests;
+#[cfg(test)]
 mod audit_file_tests;
 #[cfg(test)]
 mod audit_list_tests;
@@ -217,6 +225,8 @@ mod audit_list_tests;
 mod audit_refusal_tests;
 #[cfg(test)]
 mod audit_rotation_tests;
+#[cfg(test)]
+pub(crate) mod backup_accounts_tests;
 #[cfg(test)]
 mod backup_refusal_tests;
 #[cfg(test)]
@@ -396,6 +406,8 @@ mod ops_tests;
 mod order_terms_tests;
 #[cfg(test)]
 mod origin_https_tests;
+#[cfg(test)]
+mod password_tests;
 #[cfg(test)]
 mod picks_private_tests;
 #[cfg(test)]

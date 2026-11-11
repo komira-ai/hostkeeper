@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use hostkeeper_oidc::{Clock, SpentJtis};
 
+use crate::accounts::{Accounts, AccountsError};
 use crate::audit_file::{AuditLine, Logged, Query};
 use crate::desired::{self, StoreError};
 use crate::jti_file::JtiError;
@@ -143,6 +144,8 @@ pub(crate) struct Commit<'a> {
     pub(crate) ops: Option<(&'a OpsState, &'a OpsState)>,
     /// The verdicts acknowledged and counted.
     pub(crate) verdicts: Option<(&'a verdict_file::Held, &'a verdict_file::Held)>,
+    /// The operator's users and API tokens.
+    pub(crate) accounts: Option<(&'a Accounts, &'a Accounts)>,
     /// The audit lines of the change, in their order.
     pub(crate) audit: &'a [AuditLine],
 }
@@ -155,6 +158,7 @@ impl Commit<'_> {
             Commit {
                 ops: None,
                 verdicts: None,
+                accounts: None,
                 audit: [],
                 ..
             }
@@ -171,6 +175,8 @@ pub(crate) struct Loaded {
     pub(crate) ops: OpsState,
     /// The verdicts.
     pub(crate) verdicts: verdict_file::Held,
+    /// The operator's users and API tokens.
+    pub(crate) accounts: Accounts,
     /// The spent ids of CI's tokens, each with the second until which it is refused.
     pub(crate) spent: Vec<(String, u64)>,
 }
@@ -188,6 +194,9 @@ pub(crate) enum BackendError {
     /// The verdicts could not be read or written.
     #[error(transparent)]
     Verdicts(#[from] VerdictsError),
+    /// The users and API tokens could not be read or written.
+    #[error(transparent)]
+    Accounts(#[from] AccountsError),
     /// The spent token ids could not be read or written.
     #[error(transparent)]
     Jti(#[from] JtiError),
@@ -203,7 +212,8 @@ impl BackendError {
         match self {
             Self::Desired(e)
             | Self::Ops(OpsError::Io(e))
-            | Self::Verdicts(VerdictsError::Io(e)) => e,
+            | Self::Verdicts(VerdictsError::Io(e))
+            | Self::Accounts(AccountsError::Io(e)) => e,
             other => StoreError::Io {
                 path: PathBuf::from("store"),
                 source: io::Error::other(other.to_string()),
@@ -313,6 +323,10 @@ mod files_releases_tests;
 #[cfg(test)]
 #[path = "files_repositories_tests.rs"]
 mod files_repositories_tests;
+
+#[cfg(test)]
+#[path = "files_accounts_tests.rs"]
+mod files_accounts_tests;
 
 #[cfg(test)]
 #[path = "files_host_groups_tests.rs"]

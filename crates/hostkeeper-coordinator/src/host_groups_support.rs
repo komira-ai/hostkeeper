@@ -365,6 +365,8 @@ pub(crate) fn operator_entry(
         node_id: node.map(str::to_owned),
         host_group: group.map(str::to_owned),
         reason: Some(reason.to_owned()),
+        subject: None,
+        source: None,
     }
 }
 
@@ -379,5 +381,7 @@ pub(crate) fn cancelled(seq: u64, group: &str, service: &str, node: &str) -> Aud
         node_id: Some(node.to_owned()),
         host_group: Some(group.to_owned()),
         reason: None,
+        subject: None,
+        source: None,
     }
 }

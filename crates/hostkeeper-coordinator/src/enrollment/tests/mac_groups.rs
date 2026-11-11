@@ -218,6 +218,8 @@ fn a_nonce_approval_puts_the_mac_in_its_group() {
             key.key_hash(),
             claims("machine-mac")
         )),
+        subject: None,
+        source: None,
     };
     let entries: Vec<AuditEntry> = fleet
         .audit()
