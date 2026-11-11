@@ -177,9 +177,11 @@ impl DnsProvider for FakeDns {
             if inner.fail_remove {
                 return Err(DnsError::Failed("the provider is down".to_owned()));
             }
-            if let Some(values) = inner.records.get_mut(&record.name) {
-                values.retain(|value| *value != record.value);
-            }
+            inner
+                .records
+                .entry(record.name.clone())
+                .or_default()
+                .retain(|value| *value != record.value);
             Ok(())
         })
     }

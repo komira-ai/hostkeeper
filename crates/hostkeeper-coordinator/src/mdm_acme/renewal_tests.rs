@@ -468,6 +468,13 @@ async fn the_key_is_checked_against_the_leaf_before_a_certificate_is_left_alone(
     rig.put(SecretKind::TlsKey, b"not a key");
     assert_eq!(rig.renewer.tick().await, Tick::Renewed);
     assert_eq!(rig.renewer.tick().await, Tick::NotDue);
+    // A PEM block that is not a key any provider takes.
+    rig.put(
+        SecretKind::TlsKey,
+        b"-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n",
+    );
+    assert_eq!(rig.renewer.tick().await, Tick::Renewed);
+    assert_eq!(rig.renewer.tick().await, Tick::NotDue);
     let other = configured();
     assert_eq!(other.renewer.tick().await, Tick::Renewed);
     let key = other

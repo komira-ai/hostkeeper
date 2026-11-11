@@ -285,10 +285,10 @@ fn key_matches(key: &[u8], chain: &[u8]) -> bool {
     let Ok(key) = PrivateKeyDer::from_pem_slice(key) else {
         return false;
     };
-    let Ok(key) = rustls::crypto::ring::sign::any_supported_type(&key) else {
-        return false;
-    };
-    let Some(public) = key.public_key() else {
+    let Some(public) = rustls::crypto::ring::sign::any_supported_type(&key)
+        .ok()
+        .and_then(|key| key.public_key())
+    else {
         return false;
     };
     let Some(Ok(leaf)) = CertificateDer::pem_slice_iter(chain).next() else {
