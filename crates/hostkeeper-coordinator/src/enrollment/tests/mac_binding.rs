@@ -23,6 +23,7 @@ use crate::enrollment::{DeviceStatus, Enrollment, MacDecline, MacOutcome};
 fn enrolled_since(since: Option<u64>) -> DeviceStatus {
     DeviceStatus {
         enrolled_since_unix: since,
+        enrolled_via_dep: None,
         ..GOOD
     }
 }
