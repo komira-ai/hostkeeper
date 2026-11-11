@@ -64,9 +64,11 @@
 //!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
-//! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once
-//!   (not yet used by a route);
-//! - [`session`]: the browser sessions and the login limiter, in memory (not yet used by a route);
+//! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once;
+//! - [`session`]: the browser sessions and the login limiter, in memory;
+//! - [`login`] and [`login_routes`]: the operator's sign-in: `POST /v1/login`, `POST /v1/logout`,
+//!   `GET /v1/session` and `POST /v1/password` on the private surface, and the session cookie
+//!   the JSON gateway accepts beside a bearer token;
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
@@ -156,6 +158,8 @@ pub mod jti_file;
 pub mod listen;
 mod live;
 pub mod lock;
+pub mod login;
+pub(crate) mod login_routes;
 pub mod mdm;
 pub mod membership;
 pub(crate) mod moving;
@@ -349,6 +353,8 @@ mod inventory_window_tests;
 mod live_converged_tests;
 #[cfg(test)]
 mod live_tests;
+#[cfg(test)]
+pub(crate) mod login_support;
 #[cfg(test)]
 mod marks_support;
 #[cfg(test)]

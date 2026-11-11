@@ -38,6 +38,9 @@ pub enum StartError {
     /// None of the three is given.
     #[error("one of --tokens-file, --operator-token-file and --initial-admin-file is required")]
     NoTokenFlag,
+    /// The password hash parameters of the login flags are outside what Argon2id takes.
+    #[error(transparent)]
+    Password(#[from] crate::password::PasswordError),
     /// The initial-admin file is refused, or its passwords cannot be set up.
     #[error(transparent)]
     InitialAdmin(#[from] crate::initial_admin::InitialAdminError),

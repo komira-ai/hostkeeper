@@ -21,7 +21,11 @@
 //!   change. With a UI directory (`--ui-dir`, or the binary's default,
 //!   [`crate::config::DEFAULT_UI_DIR`]) it also answers `GET` and `HEAD` for `/ui/` and every
 //!   path below from that directory ([`crate::ui`]), with no token read; without one those paths
-//!   are not found. The heartbeat surface never serves them. `GET /v1/version[?at_least=<X.Y.Z>]`
+//!   are not found. The heartbeat surface never serves them. A coordinator with a sign-in
+//!   ([`Coordinator::login`]) also answers `POST /v1/login`, `POST /v1/logout`, `GET /v1/session`
+//!   and `POST /v1/password` ([`crate::login_routes`]), which a browser signs in and out and
+//!   changes its password with; the heartbeat surface never serves those either, and an
+//!   operator's bearer never reads or sets the cookie they use. `GET /v1/version[?at_least=<X.Y.Z>]`
 //!   answers which release this coordinator is, with no token read ([`crate::version_route`]):
 //!   CI waits on it before it sets a release a coordinator older than the release would refuse.
 //!
@@ -202,6 +206,12 @@ where
         && let Some(rest) = path.strip_prefix(crate::ui::PREFIX)
     {
         return ui.answer(&method, rest).await;
+    }
+    if surface == Surface::Control
+        && crate::login_routes::is_route(&path)
+        && let Some(login) = coordinator.login()
+    {
+        return crate::login_routes::answer(coordinator, login, request, patience).await;
     }
     match (surface, method, path.as_str()) {
         (Surface::Heartbeat, Method::POST, HEARTBEAT_PATH) => {

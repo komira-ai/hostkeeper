@@ -18,6 +18,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use hostkeeper_enrollment::enroll::records::Records;
+use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_mdm_gate::DeviceStore;
 use hostkeeper_oidc::Clock;
 
@@ -25,9 +26,11 @@ use super::{Serve, StartError, take_lock};
 use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
+use crate::enrollment::os_random;
 use crate::initial_admin::InitialAdmin;
 use crate::jti_file::jti_path;
 use crate::lock::{LockGuard, StateLock, lock_path};
+use crate::login::Login;
 use crate::ops::{Marker, OpsState, unlanded};
 use crate::service::Coordinator;
 use crate::store::postgres::{DatabaseError, Dsn, PgDevices, PgRecords, Postgres};
@@ -360,4 +363,21 @@ pub(super) fn with_initial_admin(
     };
     coordinator.look_at_initial_admin()?;
     Ok(coordinator)
+}
+
+/// `coordinator` serving the sign-in routes, over the settings of the login flags, judged by the
+/// system's clock and drawing session ids from the system's random bytes.
+///
+/// # Errors
+/// [`StartError::Password`]: the password hash parameters are outside what Argon2id takes.
+pub(super) fn with_login(
+    coordinator: Coordinator,
+    flags: &Serve,
+) -> Result<Coordinator, StartError> {
+    let login = Login::new(
+        flags.login.login_settings(),
+        Arc::new(SystemClock),
+        os_random(),
+    )?;
+    Ok(coordinator.with_login(login))
 }

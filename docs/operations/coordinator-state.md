@@ -342,10 +342,53 @@ The coordinator reads it at start and on every `--tls-reload-secs`, by its own w
 
 A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
 password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does
-not start, and on a tick it is logged as a warning and nothing changes. The file is deleted only when it has expired; deleting
-it when the password is changed belongs to the password-change call, which is not in this release.
+not start, and on a tick it is logged as a warning and nothing changes. The file is deleted when it has expired, and when the
+user it made changes the password (`POST /v1/password`, below), if it is still the file whose `id` the record holds; a file of
+another `id` or user stays until it expires, and one that does not read is left for its expiry.
 
 The start rule is: at least one of `--tokens-file`, `--operator-token-file` and `--initial-admin-file`, and not both token
 flags. With `--initial-admin-file` alone no bearer is an operator's; tokens of `--tokens-file` keep working beside it. The
 password hash is made under `--password-memory-kib` (19456), `--password-iterations` (2), `--password-parallelism` (1) and
 `--password-min-length` (12), which are the OWASP minimum for Argon2id by default.
+
+## The sign-in
+
+A coordinator signs a person in with a user name and a password (`docs/design/operator-login.md`, sections 5 and 6.2). The
+four routes are on the private listener only; the heartbeat and LAN listeners answer them as any path they do not serve.
+
+- `POST /v1/login` takes `{"username", "password"}` as JSON (at most 4 KiB; the name is 1 to 32 bytes of a-z, 0-9 and -, the
+  password 1 to 256 bytes; any other body is a 400 `bad_request`). It answers `{"username", "csrf", "must_change"}` and
+  `Set-Cookie: __Host-hk_session=<id>; Secure; HttpOnly; SameSite=Strict; Path=/`, and audits `login` (the peer's address as its
+  source). An unknown name, a wrong password, a disabled user and an initial password past its hour are all 401
+  `invalid_credentials`, with the same bytes and the same one password verify. The first failure of a run is audited
+  `login_failed` and the lock `login_locked`, both by `coordinator`.
+- `GET /v1/session` answers the session of the cookie (`username`, `csrf`, `must_change`, and `must_change_until` while a
+  password must be changed); no session is 401 `sign_in_required`.
+- `POST /v1/logout` ends the session, answers `Set-Cookie: __Host-hk_session=; Max-Age=0` and audits `logout`.
+- `POST /v1/password` takes `{"current", "new"}`: it verifies the current password like a login (a wrong one counts as a failed
+  login), checks the policy (a refusal is 400 `password_policy` with the text of the rule), stores the new hash, clears
+  `must_change`, ends the user's other sessions and keeps this one, deletes the initial-admin file that made the old password,
+  and audits `password_changed`. An initial password is changed up to its deadline: after it, 401 `initial_password_expired`.
+
+`logout` and `password` need the header `X-HK-CSRF` with the session's `csrf` and a body of type `application/json`; an `Origin`
+header, when there is one, must be `https://` and the host asked, and `Sec-Fetch-Site`, when there is one, must be
+`same-origin` (`login` takes the last two as well); a call that fails one is 403 `csrf` and changes nothing. A call that
+carries an `Authorization` header never has its cookie read, and a gRPC call never does. On the JSON gateway
+(`docs/gateway.md`) a call with the cookie and no `Authorization` header is made as the signed-in user, under the same checks.
+A session that must change its password may call `/v1/password`, `/v1/logout` and `/v1/session` and nothing else.
+
+Sessions are kept in memory: a restart signs everyone out. They end 30 minutes after their last use, or 12 hours after the
+login. The flags, each with its default from the start:
+
+| Flag | Default | Meaning |
+| --- | --- | --- |
+| `--session-idle-secs` | 1800 | idle deadline |
+| `--session-max-secs` | 43200 | absolute deadline |
+| `--session-max-count` | 256 | sessions held; a login past it ends the session least recently used |
+| `--login-max-failures` | 5 | consecutive failures of a name before it is locked |
+| `--login-lockout-secs` | 900 | how long the lock lasts, and after which a run of failures is forgotten |
+| `--login-max-hashes` | 2 | password hashes at once; past it a login is 429 `try_later` and starts no hash |
+| `--login-max-tracked` | 4096 | names the limiter counts failures of at once |
+
+The password settings of the section above apply to every hash. A coordinator started from the flags always has a sign-in; the
+routes exist even with no user, and no one can sign in until `--initial-admin-file` or a later release makes one.

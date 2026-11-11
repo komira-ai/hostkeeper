@@ -22,7 +22,8 @@
 //! [`Debug`](std::fmt::Debug) text holds the password or its hash.
 //!
 //! This module makes the record and nothing of the sign-in: the session table, the login routes
-//! and the password change (which deletes the file) are later parts of the design.
+//! and the password change are [`crate::login`] and [`crate::login_routes`]; a password change
+//! deletes the file its user's password came from ([`InitialAdmin::delete_if_adopted`]).
 
 use std::convert::Infallible;
 use std::io;
@@ -37,10 +38,12 @@ use serde::Deserialize;
 use crate::accounts::{AccountStore, AccountsError, User};
 use crate::audit_actions::{INITIAL_PASSWORD_EXPIRED, USER_BOOTSTRAP, about};
 use crate::audit_file::UnixClock;
+use crate::login::LoginSettings;
 use crate::ops::{OpsError, OpsStore, Write};
 use crate::password::{PasswordError, PasswordSettings, Passwords, PolicyError};
 use crate::reconcile::COORDINATOR;
 use crate::service::Coordinator;
+use crate::session::{LimiterSettings, SessionSettings};
 use crate::tokens::{TokenName, TokenNameError};
 
 /// The flag that names the file, which the texts of its errors name instead of its path.
@@ -92,9 +95,78 @@ pub struct LoginFlags {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=256)
     )]
     pub password_min_length: usize,
+    /// Seconds of no use after which a browser session ends; each use pushes it out.
+    #[arg(
+        long,
+        default_value_t = SessionSettings::default().idle_secs,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub session_idle_secs: u64,
+    /// Seconds after sign-in at which a browser session ends however it is used.
+    #[arg(
+        long,
+        default_value_t = SessionSettings::default().max_secs,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub session_max_secs: u64,
+    /// The most browser sessions held; a sign-in past it ends the session least recently used.
+    #[arg(
+        long,
+        default_value_t = SessionSettings::default().max_count,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
+    pub session_max_count: usize,
+    /// Consecutive failed logins of one user name that lock it.
+    #[arg(
+        long,
+        default_value_t = LimiterSettings::default().max_failures,
+        value_parser = clap::value_parser!(u32).range(1..)
+    )]
+    pub login_max_failures: u32,
+    /// Seconds a locked user name stays locked, and after which a run of failures is forgotten.
+    #[arg(
+        long,
+        default_value_t = LimiterSettings::default().lockout_secs,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub login_lockout_secs: u64,
+    /// The most password hashes that run at once (each takes about the memory of
+    /// `--password-memory-kib`); a login past it is told to try later and starts no hash.
+    #[arg(
+        long,
+        default_value_t = LoginSettings::default().max_hashes,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
+    pub login_max_hashes: usize,
+    /// The most user names the login limiter counts failures of at once.
+    #[arg(
+        long,
+        default_value_t = LimiterSettings::default().max_tracked,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..)
+    )]
+    pub login_max_tracked: usize,
 }
 
 impl LoginFlags {
+    /// The settings of the sign-in the flags give.
+    #[must_use]
+    pub fn login_settings(&self) -> LoginSettings {
+        LoginSettings {
+            sessions: SessionSettings {
+                idle_secs: self.session_idle_secs,
+                max_secs: self.session_max_secs,
+                max_count: self.session_max_count,
+            },
+            limiter: LimiterSettings {
+                max_failures: self.login_max_failures,
+                lockout_secs: self.login_lockout_secs,
+                max_tracked: self.login_max_tracked,
+            },
+            max_hashes: self.login_max_hashes,
+            passwords: self.password_settings(),
+        }
+    }
+
     /// The password settings the flags give.
     #[must_use]
     pub fn password_settings(&self) -> PasswordSettings {
@@ -284,6 +356,34 @@ impl InitialAdmin {
         Ok(Outcome::Adopted)
     }
 
+    /// Deletes the file if it is the one `id` names for `user`: the file a password the user has
+    /// now changed came from. A file of another user or another `id` stays, and so does one that
+    /// is not there. Called after the change, which has already voided what the file would grant.
+    ///
+    /// # Errors
+    /// [`InitialAdminError`]: the file cannot be read, or the file that is the user's cannot be
+    /// deleted. The expiry of the file deletes it at the next look in either case.
+    pub fn delete_if_adopted(&self, user: &str, id: &str) -> Result<(), InitialAdminError> {
+        let Some(file) = read(&self.path)? else {
+            return Ok(());
+        };
+        if file.user != user || file.id != id {
+            return Ok(());
+        }
+        self.delete()
+    }
+
+    /// Deletes the file; one that is already gone (another look, or a password change, deleted
+    /// it) is deleted.
+    fn delete(&self) -> Result<(), InitialAdminError> {
+        match std::fs::remove_file(&self.path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                Err(InitialAdminError::Delete(e.kind()))
+            }
+            _ => Ok(()),
+        }
+    }
+
     /// The file has expired: its user's initial credential is voided if this file's `id` made it
     /// and the password was not changed, the expiry is audited unless the password had been
     /// changed already, and then the file is deleted. In that order, so that a store or an audit
@@ -311,13 +411,7 @@ impl InitialAdmin {
         if !changed {
             audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
         }
-        // A file that is already gone (another look, or a password change, deleted it) is deleted.
-        match std::fs::remove_file(&self.path) {
-            Err(e) if e.kind() != io::ErrorKind::NotFound => {
-                return Err(InitialAdminError::Delete(e.kind()));
-            }
-            _ => {}
-        }
+        self.delete()?;
         Ok(Outcome::Expired)
     }
 }

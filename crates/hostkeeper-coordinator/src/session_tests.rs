@@ -615,3 +615,30 @@ fn a_tracking_cap_of_zero_holds_one_name() {
     let _ = limiter.failed("b");
     assert_eq!(limiter.tracked(), 1);
 }
+
+#[test]
+fn a_session_that_chose_a_password_no_longer_must_change_it() {
+    let clock = clock();
+    let sessions = sessions(SessionSettings::default(), &clock);
+    let (id, view) = sessions.create("admin", true, Some(START + 3600)).unwrap();
+    assert!(view.must_change);
+    let cleared = sessions.clear_must_change(id.as_str()).unwrap();
+    assert_eq!(cleared.username, "admin");
+    assert!(!cleared.must_change);
+    assert_eq!(cleared.must_change_until, None);
+    assert_eq!(cleared.csrf(), view.csrf(), "the session is the same one");
+    assert_eq!(sessions.lookup(id.as_str()), Some(cleared));
+}
+
+#[test]
+fn clearing_must_change_of_an_unknown_or_ended_or_expired_session_finds_none() {
+    let clock = clock();
+    let sessions = sessions(settings(100, 1000, 8), &clock);
+    assert!(sessions.clear_must_change("nobody").is_none());
+    let (ended, _) = sessions.create("admin", true, None).unwrap();
+    assert!(sessions.end(ended.as_str()));
+    assert!(sessions.clear_must_change(ended.as_str()).is_none());
+    let (idle, _) = sessions.create("admin", true, None).unwrap();
+    set(&clock, START + 100);
+    assert!(sessions.clear_must_change(idle.as_str()).is_none());
+}
