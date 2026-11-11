@@ -132,6 +132,16 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
   (it refills from the origins) and is not shared between coordinators. Without the flag there is no
   cache. In this release nothing serves from it yet.
+- **The push certificate.** Its records are in `mdm_secrets`: `push_pending_key` (the key of the request
+  being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
+  encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is
+  `BEGIN RSA PRIVATE KEY`, as NanoHUB keeps it, or PKCS#8). `Mdm.PutPushCertificate` stores the key and then the
+  certificate, so a failure between the two leaves the new key beside the old certificate; the push
+  identity is then the newest certificate with the newest held key that matches it, which is the key it
+  replaced (held for `secret_grace_days`), until the upload is made again. A renewal keeps the topic of the certificate in use, which every enrollment carries. The settings
+  `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
+  push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
+  reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

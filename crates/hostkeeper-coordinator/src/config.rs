@@ -596,6 +596,9 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator.with_mdm_setup(mdm_setup);
+    coordinator = coordinator.with_mdmcert(Arc::new(
+        hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
+    ));
     coordinator = coordinator.with_proxy_cache(proxy_cache);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),

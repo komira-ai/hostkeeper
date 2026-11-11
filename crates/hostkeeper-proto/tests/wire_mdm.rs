@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 18] = [
+const FIELDS: [(&str, &[Field]); 24] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -135,6 +135,40 @@ const FIELDS: [(&str, &[Field]); 18] = [
         "hostkeeper.operator.v1.ListSettingsResponse",
         &[("settings", 1, false)],
     ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestRequest",
+        &[("email", 1, false), ("submit", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.CreatePushRequestResponse",
+        &[
+            ("csr_pem", 1, false),
+            ("encryption_certificate_pem", 2, false),
+            ("submitted", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyRequest",
+        &[("reply", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushReplyResponse",
+        &[("signed_request", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateRequest",
+        &[("certificate_pem", 1, false), ("key_pem", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutPushCertificateResponse",
+        &[
+            ("topic", 1, false),
+            ("not_before_unix", 2, false),
+            ("not_after_unix", 3, false),
+            ("secret", 4, true),
+            ("renewal", 5, false),
+        ],
+    ),
     ("hostkeeper.operator.v1.MdmStatusRequest", &[]),
     (
         "hostkeeper.operator.v1.MdmStatusResponse",
@@ -190,6 +224,9 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "PutSetting(PutSettingRequest) PutSettingResponse",
             "ListSecrets(ListSecretsRequest) ListSecretsResponse",
             "ListSettings(ListSettingsRequest) ListSettingsResponse",
+            "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
+            "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
+            "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
             "Status(MdmStatusRequest) MdmStatusResponse",
             "PutName(PutNameRequest) PutNameResponse",
         ]
@@ -209,6 +246,15 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("audit_unavailable", 5),
             ("secrets_unavailable", 6),
             ("name_locked", 7),
+            ("mdmcert_unavailable", 8),
+            ("no_pending_request", 9),
+            ("reply_undecryptable", 10),
+            ("reply_not_for_request", 11),
+            ("certificate_invalid", 12),
+            ("key_invalid", 13),
+            ("key_mismatch", 14),
+            ("certificate_expired", 15),
+            ("topic_changed", 16),
         ])
     );
     assert_eq!(

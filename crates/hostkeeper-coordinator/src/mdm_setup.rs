@@ -210,6 +210,28 @@ impl MdmSetup {
             .transpose()
     }
 
+    /// Every version of `kind` still held, newest first, each opened. Replaced versions are held
+    /// for `secret_grace_days`.
+    ///
+    /// # Errors
+    /// As [`Self::open`], for any version.
+    pub fn open_held(&self, kind: SecretKind) -> Result<Vec<Secret>, SetupFailure> {
+        let key = self.key.as_ref().ok_or(SetupFailure::NoKey)?;
+        let mut rows: Vec<_> = self
+            .store
+            .secrets()?
+            .into_iter()
+            .filter(|row| row.kind == kind.as_str())
+            .collect();
+        rows.sort_by_key(|row| std::cmp::Reverse(row.version));
+        rows.iter()
+            .map(|row| {
+                key.open(&row.kind, row.version, &row.sealed.0)
+                    .map_err(SetupFailure::from)
+            })
+            .collect()
+    }
+
     /// The kinds whose secret in use the key does not open: the check of a start that holds a key
     /// and sealed rows, which refuses to start on a key of another store.
     ///
