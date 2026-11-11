@@ -317,7 +317,8 @@ pub struct AuditEntry {
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
     /// `mdm_nonce_pushed` and `mdm_install_sent`, by `mdm-gate`; `state_imported`, by
-    /// `coordinator`, the last row of an import into the database).
+    /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
+    /// release writes none).
     pub action: String,
     /// The service it concerned, if any.
     #[serde(default, skip_serializing_if = "Option::is_none")]

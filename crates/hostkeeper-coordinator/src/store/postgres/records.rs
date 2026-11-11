@@ -398,7 +398,7 @@ fn nonce_of(row: &Row) -> pb::MacNonce {
 }
 
 /// Every record the tables of `session` hold, each list in the order of its key, and the next
-/// serial when one was taken: what an import reads back and an export writes
+/// serial when one was taken: what an export writes
 /// (`docs/design/coordinator-storage.md`, section 11). A counter still at the first serial is
 /// one no serial was taken from.
 ///

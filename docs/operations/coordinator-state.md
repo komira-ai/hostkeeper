@@ -254,7 +254,7 @@ What the restore checks and refuses:
   restored audit as it read before the backup.
 - Before its first file it writes `<state-file>.restore-unfinished`, and it removes the marker
   after its last. A restore that stopped partway (killed, or the machine lost) leaves the marker:
-  `serve` refuses to start while it is there, and so does a second restore. A `<state-file>.migrate-unfinished` (left by a `host-groups migrate --apply` of release 0.1.253 that stopped partway) refuses `serve`, `backup`, `restore` and `export` the same way: `<state-file>.migrate-unfinished: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it`. Remove the files the
+  `serve` refuses to start while it is there, and so does a second restore. A `<state-file>.migrate-unfinished` (left by a `host-groups migrate --apply` of release 0.1.253 that stopped partway) refuses `serve` and `backup`: `<state-file>.migrate-unfinished: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it`; `restore` and `export` take it, in their targets, for state already there, and refuse as for any other file there. Remove the files the
   restore wrote and the marker, and restore again.
 - A write that fails removes what the restore had written. The error names anything it could not
   remove; remove that before restoring again.

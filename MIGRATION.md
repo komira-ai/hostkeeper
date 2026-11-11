@@ -659,9 +659,9 @@ Three verbs that an operator ran by hand once are gone. The coordinator's verbs 
   roles to groups goes through the operator API, in
   [hostgroups.md](docs/operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups). A
   `--apply` of release 0.1.253 that stopped partway left `<state-file>.migrate-unfinished`, and
-  `serve`, `backup`, `restore` and `export` still refuse it: `<state-file>.migrate-unfinished: a
-  host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before
-  it`.
+  `serve` and `backup` still refuse it: `<state-file>.migrate-unfinished: a host-groups migrate
+  --apply of release 0.1.253 stopped partway; restore the backup taken before it`; `restore` and
+  `export` take it, in their targets, for state already there.
 - **`hostkeeper-coordinator import`**: there is no conversion from the file store to the database.
   A farm stays on the file store, or starts a database coordinator and enrolls its hosts again.
   `export`, from the database into new files, stays.

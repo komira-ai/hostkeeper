@@ -231,7 +231,7 @@ The wire stays additive: no field, message, enum value, call or service is renum
 | `agent.v1.HeartbeatResponse`, `HeartbeatRequest` | | New `HostFacts facts` in the answer and `facts_generation` in the request; the daemon feature `facts-v1` |
 | `HostGroups` service | | New (section 7.1) |
 
-Coordinator configuration, old -> new: `--rollout-file` is refused by `serve` once this is built, naming the migration verb (section 10); it is read only by `hostkeeper-coordinator host-groups migrate`. `--live-rollouts` stays, as the default of a group's `live_rollouts`. The OIDC allow-list gains `host_groups` (section 2.2). The Mac allowlist's `role` is read as `host_group`, which it gains; its `services` is refused at start. The repository registry's entry gains `access` and `credential_file` (section 6.6).
+Coordinator configuration, old -> new: `--rollout-file` is refused by `serve` once this is built, naming the operator API calls that place the hosts instead (the removal note of section 10); no verb reads it. `--live-rollouts` stays, as the default of a group's `live_rollouts`. The OIDC allow-list gains `host_groups` (section 2.2). The Mac allowlist's `role` is read as `host_group`, which it gains; its `services` is refused at start. The repository registry's entry gains `access` and `credential_file` (section 6.6).
 
 ## 8. Storage
 

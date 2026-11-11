@@ -5,8 +5,8 @@
 //! [`hostkeeper_mdm_gate::encode_record`], and a load reads each with the gate's own reader
 //! ([`decode_record`]), so a row is as strict as a file: a record that is not whole, is of a newer
 //! schema or is of another enrollment id than its key stops the gate's start, naming the row; a
-//! field of a later release is skipped. A record moves between a row and a file byte for byte
-//! (`import`, `export`).
+//! field of a later release is skipped. A record moves from a row to a file byte for byte
+//! (`export`).
 //!
 //! A save is one transaction on the writing session, fenced by the lease as every commit is: it
 //! commits only while this coordinator holds the database's lock. A save that does not commit,

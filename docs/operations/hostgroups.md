@@ -437,8 +437,10 @@ below is safe at every step.
 
 A host is ordered nothing until both its group exists and has a desired version, so no service is
 touched while the move runs; a host's packages change only when step 5 gives its group a version
-that differs from what it runs. Scripts that name roles keep working: `--role` is read as the
-group's name.
+that differs from what it runs. Scripts that pass `--role` to `hkctl enrollment approve` or
+`enrollment add-record`, or name a `role` in a `releases force` request, keep working: it is read as
+the group's name. Scripts that call `services assign` or `unassign`, or approve naming services, are
+refused (`placed_by_host_group`, `services_retired`) and must change.
 
 To go back, restore the backup and the old configuration with the release before: the store now
 holds `host_groups`, which that release refuses. A coordinator holding groups has no way back to
