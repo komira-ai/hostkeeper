@@ -58,9 +58,9 @@ group's name as its `role` too, and `list-records` shows it as both `role` and `
 
 A coordinator that holds no host group yet refuses every `--host-group` (`unknown_host_group`)
 and orders every host nothing: put a group first (`hkctl host-groups put`,
-[hostgroups.md](hostgroups.md)), or convert a fleet placed by roles with
-`hostkeeper-coordinator host-groups migrate` ([hostgroups.md](hostgroups.md#migrating-from-roles)),
-which gives each record and approval the group of its role.
+[hostgroups.md](hostgroups.md)), or move a fleet placed by roles to groups through the operator
+API ([hostgroups.md](hostgroups.md#moving-a-fleet-from-roles-to-host-groups)); `add-record` and
+`approve` name the group of each record and approval.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \

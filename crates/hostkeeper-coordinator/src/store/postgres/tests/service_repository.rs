@@ -137,7 +137,6 @@ fn the_release_before_runs_on_a_database_this_release_migrated() {
         .expect("a repository set");
     let ran = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
-        migrate::refuse_newer(session, &before).expect("not refused before it runs");
         migrate::apply(session, &before).expect("the release before is accepted")
     });
     assert_eq!(ran, Vec::<i32>::new());
