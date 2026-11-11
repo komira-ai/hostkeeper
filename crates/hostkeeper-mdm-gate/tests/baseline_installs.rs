@@ -361,6 +361,74 @@ async fn a_name_the_mac_refused_is_sent_again_at_the_interval_or_when_it_changes
     assert_eq!(count(&rig, "Settings"), 3, "a new name is not held back");
 }
 
+/// Catches: a `Settings` answered `Acknowledged` whose items did not all apply (an item with an
+/// `Error` status, or none) shown as applied and never sent again; an item list that is all
+/// acknowledged, or absent, shown as failed.
+#[tokio::test]
+async fn an_acknowledged_name_with_a_failed_item_is_failed_and_sent_again() {
+    let item = |status: &str| {
+        Value::Dictionary(dict(&[
+            ("Status", Value::from(status)),
+            ("Item", Value::from("HostName")),
+        ]))
+    };
+    let rig = profile_only("name-item", true).await;
+    ack(&rig, "InstallProfile", 0, 1_010).await;
+    let uuid = rig.last_uuid("Settings");
+    rig.clock().set(1_020);
+    let items = Value::Array(vec![item("Acknowledged"), item("Error")]);
+    rig.rig
+        .post(&result(
+            UDID,
+            Some(&uuid),
+            "Acknowledged",
+            &[("Settings", items)],
+        ))
+        .await;
+    assert_eq!(
+        status(&rig),
+        Some(BaselineStatus {
+            state: BaselineState::Failed,
+            reason: "device name: the device answered an error".to_owned()
+        })
+    );
+    look(&rig, 1_020 + CHECK).await;
+    assert_eq!(count(&rig, "Settings"), 2, "sent again at the interval");
+
+    // An item with no status is no success; all items acknowledged is.
+    let uuid = rig.last_uuid("Settings");
+    rig.clock().set(2_000);
+    let items = Value::Array(vec![Value::Dictionary(dict(&[]))]);
+    rig.rig
+        .post(&result(
+            UDID,
+            Some(&uuid),
+            "Acknowledged",
+            &[("Settings", items)],
+        ))
+        .await;
+    assert_eq!(status(&rig).map(|s| s.state), Some(BaselineState::Failed));
+    look(&rig, 2_000 + CHECK).await;
+    let uuid = rig.last_uuid("Settings");
+    rig.clock().set(3_000);
+    let items = Value::Array(vec![item("Acknowledged"), item("Acknowledged")]);
+    rig.rig
+        .post(&result(
+            UDID,
+            Some(&uuid),
+            "Acknowledged",
+            &[("Settings", items)],
+        ))
+        .await;
+    assert_ne!(status(&rig).map(|s| s.state), Some(BaselineState::Failed));
+    look(&rig, 3_000 + 10 * CHECK).await;
+    assert_eq!(
+        count(&rig, "Settings"),
+        3,
+        "an applied name is not sent again"
+    );
+}
+
 /// Catches: a baseline install sent before the config profile is acknowledged, to a Mac of a
 /// group with no baseline, or the hostkeeper pkg sent by the baseline as well as by the pkg
 /// step; a manifest that does not name the entry's digest, bundle identifier and version or that

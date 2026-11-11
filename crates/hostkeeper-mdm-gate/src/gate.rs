@@ -35,7 +35,7 @@ use hostkeeper_enrollment::validity::UnixClock;
 
 use crate::answer;
 use crate::baseline::Baseline;
-use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO};
+use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO, SETTINGS};
 use crate::enroll::{EnrollSide, Held};
 use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
@@ -452,6 +452,11 @@ fn result(
                 }
                 PROFILE_LIST => {
                     record.answer_profile_list(&uuid, answer::profile_list(payload, &uuid), now);
+                }
+                // The device acknowledged the command, but its items may each have failed.
+                SETTINGS => {
+                    let applied = answer::settings_applied(payload, &uuid);
+                    record.answer_profile(&uuid, applied, now);
                 }
                 // A profile command of the enrollment side.
                 _ => record.answer_profile(&uuid, true, now),

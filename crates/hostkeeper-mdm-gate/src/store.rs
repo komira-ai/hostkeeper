@@ -22,9 +22,10 @@
 //! without them as one with no profile sent and no nonce issued. The pkg sends of an enrollment
 //! (task M14) are field 20, added to schema 1 the same way: a record without it is one with no
 //! pkg sent. The enrollment baseline's sends (design 6.4) are field 21 the same way; its
-//! unanswered `EnableRemoteDesktop`, `ProfileList` and `Settings` commands are written to field 22, not to
+//! unanswered `EnableRemoteDesktop` and `ProfileList` commands are written to field 22, not to
 //! the list of field 15, because a release before them refuses a sent command of a type it does
-//! not send, and so would refuse the whole record. The device name's last `Settings` and the
+//! not send, and so would refuse the whole record. A release with field 22 refuses a type off
+//! its own list the same way, so the unanswered `Settings` commands are in field 23. The device name's last `Settings` and the
 //! baseline installs are fields 6 and 7 of the baseline message, added the same way.
 //!
 //! Under the coordinator's file store, the directory is `mdm-devices` in the enrollment store
@@ -266,9 +267,15 @@ struct RecordPb {
     /// The unanswered commands of the types a release before the baseline does not know
     /// (`EnableRemoteDesktop`, `ProfileList`), kept apart from field 15 so that release, which
     /// refuses a sent command of a type it does not send, still reads the record and skips
-    /// these.
+    /// these. A release with the baseline reads this field and refuses a type off its own list,
+    /// so `Settings` is not kept here but in field 23.
     #[prost(message, repeated, tag = "22")]
     baseline_sent: Vec<SentPb>,
+    /// The unanswered `Settings` commands, kept apart from fields 15 and 22 so a release that
+    /// has the baseline but not `Settings`, which refuses a sent command of a type it does not
+    /// send, still reads the record and skips these.
+    #[prost(message, repeated, tag = "23")]
+    settings_sent: Vec<SentPb>,
 }
 
 fn profile_pb(command: &ProfileCommand) -> ProfilePb {
@@ -400,7 +407,12 @@ fn baseline_of(pb: BaselinePb) -> Option<BaselineRecord> {
 
 /// Whether a command of `request_type` is kept in `baseline_sent` (field 22), not in `sent`.
 fn is_baseline_type(request_type: &str) -> bool {
-    [ENABLE_REMOTE_DESKTOP, PROFILE_LIST, SETTINGS].contains(&request_type)
+    [ENABLE_REMOTE_DESKTOP, PROFILE_LIST].contains(&request_type)
+}
+
+/// Whether a command of `request_type` is kept in `settings_sent` (field 23).
+fn is_settings_type(request_type: &str) -> bool {
+    request_type == SETTINGS
 }
 
 fn sent_pb(sent: &Sent) -> SentPb {
@@ -451,7 +463,9 @@ pub fn encode_record(record: &DeviceRecord) -> Vec<u8> {
         sent: record
             .sent
             .iter()
-            .filter(|sent| !is_baseline_type(&sent.request_type))
+            .filter(|sent| {
+                !is_baseline_type(&sent.request_type) && !is_settings_type(&sent.request_type)
+            })
             .map(sent_pb)
             .collect(),
         refused: record.refused.clone(),
@@ -464,6 +478,12 @@ pub fn encode_record(record: &DeviceRecord) -> Vec<u8> {
             .sent
             .iter()
             .filter(|sent| is_baseline_type(&sent.request_type))
+            .map(sent_pb)
+            .collect(),
+        settings_sent: record
+            .sent
+            .iter()
+            .filter(|sent| is_settings_type(&sent.request_type))
             .map(sent_pb)
             .collect(),
     }
@@ -523,8 +543,14 @@ fn decode(
         .filter(|id| kept_under(id))
         .ok_or_else(|| corrupt(elsewhere))?;
     let phase = phase_of(pb.phase).ok_or_else(|| corrupt("the record's phase is unknown"))?;
-    let mut sent = Vec::with_capacity(pb.sent.len() + pb.baseline_sent.len());
-    for one in pb.sent.into_iter().chain(pb.baseline_sent) {
+    let mut sent =
+        Vec::with_capacity(pb.sent.len() + pb.baseline_sent.len() + pb.settings_sent.len());
+    for one in pb
+        .sent
+        .into_iter()
+        .chain(pb.baseline_sent)
+        .chain(pb.settings_sent)
+    {
         let uuid = CommandUuid::parse(&one.uuid)
             .ok_or_else(|| corrupt("a sent command's UUID is malformed"))?;
         if !COMMAND_TYPES.contains(&one.request_type.as_str()) {

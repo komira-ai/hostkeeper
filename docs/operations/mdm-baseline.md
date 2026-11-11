@@ -101,11 +101,14 @@ last send; the next check turns it on again.
 ## What changes, and what does not
 
 - **Format.** The gate's device record gains a baseline (field 21) and a list of unanswered
-  baseline commands (field 22), both new optional fields of schema 1. The last `Settings` and the
+  baseline commands (field 22) and of unanswered `Settings` commands (field 23), all new optional
+  fields of schema 1. The last `Settings` and the
   last install of each name are fields 6 and 7 of the baseline message, new optional fields the
-  release before skips. The unanswered `EnableRemoteDesktop`, `ProfileList` and `Settings` are in field 22 and not in the list of field 15 because
-  the release before refuses a record with a sent command of a type it does not send; it skips
-  fields 21 and 22, so it reads every record this release writes, and this release reads a record
+  release before skips. The unanswered `EnableRemoteDesktop` and `ProfileList` are in field 22, and `Settings` in field
+  23, not in the list of field 15 and not together: a release refuses a record with a sent
+  command of a type it does not send, so each release must find a type it knows in each field it
+  reads. The release before the baseline skips fields 21 to 23, the release with the baseline
+  skips field 23, so it reads every record this release writes, and this release reads a record
   without them as one with no baseline sent. `Mdm.ListDevices` gains `baseline_state` (20) and
   `baseline_reason` (21) on `MdmDevice`, new optional fields.
 - **Flags.** Both flags are new. A coordinator started without them runs as before and sends no
@@ -128,6 +131,8 @@ listed too and a baseline profile is judged by its identifier alone.
 The `Settings` command (the device name) carries two items, `{Item: DeviceName, DeviceName: <name>}`
 and `{Item: HostName, HostName: <name>}`, as the design says Apple's `settings.yaml` has them
 (coordinator-mdm.md, section 4.6). It is tested against the gate's fake NanoHUB only; it has not
-been measured on a Mac, so the first Mac that takes it is the check. `InstallEnterpriseApplication`
+been measured on a Mac, so the first Mac that takes it is the check. The answer's `Settings`
+array has one result per item; an acknowledged command with an item whose `Status` is not
+`Acknowledged` is an error answer, shown as `FAILED` and sent again at the next check. `InstallEnterpriseApplication`
 is the command of the pkg step, with the manifest of
 [enrollment-coordinator.md](../enrollment-coordinator.md).

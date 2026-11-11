@@ -347,6 +347,8 @@ struct RecordPb {
     baseline: Option<BaselinePb>,
     #[prost(message, repeated, tag = "22")]
     baseline_sent: Vec<SentPb>,
+    #[prost(message, repeated, tag = "23")]
+    settings_sent: Vec<SentPb>,
 }
 
 const UUID_A: &str = "0A1B2C3D-AAAA-4BBB-8CCC-0123456789AB";
@@ -391,7 +393,7 @@ fn file_of(record: &RecordPb) -> Vec<u8> {
 }
 
 /// Catches: a record this release writes that the release before refuses or misreads (B8): its
-/// unanswered `EnableRemoteDesktop` and `ProfileList` are in a field that release skips, and
+/// unanswered `EnableRemoteDesktop` and `ProfileList` are in a field that release skips, and an unanswered `Settings` in a field the release with the baseline skips, and
 /// every other field it reads is as it was; a record the release before wrote (no baseline)
 /// read as one with none; a baseline whose command UUID is malformed taken as whole.
 #[test]
@@ -451,8 +453,24 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
             "InstallEnterpriseApplication"
         ]
     );
-    // `EnableRemoteDesktop`, `ProfileList` and `Settings`.
-    assert_eq!(old.baseline_sent.len(), 3);
+    // `EnableRemoteDesktop` and `ProfileList`; `Settings` is in field 23, which the release with
+    // the baseline but not `Settings` skips.
+    assert_eq!(old.baseline_sent.len(), 2);
+    assert_eq!(old.settings_sent.len(), 1);
+    // The release with the baseline (seven types) refuses a type off its list in fields 15 and
+    // 22: every command of those fields is one of the seven.
+    let seven = [
+        "DeviceInformation",
+        "SecurityInfo",
+        "InstallProfile",
+        "InstallEnterpriseApplication",
+        "EnableRemoteDesktop",
+        "ProfileList",
+        "ProfileList",
+    ];
+    for one in old.sent.iter().chain(&old.baseline_sent) {
+        assert!(seven.contains(&one.request_type.as_str()), "{one:?}");
+    }
 
     // A record the release before wrote.
     let before = RecordPb {
@@ -551,6 +569,20 @@ fn the_release_before_the_baseline_reads_every_record_this_one_writes() {
             ..before.clone()
         }),
         "a sent command's UUID is malformed"
+    );
+    assert_eq!(
+        corrupt(&RecordPb {
+            settings_sent: vec![sent("short", "Settings")],
+            ..before.clone()
+        }),
+        "a sent command's UUID is malformed"
+    );
+    assert_eq!(
+        corrupt(&RecordPb {
+            settings_sent: vec![sent(UUID_A, "EraseDevice")],
+            ..before.clone()
+        }),
+        "a sent command's type is not one the gate sends"
     );
     assert_eq!(
         corrupt(&RecordPb {
