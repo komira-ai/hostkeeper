@@ -517,6 +517,12 @@ message MdmStatusResponse {
   optional int64 tls_not_after_unix = 15;
   // The DNS names the TLS certificate holds as subject alternative names.
   repeated string tls_names = 16;
+  // When the last pass of the ABM sync ended without an error, as the running coordinator saw it;
+  // absent when none has since it started (or this coordinator has no ABM client).
+  optional int64 abm_last_sync_unix = 17;
+  // What the last pass of the ABM sync failed with, in words (the faults Apple names on the session
+  // are in them: `signature_invalid`, `timestamp_refused`); empty after a pass that did not fail.
+  string abm_sync_error = 18;
 }
 
 message PutNameRequest {

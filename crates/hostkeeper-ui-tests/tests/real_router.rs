@@ -71,8 +71,12 @@ const SESSION_REQUIRED: &str = "session_required";
 /// coordinator serves the method and keeps it from a token. Any other method answered so fails.
 const SESSION_ONLY_CALLS: &[&str] = &[
     "hostkeeper.operator.v1.Mdm/CreatePushRequest",
+    "hostkeeper.operator.v1.Mdm/GetAbmPublicKey",
+    "hostkeeper.operator.v1.Mdm/PutAbmToken",
+    "hostkeeper.operator.v1.Mdm/PutName",
     "hostkeeper.operator.v1.Mdm/PutPushCertificate",
     "hostkeeper.operator.v1.Mdm/PutPushReply",
+    "hostkeeper.operator.v1.Mdm/PutSecret",
 ];
 
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
@@ -156,7 +160,16 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Mdm/CreatePushRequest",
         r#"{"email": "ops@example.org", "submit": false}"#,
     ),
+    ("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", "{}"),
     ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),
+    (
+        "hostkeeper.operator.v1.Mdm/PutAbmToken",
+        r#"{"tokenJson": "e30="}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Mdm/PutName",
+        r#"{"name": "mdm.example.com"}"#,
+    ),
     (
         "hostkeeper.operator.v1.Mdm/PutPushCertificate",
         r#"{"certificatePem": "MDBmZg=="}"#,
@@ -164,6 +177,10 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Mdm/PutPushReply",
         r#"{"reply": "MDBmZg=="}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Mdm/PutSecret",
+        r#"{"kind": "abm_key", "material": "MDBmZg=="}"#,
     ),
     ("hostkeeper.operator.v1.Mdm/Status", "{}"),
     (

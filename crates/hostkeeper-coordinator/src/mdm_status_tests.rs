@@ -154,6 +154,8 @@ fn a_complete_setup_is_configured_and_shows_what_is_read_of_it() {
             abm_not_after_unix: Some(ABM_ENDS),
             tls_not_after_unix: Some(ENDS),
             tls_names: vec![NAME.to_owned()],
+            abm_last_sync_unix: None,
+            abm_sync_error: String::new(),
         }
     );
     assert!(status.push_cert.is_some() && status.tls_key.is_some());

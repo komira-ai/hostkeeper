@@ -135,7 +135,6 @@ impl Abm {
     }
 
     /// The status of the last pass.
-    #[cfg_attr(not(test), expect(dead_code, reason = "read by Mdm.Status, task CM21"))]
     pub(crate) fn status(&self) -> SyncStatus {
         self.status
             .lock()

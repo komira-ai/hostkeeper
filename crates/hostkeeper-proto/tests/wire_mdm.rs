@@ -187,6 +187,8 @@ const FIELDS: [(&str, &[Field]); 28] = [
             ("abm_not_after_unix", 14, true),
             ("tls_not_after_unix", 15, true),
             ("tls_names", 16, false),
+            ("abm_last_sync_unix", 17, true),
+            ("abm_sync_error", 18, false),
         ],
     ),
     (

@@ -512,6 +512,7 @@ another is refused `name_locked`, and the same name is taken again.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
+
 #### `hkctl mdm put-abm-token`
 
 `/hostkeeper.operator.v1.Mdm/PutAbmToken`

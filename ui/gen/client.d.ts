@@ -591,6 +591,8 @@ export namespace hostkeeper_operator_v1 {
     abmNotAfterUnix?: string;
     tlsNotAfterUnix?: string;
     tlsNames?: string[];
+    abmLastSyncUnix?: string;
+    abmSyncError?: string;
   }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
