@@ -974,3 +974,79 @@ fn an_alert_is_logged_once_when_it_appears_and_keeps_its_first_time() {
         log.text()
     );
 }
+
+/// The alerts of the identities `identities`, the CA expiring at `ca` and the window `days`, at 1000.
+fn identity_alerts(identities: &[(&str, u64)], ca: Option<u64>, days: Option<u32>) -> Vec<Alert> {
+    let store = EnrollmentFacts {
+        mdm_identities: identities
+            .iter()
+            .map(|(serial, at)| ((*serial).to_owned(), *at))
+            .collect(),
+        mdm_ca_not_after: ca,
+        mdm_renew_alert_days: days,
+        ..EnrollmentFacts::default()
+    };
+    derive(
+        &fleet_of(&[], 0),
+        &OpsState::default(),
+        &Services::default(),
+        &store,
+        at(1_000),
+        &Thresholds::default(),
+    )
+}
+
+/// Proves: the identity alert lists the serials whose identity expires inside the window, names the
+/// CA when it does, has the window in days as its version and `expired` once any has, and is none
+/// when nothing is inside the window or the setting was not read.
+///
+/// Catches: a renewal missed because a Mac's identity ran out unannounced, and a CA that expires
+/// without a word.
+#[test]
+fn the_identity_alert_lists_the_serials_and_the_ca_inside_the_window() {
+    let now = UNIX + 1_000;
+    let day = 86_400;
+    assert_eq!(identity_alerts(&[], None, Some(90)), Vec::new());
+    assert_eq!(
+        identity_alerts(&[("A1", now + day)], None, None),
+        Vec::new()
+    );
+    assert_eq!(
+        identity_alerts(&[], Some(now + 91 * day), Some(90)),
+        Vec::new()
+    );
+    let alerts = identity_alerts(&[("A1", now + day), ("B2", now + 5 * day)], None, Some(90));
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].subject.kind, Kind::MdmIdentityNearExpiry);
+    assert_eq!(alerts[0].subject.version, "90");
+    assert_eq!(
+        alerts[0].message,
+        "the identity certificates of A1, B2 expire within 90 days (or have): enroll each Mac \
+         again before they do"
+    );
+    let both = identity_alerts(&[("A1", now + day)], Some(now + 10 * day), Some(30));
+    assert_eq!(both[0].subject.version, "30");
+    assert!(both[0].message.contains("A1") && both[0].message.contains("the CA that issues"));
+    let ca_only = identity_alerts(&[], Some(now + 10 * day), Some(90));
+    assert!(ca_only[0].message.starts_with("the CA that issues"));
+    assert_eq!(
+        identity_alerts(&[("A1", now)], None, Some(90))[0]
+            .subject
+            .version,
+        "expired"
+    );
+    assert_eq!(
+        identity_alerts(&[], Some(now - day), Some(90))[0]
+            .subject
+            .version,
+        "expired"
+    );
+    assert_eq!(
+        Kind::MdmIdentityNearExpiry.log_token(),
+        "mdm_identity_near_expiry"
+    );
+    assert_eq!(
+        Kind::MdmIdentityNearExpiry.severity(),
+        proto::AlertSeverity::Warning
+    );
+}

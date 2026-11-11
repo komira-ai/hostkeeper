@@ -536,6 +536,21 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "abm_clock_refused",
             ),
             (MdmRefusal::AbmUnreachable, Unavailable, "abm_unreachable"),
+            (
+                MdmRefusal::EnrollmentUnavailable,
+                FailedPrecondition,
+                "enrollment_unavailable",
+            ),
+            (
+                MdmRefusal::NoPendingEnrollment,
+                NotFound,
+                "no_pending_enrollment",
+            ),
+            (
+                MdmRefusal::SerialNotInAbm,
+                FailedPrecondition,
+                "serial_not_in_abm",
+            ),
         ],
         refusal::mdm,
     );

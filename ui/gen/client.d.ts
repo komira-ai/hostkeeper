@@ -51,6 +51,8 @@ export interface Client {
     putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
     putAbmToken(request: hostkeeper_operator_v1.PutAbmTokenRequest): Promise<hostkeeper_operator_v1.PutAbmTokenResponse>;
     getAbmPublicKey(request: hostkeeper_operator_v1.GetAbmPublicKeyRequest): Promise<hostkeeper_operator_v1.GetAbmPublicKeyResponse>;
+    listEnrollmentRequests(request: hostkeeper_operator_v1.ListEnrollmentRequestsRequest): Promise<hostkeeper_operator_v1.ListEnrollmentRequestsResponse>;
+    confirmEnrollment(request: hostkeeper_operator_v1.ConfirmEnrollmentRequest): Promise<hostkeeper_operator_v1.ConfirmEnrollmentResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -211,7 +213,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_STORE_UNREACHABLE"
     | "ALERT_KIND_TRUSTED_ROOT"
-    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY";
+    | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
+    | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApproveRequest {
     requestId?: string;
@@ -250,6 +253,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface ClearRecordRequest { nodeId?: string; service?: string; }
   export interface ClearRecordResponse { orderId?: string; }
+  export interface ConfirmEnrollmentRequest { serial?: string; }
+  export interface ConfirmEnrollmentResponse { serial?: string; expiresUnix?: string; }
   export interface ConvergeRequest { service?: string; hostGroup?: string; }
   export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
   export interface Convergence {
@@ -279,6 +284,17 @@ export namespace hostkeeper_operator_v1 {
     minUp?: { [key: string]: number };
     packageDigest?: string;
     releaseIndexDigest?: string;
+  }
+  export interface EnrollmentRequest {
+    serial?: string;
+    udid?: string;
+    product?: string;
+    reason?: string;
+    firstUnix?: string;
+    lastUnix?: string;
+    count?: number;
+    inAbm?: boolean;
+    confirmedUntilUnix?: string;
   }
   export type EnrollmentRequestState =
     | "ENROLLMENT_REQUEST_STATE_UNSPECIFIED"
@@ -485,6 +501,9 @@ export namespace hostkeeper_operator_v1 {
   export interface ListAuditResponse { entries?: hostkeeper_operator_v1.AuditEntry[]; nextSeq?: string; }
   export interface ListDevicesRequest { limit?: number; pageToken?: string; }
   export interface ListDevicesResponse { devices?: hostkeeper_operator_v1.MdmDevice[]; nextPageToken?: string; gate?: boolean; }
+  export interface ListEnrollmentRequestsRequest {
+  }
+  export interface ListEnrollmentRequestsResponse { requests?: hostkeeper_operator_v1.EnrollmentRequest[]; }
   export interface ListHostGroupsRequest { limit?: number; pageToken?: string; }
   export interface ListHostGroupsResponse { hostGroups?: hostkeeper_operator_v1.HostGroupState[]; nextPageToken?: string; }
   export interface ListHostsRequest { limit?: number; pageToken?: string; }

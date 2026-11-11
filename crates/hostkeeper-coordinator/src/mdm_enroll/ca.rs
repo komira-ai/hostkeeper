@@ -46,8 +46,13 @@ impl From<SetupFailure> for CaError {
     }
 }
 
+/// A CA that could not be made or read.
+fn build(why: impl std::fmt::Display) -> CaError {
+    CaError::Build(why.to_string())
+}
+
 /// The secret for `cert` and `key`.
-fn pack(cert: &[u8], key: &[u8]) -> Vec<u8> {
+pub(crate) fn pack(cert: &[u8], key: &[u8]) -> Vec<u8> {
     let mut out = u32::try_from(cert.len())
         .unwrap_or(u32::MAX)
         .to_be_bytes()
@@ -58,7 +63,7 @@ fn pack(cert: &[u8], key: &[u8]) -> Vec<u8> {
 }
 
 /// The certificate and the key of a secret [`pack`] made.
-fn unpack(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
+pub(crate) fn unpack(bytes: &[u8]) -> Option<(&[u8], &[u8])> {
     let (length, rest) = bytes.split_first_chunk::<4>()?;
     let length = usize::try_from(u32::from_be_bytes(*length)).ok()?;
     (length <= rest.len()).then(|| rest.split_at(length))
@@ -78,10 +83,11 @@ fn held(coordinator: &Coordinator, tune: &Tunables) -> Result<Option<Ca>, CaErro
         return Ok(None);
     };
     let (cert, key) = unpack(secret.expose())
-        .ok_or_else(|| CaError::Build("the sealed CA is not a certificate and a key".to_owned()))?;
+        .ok_or("the sealed CA is not a certificate and a key")
+        .map_err(build)?;
     Ca::from_der(cert, key, policy(tune))
         .map(Some)
-        .map_err(|why| CaError::Build(why.to_string()))
+        .map_err(build)
 }
 
 /// The CA of the Macs' identities with the policy of `tune`: the one held, or a new one made under
@@ -115,11 +121,9 @@ pub(crate) async fn identity_ca(
         )
     })
     .await
-    .map_err(|why| CaError::Build(why.to_string()))?
-    .map_err(|why| CaError::Build(why.to_string()))?;
-    let key = ca
-        .key_pkcs8_der()
-        .map_err(|why| CaError::Build(why.to_string()))?;
+    .map_err(build)?
+    .map_err(build)?;
+    let key = ca.key_pkcs8_der().map_err(build)?;
     let not_after = now.saturating_add(i64::from(tune.ca_days) * 86_400);
     coordinator
         .audit_setup(

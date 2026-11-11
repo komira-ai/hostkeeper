@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 24] = [
+const FIELDS: [(&str, &[Field]); 29] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -183,6 +183,33 @@ const FIELDS: [(&str, &[Field]); 24] = [
             ("created", 3, false),
         ],
     ),
+    ("hostkeeper.operator.v1.ListEnrollmentRequestsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+        &[("requests", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.EnrollmentRequest",
+        &[
+            ("serial", 1, false),
+            ("udid", 2, false),
+            ("product", 3, true),
+            ("reason", 4, false),
+            ("first_unix", 5, false),
+            ("last_unix", 6, false),
+            ("count", 7, false),
+            ("in_abm", 8, false),
+            ("confirmed_until_unix", 9, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+        &[("serial", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+        &[("serial", 1, false), ("expires_unix", 2, false)],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -213,6 +240,8 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
             "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
             "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
+            "ListEnrollmentRequests(ListEnrollmentRequestsRequest) ListEnrollmentRequestsResponse",
+            "ConfirmEnrollment(ConfirmEnrollmentRequest) ConfirmEnrollmentResponse",
         ]
     );
 
@@ -244,6 +273,9 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("abm_credential_refused", 19),
             ("abm_clock_refused", 20),
             ("abm_unreachable", 21),
+            ("enrollment_unavailable", 22),
+            ("no_pending_enrollment", 23),
+            ("serial_not_in_abm", 24),
         ])
     );
     assert_eq!(

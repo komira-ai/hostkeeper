@@ -283,6 +283,7 @@ fn a_certificate_without_an_rsa_key_does_not_verify() {
         index: 1,
         der: ca.der(),
         key_der: Vec::new(),
+        key: None,
     };
     assert_eq!(
         signer(BODY, &header(BODY, &ecdsa, &Spec::default())),

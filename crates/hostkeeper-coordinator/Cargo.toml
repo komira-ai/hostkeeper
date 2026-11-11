@@ -124,6 +124,16 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
 hyper = { workspace = true, features = ["client"] }
+# The fake Mac of the enrollment tests builds a device blob signed by a fake Apple
+# (hostkeeper-mdm-ade's test helper) and a SCEP request (hostkeeper-mdm-scep's), with their crates.
+cipher.workspace = true
+const-oid.workspace = true
+der.workspace = true
+p256.workspace = true
+rand.workspace = true
+signature.workspace = true
+spki.workspace = true
+x509-cert.workspace = true
 # The MDM commands and profiles a fake NanoHUB heard, read in the gate's tests.
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.

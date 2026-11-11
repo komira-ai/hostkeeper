@@ -6,20 +6,17 @@
 use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
 
-use bytes::Bytes;
 use hostkeeper_mdm_ade::blob::{self, Device};
 use hostkeeper_mdm_ade::profile::{self, Enrollment};
-use http_body_util::Full;
-use hyper::header::CONTENT_TYPE;
-use hyper::{Method, Response, StatusCode};
+use hyper::Method;
 use sha2::{Digest, Sha256};
 
 use super::pending::Held1;
-use super::{Answer, Decline, Tunables, ca};
+use super::{Answer, Decline, Tunables, ca, ca_unavailable, internal, reply};
 use crate::audit_actions;
 use crate::mdm_server::MdmServer;
 use crate::service::Coordinator;
-use crate::store::mdm::{Challenge, MdmError};
+use crate::store::mdm::Challenge;
 
 /// The identifier of the enrollment profile the Macs are given.
 pub(crate) const PROFILE_IDENTIFIER: &str = "dev.hostkeeper.mdm";
@@ -46,18 +43,9 @@ pub(crate) async fn answer(
         return Decline::Method.answer();
     }
     match post(coordinator, server, peer, body).await {
-        Ok(profile) => Response::builder()
-            .status(StatusCode::OK)
-            .header(CONTENT_TYPE, "application/x-apple-aspen-config")
-            .body(Full::new(Bytes::from(profile)))
-            .unwrap_or_else(|_| Decline::Internal.answer()),
+        Ok(profile) => reply("application/x-apple-aspen-config", profile),
         Err(decline) => decline.answer(),
     }
-}
-
-fn store_failed(why: MdmError) -> Decline {
-    tracing::error!(%why, "the MDM store failed");
-    Decline::Internal
 }
 
 fn audit(coordinator: &Coordinator, action: &str, serial: &str, reason: String) {
@@ -98,14 +86,11 @@ async fn post(
     ) else {
         return Err(Decline::Unavailable);
     };
-    if !coordinator.mdm_setup.has_key() {
-        return Err(Decline::Unavailable);
-    }
     let (device, unverified) = read_blob(server, body, now)?;
     if !is_serial(&device.serial) {
         return Err(Decline::BadRequest);
     }
-    if !server.serial_in_abm(&device.serial).map_err(store_failed)? {
+    if !server.serial_in_abm(&device.serial).map_err(internal)? {
         let (window, max) = (i64::from(tune.challenge_ttl_s), tune.pending_max as usize);
         if server
             .enroll
@@ -135,10 +120,7 @@ async fn post(
     // The CA is made here if this is the first need, so that the Mac's SCEP request finds it.
     ca::identity_ca(coordinator, server, &tune)
         .await
-        .map_err(|why| {
-            tracing::error!(%why, "no identity CA for an enrollment profile");
-            Decline::Unavailable
-        })?;
+        .map_err(ca_unavailable)?;
     let challenge = new_challenge(server)?;
     server
         .store
@@ -149,7 +131,7 @@ async fn post(
             expires_unix: now.saturating_add(i64::from(tune.challenge_ttl_s)),
             confirmed,
         })
-        .map_err(store_failed)?;
+        .map_err(internal)?;
     profile::render(&Enrollment {
         dns_name,
         identifier: PROFILE_IDENTIFIER,
@@ -158,10 +140,7 @@ async fn post(
         topic: &push.info.topic,
         challenge: &challenge,
     })
-    .map_err(|why| {
-        tracing::error!(%why, "the enrollment profile could not be written");
-        Decline::Internal
-    })
+    .map_err(internal)
 }
 
 /// Holds the request of an unverified blob for an operator, and audits the first post of it.

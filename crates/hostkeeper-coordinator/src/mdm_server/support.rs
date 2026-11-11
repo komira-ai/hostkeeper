@@ -51,27 +51,27 @@ use crate::store::mdm::{
 use crate::testutil::scratch;
 
 /// The push topic of the test certificate.
-pub(super) const TOPIC: &str = "com.apple.mgmt.External.d1801ae1-3ef7-483e-9f6d-4979e2ebfc09";
+pub(crate) const TOPIC: &str = "com.apple.mgmt.External.d1801ae1-3ef7-483e-9f6d-4979e2ebfc09";
 
 /// The serial of the Mac the tests enroll.
-pub(super) const SERIAL: &str = "C02TESTSERIAL";
+pub(crate) const SERIAL: &str = "C02TESTSERIAL";
 
 /// The UDID of that Mac.
-pub(super) const UDID: &str = "00008103-001A2B3C4D5E6F70";
+pub(crate) const UDID: &str = "00008103-001A2B3C4D5E6F70";
 
 /// The time the rigs start at, in unix seconds.
-pub(super) const NOW: u64 = 1_800_000_000;
+pub(crate) const NOW: u64 = 1_800_000_000;
 
 /// A clock that moves when a test moves it: the time of the queue and of the pusher.
 #[derive(Debug)]
-pub(super) struct Time(AtomicU64);
+pub(crate) struct Time(AtomicU64);
 
 impl Time {
-    pub(super) fn at(now: u64) -> Self {
+    pub(crate) fn at(now: u64) -> Self {
         Self(AtomicU64::new(now))
     }
 
-    pub(super) fn advance(&self, seconds: u64) {
+    pub(crate) fn advance(&self, seconds: u64) {
         self.0.fetch_add(seconds, Ordering::SeqCst);
     }
 }
@@ -90,11 +90,16 @@ impl Clock for Time {
 
 /// The tables with a switch: a call of the method named in [`Flaky::fail`] fails with a store
 /// error, any other is the real table's.
-pub(super) struct Flaky {
+pub(crate) struct Flaky {
     inner: FileMdm,
     failing: Mutex<Option<&'static str>>,
     not_live: std::sync::atomic::AtomicBool,
+    /// Runs once on the tables just before the next `consume_challenge`: a competing request.
+    race: Mutex<Option<RaceHook>>,
 }
+
+/// What a competing request does to the tables.
+type RaceHook = Box<dyn FnOnce(&FileMdm) + Send>;
 
 impl Flaky {
     fn new(inner: FileMdm) -> Self {
@@ -102,16 +107,22 @@ impl Flaky {
             inner,
             failing: Mutex::new(None),
             not_live: std::sync::atomic::AtomicBool::new(false),
+            race: Mutex::new(None),
         }
     }
 
+    /// Before the next `consume_challenge`, `competitor` runs on the tables.
+    pub(crate) fn race_before_consume(&self, competitor: impl FnOnce(&FileMdm) + Send + 'static) {
+        *self.race.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(competitor));
+    }
+
     /// From now on the method `name` fails; `None` mends it.
-    pub(super) fn fail(&self, name: Option<&'static str>) {
+    pub(crate) fn fail(&self, name: Option<&'static str>) {
         *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = name;
     }
 
     /// From now on `set_push` finds the enrollment not live.
-    pub(super) fn end_enrollments_before_set_push(&self) {
+    pub(crate) fn end_enrollments_before_set_push(&self) {
         self.not_live.store(true, Ordering::SeqCst);
     }
 
@@ -148,6 +159,26 @@ impl MdmStore for Flaky {
         self.inner.set_push(enrollment_id, token, magic, topic)
     }
 
+    fn consume_challenge(
+        &self,
+        challenge_sha256: &str,
+        key_sha256: &str,
+        issuance: &Issuance,
+        now_unix: i64,
+    ) -> Result<Consumed, MdmError> {
+        self.check("consume_challenge")?;
+        let competitor = self
+            .race
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .take();
+        if let Some(competitor) = competitor {
+            competitor(&self.inner);
+        }
+        self.inner
+            .consume_challenge(challenge_sha256, key_sha256, issuance, now_unix)
+    }
+
     delegate! {
         fn replace_live(&self, new: &Enrollment) -> Result<Vec<String>, MdmError>;
         fn check_out(&self, enrollment_id: &str, now_unix: i64) -> Result<bool, MdmError>;
@@ -156,7 +187,6 @@ impl MdmStore for Flaky {
         fn enrollment(&self, enrollment_id: &str) -> Result<Option<Enrollment>, MdmError>;
         fn live_enrollment(&self, serial: &str) -> Result<Option<Enrollment>, MdmError>;
         fn issue_challenge(&self, challenge: &Challenge) -> Result<(), MdmError>;
-        fn consume_challenge(&self, challenge_sha256: &str, key_sha256: &str, issuance: &Issuance, now_unix: i64) -> Result<Consumed, MdmError>;
         fn challenge(&self, challenge_sha256: &str) -> Result<Option<Identity>, MdmError>;
         fn identity(&self, cert_sha256: &str) -> Result<Option<Identity>, MdmError>;
         fn kill_identity(&self, cert_sha256: &str) -> Result<bool, MdmError>;
@@ -176,12 +206,12 @@ impl MdmStore for Flaky {
 }
 
 /// A CA that issues certificates to the Macs, and the Mac certificates it issued.
-pub(super) struct Ca {
+pub(crate) struct Ca {
     issuer: CertifiedIssuer<'static, KeyPair>,
 }
 
 impl Ca {
-    pub(super) fn new() -> Self {
+    pub(crate) fn new() -> Self {
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("CA params");
         params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
         params.key_usages = vec![
@@ -193,17 +223,17 @@ impl Ca {
         Self { issuer }
     }
 
-    pub(super) fn der(&self) -> Vec<u8> {
+    pub(crate) fn der(&self) -> Vec<u8> {
         self.issuer.der().to_vec()
     }
 
     /// A certificate for the RSA key number `index` of the test binary, with the client-auth use.
-    pub(super) fn issue(&self, index: usize, subject: &str) -> Identity2 {
+    pub(crate) fn issue(&self, index: usize, subject: &str) -> Identity2 {
         self.issue_with(index, subject, None)
     }
 
     /// [`Self::issue`], with the key identifier `ski` in the certificate when it is given.
-    pub(super) fn issue_with(&self, index: usize, subject: &str, ski: Option<&[u8]>) -> Identity2 {
+    pub(crate) fn issue_with(&self, index: usize, subject: &str, ski: Option<&[u8]>) -> Identity2 {
         let der = fixture_key(index).to_pkcs8_der().expect("the key encodes");
         let pair = KeyPair::from_pkcs8_der_and_sign_algo(
             &PrivatePkcs8KeyDer::from(der.as_bytes().to_vec()),
@@ -228,20 +258,23 @@ impl Ca {
             index,
             der: cert.der().to_vec(),
             key_der: der.as_bytes().to_vec(),
+            key: None,
         }
     }
 }
 
 /// A Mac's identity: its certificate and the key it is for.
 #[derive(Clone)]
-pub(super) struct Identity2 {
-    pub(super) index: usize,
-    pub(super) der: Vec<u8>,
-    pub(super) key_der: Vec<u8>,
+pub(crate) struct Identity2 {
+    pub(crate) index: usize,
+    pub(crate) der: Vec<u8>,
+    pub(crate) key_der: Vec<u8>,
+    /// The key to sign with when it is not the fixture key `index`: a Mac that made its own.
+    pub(crate) key: Option<rsa09::RsaPrivateKey>,
 }
 
 impl Identity2 {
-    pub(super) fn sha256(&self) -> String {
+    pub(crate) fn sha256(&self) -> String {
         fingerprint(&self.der)
     }
 }
@@ -251,24 +284,24 @@ type GateBuilder =
     Box<dyn FnOnce(Arc<MdmQueue>, &Scratch, Arc<Time>) -> Arc<hostkeeper_mdm_gate::Gate>>;
 
 /// The tables, the setup, the clock, the fake APNs and the server of one test.
-pub(super) struct Rig {
-    pub(super) store: Arc<Flaky>,
-    pub(super) setup: Arc<MdmSetup>,
-    pub(super) time: Arc<Time>,
-    pub(super) apns: Arc<FakeApns>,
-    pub(super) queue: Arc<MdmQueue>,
-    pub(super) server: Arc<MdmServer>,
-    pub(super) coordinator: Arc<Coordinator>,
-    pub(super) fake: Fake,
-    pub(super) mac_ca: Arc<Ca>,
-    pub(super) server_ca: Ca,
+pub(crate) struct Rig {
+    pub(crate) store: Arc<Flaky>,
+    pub(crate) setup: Arc<MdmSetup>,
+    pub(crate) time: Arc<Time>,
+    pub(crate) apns: Arc<FakeApns>,
+    pub(crate) queue: Arc<MdmQueue>,
+    pub(crate) server: Arc<MdmServer>,
+    pub(crate) coordinator: Arc<Coordinator>,
+    pub(crate) fake: Fake,
+    pub(crate) mac_ca: Arc<Ca>,
+    pub(crate) server_ca: Ca,
     dir: Scratch,
 }
 
 impl Rig {
     /// A rig with the certificate of the name and the push identity stored, so that both families
     /// are served.
-    pub(super) fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str) -> Self {
         let rig = Self::bare(name);
         rig.store_tls();
         rig.store_push();
@@ -276,13 +309,40 @@ impl Rig {
     }
 
     /// A rig with nothing in the setup but the master key.
-    pub(super) fn bare(name: &str) -> Self {
-        Self::build(name, None, counting())
+    pub(crate) fn bare(name: &str) -> Self {
+        Self::build(name, None, counting(), None)
+    }
+
+    /// [`Self::with_apple`] with a source of random bytes of its own.
+    pub(crate) fn with_apple_random(
+        name: &str,
+        roots: Vec<Vec<u8>>,
+        random: crate::enrollment::Random,
+    ) -> Self {
+        let rig = Self::build(name, None, random, Some(roots));
+        rig.store_tls();
+        rig.store_push();
+        rig.setup
+            .set_setting("mdm_name", "localhost")
+            .expect("the name is set");
+        rig
+    }
+
+    /// A rig as [`Self::new`] makes it whose device blobs must chain to `roots` (DER), the fake
+    /// Apple of a test, and whose name is `localhost`.
+    pub(crate) fn with_apple(name: &str, roots: Vec<Vec<u8>>) -> Self {
+        let rig = Self::build(name, None, counting(), Some(roots));
+        rig.store_tls();
+        rig.store_push();
+        rig.setup
+            .set_setting("mdm_name", "localhost")
+            .expect("the name is set");
+        rig
     }
 
     /// A queue as a restarted coordinator builds it: new pushers and nothing armed, over the same
     /// tables, setup, clock and fake APNs.
-    pub(super) fn restarted_queue(&self) -> MdmQueue {
+    pub(crate) fn restarted_queue(&self) -> MdmQueue {
         let apns = Arc::clone(&self.apns);
         let factory: SenderFactory = Box::new(move |_, _| {
             Some(Arc::clone(&apns) as Arc<dyn hostkeeper_mdm_push::apns::PushSender>)
@@ -299,20 +359,20 @@ impl Rig {
     }
 
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
-    pub(super) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
-        let rig = Self::build(name, None, random);
+    pub(crate) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
+        let rig = Self::build(name, None, random, None);
         rig.store_tls();
         rig.store_push();
         rig
     }
 
     /// A rig whose server also has the gate `gate` (built over its queue by the caller's closure).
-    pub(super) fn with_gate(
+    pub(crate) fn with_gate(
         name: &str,
         gate: impl FnOnce(Arc<MdmQueue>, &Scratch, Arc<Time>) -> Arc<hostkeeper_mdm_gate::Gate>
         + 'static,
     ) -> Self {
-        let rig = Self::build(name, Some(Box::new(gate)), counting());
+        let rig = Self::build(name, Some(Box::new(gate)), counting(), None);
         rig.store_tls();
         rig.store_push();
         rig
@@ -322,7 +382,12 @@ impl Rig {
         clippy::type_complexity,
         reason = "a test builder takes a closure that builds the gate over the queue"
     )]
-    fn build(name: &str, gate: Option<GateBuilder>, random: crate::enrollment::Random) -> Self {
+    fn build(
+        name: &str,
+        gate: Option<GateBuilder>,
+        random: crate::enrollment::Random,
+        roots: Option<Vec<Vec<u8>>>,
+    ) -> Self {
         let dir = scratch(name);
         let tables = FileMdm::open(&dir.path().join("mdm")).expect("the tables open");
         let store = Arc::new(Flaky::new(tables));
@@ -356,7 +421,7 @@ impl Rig {
             Arc::new(move || vec![ca.der()])
         };
         let gate = gate.map(|build| build(Arc::clone(&queue), &dir, Arc::clone(&time)));
-        let server = Arc::new(MdmServer::new(Parts {
+        let server = MdmServer::new(Parts {
             store: Arc::clone(&store) as Arc<dyn MdmStore>,
             clock: Arc::clone(&time) as Arc<dyn UnixClock>,
             random,
@@ -365,7 +430,11 @@ impl Rig {
             pushers: Arc::clone(&pushers),
             tls: Arc::new(MdmTls::new(Arc::clone(&setup), trust)),
             sweep: Duration::from_secs(60),
-        }));
+        });
+        let server = Arc::new(match roots {
+            Some(roots) => server.with_apple_roots(roots),
+            None => server,
+        });
         let fake = Fake::new();
         let coordinator = Arc::new(
             coordinator_listed(&fake, &Arc::new(AtomicU64::new(1_000)), None, "")
@@ -388,12 +457,12 @@ impl Rig {
     }
 
     /// The rig's scratch directory.
-    pub(super) fn store_dir(&self) -> std::path::PathBuf {
+    pub(crate) fn store_dir(&self) -> std::path::PathBuf {
         self.dir.path().to_path_buf()
     }
 
     /// Stores the certificate and key of the name `localhost`, signed by the rig's server CA.
-    pub(super) fn store_tls(&self) {
+    pub(crate) fn store_tls(&self) {
         let mut params = CertificateParams::new(Vec::<String>::new()).expect("params");
         params.subject_alt_names = vec![SanType::DnsName("localhost".try_into().expect("a name"))];
         params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
@@ -406,14 +475,14 @@ impl Rig {
     }
 
     /// Stores the push certificate and its key.
-    pub(super) fn store_push(&self) {
+    pub(crate) fn store_push(&self) {
         let key = fixture_key(0);
         let cert = push_certificate_pem(key, TOPIC, 1_700_000_000, 1_900_000_000);
         self.put(SecretKind::PushCert, cert.as_bytes());
         self.put(SecretKind::PushKey, pkcs1_pem(key).expect("pem").expose());
     }
 
-    pub(super) fn put(&self, kind: SecretKind, bytes: &[u8]) {
+    pub(crate) fn put(&self, kind: SecretKind, bytes: &[u8]) {
         self.setup
             .put_secret(
                 kind,
@@ -425,7 +494,7 @@ impl Rig {
     }
 
     /// An identity for `serial` and `udid`, as the SCEP step leaves it: issued for `mac`.
-    pub(super) fn issue(&self, mac: &Identity2, serial: &str, udid: &str, confirmed: bool) {
+    pub(crate) fn issue(&self, mac: &Identity2, serial: &str, udid: &str, confirmed: bool) {
         let challenge = Sha256::digest(format!("challenge-{}-{serial}", mac.index));
         let challenge = hex::encode(challenge);
         let now = i64::try_from(NOW).unwrap_or(0);
@@ -453,7 +522,7 @@ impl Rig {
     }
 
     /// The live enrollment `id` of `serial`, with a push token when `token` is set.
-    pub(super) fn live(&self, id: &str, serial: &str, token: bool) -> Enrollment {
+    pub(crate) fn live(&self, id: &str, serial: &str, token: bool) -> Enrollment {
         let mut enrollment = Enrollment::new(id, serial, UDID, i64::try_from(NOW).unwrap_or(0));
         if token {
             enrollment.push_token = Some(vec![9; 32]);
@@ -465,7 +534,7 @@ impl Rig {
     }
 
     /// Queues the `DeviceInformation` number `n` for the enrollment `id` through the gate's port.
-    pub(super) async fn enqueue(
+    pub(crate) async fn enqueue(
         &self,
         id: &str,
         n: u8,
@@ -476,12 +545,12 @@ impl Rig {
     }
 
     /// The id of the command `enqueue(_, n)` queued.
-    pub(super) fn command_id(n: u8) -> String {
+    pub(crate) fn command_id(n: u8) -> String {
         CommandUuid::from_random([n; 16]).as_str().to_owned()
     }
 
     /// The serial in the ABM table.
-    pub(super) fn list_in_abm(&self, serial: &str) {
+    pub(crate) fn list_in_abm(&self, serial: &str) {
         self.store
             .abm_apply(&AbmBatch {
                 upserts: vec![AbmDevice {
@@ -502,7 +571,7 @@ impl Rig {
     }
 
     /// The audit actions so far, oldest first.
-    pub(super) fn audited(&self) -> Vec<String> {
+    pub(crate) fn audited(&self) -> Vec<String> {
         self.coordinator
             .ops()
             .state()
@@ -526,24 +595,24 @@ pub(crate) fn counting() -> crate::enrollment::Random {
 }
 
 /// A command for the gate's queue, of the type `request_type` (a type off the list is refused).
-pub(super) fn gate_command(n: u8, request_type: &str) -> Command {
+pub(crate) fn gate_command(n: u8, request_type: &str) -> Command {
     let uuid = CommandUuid::from_random([n; 16]);
     Command::new(request_type, uuid, plist::Dictionary::new())
 }
 
 /// The enrollment id `text`.
-pub(super) fn enrollment_id(text: &str) -> EnrollmentId {
+pub(crate) fn enrollment_id(text: &str) -> EnrollmentId {
     EnrollmentId::parse(text).expect("an enrollment id")
 }
 
 /// A fake Mac's connection to the listener: in memory, TLS, HTTP/1.1.
-pub(super) struct Session {
+pub(crate) struct Session {
     send: hyper::client::conn::http1::SendRequest<Full<Bytes>>,
 }
 
 impl Session {
     /// A connection from a client that offers `identity` (none: no certificate) to the rig's listener.
-    pub(super) async fn dial(rig: &Rig, identity: Option<&Identity2>) -> Option<Self> {
+    pub(crate) async fn dial(rig: &Rig, identity: Option<&Identity2>) -> Option<Self> {
         let config = rig.server.tls().config()?;
         let (client, server) = tokio::io::duplex(256 * 1024);
         tokio::spawn(crate::listen::connection_with(
@@ -569,7 +638,7 @@ impl Session {
     }
 
     /// `PUT path` with `body` and the `headers`: the status and the body of the answer.
-    pub(super) async fn put(
+    pub(crate) async fn put(
         &mut self,
         path: &str,
         headers: &[(&str, String)],
@@ -579,7 +648,7 @@ impl Session {
     }
 
     /// `method path` with `body` and the `headers`.
-    pub(super) async fn request(
+    pub(crate) async fn request(
         &mut self,
         method: &str,
         path: &str,
@@ -592,7 +661,7 @@ impl Session {
     }
 
     /// [`Self::request`], or the error of a connection the server ended.
-    pub(super) async fn try_request(
+    pub(crate) async fn try_request(
         &mut self,
         method: &str,
         path: &str,
@@ -617,7 +686,7 @@ impl Session {
 }
 
 /// A TLS client that trusts the rig's server CA and offers `identity` when it is given.
-pub(super) fn connector(rig: &Rig, identity: Option<&Identity2>) -> TlsConnector {
+pub(crate) fn connector(rig: &Rig, identity: Option<&Identity2>) -> TlsConnector {
     let mut roots = RootCertStore::empty();
     roots
         .add(CertificateDer::from(rig.server_ca.der()))
@@ -641,7 +710,7 @@ pub(super) fn connector(rig: &Rig, identity: Option<&Identity2>) -> TlsConnector
 }
 
 /// A handshake to the rig's listener by a client whose certificate `resolver` decides.
-pub(super) async fn dial_resolving(
+pub(crate) async fn dial_resolving(
     rig: &Rig,
     resolver: Arc<dyn rustls::client::ResolvesClientCert>,
 ) -> Option<TlsStream<DuplexStream>> {
@@ -672,7 +741,7 @@ pub(super) async fn dial_resolving(
 }
 
 /// The DER of the certificate a new handshake to the rig's listener is served.
-pub(super) async fn served_leaf(rig: &Rig) -> Vec<u8> {
+pub(crate) async fn served_leaf(rig: &Rig) -> Vec<u8> {
     let tls = connector(rig, None)
         .connect(ServerName::try_from("localhost").expect("a name"), {
             let config = rig.server.tls().config().expect("a configuration");
@@ -692,7 +761,7 @@ pub(super) async fn served_leaf(rig: &Rig) -> Vec<u8> {
 }
 
 /// The plist of a check-in `message` of the device `UDID`, with `fields` beside it.
-pub(super) fn checkin(message: &str, fields: &[(&str, plist::Value)]) -> Vec<u8> {
+pub(crate) fn checkin(message: &str, fields: &[(&str, plist::Value)]) -> Vec<u8> {
     let mut dict = plist::Dictionary::new();
     dict.insert("MessageType".to_owned(), message.into());
     dict.insert("UDID".to_owned(), UDID.into());
@@ -708,12 +777,12 @@ pub(super) fn checkin(message: &str, fields: &[(&str, plist::Value)]) -> Vec<u8>
 }
 
 /// The `Authenticate` of the Mac `SERIAL`.
-pub(super) fn authenticate(serial: &str) -> Vec<u8> {
+pub(crate) fn authenticate(serial: &str) -> Vec<u8> {
     checkin("Authenticate", &[("SerialNumber", serial.into())])
 }
 
 /// The `TokenUpdate` with a 32-byte token and the magic `magic`.
-pub(super) fn token_update(magic: &str) -> Vec<u8> {
+pub(crate) fn token_update(magic: &str) -> Vec<u8> {
     checkin(
         "TokenUpdate",
         &[
@@ -724,12 +793,12 @@ pub(super) fn token_update(magic: &str) -> Vec<u8> {
 }
 
 /// A result posted to `/mdm`: `status` for `command`.
-pub(super) fn result(status: &str, command: Option<&str>) -> Vec<u8> {
+pub(crate) fn result(status: &str, command: Option<&str>) -> Vec<u8> {
     result_with(status, command, &[])
 }
 
 /// [`result`], with `fields` beside the status (a command's answer keys).
-pub(super) fn result_with(
+pub(crate) fn result_with(
     status: &str,
     command: Option<&str>,
     fields: &[(&str, plist::Value)],
@@ -751,21 +820,21 @@ pub(super) fn result_with(
 }
 
 /// The command in the plist an `/mdm` answer carries.
-pub(super) fn command_in(body: &[u8]) -> hostkeeper_mdm_server::CommandRequest {
+pub(crate) fn command_in(body: &[u8]) -> hostkeeper_mdm_server::CommandRequest {
     hostkeeper_mdm_server::CommandRequest::parse(body).expect("a command")
 }
 
 // The CMS messages of a client that signs its messages.
-pub(super) const SHA1: &str = "1.3.14.3.2.26";
-pub(super) const SHA256: &str = "2.16.840.1.101.3.4.2.1";
-pub(super) const SHA384: &str = "2.16.840.1.101.3.4.2.2";
-pub(super) const SHA512: &str = "2.16.840.1.101.3.4.2.3";
-pub(super) const RSA: &str = "1.2.840.113549.1.1.1";
-pub(super) const SHA256_RSA: &str = "1.2.840.113549.1.1.11";
-pub(super) const BODY: &[u8] = b"<plist>a check-in</plist>";
+pub(crate) const SHA1: &str = "1.3.14.3.2.26";
+pub(crate) const SHA256: &str = "2.16.840.1.101.3.4.2.1";
+pub(crate) const SHA384: &str = "2.16.840.1.101.3.4.2.2";
+pub(crate) const SHA512: &str = "2.16.840.1.101.3.4.2.3";
+pub(crate) const RSA: &str = "1.2.840.113549.1.1.1";
+pub(crate) const SHA256_RSA: &str = "1.2.840.113549.1.1.11";
+pub(crate) const BODY: &[u8] = b"<plist>a check-in</plist>";
 
 /// The DER prefix of a `DigestInfo` for the digest `oid`, and the digest algorithm.
-pub(super) fn digest_info(oid: &str) -> (&'static [u8], &'static digest::Algorithm) {
+pub(crate) fn digest_info(oid: &str) -> (&'static [u8], &'static digest::Algorithm) {
     match oid {
         SHA1 => (
             &[
@@ -800,21 +869,21 @@ pub(super) fn digest_info(oid: &str) -> (&'static [u8], &'static digest::Algorit
 
 /// How a message is built.
 #[derive(Clone)]
-pub(super) struct Spec {
-    pub(super) digest: &'static str,
-    pub(super) signature: &'static str,
-    pub(super) attributes: bool,
-    pub(super) ski: Option<Vec<u8>>,
+pub(crate) struct Spec {
+    pub(crate) digest: &'static str,
+    pub(crate) signature: &'static str,
+    pub(crate) attributes: bool,
+    pub(crate) ski: Option<Vec<u8>>,
     /// The digest in the attributes is of this instead of the body, when set.
-    pub(super) claimed: Option<Vec<u8>>,
-    pub(super) leave_out_digest_attribute: bool,
-    pub(super) certificates: usize,
-    pub(super) names_other_serial: bool,
-    pub(super) indefinite_attributes: bool,
-    pub(super) signers: usize,
-    pub(super) sid_tag: Option<u8>,
-    pub(super) flip_signature: bool,
-    pub(super) drop_certificates: bool,
+    pub(crate) claimed: Option<Vec<u8>>,
+    pub(crate) leave_out_digest_attribute: bool,
+    pub(crate) certificates: usize,
+    pub(crate) names_other_serial: bool,
+    pub(crate) indefinite_attributes: bool,
+    pub(crate) signers: usize,
+    pub(crate) sid_tag: Option<u8>,
+    pub(crate) flip_signature: bool,
+    pub(crate) drop_certificates: bool,
 }
 
 impl Default for Spec {
@@ -846,8 +915,8 @@ fn algorithm(oid: &str) -> Vec<u8> {
 }
 
 /// The cms message for `body` signed by `mac`, built as `spec` says.
-pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
-    let key = fixture_key(mac.index);
+pub(crate) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
+    let key = mac.key.as_ref().unwrap_or_else(|| fixture_key(mac.index));
     let (prefix, algorithm_of) = digest_info(spec.digest);
     let body_digest = digest::digest(algorithm_of, body).as_ref().to_vec();
     let claimed = spec.claimed.clone().unwrap_or_else(|| body_digest.clone());
@@ -931,6 +1000,6 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     )
 }
 
-pub(super) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
+pub(crate) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
     STANDARD.encode(message(body, mac, spec))
 }

@@ -10,14 +10,11 @@
 use std::net::IpAddr;
 use std::time::{Duration, SystemTime};
 
-use bytes::Bytes;
 use hostkeeper_mdm_scep::{Challenges, Error, KeyHash, Redeem};
-use http_body_util::Full;
-use hyper::header::CONTENT_TYPE;
-use hyper::{Method, Response, StatusCode};
+use hyper::Method;
 use sha2::{Digest, Sha256};
 
-use super::{Answer, Decline, Tunables, ca};
+use super::{Answer, Decline, Tunables, ca, ca_unavailable, reply};
 use crate::mdm_server::MdmServer;
 use crate::service::Coordinator;
 use crate::store::mdm::{Consumed, IdentityState, Issuance, MdmStore};
@@ -40,12 +37,17 @@ fn failed(why: impl std::fmt::Display) -> Redeem {
     Redeem::Failed(Error::Build("the challenge store"))
 }
 
-/// When the certificate `der` stops being valid, unix seconds; none for bytes that are no
-/// certificate.
-fn not_after(der: &[u8]) -> Option<i64> {
+/// A SCEP message that names no transaction, so no reply can be formed.
+fn no_transaction(why: Error) -> Decline {
+    tracing::warn!(%why, "refused a SCEP message that names no transaction");
+    Decline::BadRequest
+}
+
+/// When the certificate `der` stops being valid, unix seconds; 0 (already expired) for bytes that
+/// are no certificate, which the CA does not issue.
+fn not_after(der: &[u8]) -> i64 {
     x509_parser::parse_x509_certificate(der)
-        .ok()
-        .map(|(_, cert)| cert.validity().not_after.timestamp())
+        .map_or(0, |(_, cert)| cert.validity().not_after.timestamp())
 }
 
 impl Challenges for StoreChallenges<'_> {
@@ -63,14 +65,12 @@ impl Challenges for StoreChallenges<'_> {
         };
         match (row.state, row.issued) {
             (IdentityState::Retired | IdentityState::Dead, _) => return Redeem::Unknown,
-            (IdentityState::Issued, Some(stored)) => {
-                return if row.key_sha256.as_deref() == Some(key.as_str()) {
-                    Redeem::Replayed(stored.cert_der)
-                } else {
-                    Redeem::Consumed
-                };
+            (IdentityState::Issued, Some(stored))
+                if row.key_sha256.as_deref() == Some(key.as_str()) =>
+            {
+                return Redeem::Replayed(stored.cert_der);
             }
-            (IdentityState::Issued, None) => return Redeem::Unknown,
+            (IdentityState::Issued, _) => return Redeem::Consumed,
             (IdentityState::Challenged, _) => {}
         }
         if row.expires_unix <= self.now {
@@ -80,13 +80,10 @@ impl Challenges for StoreChallenges<'_> {
             Ok(der) => der,
             Err(why) => return Redeem::Failed(why),
         };
-        let Some(not_after_unix) = not_after(&der) else {
-            return Redeem::Failed(Error::Build("the identity"));
-        };
         let issuance = Issuance {
             cert_sha256: hex::encode(Sha256::digest(&der)),
             cert_der: der.clone(),
-            not_after_unix,
+            not_after_unix: not_after(&der),
         };
         match self
             .store
@@ -95,19 +92,11 @@ impl Challenges for StoreChallenges<'_> {
             Ok(Consumed::Issued) => Redeem::Issued(der),
             // A request of the same key won the race: its certificate is the answer.
             Ok(Consumed::Replayed(stored)) => Redeem::Replayed(stored.cert_der),
-            Ok(Consumed::Refused(crate::store::mdm::Refusal::KeyMismatch)) => Redeem::Consumed,
-            Ok(Consumed::Refused(_)) => Redeem::Unknown,
+            // Another key won the race (the only refusal left once the row was read open).
+            Ok(Consumed::Refused(_)) => Redeem::Consumed,
             Err(why) => failed(why),
         }
     }
-}
-
-fn reply(content_type: &'static str, body: Vec<u8>) -> Answer {
-    Response::builder()
-        .status(StatusCode::OK)
-        .header(CONTENT_TYPE, content_type)
-        .body(Full::new(Bytes::from(body)))
-        .unwrap_or_else(|_| Decline::Internal.answer())
 }
 
 /// The value of the `operation` parameter of `query`.
@@ -158,10 +147,7 @@ async fn run(
     }
     let ca = ca::identity_ca(coordinator, server, &tune)
         .await
-        .map_err(|why| {
-            tracing::error!(%why, "no identity CA for a SCEP request");
-            Decline::Unavailable
-        })?;
+        .map_err(ca_unavailable)?;
     match operation {
         "GetCACaps" => Ok(reply("text/plain", ca.ca_caps().as_bytes().to_vec())),
         "GetCACert" => Ok(reply("application/x-x509-ca-cert", ca.ca_cert().to_vec())),
@@ -178,10 +164,7 @@ async fn run(
                     at,
                     &mut rsa::rand_core::UnwrapErr(getrandom::SysRng),
                 )
-                .map_err(|why| {
-                    tracing::warn!(%why, "refused a SCEP message that names no transaction");
-                    Decline::BadRequest
-                })?;
+                .map_err(no_transaction)?;
             tracing::info!(verdict = ?done.verdict, "answered a SCEP PKIOperation");
             Ok(reply("application/x-pki-message", done.der))
         }

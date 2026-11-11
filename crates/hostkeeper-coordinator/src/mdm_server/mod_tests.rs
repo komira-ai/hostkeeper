@@ -84,8 +84,6 @@ async fn every_path_outside_the_table_is_not_found_whatever_the_credential() {
         "/hostkeeper.operator.v1.Mdm/PutSecret",
         "/hostkeeper.operator.v1.Mdm/ListDevices",
         "/repositories/x/dists/y/Release",
-        "/enroll",
-        "/scep",
         "/apt/main/dists/stable/Release",
         "/pkg/ab.pkg",
         "/checkin/",

@@ -28,6 +28,8 @@ const PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 const PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 const PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
 const GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+const LIST_ENROLLMENT_REQUESTS: &str = "/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests";
+const CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
@@ -97,7 +99,15 @@ fn mdm_paths() -> (Vec<&'static str>, Vec<&'static str>) {
 #[test]
 fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
     let (reads, writes) = mdm_paths();
-    assert_eq!(reads, [LIST_DEVICES, LIST_SECRETS, LIST_SETTINGS]);
+    assert_eq!(
+        reads,
+        [
+            LIST_DEVICES,
+            LIST_SECRETS,
+            LIST_SETTINGS,
+            LIST_ENROLLMENT_REQUESTS
+        ]
+    );
     assert_eq!(
         writes,
         [
@@ -107,7 +117,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             PUT_PUSH_REPLY,
             PUT_PUSH_CERTIFICATE,
             PUT_ABM_TOKEN,
-            GET_ABM_PUBLIC_KEY
+            GET_ABM_PUBLIC_KEY,
+            CONFIRM_ENROLLMENT
         ]
     );
     for path in &writes {
@@ -420,7 +431,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         .await;
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
-    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(8));
+    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(19));
 }
 
 /// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most

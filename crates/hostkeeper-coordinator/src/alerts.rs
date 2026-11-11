@@ -702,13 +702,13 @@ fn mdm_identity_near_expiry(enrollment: &EnrollmentFacts, unix: u64) -> Vec<Aler
             .map(|(serial, _)| serial.as_str())
             .collect();
         parts.push(format!(
-            "the identity certificates of {} expire within {days} days (or have): enroll each Mac              again before they do",
+            "the identity certificates of {} expire within {days} days (or have): enroll each Mac again before they do",
             serials.join(", ")
         ));
     }
     if let Some(at) = ca {
         parts.push(format!(
-            "the CA that issues the Macs' identities expires at unix {at}: no identity issued              after that is valid"
+            "the CA that issues the Macs' identities expires at unix {at}: no identity issued after that is valid"
         ));
     }
     vec![Alert {

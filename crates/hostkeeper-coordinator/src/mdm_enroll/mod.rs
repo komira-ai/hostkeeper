@@ -93,6 +93,28 @@ impl Decline {
     }
 }
 
+/// A failure of the store or of a writer that no request can mend: logged, and a `500`.
+pub(crate) fn internal(why: impl std::fmt::Display) -> Decline {
+    tracing::error!(%why, "an enrollment request failed inside the coordinator");
+    Decline::Internal
+}
+
+/// No identity CA to answer with: logged, and the route is unavailable until the setup mends.
+pub(crate) fn ca_unavailable(why: ca::CaError) -> Decline {
+    tracing::error!(%why, "no identity CA for an enrollment request");
+    Decline::Unavailable
+}
+
+/// A `200` carrying `body` as `content_type`.
+pub(crate) fn reply(content_type: &'static str, body: Vec<u8>) -> Answer {
+    let mut answer = hyper::Response::new(http_body_util::Full::new(bytes::Bytes::from(body)));
+    answer.headers_mut().insert(
+        hyper::header::CONTENT_TYPE,
+        hyper::header::HeaderValue::from_static(content_type),
+    );
+    answer
+}
+
 /// The numbers and the text the enrollment reads of the setup, at the moment of a request.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct Tunables {
@@ -136,6 +158,38 @@ impl Tunables {
     }
 }
 
+// The fake Apple that signs a device blob, and the SCEP client of a fake Mac, are the test helpers
+// of the two crates that own those formats, so that the formats are built in one place.
 #[cfg(test)]
-#[path = "tests.rs"]
-mod tests;
+#[path = "../../../hostkeeper-mdm-ade/tests/common/mod.rs"]
+mod fake_apple;
+#[cfg(test)]
+#[path = "../../../hostkeeper-mdm-scep/tests/common/mod.rs"]
+mod scep_client;
+
+#[cfg(test)]
+mod testkit;
+
+#[cfg(test)]
+#[path = "pending_tests.rs"]
+mod pending_tests;
+
+#[cfg(test)]
+#[path = "ca_tests.rs"]
+mod ca_tests;
+
+#[cfg(test)]
+#[path = "enroll_tests.rs"]
+mod enroll_tests;
+
+#[cfg(test)]
+#[path = "scep_tests.rs"]
+mod scep_tests;
+
+#[cfg(test)]
+#[path = "flow_tests.rs"]
+mod flow_tests;
+
+#[cfg(test)]
+#[path = "operator_tests.rs"]
+mod operator_tests;
