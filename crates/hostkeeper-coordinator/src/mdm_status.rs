@@ -103,14 +103,14 @@ impl Coordinator {
     /// not failing. Held in memory by [`crate::mdm_acme::status::TlsStatus`].
     fn tls_renewal(&self) -> Option<proto::TlsRenewal> {
         let tls = self.mdm_setup.tls_status();
-        let snapshot = tls.snapshot();
+        let (snapshot, retry_at) = tls.snapshot_and_retry();
         let failing = snapshot.failing?;
         Some(proto::TlsRenewal {
             since_unix: failing.since_unix,
             attempts: failing.attempts,
             message: failing.message,
             dns_rejected: snapshot.dns_rejected.unwrap_or_default(),
-            retry_at_unix: Some(tls.retry_at_unix()).filter(|at| *at != 0),
+            retry_at_unix: Some(retry_at).filter(|at| *at != 0),
         })
     }
 

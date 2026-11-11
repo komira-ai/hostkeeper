@@ -667,9 +667,8 @@ Four ports and a timer:
   held or the one in use (read from the stored certificate, not the upload's label) expires within `tls_renew_days`. One attempt at a time under a lock in the
   process: **the store's lease of the design does not exist yet** (v1 has one coordinator on a store, the state lock refuses a second), so the lock is the single flight, and CM19 moves it
   to the lease with the rest of the multi-node work. After a failure the next attempt waits `tls_retry_s`. A success stores the key and then the chain, as the next
-  versions of `tls_key` and `tls_cert`; the listener's resolver (`MdmTls::config`) reads the newest versions of both on each handshake, so the renewed certificate is
-  served from the next one (a window of a few microseconds between the two writes serves no configuration, since the key and the certificate do not match; a
-  handshake in it fails and the Mac retries). The certificate upload of 4.9 is unchanged and works until the certificate it stores is due.
+  versions of `tls_key` and `tls_cert`; the listener's resolver (`MdmTls::config`) reads the held versions on each handshake and serves the newest certificate with the newest key that fits it, so the renewed certificate is
+  served from the next one, and between the two writes (the new key stored, its certificate not yet) the pair in use keeps serving. The certificate upload of 4.9 is unchanged and works until the certificate it stores is due.
 - Alerts: `mdm_tls_renewal_failed` (the attempts, since when, the message) and `mdm_dns_credential_rejected`, derived from the renewal's in-memory status, which a
   restart clears (the first failed attempt after it raises the alert again).
 

@@ -94,6 +94,13 @@ impl TlsStatus {
         self.lock().retry_at_unix
     }
 
+    /// The snapshot and the time of the next attempt, read under one lock.
+    #[must_use]
+    pub fn snapshot_and_retry(&self) -> (Snapshot, u64) {
+        let inner = self.lock();
+        (inner.snapshot.clone(), inner.retry_at_unix)
+    }
+
     /// What the alerts read now.
     #[must_use]
     pub fn snapshot(&self) -> Snapshot {
