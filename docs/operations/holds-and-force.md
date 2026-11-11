@@ -6,9 +6,8 @@ stages of a rollout, and `Rollouts.Advance`, `Pause` and `Resume`, are in
 `unauthorized`, and a refused call changes nothing. Every change is an entry of the audit log,
 under the name of the token that made it; `Audit.List` reads the log back.
 
-Where the coordinator holds host groups ([hostgroups.md](hostgroups.md)), a service is rolled out
-once for each group that lists it, and the calls below act on a group or on each group that lists
-the service. Each section says what it does there; what it says without a mention holds as it is.
+A service is rolled out once for each host group that lists it ([hostgroups.md](hostgroups.md)),
+and the calls below act on a group or on each group that lists the service.
 
 ## Holds
 
@@ -20,10 +19,10 @@ with a reason; `Services.Unhold` releases it. A hold freezes the service where i
   pair as `held`.
 - A hold carries no version. The host keeps running what it runs, and never learns of the hold.
 - A role hold is matched against the host's role each time the coordinator decides, so a host
-  that joins the role later is held, and one that leaves it is released. Where the coordinator
-  holds host groups, a host's role is the name of its group: a hold of the role `web` holds the
-  hosts of the group `web` (and of no other group), and a role that names no group is refused
-  `unknown_host_group`. A hold of a host, or of the whole fleet, is as before.
+  that joins the role later is held, and one that leaves it is released. A host's role is the
+  name of its group: a hold of the role `web` holds the hosts of the group `web` (and of no other
+  group), and a role that names no group is refused `unknown_host_group`. A hold of a host, or of
+  the whole fleet, holds those hosts.
 - A held pair takes no update slot, is in no stage of the service's update plan (it takes no
   place in a stage and does not count towards one being done), never holds back a bake, and is
   left out of the convergence and of the hosts an automatic rollback is counted against, so it
@@ -42,7 +41,7 @@ The ops file gains a `holds` key once a hold is set. A coordinator of an earlier
 to start on such a file rather than ignore the holds; a file that never held one keeps the shape
 earlier releases read.
 
-In a host group a host is also told, as the status shows it, `install_order` (a package listed
+A host is also told, as the status shows it, `install_order` (a package listed
 before this one is not installed on the host yet), `uninstall_order` (a package whose uninstall
 goes first is still on the host) or `moving` (the host was moved into its group and its plans have
 not admitted it, or its uninstalls are not done); none of them is a failure, and
@@ -97,13 +96,13 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
 - `Releases.MarkBad` marks a version of a service bad, any version the service's version scheme
   reads. No host is ordered it again, and CI cannot set it, until `UnmarkBad` or a force lifts
   the mark. A version marked bad halts the plan (every host is told `bad`). A second mark of the same version is refused with `already_bad`.
-  The mark is the package's: in host groups a version marked bad is bad in every group, so a
+  The mark is the package's: a version marked bad is bad in every group, so a
   build that fails in one group is not rolled on to the next.
 - `Releases.Halt` halts a service by hand, as a host's halt report does: no host of it is
   ordered until `ClearHalt` (or a force). It is an alert (`Alerts.List`, and an `alert=halt`
   line logged once when it appears). A service with
   no desired version has nothing to halt and is refused with `invalid_request`; a service that
-  is halted already, with `already_halted`. In host groups a halt is a group's: the call names no
+  is halted already, with `already_halted`. A halt is a group's: the call names no
   group, and halts the service in every group that lists it and has a desired version of it, each
   at its own desired version, with one `halt` entry for each group that names it. A group that is
   halted already is left as it is, and `already_halted` is the answer only when every group was.
@@ -142,24 +141,24 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
 ## Force
 
 `Releases.Force` is the fleet-wide fix: one call orders a hookless `force` of a service to a
-version at every targeted host's next heartbeat, past the update plan (its stages, the role
+version at every targeted host's next heartbeat, past the update plan (its stages, the group's
 limits, a pause and the other services' rollouts), the canary, the bake, a deferral, a bad mark,
 a halt and a host's failure of the version. The units stop
 without a drain, so a force may cut running work.
 
 The targets are the whole fleet (the call names the service a second time, `confirm_service`),
-a role, or a list of hosts. The coordinator refuses, changing nothing:
+a role (the name of a group), or a list of hosts. The coordinator refuses, changing nothing:
 
 | Refusal | When |
 |---|---|
 | `self_service` | the service is `hostkeeper`, which updates itself by its own path |
-| `below_min_version` | the version is below the service's `min_version` (the floor itself is accepted) |
+| `below_min_version` | the version is below the group's minimum version for the service, as `Services.SetMinVersion` set it (the floor itself is accepted) |
 | `no_digest` | CI never registered a package digest or a release index for the version |
 | `confirm_mismatch` | a fleet-wide force whose `confirm_service` is not the service |
-| `unknown_target` | a role the service does not run on, or a host the coordinator has not heard from |
-| `not_in_host_group` | in host groups: `host_group` names a group that does not list the service or that no group has the name of, or no group lists the service |
+| `unknown_target` | a role that is not the group's, or a host the coordinator has not heard from |
+| `not_in_host_group` | `host_group` names a group that does not list the service or that no group has the name of, or no group lists the service |
 
-In host groups a force is a deployment to a group: it sets the group's desired version and the
+A force is a deployment to a group: it sets the group's desired version and the
 force stands in that group's marks. The call names the group in `host_group`, which must list the
 service (`not_in_host_group`), or names none:
 

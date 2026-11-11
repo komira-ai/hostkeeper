@@ -258,6 +258,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "not_in_host_group",
             ),
+            (
+                ServicesRefusal::RepositoryUnknown,
+                NotFound,
+                "repository_unknown",
+            ),
         ],
         refusal::services,
     );

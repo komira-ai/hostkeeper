@@ -39,7 +39,7 @@ use prost::Message;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PublicKeyData, SigningKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
-use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, recorded, scratch};
+use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, scratch};
 use tokio_rustls::TlsConnector;
 use tonic::{Code, Status};
 
@@ -65,7 +65,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         std::fs::create_dir(files.path("ui")).expect("the UI directory");
         files.put("ui/index.html", "<!doctype html><title>ui</title>", 0o644);
         files
@@ -102,8 +101,6 @@ impl Files {
             "=oidc.toml",
             "--operator-token-file",
             "=operator.token",
-            "--rollout-file",
-            "=rollout.toml",
             "--legacy-service",
             "kbf",
             "--ui-dir",
@@ -540,6 +537,7 @@ impl Lan {
                     role: Role::parse("storage").expect("a role"),
                     services: Vec::new(),
                     replace,
+                    host_group: None,
                 },
             )
             .expect("approved");

@@ -7,7 +7,8 @@
 //! package they installed.
 
 use hostkeeper_wire::wire::{
-    Agent, AgentName, Heartbeat, ORDER_FEATURE, Outcome, ServiceBeat, ServiceReply, UpdateResult,
+    Agent, AgentName, Health, Heartbeat, ORDER_FEATURE, Outcome, ServiceBeat, ServiceReply,
+    UpdateResult,
 };
 use serde_json::{Value, json};
 
@@ -104,6 +105,21 @@ fn verdict(target: &str, outcome: Outcome, order_try: u64) -> UpdateResult {
         order_try: Some(order_try),
         ..UpdateResult::new(version(target), outcome)
     }
+}
+
+/// A refusal of an install of `target` for `reason`: failed, no phase, no class.
+fn refusal(target: &str, reason: &str) -> UpdateResult {
+    UpdateResult {
+        reason: hostkeeper_wire::wire::Token::parse(reason),
+        ..UpdateResult::new(version(target), Outcome::Failed)
+    }
+}
+
+/// An entry of `service` at `listed` with `health` and `last` as its last update.
+fn entry_with(health: Health, last: Option<UpdateResult>) -> ServiceBeat {
+    let mut one = entry(HK, "0.2.0", last);
+    one.health = health;
+    one
 }
 
 /// The convergence of `service`, as JSON.
@@ -418,4 +434,21 @@ fn an_order_of_the_other_kind_to_the_same_version_takes_the_next_try() {
     assert_eq!(fleet.order_try(WEB, &id("d1"), &running, false, now), 2);
     fleet.order(WEB, id("d1"), running.clone(), now);
     assert_eq!(fleet.order_try(WEB, &id("d1"), &running, false, now), 2);
+}
+
+/// Catches an install refused `already_installed` counted as a failed update of a host that runs
+/// the desired version: a daemon that lists its own service present at that version, with the
+/// refusal as its last update, is ordered nothing, up to date, and the service converged.
+#[tokio::test]
+async fn an_already_installed_refusal_at_the_desired_version_is_no_failure_of_the_host() {
+    let rig = rig("agent-already-installed", "");
+    set(&rig, HK, "0.2.0").await;
+    let refused = entry_with(Health::Healthy, Some(refusal("0.2.0", "already_installed")));
+
+    let (reply, order) = ask_typed(&rig, "d1", "daemon", daemon("0.2.0", vec![refused]));
+
+    assert_eq!((reply, order), (ServiceReply::Nothing, None));
+    assert_eq!(why_of(&rig, HK, "d1"), Some(Why::Skip(Skip::UpToDate)));
+    let c = convergence(&rig.coordinator, HK);
+    assert_eq!(c["state"], "converged", "{c}");
 }

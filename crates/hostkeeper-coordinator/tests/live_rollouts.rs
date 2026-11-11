@@ -21,7 +21,7 @@ use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
 use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
-use support::{Ca, OPERATOR, recorded, scratch};
+use support::{Ca, OPERATOR, scratch};
 
 /// The files the flags name, in a directory of their own.
 struct Files {
@@ -37,7 +37,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("clients CA").pem);
         files.put("oidc.toml", &config_text(STATIC_ISSUER));
         files.put("operator.token", OPERATOR);
-        files.put("rollout.toml", &recorded("services.toml"));
         files
     }
 
@@ -62,7 +61,6 @@ impl Files {
             ("--state-file", path("desired.json")),
             ("--oidc-config", path("oidc.toml")),
             ("--operator-token-file", path("operator.token")),
-            ("--rollout-file", path("rollout.toml")),
             ("--legacy-service", "kbf".to_owned()),
             ("--role-uri-prefix", "urn:kbf:role:".to_owned()),
             ("--host-role-uri-prefix", "urn:kbf:host-role:".to_owned()),

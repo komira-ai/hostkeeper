@@ -235,9 +235,8 @@ a binary OpenPGP keyring otherwise (an empty file, or armor in a `.gpg`, is refu
 are refused: an entry that turns off apt's signature checks is never used. A daemon that refuses to start runs no
 self-update either, which is why the daemon judges a set the coordinator sends with this same loader before it
 replaces the directory (section 3.2), and host setup checks a directory it places with it too, as it does
-`hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judges a staged directory as
-the daemon would take it here (a `Signed-By` of this directory names the file of `DIR`), exits 0 listing each entry,
-and 1 with the loader's refusal (README, "Checking a repositories directory").
+`hostkeeper.toml`: `hostkeeper check-repositories --dir DIR` judged a staged directory as
+the daemon would take it here. Removed: the daemon's start and `pxe serve`'s start make this check.
 
 These files are hostkeeper's and not the system's: they are not in `/etc/apt/sources.list.d/`, so the host's own
 `apt-get upgrade` and unattended upgrades never see the repository through them. An operator may list the same
@@ -497,6 +496,7 @@ the state it checks, and reads apt's messages only where apt has no other signal
 | The dpkg lock is held past `DPkg::Lock::Timeout`, or past `remove_secs` for the purge (an unattended upgrade is running) | `stage` 3, `activate`, `remove` | `Deferred`, `environment`, `package_manager_busy` |
 | dpkg was interrupted before this run and needs `dpkg --configure -a`, which would touch other packages | any | `Failed`, `environment`, `dpkg_interrupted`. hostkeeper runs nothing host-wide |
 | The install itself failed: a maintainer script exited non-zero, or `dpkg-query` does not show `V` installed afterwards | `activate` | `Failed`, `release`, `dpkg_error`, with apt's last error line. The update rolls back to the previous version (section 4.4), or a first install is purged |
+| After the install over an archive version (packages-native.md section 10.6), systemd does not load a unit the archive placed from the package's own file (`systemctl show`'s `LoadState` is not `loaded`, or its `FragmentPath` is not in `/usr/lib/systemd/system/` or `/lib/systemd/system/`): a unit left in `/etc/systemd/system/` hides it | `activate` | `Failed`, `environment`, `unit_not_loaded`, naming what systemd loads instead. `placed.json` keeps the archive's paths, so the next `activate` takes them away and checks again |
 
 `not_in_repository` defers rather than fails, because a suite seen through a cache may lag the publish by minutes, and
 a failure of class `release` on a canary would mark the version bad. The deferral is shown by `Status` with its

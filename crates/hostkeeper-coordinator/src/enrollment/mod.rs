@@ -18,6 +18,10 @@
 //! - `approve` and `list`: `Enrollment.Approve` and `Enrollment.List` of
 //!   `hostkeeper.operator.v1` as plain functions over the store, and the audit of each
 //!   approval in the coordinator's ops store ([`Enrollment::audit_to`]);
+//! - `groups`: the host group an approval or an inventory record names, read from its
+//!   `host_group` or else its `role`, checked against the groups the coordinator holds
+//!   ([`Enrollment::held_groups`]): from a coordinator that holds one, every approval puts its
+//!   host in a group (`docs/design/hostgroups.md` section 1.2);
 //! - `by_record`: a pending request that matches an open inventory record exactly is approved by
 //!   the coordinator itself ([`Enrollment::approve_by_record`]), audited
 //!   `enrollment.auto_approved` and marking the record used;
@@ -44,6 +48,7 @@ mod by_record;
 mod device_state;
 mod expiry;
 mod gate_port;
+pub(crate) mod groups;
 mod list;
 mod mac_nonce;
 mod nonce;
@@ -81,6 +86,8 @@ pub use setup::{
     server_due, setup,
 };
 
+use crate::desired::DesiredStore;
+use crate::host_groups::HostGroups;
 use crate::identity::Identity;
 use crate::ops::OpsStore;
 
@@ -120,10 +127,16 @@ pub struct Enrollment {
     clock: Arc<dyn UnixClock>,
     nonces: Nonces,
     mac: MacPolicy,
+    /// A Mac is approved only when the gate says it enrolled through ADE (`device_not_via_dep`
+    /// otherwise); off by default.
+    mac_require_dep: bool,
     /// How long a request waits for an operator before it expires, in seconds.
     request_ttl_secs: u64,
     /// Set when a coordinator takes this enrollment ([`Enrollment::audit_to`]).
     audit: Mutex<Option<Arc<OpsStore>>>,
+    /// The desired state of the coordinator that took this enrollment, whose host groups an
+    /// approval places its host in ([`Enrollment::place_by`]); `None` until one does.
+    desired: Mutex<Option<Arc<DesiredStore>>>,
     /// Called after each new request is recorded ([`Enrollment::with_posted`]).
     posted: Option<Posted>,
 }
@@ -169,10 +182,38 @@ impl Enrollment {
             clock,
             nonces: Nonces::new(random),
             mac: MacPolicy::default(),
+            mac_require_dep: false,
             request_ttl_secs: DEFAULT_REQUEST_TTL_SECS,
             audit: Mutex::new(None),
+            desired: Mutex::new(None),
             posted: None,
         }
+    }
+
+    /// From now on, places each approved host by the host groups of `desired`, the desired state
+    /// of the coordinator that takes this enrollment: while it holds a group, by group
+    /// ([`Enrollment::held_groups`]). Called when a coordinator takes this enrollment.
+    pub(crate) fn place_by(&self, desired: Arc<DesiredStore>) {
+        *self.desired.lock().unwrap_or_else(PoisonError::into_inner) = Some(desired);
+    }
+
+    /// The host groups an approval puts its host in, as the coordinator holds them now; `None`
+    /// when it holds none (or no coordinator took this enrollment), and an approval places its
+    /// host by role, as before groups.
+    pub(crate) fn held_groups(&self) -> Option<HostGroups> {
+        self.desired
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .as_ref()
+            .and_then(|desired| groups::held_in(desired))
+    }
+
+    /// The same enrollment, its CA naming the fixed host role of each host certificate after
+    /// `prefix`, the coordinator's `--host-role-uri-prefix` ([`Ca::with_host_role_uri_prefix`]).
+    #[must_use]
+    pub fn with_host_role_uri_prefix(mut self, prefix: &str) -> Self {
+        self.ca = self.ca.with_host_role_uri_prefix(prefix);
+        self
     }
 
     /// The same enrollment, calling `posted` after each new request is recorded (a repost of a
@@ -205,6 +246,15 @@ impl Enrollment {
     #[must_use]
     pub fn with_mac(mut self, mac: MacPolicy) -> Self {
         self.mac = mac;
+        self
+    }
+
+    /// The same enrollment, declining `device_not_via_dep` a Mac whose `SecurityInfo` did not say
+    /// `EnrolledViaDEP` true (also one that has not answered). Off by default, so an allowlisted
+    /// Mac enrolled by hand is approved as before.
+    #[must_use]
+    pub fn with_mac_require_dep(mut self, require: bool) -> Self {
+        self.mac_require_dep = require;
         self
     }
 

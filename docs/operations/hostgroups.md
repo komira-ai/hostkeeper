@@ -1,11 +1,11 @@
 # Host groups: what each host runs
 
 A host group is a name, the ordered list of the packages its hosts run, and one rollout policy.
-Every enrolled host is in at most one group, and once the coordinator holds a group a host runs
-exactly the packages its group lists, at the group's desired version of each. This page is what
-the coordinator does with groups today. The design, which goes further than what is built, is
-[hostgroups.md](../design/hostgroups.md); the last section lists what is not built. `hkctl` is
-[cli.md](../cli.md).
+Every enrolled host is in at most one group, and a host runs exactly the packages its group
+lists, at the group's desired version of each. This page is what the coordinator does with groups.
+The design is [hostgroups.md](../design/hostgroups.md). A fleet that was placed by roles and a
+rollout file moves through the operator API, by [Moving a fleet from roles to host groups](#moving-a-fleet-from-roles-to-host-groups).
+`hkctl` is [cli.md](../cli.md).
 
 Every `HostGroups` call takes the operator token only: a CI token is refused with `forbidden`, no
 token with `unauthorized`, and a refused call changes nothing. A call that changes something needs
@@ -23,49 +23,89 @@ most 64 KiB; the gateway serves each call at `POST /hostkeeper.operator.v1.HostG
 | `policy` | How every package of the group rolls out (see Policy below). |
 | `generation` | 1 for a new group, and one more for each `Put` that replaces it. |
 
-A group names no host: a host is in a group because its enrollment record says so
-(`HostGroups.Move`). A group lists packages, not versions: the versions are the group's desired
+A group names no host: a host is in a group because its enrollment record says so, put there by
+its approval ([Enrolling a host into a group](#enrolling-a-host-into-a-group)) and changed later
+only by `HostGroups.Move`. A group lists packages, not versions: the versions are the group's desired
 versions, set with `Releases.SetDesired` (Deployments below). A package can be listed by many
 groups, and a host runs it at its own group's desired version. A package's minimum version in a
 group is not part of the group: only `Services.SetMinVersion` writes it, and `Put` neither reads
 nor resets it, so an incident's minimum is never undone by putting the group's file again.
 
-## Group mode
+## How the coordinator places hosts
 
-The coordinator is in group mode while it holds at least one group: the first `Put` of a group
-starts it, and it ends when the last group is removed. It is decided at each heartbeat, not at
-start. In group mode:
+`serve` always places by groups, whether or not the coordinator holds a group yet: it refuses
+`--rollout-file` (`--rollout-file is not read by serve: start serve without it and place hosts with
+the operator API: HostGroups.Put each group, HostGroups.Move each host, Services.SetRepository and
+Services.SetMinVersion where needed, Releases.SetDesired per group (docs/operations/hostgroups.md)`)
+and has no rollout file, role or assignment to place by. A coordinator that holds no group orders every host nothing. The coordinator decides
+at each heartbeat:
 
-- A host runs the packages its group lists and no others. What the rollout file's `roles`,
-  `selector` and `priority` say, and the operator's assignments, place nothing any more.
-  `Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`, before anything is
-  read. The services an approval names still write assignment entries, which place nothing.
+- A host runs the packages its group lists and no others. `Services.Assign` and
+  `Services.Unassign` are refused `placed_by_host_group`, before anything is read, and an approval
+  that names services is refused `services_retired`.
+- A host is put in its group when it is approved: by the group `Approve` names, the group of the
+  inventory record that approves it, or the group of its Mac allowlist entry
+  ([Enrolling a host into a group](#enrolling-a-host-into-a-group)). After that only `Move`
+  changes it. An approval or a record that names a group the coordinator does not hold is refused
+  `unknown_host_group`, a coordinator that holds none included.
 - A host in no group is ordered nothing: no install, no update, no uninstall. It keeps running
-  what it runs. A newly approved host is in no group until `Move` puts it in one.
+  what it runs. A host is in none when it was approved before the coordinator held a group, until
+  `Move` puts it in one; [moving a fleet from roles](#moving-a-fleet-from-roles-to-host-groups)
+  puts every host of a role in the group of that name.
 - The role the coordinator's fleet records for a host is the name of its group (empty for a host in
   none). `Hosts.List` and `Hosts.Get` show a host in a group with the group's name as `role` and as
-  `host_group`; a host in none keeps the role it was approved for and an empty `host_group`. The slots of a package
+  `host_group` (an approval by group writes the group's name as the host's role, too); a host in
+  none keeps the role it was approved for and an empty `host_group`. The slots of a package
   (`max_updating`), its `min_up` and its stages count the hosts of one group, so two groups never
   wait on each other; a hold of a role holds the group of that name.
-- The rollout file is still read at start. It gives a package what a package has alone: its
-  version scheme, its repository and the floor of its `min_version`. Its `stages`, `canary`,
-  `bake_beats`, `rollback`, `rollback_after_failed` and `defer_backoff` are not read, and neither
-  are the desired state's `max_updating` and `min_up`: the group's policy holds them all. A
-  package that a group lists and the rollout file does not define has the default version scheme
-  and repository.
+- A package's own settings are not the group's: its version scheme is the default, its minimum
+  version is the one `Services.SetMinVersion` set for the group (see below), and its repository
+  is the one `Services.SetRepository` set. Everything else that rolls it out is the group's
+  policy.
 - A package a host runs that its group does not list, and no uninstall intent covers (it was
   installed by hand, or by an earlier placement), is never ordered. `Hosts.Get` still shows it.
 - A private repository is served to a host under the name of its group, the one its record holds,
-  not the role its certificate names: the suite a host is sent
+  never a role from its certificate (a host certificate names the fixed role `host`, which means
+  nothing, [enrollment-coordinator.md](../enrollment-coordinator.md)): the suite a host is sent
   ([repository-keys.md](repository-keys.md)) and the paths it may read are of that group. A host
   in no group reads none.
 
-Without any group, nothing on this page applies and the coordinator places by the rollout file and
-the operator's assignments ([assignments.md](assignments.md)). The groups and their desired
-versions are kept in the state file under the key `host_groups`, and each (group, package)'s
-marks in the ops file under the same key (on the database store, the tables of migration `0008`:
-[coordinator-state.md](coordinator-state.md)). A coordinator of the release before refuses both
-files, and the database, once they hold a group.
+The groups and their desired versions are kept in the state file under the key `host_groups`, and
+each (group, package)'s marks in the ops file under the same key (on the database store, the tables
+of migration `0008`: [coordinator-state.md](coordinator-state.md)). A coordinator of the release
+before refuses both files, and the database, once they hold a group.
+
+### Where a package's repository and minimum version come from
+
+A package belongs to no group, so its repository is not a field of a group: it is set for the
+package, whichever groups list it, by `Services.SetRepository`. It is kept in the coordinator's
+state (the ops file's `repository` key of the service; on the database, the column
+`services.repository` of migration `0009`, which older releases may run on), and every change is
+an audit entry, `set_repository`, naming the service, with the reason `repository <name>: <yours>`
+(or `repository komira (the default): <yours>` when cleared).
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    services set-repository --service hello-config-web --repository acme-private \
+    --reason "the web config comes from the private repository"
+```
+
+- A package whose repository was never set comes from `komira`, the default. An empty
+  `--repository` clears the setting and puts the package back on it.
+- The service must be a package some group lists (`unknown_service`), the name must be a
+  repository name (`invalid_request`) and the registry must hold it (`repository_unknown`). A call
+  that sets what is already set still writes its entry. The call takes the operator token only, like
+  every call of this page.
+- `Services.List` shows a package's repository as set (or `komira`). A release's `SetDesired` is
+  accepted only when its repository entries name channels of that repository
+  (`repository_unknown` otherwise), so set a config package's repository before its first release.
+- `Repositories.Remove` of a repository is refused (`in_use`) while a package names it, and
+  `komira` itself while any group lists a package on the default; clear or move those packages
+  first, then remove it ([package-repositories.md](../deploy/package-repositories.md)).
+
+A package's minimum version in a group is the one `Services.SetMinVersion` set for it (with the
+group's name as the `role` of the minimum): nothing else floors a package, since there is no
+rollout file. A host's own minimum stands before it.
 
 ## The calls
 
@@ -115,19 +155,42 @@ operator's reason: `new group`, `packages +<added> -<taken out>`, `reordered` (t
 stayed changed order), `policy <keys that changed>` or `no change`, joined by `; ` and followed by
 `: ` and yours, for example `packages +hello-config-web; policy bake_beats: add the web config`.
 
-**Remove.** A group that a host is in or moving into, or that an inventory record names, is
-`not_empty`. Removing the last group ends group mode. The entry is `host_group_remove`.
+**Remove.** A group that a host is in or moving into, that an inventory record names (by its
+group, or by its role for a record added before the coordinator held groups), or that an entry of
+the Mac allowlist names, is `not_empty`; an approved host is in its group from its approval, before
+it first polls. The check runs under the lock an approval and `AddRecord` check their group
+under, so neither lands in a group being removed. Once the last group is removed the coordinator holds
+none, and orders no host anything. The entry is `host_group_remove`.
 
 **Move.** The entry is `host_move`, about the host (`node_id`) and the new group (`host_group`),
 with the reason `from <old> to <new>: <yours>`, or `into <new>: <yours>` for a host that was in
 none. The answer names the group the host was in. `unknown_host` is a host that is not enrolled
 or is denied, and the checks run in the order of the table.
 
+## Enrolling a host into a group
+
+In group mode every approval puts its host in a group, which must be one the coordinator holds
+(`unknown_host_group`) ([enrollment.md](enrollment.md)):
+
+- `hkctl enrollment add-record --host-group <group>`: the record is the approval, and the
+  coordinator puts the host it approves in the record's group. A record added before the
+  coordinator held groups names its group by its role; one whose role no group has approves
+  nothing, and its request waits for an operator.
+- `hkctl enrollment approve --host-group <group>`: the operator's approval. It names no
+  `--services` (`services_retired`).
+- A Mac approved by its MDM nonce goes into the `host_group` of its entry of
+  `--mac-serial-allowlist` ([enrollment-coordinator.md](../enrollment-coordinator.md#a-mac-approved-by-its-nonce)).
+
+`--role` is read as the group's name where `--host-group` is left out, so scripts that name roles
+keep working once the groups have the roles' names. The approval's audit entry names the group,
+and the host's facts generation is raised by it. A renewal keeps the host's group, and an approval
+with `--replace` keeps the group of the host it replaces: naming another group is
+`host_group_differs`.
+
 ## Moving a host
 
-`Approve` and `AddRecord` do not name a group yet: `--host-group` on either is refused
-`unknown_host_group`. So a host gets into a group by `Move`, and a host in a group is changed to
-another by `Move`.
+A host in a group is changed to another by `Move`, and a host approved before the coordinator held
+groups is put in one by `Move`.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
@@ -183,8 +246,8 @@ the plan's gate.
   again from admission into the newest group, and the group it was in before becomes the one it
   moves from.
 - The installs wait for the uninstalls (`moving`). An uninstall the host declined is ordered again
-  after its backoff; one that failed is left for the operator, as
-  [assignments.md](assignments.md#uninstall) says, and the installs wait for it.
+  after its backoff; one that failed is left for the operator
+  ([Uninstalls](#uninstalls)), and the installs wait for it.
 - A package the host cannot be ordered (the release has no target or no digest for it, or the
   daemon cannot take an install) does not hold the move: it ends without that package. The
   move also ends, with the intents standing, for an uninstall intent of a package the host does not
@@ -199,8 +262,8 @@ A host's facts (its id, its group, its labels) are sent in the answer to its hea
 whole, until the host reports their generation. The generation is the number of the newest audit
 entry that changed the facts of the host: `host_move`, `set_labels`, an approval or a replacing
 approval, or, if none since the coordinator opened its audit log, the number of its last entry.
-The group in the facts is the one the host's record holds, or, for a host in none, the role it
-was approved for. Nothing is stored for the generation: it follows from the audit log, so a
+The group in the facts is the one the host's record holds (an approval by group writes it), or,
+for a host in none, the role it was approved for. Nothing is stored for the generation: it follows from the audit log, so a
 restart resends every host its facts once and the daemon, which writes the file only on a change,
 writes nothing.
 
@@ -231,6 +294,26 @@ The gate reasons the status shows for a host in a group, besides those of
 | `uninstall_order` | `GATE_REASON_UNINSTALL_ORDER` | a package whose uninstall goes first is still on the host |
 | `moving` | `GATE_REASON_MOVING` | the host is moving and its plans have not admitted it, or its uninstalls are not done |
 
+## Uninstalls
+
+An uninstall is ordered to a host in two ways only: a `Put` that takes a package out of a group's
+list, and a `Move` to a group that does not list a package the old one did. Each writes one
+uninstall intent for every host concerned that listed the package at its last heartbeat to this
+coordinator (above). No other call orders one: excluding a host, retiring it, an enrollment
+approval, a hold, a minimum version or a new desired version never does. A package that is not
+listed and has no intent stays installed on the host, unmanaged: it is never ordered there again.
+
+The uninstall is decided under the halt, the hold, the quiet start, one update at a time on the
+host and the group's other live rollouts (`rollout_elsewhere`, `--live-rollouts`), and takes an
+update slot of the group's `max_updating` as an update does. It is not a stage of any plan. It
+stands across a coordinator restart, in the ops file (on the database store, the table
+`uninstall_intents`), and ends when the host reports the package gone from the services it lists
+(audited `uninstalled`, by the coordinator), or when the package is listed for the host again
+(`uninstall_cancelled`). An uninstall the host declined is ordered again after its backoff; one
+that failed is left for the operator, and like a failed update it holds the slot until the host
+heartbeats healthy (or an operator excludes it, which frees it). An excluded host is ordered
+nothing at all.
+
 ## Deployments: a version is set in a group
 
 A desired version is a (group, package, version), rolled over that group's hosts by that group's
@@ -250,6 +333,18 @@ the column on the right. A set refused for any group writes nothing for any. A `
 group's policy. A group with no hosts is converged. A package a group lists that has no desired
 version in that group orders nothing, and the status shows the pair `no_desired`; when no group
 has a desired version, `WaitConverged` answers `no_desired` at once.
+
+An entry of the CI allow-list may name `host_groups` ([ci-client.md](../deploy/ci-client.md)), a
+list of host group names. Without the key, a token of the entry deploys its services to any group
+that lists them. With it, the token deploys to those groups alone, and `host_groups = []` names
+none. A set that names a group outside the list is refused `forbidden` (gRPC `PermissionDenied`,
+HTTP 403), before the group is looked up, so it does not say whether the group exists. A set that
+names no group is one deployment to each of the token's groups that lists the package, one entry
+each; it is `not_in_host_group` when no group lists the package and `forbidden` when some do but
+none of them is the token's, and `if_generation` is `ambiguous_host_group` when more than one of
+the token's groups lists it. A coordinator that holds no host group refuses such a token every
+set with `forbidden`. The list limits deployments only: `Converge`, `WaitConverged` and
+`GetRelease` answer a token of any admitted entry for any group.
 
 `Releases.Status` answers one entry for each (group, package), with its `host_group`. A version
 marked bad is bad in every group (`Releases.MarkBad` is the package's), so a build that fails in
@@ -307,14 +402,46 @@ with `host_group` lists those entries. The actions `host_group_put`, `host_group
 `rollout_advance`, `rollout_pause`, `rollout_resume` and the rollback entries name the group of
 the plan they are about.
 
-## Not built yet
+## Moving a fleet from roles to host groups
 
-- Approval by group: `Approve` and `AddRecord` name no group, the services an approval names are
-  not refused, and the Mac allowlist names no group. A new host is in no group until `Move`.
-- The CI allow-list's `host_groups`: a CI token may deploy to any group that lists its service.
-- The migration of roles, the rollout file and assignments into groups, and the refusal of
-  `--rollout-file`. Until then, putting the first group is the whole fleet changing from placement
-  by roles to placement by groups: every host is in no group, and runs what it runs but is ordered
-  nothing, until it is moved.
+A coordinator that placed hosts by roles, a rollout file and assignments moves to groups through
+the operator API, with the hosts running throughout and no service touched. `serve` does not read
+the rollout file any more and refuses it, and a coordinator that holds no group orders every host
+nothing (see [How the coordinator places hosts](#how-the-coordinator-places-hosts)), so the order
+below is safe at every step.
 
-Each is a later build item of the design ([hostgroups.md](../design/hostgroups.md), section 12).
+1. **Start this release without the rollout file.** Stop the coordinator and take the backup
+   ([coordinator-state.md](coordinator-state.md#backing-up) for the files, `pg_dump` for the
+   database). Drop `--rollout-file` (or `rollout-file` of the configuration file). Also leave out
+   `--mac-serial-allowlist` for now: a start refuses an entry that names `services`, and one that
+   names a group the store does not hold, which at this point is every group. Start the release.
+   Every host keeps running what it runs and is ordered nothing.
+2. **Put each group.** `hkctl host-groups put` with the group's packages in install order and its
+   policy ([cli.md](../cli.md#hkctl-host-groups-put), [The calls](#the-calls)). Name a group after
+   the role whose hosts it takes.
+3. **Move each enrolled host into its group.** `hkctl host-groups move` for each host, the hosts
+   of a role into the group of that name ([cli.md](../cli.md#hkctl-host-groups-move),
+   [Moving a host](#moving-a-host)).
+4. **Set what the rollout file held per package.** `hkctl services set-repository` for each
+   package whose repository is not `komira` (put the registry's entries in place first,
+   [package-repositories.md](../deploy/package-repositories.md)), and `hkctl services
+   set-min-version` for each minimum a group needs
+   ([Where a package's repository and minimum version come from](#where-a-packages-repository-and-minimum-version-come-from)).
+5. **Set the desired versions.** `hkctl releases set-desired --host-group <group>` for each
+   package of each group ([Deployments](#deployments-a-version-is-set-in-a-group)), and point CI at
+   the groups with the `host_group` of its release step
+   ([github-actions.md](../deploy/github-actions.md)).
+6. **Bring the Mac allowlist back.** Once the groups exist, give each entry of
+   `--mac-serial-allowlist` its `host_group` and remove its `services`, and start the coordinator
+   with the file again.
+
+A host is ordered nothing until both its group exists and has a desired version, so no service is
+touched while the move runs; a host's packages change only when step 5 gives its group a version
+that differs from what it runs. Scripts that pass `--role` to `hkctl enrollment approve` or
+`enrollment add-record`, or name a `role` in a `releases force` request, keep working: it is read as
+the group's name. Scripts that call `services assign` or `unassign`, or approve naming services, are
+refused (`placed_by_host_group`, `services_retired`) and must change.
+
+To go back, restore the backup and the old configuration with the release before: the store now
+holds `host_groups`, which that release refuses. A coordinator holding groups has no way back to
+roles but the backup.

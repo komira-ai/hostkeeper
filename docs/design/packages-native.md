@@ -260,6 +260,12 @@ this against making the coordinator a hostkeeper service).
 
 ### 10.5 The release channel's end
 
+What replaces the channel for the lab LAN is the coordinator's package proxy, designed in [package-proxy.md](package-proxy.md) (**Designed**, nothing
+built): a caching pass-through at `https://<mdm name>/apt/<repo>/` and `/pkg/<sha256>.pkg`, which reads the public repository (or the pkg's
+origin) once and keeps it. It serves bytes only; apt, the daemon and the Mac verify them as before (10.3), so no trust moves to it. The
+steps below end the channel; package-proxy.md section 6 gives the order in which the tailnet-only download server is retired and hosts are
+pointed at the proxy, and it owns the repointing of `release_channel` and of repository entries.
+
 The channel and its sync are interim, as ruled. The channel serves archives and nothing else, and it is needed until
 the last archive is ordered: a daemon before `target-v1` fetches through nothing else, and a `target-v1` daemon with no
 `stores.toml` defines only the `channel` store. So, exactly:
@@ -338,22 +344,48 @@ does is not one we run.
 - **The daemon.** The one installer change it accepts is from `hostkeeper-archive` to a native installer. Back, or
   between native installers, is `installer_changed`, as today. The move is an update: `stage` the native version, the
   hook's `prepare` from its tree, then `activate`, which first takes away the archive version's placed units and files
-  (listed in `placed.json`; a placed unit in `/etc/systemd/system/` would hide the package's unit of the same name),
-  then installs the package; then `cutover`, `verify` and `cleanup`. The archive version stays
+  (listed in `placed.json`'s `paths`; a placed unit in `/etc/systemd/system/` would hide the package's unit of the same
+  name, and once `current` names the native version its link dangles and systemd finds no unit at all) and reloads
+  systemd, then installs the package; then `cutover`, `verify` and `cleanup`. The archive version stays
   on the host as `previous` until the next update's `retire`.
+- **What `activate` takes away, and its check.** Each path `paths` lists for the service is looked at without following
+  a link. A `unit` path is removed when it holds a regular file or a link, wherever the link points, dangling or not. A
+  `wants_link` or `file` path is removed only when it holds a link to the recorded `link_target` or into the packages
+  directory; anything else there (the `.deb`'s own `systemctl enable` link, a conffile, an operator's file) is left.
+  After the install, each removed or already missing unit the package also installs must be what systemd loads:
+  `systemctl show` gives `LoadState=loaded` and a `FragmentPath` in `/usr/lib/systemd/system/` or
+  `/lib/systemd/system/`. Otherwise `activate` is `Failed`, class environment, `unit_not_loaded` (packages-repositories.md
+  section 4.5), naming what systemd loads instead. Only after the check are the entries dropped from `paths`, so a
+  deferred or failed `activate` takes them away and checks again on its next try. The package's `run` units are then
+  enabled by the package's own `WantedBy=` links, as for any native install.
+- **The repair at the start.** Releases 0.1.242 to 0.1.245 moved hostkeeper without taking its unit link away. At
+  every start, after the `activate` of its own package and before the boot pass starts any unit, the daemon removes
+  each link directly in the unit directory that points into the package directory of a service `placed.json` records
+  with a native installer and whose target is gone, reloads systemd and logs one line naming them. A link that points
+  anywhere else, or whose target is there, is left as it is.
+- **The daemon's own service is never absent.** A daemon that observes its own service absent (systemd finds no
+  unit, as a hidden unit leaves it) while `current` names its installed version reports it unhealthy, detail
+  `own_unit_not_loaded`, with its liveness running: it is that process. Read as absent, the coordinator would take
+  `hostkeeper` for not installed and order the `install` of the version that runs, which the daemon refuses
+  `already_installed`.
 - **The move's rollback**, automatic or a `ForceRollback`, before or after the move settled: `activate` the archive
   version again. It purges the native package (for a service; for `hostkeeper`, the package stays at the version apt
   installed, since purging it would remove the unit and the binary the host starts), places the archive's paths
   again, and records `hostkeeper-archive`. The daemon takes it from its sealed copy and fetches nothing. Once the
-  next update has retired the archive version, the move cannot be undone. Since A25 the coordinator never orders it:
+  next update has retired the archive version, the move cannot be undone. A daemon from A25 runs no such rollback:
+  it has no archive installer, and the archive's paths its `activate` took away stay away. Since A25 the coordinator
+  never orders it:
   no pick returns an archive entry, so a moved host going back to a version whose list has no native entry it lists
   is picked nothing (`installer_dropped`), and one going back to a version with such an entry is ordered that entry,
   which a daemon refuses `rollback_below_installer` below its floor (*A rollback of the daemon below the change*,
   below). The automatic rollback of a daemon's own failed move needs no order: before the confirm the old binary goes
   on from archives.
 - **hostkeeper's move** is 10.4's self-update with the move's `activate`. After `N` confirms, it installs its `.deb`
-  (an upgrade of the bootstrap package dpkg still lists at the host's first version), enables the `.deb`'s unit, takes
-  away the archive's package unit from `/etc/systemd/system/` and reloads systemd. The running daemon is not
+  (an upgrade of the bootstrap package dpkg still lists at the host's first version), having first taken away the
+  archive's package unit from `/etc/systemd/system/` and reloaded systemd (the rules above; an `activate` that fails or
+  defers puts the links it removed back, so the old binary's unit stays), enables the `.deb`'s
+  unit and checks that systemd loads it from the `.deb`; a check that fails ends the update `Failed`,
+  `unit_not_loaded`, and the binary keeps running. The running daemon is not
   restarted; its next start runs `/usr/bin/hostkeeper` (`N`), which execs `current` (`N`). A move that fails before
   the confirm is a failed self-update: the old binary goes on from archives, unchanged.
 - **A rollback of the daemon below the change** is refused before anything switches: to a release before A7 on a host

@@ -5,8 +5,9 @@
 // button, one of Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt,
 // Releases.Converge, Releases.Force, Releases.SetDesired, Rollouts.Advance, Rollouts.Pause,
 // Rollouts.Resume, Services.Assign, Services.Unassign and Services.SetMinVersion, and Hosts.List
-// to count a force's hosts. The desired version is set here or by CI.
+// to count a force's hosts. The page ends with the host groups section (pages/hostgroups.js). The desired version is set here or by CI.
 
+import { section as hostGroupsSection } from "./hostgroups.js";
 import {
   h, action, allPages, area, checkbox, describeError, enumLabel, errorView, field, list, reasonProblem, select,
   table, trimmed, words,
@@ -299,9 +300,20 @@ function waitStage(plan) {
   }
 }
 
+// A service the plan waits on, with why its rollout is live and on which host when the
+// coordinator says (`waitingOnWhy`; a coordinator before it names the service alone).
+function liveOn(plan, service) {
+  const why = (plan.waitingOnWhy || []).find((w) => w.service === service);
+  if (!why) {
+    return service;
+  }
+  const host = why.nodeId ? ` on ${why.nodeId}` : "";
+  return `${service} (${enumLabel(why.reason, "LIVE_REASON_")}${host})`;
+}
+
 // Why the plan orders no new host: the wait with its stage or, for another service's rollout,
-// the services it waits on (none from a coordinator that does not name them), and the pause
-// with who and why.
+// the services it waits on, each with why it is live and on which host (none from a coordinator
+// that does not name them), and the pause with who and why.
 export function planWaiting(plan) {
   if (!plan) {
     return "-";
@@ -309,7 +321,7 @@ export function planWaiting(plan) {
   const parts = [];
   if (plan.waiting !== "PLAN_WAIT_PAUSED") {
     const stage = waitStage(plan);
-    const on = (plan.waitingOn || []).join(", ");
+    const on = (plan.waitingOn || []).map((service) => liveOn(plan, service)).join(", ");
     parts.push(
       enumLabel(plan.waiting, "PLAN_WAIT_") +
         (stage === null ? "" : `, stage ${stage}`) +
@@ -614,11 +626,13 @@ export async function render(ctx) {
     prepared: null,
     typed: "",
   };
+  const groups = await hostGroupsSection(ctx, () => ctx.show(page()));
   const page = () => h("section", { class: "page" },
     h("h2", {}, "Rollout"),
     h("p", { class: "note" }, "CI or an operator sets the desired version: an operator sets it here."),
     status.quiet === true ? h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.") : null,
     services.map((svc) => serviceSection(ctx, svc, listing)),
-    forceSection(ctx, services, state, () => ctx.show(page())));
+    forceSection(ctx, services, state, () => ctx.show(page())),
+    groups.view());
   return page();
 }

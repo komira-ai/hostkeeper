@@ -719,6 +719,7 @@ fn approved(byte: &str, host: &str, claims: Claims) -> RecordedApproval {
         request_id: KeyHash::from_hex(&byte.repeat(32)).expect("a key hash"),
         host_id: host.to_owned(),
         role: "storage".to_owned(),
+        host_group: String::new(),
         services: Vec::new(),
         replace: false,
         approver: "operator".to_owned(),

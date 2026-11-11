@@ -1439,7 +1439,6 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-launchd",
  "hostkeeper-testkit",
- "rustix",
 ]
 
 [[package]]
@@ -1767,6 +1766,10 @@ dependencies = [
  "toml",
  "tracing",
 ]
+
+[[package]]
+name = "hostkeeper-mdm-model"
+version = "0.1.0"
 
 [[package]]
 name = "hostkeeper-mdm-step"
@@ -5366,6 +5369,7 @@ dependencies = [
  "hostkeeper-link",
  "hostkeeper-mdm",
  "hostkeeper-mdm-core",
+ "hostkeeper-package",
  "hostkeeper-proto",
  "hostkeeper-pxe-packets",
  "hostkeeper-release",
@@ -5378,7 +5382,9 @@ dependencies = [
  "plist",
  "prost",
  "prost-reflect",
+ "rcgen",
  "rpm",
+ "rustix",
  "rustls",
  "rustls-native-certs",
  "ruzstd",

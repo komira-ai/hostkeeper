@@ -754,6 +754,7 @@ pub(super) fn approved(store: &Postgres, host: &str) -> (EnrollmentStore, HostId
                 role: Role::parse("web").expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
         )
         .expect("approved");
@@ -847,6 +848,7 @@ async fn a_heartbeat_in_the_steady_state_runs_no_query() {
                 role: Role::parse(DAEMON).expect("a role"),
                 services: Vec::new(),
                 replace: false,
+                host_group: None,
             },
         )
         .expect("approved");

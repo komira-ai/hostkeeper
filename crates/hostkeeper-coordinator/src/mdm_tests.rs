@@ -158,6 +158,7 @@ fn the_port_answers_from_the_gates_records() {
             enrolled,
             supervised,
             enrolled_since_unix: Some(NOW),
+            enrolled_via_dep: None,
         })
     };
     assert_eq!(said(&mdm, "GOODSERIAL01"), status(true, true));

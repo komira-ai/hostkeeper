@@ -166,6 +166,7 @@ pub fn decision(host: &str, replace: bool) -> Decision {
         role: Role::parse("web").expect("a role"),
         services: vec![ServiceName::parse("api").expect("a service name")],
         replace,
+        host_group: None,
     }
 }
 

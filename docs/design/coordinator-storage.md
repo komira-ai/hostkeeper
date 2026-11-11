@@ -42,7 +42,7 @@ holds on one machine only.
   database on a named volume and a health check (section 9).
 - Backups are `pg_dump` on a timer, taken while the coordinator runs, with a restore drill (section 10). The
   coordinator's own `backup` and `restore` verbs stay for the file store only.
-- The farm moves once: stop the file coordinator, run `hostkeeper-coordinator import`, start the compose stack. No host
+- The farm moved once (designed here; the verb was removed later, see section 11): stop the file coordinator, run `hostkeeper-coordinator import`, start the compose stack. No host
   enrolls again (section 11). The way back is `hostkeeper-coordinator export` and the file coordinator.
 
 **What does not change.** The rollout file, the operator tokens file, the OIDC allow-list, the TLS files, the CA key and
@@ -708,8 +708,9 @@ volumes:
 ```
 
 - **Host networking for both.** `--private-listen` and `--lan-listen` (network-install.md section 7) each refuse a
-  wildcard address and take one interface's address. In a bridge network the container has no
-  such address, so the coordinator uses the host's network and binds the addresses it binds today. Postgres then listens
+  wildcard address and take one interface's address (`--private-listen-wildcard` takes a wildcard `--private-listen`,
+  for a namespace of the coordinator's own whose interfaces are loopback and one private network; not this one). In
+  a bridge network the container has no such address, so the coordinator uses the host's network and binds the addresses it binds today. Postgres then listens
   on the host's loopback only, and is not reachable from any other machine.
 - **The image.** The release's image tar is checked against its attestation
   ([verify-a-release.md](../deploy/verify-a-release.md)) and loaded with `docker load`, which names it by the release's
@@ -755,8 +756,8 @@ volumes:
   has no shell or client to run one, so the coordinator has no compose `healthcheck` and no `HEALTHCHECK`; it exits on a
   refusal and the restart policy starts it again (section 5). Its health is a route a probe outside the container asks
   instead: `serve --health-listen <loopback address:port>` answers `GET /healthz` with `200 ok`, or `503` and one of
-  `starting`, `store_unreachable` and `not_writer` (two-programs.md section 2.7,
-  [coordinator-health.md](../deploy/coordinator-health.md)).
+  `starting`, `store_unreachable`, `not_writer` and `draining` (from SIGTERM until it exits; two-programs.md
+  section 2.7, [coordinator-health.md](../deploy/coordinator-health.md)).
 
 ## 10. Backups and the restore drill
 
@@ -786,6 +787,8 @@ volumes:
   until one passes.
 
 ## 11. The move: import, cutover and back-out
+
+*Removed:* `hostkeeper-coordinator import` was removed after it was built; there is no conversion from the file store to the database, and a farm on the file store stays on it or starts a database coordinator and enrolls its hosts again. `export` stays ([coordinator-state.md](../operations/coordinator-state.md)). The rest of this section is the design as it was built, kept as history.
 
 **Built** (C4): `crates/hostkeeper-coordinator/src/transfer.rs`, the database's side in
 `crates/hostkeeper-coordinator/src/store/postgres/transfer.rs`, the enrollment store read and

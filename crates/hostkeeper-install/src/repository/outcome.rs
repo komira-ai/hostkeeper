@@ -84,11 +84,14 @@ pub enum Reason {
     /// `macos-pkg`: `installer` failed, the receipt does not show the version, or an installed
     /// file differs.
     InstallerError,
+    /// After the install, systemd does not load the package's own unit: a unit an earlier
+    /// release left in `/etc/systemd/system/` hides it ([`super::loaded`]).
+    UnitNotLoaded,
 }
 
 impl Reason {
     /// Every reason, in token order.
-    pub const ALL: [Reason; 20] = [
+    pub const ALL: [Reason; 21] = [
         Reason::CoordinatorTooOld,
         Reason::DependencyChanges,
         Reason::DependencyMissing,
@@ -108,6 +111,7 @@ impl Reason {
         Reason::RepositoryUnknown,
         Reason::Signature,
         Reason::StoreDigestMismatch,
+        Reason::UnitNotLoaded,
         Reason::UnsafeDirectory,
     ];
 
@@ -134,6 +138,7 @@ impl Reason {
             Reason::IoError => "io_error",
             Reason::UnsafeDirectory => "unsafe_directory",
             Reason::InstallerError => "installer_error",
+            Reason::UnitNotLoaded => "unit_not_loaded",
         }
     }
 
@@ -159,7 +164,8 @@ impl Reason {
             | Reason::PackageManagerBusy
             | Reason::DpkgInterrupted
             | Reason::IoError
-            | Reason::UnsafeDirectory => Class::Environment,
+            | Reason::UnsafeDirectory
+            | Reason::UnitNotLoaded => Class::Environment,
         }
     }
 

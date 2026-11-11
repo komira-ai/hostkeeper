@@ -71,6 +71,7 @@ export interface Client {
     assign(request: hostkeeper_operator_v1.AssignRequest): Promise<hostkeeper_operator_v1.AssignResponse>;
     unassign(request: hostkeeper_operator_v1.UnassignRequest): Promise<hostkeeper_operator_v1.UnassignResponse>;
     setMinVersion(request: hostkeeper_operator_v1.SetMinVersionRequest): Promise<hostkeeper_operator_v1.SetMinVersionResponse>;
+    setRepository(request: hostkeeper_operator_v1.SetRepositoryRequest): Promise<hostkeeper_operator_v1.SetRepositoryResponse>;
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
   };
@@ -579,6 +580,18 @@ export namespace hostkeeper_operator_v1 {
     services?: hostkeeper_operator_v1.ServiceEntry[];
     holds?: hostkeeper_operator_v1.HoldMark[];
   }
+  export type LiveReason =
+    | "LIVE_REASON_UNSPECIFIED"
+    | "LIVE_REASON_UPDATING"
+    | "LIVE_REASON_PROMOTION_PENDING"
+    | "LIVE_REASON_ORDERED"
+    | "LIVE_REASON_BAKING"
+    | "LIVE_REASON_PLAN_UNDER_WAY";
+  export interface LiveRollout {
+    service?: string;
+    reason?: hostkeeper_operator_v1.LiveReason;
+    nodeId?: string;
+  }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export type MdmBaselineState =
@@ -777,6 +790,7 @@ export namespace hostkeeper_operator_v1 {
     finished?: boolean;
     waitingOn?: string[];
     hostGroup?: string;
+    waitingOnWhy?: hostkeeper_operator_v1.LiveRollout[];
   }
   export interface RolloutPolicy {
     stages?: hostkeeper_operator_v1.PolicyStage[];
@@ -856,6 +870,8 @@ export namespace hostkeeper_operator_v1 {
     minVersion?: hostkeeper_operator_v1.MinVersion;
   }
   export interface SetMinVersionResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface SetRepositoryRequest { service?: string; repository?: string; reason?: string; }
+  export interface SetRepositoryResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface SkippedHost { nodeId?: string; reason?: string; }
   export type StageAdvance =
     | "STAGE_ADVANCE_UNSPECIFIED"

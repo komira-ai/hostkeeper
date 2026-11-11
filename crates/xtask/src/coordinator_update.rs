@@ -9,7 +9,8 @@
 //! mounts. In this order, one report line each:
 //!
 //! 1. The target version: `--target-version`, else the newest published release of hostkeeper's
-//!    repository tagged `vX.Y.Z`.
+//!    repository tagged `vX.Y.Z`, from the public release list, read with no token and asked
+//!    with the `ETag` of the last list kept (`public`): a `304` is answered from the kept list.
 //! 2. The container `--container` must exist and run (a stopped one is never started), and no
 //!    container `<name>-next` may exist (an earlier run was cut short).
 //! 3. The running version: the coordinator's `/v1/version`, or for an older coordinator that has
@@ -20,9 +21,10 @@
 //!    container.
 //! 4. A marker `failed-v<target>` in `--download-dir` (a run that rolled back) refuses the
 //!    version until the operator removes it.
-//! 5. The image tarball, its bundle and `SHA256SUMS` are downloaded to `v<target>/`; the tarball
-//!    must be the sum `SHA256SUMS` lists and its attestation by the release signer, of the
-//!    release's commit, must verify online and from the bundle. Nothing is loaded otherwise.
+//! 5. The image tarball, its bundle and `SHA256SUMS` are downloaded to `v<target>/` from their
+//!    public download URLs; the tarball must be the sum `SHA256SUMS` lists and its attestation by
+//!    the release signer, of the release's commit, must verify offline from the bundle, with the
+//!    pinned `gh` and the Sigstore trusted root (`offline`). Nothing is loaded otherwise.
 //! 6. The manifest and config digests the tarball names are read from it.
 //! 7. The tarball is loaded; the id of `hostkeeper-coordinator:<target>` must be one of them.
 //! 8. The new container's create body is [`rebase::create_body`].
@@ -33,8 +35,21 @@
 //!    started again, and the version is marked failed. A docker call that fails while the new
 //!    container is checked is one check that is not ready. Only a successful update removes old
 //!    downloads, keeping the newest two `v*` directories and the one just installed.
+//!
+//! GitHub limits requests without a token (60 an hour to its API, by address); the timer runs
+//! the program every five minutes, and a run asks for the list once. An answer that says the
+//! limit is used up, to the list or to a download, ends the run at once with exit 0 and a report
+//! line: nothing is changed, and the next run tries again.
 
 mod engine;
+#[cfg(test)]
+pub(crate) mod https_tests;
+pub(crate) mod offline;
+#[cfg(test)]
+mod offline_tests;
+pub(crate) mod public;
+#[cfg(test)]
+mod public_tests;
 mod rebase;
 #[cfg(test)]
 mod tests;
@@ -44,6 +59,8 @@ mod tests_engine;
 mod tests_fake;
 #[cfg(test)]
 mod tests_rebase;
+#[cfg(test)]
+mod wait_tests;
 
 use std::path::{Path, PathBuf};
 use std::str::FromStr as _;
@@ -56,9 +73,10 @@ use crate::release::contract::{
     COORDINATOR, Commit, Platform, Repo, SUMS, Signer, Version, bundle_of,
 };
 use crate::release::image_index::image_name;
-use crate::release::ports::{Download, Exec, PortError, Release, ReleaseStore, Verifier};
+use crate::release::ports::{Exec, PortError, Release, Verifier};
 use crate::release::{self, file_sha256};
 use engine::{CurlEngine, CurlProbe, Engine, Probe, Probed};
+use public::FetchError;
 
 /// The platform of this build: the Linux platform of `std::env::consts::ARCH`.
 const DEFAULT_PLATFORM: &str = match std::env::consts::ARCH.as_bytes() {
@@ -112,10 +130,36 @@ pub(crate) struct Flags {
     /// The seconds the old container gets to stop before it is killed.
     #[arg(long, default_value_t = 30)]
     pub(crate) stop_timeout_secs: u64,
-    /// The `curl` program.
+    /// The `curl` program, which reaches docker and the coordinator.
     #[arg(long, default_value = "curl")]
     pub(crate) curl: String,
+    /// The pinned `gh`, which checks each attestation offline: owned by root, writable by no one
+    /// else.
+    #[arg(long, default_value = GH)]
+    pub(crate) gh: PathBuf,
+    /// The Sigstore trusted root `gh` checks with (`gh attestation trusted-root`): owned by root,
+    /// writable by no one else.
+    #[arg(long, default_value = TRUSTED_ROOT)]
+    pub(crate) trusted_root: PathBuf,
+    /// The PEM file of the roots that GitHub's certificates must chain to.
+    #[arg(long, default_value = public::CA_BUNDLE)]
+    pub(crate) ca_bundle: PathBuf,
+    /// GitHub's API, which lists the releases.
+    #[arg(long, default_value = public::API, value_parser = https_url)]
+    pub(crate) github_api_url: String,
+    /// GitHub's site, which serves the release assets.
+    #[arg(long, default_value = public::SITE, value_parser = https_url)]
+    pub(crate) github_url: String,
 }
+
+/// The default of `--gh`: where the runbook installs the pinned `gh`, beside the program.
+pub(crate) const GH: &str = "/usr/local/libexec/hostkeeper/gh";
+
+/// The default of `--trusted-root`: where the runbook installs the Sigstore trusted root.
+pub(crate) const TRUSTED_ROOT: &str = "/usr/local/lib/hostkeeper/trusted_root.json";
+
+/// Where `gh` runs, in the download directory: its scratch home.
+pub(crate) const GH_HOME: &str = ".gh";
 
 /// A container name as docker takes it: letters, digits, `_`, `.` and `-`, not starting with
 /// one of the last three.
@@ -182,12 +226,25 @@ pub(crate) enum Error {
     /// A change was begun and did not finish; the text says what stands.
     #[error("{0}")]
     Failed(String),
-    /// Docker could not answer.
+    /// Docker, the coordinator or GitHub could not answer.
     #[error(transparent)]
     Engine(#[from] PortError),
     /// A file could not be read or written.
     #[error(transparent)]
     Release(#[from] release::Error),
+    /// GitHub's limit of requests without a token is used up. [`update`] never returns it: it
+    /// ends the run with a report line and exit 0, and the next run tries again.
+    #[error("{0}")]
+    Wait(String),
+}
+
+impl From<FetchError> for Error {
+    fn from(e: FetchError) -> Error {
+        match e {
+            FetchError::RateLimited(why) => Error::Wait(why),
+            FetchError::Failed(e) => Error::Engine(e),
+        }
+    }
 }
 
 /// What waits between two readiness checks.
@@ -205,31 +262,13 @@ impl<F: Fn(std::time::Duration)> Pause for Sleep<F> {
 }
 
 /// Where the update reads the published releases of a repository and their assets: reads only,
-/// of public release assets.
+/// of public release assets, with no token (`public::PublicReleases`).
 pub(crate) trait Releases {
     /// Every release, drafts included (the caller leaves drafts out).
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError>;
+    fn list(&self, repo: &Repo) -> Result<Vec<Release>, FetchError>;
     /// Writes the asset `name` of the release `tag` to `dir/<name>`. `name` is a plain file name;
-    /// `dir` exists and does not hold it.
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError>;
-}
-
-/// [`Releases`] over GitHub: the list from the release store (`gh api`), an asset by its
-/// download URL, `https://github.com/<repo>/releases/download/<tag>/<name>` (`curl`).
-pub(crate) struct GitHubReleases<'a> {
-    pub(crate) store: &'a dyn ReleaseStore,
-    pub(crate) fetch: &'a dyn Download,
-}
-
-impl Releases for GitHubReleases<'_> {
-    fn list(&self, repo: &Repo) -> Result<Vec<Release>, PortError> {
-        self.store.releases(repo)
-    }
-
-    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), PortError> {
-        let url = format!("https://github.com/{repo}/releases/download/{tag}/{name}");
-        self.fetch.download(&url, &dir.join(name))
-    }
+    /// `dir` exists and does not hold it. An error leaves no `dir/<name>`.
+    fn download(&self, repo: &Repo, tag: &str, name: &str, dir: &Path) -> Result<(), FetchError>;
 }
 
 /// What the update runs against.
@@ -241,7 +280,8 @@ pub(crate) struct Ports<'a> {
     pub(crate) pause: &'a dyn Pause,
 }
 
-/// The program: `flags` over the real `curl`, through `exec`, and the release adapters.
+/// The program: `flags` over the real `curl`, through `exec`, the public releases `source` and
+/// the offline `verifier`.
 pub(crate) fn run(
     flags: &Flags,
     source: &dyn Releases,
@@ -279,9 +319,24 @@ fn field<'v>(value: &'v Value, path: &[&str], what: &str) -> Result<&'v str, Err
         .ok_or_else(|| Error::Refused(format!("{what} has no {}", path.join("."))))
 }
 
-/// One update (see the module).
+/// One update (see the module): its report lines. A run that must wait for GitHub's limit
+/// ([`Error::Wait`]) ends here with its lines so far and the reason, and changes nothing.
 pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Error> {
     let mut lines = Vec::new();
+    match steps(ports, flags, &mut lines) {
+        Ok(()) => Ok(lines),
+        Err(Error::Wait(why)) => {
+            lines.push(said(format!(
+                "{why}: nothing changed; the next run tries again"
+            )));
+            Ok(lines)
+        }
+        Err(e) => Err(e),
+    }
+}
+
+/// The steps of [`update`], each reporting to `lines`.
+fn steps(ports: &Ports<'_>, flags: &Flags, lines: &mut Vec<String>) -> Result<(), Error> {
     let name = flags.container.as_str();
     let (target, release) = choose(ports.source, flags.target_version)?;
     lines.push(said(format!("target v{target}")));
@@ -298,7 +353,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
         lines.push(said(format!(
             "up to date: {name} runs {was}, which is at least v{target}; nothing changed"
         )));
-        return Ok(lines);
+        return Ok(());
     }
 
     let Some(old_image) = old_image else {
@@ -318,7 +373,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
     }
     let tar = fetch(ports, flags, &release, target, &dir)?;
     lines.push(said(format!(
-        "{} is the release's image: it matches {SUMS} and its attestation verified online and from its bundle",
+        "{} is the release's image: it matches {SUMS} and its attestation verified offline from its bundle",
         tar.display()
     )));
     let (manifest, config) = image_ids(&tar)?;
@@ -334,7 +389,7 @@ pub(crate) fn update(ports: &Ports<'_>, flags: &Flags) -> Result<Vec<String>, Er
         "{name} now runs v{target} (was {was}); its command line, mounts and volumes are the old container's"
     )));
     lines.extend(prune(&flags.download_dir, target)?);
-    Ok(lines)
+    Ok(())
 }
 
 /// The version to install and its release: `wanted`, else the newest published one.
@@ -409,7 +464,8 @@ fn running_version(probe: &dyn Probe, image: Option<&Value>) -> Result<Option<Ve
 }
 
 /// Downloads the image tarball, its bundle and `SHA256SUMS` into `dir` (a file already there is
-/// kept) and checks them; the tarball's path.
+/// kept) and checks them: the sum, then the attestation offline from the bundle; the tarball's
+/// path.
 fn fetch(
     ports: &Ports<'_>,
     flags: &Flags,
@@ -432,7 +488,12 @@ fn fetch(
         ports
             .source
             .download(&repo, &release.tag, &asset, &part)
-            .map_err(|e| Error::Refused(format!("download {asset} of {}: {e}", release.tag)))?;
+            .map_err(|e| match e {
+                FetchError::RateLimited(why) => Error::Wait(why),
+                FetchError::Failed(e) => {
+                    Error::Refused(format!("download {asset} of {}: {e}", release.tag))
+                }
+            })?;
         std::fs::rename(part.join(&asset), &to).map_err(release::Error::io(format!(
             "move {asset} into {}",
             dir.display()
@@ -458,15 +519,13 @@ fn fetch(
     let signer = Signer::hostkeeper();
     let bundle = dir.join(bundle_of(&name));
     let mut problems = Vec::new();
-    for (form, bundle) in [("online", None), ("offline", Some(bundle.as_path()))] {
-        judge(
-            &format!("{name} ({form})"),
-            ports.verifier.verify(&signer, &tar, bundle, &commit),
-            &digest,
-            (&signer, &commit),
-            &mut problems,
-        );
-    }
+    judge(
+        &format!("{name} (offline)"),
+        ports.verifier.verify(&signer, &tar, Some(&bundle), &commit),
+        &digest,
+        (&signer, &commit),
+        &mut problems,
+    );
     if problems.is_empty() {
         Ok(tar)
     } else {

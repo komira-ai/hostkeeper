@@ -14,8 +14,8 @@ use std::path::Path;
 use super::guest::Ssh;
 use crate::support::pair::put;
 
-/// The name of the repository in the coordinator's registry, which the rollout file names as the
-/// fixture service's `repository`.
+/// The name of the repository in the coordinator's registry: the default repository, which the
+/// fixture service comes from.
 pub const NAME: &str = "komira";
 /// The name of the keyring the entry names: `<name>.gpg`.
 pub const KEYRING: &str = "komira.gpg";

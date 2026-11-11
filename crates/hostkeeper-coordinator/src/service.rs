@@ -70,7 +70,8 @@ pub enum SetError {
     /// lift again.
     #[error(transparent)]
     Ops(#[from] OpsError),
-    /// The allow-list entry that admitted the token does not name this service.
+    /// The allow-list entry that admitted the token does not name this service, or names
+    /// `host_groups` that exclude where the set would deploy.
     #[error("the token may not set this service")]
     Forbidden,
     /// The version is below the service's `min_version`.
@@ -228,7 +229,8 @@ struct ExtrasDropped {
 /// The coordinator.
 pub struct Coordinator {
     pub(crate) fleet: Mutex<Fleet>,
-    pub(crate) desired: DesiredStore,
+    /// Shared with enrollment, which places each approved host by its host groups.
+    pub(crate) desired: Arc<DesiredStore>,
     pub(crate) services: Services,
     legacy: Option<String>,
     prefixes: SanPrefixes,
@@ -256,6 +258,10 @@ pub struct Coordinator {
     pub(crate) running: crate::running::Kept,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
     pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
+    /// Held by `Services.SetRepository` from its check that the registry holds the repository to
+    /// its write, and by `Repositories.Remove` from its check that no service names the
+    /// repository to its commit, so neither decides on what the other is changing.
+    pub(crate) repository_naming: Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -291,7 +297,7 @@ impl Coordinator {
     ) -> Self {
         Self {
             fleet: Mutex::new(Fleet::new(clock(), QUIET_START)),
-            desired,
+            desired: Arc::new(desired),
             services: Services::default(),
             legacy: None,
             prefixes: SanPrefixes::default(),
@@ -311,6 +317,7 @@ impl Coordinator {
             repository_reports: crate::repository_push::Reports::default(),
             running: crate::running::Kept::default(),
             repository_origin: None,
+            repository_naming: Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

@@ -12,7 +12,6 @@ use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
     CommandUuid, DeviceRecord, DeviceStore, FileDeviceStore, Gate, Handled, InstallRecord,
     NonceRecord, Phase, PkgDigest, ProfileAnswer, ProfileCommand, SCHEMA, Sent, StoreError,
-    WebhookError,
 };
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
@@ -839,22 +838,17 @@ async fn a_record_that_cannot_be_written_is_not_taken() {
         let clock = Clock::at(1_000);
         let store = Box::new(FileDeviceStore::open(fs.clone(), &dir).expect("opens"));
         let gate = Gate::open(store, hub.client(), Arc::new(clock), counting()).expect("opens");
-        gate.webhook(&support::authenticate(OTHER_UDID, None))
-            .await
-            .expect("taken");
+        support::handle(&gate, &support::authenticate(OTHER_UDID, None)).await;
         let before = gate.records();
         let heard = hub.heard().len();
 
         let n = fs.count() + step;
         fs.fail_at(n);
         let error = gate
-            .webhook(&token_update(UDID, 1))
+            .handle(support::event_of(&token_update(UDID, 1)))
             .await
             .expect_err("not taken");
-        assert!(
-            matches!(error, WebhookError::Store(StoreError::Io { .. })),
-            "{error}"
-        );
+        assert!(matches!(error, StoreError::Io { .. }), "{error}");
         assert_eq!(
             error.to_string(),
             format!(
@@ -871,7 +865,7 @@ async fn a_record_that_cannot_be_written_is_not_taken() {
 
         // The next event is taken.
         assert_eq!(
-            gate.webhook(&token_update(UDID, 1)).await.expect("taken"),
+            support::handle(&gate, &token_update(UDID, 1)).await,
             Handled::Recorded
         );
         assert_eq!(gate.records().len(), 2);

@@ -1,6 +1,6 @@
-//! Approval by the host inventory: entering a record that names a role is the approval of the
-//! host it was entered for, so the coordinator approves a pending request by the record itself,
-//! with no `Enrollment.Approve`.
+//! Approval by the host inventory: entering a record that names a host group (or a role) is the
+//! approval of the host it was entered for, so the coordinator approves a pending request by the
+//! record itself, with no `Enrollment.Approve`.
 //!
 //! [`Enrollment::approve_by_record`] approves the pending request `request_id` when every
 //! condition holds, and otherwise leaves it pending for an operator ([`Waits`] says which did
@@ -11,12 +11,17 @@
 //!   match stays with the operator;
 //! - the match is exact ([`InventoryRecord::matches_exactly`]): by a data MAC among the claimed
 //!   addresses and, when the record holds a BMC MAC, that BMC MAC claimed; a Mac by its serial;
-//! - the record is open (the time is before its `approve_until_unix`), unused, and names a role;
+//! - the record is open (the time is before its `approve_until_unix`), unused, and names a host
+//!   group or a role ([`InventoryRecord::group`]);
+//! - from a coordinator that holds host groups, that name is a group it holds: a record added
+//!   before the coordinator held groups names one only by its role, which no group may have;
 //! - no other pending request contests the record ([`Enrollment::contests`]).
 //!
 //! It then approves through the store's [`EnrollmentStore::approve_recorded`] as an operator's
 //! approval is made, as the record's host id and role, bound to the SHA-256 of the request's key,
-//! with no service (a record names none), by [`INVENTORY_APPROVER`]. The store checks again under
+//! with no service (a record names none), by [`INVENTORY_APPROVER`]; from a coordinator that
+//! holds host groups, in the record's group, whose name is then the role
+//! (`docs/design/hostgroups.md` section 1.2). The store checks again under
 //! its lock what an operator's approval is held to: a host id another key holds, a denied host id,
 //! a duplicate claim and a request no longer pending each leave the request pending (logged, not
 //! audited, the record untouched). That one host per host id is what keeps two requests that
@@ -42,6 +47,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 
 use super::Enrollment;
 use super::approve::{Checked, approval_entry, refusal_of, role_of, token_of};
+use super::groups::group_in;
 use crate::inventory::{InventoryMatch, InventoryRecord, mark_used, match_claims};
 use crate::ops::{AuditEntry, OpsStore, Write};
 
@@ -69,8 +75,11 @@ pub enum Waits {
     Inexact,
     /// The record is used.
     Used,
-    /// The record names no role.
+    /// The record names neither a host group nor a role.
     NoRole,
+    /// The coordinator holds host groups, and none has the name the record gives: a record
+    /// added before it held groups, whose role names none.
+    UnknownHostGroup,
     /// The record's window is closed.
     Closed,
     /// Another pending request matches the record too.
@@ -86,7 +95,7 @@ pub enum Waits {
 /// What [`Enrollment::approve_by_record`] did.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ByRecord {
-    /// The request was approved as the record's host id and role.
+    /// The request was approved as the record's host id and role, or group.
     Approved {
         /// The host id the certificate will name.
         host_id: HostId,
@@ -141,9 +150,16 @@ impl Enrollment {
             Ok(chosen) => chosen,
             Err(waits) => return ByRecord::Waits(waits),
         };
-        let (Ok(host_id), Some(role)) = (HostId::parse(&record.host_id), role_of(&record.role))
+        let (Ok(host_id), Some(role)) = (HostId::parse(&record.host_id), role_of(record.group()))
         else {
             return ByRecord::Waits(Waits::BadRecord);
+        };
+        let host_group = match self.held_groups() {
+            None => None,
+            Some(held) => match group_in(record.group(), "", &held) {
+                Ok(group) => group.map(|group| group.to_string()),
+                Err(_) => return ByRecord::Waits(Waits::UnknownHostGroup),
+            },
         };
         let checked = Checked {
             request_id: *request_id,
@@ -153,6 +169,7 @@ impl Enrollment {
                 role,
                 services: Vec::new(),
                 replace: false,
+                host_group,
             },
             reason: format!("approved by its inventory record {}", record.host_id),
         };
@@ -163,22 +180,25 @@ impl Enrollment {
             mac_nonce: None,
             mac_enrolled_since_unix: None,
         };
-        if let Err(error) = self.store.approve_recorded(
+        let approved = match self.store.approve_recorded(
             &checked.request_id,
             &checked.key_sha256,
             &checked.decision,
             &approval,
         ) {
-            let refusal = refusal_of(&error);
-            tracing::info!(
-                request_id = %request_id,
-                host_id = %record.host_id,
-                refusal = %token_of(refusal),
-                "an inventory record did not approve its request: it stays pending"
-            );
-            return ByRecord::Waits(Waits::Refused(refusal));
-        }
-        let recorded = self.recorded(&checked, &approval, view.claims);
+            Ok(approved) => approved,
+            Err(error) => {
+                let refusal = refusal_of(&error);
+                tracing::info!(
+                    request_id = %request_id,
+                    host_id = %record.host_id,
+                    refusal = %token_of(refusal),
+                    "an inventory record did not approve its request: it stays pending"
+                );
+                return ByRecord::Waits(Waits::Refused(refusal));
+            }
+        };
+        let recorded = self.recorded(&checked, &approval, view.claims, &approved.host_group);
         let entry = self
             .ops()
             .and_then(|ops| record_auto_approval(&ops, &recorded));
@@ -257,7 +277,7 @@ impl Enrollment {
         if record.used.is_some() {
             return Err(Waits::Used);
         }
-        if record.role.is_empty() {
+        if record.group().is_empty() {
             return Err(Waits::NoRole);
         }
         if now >= record.approve_until_unix {

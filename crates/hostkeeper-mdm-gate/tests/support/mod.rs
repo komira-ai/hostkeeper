@@ -21,8 +21,8 @@ use bytes::Bytes;
 use hostkeeper_enrollment::fs::{Fs, RealFs};
 use hostkeeper_enrollment::validity::UnixClock;
 use hostkeeper_mdm_gate::{
-    ApiKey, ApiUrl, DeviceRecord, DeviceStore, EnrollmentId, FileDeviceStore, Gate, NanoHub,
-    Random, StoreError,
+    ApiKey, ApiUrl, DeviceRecord, DeviceStore, EnrollmentId, FileDeviceStore, Gate, Handled,
+    NanoHub, Random, StoreError,
 };
 use hostkeeper_testkit::Scratch;
 use http_body_util::{BodyExt as _, Full};
@@ -513,7 +513,7 @@ impl Rig {
     }
 
     pub async fn post(&self, body: &[u8]) {
-        self.gate.webhook(body).await.expect("the event is taken");
+        handle(&self.gate, body).await;
     }
 
     /// The record of the device `id`.
@@ -748,4 +748,18 @@ impl tracing::Subscriber for Logs {
 pub fn capture_logs() -> (tracing::subscriber::DefaultGuard, Logs) {
     let logs = Logs::default();
     (tracing::subscriber::set_default(logs.clone()), logs)
+}
+
+/// The event the webhook `body` says.
+pub fn event_of(body: &[u8]) -> hostkeeper_mdm_gate::Event {
+    hostkeeper_mdm_gate::parse_event(body)
+        .expect("the body is an event")
+        .expect("the gate reads the event")
+}
+
+/// The event in the webhook `body`, taken by `gate` through [`Gate::handle`].
+pub async fn handle(gate: &Gate, body: &[u8]) -> Handled {
+    gate.handle(event_of(body))
+        .await
+        .expect("the event is taken")
 }

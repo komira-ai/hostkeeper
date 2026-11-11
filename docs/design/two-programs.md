@@ -36,8 +36,8 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
 **After.**
 
 - `hostkeeper daemon` is the only verb of `hostkeeper` that runs the daemon. `hostkeeper --version` stays.
-  `hostkeeper check-repositories` was added after this design: host setup's check of a repositories directory with
-  the daemon's own loader (packages-repositories.md section 3.1), which only the binary the daemon runs can give.
+  `hostkeeper check-repositories` was added after this design and removed: the daemon's start and `pxe serve`'s start
+  make this check.
 - `hostkeeper-coordinator serve` is the only verb of the coordinator once the storage move is done (section 7).
 - `hkctl` is the command line. It is one bash script, generated from the protobuf, released as an attested asset. It
   calls the private listener's JSON gateway with `curl`. Its command tree is the one `hostkeeper ctl` has today
@@ -182,7 +182,7 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 | Program | Verb | Fate |
 |---|---|---|
 | `hostkeeper` | `daemon` | Kept, the only verb that runs the daemon. Gains the seed, the Mac config and the hand-over (2.1). |
-| | `check-repositories` | Added later: checks a repositories directory with the daemon's loader, for host setup (packages-repositories.md section 3.1). |
+| | `check-repositories` | Added later, then removed: the daemon's start and `pxe serve`'s start make this check. |
 | | `--version` | Kept (a flag). |
 | | `admin status` | Deleted (**Built**, K3). `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
 | | `admin abort <service>` | Deleted (**Built**, K3). `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
@@ -221,11 +221,13 @@ route, and the probe runs outside the container:
 - **A health listener.** `serve --health-listen <loopback address:port>` binds one more listener, plain HTTP, that
   answers only `GET /healthz` (and `HEAD`) and 404 to everything else, with no authentication and no TLS. `serve`
   refuses an address that is not loopback (`127.0.0.0/8` or `::1`), as it refuses a wildcard for `--private-listen`
-  today (`crates/hostkeeper-coordinator/src/config.rs`, **Built**), so nothing off the machine reaches it. Without the
+  unless `--private-listen-wildcard` is given (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**), so
+  nothing off the machine reaches it. Without the
   flag there is no such listener, as today.
 - **What it says.** `200` with the body `ok` when every listener the flags name is bound and serving, the store is
   open and, with the Postgres store, this coordinator holds the single-writer lock (coordinator-storage.md section 5);
-  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`). The body is that token and
+  `503` with one reason token otherwise (`store_unreachable`, `not_writer`, `starting`, and `draining` from SIGTERM
+  or SIGINT until the process exits, ahead of the others). The body is that token and
   nothing else: no version, no host, no count. It reads memory only and writes no audit line. The listener has the
   same limits as the others (handshake, head, connection count; `listen.rs`, **Built**).
 - **Who probes it.** The deployment, from outside the container: the coordinator runs on the host's network

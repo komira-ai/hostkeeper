@@ -97,7 +97,7 @@ fn set_link(
 }
 
 /// What is at `path` on disk, as the [`Owner`] a conflict would name: `None` when nothing is.
-fn occupant(fs: &dyn Fs, path: &Path) -> Result<Option<Owner>, PlacedError> {
+pub(crate) fn occupant(fs: &dyn Fs, path: &Path) -> Result<Option<Owner>, PlacedError> {
     let kind = fs.kind(path).map_err(io_at("inspect", path))?;
     Ok(match kind {
         None => None,

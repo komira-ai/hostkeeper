@@ -50,6 +50,28 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
         (60, 5, 30)
     );
     assert_eq!(f.curl, "curl");
+    // No token flag: GitHub is read at its public URLs, the attestation checked offline with the
+    // pinned gh and trusted root the runbook installs, against the system's CA bundle file.
+    assert_eq!(
+        (
+            f.gh.as_path(),
+            f.trusted_root.as_path(),
+            f.ca_bundle.as_path(),
+            f.github_api_url.as_str(),
+            f.github_url.as_str(),
+        ),
+        (
+            Path::new("/usr/local/libexec/hostkeeper/gh"),
+            Path::new("/usr/local/lib/hostkeeper/trusted_root.json"),
+            Path::new("/etc/ssl/certs/ca-certificates.crt"),
+            "https://api.github.com",
+            "https://github.com",
+        )
+    );
+    for token in ["--gh-token-file", "--token", "--github-token"] {
+        let err = parse(&[token, "/t"]).expect_err("no token flag");
+        assert!(err.contains("unexpected argument"), "{token}: {err}");
+    }
     let host = if cfg!(target_arch = "aarch64") {
         Platform::LinuxArm64
     } else {
@@ -66,6 +88,16 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
         "coord_2",
         "--ready-checks",
         "2",
+        "--gh",
+        "/opt/gh",
+        "--trusted-root",
+        "/opt/root.json",
+        "--ca-bundle",
+        "/opt/ca.pem",
+        "--github-api-url",
+        "https://127.0.0.1:8443",
+        "--github-url",
+        "https://[::1]:8443",
     ])
     .expect("flags");
     assert_eq!(
@@ -76,6 +108,22 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
             f.ready_checks
         ),
         (Platform::LinuxArm64, Some(v("1.2.3")), "coord_2", 2)
+    );
+    assert_eq!(
+        (
+            f.gh.as_path(),
+            f.trusted_root.as_path(),
+            f.ca_bundle.as_path(),
+            f.github_api_url.as_str(),
+            f.github_url.as_str(),
+        ),
+        (
+            Path::new("/opt/gh"),
+            Path::new("/opt/root.json"),
+            Path::new("/opt/ca.pem"),
+            "https://127.0.0.1:8443",
+            "https://[::1]:8443",
+        )
     );
 
     for (args, why) in [
@@ -92,6 +140,14 @@ fn the_flags_default_to_the_deployment_and_refuse_what_does_not_fit() {
         (vec!["--container=-x"], "not a container name: \"-x\""),
         (vec!["--container", ""], "not a container name: \"\""),
         (vec!["--container", "a/b"], "not a container name: \"a/b\""),
+        (
+            vec!["--github-api-url", "http://api.github.com"],
+            "not an https://<host>[:<port>] URL",
+        ),
+        (
+            vec!["--github-url", "https://github.com/komira-ai"],
+            "not an https://<host>[:<port>] URL",
+        ),
     ] {
         let err = parse(&args).expect_err("refused");
         assert!(err.contains(why), "{args:?}: {err}");

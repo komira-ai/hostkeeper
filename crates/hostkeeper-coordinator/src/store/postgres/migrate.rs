@@ -49,7 +49,7 @@ pub(crate) struct Migration {
 }
 
 /// The migrations this binary ships, in order.
-pub(crate) const SHIPPED: [(i32, &str, &str); 8] = [
+pub(crate) const SHIPPED: [(i32, &str, &str); 9] = [
     (1, "state", include_str!("migrations/0001_state.sql")),
     (
         2,
@@ -81,6 +81,11 @@ pub(crate) const SHIPPED: [(i32, &str, &str); 8] = [
         8,
         "host_groups",
         include_str!("migrations/0008_host_groups.sql"),
+    ),
+    (
+        9,
+        "service_repository",
+        include_str!("migrations/0009_service_repository.sql"),
     ),
 ];
 
@@ -313,37 +318,6 @@ fn newer(rows: &[Applied], set: &[Migration]) -> Result<(), ApplyError> {
         }),
         None => Ok(()),
     }
-}
-
-/// Refuses the database of `session` when it holds a migration newer than `set` that says
-/// `refuse`, as [`apply`] does, reading and making nothing: a database no migration ran on holds
-/// none.
-///
-/// # Errors
-/// [`ApplyError`]: a newer schema, or the bookkeeping could not be read.
-pub(crate) fn refuse_newer(session: &mut Session, set: &[Migration]) -> Result<(), ApplyError> {
-    let database = |e: postgres::Error| ApplyError::Database(describe(&e));
-    let made: bool = session
-        .query_one("SELECT to_regclass('schema_version') IS NOT NULL", &[])
-        .map_err(database)?
-        .get(0);
-    if !made {
-        return Ok(());
-    }
-    let rows: Vec<Applied> = session
-        .query(
-            "SELECT version, name, older_releases FROM schema_version ORDER BY version",
-            &[],
-        )
-        .map_err(database)?
-        .iter()
-        .map(|row| Applied {
-            version: row.get(0),
-            name: row.get(1),
-            older: row.get(2),
-        })
-        .collect();
-    newer(&rows, set)
 }
 
 /// Brings the database of `session`, which holds the lock, up to `set`: refuses a database that

@@ -37,7 +37,7 @@ use crate::answer;
 use crate::baseline::Baseline;
 use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO};
 use crate::enroll::{EnrollSide, Held};
-use crate::event::{self, Event, EventError};
+use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
 use crate::nanohub::{EnqueueError, NanoHub};
 use crate::pkg::Install;
@@ -57,6 +57,9 @@ pub struct DeviceStatus {
     /// When its current enrollment began: its first `TokenUpdate` after an `Authenticate` or a
     /// `CheckOut`, by the gate's clock; `None` before one.
     pub enrolled_since_unix: Option<u64>,
+    /// `EnrolledViaDEP` of its `SecurityInfo` answer of this enrollment; `None` until one came.
+    /// What the Mac says about itself: evidence, never an identity (design 4.6).
+    pub enrolled_via_dep: Option<bool>,
 }
 
 /// Why the gate says nothing of a serial.
@@ -70,18 +73,7 @@ pub enum Unavailable {
     Ambiguous,
 }
 
-/// Why a webhook event was not taken.
-#[derive(Debug, thiserror::Error)]
-pub enum WebhookError {
-    /// The body is not an event the gate reads.
-    #[error(transparent)]
-    Event(#[from] EventError),
-    /// The device's record could not be written: the event is not taken, and NanoHUB is told.
-    #[error(transparent)]
-    Store(#[from] StoreError),
-}
-
-/// What became of a webhook event.
+/// What became of an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Handled {
     /// It changed a device's record.
@@ -265,17 +257,16 @@ impl Gate {
             enrolled: record.is_enrolled(),
             supervised: record.supervised == Some(true),
             enrolled_since_unix: record.enrolled_since_unix,
+            enrolled_via_dep: record.enrolled_via_dep,
         })
     }
 
-    /// Takes one webhook body.
+    /// Takes one event: the single entry point of the gate's device side. The webhook
+    /// ([`crate::webhook`]) reads NanoHUB's body into an [`Event`] and calls this.
     ///
     /// # Errors
-    /// [`WebhookError`]: the body is no event, or the record cannot be written.
-    pub async fn webhook(&self, body: &[u8]) -> Result<Handled, WebhookError> {
-        let Some(event) = event::parse(body)? else {
-            return Ok(Handled::PassedOver);
-        };
+    /// [`StoreError`]: the device's record cannot be written; the event is not taken.
+    pub async fn handle(&self, event: Event) -> Result<Handled, StoreError> {
         let _turn = self.turn.lock().await;
         let now = self.clock.now_unix();
         let id = id_of(&event).clone();

@@ -2,12 +2,14 @@
 //! job [`TARGETS_JOB`], which writes the targets of the newest release of the run, and the job
 //! [`JOB`], which sets it as hostkeeper's desired version through the CI client. A release is set
 //! with native entries alone (docs/design/packages-native.md section 10.5, A24): no host fetches
-//! it from the release channel, so nothing waits for the channel, and no index is given.
+//! it from the release channel, so nothing waits for that channel, and no index is given. Each
+//! entry points at a package channel instead (the apt suite `testing`, the installers' `testing`
+//! directory), and a host defers an entry its channel does not list yet (`not_in_repository`), so
+//! [`JOB`] waits for every job that writes a channel the targets point at ([`CHANNEL_WRITES`]).
 //! [`problems`] refuses `release.yml` when:
 //! - [`TARGETS_JOB`] lacks the exact `if:` [`DESIRED_IF`] (a release of main, only while the
-//!   repository variable [`GATE`] is `true`, so that the deploy can be turned off), or [`JOB`]
-//!   the exact `if:` [`SET_IF`] (the same, and only when this run's release is the newest
-//!   published); or either job has `continue-on-error`;
+//!   repository variable [`GATE`] is `true`, so that the deploy can be turned off); or one of the
+//!   three jobs has `continue-on-error`;
 //! - [`TARGETS_JOB`] does not need exactly `plan` and `publish` (it runs once every release of
 //!   the run is published, and not before), holds other token rights than exactly
 //!   [`TARGETS_PERMISSIONS`] (reading the repository: it joins no tailnet), has a step with a key
@@ -24,9 +26,12 @@
 //! - [`COORDINATOR_JOB`] lacks the exact `if:` [`SET_IF`] or has `continue-on-error`, or breaks
 //!   the rules of [`super::coordinator_wait`] (it waits until the coordinator runs the release,
 //!   and holds `id-token: write` for the tailnet join alone);
-//! - [`JOB`] does not need exactly `plan`, [`TARGETS_JOB`] and [`COORDINATOR_JOB`] (it calls the
-//!   coordinator only with the release's targets, and only once the coordinator runs the
-//!   release), or its `with` does not set `service: hostkeeper`, the version
+//! - [`JOB`] lacks the exact `if:` [`SET_DESIRED_IF`] ([`SET_IF`], and only once a write of each
+//!   channel the targets point at has landed), or does not need exactly `plan`, [`TARGETS_JOB`],
+//!   [`COORDINATOR_JOB`], the jobs of [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`] (it
+//!   calls the coordinator only with the release's targets, only once the coordinator runs the
+//!   release, only once each channel lists the packages the targets pin, and only when no newer
+//!   release is published, checked again in the same attempt of the run), or its `with` does not set `service: hostkeeper`, the version
 //!   and the targets from [`TARGETS_JOB`] ([`WITH_FROM_TARGETS`]), and `wait: false`; or passes
 //!   one of [`NOT_PASSED`]: a `package_digest` (one package for every host, whatever its
 //!   platform), a `release_index` or a `release_index_digest` (a release is set with no index).
@@ -61,6 +66,39 @@ pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github
 /// The `if:` of [`JOB`]: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release the newest
 /// published, so that a late run of an older commit never moves the fleet back.
 pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}";
+
+/// The `if:` of [`JOB`]: [`SET_IF`], once [`COORDINATOR_JOB`] succeeded and a write of each
+/// channel of [`CHANNEL_WRITES`] has landed: one of the three attempts of the apt write reported
+/// `conflict` `false` (the index it wrote lists the `.debs`; an attempt that lost the race says
+/// `true`, and one gated off says nothing), and the pkg upload ran with its settings (`enabled`
+/// `true`; gated off, it put nothing). `!cancelled() && !failure()` in place of the implicit
+/// `success()`: attempts 2 and 3 are skipped when attempt 1 landed, and a skipped job it needs
+/// would otherwise skip [`JOB`]; any failed job it needs, at any depth, still stops it. Last, the
+/// check of [`super::no_downgrade::JOB`], made in this same attempt of the run, found no newer
+/// release published (`set` `true`, `attempt` this run's): [`super::no_downgrade::GUARD_IF`]
+/// with [`super::no_downgrade::SET_TERMS`].
+pub const SET_DESIRED_IF: &str = "${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' && needs.coordinator.result == 'success' && (needs.testing-apt-write.outputs.conflict == 'false' || needs.testing-apt-write-2.outputs.conflict == 'false' || needs.testing-apt-write-3.outputs.conflict == 'false') && needs.testing-pkg-upload.outputs.enabled == 'true' && needs.no-downgrade.outputs.set == 'true' && needs.no-downgrade.outputs.attempt == github.run_attempt }}";
+
+/// The jobs of `release.yml` that put a release's native packages where the entries of its
+/// targets point, by entry: `(installer, the entry's repository or store, the jobs)`. An `apt`
+/// entry names the repository entry `komira-testing`, the suite `testing`, which the three
+/// attempts of the apt write write (`testing-apt-write`, and `-2` and `-3` when the one before
+/// lost the race for the index); a `macos-pkg` entry the store `komira-testing`, the installers'
+/// `testing` directory, which the pkg upload writes. [`JOB`] needs each of them. The release's
+/// targets name no other channel (no rpm entry, no `komira-testing-fail`); a test runs the real
+/// `release targets` and holds its entries to these rows, every row used.
+pub const CHANNEL_WRITES: [(&str, &str, &[&str]); 2] = [
+    (
+        "apt",
+        "komira-testing",
+        &[
+            "testing-apt-write",
+            "testing-apt-write-2",
+            "testing-apt-write-3",
+        ],
+    ),
+    ("macos-pkg", "komira-testing", &["testing-pkg-upload"]),
+];
 
 /// The keys a step of [`TARGETS_JOB`] may have: no `if:` that could skip it, no
 /// `continue-on-error` that could let it fail, no `shell` or `working-directory` that could
@@ -168,7 +206,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     for (name, condition) in [
         (TARGETS_JOB, DESIRED_IF),
         (COORDINATOR_JOB, SET_IF),
-        (JOB, SET_IF),
+        (JOB, SET_DESIRED_IF),
     ] {
         let j = job(doc, name);
         if text(j, "if") != Some(condition) {
@@ -184,6 +222,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     }
     problems.extend(targets_problems(job(doc, TARGETS_JOB)));
     problems.extend(super::coordinator_wait::problems(job(doc, COORDINATOR_JOB)));
+    problems.extend(super::no_downgrade::problems(doc));
     problems.extend(caller_problems(job(doc, JOB)));
     problems
 }
@@ -249,13 +288,26 @@ fn targets_problems(targets: Option<&Node>) -> Vec<String> {
     problems
 }
 
+/// The jobs [`JOB`] needs, sorted: `plan`, [`TARGETS_JOB`], [`COORDINATOR_JOB`], every job of
+/// [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`].
+pub fn caller_needs() -> Vec<&'static str> {
+    let mut want = vec!["plan", TARGETS_JOB, COORDINATOR_JOB];
+    want.extend(
+        CHANNEL_WRITES
+            .iter()
+            .flat_map(|(_, _, jobs)| jobs.iter().copied()),
+    );
+    want.push(super::no_downgrade::JOB);
+    want.sort_unstable();
+    want
+}
+
 fn caller_problems(caller: Option<&Node>) -> Vec<String> {
     let mut problems = Vec::new();
     let got = needs(caller);
-    if got != ["coordinator", "plan", TARGETS_JOB] {
-        problems.push(format!(
-            "{FILE}: job {JOB} needs {got:?}, not [\"coordinator\", \"plan\", \"{TARGETS_JOB}\"]"
-        ));
+    let want = caller_needs();
+    if got != want {
+        problems.push(format!("{FILE}: job {JOB} needs {got:?}, not {want:?}"));
     }
     let with = caller.and_then(|j| entry(j, "with"));
     if text(with, "service") != Some("hostkeeper") {
