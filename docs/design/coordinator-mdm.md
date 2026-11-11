@@ -779,8 +779,24 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 ### 9.1 Compatibility (B8) and formats
 
 - Two migrations add tables only. The login one, first (operator-login.md): `users` and `api_tokens`; sessions are in memory. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
-  `mdm_identities`, `abm_devices`, `abm_state`, `mdm_secrets`, `mdm_settings`. Each table has a file-store family, because both backends exist
-  today, and each header is `older-releases: may-run`. The device record of the gate, `mdm_devices`,
+  `mdm_identities`, `abm_devices`, `abm_state`; `mdm_secrets` and `mdm_settings` are the migration of CM20's own, as 4.9 says. Each table has a file-store family, because both backends exist
+  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0011_mdm.sql` (it takes the next free number, after the login migration `0010_accounts.sql`, which landed first; no MDM table refers to a login table), the port `MdmStore`
+  (`crates/hostkeeper-coordinator/src/store/mdm/`) with its two stores, `FileMdm` (one `<family>.json` file per table in a directory, each
+  `{"schema": 1, "rows": [...]}`, replaced whole, the commands written before the enrollments so that a change that stops half way leaves
+  commands cancelled under an enrollment that still stands and never the reverse) and `PgMdm`
+  (`store/postgres/mdm.rs`), and one conformance suite run against both. The tables keep the rules of the model check of section 10 by
+  themselves: one live enrollment per serial (a unique index; the new `Authenticate` retires the old row, cancels its commands and retires
+  its identity in one change), enqueue idempotent on the command id and refused for an enrollment that is not live, a claim of one
+  `UPDATE ... FOR UPDATE SKIP LOCKED` that takes only a queued command of a live enrollment that the connection has not tried, an
+  answer matched only to a command in `Sent` through the enrollment it was sent to (`NotNow` queues it again, marked deferred),
+  `requeue_timed_out` that hands back the commands for the caller to push, and a challenge consumed once (keyed on the challenge and the
+  hash of the key, so a repeat with the same key gets the stored certificate whatever its `transactionID`, and a refusal changes
+  nothing). The store is a table store and does not bind an enrollment to its identity: `replace_live` takes the `cert_sha256` it is given, and an
+  enrollment without one retires no identity when it ends. CM11a, which holds the certificate that the Mac presented and looks its identity up, must check before the call that
+  the identity is issued and has the serial and the UDID of the enrollment, and must enter every enrollment with its `cert_sha256`. `FileMdm` writes back, with their rows,
+  the fields of a later release that it read, so that a rollback and a roll forward lose none; a file whose directory could not be synced after the file was put in place is counted
+  as written (the change is kept and the failure is logged), since the memory must not differ from what a restart reads. A write that fails before a file is replaced leaves the memory as it was, and
+  the families written before it stay until the next change that writes them. `import` and `export` between the stores do not carry these tables yet (no code writes them before CM11a). The device record of the gate, `mdm_devices`,
   gains no required field.
 - New flags: `--mdm-listen`, `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir`; the login flags (`--initial-admin-file`, `--initial-password-secs`, the session, lockout and password settings) are listed in operator-login.md section 10; the rest of MDM and of the
   proxy is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
