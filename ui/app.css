@@ -154,6 +154,16 @@ ul.plain {
   color: var(--muted);
 }
 
+.secret {
+  padding: 4px 12px;
+  border-left: 4px solid var(--alert);
+  background: var(--alert-panel);
+}
+
+.secret code {
+  user-select: all;
+}
+
 .alerts {
   padding: 4px 12px;
   border-left: 4px solid var(--alert);
