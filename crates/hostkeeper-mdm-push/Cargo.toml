@@ -22,11 +22,13 @@ description = "The coordinator's MDM push side: the APNs sender, the push policy
 testkit = []
 
 [dependencies]
-aes.workspace = true
+# The ciphers and the RSA of the CMS reply of mdmcert.download are kept at the versions this crate
+# was written against; the workspace's `aes`, `cbc`, `des` and `rsa` are those of hostkeeper-mdm-scep.
+aes = "0.8.4"
 base64.workspace = true
 bytes.workspace = true
-cbc.workspace = true
-des.workspace = true
+cbc = { version = "0.1.2", features = ["alloc"] }
+des = "0.8.1"
 hex.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
@@ -34,7 +36,7 @@ hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
 rand_core.workspace = true
 rcgen.workspace = true
-rsa.workspace = true
+rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 rustls = { workspace = true, features = ["tls12"] }
 rustls-pki-types.workspace = true
 serde.workspace = true

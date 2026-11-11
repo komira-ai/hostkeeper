@@ -469,7 +469,7 @@ async fn a_redirect_to_anything_else_is_refused() {
             "https://[::1]/x",
             "a redirect names no host a certificate can be checked for",
         ),
-        ("https://exa mple.test/x", "a redirect is not a URL"),
+        ("https://example.test mple/x", "a redirect is not a URL"),
         (long.as_str(), "a redirect is too long"),
         ("/a path with spaces", "the request failed"),
     ] {
