@@ -516,6 +516,11 @@ impl AccountStore {
         self.held().clone()
     }
 
+    /// What `read` makes of the accounts as they are now, without a copy of them.
+    pub fn read<R>(&self, read: impl FnOnce(&Accounts) -> R) -> R {
+        read(&self.held())
+    }
+
     /// Makes the accounts `edit` makes of the ones held, durable, and then the ones held. A change
     /// that leaves them as they were writes nothing.
     ///
