@@ -34,6 +34,11 @@ fn push(priority: u8, expiration_unix: u64) -> Push {
 
 const LONG: Duration = Duration::from_secs(60);
 
+/// For a request the server never answers: the only way out of it is this timeout, and no test
+/// asserts how long it took. The clock is not paused here, because a paused one jumps ahead while
+/// the sockets are still being served, and would time out the requests that are answered.
+const SHORT: Duration = Duration::from_secs(2);
+
 #[tokio::test]
 async fn a_push_posts_the_hex_token_url_with_the_mdm_headers_and_the_magic_body() {
     let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
@@ -278,6 +283,34 @@ async fn an_answer_that_never_comes_ends_in_a_connection_error() {
         .await
         .unwrap_err();
     assert!(matches!(error, PushError::Connection(_)), "{error}");
+}
+
+/// A connection that goes silent after it was used (a NAT dropping it) must not wedge the sender:
+/// the push that meets it times out on it and is sent again on a new connection.
+#[tokio::test]
+async fn a_push_that_hangs_on_a_reused_connection_is_sent_again_on_a_new_one() {
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
+    let sender = sender(&server, SHORT);
+    sender.send(&push(10, 1)).await.unwrap();
+    let mut never = Reply::ok();
+    never.hang = true;
+    server.answer_next(never);
+    sender.send(&push(10, 1)).await.unwrap();
+    assert_eq!(server.connections.load(Ordering::SeqCst), 2);
+}
+
+/// After a push that timed out the sender does not keep the dead connection: the next push
+/// connects again and is delivered.
+#[tokio::test]
+async fn a_push_after_one_that_timed_out_connects_again_and_is_delivered() {
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
+    let sender = sender(&server, SHORT);
+    let mut never = Reply::ok();
+    never.hang = true;
+    server.answer_next(never);
+    sender.send(&push(10, 1)).await.unwrap_err();
+    sender.send(&push(10, 1)).await.unwrap();
+    assert_eq!(server.connections.load(Ordering::SeqCst), 2);
 }
 
 #[test]

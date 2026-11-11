@@ -3,6 +3,7 @@
 //! of the whole route (a request, mdmcert.download's emailed reply, Apple's certificate).
 
 use std::collections::BTreeMap;
+use std::future::Future as _;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -233,6 +234,22 @@ async fn a_request_is_posted_to_mdmcert_and_keeps_both_keys_sealed() {
         !shown.contains(EMAIL),
         "the audit and the listing name no address"
     );
+}
+
+/// Proves: making the request's keys does not run on the task that answers the call: the call
+/// is not done at its first poll, and it still ends with the request made.
+///
+/// Catches: two RSA key generations run inline in the handler, which hold a runtime worker for
+/// seconds and stall every other task scheduled on it.
+#[tokio::test]
+async fn the_keys_of_a_request_are_made_off_the_task_that_answers() {
+    let rig = rig("mdm-push-create-blocking");
+    let mut call = std::pin::pin!(rig.create(false));
+    let first =
+        std::future::poll_fn(|cx| std::task::Poll::Ready(call.as_mut().poll(cx).is_pending()))
+            .await;
+    assert!(first, "the call was answered within its first poll");
+    assert!(call.await.is_ok());
 }
 
 /// Proves: without `submit` nothing is posted and the answer says so, and a second request

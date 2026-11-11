@@ -8,7 +8,9 @@
 //! One connection is kept and reused for sequential requests. When the cached connection has been
 //! closed (APNs sent a GOAWAY, or the peer went away) the next request connects again, and a
 //! request that failed on a reused connection before any answer is sent once more on a new one:
-//! a push is safe to repeat.
+//! a push is safe to repeat. Every try has its own `timeout`, so a connection gone silent ends the
+//! try, is dropped, and the request goes again on a new one; PINGs on the open connection, also
+//! while idle, end a dead one before a push meets it.
 //!
 //! What APNs answers maps to [`PushError`] as the spike measured it: `400 BadDeviceToken` is
 //! terminal for that token (an unknown token gives `400`, not `410`), `400 TopicDisallowed` is a
@@ -20,6 +22,7 @@
 //! handled as Apple documents them and were not provoked.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use bytes::Bytes;
@@ -27,7 +30,7 @@ use http_body_util::{BodyExt as _, Full, Limited};
 use hyper::client::conn::http2::SendRequest;
 use hyper::header::HeaderValue;
 use hyper::{Method, Request, StatusCode};
-use hyper_util::rt::{TokioExecutor, TokioIo};
+use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use rustls::ClientConfig;
 use rustls::RootCertStore;
 use tokio::sync::Mutex;
@@ -150,6 +153,19 @@ pub trait PushSender: Send + Sync {
     fn send<'a>(&'a self, push: &'a Push) -> BoxFuture<'a, Result<Delivered, PushError>>;
 }
 
+/// How often an open connection is probed with a PING, idle or not.
+const KEEP_ALIVE_INTERVAL: Duration = Duration::from_secs(60);
+
+/// How one try of a push ended.
+enum Attempt {
+    /// APNs answered (the answer may be a refusal).
+    Answer(Result<Delivered, PushError>),
+    /// No answer, on a connection made for this try: repeating would meet the same.
+    OnNew(PushError),
+    /// No answer, on the connection kept from an earlier push: a new one may do.
+    OnReused(PushError),
+}
+
 /// The HTTP/2 client of APNs.
 pub struct Http2Sender {
     endpoint: Endpoint,
@@ -213,10 +229,17 @@ impl Http2Sender {
         let stream = tls::connect(&self.endpoint, self.config.clone(), self.timeout)
             .await
             .map_err(connection_failed)?;
-        let (sender, connection) =
-            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
-                .await
-                .map_err(connection_failed)?;
+        // A peer that went silent (a NAT that dropped an idle connection without a word) is found
+        // by PING, also while no request is open: the connection then ends and the next request
+        // connects again.
+        let (sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
+            .timer(TokioTimer::new())
+            .keep_alive_interval(Some(KEEP_ALIVE_INTERVAL))
+            .keep_alive_timeout(self.timeout)
+            .keep_alive_while_idle(true)
+            .handshake(TokioIo::new(stream))
+            .await
+            .map_err(connection_failed)?;
         tokio::spawn(async move {
             // The connection ends by GOAWAY or by the peer; the next request connects again.
             drop(connection.await);
@@ -249,35 +272,49 @@ impl Http2Sender {
         Ok(Err(map_answer(parts.status.as_u16(), &body)))
     }
 
+    /// One try: a connection, the request and the answer, all within `timeout`. A try that ends
+    /// without an answer drops the cached connection, so that no later push meets it.
+    async fn attempt(&self, request: &Request<Full<Bytes>>) -> Attempt {
+        // Stays `true` until a connection is in hand: a try that fails to connect is a fresh one.
+        let fresh = AtomicBool::new(true);
+        let run = async {
+            let (sender, is_new) = self.ready().await?;
+            fresh.store(is_new, Ordering::SeqCst);
+            self.exchange(sender, request.clone())
+                .await
+                .map_err(connection_failed)
+        };
+        let failure = match tokio::time::timeout(self.timeout, run).await {
+            Ok(Ok(answer)) => return Attempt::Answer(answer),
+            Ok(Err(error)) => error,
+            Err(_) => PushError::Connection("the answer timed out".to_owned()),
+        };
+        *self.connection.lock().await = None;
+        if fresh.load(Ordering::SeqCst) {
+            Attempt::OnNew(failure)
+        } else {
+            Attempt::OnReused(failure)
+        }
+    }
+
     async fn deliver(&self, push: &Push) -> Result<Delivered, PushError> {
         let request = request_of(push, &self.endpoint)?;
-        let (sender, fresh) = self.ready().await?;
-        match self.exchange(sender, request.clone()).await {
-            Ok(answer) => answer,
-            Err(why) => {
-                // Whatever went wrong, the connection is not kept.
-                *self.connection.lock().await = None;
-                if fresh {
-                    return Err(connection_failed(why));
-                }
-                // The connection kept from the last push is gone, and no answer came: a push is
-                // safe to repeat, so it is sent once more, on a new connection.
-                let (sender, _) = self.ready().await?;
-                self.exchange(sender, request)
-                    .await
-                    .unwrap_or_else(|why| Err(connection_failed(why)))
-            }
+        match self.attempt(&request).await {
+            Attempt::Answer(answer) => answer,
+            Attempt::OnNew(error) => Err(error),
+            // The connection kept from the last push is gone or silent, and no answer came: a push
+            // is safe to repeat, so it is sent once more, on a new connection.
+            Attempt::OnReused(_) => match self.attempt(&request).await {
+                Attempt::Answer(answer) => answer,
+                Attempt::OnNew(error) | Attempt::OnReused(error) => Err(error),
+            },
         }
     }
 }
 
 impl PushSender for Http2Sender {
     fn send<'a>(&'a self, push: &'a Push) -> BoxFuture<'a, Result<Delivered, PushError>> {
-        Box::pin(async move {
-            tokio::time::timeout(self.timeout, self.deliver(push))
-                .await
-                .unwrap_or_else(|_| Err(PushError::Connection("the answer timed out".to_owned())))
-        })
+        Box::pin(self.deliver(push))
     }
 }
 

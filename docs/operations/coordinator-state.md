@@ -127,8 +127,9 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
   encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is
   `BEGIN RSA PRIVATE KEY`, as NanoHUB keeps it, or PKCS#8). `Mdm.PutPushCertificate` stores the key and then the
-  certificate, so a failure between the two leaves the new key beside the old certificate until the upload is
-  made again. A renewal keeps the topic of the certificate in use, which every enrollment carries. The settings
+  certificate, so a failure between the two leaves the new key beside the old certificate; the push
+  identity is then the newest certificate with the newest held key that matches it, which is the key it
+  replaced (held for `secret_grace_days`), until the upload is made again. A renewal keeps the topic of the certificate in use, which every enrollment carries. The settings
   `push_retry_s` (3600), `push_expiry_s` (86400), `push_priority` (10) and `push_timeout_s` (30) are those of the
   push, and `push_alert_days` (60,14) raises the alert `push_cert_near_expiry` before the certificate expires. The
   reply of mdmcert.download comes by email: the operator uploads the attachment (`Mdm.PutPushReply`).

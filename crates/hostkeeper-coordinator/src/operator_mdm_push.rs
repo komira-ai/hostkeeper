@@ -36,8 +36,7 @@ impl Coordinator {
     /// `Mdm.CreatePushRequest`: makes the request, keeps its keys sealed, and posts it to
     /// mdmcert.download when asked.
     ///
-    /// Both RSA keys are made on the calling task: about a second of one worker's time, once per
-    /// request an operator makes.
+    /// Both RSA keys are made on a blocking thread, not on a worker of the runtime.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the email is not one address),
@@ -56,7 +55,10 @@ impl Coordinator {
             return self.refused_push(by, action, None, MdmRefusal::SecretsUnavailable);
         }
         let now = now_of(self);
-        let Ok(made) = request::new_request(&request.email, now) else {
+        // Two RSA-2048 keys: seconds of CPU, on a thread that is not a worker's.
+        let email = request.email.clone();
+        let made = tokio::task::spawn_blocking(move || request::new_request(&email, now)).await;
+        let Ok(Ok(made)) = made else {
             tracing::error!("the keys of a push certificate request could not be made");
             return self.refused_push(by, action, None, MdmRefusal::StoreFailed);
         };

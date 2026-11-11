@@ -62,18 +62,20 @@ fn the_push_identity_is_the_pair_in_use_and_none_until_both_are_held() {
     );
     let identity = setup.push_identity().expect("read").expect("a pair");
     assert_eq!(identity.info.topic, TOPIC);
-    // A new key replaces the old: the newest version is the one in use, and it does not match.
+    // No held key is the certificate's: a mismatch.
+    let other = keyed();
+    store(&other, SecretKind::PushCert, cert.as_bytes());
     store(
-        &setup,
+        &other,
         SecretKind::PushKey,
         pkcs1_pem(fixture_key(1)).expect("pem").expose(),
     );
     assert_eq!(
-        setup.push_identity().expect_err("a mismatch").to_string(),
+        other.push_identity().expect_err("a mismatch").to_string(),
         IdentityError::KeyMismatch.to_string()
     );
     assert!(matches!(
-        setup.push_identity(),
+        other.push_identity(),
         Err(PushIdentityError::Identity(IdentityError::KeyMismatch))
     ));
     let unkeyed = MdmSetup::volatile();
@@ -81,6 +83,37 @@ fn the_push_identity_is_the_pair_in_use_and_none_until_both_are_held() {
         unkeyed.push_identity(),
         Err(PushIdentityError::Setup(SetupFailure::NoKey))
     ));
+}
+
+/// Proves: an upload that stored its new key and then failed to store its certificate leaves the
+/// certificate in use paired with the key it replaced, which is still held, so pushes keep
+/// working; once the new certificate is stored the new key is the one used.
+///
+/// Catches: a renewal whose second write failed that takes the push path down until the upload is
+/// repeated.
+#[test]
+fn a_new_key_stored_beside_the_old_certificate_leaves_the_old_identity_in_use() {
+    let setup = keyed();
+    let (old, new) = (fixture_key(0), fixture_key(1));
+    let old_cert = push_certificate_pem(old, TOPIC, 1_700_000_000, 1_900_000_000);
+    store(&setup, SecretKind::PushCert, old_cert.as_bytes());
+    store(
+        &setup,
+        SecretKind::PushKey,
+        pkcs1_pem(old).expect("pem").expose(),
+    );
+    // The renewal's first write; the certificate's never came.
+    store(
+        &setup,
+        SecretKind::PushKey,
+        pkcs1_pem(new).expect("pem").expose(),
+    );
+    let identity = setup.push_identity().expect("read").expect("the old pair");
+    assert_eq!(identity.info.not_after_unix, 1_900_000_000);
+    let new_cert = push_certificate_pem(new, TOPIC, 1_700_000_000, 1_950_000_000);
+    store(&setup, SecretKind::PushCert, new_cert.as_bytes());
+    let identity = setup.push_identity().expect("read").expect("the new pair");
+    assert_eq!(identity.info.not_after_unix, 1_950_000_000);
 }
 
 /// Proves: the push settings are their defaults until set, then the values set, and the timeout

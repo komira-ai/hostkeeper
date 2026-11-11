@@ -393,6 +393,56 @@ fn a_failing_store_is_a_failure() {
     assert!(MdmSetup::holds_secrets(&*failing).expect("read"));
 }
 
+/// Proves: every version of a kind still held is opened, newest first; a kind with none gives an
+/// empty list; no master key is `NoKey`; and a version that does not open fails the whole read.
+///
+/// Catches: a reader of replaced versions that skips a version it cannot open and so pairs a
+/// certificate with a key that was never checked.
+#[test]
+fn every_held_version_of_a_kind_opens_newest_first() {
+    let (setup, store) = setup();
+    assert_eq!(setup.open_held(SecretKind::PushKey), Ok(Vec::new()));
+    setup
+        .put_secret(SecretKind::PushKey, &secret("one"), None, 1)
+        .expect("v1");
+    setup
+        .put_secret(SecretKind::PushKey, &secret("two"), None, 2)
+        .expect("v2");
+    setup
+        .put_secret(SecretKind::TlsKey, &secret("other kind"), None, 2)
+        .expect("tls");
+    assert_eq!(
+        setup.open_held(SecretKind::PushKey),
+        Ok(vec![secret("two"), secret("one")])
+    );
+    let keyless = MdmSetup::new(
+        Arc::<FileSetup>::clone(&store),
+        None,
+        crate::enrollment::os_random(),
+    );
+    assert_eq!(
+        keyless.open_held(SecretKind::PushKey),
+        Err(SetupFailure::NoKey)
+    );
+    let tls = store
+        .secrets()
+        .expect("rows")
+        .into_iter()
+        .find(|row| row.kind == "tls_key")
+        .expect("the tls row");
+    store
+        .put_secret(&SecretRow {
+            kind: "push_key".to_owned(),
+            version: 3,
+            ..tls
+        })
+        .expect("copied under another kind");
+    assert_eq!(
+        setup.open_held(SecretKind::PushKey),
+        Err(SetupFailure::Seal(SealError::Open))
+    );
+}
+
 /// Proves: when the replacement is stored but the settings cannot be read for the grace, or the
 /// prune of old versions fails, the upload still reports success with the new version, which is
 /// listed; the next upload prunes.

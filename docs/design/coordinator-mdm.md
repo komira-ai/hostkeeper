@@ -554,8 +554,10 @@ the key with its CSR, and `push_encryption_key`, answers the CSR and the encrypt
 mdmcert.download, a failure leaving the request pending), `PutPushReply` (decrypts the emailed attachment, answers the signed request,
 stores nothing) and `PutPushCertificate` (a certificate for the pending key, or with `key_pem` an existing pair; PKCS#1 and PKCS#8 are read;
 refused `certificate_invalid`, `key_invalid`, `key_mismatch`, `certificate_expired` and, when a certificate is in use, `topic_changed`).
-The key is stored, then the certificate: a failure between the two leaves the new key beside the old certificate until the upload is
-repeated, which `MdmSetup::push_identity` reports as a pair that does not match. The settings `push_retry_s`, `push_expiry_s`,
+The key is stored, then the certificate: a failure between the two leaves the new key beside the old certificate; `MdmSetup::push_identity`
+pairs the newest certificate with the newest held key that matches it, which is the key it replaced (held for `secret_grace_days`), so the
+old identity keeps working until the upload is repeated. The `apns` sender gives each try its own timeout, drops a connection that
+timed out, and sends HTTP/2 PINGs every 60 s, also while idle. The settings `push_retry_s`, `push_expiry_s`,
 `push_priority` and `push_timeout_s` are new, with their defaults. The alert `push_cert_near_expiry` stands once the certificate in use
 expires within the largest of `push_alert_days` (60 and 14), with the smallest threshold reached as its version, so that 14 days is a new
 alert, and `expired` after expiry. The production transport to mdmcert.download is built at start, and a

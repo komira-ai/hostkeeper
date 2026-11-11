@@ -7,8 +7,9 @@
 //! encrypts its reply to; `push_key` and `push_cert` the pair in use, which
 //! [`MdmSetup::push_identity`] reads together. The newest version of a kind is the one in use.
 //! Uploading a certificate stores the key, then the certificate: a failure between the two leaves
-//! the new key beside the old certificate until the upload is made again, which
-//! [`MdmSetup::push_identity`] reports as a pair that does not match.
+//! the new key beside the old certificate, and [`MdmSetup::push_identity`] then pairs the
+//! certificate with the key it replaced (kept for `secret_grace_days`), so the old identity keeps
+//! working until the upload is made again.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -56,20 +57,32 @@ pub fn split_pending(bundle: &[u8]) -> Option<(Vec<u8>, String)> {
 }
 
 impl MdmSetup {
-    /// The push identity in use: the newest `push_cert` and `push_key`, which must match; none
-    /// when either is not held.
+    /// The push identity in use: the newest `push_cert` with the newest `push_key` that matches it;
+    /// none when either is not held.
     ///
     /// # Errors
     /// [`PushIdentityError::Setup`]: no master key, a record that does not open, or the store;
     /// `Identity`: the two do not make a push identity (the key is not the certificate's).
     pub fn push_identity(&self) -> Result<Option<PushIdentity>, PushIdentityError> {
-        let (Some(cert), Some(key)) = (
+        let (Some(cert), keys) = (
             self.open(SecretKind::PushCert)?,
-            self.open(SecretKind::PushKey)?,
+            self.open_held(SecretKind::PushKey)?,
         ) else {
             return Ok(None);
         };
-        Ok(Some(PushIdentity::parse(cert.expose(), key.expose())?))
+        // The newest key that is the certificate's: an upload that stored its key and then failed
+        // to store its certificate leaves the new key beside the old certificate, and the key it
+        // replaced, still held, is the one that matches.
+        let mut first_error = None;
+        for key in &keys {
+            match PushIdentity::parse(cert.expose(), key.expose()) {
+                Ok(identity) => return Ok(Some(identity)),
+                Err(why) => {
+                    first_error.get_or_insert(why);
+                }
+            }
+        }
+        first_error.map_or(Ok(None), |why| Err(why.into()))
     }
 
     /// The push settings: `push_retry_s`, `push_expiry_s` and `push_priority`, as set or by their
