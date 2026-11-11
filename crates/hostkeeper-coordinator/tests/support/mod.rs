@@ -13,6 +13,7 @@
 
 pub mod beats;
 pub mod database;
+pub mod mdm;
 pub mod readers;
 pub mod replay;
 pub mod rig;
