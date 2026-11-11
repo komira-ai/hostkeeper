@@ -134,10 +134,21 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("abm_alert_days", "60", true),
             ("tls_renew_days", "30", true),
             ("secret_grace_days", "7", true),
+            ("push_retry_s", "3600", true),
+            ("push_expiry_s", "86400", true),
+            ("push_priority", "10", true),
+            ("push_timeout_s", "30", true),
             ("abm_sync_s", "300", true),
             ("abm_request_timeout_s", "30", true),
             ("abm_retries", "3", true),
             ("ade_profile_name", "Komira MDM", true),
+            ("identity_days", "1095", true),
+            ("renew_alert_days", "90", true),
+            ("challenge_ttl_s", "3600", true),
+            ("ca_days", "3650", true),
+            ("identity_org", "hostkeeper", true),
+            ("enroll_rate_per_min", "60", true),
+            ("enroll_pending_max", "256", true),
         ]
     );
 }
