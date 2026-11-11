@@ -9,6 +9,7 @@ use crate::mdm_pki_support::{TOPIC, other_key, pair};
 fn a_certificates_facts_are_read() {
     let push = pair(Some(TOPIC), &[], 1_900_000_000);
     let facts = CertFacts::read(push.cert.as_bytes()).expect("a certificate");
+    assert_eq!(facts.not_before_unix, 1_000_000_000);
     assert_eq!(facts.not_after_unix, 1_900_000_000);
     assert_eq!(facts.topic.as_deref(), Some(TOPIC));
     assert!(facts.names.is_empty());

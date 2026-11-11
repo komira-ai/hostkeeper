@@ -230,6 +230,8 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("tls_pair_invalid", 11),
             ("tls_cert_expired", 12),
             ("tls_name_mismatch", 13),
+            ("push_cert_not_yet_valid", 14),
+            ("tls_cert_not_yet_valid", 15),
         ])
     );
     assert_eq!(

@@ -15,6 +15,8 @@ const UID_OID: &str = "0.9.2342.19200300.100.1.1";
 /// What a certificate says of itself.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct CertFacts {
+    /// The start of validity, in unix seconds.
+    pub(crate) not_before_unix: i64,
     /// The end of validity, in unix seconds.
     pub(crate) not_after_unix: i64,
     /// The subject UID, which on a push certificate is the topic.
@@ -53,6 +55,7 @@ impl CertFacts {
             })
             .unwrap_or_default();
         Some(Self {
+            not_before_unix: cert.validity().not_before.timestamp(),
             not_after_unix: cert.validity().not_after.timestamp(),
             topic,
             names,

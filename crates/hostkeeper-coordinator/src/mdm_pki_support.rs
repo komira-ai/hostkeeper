@@ -19,6 +19,16 @@ pub(crate) struct Pair {
 /// A self-signed certificate with subject UID `uid` (none when `None`) and the DNS names
 /// `names`, ending at the unix time `not_after`, and its key.
 pub(crate) fn pair(uid: Option<&str>, names: &[&str], not_after: i64) -> Pair {
+    pair_between(uid, names, 1_000_000_000, not_after)
+}
+
+/// [`pair`] valid from the unix time `not_before`.
+pub(crate) fn pair_between(
+    uid: Option<&str>,
+    names: &[&str],
+    not_before: i64,
+    not_after: i64,
+) -> Pair {
     let key = KeyPair::generate().expect("a key");
     let names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
     let mut params = CertificateParams::new(names).expect("a certificate request");
@@ -29,7 +39,7 @@ pub(crate) fn pair(uid: Option<&str>, names: &[&str], not_after: i64) -> Pair {
             .distinguished_name
             .push(DnType::CustomDnType(UID.to_vec()), uid);
     }
-    params.not_before = OffsetDateTime::from_unix_timestamp(1_000_000_000).expect("a time");
+    params.not_before = OffsetDateTime::from_unix_timestamp(not_before).expect("a time");
     params.not_after = OffsetDateTime::from_unix_timestamp(not_after).expect("a time");
     let cert = params.self_signed(&key).expect("a certificate");
     Pair {

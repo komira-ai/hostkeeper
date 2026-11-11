@@ -8,7 +8,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::MdmCondition as Missing;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
 use crate::login_support::World;
-use crate::mdm_pki_support::{Pair, TOPIC, other_key, pair};
+use crate::mdm_pki_support::{Pair, TOPIC, other_key, pair, pair_between};
 use crate::mdm_secrets::MasterKey;
 use crate::mdm_setup::MdmSetup;
 use crate::operator::Caller;
@@ -21,7 +21,7 @@ const NOW: u64 = 1_800_000_000;
 const ENDS: i64 = 1_900_000_000;
 /// `2027-10-31T22:01:36Z`, the shape of the ABM expiry the spike read.
 const ABM_ENDS: i64 = 1_825_020_096;
-const NAME: &str = "mdm.internal.komira.dev";
+const NAME: &str = "mdm.internal.example.com";
 
 fn alice() -> Caller {
     Caller::Operator("alice".parse().expect("a token name"))
@@ -409,14 +409,14 @@ fn a_tls_certificate_for_another_name_is_named() {
         &world,
         "tls_cert",
         "tls_key",
-        &pair(None, &["other.internal.komira.dev"], ENDS),
+        &pair(None, &["other.internal.example.com"], ENDS),
     );
     assert_eq!(missing(&world), [Missing::TlsNameMismatch]);
     upload_pair(
         &world,
         "tls_cert",
         "tls_key",
-        &pair(None, &["*.internal.komira.dev"], ENDS),
+        &pair(None, &["*.internal.example.com"], ENDS),
     );
     assert!(status(&world).configured);
 }
@@ -511,4 +511,33 @@ fn a_status_of_a_store_that_fails_is_refused() {
         world.coordinator.mdm_status(&Caller::Anonymous),
         Err(MdmRefusal::Unauthorized)
     );
+}
+
+/// Proves: a push or TLS certificate whose validity has not begun is `push_cert_not_yet_valid` or
+/// `tls_cert_not_yet_valid` (and shows its end), and one that has begun, at the second it does,
+/// is not.
+#[test]
+fn a_certificate_that_is_not_yet_valid_is_named() {
+    let begins = NOW as i64 + 1;
+    let world = complete("mdm-status-not-yet-valid");
+    upload_pair(
+        &world,
+        "push_cert",
+        "push_key",
+        &pair_between(Some(TOPIC), &[], begins, ENDS),
+    );
+    assert_eq!(missing(&world), [Missing::PushCertNotYetValid]);
+    upload_pair(
+        &world,
+        "tls_cert",
+        "tls_key",
+        &pair_between(None, &[NAME], begins, ENDS),
+    );
+    assert_eq!(
+        missing(&world),
+        [Missing::PushCertNotYetValid, Missing::TlsCertNotYetValid]
+    );
+    assert_eq!(status(&world).tls_not_after_unix, Some(ENDS));
+    world.at(NOW + 1);
+    assert!(status(&world).configured, "at the second it begins");
 }

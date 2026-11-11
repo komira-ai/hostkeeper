@@ -251,8 +251,8 @@ fn the_name_cannot_change_once_a_mac_has_enrolled() {
             .expect("a status")
             .name_locked
     );
-    let first = rename(&world, "mdm.internal.komira.dev").expect("the first name is taken");
-    assert_eq!(first.name, "mdm.internal.komira.dev");
+    let first = rename(&world, "mdm.internal.example.com").expect("the first name is taken");
+    assert_eq!(first.name, "mdm.internal.example.com");
     assert!(
         world
             .coordinator
@@ -261,17 +261,17 @@ fn the_name_cannot_change_once_a_mac_has_enrolled() {
             .name_locked
     );
     assert_eq!(
-        rename(&world, " MDM.internal.komira.dev ")
+        rename(&world, " MDM.internal.example.com ")
             .expect("the same name")
             .name,
-        "mdm.internal.komira.dev"
+        "mdm.internal.example.com"
     );
     assert_eq!(
         rename(&world, "other.example.com"),
         Err(MdmRefusal::NameLocked)
     );
     let held = world.coordinator.mdm_status(&alice()).expect("a status");
-    assert_eq!(held.name, "mdm.internal.komira.dev");
+    assert_eq!(held.name, "mdm.internal.example.com");
     let reasons: Vec<String> = world
         .audit()
         .into_iter()
@@ -280,8 +280,8 @@ fn the_name_cannot_change_once_a_mac_has_enrolled() {
     assert_eq!(
         reasons,
         [
-            "mdm_name_set: set to mdm.internal.komira.dev",
-            "mdm_name_set: set to mdm.internal.komira.dev",
+            "mdm_name_set: set to mdm.internal.example.com",
+            "mdm_name_set: set to mdm.internal.example.com",
             "mdm_name_set: refused: MDM_REFUSAL_NAME_LOCKED for other.example.com",
         ]
     );
@@ -290,7 +290,7 @@ fn the_name_cannot_change_once_a_mac_has_enrolled() {
         "mdm-name-unlocked",
         &[record("AAAA-1", None, Phase::Authenticated, None)],
     );
-    rename(&early, "mdm.internal.komira.dev").expect("named");
+    rename(&early, "mdm.internal.example.com").expect("named");
     assert!(
         !early
             .coordinator
@@ -299,4 +299,62 @@ fn the_name_cannot_change_once_a_mac_has_enrolled() {
             .name_locked
     );
     rename(&early, "other.example.com").expect("a device that has not enrolled does not lock it");
+}
+
+/// Proves: a setup store that cannot be read does not take the device list with it: the gate's
+/// devices are listed, `configured` is false and no condition is named, so the Devices page keeps
+/// its view while the store is down.
+#[test]
+fn the_list_keeps_its_devices_when_the_setup_cannot_be_read() {
+    use crate::store::mdm_setup::files::FileSetup;
+    use crate::store::mdm_setup::{SecretRow, SetupError, SetupStore};
+    use std::sync::Arc;
+
+    /// A store that takes writes and reads none.
+    struct Down(FileSetup);
+    impl SetupStore for Down {
+        fn put_secret(&self, row: &SecretRow) -> Result<(), SetupError> {
+            self.0.put_secret(row)
+        }
+        fn secrets(&self) -> Result<Vec<SecretRow>, SetupError> {
+            Err(SetupError::Store("unreadable".to_owned()))
+        }
+        fn prune_superseded(&self, at: i64) -> Result<u64, SetupError> {
+            self.0.prune_superseded(at)
+        }
+        fn settings(&self) -> Result<std::collections::BTreeMap<String, String>, SetupError> {
+            Err(SetupError::Store("unreadable".to_owned()))
+        }
+        fn set_setting(&self, name: &str, value: &str) -> Result<(), SetupError> {
+            self.0.set_setting(name, value)
+        }
+    }
+    let dir = scratch("mdm-devices-setup-down-gate");
+    let mdm = mdm_with(&dir, &[record("AAAA-1", None, Phase::Enrolled, None)]);
+    let world = World::build(
+        "mdm-devices-setup-down",
+        crate::login_support::settings(),
+        crate::login_support::counting(),
+        |c, _| {
+            c.with_mdm(Some(mdm)).with_mdm_setup(MdmSetup::new(
+                Arc::new(Down(FileSetup::volatile())),
+                Some(MasterKey::from_bytes(&[0x21; 32]).expect("a key")),
+                crate::enrollment::os_random(),
+            ))
+        },
+    );
+    assert_eq!(
+        world.coordinator.mdm_status(&alice()),
+        Err(MdmRefusal::StoreFailed)
+    );
+    let listed = list(&world);
+    assert_eq!(
+        (
+            listed.gate,
+            listed.devices.len(),
+            listed.configured,
+            listed.missing.len()
+        ),
+        (true, 1, false, 0)
+    );
 }

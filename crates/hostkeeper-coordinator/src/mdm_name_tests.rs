@@ -6,9 +6,9 @@ use super::{enrollment_url, normalize};
 #[test]
 fn a_dns_name_is_kept_in_lower_case() {
     for (given, kept) in [
-        ("mdm.internal.komira.dev", "mdm.internal.komira.dev"),
+        ("mdm.internal.example.com", "mdm.internal.example.com"),
         ("  MDM.Example.COM \n", "mdm.example.com"),
-        ("a-b.c1.io", "a-b.c1.io"),
+        ("a-b.c1.example.com", "a-b.c1.example.com"),
     ] {
         assert_eq!(normalize(given).as_deref(), Some(kept), "{given:?}");
     }
@@ -30,10 +30,10 @@ fn a_name_that_is_not_dns_safe_is_refused() {
         "-mdm.example.com",
         "mdm-.example.com",
         "mdm_1.example.com",
-        "mdm.exam ple.com",
+        "mdm. example.com",
         "mdm.example.com/enroll",
         "mdm.examplé.com",
-        "192.168.1.5",
+        "192.0.2.5",
         "mdm.example.123",
         &long_label,
         &long_name,
@@ -59,7 +59,7 @@ fn a_name_that_is_not_dns_safe_is_refused() {
 #[test]
 fn the_enrollment_url_is_the_names_enroll_path() {
     assert_eq!(
-        enrollment_url("mdm.internal.komira.dev"),
-        "https://mdm.internal.komira.dev/enroll"
+        enrollment_url("mdm.internal.example.com"),
+        "https://mdm.internal.example.com/enroll"
     );
 }

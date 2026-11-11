@@ -54,7 +54,13 @@ impl Coordinator {
             "" => None,
             token => Some(EnrollmentId::parse(token).ok_or(MdmRefusal::InvalidRequest)?),
         };
-        let status = self.setup_status()?;
+        // The setup is told for the Devices page, not needed for it: a setup that cannot be read
+        // now leaves the list as it was before the setup existed, with `configured` false and
+        // nothing named.
+        let status = self.setup_status().unwrap_or_else(|why| {
+            tracing::warn!(?why, "the MDM setup is not read for the device list");
+            proto::MdmStatusResponse::default()
+        });
         let Some(mdm) = self.mdm() else {
             return Ok(proto::ListDevicesResponse {
                 configured: status.configured,

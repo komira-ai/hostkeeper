@@ -161,6 +161,9 @@ impl Coordinator {
             if facts.not_after_unix <= now {
                 missing.push(MdmCondition::PushCertExpired);
             }
+            if facts.not_before_unix > now {
+                missing.push(MdmCondition::PushCertNotYetValid);
+            }
         }
         Ok(())
     }
@@ -214,6 +217,9 @@ impl Coordinator {
             status.tls_not_after_unix = Some(facts.not_after_unix);
             if facts.not_after_unix <= now {
                 missing.push(MdmCondition::TlsCertExpired);
+            }
+            if facts.not_before_unix > now {
+                missing.push(MdmCondition::TlsCertNotYetValid);
             }
             status.tls_names = facts.names;
         }

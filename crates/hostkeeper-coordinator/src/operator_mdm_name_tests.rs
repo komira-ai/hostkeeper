@@ -54,13 +54,13 @@ fn a_name_is_kept_audited_and_shown_by_the_status() {
     let world = world_over(Arc::new(FileSetup::volatile()), "mdm-name-set");
     let answer = world
         .coordinator
-        .mdm_put_name(&alice(), &name_of("  MDM.Internal.Komira.Dev "))
+        .mdm_put_name(&alice(), &name_of("  MDM.Internal.Example.COM "))
         .expect("named");
     assert_eq!(
         answer,
         proto::PutNameResponse {
-            name: "mdm.internal.komira.dev".to_owned(),
-            enrollment_url: "https://mdm.internal.komira.dev/enroll".to_owned(),
+            name: "mdm.internal.example.com".to_owned(),
+            enrollment_url: "https://mdm.internal.example.com/enroll".to_owned(),
         }
     );
     let status = world.coordinator.mdm_status(&alice()).expect("a status");
@@ -71,8 +71,8 @@ fn a_name_is_kept_audited_and_shown_by_the_status() {
             status.name_locked
         ),
         (
-            "mdm.internal.komira.dev",
-            "https://mdm.internal.komira.dev/enroll",
+            "mdm.internal.example.com",
+            "https://mdm.internal.example.com/enroll",
             false
         )
     );
@@ -91,7 +91,7 @@ fn a_name_is_kept_audited_and_shown_by_the_status() {
     assert_eq!(
         audit(&world),
         [
-            ("alice", "mdm_name_set", "set to mdm.internal.komira.dev"),
+            ("alice", "mdm_name_set", "set to mdm.internal.example.com"),
             ("alice", "mdm_name_set", "set to mdm2.example.com"),
         ]
         .map(|(by, action, reason)| (

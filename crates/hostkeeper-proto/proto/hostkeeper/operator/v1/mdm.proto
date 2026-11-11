@@ -127,6 +127,10 @@ enum MdmCondition {
   MDM_CONDITION_TLS_CERT_EXPIRED = 12;
   // The TLS certificate does not name the MDM name.
   MDM_CONDITION_TLS_NAME_MISMATCH = 13;
+  // The push certificate's validity has not begun.
+  MDM_CONDITION_PUSH_CERT_NOT_YET_VALID = 14;
+  // The TLS certificate's validity has not begun.
+  MDM_CONDITION_TLS_CERT_NOT_YET_VALID = 15;
 }
 
 // How far the hostkeeper settings profile of the gate has got on a device in its enrollment.

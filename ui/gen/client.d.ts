@@ -532,7 +532,9 @@ export namespace hostkeeper_operator_v1 {
     | "MDM_CONDITION_TLS_KEY_MISSING"
     | "MDM_CONDITION_TLS_PAIR_INVALID"
     | "MDM_CONDITION_TLS_CERT_EXPIRED"
-    | "MDM_CONDITION_TLS_NAME_MISMATCH";
+    | "MDM_CONDITION_TLS_NAME_MISMATCH"
+    | "MDM_CONDITION_PUSH_CERT_NOT_YET_VALID"
+    | "MDM_CONDITION_TLS_CERT_NOT_YET_VALID";
   export interface MdmDevice {
     enrollmentId?: string;
     udid?: string;
