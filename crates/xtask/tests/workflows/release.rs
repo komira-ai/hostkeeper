@@ -6,8 +6,9 @@
 //!   the repository).
 //! - `release.yml` ([`release_problems`]) starts only by [`RELEASE_TRIGGERS`] (a `workflow_run`
 //!   of exactly `ci`, `privileged` and `artifacts`, completed, on main), has exactly the jobs
-//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, and the three jobs
-//!   of hostkeeper's own deploy, held to [`desired::problems`]; plans with the one step of
+//!   of [`RELEASE_JOBS`]: `plan`, `verify` and `publish` under their exact `if:`, the jobs of
+//!   hostkeeper's own deploy, held to [`desired::problems`], and the two jobs of the coordinator's
+//!   deploy to the control plane, held to [`cp_deploy::problems`]; plans with the one step of
 //!   [`PLAN_RUN`], under no `if:`, on a checkout of the tip, for every trigger; publishes in the
 //!   job-level group of [`PUBLISH_GROUP`], never cancelled; checks every shipped binary
 //!   ([`SHIPPED_BINARIES`]) in `verify`, and
@@ -32,6 +33,7 @@
 //!
 //! Which job may hold which write scope, under which `if:`, is [`super::lint::WRITE_ALLOWED`].
 
+use super::cp_deploy;
 use super::desired;
 use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
 use super::packages;
@@ -74,10 +76,13 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 )];
 
 /// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
-/// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::TARGETS_JOB`],
-/// [`desired::COORDINATOR_JOB`], [`super::no_downgrade::JOB`], [`desired::JOB`]).
-pub const RELEASE_JOBS: [&str; 8] = [
+/// (`plan`, `verify`, `publish`, `image`), hostkeeper's own deploy ([`desired::TARGETS_JOB`],
+/// [`desired::COORDINATOR_JOB`], [`super::no_downgrade::JOB`], [`desired::JOB`]) and the
+/// coordinator's deploy to the control plane ([`cp_deploy::JOB`], [`cp_deploy::DIGEST_JOB`]).
+pub const RELEASE_JOBS: [&str; 10] = [
     "coordinator",
+    "cp-deploy",
+    "cp-deploy-digest",
     "image",
     "no-downgrade",
     "plan",
@@ -241,9 +246,10 @@ const PUBLISH_MARKS: [&str; 6] = [
 ];
 
 /// The `cargo xtask release` verbs release.yml may run: none builds, packages or signs.
-const RELEASE_VERBS: [&str; 8] = [
+const RELEASE_VERBS: [&str; 9] = [
     "check",
     "check-binary",
+    "image-digest",
     "image-layout",
     "locate",
     "plan",
@@ -405,7 +411,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     want.sort();
     if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired and the jobs of the package channels ({want:?})"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired, cp-deploy-digest, cp-deploy and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [
@@ -453,6 +459,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
         problems.extend(build_problems(name, Some(j)));
     }
     problems.extend(desired::problems(doc));
+    problems.extend(cp_deploy::problems(doc));
     problems.extend(packages::problems(doc));
     problems.extend(packages::promote_check_problems(doc));
     if let Some(check) = job(doc, "check-rpm") {

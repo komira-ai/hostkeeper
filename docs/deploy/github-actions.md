@@ -10,8 +10,8 @@ token. The call names no host group, so it is one deployment to each group that 
 update plan rolls the release out over that group's hosts stage by stage, the canary or first
 stage of hosts first, then more hosts once each stage has baked.
 
-The release also waits for the coordinator. CI never changes the coordinator: its own machine
-updates it from each published release
+The release also waits for the coordinator. The hosts' deploy never changes the coordinator: its
+own machine updates it from each published release
 ([coordinator-update.md](coordinator-update.md)), and the deploy sets the hosts' desired version
 only once the coordinator runs that release, because a coordinator older than the release refuses
 the fields the release sends (`invalid_request`).
@@ -280,6 +280,8 @@ is older than one already published sets nothing: `set-desired` is skipped, not 
   release.
 - It never changes the coordinator, not its version, allow-list, host groups, holds or marks:
   the coordinator's own machine updates it ([coordinator-update.md](coordinator-update.md)), and
-  CI only waits until it runs the release.
+  CI only waits until it runs the release. (The deploy of the coordinator's image to the control
+  plane's Docker Swarm service is a separate pair of jobs of the same run, with its own switch:
+  [control-plane.md](control-plane.md).)
 - It sets only `hostkeeper`. The hello proof run stays a dispatch by hand
   ([docs/hello.md](../hello.md)).
