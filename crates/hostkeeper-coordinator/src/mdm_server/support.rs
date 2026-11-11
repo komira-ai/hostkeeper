@@ -166,6 +166,7 @@ impl MdmStore for Flaky {
         fn requeue_timed_out(&self, sent_before_unix: i64) -> Result<Vec<(String, String)>, MdmError>;
         fn command(&self, id: &str) -> Result<Option<Row>, MdmError>;
         fn commands(&self, enrollment_id: &str) -> Result<Vec<Row>, MdmError>;
+        fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError>;
         fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError>;
         fn abm_device(&self, serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         fn abm_devices(&self) -> Result<Vec<AbmDevice>, MdmError>;
@@ -276,6 +277,24 @@ impl Rig {
     /// A rig with nothing in the setup but the master key.
     pub(super) fn bare(name: &str) -> Self {
         Self::build(name, None, counting())
+    }
+
+    /// A queue as a restarted coordinator builds it: new pushers and nothing armed, over the same
+    /// tables, setup, clock and fake APNs.
+    pub(super) fn restarted_queue(&self) -> MdmQueue {
+        let apns = Arc::clone(&self.apns);
+        let factory: SenderFactory = Box::new(move |_, _| {
+            Some(Arc::clone(&apns) as Arc<dyn hostkeeper_mdm_push::apns::PushSender>)
+        });
+        let clock: Arc<dyn Clock> = Arc::clone(&self.time) as Arc<dyn Clock>;
+        let pushing = Arc::new(SetupPushers::new(Arc::clone(&self.setup), clock, factory));
+        MdmQueue::new(
+            Arc::clone(&self.store) as Arc<dyn MdmStore>,
+            Arc::clone(&self.time) as Arc<dyn UnixClock>,
+            Arc::new(move || pushing.get()),
+            Arc::clone(&self.setup),
+            86_400,
+        )
     }
 
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.

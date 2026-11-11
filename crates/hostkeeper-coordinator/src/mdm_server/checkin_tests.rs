@@ -263,6 +263,16 @@ async fn token_update_sets_the_push_token_of_the_live_enrollment_only() {
         ],
     );
     mac_session.put("/checkin", &[], &console).await;
+    let by_user_id = checkin(
+        "TokenUpdate",
+        &[
+            ("Token", plist::Value::Data(vec![2; 32])),
+            ("PushMagic", "user-id-magic".into()),
+            ("UserID", "ABCD-1234".into()),
+        ],
+    );
+    let (status, _) = mac_session.put("/checkin", &[], &by_user_id).await;
+    assert_eq!(status, StatusCode::OK);
     let kept = rig
         .store
         .live_enrollment(SERIAL)

@@ -183,7 +183,10 @@ async fn token_update(
 ) -> Result<Answer, Refusal> {
     let enrollment = live(server, identity, cert, message.id.key())?;
     // The channel of a user is not the device's: its token is not the Mac's.
-    if message.enrollment_user_id.is_some() || message.not_on_console == Some(true) {
+    if message.enrollment_user_id.is_some()
+        || message.user_id.is_some()
+        || message.not_on_console == Some(true)
+    {
         return Ok(ok());
     }
     let kept = server.store.set_push(

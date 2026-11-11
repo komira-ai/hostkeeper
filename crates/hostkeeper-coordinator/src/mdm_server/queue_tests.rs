@@ -134,6 +134,53 @@ async fn not_now_keeps_the_command_and_arms_the_push_floor() {
     );
 }
 
+/// Proves: a restarted coordinator pushes for a command that was left queued: the queue it builds
+/// has nothing armed, yet its sweep reads the store, finds the live enrollment with a queued
+/// command, starts its floor and pushes once the floor has elapsed, and not before.
+///
+/// Catches: a deferred or unpushed command forgotten across a deploy, the Mac asleep and never woken.
+#[tokio::test]
+async fn a_restarted_queue_pushes_for_a_command_left_queued() {
+    let rig = Rig::new("queue-restart");
+    rig.live("e1", SERIAL, true);
+    rig.store
+        .enqueue(&crate::mdm_server::queue_new(1, "e1"))
+        .expect("queued");
+    rig.queue.claim("e1", &[]).expect("claimed");
+    rig.queue
+        .answer("e1", &Rig::command_id(1), Answer::NotNow, b"<plist/>")
+        .expect("answered");
+    let restarted = rig.restarted_queue();
+    assert!(restarted.armed.lock().expect("lock").is_empty());
+    restarted.sweep().await.expect("swept");
+    assert!(
+        rig.apns.sent().is_empty(),
+        "the floor starts at the first sweep"
+    );
+    rig.time.advance(FLOOR - 1);
+    restarted.sweep().await.expect("swept");
+    assert!(rig.apns.sent().is_empty(), "inside the floor");
+    rig.time.advance(1);
+    restarted.sweep().await.expect("swept");
+    assert_eq!(rig.apns.sent().len(), 1, "at the floor");
+}
+
+/// Proves: a sweep whose store cannot say which enrollments wait carries on with the timed-out
+/// commands and the enrollments already armed.
+///
+/// Catches: one failed read stopping every Mac's wake.
+#[tokio::test]
+async fn a_sweep_carries_on_when_the_waiting_enrollments_cannot_be_read() {
+    let rig = Rig::new("queue-waiting-fails");
+    rig.live("e1", SERIAL, true);
+    rig.enqueue("e1", 1).await.expect("queued");
+    rig.time.advance(FLOOR);
+    rig.store.fail(Some("enrollments_with_queued"));
+    rig.queue.sweep().await.expect("swept");
+    assert_eq!(rig.apns.sent().len(), 2, "the armed enrollment was pushed");
+    rig.store.fail(None);
+}
+
 /// Proves: a command that a Mac holds past `--mdm-command-timeout-s` is queued again and its Mac
 /// is pushed, even though a push is outstanding.
 ///

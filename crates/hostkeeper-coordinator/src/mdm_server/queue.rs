@@ -103,11 +103,12 @@ impl MdmQueue {
             .map_or(DEFAULT_PUSH, |(settings, _)| settings)
     }
 
-    fn arm(&self, id: &str) {
+    /// Whether `id` was not armed before.
+    fn arm(&self, id: &str) -> bool {
         self.armed
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .insert(id.to_owned());
+            .insert(id.to_owned())
     }
 
     fn disarm(&self, id: &str) {
@@ -237,6 +238,24 @@ impl MdmQueue {
         for enrollment_id in enrollments {
             if let Some(why) = self.push(enrollment_id, Why::TimedOut).await {
                 tracing::warn!(enrollment_id, %why, "a timed-out command could not be pushed");
+            }
+        }
+        // The store, not memory, says who waits: after a restart nothing is armed, and a sleeping
+        // Mac calls only when pushed.
+        match self.store.enrollments_with_queued() {
+            Ok(waiting) => {
+                for enrollment_id in &waiting {
+                    // Newly known to this process: the push policy has no floor for it either,
+                    // so it is armed there too, and the push comes one floor from now.
+                    if self.arm(enrollment_id)
+                        && let Some(pusher) = (self.pushers)()
+                    {
+                        pusher.command_deferred(enrollment_id, self.settings());
+                    }
+                }
+            }
+            Err(why) => {
+                tracing::warn!(%why, "the enrollments with queued commands could not be read")
             }
         }
         let armed: Vec<String> = self
