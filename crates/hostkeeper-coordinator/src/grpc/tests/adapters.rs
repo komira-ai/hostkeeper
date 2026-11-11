@@ -36,10 +36,9 @@ fn assert_refused<T: Debug>(result: Result<Response<T>, Status>, code: Code, tok
 /// A call that carries the operator's token, but whose caller the router found to be CI.
 fn as_ci_caller<T>(message: T) -> Request<T> {
     let mut request = Request::new(message);
-    request.extensions_mut().insert(Admitted::Operator {
-        caller: Caller::Ci,
-        bearer: String::new(),
-    });
+    request
+        .extensions_mut()
+        .insert(Admitted::Operator { caller: Caller::Ci });
     request
 }
 
@@ -508,7 +507,6 @@ async fn converge_answers_the_operator_and_refuses_a_call_admitted_as_neither_ci
     let mut operator = Request::new(request());
     operator.extensions_mut().insert(Admitted::Operator {
         caller: Caller::Operator("operator".parse().expect("a token name")),
-        bearer: String::new(),
     });
     let reply = releases(&world)
         .converge(operator)

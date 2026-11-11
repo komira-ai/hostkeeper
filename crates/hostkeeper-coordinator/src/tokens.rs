@@ -258,6 +258,13 @@ impl OperatorTokens {
         Self::of(vec![token], None)
     }
 
+    /// No token: nothing is an operator's bearer. What a coordinator has when it is started with
+    /// `--initial-admin-file` alone, whose users sign in with a password.
+    #[must_use]
+    pub fn none() -> Self {
+        Self::of(Vec::new(), None)
+    }
+
     /// The tokens of the file at `path`, which [`Self::reload`] reads again.
     ///
     /// # Errors

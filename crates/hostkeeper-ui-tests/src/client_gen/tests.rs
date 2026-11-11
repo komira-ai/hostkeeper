@@ -132,6 +132,7 @@ enum Kind {
 enum LongEnumNameForWrapping {
   LONG_ENUM_NAME_FOR_WRAPPING_UNSPECIFIED = 0;
   LONG_ENUM_NAME_FOR_WRAPPING_FIRST = 1;
+  LONG_ENUM_NAME_FOR_WRAPPING_SECOND = 2;
 }
 
 message Holder {
@@ -257,7 +258,8 @@ export namespace hostkeeper_operator_v1 {
   export type Kind = "KIND_UNSPECIFIED" | "KIND_A";
   export type LongEnumNameForWrapping =
     | "LONG_ENUM_NAME_FOR_WRAPPING_UNSPECIFIED"
-    | "LONG_ENUM_NAME_FOR_WRAPPING_FIRST";
+    | "LONG_ENUM_NAME_FOR_WRAPPING_FIRST"
+    | "LONG_ENUM_NAME_FOR_WRAPPING_SECOND";
   export interface Tree { children?: hostkeeper_operator_v1.Tree[]; }
 }
 

@@ -23,7 +23,18 @@ serves the gateway; the heartbeat listener never does.
 ## Authentication
 
 The caller sends `Authorization: Bearer <token>`, as a gRPC call sends it in its `authorization`
-metadata, and the token is checked before the body is read. `Releases.SetDesired` takes CI's
+metadata, and the token is checked before the body is read. A browser that has signed in
+(`docs/operations/coordinator-state.md`, "The sign-in") sends its session cookie instead, with the
+header `X-HK-CSRF` set to the session's CSRF token, an `Origin` that is the listener's own (when it
+sends one), `Sec-Fetch-Site: same-origin` (when it sends one) and `Content-Type: application/json`;
+the call is then made as the signed-in user, who is `by` in the audit as a token's name is. A call
+that fails one of those checks is `PERMISSION_DENIED` with the reason `csrf`, and one from a user
+who must still choose a new password is `PERMISSION_DENIED` `password_change_required`; a cookie
+that names no live session is no credential. A call with an `Authorization` header never has its
+cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
+refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret` and
+`Mdm.PutSetting` (`docs/design/coordinator-mdm.md`, section 4.9), which an API token, the tokens file's or one
+made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets` and `Mdm.ListSettings`. `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and
 `Releases.GetRelease`, which change nothing, also take CI's OIDC token or an operator token. Each CI token is good once, and an operator token spends none. With CI's token `SetDesired` sets only the services
 the admitting allow-list entry names. With an operator token it sets any service the coordinator
@@ -47,7 +58,7 @@ The JSON routes `POST /v1/desired` and `GET /v1/convergence` stay CI's only. The
 `POST /v1/desired` takes a release index as `release_index` (its text) and
 `release_index_digest`, and a refused index is a 400 with the reason `index_digest_mismatch` or
 `index_invalid`. Every other method,
-each of the other `Releases` methods among them, takes an operator token only. TLS authenticates the server only; there is no client certificate and no cookie.
+each of the other `Releases` methods among them, takes an operator token only. TLS authenticates the server only; there is no client certificate, and a bearer call reads and sets no cookie.
 
 ## Request and response
 

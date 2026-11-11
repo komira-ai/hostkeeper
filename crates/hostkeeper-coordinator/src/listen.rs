@@ -21,6 +21,7 @@
 
 use std::convert::Infallible;
 use std::io;
+use std::net::SocketAddr;
 use std::pin::{Pin, pin};
 use std::sync::Arc;
 use std::task::{Context, Poll};
@@ -41,7 +42,7 @@ use tokio_rustls::TlsAcceptor;
 
 use crate::enrollment::Enrollment;
 use crate::grpc::route;
-use crate::http::{Peer, Surface};
+use crate::http::{Peer, PeerAddr, Surface};
 use crate::service::Coordinator;
 use crate::tokens::OperatorTokens;
 use crate::wait::{ConnectionWaits, unless};
@@ -65,6 +66,22 @@ pub const MAX_STREAMS: u32 = 16;
 /// wait on it, of which a coordinator holds at most [`crate::wait::MAX_WAITS`]), so the cap makes
 /// a flood wait in the kernel's backlog rather than take the process's descriptors and memory.
 pub const MAX_CONNECTIONS: usize = 1024;
+
+/// A transport that can say where it came from.
+pub trait Remote {
+    /// The address of the other end, or `None` for a transport with none (an in-memory pipe).
+    fn remote(&self) -> Option<SocketAddr> {
+        None
+    }
+}
+
+impl Remote for TcpStream {
+    fn remote(&self) -> Option<SocketAddr> {
+        self.peer_addr().ok()
+    }
+}
+
+impl Remote for tokio::io::DuplexStream {}
 
 /// One listener: `accept` yields the next connection, as a function of no argument that
 /// returns a future.
@@ -100,7 +117,7 @@ pub fn serve<A, F, S>(
 where
     A: FnMut() -> F + Send,
     F: Future<Output = io::Result<S>> + Send,
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     serve_with_slots(
         listener,
@@ -121,7 +138,7 @@ pub async fn serve_with_slots<A, F, S>(
 where
     A: FnMut() -> F + Send,
     F: Future<Output = io::Result<S>> + Send,
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let Listener {
         accept,
@@ -171,6 +188,15 @@ where
                 tokio::time::sleep(Duration::from_millis(100)).await;
             }
         }
+    }
+}
+
+/// What a connection hands each of its requests besides the request: its held waits, and the
+/// address it came from when it has one.
+fn carry<B>(request: &mut hyper::Request<B>, waits: &ConnectionWaits, remote: Option<SocketAddr>) {
+    request.extensions_mut().insert(waits.clone());
+    if let Some(from) = remote {
+        request.extensions_mut().insert(PeerAddr(from));
     }
 }
 
@@ -279,7 +305,8 @@ impl<S: AsyncWrite + Unpin> AsyncWrite for WriteDeadline<S> {
 }
 
 /// Serves one connection until it ends: the TLS handshake, then HTTP/2 when the handshake
-/// settled on `h2` and HTTP/1.1 otherwise, each with its limit.
+/// settled on `h2` and HTTP/1.1 otherwise, each with its limit. The address the stream came
+/// from rides on each request as [`PeerAddr`] (no extension when the stream has none).
 pub async fn connection<S>(
     stream: S,
     tls: TlsSource,
@@ -287,19 +314,20 @@ pub async fn connection<S>(
     coordinator: Arc<Coordinator>,
     patience: Duration,
 ) where
-    S: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    S: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
+    let remote = stream.remote();
     let mut config = (*tls.config()).clone();
     config.alpn_protocols = ALPN.iter().map(|name| name.to_vec()).collect();
     let shaken = tokio::time::timeout(patience, TlsAcceptor::from(Arc::new(config)).accept(stream));
     let tls = match shaken.await {
         Ok(Ok(tls)) => tls,
         Ok(Err(why)) => {
-            tracing::debug!(%why, "a TLS handshake failed");
+            tracing::debug!(%why, ?remote, "a TLS handshake failed");
             return;
         }
         Err(_) => {
-            tracing::debug!("a TLS handshake did not finish in time");
+            tracing::debug!(?remote, "a TLS handshake did not finish in time");
             return;
         }
     };
@@ -315,7 +343,7 @@ pub async fn connection<S>(
     let service = service_fn(move |mut request: hyper::Request<Incoming>| {
         let coordinator = Arc::clone(&coordinator);
         let peer = peer.clone();
-        request.extensions_mut().insert(held.clone());
+        carry(&mut request, &held, remote);
         async move { Ok::<_, Infallible>(route(&coordinator, surface, &peer, request, patience).await) }
     });
     let io = TokioIo::new(WriteDeadline::new(tls, patience));

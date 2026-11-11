@@ -21,8 +21,8 @@ use crate::audit_file::UnixClock;
 use crate::desired::{DesiredError, StoreError};
 use crate::grpc::Admitted;
 use crate::grpc::operator::{
-    HostsService, ReleasesService, bearer_of, caller_of, converge_refusal, desired_body,
-    desired_proto, hosts_refusal, record_proto, releases_action_refusal, set_refusal,
+    HostsService, ReleasesService, caller_of, converge_refusal, desired_body, desired_proto,
+    hosts_refusal, record_proto, releases_action_refusal, set_refusal,
 };
 use crate::http::{DESIRED_PATH, OPERATOR_PATH, Surface, handle};
 use crate::operate::OperateError;
@@ -99,7 +99,6 @@ pub(super) async fn as_operator<T>(coordinator: &Coordinator, message: T) -> Req
     let mut request = Request::new(message);
     request.extensions_mut().insert(Admitted::Operator {
         caller: coordinator.caller(Some(OPERATOR)).await,
-        bearer: OPERATOR.to_owned(),
     });
     request
 }
@@ -756,8 +755,7 @@ fn the_desired_state_of_an_answer_holds_the_version_the_limits_and_the_digest() 
 }
 
 /// Proves who a call is from: the operator the router admitted, and nobody for a call with no
-/// admission and for one admitted as another kind of caller, whose bearer is not the operator's
-/// either.
+/// admission and for one admitted as another kind of caller.
 #[tokio::test]
 async fn a_call_is_from_the_operator_the_router_admitted_and_from_no_one_otherwise() {
     let world = World::new("operator-caller");
@@ -767,13 +765,10 @@ async fn a_call_is_from_the_operator_the_router_admitted_and_from_no_one_otherwi
         caller_of(&operator),
         Caller::Operator(name) if name.as_str() == "operator"
     ));
-    assert_eq!(bearer_of(&operator), Some(OPERATOR));
 
     let unadmitted = Request::new(());
     assert!(matches!(caller_of(&unadmitted), Caller::Anonymous));
-    assert_eq!(bearer_of(&unadmitted), None);
 
     let ci = as_ci(&world.coordinator, ()).await;
     assert!(matches!(caller_of(&ci), Caller::Anonymous));
-    assert_eq!(bearer_of(&ci), None);
 }
