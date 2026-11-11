@@ -1,6 +1,6 @@
 //! The coordinator's gRPC: `hostkeeper.agent.v1.Coordinator` on the heartbeat listener,
 //! `hostkeeper.operator.v1.{Hosts, Releases, Services, Enrollment, Audit, Alerts, Rollouts,
-//! Mdm, Repositories, HostGroups}` on the private one,
+//! Mdm, Repositories, HostGroups, Users, ApiTokens}` on the private one,
 //! and the JSON gateway of the operator API ([`gateway`]), all beside the frozen JSON routes of
 //! [`crate::http`].
 //!
@@ -40,6 +40,7 @@ use bytes::Bytes;
 use hostkeeper_oidc::Verified;
 use hostkeeper_proto::hostkeeper::agent::v1::coordinator_server::CoordinatorServer;
 use hostkeeper_proto::hostkeeper::operator::v1::alerts_server::AlertsServer;
+use hostkeeper_proto::hostkeeper::operator::v1::api_tokens_server::ApiTokensServer;
 use hostkeeper_proto::hostkeeper::operator::v1::audit_server::AuditServer;
 use hostkeeper_proto::hostkeeper::operator::v1::enrollment_server::EnrollmentServer;
 use hostkeeper_proto::hostkeeper::operator::v1::host_groups_server::HostGroupsServer;
@@ -49,6 +50,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::releases_server::ReleasesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::repositories_server::RepositoriesServer;
 use hostkeeper_proto::hostkeeper::operator::v1::rollouts_server::RolloutsServer;
 use hostkeeper_proto::hostkeeper::operator::v1::services_server::ServicesServer;
+use hostkeeper_proto::hostkeeper::operator::v1::users_server::UsersServer;
 use hostkeeper_wire::wire::MAX_HEARTBEAT_BYTES;
 use http_body_util::{Either, Full};
 use hyper::body::Body;
@@ -63,6 +65,7 @@ use self::operator::{
     AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
     RolloutsService, ServicesService,
 };
+use self::operator_accounts::{ApiTokensService, UsersService};
 use self::operator_host_groups::HostGroupsService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
@@ -81,6 +84,7 @@ pub(crate) mod agent;
 mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
+mod operator_accounts;
 mod operator_host_groups;
 mod operator_repositories;
 pub(crate) mod refusal;
@@ -124,6 +128,10 @@ const MDM: &str = "hostkeeper.operator.v1.Mdm";
 const REPOSITORIES: &str = "hostkeeper.operator.v1.Repositories";
 /// The full name of the operator API's `HostGroups`.
 const HOST_GROUPS: &str = "hostkeeper.operator.v1.HostGroups";
+/// The full name of the operator API's `Users`.
+const USERS: &str = "hostkeeper.operator.v1.Users";
+/// The full name of the operator API's `ApiTokens`.
+const API_TOKENS: &str = "hostkeeper.operator.v1.ApiTokens";
 
 /// The path of `Coordinator.Heartbeat`, which needs a client certificate that names a host.
 const HEARTBEAT: &str = "/hostkeeper.agent.v1.Coordinator/Heartbeat";
@@ -291,7 +299,7 @@ pub(crate) async fn admit_via(
             Surface::Control,
             Some(
                 HOSTS | RELEASES | SERVICES | ENROLLMENT | AUDIT | ALERTS | ROLLOUTS | MDM
-                | REPOSITORIES | HOST_GROUPS,
+                | REPOSITORIES | HOST_GROUPS | USERS | API_TOKENS,
             ),
         ) => Served::Operator,
         _ => return Err(Status::unimplemented("")),
@@ -497,6 +505,16 @@ where
         Some(HOST_GROUPS) => {
             let server = HostGroupsServer::new(HostGroupsService::new(coordinator))
                 .max_decoding_message_size(operator_limit(path));
+            call(server, request).await
+        }
+        Some(USERS) => {
+            let server = UsersServer::new(UsersService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
+            call(server, request).await
+        }
+        Some(API_TOKENS) => {
+            let server = ApiTokensServer::new(ApiTokensService::new(coordinator))
+                .max_decoding_message_size(MAX_OPERATOR_BYTES);
             call(server, request).await
         }
         _ => Status::unimplemented("").into_http(),

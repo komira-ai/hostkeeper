@@ -11,6 +11,11 @@ export interface Client {
   readonly alerts: {
     list(request: hostkeeper_operator_v1.ListAlertsRequest): Promise<hostkeeper_operator_v1.ListAlertsResponse>;
   };
+  readonly apiTokens: {
+    list(request: hostkeeper_operator_v1.ListApiTokensRequest): Promise<hostkeeper_operator_v1.ListApiTokensResponse>;
+    create(request: hostkeeper_operator_v1.CreateApiTokenRequest): Promise<hostkeeper_operator_v1.CreateApiTokenResponse>;
+    revoke(request: hostkeeper_operator_v1.RevokeApiTokenRequest): Promise<hostkeeper_operator_v1.RevokeApiTokenResponse>;
+  };
   readonly audit: {
     list(request: hostkeeper_operator_v1.ListAuditRequest): Promise<hostkeeper_operator_v1.ListAuditResponse>;
   };
@@ -80,6 +85,14 @@ export interface Client {
     setRepository(request: hostkeeper_operator_v1.SetRepositoryRequest): Promise<hostkeeper_operator_v1.SetRepositoryResponse>;
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
+  };
+  readonly users: {
+    list(request: hostkeeper_operator_v1.ListUsersRequest): Promise<hostkeeper_operator_v1.ListUsersResponse>;
+    create(request: hostkeeper_operator_v1.CreateUserRequest): Promise<hostkeeper_operator_v1.CreateUserResponse>;
+    disable(request: hostkeeper_operator_v1.DisableUserRequest): Promise<hostkeeper_operator_v1.DisableUserResponse>;
+    enable(request: hostkeeper_operator_v1.EnableUserRequest): Promise<hostkeeper_operator_v1.EnableUserResponse>;
+    resetPassword(request: hostkeeper_operator_v1.ResetPasswordRequest): Promise<hostkeeper_operator_v1.ResetPasswordResponse>;
+    delete(request: hostkeeper_operator_v1.DeleteUserRequest): Promise<hostkeeper_operator_v1.DeleteUserResponse>;
   };
 }
 
@@ -209,6 +222,8 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_STORE_UNREACHABLE"
     | "ALERT_KIND_TRUSTED_ROOT";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
+  export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
+  export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
   export interface ApproveRequest {
     requestId?: string;
     keySha256?: string;
@@ -266,7 +281,14 @@ export namespace hostkeeper_operator_v1 {
     | "CONVERGENCE_STATE_BLOCKED"
     | "CONVERGENCE_STATE_HALTED"
     | "CONVERGENCE_STATE_IN_PROGRESS";
+  export interface CreateApiTokenRequest { name?: string; }
+  export interface CreateApiTokenResponse { token?: hostkeeper_operator_v1.ApiTokenInfo; secret?: string; }
+  export interface CreateUserRequest { name?: string; }
+  export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
+  export interface DeleteUserRequest { name?: string; }
+  export interface DeleteUserResponse {
+  }
   export interface DesiredState {
     version?: string;
     maxUpdating?: { [key: string]: number };
@@ -274,6 +296,10 @@ export namespace hostkeeper_operator_v1 {
     packageDigest?: string;
     releaseIndexDigest?: string;
   }
+  export interface DisableUserRequest { name?: string; }
+  export interface DisableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
+  export interface EnableUserRequest { name?: string; }
+  export interface EnableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
   export type EnrollmentRequestState =
     | "ENROLLMENT_REQUEST_STATE_UNSPECIFIED"
     | "ENROLLMENT_REQUEST_STATE_PENDING"
@@ -462,6 +488,9 @@ export namespace hostkeeper_operator_v1 {
   export interface ListAlertsRequest {
   }
   export interface ListAlertsResponse { alerts?: hostkeeper_operator_v1.Alert[]; }
+  export interface ListApiTokensRequest {
+  }
+  export interface ListApiTokensResponse { tokens?: hostkeeper_operator_v1.ApiTokenInfo[]; }
   export interface ListAuditRequest {
     sinceSeq?: string;
     limit?: number;
@@ -506,6 +535,9 @@ export namespace hostkeeper_operator_v1 {
   export interface ListSettingsRequest {
   }
   export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
+  export interface ListUsersRequest {
+  }
+  export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"
@@ -686,10 +718,15 @@ export namespace hostkeeper_operator_v1 {
   export interface RemoveRepositoryRequest { name?: string; reason?: string; }
   export interface RemoveRepositoryResponse { generation?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
+  export interface ResetPasswordRequest { name?: string; }
+  export interface ResetPasswordResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
   export interface ResumeRequest { service?: string; reason?: string; hostGroup?: string; }
   export interface ResumeResponse { entry?: hostkeeper_operator_v1.AuditEntry; plan?: hostkeeper_operator_v1.RolloutPlan; }
   export interface RetireRequest { nodeId?: string; reason?: string; }
   export interface RetireResponse { entry?: hostkeeper_operator_v1.AuditEntry; updateInFlight?: boolean; }
+  export interface RevokeApiTokenRequest { name?: string; }
+  export interface RevokeApiTokenResponse {
+  }
   export interface RoleCounts { role?: string; atDesired?: number; updating?: number; failed?: number; down?: number; pinned?: number; }
   export type RollbackMode = "ROLLBACK_MODE_UNSPECIFIED" | "ROLLBACK_MODE_MANUAL" | "ROLLBACK_MODE_AUTOMATIC";
   export interface RolloutPlan {
@@ -807,6 +844,15 @@ export namespace hostkeeper_operator_v1 {
   export interface UnholdResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnmarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface UserInfo {
+    name?: string;
+    enabled?: boolean;
+    mustChange?: boolean;
+    createdBy?: string;
+    createdUnix?: string;
+    lastLoginUnix?: string;
+    passwordValidUntilUnix?: string;
+  }
   export interface WaitConvergedRequest { service?: string; version?: string; waitSecs?: number; hostGroup?: string; }
   export interface WaitConvergedResponse { outcome?: hostkeeper_operator_v1.WaitOutcome; convergence?: hostkeeper_operator_v1.Convergence; }
   export type WaitOutcome =

@@ -164,6 +164,7 @@ impl LoginFlags {
             },
             max_hashes: self.login_max_hashes,
             passwords: self.password_settings(),
+            temporary_secs: self.initial_password_secs,
         }
     }
 

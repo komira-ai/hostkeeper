@@ -576,20 +576,20 @@ export async function main() {
 #[test]
 fn the_page_list_opens_the_release_page_and_its_form_reads_the_release() {
     let mut ui = Ui::start();
+    ui.session("operator-csrf");
     ui.reply(&m("Releases/Status"), json!({}));
     ui.reply(&m("Hosts/List"), json!({}));
     ui.reply(&m("Releases/GetRelease"), json!({}));
     ui.reply(&m("Hosts/List"), json!({}));
     ui.run(
         r#"
-import { fakeDocument, domNamed, fire } from "../test/kit.js";
+import { fakeDocument, settle } from "../test/kit.js";
 import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
   startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
-  fire(domNamed(doc.root, "token"), "input", { target: { value: "operator-token" } });
-  fire(doc.root.children[0], "submit", { preventDefault() {} });
+  await settle();
 }"#,
     );
     let step = |steps: &str| {
