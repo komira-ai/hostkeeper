@@ -444,3 +444,95 @@ fn the_layout_appends_the_digest_of_the_index_to_the_env_file_and_an_unwritable_
         )
     );
 }
+
+/// The repository the deploy tests name.
+fn repo() -> Repo {
+    "komira-ai/hostkeeper".parse().expect("a repository")
+}
+
+/// Writes the good linux-x86_64 tarball alone and its bundle into `dir`; returns its manifest.
+fn write_amd_and_bundle(dir: &Path) -> Vec<u8> {
+    let (amd, manifest) = good("amd64");
+    let name = image_name(&version(), Platform::LinuxX86_64);
+    std::fs::write(dir.join(&name), amd).expect("write");
+    std::fs::write(dir.join(bundle_of(&name)), "{}").expect("write");
+    manifest
+}
+
+#[test]
+fn a_deploy_is_given_the_amd64_manifest_digest_and_the_release_addresses_of_the_tarball_and_its_bundle()
+ {
+    // Catches: the digest of the tarball or of the image index given instead of the manifest's,
+    // the arm64 tarball read (none is in `dir`), or an address of another tag, repository or
+    // file; and lines replaced in the output file instead of appended to it.
+    let dir = scratch("image-digest");
+    let manifest = write_amd_and_bundle(&dir);
+    let output = dir.join("github-output");
+    std::fs::write(&output, "earlier=1\n").expect("write");
+    let want = vec![
+        format!("digest=sha256:{}", hex_of(&manifest)),
+        "image-url=https://github.com/komira-ai/hostkeeper/releases/download/v0.1.5/hostkeeper-coordinator-0.1.5-linux-x86_64.image.tar".to_owned(),
+        "bundle-url=https://github.com/komira-ai/hostkeeper/releases/download/v0.1.5/hostkeeper-coordinator-0.1.5-linux-x86_64.image.tar.sigstore.json".to_owned(),
+    ];
+    assert_eq!(
+        deploy_inputs(&dir, &version(), &repo(), Some(&output)),
+        Ok(want.clone())
+    );
+    assert_eq!(
+        std::fs::read_to_string(&output).expect("read"),
+        format!("earlier=1\n{}\n", want.join("\n"))
+    );
+    assert_eq!(deploy_inputs(&dir, &version(), &repo(), None), Ok(want));
+}
+
+#[test]
+fn a_deploy_is_refused_without_the_bundle_of_the_image() {
+    // Catches: an address of a bundle the release does not hold, which the updater would fetch
+    // and fail on only after downloading the image.
+    let dir = scratch("image-digest-no-bundle");
+    write_amd_and_bundle(&dir);
+    let name = image_name(&version(), Platform::LinuxX86_64);
+    std::fs::remove_file(dir.join(bundle_of(&name))).expect("remove");
+    assert_eq!(
+        deploy_inputs(&dir, &version(), &repo(), None).map_err(|e| e.to_string()),
+        Err(format!(
+            "hostkeeper-coordinator-0.1.5-linux-x86_64.image.tar.sigstore.json is missing from {}: a deploy is given the bundle of the image",
+            dir.display()
+        ))
+    );
+}
+
+#[test]
+fn a_deploy_is_refused_for_a_tarball_that_is_not_one_amd64_image_or_is_missing() {
+    // Catches: a digest given for a tarball of another platform (the updater would refuse it
+    // only after the download, as `platform_mismatch`), for one whose index.json names several
+    // manifests, or for no tarball at all.
+    let amd = "hostkeeper-coordinator-0.1.5-linux-x86_64.image.tar";
+    let dir = scratch("image-digest-refused");
+    let missing = deploy_inputs(&dir, &version(), &repo(), None).expect_err("absent");
+    assert!(
+        missing
+            .to_string()
+            .starts_with(&format!("read {}: ", dir.join(amd).display())),
+        "{missing}"
+    );
+    let (arm, _) = good("arm64");
+    std::fs::write(dir.join(amd), arm).expect("write");
+    std::fs::write(dir.join(bundle_of(amd)), "{}").expect("write");
+    assert_eq!(
+        deploy_inputs(&dir, &version(), &repo(), None).map_err(|e| e.to_string()),
+        Err(format!(
+            "{amd}: the manifest is for \"linux\"/\"arm64\", not linux/amd64"
+        ))
+    );
+    let (manifest, mut blobs) = manifest_of("amd64", b"layer");
+    blobs.push((
+        "index.json".to_owned(),
+        index_json(vec![entry(&manifest, "amd64"), entry(&manifest, "amd64")]),
+    ));
+    std::fs::write(dir.join(amd), tar_of(&blobs)).expect("write");
+    assert_eq!(
+        deploy_inputs(&dir, &version(), &repo(), None).map_err(|e| e.to_string()),
+        Err(format!("{amd}: index.json names 2 manifests, not one"))
+    );
+}
