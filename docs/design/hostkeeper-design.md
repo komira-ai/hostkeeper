@@ -73,7 +73,7 @@ hostkeeper replaces all of that with one daemon per host, one coordinator per fa
 
 ## 3. The design in one picture
 
-![Components and trust boundaries: coordinator with service assignment, one root daemon per host with its daemon config, the signed package, hook, service, trusted signer, release channel, operator and CI, with the trust boundary drawn at each crossing](diagrams/components-and-trust.svg)
+![Components and trust boundaries: coordinator with service assignment, one root daemon per host with its daemon config, the signed package, hook, service, trusted signer, package repository, operator and CI, with the trust boundary drawn at each crossing](diagrams/components-and-trust.svg)
 
 - **The coordinator** (`hostkeeper-coordinator serve`) holds which services each host or role runs, the desired version and `min_version` of each service, the farm's membership and the operator's marks (excluded hosts, holds, halts, bad versions). The rollout gate (section 5.4) decides, per heartbeat, whether to order a host to do something. An order is a verb and typed arguments. It also serves the operator API (section 4.8), which the generated CLI and the UI both call.
 - **The daemon** (`hostkeeper`) runs on every host as root. It connects out to the coordinator over mutual TLS, heartbeats, and executes orders. It listens on no network port. Its local interface is a root-only unix socket for three verbs (`status`, `abort`, `clear_record`, section 4.1). It executes only the verbs compiled into it (section 4.1).
@@ -314,7 +314,7 @@ Holds show on the Fleet and Holds pages and in `Hosts.Get` and `Services.List`.
 
 ### 5.5 Fetching, verifying and unpacking a package
 
-A package is fetched by the host's package tool from the project's repository or installer store, and its attestation is checked when it is published ([packages-native.md](packages-native.md), sections 10.1, 10.3 and 10.7). The release channel, the release index and hostkeeper's archive format are deleted. The platforms a release is built for are in [verify-a-release.md](../deploy/verify-a-release.md); the downgrade bound is still the coordinator's `min_version` (Q13).
+A package is fetched by the host's package tool from the project's repository or installer store, and its attestation is checked when it is published ([packages-native.md](packages-native.md), sections 10.1, 10.3 and 10.7). The release channel, the release index and hostkeeper's archive format are deleted. On the lab LAN the coordinator offers a caching pass-through for the apt repository and the macOS pkg (design: [package-proxy.md](package-proxy.md), **Designed**, not built); clients still verify every byte themselves, so the proxy can only serve bytes or refuse to, and the tailnet-only download server it replaces is retired by the owner's steps in package-proxy.md section 6. The platforms a release is built for are in [verify-a-release.md](../deploy/verify-a-release.md); the downgrade bound is still the coordinator's `min_version` (Q13).
 
 ### 5.6 Force: the fleet-wide fix
 
@@ -837,7 +837,7 @@ Built as (b), with the BMC MAC required only of a record that holds one, and the
 - **Placed path:** a system path (a unit, or a `files/` entry) that the daemon links from `current`; `placed.json` records which package owns it, and a second claim is refused.
 - **Platform:** one operating system and CPU family a package is built for: `linux-x86_64`, `linux-arm64` or `macos-arm64`. The daemon's own is the target it was compiled for.
 - **Promotion pending:** the update succeeded but the hook cannot yet call it final; the coordinator holds the slot.
-- **Release channel:** the daemon config's `release_channel` key, kept for the packages that were served from it; deleted with hostkeeper's archive format (section 5.5).
+- **Release channel:** the daemon config's `release_channel` key, kept for the packages that were served from it; deleted with hostkeeper's archive format (section 5.5). The package channel for the lab LAN is the coordinator's package proxy ([package-proxy.md](package-proxy.md), **Designed**).
 - **Release index:** `index.json` of one service version, per platform the package file, its size and its SHA-256; no longer built (section 5.5).
 - **Rollout gate:** the coordinator's `decide()`: halts, excluded hosts, holds, bad versions, the quiet start, one update on a host at a time, then the service's update plan (pause, the other services' live rollouts, the stage, `max_updating`, `min_up`, bake). Order construction (`install` or `update`, up to date, backoff) is outside it.
 - **Role:** a label on a host (1 to 32 bytes, `a-z0-9-`) used by service assignment and Force targets.
