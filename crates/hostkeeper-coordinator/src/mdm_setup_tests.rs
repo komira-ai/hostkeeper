@@ -333,6 +333,7 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("push_expiry_s", "86400".to_owned(), true),
             ("push_priority", "10".to_owned(), true),
             ("push_timeout_s", "30".to_owned(), true),
+            ("installs", "[]".to_owned(), true),
         ]
     );
     assert_eq!(

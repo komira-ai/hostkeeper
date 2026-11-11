@@ -165,6 +165,9 @@ async fn the_operator_lists_every_field_of_a_device_over_grpc_and_the_gateway() 
         install_sends: 3,
         install_last_sent_unix: Some(1_800_000_070),
         install_sha256: "ab".repeat(32),
+        // This coordinator's gate has no baseline: no state is shown.
+        baseline_state: proto::MdmBaselineState::Unspecified.into(),
+        baseline_reason: String::new(),
     };
     let bare = proto::MdmDevice {
         enrollment_id: "BBBB-BARE".to_owned(),
@@ -310,6 +313,7 @@ async fn a_page_holds_at_most_the_cap_and_a_limit_of_zero_is_the_cap() {
         Devices::Files(dir.path()),
         crate::enrollment::tests::support::FixedClock::at(1),
         crate::enrollment::os_random(),
+        &crate::mdm_setup::MdmSetup::volatile(),
     )
     .expect("opens")
     .expect("a gate");

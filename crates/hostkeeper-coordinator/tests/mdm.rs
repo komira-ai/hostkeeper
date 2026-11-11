@@ -320,6 +320,8 @@ fn serve_help_lists_the_gate_flags_and_no_environment_variable() {
         "--mdm-macos-pkg <MDM_MACOS_PKG>",
         "--mdm-pkg-allowlist <MDM_PKG_ALLOWLIST>",
         "--mdm-host <MDM_HOST>",
+        "--mdm-baseline-file <MDM_BASELINE_FILE>",
+        "--mdm-baseline-check-s <MDM_BASELINE_CHECK_S>",
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }
@@ -586,10 +588,11 @@ fn the_stores_and_signers_flags_need_the_profile_and_are_checked_at_start() {
 }
 
 /// Catches: a pkg flag accepted without its partner or without the enrollment side
-/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` alone, both without
+/// (`--mdm-pkg-allowlist` without `--mdm-host`, `--mdm-host` or both without
 /// `--mdm-profile-identifier`), a pkg allowlist that is not root's let through the start (it
 /// says what may be installed as root on every Mac), or a host name with a scheme; each
-/// refusal names its flag.
+/// refusal names its flag. The host alone, with the enrollment side, starts the gate with the
+/// installs of its setting (none yet), since the old allowlist only seeds them.
 #[test]
 fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let files = Files::new("mdm-pkg-flags");
@@ -612,7 +615,7 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     let host = ["--mdm-host", "mdm.example.com"];
     let refused: [Vec<&str>; 3] = [
         good().into_iter().chain(side).chain(allowlist).collect(),
-        good().into_iter().chain(side).chain(host).collect(),
+        good().into_iter().chain(host).collect(),
         good().into_iter().chain(allowlist).chain(host).collect(),
     ];
     for args in refused {
@@ -622,6 +625,17 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
             "{args:?}"
         );
     }
+    let host_alone: Vec<&str> = good().into_iter().chain(side).chain(host).collect();
+    let parts = start(&files, &host_alone).expect("started");
+    let installs = parts
+        .coordinator
+        .mdm()
+        .expect("the gate")
+        .gate
+        .installs()
+        .expect("a pkg install");
+    assert!(installs.entries().is_empty());
+    drop(parts);
     let all: Vec<&str> = good()
         .into_iter()
         .chain(side)
@@ -791,6 +805,27 @@ fn device_information(uuid: &str) -> Vec<u8> {
         },
     }))
     .expect("json")
+}
+
+/// Makes the state files hold the host group `build`, which an allowlist entry's role names.
+async fn hold_group_build(files: &Files) {
+    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
+    let first = build(&flags_of(files.args(&enrollment())), roots).expect("started");
+    first
+        .coordinator
+        .host_groups_put(
+            &first.coordinator.caller(Some(OPERATOR)).await,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
 }
 
 /// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
@@ -984,4 +1019,75 @@ fn serve_help_lists_the_macs_listener_flags() {
     ] {
         assert!(help.contains(flag), "{flag}: {help}");
     }
+}
+
+/// Catches: a baseline flag accepted without its partners (`--mdm-baseline-file` without
+/// `--mdm-profile-identifier` or without `--mac-serial-allowlist`, the check interval without
+/// the file, an interval of 0), a baseline file that is not root's let through the start (it
+/// says what every Mac is configured with), and a default check interval other than six hours.
+#[tokio::test]
+async fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
+    let files = Files::new("mdm-baseline-flags");
+    hold_group_build(&files).await;
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    files.put(
+        "mac.toml",
+        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n",
+        0o600,
+    );
+    files.put(
+        "baseline.toml",
+        "[[group]]\nhost_group = \"build\"\n[[group.entry]]\nremote_desktop = true\n",
+        0o644,
+    );
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let allowlist = ["--mac-serial-allowlist", "=mac.toml"];
+    let baseline = ["--mdm-baseline-file", "=baseline.toml"];
+    let refused: [Vec<&str>; 4] = [
+        good()
+            .into_iter()
+            .chain(allowlist)
+            .chain(baseline)
+            .collect(),
+        good().into_iter().chain(side).chain(baseline).collect(),
+        good()
+            .into_iter()
+            .chain(side)
+            .chain(allowlist)
+            .chain(["--mdm-baseline-check-s", "60"])
+            .collect(),
+        good()
+            .into_iter()
+            .chain(side)
+            .chain(allowlist)
+            .chain(baseline)
+            .chain(["--mdm-baseline-check-s", "0"])
+            .collect(),
+    ];
+    for args in refused {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&args)),
+            ExitCode::from(2),
+            "{args:?}"
+        );
+    }
+    let all: Vec<&str> = good()
+        .into_iter()
+        .chain(side)
+        .chain(allowlist)
+        .chain(baseline)
+        .collect();
+    assert_eq!(flags_of(files.args(&all)).mdm.mdm_baseline_check_s, 21_600);
+    assert_eq!(
+        refusal(&files, &all),
+        format!(
+            "--mdm-baseline-file {}: it is not owned by root; the baseline and its profiles must be files of root's that no one else can write",
+            files.path("baseline.toml").display()
+        )
+    );
 }

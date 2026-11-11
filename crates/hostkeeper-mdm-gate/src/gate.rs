@@ -34,7 +34,8 @@ use std::sync::{Arc, Mutex, PoisonError};
 use hostkeeper_enrollment::validity::UnixClock;
 
 use crate::answer;
-use crate::command::{Command, DEVICE_INFORMATION, SECURITY_INFO};
+use crate::baseline::Baseline;
+use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO, SETTINGS};
 use crate::enroll::{EnrollSide, Held};
 use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
@@ -94,6 +95,9 @@ pub struct Gate {
     enroll: Option<EnrollSide>,
     /// The pkg install; without it (or without the enrollment side) the gate sends no pkg.
     install: Option<Install>,
+    /// The enrollment baseline; without it (or without the enrollment side) the gate sends no
+    /// baseline.
+    baseline: Option<Baseline>,
     /// The nonce last pushed to each device, to push it again.
     held: Mutex<BTreeMap<EnrollmentId, Held>>,
     /// Set by [`Gate::wake`]: a request was posted.
@@ -134,6 +138,7 @@ impl Gate {
             turn: tokio::sync::Mutex::new(()),
             enroll: None,
             install: None,
+            baseline: None,
             held: Mutex::new(BTreeMap::new()),
             wake: tokio::sync::Notify::new(),
         })
@@ -155,6 +160,29 @@ impl Gate {
         self
     }
 
+    /// Replaces the installs of the pkg install ([`Install::set_installs`]): the next look sends
+    /// by them, and a Mac whose entry changed is sent it again. Without a pkg install (no MDM
+    /// host) there is nothing to send them from and it does nothing.
+    pub fn set_installs(&self, installs: crate::installs::Installs) {
+        if let Some(install) = &self.install {
+            install.set_installs(installs);
+        }
+    }
+
+    /// The installs the gate sends by now; `None` without a pkg install.
+    #[must_use]
+    pub fn installs(&self) -> Option<crate::installs::Installs> {
+        self.install.as_ref().map(Install::installs)
+    }
+
+    /// The same gate with the enrollment baseline `baseline` ([`crate::baseline`]), or without
+    /// one for `None`. It acts only with the enrollment side too.
+    #[must_use]
+    pub fn with_baseline(mut self, baseline: Option<Baseline>) -> Self {
+        self.baseline = baseline;
+        self
+    }
+
     /// Asks for a look at every device soon ([`crate::enroll::run`]): the coordinator calls it
     /// when a request is posted. A wake while a look runs is kept for the next.
     pub fn wake(&self) {
@@ -172,6 +200,10 @@ impl Gate {
 
     pub(crate) fn install(&self) -> Option<&Install> {
         self.install.as_ref()
+    }
+
+    pub(crate) fn baseline(&self) -> Option<&Baseline> {
+        self.baseline.as_ref()
     }
 
     pub(crate) async fn turn(&self) -> tokio::sync::MutexGuard<'_, ()> {
@@ -421,6 +453,14 @@ fn result(
                     .answer_device_information(answer::device_information(payload, &uuid), now),
                 SECURITY_INFO => {
                     record.answer_security_info(answer::security_info(payload, &uuid), now);
+                }
+                PROFILE_LIST => {
+                    record.answer_profile_list(&uuid, answer::profile_list(payload, &uuid), now);
+                }
+                // The device acknowledged the command, but its items may each have failed.
+                SETTINGS => {
+                    let applied = answer::settings_applied(payload, &uuid);
+                    record.answer_profile(&uuid, applied, now);
                 }
                 // A profile command of the enrollment side.
                 _ => record.answer_profile(&uuid, true, now),

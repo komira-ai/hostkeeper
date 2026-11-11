@@ -397,12 +397,18 @@ audits each push `mdm_nonce_pushed` by `mdm-gate`. A Mac with two pending reques
 serial and its platform UUID gets no nonce at all: deny the one that is not its daemon's, and the
 gate pushes a nonce to the other at its next look.
 
-With `--mdm-pkg-allowlist` and `--mdm-host` the gate also sends the Mac the newest pkg on its
-allowlist, before its daemon has posted, and again an hour after the Mac's last answer until a
+With `--mdm-host` the gate also sends the Mac the pkg named `hostkeeper` in the MDM setting
+`installs` (seeded once from `--mdm-pkg-allowlist`'s newest pkg), before its daemon has posted, and again an hour after the Mac's last answer until a
 request from it appears; each send is audited `mdm_install_sent` by `mdm-gate` with its count, and
 `hkctl mdm list-devices` shows the count and the last send
 ([enrollment-coordinator.md](../enrollment-coordinator.md)). A Mac whose count grows and that never
 posts did not install the pkg: read `/var/log/install.log` on the Mac.
+
+With `--mdm-baseline-file` the gate also sets up each Mac at enrollment (Screen Sharing, the
+profiles of the Mac's host group, the Mac's name and the other installs of the setting `installs`)
+and keeps it; `hkctl mdm list-devices` shows each Mac's
+`baseline_state`. A baseline failure never fails an enrollment
+([mdm-baseline.md](mdm-baseline.md)).
 
 A coordinator without those flags pushes no nonce: every Mac then waits for an operator, with
 `mac_nonce_presented` false, and is approved as a Linux request is. So does a Mac the gate does

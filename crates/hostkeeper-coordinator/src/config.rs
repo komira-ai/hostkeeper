@@ -630,10 +630,12 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                         Arc::new(SystemClock),
                         os_random(),
                         queue,
+                        coordinator.mdm_setup(),
                     )?
                 }
                 None => None,
             };
+            Mdm::check_baseline_groups(mdm.as_ref(), &allowlist)?;
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {

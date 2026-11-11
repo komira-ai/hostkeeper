@@ -9,6 +9,8 @@
 
 use std::collections::BTreeMap;
 
+use hostkeeper_mdm_gate::Installs;
+
 /// What a setting's value is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Shape {
@@ -20,6 +22,9 @@ enum Shape {
     Whole { min: u32, max: u32 },
     /// One of the values listed.
     OneOf(&'static [&'static str]),
+    /// The named installs: a JSON array [`hostkeeper_mdm_gate::Installs`] reads, stored as the
+    /// canonical text it writes back.
+    Installs,
 }
 
 /// One setting: its name, its default and what it takes.
@@ -33,7 +38,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 8] = [
+pub const SETTINGS: [Setting; 9] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -90,7 +95,17 @@ pub const SETTINGS: [Setting; 8] = [
         default: "30",
         shape: Shape::Whole { min: 1, max: 300 },
     },
+    // The packages the gate may send a Mac by name; the hostkeeper pkg is the one named
+    // `hostkeeper`. Seeded once from the old `--mdm-pkg-allowlist` file.
+    Setting {
+        name: INSTALLS,
+        default: "[]",
+        shape: Shape::Installs,
+    },
 ];
+
+/// The name of the setting of the named installs.
+pub const INSTALLS: &str = hostkeeper_mdm_gate::SETTING_NAME;
 
 /// The setting called `name`, if this release knows it.
 #[must_use]
@@ -114,6 +129,9 @@ impl Setting {
                 (min..=max).contains(&number).then(|| number.to_string())
             }
             Shape::OneOf(values) => values.contains(&value).then(|| value.to_owned()),
+            Shape::Installs => Installs::parse(value)
+                .ok()
+                .map(|installs| installs.to_json()),
             Shape::FallingDays => {
                 let days: Option<Vec<u32>> =
                     value.split(',').map(|d| parse_days(d.trim())).collect();

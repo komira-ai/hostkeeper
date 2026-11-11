@@ -25,6 +25,20 @@ impl Enrollments for Enrollment {
         self.mac.allowlist.get(serial).is_some()
     }
 
+    fn host_group(&self, serial: &str) -> Option<String> {
+        self.mac
+            .allowlist
+            .get(serial)
+            .map(|entry| entry.role.as_str().to_owned())
+    }
+
+    fn host_name(&self, serial: &str) -> Option<String> {
+        self.mac
+            .allowlist
+            .get(serial)
+            .map(|entry| entry.host_id.as_str().to_owned())
+    }
+
     fn waiting(&self, serial: &str) -> Result<Vec<Waiting>, EnrollmentsError> {
         Ok(self
             .store

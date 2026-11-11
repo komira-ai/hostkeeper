@@ -435,7 +435,7 @@ async fn a_connection_that_ends_without_an_answer_is_an_http_error() {
     }
 }
 
-/// Catches: a type off the five reaching NanoHUB; the type shown unfiltered in the refusal.
+/// Catches: a type off the list reaching NanoHUB; the type shown unfiltered in the refusal.
 #[tokio::test]
 async fn a_type_off_the_list_is_refused_before_nanohub_is_called() {
     let hub = FakeNanoHub::start().await;

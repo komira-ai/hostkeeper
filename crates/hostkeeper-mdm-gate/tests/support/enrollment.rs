@@ -5,13 +5,14 @@
 //! profiles and pkg installs in the commands NanoHUB heard.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
-use hostkeeper_enrollment::fs::{Fs, RealFs};
+use hostkeeper_enrollment::fs::{FileLock, FileStat, Fs, RealFs};
 use hostkeeper_enrollment::names::KeyHash;
 use hostkeeper_mdm_gate::{
-    ConfigProfile, DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate, Install,
-    MdmHost, Nonce, PkgAllowlist, ProfileIdentifier, Random, StoreError, Waiting,
+    Baseline, ConfigProfile, DaemonProfile, EnrollSide, Enrollments, EnrollmentsError, Gate,
+    Install, MdmHost, Nonce, PkgAllowlist, ProfileIdentifier, Random, StoreError, Waiting,
 };
 use plist::{Dictionary, Value};
 
@@ -46,6 +47,8 @@ force_start_secs       = 60
 #[derive(Default)]
 struct State {
     allowed: BTreeSet<String>,
+    groups: BTreeMap<String, String>,
+    names: BTreeMap<String, String>,
     waiting: BTreeMap<String, Vec<Waiting>>,
     approved: BTreeMap<String, u64>,
     fail_reads: bool,
@@ -67,6 +70,20 @@ impl FakeEnrollments {
     /// `serial` is on the allowlist from now on.
     pub fn allow(&self, serial: &str) {
         self.state().allowed.insert(serial.to_owned());
+    }
+
+    /// `serial`'s allowlist entry names the host group `group`.
+    pub fn group(&self, serial: &str, group: &str) {
+        self.state()
+            .groups
+            .insert(serial.to_owned(), group.to_owned());
+    }
+
+    /// `serial`'s allowlist entry names the host `name`, the device name the baseline sets.
+    pub fn name(&self, serial: &str, name: &str) {
+        self.state()
+            .names
+            .insert(serial.to_owned(), name.to_owned());
     }
 
     /// `request` waits for an operator, claiming `serial`.
@@ -112,6 +129,14 @@ impl FakeEnrollments {
 impl Enrollments for FakeEnrollments {
     fn allowed(&self, serial: &str) -> bool {
         self.state().allowed.contains(serial)
+    }
+
+    fn host_group(&self, serial: &str) -> Option<String> {
+        self.state().groups.get(serial).cloned()
+    }
+
+    fn host_name(&self, serial: &str) -> Option<String> {
+        self.state().names.get(serial).cloned()
     }
 
     fn waiting(&self, serial: &str) -> Result<Vec<Waiting>, EnrollmentsError> {
@@ -195,6 +220,8 @@ pub struct EnrollRig {
     fs: Arc<dyn Fs>,
     /// The config profile the gate sends.
     config: ConfigProfile,
+    /// The enrollment baseline the gate applies, when a test gives it one.
+    baseline: Option<Baseline>,
 }
 
 impl EnrollRig {
@@ -216,15 +243,23 @@ impl EnrollRig {
         let mut rig = Rig::new(name).await;
         let fake = Arc::new(FakeEnrollments::default());
         let config = config();
-        rig.gate =
-            gate_on(&rig, &fake, random, Arc::clone(&fs), None, &config).expect("the gate opens");
+        rig.gate = gate_on(&rig, &fake, random, Arc::clone(&fs), None, &config, None)
+            .expect("the gate opens");
         Self {
             rig,
             fake,
             allowlist: None,
             fs,
             config,
+            baseline: None,
         }
+    }
+
+    /// The same rig whose gate applies `baseline` (`None`: none), as a new gate over the same
+    /// directory and fake, as after a restart of the coordinator with another baseline.
+    pub fn baseline(&mut self, baseline: Option<Baseline>) {
+        self.baseline = baseline;
+        self.restart().expect("the gate opens");
     }
 
     /// The same rig whose gate has the pkg install of the allowlist `text`, as a new gate over
@@ -243,6 +278,7 @@ impl EnrollRig {
             Arc::clone(&self.fs),
             self.allowlist.as_deref(),
             &self.config,
+            self.baseline.clone(),
         )
         .expect("the gate opens");
     }
@@ -258,6 +294,7 @@ impl EnrollRig {
             Arc::clone(&self.fs),
             self.allowlist.as_deref(),
             &self.config,
+            self.baseline.clone(),
         )
         .expect("the gate opens");
     }
@@ -272,6 +309,7 @@ impl EnrollRig {
             Arc::new(RealFs),
             self.allowlist.as_deref(),
             &self.config,
+            self.baseline.clone(),
         )?;
         Ok(())
     }
@@ -311,6 +349,12 @@ impl EnrollRig {
         self.profile_commands()
             .iter()
             .filter(|heard| heard.command().0 == "InstallProfile")
+            // The gate's own profiles; a baseline profile carries other settings.
+            .filter(|heard| {
+                profile_dict(heard)["PayloadIdentifier"]
+                    .as_string()
+                    .is_some_and(|identifier| identifier.starts_with(IDENTIFIER))
+            })
             .map(profile_of)
             .collect()
     }
@@ -372,15 +416,70 @@ fn gate_on(
     fs: Arc<dyn Fs>,
     allowlist: Option<&str>,
     config: &ConfigProfile,
+    baseline: Option<Baseline>,
 ) -> Result<Gate, StoreError> {
-    let install = allowlist.map(|text| Install {
-        allowlist: PkgAllowlist::parse(text).expect("the allowlist parses"),
-        host: MdmHost::parse(HOST).expect("a host"),
-        fs: Arc::new(RealFs),
+    let install = allowlist.map(|text| {
+        Install::new(
+            PkgAllowlist::parse(text)
+                .expect("the allowlist parses")
+                .installs(),
+            MdmHost::parse(HOST).expect("a host"),
+            Arc::new(RealFs),
+        )
     });
     Ok(open_on(fs, &rig.dir(), &rig.hub, &rig.clock, random)?
         .with_enrollment(side_of(fake, config.clone()))
-        .with_install(install))
+        .with_install(install)
+        .with_baseline(baseline))
+}
+
+/// A file system whose `read_private` gives the bytes of the real file with the stat a test
+/// sets: a file of root's cannot be made without root.
+pub struct StatFs(Mutex<FileStat>);
+
+impl StatFs {
+    pub fn new(uid: u32, mode: u32, is_file: bool) -> Self {
+        Self(Mutex::new(FileStat { is_file, uid, mode }))
+    }
+
+    /// A regular file of root's, mode 0644.
+    pub fn root() -> Self {
+        Self::new(0, 0o644, true)
+    }
+}
+
+impl Fs for StatFs {
+    fn read(&self, path: &Path) -> std::io::Result<Option<Vec<u8>>> {
+        RealFs.read(path)
+    }
+    fn read_private(&self, path: &Path) -> std::io::Result<Option<(Vec<u8>, FileStat)>> {
+        let stat = *self.0.lock().unwrap_or_else(PoisonError::into_inner);
+        Ok(RealFs.read_private(path)?.map(|(bytes, _)| (bytes, stat)))
+    }
+    fn write_new(&self, path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
+        RealFs.write_new(path, bytes, mode)
+    }
+    fn sync_file(&self, path: &Path) -> std::io::Result<()> {
+        RealFs.sync_file(path)
+    }
+    fn rename(&self, from: &Path, to: &Path) -> std::io::Result<()> {
+        RealFs.rename(from, to)
+    }
+    fn remove(&self, path: &Path) -> std::io::Result<()> {
+        RealFs.remove(path)
+    }
+    fn sync_dir(&self, dir: &Path) -> std::io::Result<()> {
+        RealFs.sync_dir(dir)
+    }
+    fn create_dir(&self, dir: &Path) -> std::io::Result<()> {
+        RealFs.create_dir(dir)
+    }
+    fn list(&self, dir: &Path) -> std::io::Result<Vec<String>> {
+        RealFs.list(dir)
+    }
+    fn lock(&self, path: &Path) -> std::io::Result<FileLock> {
+        RealFs.lock(path)
+    }
 }
 
 /// The `Command` dictionary of a command NanoHUB heard.

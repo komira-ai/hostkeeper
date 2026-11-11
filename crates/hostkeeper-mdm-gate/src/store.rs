@@ -21,7 +21,12 @@
 //! and 19, so a release before them reads a record that has them, and this one reads a record
 //! without them as one with no profile sent and no nonce issued. The pkg sends of an enrollment
 //! (task M14) are field 20, added to schema 1 the same way: a record without it is one with no
-//! pkg sent.
+//! pkg sent. The enrollment baseline's sends (design 6.4) are field 21 the same way; its
+//! unanswered `EnableRemoteDesktop` and `ProfileList` commands are written to field 22, not to
+//! the list of field 15, because a release before them refuses a sent command of a type it does
+//! not send, and so would refuse the whole record. A release with field 22 refuses a type off
+//! its own list the same way, so the unanswered `Settings` commands are in field 23. The device name's last `Settings` and the
+//! baseline installs are fields 6 and 7 of the baseline message, added the same way.
 //!
 //! Under the coordinator's file store, the directory is `mdm-devices` in the enrollment store
 //! (`--enrollment-dir`), so `hostkeeper-coordinator backup` and `restore` copy it with the
@@ -35,11 +40,12 @@ use hostkeeper_enrollment::names::KeyHash;
 use prost::Message as _;
 use sha2::{Digest as _, Sha256};
 
-use crate::command::COMMAND_TYPES;
+use crate::command::{COMMAND_TYPES, ENABLE_REMOTE_DESKTOP, PROFILE_LIST, SETTINGS};
 use crate::ids::{CommandUuid, EnrollmentId};
 use crate::pkg::PkgDigest;
 use crate::record::{
-    DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
+    BaselineInstall, BaselineProfile, BaselineRecord, DeviceRecord, InstallRecord, NonceRecord,
+    Phase, ProfileAnswer, ProfileCommand, Sent,
 };
 
 /// The schema this release writes and the newest it reads.
@@ -178,6 +184,42 @@ struct InstallPb {
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
+struct BaselineProfilePb {
+    #[prost(string, tag = "1")]
+    identifier: String,
+    #[prost(message, optional, tag = "2")]
+    command: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct BaselineInstallPb {
+    #[prost(string, tag = "1")]
+    name: String,
+    #[prost(message, optional, tag = "2")]
+    command: Option<ProfilePb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+struct BaselinePb {
+    #[prost(message, optional, tag = "1")]
+    remote_desktop: Option<ProfilePb>,
+    #[prost(message, repeated, tag = "2")]
+    profiles: Vec<BaselineProfilePb>,
+    #[prost(message, optional, tag = "3")]
+    list: Option<ProfilePb>,
+    #[prost(string, repeated, tag = "4")]
+    installed: Vec<String>,
+    #[prost(uint64, optional, tag = "5")]
+    checked_unix: Option<u64>,
+    /// The device name's `Settings` and the baseline installs: added to the baseline message
+    /// as fields 6 and 7, so a release before them skips both and reads the rest.
+    #[prost(message, optional, tag = "6")]
+    name: Option<ProfilePb>,
+    #[prost(message, repeated, tag = "7")]
+    installs: Vec<BaselineInstallPb>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
 struct RecordPb {
     #[prost(string, tag = "1")]
     enrollment_id: String,
@@ -220,6 +262,20 @@ struct RecordPb {
     nonce: Option<NoncePb>,
     #[prost(message, optional, tag = "20")]
     install: Option<InstallPb>,
+    #[prost(message, optional, tag = "21")]
+    baseline: Option<BaselinePb>,
+    /// The unanswered commands of the types a release before the baseline does not know
+    /// (`EnableRemoteDesktop`, `ProfileList`), kept apart from field 15 so that release, which
+    /// refuses a sent command of a type it does not send, still reads the record and skips
+    /// these. A release with the baseline reads this field and refuses a type off its own list,
+    /// so `Settings` is not kept here but in field 23.
+    #[prost(message, repeated, tag = "22")]
+    baseline_sent: Vec<SentPb>,
+    /// The unanswered `Settings` commands, kept apart from fields 15 and 22 so a release that
+    /// has the baseline but not `Settings`, which refuses a sent command of a type it does not
+    /// send, still reads the record and skips these.
+    #[prost(message, repeated, tag = "23")]
+    settings_sent: Vec<SentPb>,
 }
 
 fn profile_pb(command: &ProfileCommand) -> ProfilePb {
@@ -289,6 +345,85 @@ fn install_of(pb: InstallPb) -> Option<InstallRecord> {
     })
 }
 
+fn baseline_pb(baseline: &BaselineRecord) -> BaselinePb {
+    BaselinePb {
+        remote_desktop: baseline.remote_desktop.as_ref().map(profile_pb),
+        profiles: baseline
+            .profiles
+            .iter()
+            .map(|profile| BaselineProfilePb {
+                identifier: profile.identifier.clone(),
+                command: Some(profile_pb(&profile.command)),
+            })
+            .collect(),
+        list: baseline.list.as_ref().map(profile_pb),
+        installed: baseline.installed.clone(),
+        checked_unix: baseline.checked_unix,
+        name: baseline.name.as_ref().map(profile_pb),
+        installs: baseline
+            .installs
+            .iter()
+            .map(|install| BaselineInstallPb {
+                name: install.name.clone(),
+                command: Some(profile_pb(&install.command)),
+            })
+            .collect(),
+    }
+}
+
+/// The baseline of `pb`; `None` when a command's UUID is malformed or a profile has no command.
+fn baseline_of(pb: BaselinePb) -> Option<BaselineRecord> {
+    let command = |pb: Option<ProfilePb>| pb.map(profile_of).map_or(Some(None), |c| c.map(Some));
+    let profiles = pb
+        .profiles
+        .into_iter()
+        .map(|profile| {
+            Some(BaselineProfile {
+                identifier: profile.identifier,
+                command: profile_of(profile.command?)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let installs = pb
+        .installs
+        .into_iter()
+        .map(|install| {
+            Some(BaselineInstall {
+                name: install.name,
+                command: profile_of(install.command?)?,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(BaselineRecord {
+        remote_desktop: command(pb.remote_desktop)?,
+        profiles,
+        list: command(pb.list)?,
+        name: command(pb.name)?,
+        installs,
+        installed: pb.installed,
+        checked_unix: pb.checked_unix,
+    })
+}
+
+/// Whether a command of `request_type` is kept in `baseline_sent` (field 22), not in `sent`.
+fn is_baseline_type(request_type: &str) -> bool {
+    [ENABLE_REMOTE_DESKTOP, PROFILE_LIST].contains(&request_type)
+}
+
+/// Whether a command of `request_type` is kept in `settings_sent` (field 23).
+fn is_settings_type(request_type: &str) -> bool {
+    request_type == SETTINGS
+}
+
+fn sent_pb(sent: &Sent) -> SentPb {
+    SentPb {
+        uuid: sent.uuid.as_str().to_owned(),
+        request_type: sent.request_type.clone(),
+        sent_unix: sent.sent_unix,
+        queued: sent.queued,
+    }
+}
+
 fn phase_number(phase: Phase) -> u32 {
     match phase {
         Phase::Authenticated => 1,
@@ -328,18 +463,29 @@ pub fn encode_record(record: &DeviceRecord) -> Vec<u8> {
         sent: record
             .sent
             .iter()
-            .map(|sent| SentPb {
-                uuid: sent.uuid.as_str().to_owned(),
-                request_type: sent.request_type.clone(),
-                sent_unix: sent.sent_unix,
-                queued: sent.queued,
+            .filter(|sent| {
+                !is_baseline_type(&sent.request_type) && !is_settings_type(&sent.request_type)
             })
+            .map(sent_pb)
             .collect(),
         refused: record.refused.clone(),
         last_error: record.last_error.clone(),
         config_profile: record.config_profile.as_ref().map(profile_pb),
         nonce: record.nonce.as_ref().map(nonce_pb),
         install: record.install.as_ref().map(install_pb),
+        baseline: record.baseline.as_ref().map(baseline_pb),
+        baseline_sent: record
+            .sent
+            .iter()
+            .filter(|sent| is_baseline_type(&sent.request_type))
+            .map(sent_pb)
+            .collect(),
+        settings_sent: record
+            .sent
+            .iter()
+            .filter(|sent| is_settings_type(&sent.request_type))
+            .map(sent_pb)
+            .collect(),
     }
     .encode_to_vec();
     FilePb {
@@ -397,8 +543,14 @@ fn decode(
         .filter(|id| kept_under(id))
         .ok_or_else(|| corrupt(elsewhere))?;
     let phase = phase_of(pb.phase).ok_or_else(|| corrupt("the record's phase is unknown"))?;
-    let mut sent = Vec::with_capacity(pb.sent.len());
-    for one in pb.sent {
+    let mut sent =
+        Vec::with_capacity(pb.sent.len() + pb.baseline_sent.len() + pb.settings_sent.len());
+    for one in pb
+        .sent
+        .into_iter()
+        .chain(pb.baseline_sent)
+        .chain(pb.settings_sent)
+    {
         let uuid = CommandUuid::parse(&one.uuid)
             .ok_or_else(|| corrupt("a sent command's UUID is malformed"))?;
         if !COMMAND_TYPES.contains(&one.request_type.as_str()) {
@@ -427,6 +579,10 @@ fn decode(
             install_of(pb).ok_or_else(|| corrupt("the pkg install's digest or UUID is malformed"))
         })
         .transpose()?;
+    let baseline = pb
+        .baseline
+        .map(|pb| baseline_of(pb).ok_or_else(|| corrupt("a baseline command's UUID is malformed")))
+        .transpose()?;
     Ok(DeviceRecord {
         enrollment_id,
         udid: pb.udid,
@@ -448,6 +604,7 @@ fn decode(
         config_profile,
         nonce,
         install,
+        baseline,
     })
 }
 

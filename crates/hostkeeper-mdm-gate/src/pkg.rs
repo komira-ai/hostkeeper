@@ -1,7 +1,9 @@
 //! The pkg the gate installs on a Mac (docs/design/hostkeeper-mdm.md section 7.1): the
 //! allowlist of pkg digests, and the inline manifest of `InstallEnterpriseApplication`.
 //!
-//! **The allowlist** is a TOML file, root's and writable by root alone, named by
+//! **The allowlist** is the old form of the installs ([`crate::installs`]): it is read once, to
+//! seed the setting `installs` when that was never set ([`PkgAllowlist::installs`]), and is not
+//! read for its values after. It is a TOML file, root's and writable by root alone, named by
 //! [`ALLOWLIST_FLAG`] and read when the coordinator starts:
 //!
 //! ```toml
@@ -19,8 +21,8 @@
 //! breaks a rule, stops the start. A key the gate does not read is passed over, so a later
 //! release can add one.
 //!
-//! **The digest is checked twice:** by the gate, which hashes the file before every send and
-//! sends nothing when its bytes are not the listed digest, and by the Mac, which checks the
+//! **The digest is checked twice:** by the gate, which hashes the file before every send
+//! ([`Install::check`]) and sends nothing when its bytes are not the listed digest, and by the Mac, which checks the
 //! manifest's `sha256` when it downloads.
 //!
 //! **The manifest** ([`manifest`]) is inline, not a `ManifestURL`: one item, with one
@@ -29,13 +31,15 @@
 
 use std::fmt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 
 use hostkeeper_enrollment::fs::Fs;
 use hostkeeper_wire::version::Version;
 use plist::{Dictionary, Value};
 use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
+
+use crate::installs::{HOSTKEEPER_INSTALL, InstallEntry, Installs};
 
 /// The flag of the pkg allowlist file.
 pub const ALLOWLIST_FLAG: &str = "--mdm-pkg-allowlist";
@@ -290,13 +294,29 @@ impl PkgAllowlist {
     pub fn entries(&self) -> &[PkgEntry] {
         &self.0
     }
+
+    /// The installs this allowlist seeds: its newest pkg as the install named
+    /// [`HOSTKEEPER_INSTALL`], with the bundle identifier [`PKG_IDENTIFIER`] and no origin.
+    #[must_use]
+    pub fn installs(&self) -> Installs {
+        let newest = self.newest();
+        let entry = InstallEntry {
+            name: HOSTKEEPER_INSTALL.to_owned(),
+            bundle_id: PKG_IDENTIFIER.to_owned(),
+            sha256: newest.sha256.clone(),
+            version: newest.version.clone(),
+            path: newest.path.clone(),
+            url: None,
+        };
+        Installs::from_entries(vec![entry])
+    }
 }
 
-/// What the gate needs to install the pkg: the allowlist, the MDM host the Mac fetches it
-/// from, and the file system the pkg files are read from.
+/// What the gate needs to install a pkg: the installs, which the setting `installs` changes
+/// while the gate runs, the MDM host the Mac fetches them from, and the file system the pkg
+/// files are read from.
 pub struct Install {
-    /// The pkgs it may send.
-    pub allowlist: PkgAllowlist,
+    installs: RwLock<Installs>,
     /// The MDM host whose proxy serves them.
     pub host: MdmHost,
     /// Where the pkg files are read, to check their digests.
@@ -306,7 +326,7 @@ pub struct Install {
 impl fmt::Debug for Install {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Install")
-            .field("allowlist", &self.allowlist)
+            .field("installs", &self.installs())
             .field("host", &self.host)
             .finish_non_exhaustive()
     }
@@ -332,12 +352,38 @@ pub enum PkgFileError {
 }
 
 impl Install {
-    /// The entry to send, once the bytes of its file are its listed digest.
+    /// The install of `installs`, whose manifests name `host` and whose files are read from `fs`.
+    #[must_use]
+    pub fn new(installs: Installs, host: MdmHost, fs: Arc<dyn Fs>) -> Self {
+        Self {
+            installs: RwLock::new(installs),
+            host,
+            fs,
+        }
+    }
+
+    /// The installs as they are now.
+    #[must_use]
+    pub fn installs(&self) -> Installs {
+        self.installs
+            .read()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// Replaces the installs; the gate's next look sends by the new ones.
+    pub fn set_installs(&self, installs: Installs) {
+        *self
+            .installs
+            .write()
+            .unwrap_or_else(PoisonError::into_inner) = installs;
+    }
+
+    /// Whether the bytes of `entry`'s file are its listed digest.
     ///
     /// # Errors
     /// [`PkgFileError`]: the file is missing, unreadable, or its bytes are another digest.
-    pub fn checked(&self) -> Result<&PkgEntry, PkgFileError> {
-        let entry = self.allowlist.newest();
+    pub fn check(&self, entry: &InstallEntry) -> Result<(), PkgFileError> {
         let shown = entry.path.display().to_string();
         let bytes = self
             .fs
@@ -346,7 +392,7 @@ impl Install {
             .ok_or_else(|| PkgFileError::Missing(shown.clone()))?;
         let actual = PkgDigest::of(&bytes);
         if actual == entry.sha256 {
-            Ok(entry)
+            Ok(())
         } else {
             Err(PkgFileError::Digest {
                 path: shown,
@@ -358,7 +404,7 @@ impl Install {
 
 /// The inline `Manifest` of `InstallEnterpriseApplication` for `entry`, served by `host`.
 #[must_use]
-pub fn manifest(entry: &PkgEntry, host: &MdmHost) -> Dictionary {
+pub fn manifest(entry: &InstallEntry, host: &MdmHost) -> Dictionary {
     let dict = |pairs: Vec<(&str, Value)>| -> Dictionary {
         pairs
             .into_iter()
@@ -371,12 +417,12 @@ pub fn manifest(entry: &PkgEntry, host: &MdmHost) -> Dictionary {
         ("url", Value::from(host.pkg_url(&entry.sha256))),
     ]);
     let metadata = dict(vec![
-        ("bundle-identifier", Value::from(PKG_IDENTIFIER)),
+        ("bundle-identifier", Value::from(entry.bundle_id.as_str())),
         ("bundle-version", Value::from(entry.version.as_str())),
         ("kind", Value::from("software")),
         (
             "title",
-            Value::from(format!("hostkeeper {}", entry.version.as_str())),
+            Value::from(format!("{} {}", entry.name, entry.version.as_str())),
         ),
     ]);
     let item = dict(vec![
