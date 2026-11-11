@@ -79,14 +79,21 @@
 # targets, coordinator, no-downgrade, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: write the targets of the newest release, wait until the
-#          coordinator runs at least that release (its own machine updates it; this workflow
-#          never changes it) and the package channels its targets point at list it (the apt
+#          coordinator runs at least that release (its own machine updates it; these four jobs
+#          never change it) and the package channels its targets point at list it (the apt
 #          suite `testing`, written by testing-apt-write; the installers' `testing` directory,
 #          by testing-pkg-upload), check again, in the same attempt of the run as the set, that
 #          no newer release is published (a re-run of an older release's jobs must not move the
 #          fleet back), then set the release as hostkeeper's desired version on the
 #          coordinator, by one call of the CI client (set-desired.yml) with an OIDC token. See
 #          the comment above the jobs.
+# cp-deploy-digest, cp-deploy
+#          only while the repository variables CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS are
+#          not empty, after `newest`: deploy the newest release's linux-x86_64 coordinator image
+#          to the control plane's Docker Swarm service `hostkeeper-coordinator` by calling the
+#          reusable workflow deploy.yml of komira-ai/docker-swarm-updater (the job `cp-deploy`
+#          holds `id-token: write` for that alone, and no other scope). See the comment above
+#          the two jobs.
 #
 # newest, testing-apt-*, testing-fail-apt-*, testing-rpm-*, testing-pkg-upload, check-apt,
 # check-rpm, check-pkg, promote-check, stable-apt-*, stable-rpm-*, promote-pkg
@@ -424,7 +431,7 @@ jobs:
 
   # coordinator  waits until the coordinator runs at least this release, so that set-desired
   #          never sends the fields of a newer release to an older coordinator (it would
-  #          answer `invalid_request`). This workflow never changes the coordinator: the coordinator's
+  #          answer `invalid_request`). The jobs targets, coordinator, no-downgrade and set-desired never change the coordinator: the coordinator's
   #          own machine updates it from each published release (the release asset
   #          `hostkeeper-coordinator-update` on a timer there, docs/deploy/coordinator-update.md).
   #          The job joins the tailnet as set-desired does, and asks the private listener
@@ -597,6 +604,85 @@ jobs:
         env:
           MATRIX: ${{ needs.plan.outputs.matrix }}
         run: jq --raw-output '.include[-1] | "version=\(.version)", "tag=\(.tag)", "commit=\(.commit)"' <<< "$MATRIX" >> "$GITHUB_OUTPUT"
+
+  # cp-deploy-digest and cp-deploy: the coordinator on the control plane's Docker Swarm, the
+  # service `hostkeeper-coordinator` (docs/deploy/control-plane.md). They run only while the
+  # repository variables CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS are both not empty: with
+  # either unset or empty, both jobs are skipped and the release ends as it did without them.
+  # They take the newest release of the run alone (job `newest`), after every publish and image
+  # of the run. The workflow lint (crates/xtask/tests/workflows, `cp_deploy.rs`) holds the two
+  # jobs to this shape.
+  #
+  # cp-deploy-digest  reads the repository (`contents: read`) and nothing else: from the files
+  #          verify checked (the run's artifact `release-<tag>`, checked against SHA256SUMS once
+  #          more), `cargo xtask release image-digest`, compiled from the workflow's own commit,
+  #          outputs the digest of the one manifest the linux-x86_64 image tarball's index.json
+  #          names and the release's download addresses of that tarball and its bundle.
+  # cp-deploy  calls the reusable workflow deploy.yml of komira-ai/docker-swarm-updater, pinned
+  #          like any action by a full commit with its version comment, with exactly
+  #          `id-token: write`: the called workflow joins the tailnet, asks GitHub for an OIDC
+  #          token for every request, and runs in this repository's environment `controlplane`
+  #          (main only, no required reviewer). It sends the service `hostkeeper-coordinator`,
+  #          the release's version, that digest and those addresses, and the default signer
+  #          (this repository's artifacts.yml on refs/heads/main); docker-swarm-updater checks
+  #          the token's claims and the bundle against that signer, refuses an image signed
+  #          before the one the service runs, then updates the service by digest, and Swarm rolls
+  #          back an update whose task does not become ready. The job ends once the deploy is
+  #          reported converged and fails otherwise, waiting up to 60 minutes. The release stays
+  #          published whatever it says.
+  cp-deploy-digest:
+    needs: [plan, newest]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.CP_DEPLOY_ENDPOINT != '' && vars.CP_DEPLOY_TAILSCALE_TAGS != '' }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+      image-url: ${{ steps.image.outputs.image-url }}
+      bundle-url: ${{ steps.image.outputs.bundle-url }}
+    steps:
+      # The workflow's own commit: `release image-digest` is newer than the oldest commit a run
+      # can release (see release_ref.rs of the workflow lint). The image is the release's files.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: rustup toolchain install
+      - name: Compile xtask
+        run: cargo xtask --help
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: release-${{ needs.newest.outputs.tag }}
+          path: dist
+      # The files verify checked, once more: they crossed the run's artifact store.
+      - name: Check the files against SHA256SUMS
+        working-directory: dist
+        run: sha256sum --check --strict SHA256SUMS
+      - name: The linux-x86_64 image's manifest digest and the release's addresses of it and its bundle
+        id: image
+        env:
+          VERSION: ${{ needs.newest.outputs.version }}
+        run: cargo xtask release image-digest dist --version "$VERSION" --repo "$GITHUB_REPOSITORY" --output "$GITHUB_OUTPUT"
+
+  cp-deploy:
+    needs: [plan, newest, cp-deploy-digest]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.CP_DEPLOY_ENDPOINT != '' && vars.CP_DEPLOY_TAILSCALE_TAGS != '' }}
+    permissions:
+      id-token: write
+    uses: komira-ai/docker-swarm-updater/.github/workflows/deploy.yml@c1fcc47610e2886d4d9e561be3c0c76f0452d1f6 # v0.1.3
+    with:
+      service: hostkeeper-coordinator
+      version: ${{ needs.newest.outputs.version }}
+      image-digest: ${{ needs.cp-deploy-digest.outputs.digest }}
+      image-url: ${{ needs.cp-deploy-digest.outputs.image-url }}
+      bundle-url: ${{ needs.cp-deploy-digest.outputs.bundle-url }}
+      endpoint: ${{ vars.CP_DEPLOY_ENDPOINT }}
+      audience: ${{ vars.CP_DEPLOY_AUDIENCE }}
+      environment: controlplane
+      wait-minutes: 60
+      tailscale-oauth-client-id: ${{ vars.CP_DEPLOY_TAILSCALE_CLIENT_ID }}
+      tailscale-audience: ${{ vars.CP_DEPLOY_TAILSCALE_AUDIENCE }}
+      tailscale-tags: ${{ vars.CP_DEPLOY_TAILSCALE_TAGS }}
 
   # PACKAGE CHANNELS (docs/deploy/package-repositories.md). The tool the jobs below run,
   # `cargo xtask channels`, is copied from komira-ai/tierstore (crates/xtask/src/channels, at
