@@ -4,7 +4,8 @@
 
 use super::callers::{CLIENT_COMMIT, CLIENT_RELEASE};
 use super::desired::{
-    DESIRED_IF, GATE, SET_DESIRED_IF, SET_IF, TARGETS_OUTPUTS, TARGETS_STEPS, caller_needs,
+    COORDINATOR_IF, DESIRED_IF, GATE, SET_DESIRED_IF, SET_IF, TARGETS_OUTPUTS, TARGETS_STEPS,
+    caller_needs,
 };
 use super::lint::lint;
 use super::no_downgrade::GUARD_IF;
@@ -56,8 +57,8 @@ fn targets_if() -> String {
 }
 
 /// The `if:` line of the job coordinator.
-fn set_if() -> String {
-    format!("    if: {SET_IF}\n")
+fn coordinator_if() -> String {
+    format!("    if: {COORDINATOR_IF}\n")
 }
 
 /// The `if:` line of the job set-desired.
@@ -96,9 +97,9 @@ fn the_deploy_jobs_of_the_repository_pass() {
     let text = release_yml();
     assert_eq!(lint("release.yml", &text), Vec::<String>::new());
     assert_eq!(deploy_jobs().matches(&targets_if()).count(), 1);
-    // The coordinator wait runs under the `if:` of the deploy, and set-desired under it with
-    // the channel writes landed.
-    assert_eq!(deploy_jobs().matches(&set_if()).count(), 1);
+    // The coordinator wait runs under the `if:` of the deploy after the control-plane deploy,
+    // and set-desired under the `if:` of the deploy with the channel writes landed.
+    assert_eq!(deploy_jobs().matches(&coordinator_if()).count(), 1);
     assert_eq!(deploy_jobs().matches(&set_desired_if()).count(), 1);
     assert!(SET_DESIRED_IF.contains(&SET_IF[4..SET_IF.len() - 3]));
     assert_eq!(deploy_jobs().matches(SET_NEEDS).count(), 1);
@@ -109,14 +110,19 @@ fn the_deploy_is_turned_on_only_by_the_repository_variable_being_true() {
     // Catches: the gate written against another variable, or as "set to anything", so that the
     // variable no longer turns the deploy off.
     let gate = format!(" && vars.{GATE} == 'true'");
-    assert!(DESIRED_IF.contains(&gate) && SET_IF.contains(&gate) && SET_DESIRED_IF.contains(&gate));
+    assert!(
+        DESIRED_IF.contains(&gate)
+            && SET_IF.contains(&gate)
+            && COORDINATOR_IF.contains(&gate)
+            && SET_DESIRED_IF.contains(&gate)
+    );
     let text = release_yml().replace(&gate, "");
     assert_eq!(
         lint("release.yml", &text),
         [
-            format!("job coordinator: `id-token: write` needs the exact `if: {SET_IF}`"),
+            format!("job coordinator: `id-token: write` needs the exact `if: {COORDINATOR_IF}`"),
             format!("release.yml: job targets needs the exact `if: {DESIRED_IF}`"),
-            format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
+            format!("release.yml: job coordinator needs the exact `if: {COORDINATOR_IF}`"),
             format!("release.yml: job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
             format!("release.yml: job no-downgrade needs the exact `if: {GUARD_IF}`"),
             format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
@@ -152,7 +158,11 @@ fn a_set_desired_job_that_runs_for_a_release_older_than_the_newest_is_refused() 
             &format!("job set-desired needs the exact `if: {SET_DESIRED_IF}`"),
         ],
     );
-    assert!(SET_IF.contains(newest) && SET_DESIRED_IF.contains(newest));
+    assert!(
+        SET_IF.contains(newest)
+            && COORDINATOR_IF.contains(newest)
+            && SET_DESIRED_IF.contains(newest)
+    );
     assert!(TARGETS_STEPS[6].contains(r#"== env.VERSION)"' >> "$GITHUB_OUTPUT""#));
     assert_problems(
         "      newest: ${{ steps.latest.outputs.newest }}\n",

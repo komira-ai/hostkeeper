@@ -5,8 +5,9 @@
 //! annotation each prints. Nothing is substituted in a command.
 //!
 //! `curl` on the `PATH` is the test program `tests/bin/gh_fixture.rs`: it answers the version
-//! route from a scratch file, or not at all, and never waits, so a test does not take the 30
-//! minutes of the committed retries.
+//! route from a scratch file per try, or not at all, retries as curl does with the committed
+//! retry flags (and fails as ubuntu-24.04's curl 8.5 does when it cannot retry), and never
+//! waits, so a test does not take the 30 minutes of the committed retries.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -43,10 +44,14 @@ enum Coordinator {
     Silent,
 }
 
-/// What a failed or passed wait left: the wait's exit status, its outputs, and the annotation
-/// lines of the error steps that ran, in order.
+/// The tries of the committed wait: one request and its 180 retries.
+const TRIES: usize = 181;
+
+/// What a failed or passed wait left: how many times it asked, the wait's exit status, its
+/// outputs, and the annotation lines of the error steps that ran, in order.
 #[derive(Debug, PartialEq, Eq)]
 struct Ran {
+    tries: usize,
     exit: Option<i32>,
     outputs: BTreeMap<String, String>,
     annotations: Vec<String>,
@@ -100,9 +105,23 @@ fn bash(root: &Path, script: &str, env: &[(&str, String)], output: &Path) -> (Op
     )
 }
 
-/// Runs the committed wait against `coordinator`, then the error steps whose committed
-/// conditions hold.
+/// The answer file's text of `coordinator`; `000` is no answer.
+fn answer_text(coordinator: &Coordinator) -> String {
+    match coordinator {
+        Coordinator::Answers(status, body) => format!("{status}\n{body}"),
+        Coordinator::Silent => "000".to_owned(),
+    }
+}
+
+/// Runs the committed wait against `coordinator`, the same answer to every try, then the
+/// error steps whose committed conditions hold.
 fn wait(name: &str, coordinator: &Coordinator) -> Ran {
+    wait_after(name, &[], coordinator)
+}
+
+/// Runs the committed wait against a coordinator that answers the tries in `first` in order,
+/// and every later try as `then`, then the error steps whose committed conditions hold.
+fn wait_after(name: &str, first: &[&Coordinator], then: &Coordinator) -> Ran {
     let base = Path::new(env!("CARGO_TARGET_TMPDIR")).join("coordinator-wait-run");
     let root = TestDir::under(&base, name);
     for dir in ["bin/answers", "temp"] {
@@ -110,12 +129,18 @@ fn wait(name: &str, coordinator: &Coordinator) -> Ran {
     }
     std::fs::hard_link(GH, root.join("bin/curl")).expect("install the fake curl");
     std::fs::write(root.join("temp/coordinator-ca.pem"), "the CA").expect("the CA");
-    if let Coordinator::Answers(status, body) = coordinator {
+    std::fs::write(
+        root.join("bin/answers").join(answer_key()),
+        answer_text(then),
+    )
+    .expect("the coordinator's answer");
+    for (at, coordinator) in first.iter().enumerate() {
         std::fs::write(
-            root.join("bin/answers").join(answer_key()),
-            format!("{status}\n{body}"),
+            root.join("bin/answers")
+                .join(format!("{}-{}", answer_key(), at + 1)),
+            answer_text(coordinator),
         )
-        .expect("the coordinator's answer");
+        .expect("the coordinator's answer to one try");
     }
 
     let text = workflows()
@@ -148,10 +173,10 @@ fn wait(name: &str, coordinator: &Coordinator) -> Ran {
         .filter_map(|l| l.split_once('='))
         .map(|(k, v)| (k.to_owned(), v.to_owned()))
         .collect();
-    assert_eq!(
-        std::fs::read_to_string(root.join("bin/answers/calls")).expect("the fake's calls"),
-        format!("{ASKED}\n"),
-        "the wait asks the version route once, for this release"
+    let calls = std::fs::read_to_string(root.join("bin/answers/calls")).expect("the fake's calls");
+    assert!(
+        calls.lines().all(|l| l == ASKED),
+        "every try asks the version route for this release: {calls}"
     );
 
     let mut names = BTreeMap::from([(
@@ -187,6 +212,7 @@ fn wait(name: &str, coordinator: &Coordinator) -> Ran {
         annotations.extend(printed.lines().map(str::to_owned));
     }
     Ran {
+        tries: calls.lines().count(),
         exit,
         outputs,
         annotations,
@@ -196,7 +222,7 @@ fn wait(name: &str, coordinator: &Coordinator) -> Ran {
 /// The annotation of the error step after a 409 or a 404 with `status`.
 fn no_updater(status: &str) -> String {
     format!(
-        "::error::No coordinator updater reported this release ({VERSION}) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP {status}; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. The hosts' desired version is not set."
+        "::error::No coordinator updater reported this release ({VERSION}) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP {status}; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. With the control-plane deploy on (CP_DEPLOY_ENDPOINT), the job cp-deploy reported this release deployed, so check that HOSTKEEPER_COORDINATOR_URL names the coordinator it deploys. The hosts' desired version is not set."
     )
 }
 
@@ -213,13 +239,13 @@ fn outputs(status: &str) -> BTreeMap<String, String> {
 
 #[test]
 fn a_coordinator_that_runs_an_older_release_fails_the_wait_saying_no_updater_reported_it() {
-    // Catches: a wait that passes on a 409, writes no status (or the body) into its outputs, or
-    // whose failure says the coordinator did not answer, or says both, or says nothing; and an
-    // annotation without the release or the status.
-    let older = r#"{"error":"coordinator_older","version":"0.1.229","commit":"0123456789ab"}"#;
+    // Catches: a wait that passes on a 409, gives up before its last try, writes no status (or
+    // the body) into its outputs, or whose failure says the coordinator did not answer, or says
+    // both, or says nothing; and an annotation without the release or the status.
     assert_eq!(
-        wait("older", &Coordinator::Answers(409, older)),
+        wait("older", &older()),
         Ran {
+            tries: TRIES,
             exit: Some(22),
             outputs: outputs("409"),
             annotations: vec![no_updater("409")],
@@ -233,6 +259,7 @@ fn a_coordinator_from_before_the_version_route_fails_the_wait_saying_no_updater_
     assert_eq!(
         wait("before-route", &Coordinator::Answers(404, "not found")),
         Ran {
+            tries: TRIES,
             exit: Some(22),
             outputs: outputs("404"),
             annotations: vec![no_updater("404")],
@@ -247,6 +274,7 @@ fn a_coordinator_that_does_not_answer_fails_the_wait_saying_so_with_status_000()
     assert_eq!(
         wait("silent", &Coordinator::Silent),
         Ran {
+            tries: TRIES,
             exit: Some(7),
             outputs: outputs("000"),
             annotations: vec![no_answer("000")],
@@ -255,6 +283,7 @@ fn a_coordinator_that_does_not_answer_fails_the_wait_saying_so_with_status_000()
     assert_eq!(
         wait("proxy", &Coordinator::Answers(502, "bad gateway")),
         Ran {
+            tries: TRIES,
             exit: Some(22),
             outputs: outputs("502"),
             annotations: vec![no_answer("502")],
@@ -265,13 +294,86 @@ fn a_coordinator_that_does_not_answer_fails_the_wait_saying_so_with_status_000()
 #[test]
 fn a_coordinator_that_runs_the_release_passes_the_wait_with_no_annotation() {
     // Catches: a wait that fails on a 200, or an error step that runs when the wait passed.
-    let runs = r#"{"version":"0.1.230","commit":"0123456789ab"}"#;
     assert_eq!(
-        wait("runs", &Coordinator::Answers(200, runs)),
+        wait("runs", &runs()),
         Ran {
+            tries: 1,
             exit: Some(0),
             outputs: outputs("200"),
             annotations: vec![],
+        }
+    );
+}
+
+/// The coordinator's answer while it runs an older release.
+fn older() -> Coordinator {
+    Coordinator::Answers(
+        409,
+        r#"{"error":"coordinator_older","version":"0.1.229","commit":"0123456789ab"}"#,
+    )
+}
+
+/// The coordinator's answer once it runs the release.
+fn runs() -> Coordinator {
+    Coordinator::Answers(200, r#"{"version":"0.1.230","commit":"0123456789ab"}"#)
+}
+
+/// The outcome of a wait that passed after `tries` tries.
+fn passed_after(tries: usize) -> Ran {
+    Ran {
+        tries,
+        exit: Some(0),
+        outputs: outputs("200"),
+        annotations: vec![],
+    }
+}
+
+#[test]
+fn a_coordinator_that_answers_older_until_the_deploy_lands_passes_the_wait() {
+    // Catches: the wait failing on the coordinator's first 409 (the old coordinator, while the
+    // control-plane deploy or the updater replaces it), as `--fail-with-body` made curl 8.5 do,
+    // ending with exit 23, no status and the "did not answer" annotation with an empty status.
+    let older = older();
+    assert_eq!(
+        wait_after("older-then-runs", &[&older, &older], &runs()),
+        passed_after(3)
+    );
+}
+
+#[test]
+fn a_coordinator_that_restarts_during_the_deploy_passes_the_wait() {
+    // Catches: no answer (the old task stopped, the new one not yet listening) or a proxy's 502
+    // between the 409s and the 200 ending the wait.
+    let older = older();
+    let proxy = Coordinator::Answers(502, "bad gateway");
+    assert_eq!(
+        wait_after(
+            "restarts",
+            &[&older, &Coordinator::Silent, &proxy, &older],
+            &runs()
+        ),
+        passed_after(5)
+    );
+}
+
+#[test]
+fn the_wait_passes_on_its_last_try_and_not_after_it() {
+    // Catches: a wait with fewer tries than the committed 181, or one that ignores the answer of
+    // its last try; and one that asks once more after its last.
+    let older = older();
+    let before_last: Vec<&Coordinator> = vec![&older; TRIES - 1];
+    assert_eq!(
+        wait_after("last-try", &before_last, &runs()),
+        passed_after(TRIES)
+    );
+    let all: Vec<&Coordinator> = vec![&older; TRIES];
+    assert_eq!(
+        wait_after("after-last-try", &all, &runs()),
+        Ran {
+            tries: TRIES,
+            exit: Some(22),
+            outputs: outputs("409"),
+            annotations: vec![no_updater("409")],
         }
     );
 }
