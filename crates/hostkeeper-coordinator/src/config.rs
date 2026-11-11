@@ -68,6 +68,7 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::accounts::AccountStore;
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
@@ -560,6 +561,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
         .with_marker(marker)
         .with_record_window(record_window);
+    let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -578,6 +580,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)
+        .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
