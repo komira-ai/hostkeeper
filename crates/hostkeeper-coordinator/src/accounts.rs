@@ -320,13 +320,20 @@ impl Accounts {
         name: &str,
         edit: impl FnOnce(&mut User),
     ) -> Result<Self, AccountsError> {
-        let mut users = self.users.clone();
-        let user = users
-            .get_mut(name)
-            .ok_or_else(|| AccountsError::NoUser(name.to_owned()))?;
-        let was_enabled = user.enabled;
-        edit(user);
+        let mut user = self.users.get(name).cloned();
+        let _ = user.as_mut().map(edit);
+        self.with_user_replaced(name, user)
+    }
+
+    /// The accounts with the user `name` replaced by `user` (none: there is no such user), under
+    /// the rules of [`Accounts::new`] and the last-enabled-user rule. Not generic over the edit
+    /// that made `user`, so each of its branches is one branch to cover.
+    fn with_user_replaced(&self, name: &str, user: Option<User>) -> Result<Self, AccountsError> {
+        let mut user = user.ok_or_else(|| AccountsError::NoUser(name.to_owned()))?;
+        let was_enabled = self.users.get(name).is_some_and(|before| before.enabled);
         name.clone_into(&mut user.name);
+        let mut users = self.users.clone();
+        users.insert(name.to_owned(), user);
         let edited = Self::new(users, self.tokens.clone())?;
         if was_enabled && edited.enabled_users() == 0 {
             return Err(AccountsError::LastEnabled);
@@ -403,8 +410,8 @@ impl Accounts {
     /// break a rule of [`Accounts::new`].
     pub(crate) fn of_records(
         place: &Path,
-        users: impl IntoIterator<Item = (String, serde_json::Value)>,
-        tokens: impl IntoIterator<Item = (String, serde_json::Value)>,
+        users: Vec<(String, serde_json::Value)>,
+        tokens: Vec<(String, serde_json::Value)>,
     ) -> Result<Self, AccountsError> {
         let refused = |why: String| AccountsError::Invalid {
             path: place.to_owned(),
@@ -519,8 +526,19 @@ impl AccountStore {
         &self,
         edit: impl FnOnce(&Accounts) -> Result<Accounts, AccountsError>,
     ) -> Result<(), AccountsError> {
-        let mut held = self.held();
-        let next = edit(&held)?;
+        let held = self.held();
+        let next = edit(&held);
+        self.commit_change(held, next)
+    }
+
+    /// Commits `next`, the result of an edit of `held`, and puts it in `held`. Not generic over
+    /// the edit, so each of its branches is one branch to cover.
+    fn commit_change(
+        &self,
+        mut held: MutexGuard<'_, Accounts>,
+        next: Result<Accounts, AccountsError>,
+    ) -> Result<(), AccountsError> {
+        let next = next?;
         if next == *held {
             return Ok(());
         }

@@ -534,15 +534,15 @@ fn records_are_read_under_their_keys_and_refused_by_the_place_that_held_them() {
     });
     let held = Accounts::of_records(
         Path::new("database/accounts"),
-        [("alice".to_owned(), record.clone())],
-        std::iter::empty(),
+        vec![("alice".to_owned(), record.clone())],
+        Vec::new(),
     )
     .expect("reads");
     assert_eq!(held.user("alice").map(|u| u.name.as_str()), Some("alice"));
     let refused = Accounts::of_records(
         Path::new("database/accounts"),
-        [("alice".to_owned(), serde_json::json!({"hash": HASH}))],
-        std::iter::empty(),
+        vec![("alice".to_owned(), serde_json::json!({"hash": HASH}))],
+        Vec::new(),
     )
     .expect_err("a record that does not read");
     assert!(
@@ -553,8 +553,8 @@ fn records_are_read_under_their_keys_and_refused_by_the_place_that_held_them() {
     );
     let refused = Accounts::of_records(
         Path::new("database/accounts"),
-        [("Alice".to_owned(), record)],
-        std::iter::empty::<(String, serde_json::Value)>(),
+        vec![("Alice".to_owned(), record)],
+        Vec::new(),
     )
     .expect_err("a name that is not a name");
     assert!(
@@ -620,13 +620,13 @@ fn a_password_hash_is_not_in_the_debug_text_or_the_error_of_a_record() {
     assert_eq!(format!("{held:?}"), "Accounts { users: 1, tokens: 0 }");
     let refused = Accounts::of_records(
         Path::new("database/accounts"),
-        [(
+        vec![(
             "alice".to_owned(),
             serde_json::json!({
                 "hash": HASH, "enabled": true, "created_by": "x", "created_at": HASH
             }),
         )],
-        std::iter::empty(),
+        Vec::new(),
     )
     .expect_err("a wrong type");
     assert_eq!(
@@ -658,8 +658,8 @@ fn accounts_made_with_a_token_whose_name_is_not_a_name_are_refused() {
 fn a_token_record_that_does_not_read_is_refused_naming_the_record() {
     let refused = Accounts::of_records(
         Path::new("database/accounts"),
-        std::iter::empty(),
-        [(
+        Vec::new(),
+        vec![(
             "ci-ops".to_owned(),
             serde_json::json!({"sha256": 7, "created_by": "x", "created_at": 1}),
         )],
