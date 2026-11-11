@@ -87,6 +87,7 @@ use crate::listen::{
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::ops::OpsStore;
+use crate::proxy_origin::Proxy;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
 use crate::transfer::{Export, export};
@@ -556,8 +557,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
-    let proxy_cache =
-        crate::proxy_cache::open_at_start(flags.proxy_cache_dir.as_deref(), &mdm_setup)?;
+    let proxy = Proxy::start(flags.proxy_cache_dir.as_deref(), &mdm_setup, roots.clone())?;
     let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup);
     let verifier = Verifier::new(
         oidc,
@@ -599,8 +599,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_shared_mdm_setup(mdm_setup)
         .with_mdmcert(Arc::new(
             hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
-        ));
-    coordinator = coordinator.with_proxy_cache(proxy_cache);
+        ))
+        .with_proxy(proxy);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),

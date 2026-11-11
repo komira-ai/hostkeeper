@@ -47,6 +47,8 @@ jaq-std = "3.0.4"
 # The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
 # hostkeeper-oidc); members turn on the parts they use.
 http-body-util = "0.1.5"
+# The dates of `Last-Modified` and `If-Modified-Since` (hostkeeper-coordinator's package proxy).
+httpdate = "1.0.3"
 hyper = { version = "1.12.0", default-features = false }
 hyper-util = { version = "0.1.21", default-features = false }
 # The Linux daemon's reader of the BMC over `/dev/ipmi0` (hostkeeper-daemon's `ipmi`): the

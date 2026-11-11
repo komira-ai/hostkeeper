@@ -82,6 +82,9 @@ pub enum FetchError {
         /// The bytes the origin declared.
         want: u64,
     },
+    /// The origin has no such file (404).
+    #[error("the origin has no such file")]
+    NotFound,
     /// A cached file could not be read to its end.
     #[error("a cached file could not be read")]
     Cache,
@@ -114,6 +117,38 @@ pub struct ByteRange {
     pub end: Option<u64>,
 }
 
+/// The validators of a stored object, sent to its origin to ask whether it changed.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Condition {
+    /// The object's `ETag`: `If-None-Match`.
+    pub etag: Option<String>,
+    /// The object's `Last-Modified`: `If-Modified-Since`.
+    pub last_modified: Option<String>,
+}
+
+impl Condition {
+    /// The validators `meta` holds: its validator is an `ETag` when it is a quoted string (or a
+    /// weak one), else a date.
+    #[must_use]
+    pub fn of(meta: &Meta) -> Self {
+        let etag = meta.validator.clone().filter(|v| is_etag(v));
+        let last_modified = meta
+            .last_modified
+            .clone()
+            .or_else(|| meta.validator.clone().filter(|_| etag.is_none()));
+        Self {
+            etag,
+            last_modified,
+        }
+    }
+}
+
+/// Whether a validator is an entity tag (a quoted string, or a weak one) and not a date.
+#[must_use]
+pub fn is_etag(validator: &str) -> bool {
+    validator.starts_with('"') || validator.starts_with("W/\"")
+}
+
 /// One read of the origin that the cache asks [`Origin`] to start.
 #[derive(Clone, Debug)]
 pub struct Request {
@@ -121,12 +156,34 @@ pub struct Request {
     pub key: Key,
     /// The range to read, for a pass-through of a range; a fill reads the whole.
     pub range: Option<ByteRange>,
+    /// For the revalidation of a stored object: its validators. The read is then conditional, and
+    /// an origin that says the object is unchanged answers [`Fetched::unchanged`].
+    pub condition: Option<Condition>,
+}
+
+/// The part of an object a `206` body is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Slice {
+    /// The first byte of the body in the object.
+    pub start: u64,
+    /// The last byte of the body in the object.
+    pub end: u64,
+    /// The length of the whole object, when the origin said it.
+    pub total: Option<u64>,
 }
 
 /// What the origin answered: its validator and length, and the body.
 pub struct Fetched {
     /// The origin's validator for the object.
     pub validator: Option<String>,
+    /// The origin's `Last-Modified`, when it gave one.
+    pub last_modified: Option<String>,
+    /// The origin answered a conditional read with 304: the stored object is current, and the body
+    /// is empty.
+    pub unchanged: bool,
+    /// The part of the object the body is, when the origin answered a range with 206; none for the
+    /// whole object.
+    pub slice: Option<Slice>,
     /// The length the origin declared for the body, if it did.
     pub length: Option<u64>,
     /// The body.
@@ -180,12 +237,14 @@ pub struct Answer {
     pub served: Served,
     /// The origin's validator for the object.
     pub validator: Option<String>,
-    /// For a hit, the length of the whole object; otherwise the length the origin declared for
-    /// the body, if it did.
+    /// The origin's `Last-Modified`, when it gave one.
+    pub last_modified: Option<String>,
+    /// For a hit and for a range, the length of the whole object (none when the origin did not
+    /// say); otherwise the length the origin declared for the body, if it did.
     pub length: Option<u64>,
     /// When the object was fetched, in unix seconds; for an answer that is not a hit, now.
     pub fetched_at: u64,
-    /// For a hit of a range, the first and the last byte of the body in the object.
+    /// For a range, the first and the last byte of the body in the object.
     pub range: Option<(u64, u64)>,
     /// The body.
     pub body: BodyStream,
@@ -249,7 +308,7 @@ pub struct ProxyCache {
 }
 
 /// A place in the in-flight reads, given back when it drops.
-struct Slot(Arc<Shared>);
+pub(crate) struct Slot(Arc<Shared>);
 
 impl Drop for Slot {
     fn drop(&mut self) {
@@ -446,6 +505,7 @@ impl ProxyCache {
         Ok(Some(Answer {
             served: Served::Hit,
             validator: meta.validator,
+            last_modified: meta.last_modified,
             length: Some(length),
             fetched_at: meta.fetched_at,
             range: range.map(|_| (start, end)),
@@ -475,7 +535,7 @@ impl ProxyCache {
     }
 
     /// A place among the reads in flight, or [`ProxyError::Busy`].
-    fn slot(&self, limits: &Limits) -> Result<Slot, ProxyError> {
+    pub(crate) fn slot(&self, limits: &Limits) -> Result<Slot, ProxyError> {
         let mut state = self.shared.state();
         if state.active >= limits.fetches {
             return Err(ProxyError::Busy);
@@ -496,6 +556,7 @@ impl ProxyCache {
         let fetched = origin(Request {
             key: key.clone(),
             range,
+            condition: None,
         })
         .await?;
         self.shared.state().stats.passed += 1;
@@ -506,9 +567,10 @@ impl ProxyCache {
         Ok(Answer {
             served: Served::Passed,
             validator: fetched.validator,
-            length: fetched.length,
+            last_modified: fetched.last_modified,
+            length: fetched.slice.map_or(fetched.length, |slice| slice.total),
             fetched_at: self.shared.clock.now_unix(),
-            range: None,
+            range: fetched.slice.map(|slice| (slice.start, slice.end)),
             body: Box::pin(body),
         })
     }
@@ -526,8 +588,23 @@ impl ProxyCache {
         let fetched = origin(Request {
             key: key.clone(),
             range: None,
+            condition: None,
         })
         .await?;
+        Ok(self.start_fill(key, flight, fetched, slot, limits))
+    }
+
+    /// The fill of `key` from `fetched`, whose body is the whole object: streamed to the asker and
+    /// written to a temp file by a task that outlives the asker. It replaces a stored object of
+    /// the key when it commits.
+    fn start_fill(
+        &self,
+        key: &Key,
+        flight: Flight,
+        fetched: Fetched,
+        slot: Slot,
+        limits: &Limits,
+    ) -> Answer {
         let fits = fetched.length.is_none_or(|len| len <= limits.max_bytes);
         let sink = if fits {
             self.open_sink(key)
@@ -542,6 +619,7 @@ impl ProxyCache {
         let answer = Answer {
             served: Served::Filled,
             validator: fetched.validator.clone(),
+            last_modified: fetched.last_modified.clone(),
             length: fetched.length,
             fetched_at,
             range: None,
@@ -567,6 +645,7 @@ impl ProxyCache {
             sink,
             meta: Meta {
                 validator: fetched.validator,
+                last_modified: fetched.last_modified,
                 fetched_at,
                 length: 0,
             },
@@ -576,7 +655,7 @@ impl ProxyCache {
             cut,
         };
         tokio::spawn(fill.run(fetched.body, flight, slot));
-        Ok(answer)
+        answer
     }
 
     /// The temp file of a fill of `key`, or none when it cannot be made.
@@ -850,16 +929,19 @@ impl crate::service::Coordinator {
     /// The same coordinator with the package proxy's cache `cache` (`--proxy-cache-dir`).
     #[must_use]
     pub fn with_proxy_cache(mut self, cache: Option<ProxyCache>) -> Self {
-        self.proxy_cache = cache.map(Arc::new);
+        self.proxy.cache = cache.map(Arc::new);
         self
     }
 
     /// The package proxy's cache: none without `--proxy-cache-dir`.
     #[must_use]
     pub fn proxy_cache(&self) -> Option<&Arc<ProxyCache>> {
-        self.proxy_cache.as_ref()
+        self.proxy.cache.as_ref()
     }
 }
+
+#[path = "proxy_cache_stale.rs"]
+mod stale;
 
 #[cfg(test)]
 #[path = "proxy_cache_review_tests.rs"]

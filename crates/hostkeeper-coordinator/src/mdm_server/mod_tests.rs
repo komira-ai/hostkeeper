@@ -86,7 +86,6 @@ async fn every_path_outside_the_table_is_not_found_whatever_the_credential() {
         "/repositories/x/dists/y/Release",
         "/enroll",
         "/scep",
-        "/apt/main/dists/stable/Release",
         "/pkg/ab.pkg",
         "/checkin/",
         "/MDM",
@@ -122,13 +121,26 @@ async fn the_mdm_routes_answer_503_while_the_package_routes_are_served() {
         assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{path}");
         assert_eq!(body, br#"{"error":"unavailable"}"#);
     }
-    for path in ["/apt/main/dists/stable/Release", "/pkg/ab.pkg"] {
-        assert_eq!(
-            session.put(path, &[], b"x").await.0,
-            StatusCode::NOT_FOUND,
-            "{path}"
-        );
-    }
+    // `/apt/...` is mounted (PP2): a repository the registry does not hold is 404, and a method
+    // that is not `GET` or `HEAD` is 405. `/pkg/...` lands with PP3 and is 404.
+    assert_eq!(
+        session
+            .request("GET", "/apt/main/dists/stable/Release", &[], b"")
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        session
+            .put("/apt/main/dists/stable/Release", &[], b"x")
+            .await
+            .0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        session.put("/pkg/ab.pkg", &[], b"x").await.0,
+        StatusCode::NOT_FOUND
+    );
     rig.store_push();
     assert!(rig.server.serves(Family::Mdm));
     assert_eq!(

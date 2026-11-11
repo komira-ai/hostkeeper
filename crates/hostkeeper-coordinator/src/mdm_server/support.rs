@@ -543,13 +543,22 @@ pub(super) struct Session {
 impl Session {
     /// A connection from a client that offers `identity` (none: no certificate) to the rig's listener.
     pub(super) async fn dial(rig: &Rig, identity: Option<&Identity2>) -> Option<Self> {
+        Self::dial_to(rig, &rig.coordinator, identity).await
+    }
+
+    /// [`Self::dial`] to the listener of `coordinator`, which serves the rig's server.
+    pub(super) async fn dial_to(
+        rig: &Rig,
+        coordinator: &Arc<Coordinator>,
+        identity: Option<&Identity2>,
+    ) -> Option<Self> {
         let config = rig.server.tls().config()?;
         let (client, server) = tokio::io::duplex(256 * 1024);
         tokio::spawn(crate::listen::connection_with(
             server,
             config,
             crate::http::Surface::Mdm,
-            Arc::clone(&rig.coordinator),
+            Arc::clone(coordinator),
             Duration::from_secs(10),
         ));
         let tls = connector(rig, identity)
@@ -588,6 +597,28 @@ impl Session {
         self.try_request(method, path, headers, body)
             .await
             .expect("an answer")
+    }
+
+    /// `method path` with the `headers`: the status, the headers and the body of the answer, or
+    /// the error of a connection the server ended.
+    pub(super) async fn fetch(
+        &mut self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(StatusCode, hyper::HeaderMap, Vec<u8>), hyper::Error> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "localhost");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let request = request.body(Full::new(Bytes::new())).expect("a request");
+        let response = self.send.send_request(request).await?;
+        let (parts, body) = response.into_parts();
+        let bytes = body.collect().await?.to_bytes();
+        Ok((parts.status, parts.headers, bytes.to_vec()))
     }
 
     /// [`Self::request`], or the error of a connection the server ended.
