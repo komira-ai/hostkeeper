@@ -86,8 +86,6 @@ prost-types = "0.14.4"
 # Reads custom options (`(hostkeeper.secret)`) off compiled descriptors in hostkeeper-proto's tests;
 # hostkeeper-ui-tests and hostkeeper-testkit add `serde` to read a message's canonical JSON against
 # its descriptor.
-# The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
-rand_core = { version = "0.6.4", features = ["getrandom"] }
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.

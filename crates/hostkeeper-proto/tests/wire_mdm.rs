@@ -77,6 +77,8 @@ const FIELDS: [(&str, &[Field]); 20] = [
             ("install_sends", 17, false),
             ("install_last_sent_unix", 18, true),
             ("install_sha256", 19, false),
+            ("baseline_state", 20, false),
+            ("baseline_reason", 21, false),
         ],
     ),
     (
@@ -224,6 +226,19 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("authenticated", 1),
             ("enrolled", 2),
             ("checked_out", 3),
+        ])
+    );
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmBaselineState",
+            "MDM_BASELINE_STATE_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("pending", 1),
+            ("applied", 2),
+            ("failed", 3),
         ])
     );
 

@@ -287,7 +287,7 @@ fn key_matches(key: &[u8], chain: &[u8]) -> bool {
     };
     let Some(public) = rustls::crypto::ring::sign::any_supported_type(&key)
         .ok()
-        .and_then(|key| key.public_key())
+        .and_then(|key| key.public_key().map(|public| public.into_owned()))
     else {
         return false;
     };
