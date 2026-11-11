@@ -1,0 +1,21 @@
+[package]
+name = "hostkeeper-mdm-server"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+description = "The coordinator's MDM server, wire layer: the property-list types of the check-in messages a Mac sends, of the results it answers commands with, and of the commands the server sends."
+
+# docs/design/coordinator-mdm.md section 8 (task CM5). Pure: bytes in, typed values out, no I/O,
+# no clock, no randomness. The queue (CM11a) and the listener build on these types; this crate
+# later receives `AdeProfile` and the enrollment profile renderers from hostkeeper-mdm-core (CM14b).
+# It depends on no crate of this workspace (crates/xtask/tests/layering keeps it so).
+[dependencies]
+# Check-ins, results and commands are property lists, XML or binary.
+plist.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

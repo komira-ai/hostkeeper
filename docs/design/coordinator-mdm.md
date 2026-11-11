@@ -200,9 +200,23 @@ time it is needed and held encrypted in the store (4.9). The identity's subject 
 shared empty DN. The challenge is per request: `POST /enroll` verifies the device-information blob, finds the serial in the ABM table,
 makes a 32-byte challenge valid for one hour, and builds the enrollment profile with that challenge. The challenge is bound to the
 serial, the blob's UDID and the ABM record's `profile_status` (`pushed`). `PKIOperation` is **idempotent**: consumption is keyed on the
-challenge and the hash of the CSR's public key, in the transaction that records the issued certificate. A repeat with the same challenge,
-key and `transactionID` (a client whose CertRep was lost) gets the stored certificate again; a different key presenting a consumed challenge
-is refused.
+challenge and the hash of the CSR's public key, in the transaction that records the issued certificate. A repeat with the same challenge
+and key (a client whose CertRep was lost) gets the stored certificate again, **whatever its `transactionID`**, because the Mac's client
+opens a new session with a new `transactionID` when it retries (measured on the live stack, `coordinator-mdm-cm12a.md`); a different key
+presenting a consumed challenge is refused. A refused request still gets HTTP 200 with a signed FAILURE `CertRep` (what the Mac's client
+reads), and a refusal consumes nothing. The library is `hostkeeper-mdm-scep` (CM12b): the challenge store is a port it calls once, atomically
+(`Challenges::redeem`), and CM12c implements it on the store. It hashes the signed attributes as received and does not re-encode them, so a
+sender's BER encoding does not break a valid message; `cms` (a pinned release candidate under R6, licences and bans pass) has no verify or decrypt
+side, which the crate writes, and its builder omits `contentType` and `messageDigest` from a reply with no content, which the crate supplies
+(a test checks a failure reply with a verifier of its own). `GetCACaps` answers `POSTPKIOperation`, `SHA-256`, `AES` and `SCEPStandard`; DES3 and
+SHA-1 requests are accepted and not advertised, and there is no `Renewal` (renewal is the `InstallProfile` below). Which capabilities the Mac's
+client requires is not measured; the first real-Mac run decides whether `DES3`, `SHA-1` or `Renewal` must be advertised.
+
+The crate reads DER only; whether a Mac's CMS stack sends BER (indefinite lengths) is not measured, and a BER request is answered with an HTTP error
+until a capture of a real request says otherwise. A `Replayed` verdict proves knowledge of the challenge and of the key's public half and not
+possession of the private key (the reply is enveloped to the retry's signer certificate), so CM12c does not mark a device enrolled on it. The
+envelope is opened with the CA's RSA key before the challenge can be read, from an unauthenticated signer, so CM12c rate-limits per peer before
+calling `pki_operation` and keeps the refusal reason in the audit log, never in the reply. A validity no time can hold (a setting too large) is an error, not a panic.
 
 **Why SCEP and not the alternatives.**
 
@@ -678,7 +692,7 @@ operator action are involved.
 | A peer on the LAN replays a blob it captured from a Mac in ABM | accepted risk of owner decision B (9.2): the blob verifies, so the peer gets a challenge and its identity can replace the Mac's live enrollment; its enrollment is never approved (the nonce reaches only the Mac's daemon) and the Mac's next enrollment replaces it again; the audit rows show every replacement |
 | A wiped Mac enrolls again, the old enrollment never checked out | the new `Authenticate` replaces the old enrollment with no operator (4.2, 5.4) |
 | The serial was removed from ABM after its challenge was issued, and it enrolls | the ABM table is read at the replacement; the enrollment is refused, audited and waits for the operator's confirmation (4.2) |
-| `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key and `transactionID` gets the stored certificate, a different key is refused; tests for both |
+| `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key gets the stored certificate, whatever the `transactionID`, a different key is refused; tests for both |
 | Identity certificate's serial differs from `Authenticate.SerialNumber` | refused, audited `mdm_serial_mismatch` |
 | Two coordinators on one Postgres | MDM is single-node in v1 (4.9): a second coordinator serving MDM refuses to start while the lease holder serves it; the gate's saves run under the lease (**Built**) |
 | The push certificate expires | `403` from APNs raises the alert; commands queue; the Macs still `Idle` on their own, so nothing is lost, only delayed |
@@ -766,8 +780,7 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
 
 - Two migrations add tables only. The login one, first (operator-login.md): `users` and `api_tokens`; sessions are in memory. The MDM one, after it: `mdm_enrollments`, `mdm_commands`,
   `mdm_identities`, `abm_devices`, `abm_state`; `mdm_secrets` and `mdm_settings` are the migration of CM20's own, as 4.9 says. Each table has a file-store family, because both backends exist
-  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0010_mdm.sql` (it takes the next free number; the login migration is not on `main`, and
-  whichever of the two lands second is renumbered before it merges, since no MDM table refers to a login table), the port `MdmStore`
+  today, and each header is `older-releases: may-run`. **Built (CM6)**: migration `0011_mdm.sql` (it takes the next free number, after the login migration `0010_accounts.sql`, which landed first; no MDM table refers to a login table), the port `MdmStore`
   (`crates/hostkeeper-coordinator/src/store/mdm/`) with its two stores, `FileMdm` (one `<family>.json` file per table in a directory, each
   `{"schema": 1, "rows": [...]}`, replaced whole, the commands written before the enrollments so that a change that stops half way leaves
   commands cancelled under an enrollment that still stands and never the reverse) and `PgMdm`
@@ -851,7 +864,7 @@ does not block a PR under R6; this note is the reason to keep CM12c's limits.
     replace, and replaces after an operator confirms. The takeover by a peer that replays a blob is **not** a violation under the rule; a
     test walks it as the accepted risk of 9.2 (the peer's enrollment never approves, and the Mac's own enrollment replaces it).
     A wiped Mac replaces its enrollment with no operator, checked out or not.
-- **SCEP tests** (CM12b): a lost `CertRep` retried with the same key and `transactionID` gets the stored certificate; a different key
+- **SCEP tests** (CM12b): a lost `CertRep` retried with the same key, and the same or a new `transactionID`, gets the stored certificate; a different key
   reusing a consumed challenge is refused; `/enroll` issues nothing without verification or an operator, and issues a challenge to a verified
   blob of a serial in the ABM table whether or not it has a live enrollment (4.2). **Listener tests** (CM11a): `/enroll` accepts no client certificate while `/checkin` refuses without one; an unknown
   enrollment keeps the fake Mac's state. **Push tests**: a command after an answered push is pushed at once; `apns-priority` and

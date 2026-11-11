@@ -1,6 +1,6 @@
-//! The MDM tables of migration `0010` on Postgres: the rules the schema keeps by itself, a claim
+//! The MDM tables of migration `0011` on Postgres: the rules the schema keeps by itself, a claim
 //! that skips a row another transaction holds, what the store says of rows it cannot read or a
-//! database it cannot reach, and the release before on a database holding `0010`, and this release
+//! database it cannot reach, and the release before on a database holding `0011`, and this release
 //! on the release before's.
 
 use super::{SPENT_NOW, TestDatabase};
@@ -267,17 +267,17 @@ fn every_call_answers_an_error_when_the_tables_are_gone() {
     }
 }
 
-/// Proves: `0010` does not stop the release before it (migrations `0001` to `0009`, whose start
+/// Proves: `0011` does not stop the release before it (migrations `0001` to `0010`, whose start
 /// never reads the MDM tables) on a database this release migrated and whose MDM tables hold an
 /// enrollment: its runner takes the database, and the state reads as this release loads it. And the
-/// other way: this release starts on a database the release before migrated, runs `0010`, and the
+/// other way: this release starts on a database the release before migrated, runs `0011`, and the
 /// MDM tables are empty.
 ///
 /// Catches: an MDM table that makes the previous coordinator refuse to start (the back-out of a
 /// release would need the database restored), or a migration this release does not run on a
 /// database of the release before.
 #[test]
-fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
+fn the_release_before_starts_on_a_database_with_0011_and_this_one_on_its() {
     let db = TestDatabase::new();
     let (store, loaded) = db.open("this release").expect("the store opens");
     PgMdm::over(&store)
@@ -293,7 +293,7 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
         )
     });
     assert_eq!(
-        taken.expect("0010 says older releases may run"),
+        taken.expect("0011 says older releases may run"),
         Vec::<i32>::new()
     );
     assert_eq!(before_loaded, loaded);

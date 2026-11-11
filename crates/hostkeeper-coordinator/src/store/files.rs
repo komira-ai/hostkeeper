@@ -3,7 +3,8 @@
 //! changed, the releases file beside it, `<desired.json>.releases`, by [`crate::releases`], and
 //! the repositories file `<desired.json>.repositories`, by [`crate::repositories`]; the
 //! ops file and its halts file by
-//! [`crate::ops_file`], the verdicts by [`crate::verdict_file`]), and the audit lines of a commit
+//! [`crate::ops_file`], the verdicts by [`crate::verdict_file`], the users and API tokens by
+//! [`crate::accounts`]), and the audit lines of a commit
 //! are appended to the audit file ([`crate::audit_file`]) before the ops file is written, so a
 //! commit whose line cannot be appended writes nothing of the ops state.
 //!
@@ -22,6 +23,7 @@ use std::sync::Arc;
 use hostkeeper_oidc::{Clock, SpentJtis};
 
 use super::{Backend, BackendError, Commit, Loaded, in_turn};
+use crate::accounts::{self, Accounts, AccountsError};
 use crate::audit_file::{self, Appender, AuditLine, AuditLog, Logged, Query, Rotation};
 use crate::desired::{self, StoreError, SyncDir, io_at};
 use crate::jti_file::{JtiError, JtiFile};
@@ -62,6 +64,7 @@ pub(crate) struct Files {
     desired: Option<DesiredFile>,
     ops: Option<OpsFiles>,
     verdicts: Option<PathBuf>,
+    accounts: Option<PathBuf>,
     jti: Option<JtiFile>,
 }
 
@@ -143,6 +146,13 @@ impl Files {
         self
     }
 
+    /// The files with the accounts' file at `path` added.
+    #[must_use]
+    pub(crate) fn with_accounts(mut self, path: &Path) -> Self {
+        self.accounts = Some(path.to_owned());
+        self
+    }
+
     /// The files with the spent token ids' file at `path` added: created if it is not there, its
     /// ids already past by `clock` dropped and the file rewritten without them ([`JtiFile`]).
     ///
@@ -214,6 +224,20 @@ impl Files {
         }
     }
 
+    /// The users and API tokens the file holds; none without one.
+    ///
+    /// # Errors
+    /// [`AccountsError`]: the file cannot be read, or holds a value this build cannot read.
+    pub(crate) fn load_accounts(&self) -> Result<Accounts, AccountsError> {
+        let Some(path) = &self.accounts else {
+            return Ok(Accounts::default());
+        };
+        match read_if_any(path).map_err(io_at(path))? {
+            Some(bytes) => accounts::parse_file(path, &bytes),
+            None => Ok(Accounts::default()),
+        }
+    }
+
     /// The spent token ids the file holds, not yet past when it was opened; none without one.
     #[must_use]
     pub(crate) fn load_spent(&self) -> Vec<(String, u64)> {
@@ -277,6 +301,17 @@ impl Files {
         Ok((ops.write)(state)?)
     }
 
+    fn write_accounts(&self, held: &Accounts) -> Result<(), BackendError> {
+        let Some(path) = &self.accounts else {
+            return Ok(());
+        };
+        let text = accounts::encode_file(held)
+            .map_err(io::Error::from)
+            .map_err(io_at(path))
+            .map_err(AccountsError::Io)?;
+        Ok(desired::write_whole(path, &text).map_err(AccountsError::Io)?)
+    }
+
     fn write_verdicts(&self, held: &verdict_file::Held) -> Result<(), BackendError> {
         let Some(path) = &self.verdicts else {
             return Ok(());
@@ -292,6 +327,7 @@ impl Backend for Files {
             desired: self.load_desired()?,
             ops: self.load_ops()?,
             verdicts: self.load_verdicts()?,
+            accounts: self.load_accounts()?,
             spent: self.load_spent(),
         })
     }
@@ -308,6 +344,9 @@ impl Backend for Files {
         }
         if let Some((_, after)) = change.verdicts {
             self.write_verdicts(after)?;
+        }
+        if let Some((_, after)) = change.accounts {
+            self.write_accounts(after)?;
         }
         Ok(())
     }

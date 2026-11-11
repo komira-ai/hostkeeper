@@ -226,6 +226,7 @@ pub(crate) fn unix() -> UnixClock {
     Arc::new(|| AT)
 }
 
+mod accounts;
 mod connect;
 mod coordinator;
 mod devices;
