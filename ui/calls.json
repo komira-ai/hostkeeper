@@ -1,6 +1,9 @@
 {
   "calls": [
     { "function": "alerts.list", "method": "hostkeeper.operator.v1.Alerts/List", "pages": ["fleet"] },
+    { "function": "apiTokens.create", "method": "hostkeeper.operator.v1.ApiTokens/Create", "pages": ["tokens"] },
+    { "function": "apiTokens.list", "method": "hostkeeper.operator.v1.ApiTokens/List", "pages": ["tokens"] },
+    { "function": "apiTokens.revoke", "method": "hostkeeper.operator.v1.ApiTokens/Revoke", "pages": ["tokens"] },
     { "function": "audit.list", "method": "hostkeeper.operator.v1.Audit/List", "pages": ["audit", "host"] },
     { "function": "enrollment.addRecord", "method": "hostkeeper.operator.v1.Enrollment/AddRecord", "pages": ["inventory"] },
     { "function": "enrollment.approve", "method": "hostkeeper.operator.v1.Enrollment/Approve", "pages": ["enrollment"] },
@@ -36,6 +39,12 @@
     { "function": "services.list", "method": "hostkeeper.operator.v1.Services/List", "pages": ["holds", "host", "rollout"] },
     { "function": "services.setMinVersion", "method": "hostkeeper.operator.v1.Services/SetMinVersion", "pages": ["rollout"] },
     { "function": "services.unassign", "method": "hostkeeper.operator.v1.Services/Unassign", "pages": ["rollout"] },
-    { "function": "services.unhold", "method": "hostkeeper.operator.v1.Services/Unhold", "pages": ["holds", "host"] }
+    { "function": "services.unhold", "method": "hostkeeper.operator.v1.Services/Unhold", "pages": ["holds", "host"] },
+    { "function": "users.create", "method": "hostkeeper.operator.v1.Users/Create", "pages": ["users"] },
+    { "function": "users.delete", "method": "hostkeeper.operator.v1.Users/Delete", "pages": ["users"] },
+    { "function": "users.disable", "method": "hostkeeper.operator.v1.Users/Disable", "pages": ["users"] },
+    { "function": "users.enable", "method": "hostkeeper.operator.v1.Users/Enable", "pages": ["users"] },
+    { "function": "users.list", "method": "hostkeeper.operator.v1.Users/List", "pages": ["users"] },
+    { "function": "users.resetPassword", "method": "hostkeeper.operator.v1.Users/ResetPassword", "pages": ["users"] }
   ]
 }
