@@ -895,7 +895,6 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     }
     let (_, parsed) = x509_parser::parse_x509_certificate(&mac.der).expect("a certificate");
     let sid = match (&spec.ski, spec.sid_tag) {
-        _ if spec.lone_sid => der(0x30, &der(0x02, &[1])),
         (_, Some(tag)) => der(tag, b"x"),
         (Some(ski), None) => der(0x80, ski),
         (None, None) => {
