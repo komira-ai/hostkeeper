@@ -419,11 +419,11 @@ async fn a_store_or_a_chain_that_fails_fails_the_attempt() {
     assert_eq!(rig.version(SecretKind::TlsCert), 0);
 }
 
-/// Proves: a renewal that stops between its two writes (the key stored, the chain not) leaves a
-/// pair the listener cannot serve, and the next tick repairs it by ordering again even when the
-/// old chain is outside the renew window; the repaired pair makes a TLS configuration.
+/// Proves: a renewal that stops between its two writes (the key stored, the chain not) leaves the
+/// pair in use serving, and the next tick repairs it by ordering again even when the old chain is
+/// outside the renew window; the repaired pair makes a TLS configuration.
 ///
-/// Catches: a listener left with no TLS configuration for as long as the old chain stays valid.
+/// Catches: a key stored without its chain that is never repaired while the old chain stays valid.
 #[tokio::test]
 async fn a_key_that_is_not_the_chains_is_repaired_by_the_next_tick() {
     let rig = configured();
@@ -441,7 +441,10 @@ async fn a_key_that_is_not_the_chains_is_repaired_by_the_next_tick() {
         ),
         (2, 1)
     );
-    assert!(tls.config().is_none(), "a new key with the old chain");
+    assert!(
+        tls.config().is_some(),
+        "the pair in use serves beside the new key"
+    );
     // The operator narrows the window, so the old chain alone would not be due.
     rig.setup.set_setting("tls_renew_days", "1").expect("set");
     rig.store.puts_left.store(i64::MAX, Ordering::SeqCst);

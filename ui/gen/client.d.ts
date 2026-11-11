@@ -688,6 +688,8 @@ export namespace hostkeeper_operator_v1 {
     abmLastSyncUnix?: string;
     abmSyncError?: string;
     abmUnavailable?: boolean;
+    dnsCredential?: hostkeeper_operator_v1.SecretInfo;
+    tlsRenewal?: hostkeeper_operator_v1.TlsRenewal;
   }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
@@ -919,6 +921,7 @@ export namespace hostkeeper_operator_v1 {
     factsDropped?: { [key: string]: string };
     audit?: hostkeeper_operator_v1.AuditEntry[];
   }
+  export interface TlsRenewal { sinceUnix?: string; attempts?: number; message?: string; dnsRejected?: string; retryAtUnix?: string; }
   export interface UnassignRequest { nodeId?: string; service?: string; uninstall?: boolean; role?: string; }
   export interface UnassignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnholdRequest { scope?: hostkeeper_operator_v1.HoldScope; service?: string; reason?: string; }

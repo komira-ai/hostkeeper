@@ -91,6 +91,8 @@ impl Coordinator {
         } else {
             status.abm_unavailable = true;
         }
+        status.dns_credential = in_use(SecretKind::DnsCredential);
+        status.tls_renewal = self.tls_renewal();
 
         let mut missing = Vec::new();
         self.check_push(&mut status, &mut missing, now)?;
@@ -102,6 +104,21 @@ impl Coordinator {
         status.configured = missing.is_empty();
         status.missing = missing.into_iter().map(i32::from).collect();
         Ok(status)
+    }
+
+    /// The failing renewal of the TLS certificate, as the renewer reported it; none while it is
+    /// not failing. Held in memory by [`crate::mdm_acme::status::TlsStatus`].
+    fn tls_renewal(&self) -> Option<proto::TlsRenewal> {
+        let tls = self.mdm_setup.tls_status();
+        let (snapshot, retry_at) = tls.snapshot_and_retry();
+        let failing = snapshot.failing?;
+        Some(proto::TlsRenewal {
+            since_unix: failing.since_unix,
+            attempts: failing.attempts,
+            message: failing.message,
+            dns_rejected: snapshot.dns_rejected.unwrap_or_default(),
+            retry_at_unix: Some(retry_at).filter(|at| *at != 0),
+        })
     }
 
     /// The version in use of `kind`, opened.

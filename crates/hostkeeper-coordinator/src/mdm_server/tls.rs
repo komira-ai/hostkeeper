@@ -6,7 +6,8 @@
 //! certificate and key the store holds and at the trusted issuers, and makes the configuration
 //! again when any of them changed, so a certificate that was uploaded or renewed is served from
 //! the next handshake on and a connection that is open keeps what it was accepted under. With no
-//! certificate held there is no configuration and the listener answers no handshake.
+//! certificate held there is no configuration and the listener answers no handshake. A newest
+//! key that does not fit the newest certificate leaves the newest pair that does fit in service.
 //!
 //! **Optional client certificate.** The verifier lets a client connect with none ([`Peer`] is then
 //! `None`) and refuses one that does not chain to a trusted issuer. Each route decides what it
@@ -86,33 +87,60 @@ impl MdmTls {
         config
     }
 
+    /// The configuration of the newest certificate that has a key held which makes one with it,
+    /// and of the newest such key. A key stored before its certificate (the two are two uploads)
+    /// does not match the certificate in use, so the pair in use stays served until a certificate
+    /// for the new key is stored.
     fn build(&self, issuers: &[Vec<u8>]) -> Option<Arc<ServerConfig>> {
-        let cert = self.setup.open(SecretKind::TlsCert).ok()??;
-        let key = self.setup.open(SecretKind::TlsKey).ok()??;
-        let chain = CertificateDer::pem_slice_iter(cert.expose())
-            .collect::<Result<Vec<_>, _>>()
-            .ok()?;
-        let key = PrivateKeyDer::from_pem_slice(key.expose()).ok()?;
+        let certs = self.setup.open_held(SecretKind::TlsCert).ok()?;
+        let keys = self.setup.open_held(SecretKind::TlsKey).ok()?;
         let provider = Arc::new(rustls::crypto::ring::default_provider());
-        let builder = ServerConfig::builder_with_provider(Arc::clone(&provider))
-            .with_safe_default_protocol_versions()
-            .ok()?;
         let mut roots = RootCertStore::empty();
         roots
             .add_parsable_certificates(issuers.iter().map(|der| CertificateDer::from(der.clone())));
+        let roots = Arc::new(roots);
+        for cert in &certs {
+            let Ok(chain) =
+                CertificateDer::pem_slice_iter(cert.expose()).collect::<Result<Vec<_>, _>>()
+            else {
+                continue;
+            };
+            for key in &keys {
+                let Ok(key) = PrivateKeyDer::from_pem_slice(key.expose()) else {
+                    continue;
+                };
+                if let Some(config) = Self::pair(&provider, &roots, chain.clone(), key) {
+                    return Some(Arc::new(config));
+                }
+            }
+        }
+        if !certs.is_empty() && !keys.is_empty() {
+            tracing::error!("no certificate and key of the MDM held make a TLS configuration");
+        }
+        None
+    }
+
+    fn pair(
+        provider: &Arc<rustls::crypto::CryptoProvider>,
+        roots: &Arc<RootCertStore>,
+        chain: Vec<CertificateDer<'static>>,
+        key: PrivateKeyDer<'static>,
+    ) -> Option<ServerConfig> {
+        let builder = ServerConfig::builder_with_provider(Arc::clone(provider))
+            .with_safe_default_protocol_versions()
+            .ok()?;
         // With no issuer that parses there is no verifier to make, and no certificate is asked.
-        let builder = match WebPkiClientVerifier::builder_with_provider(Arc::new(roots), provider)
-            .allow_unauthenticated()
-            .build()
+        let builder = match WebPkiClientVerifier::builder_with_provider(
+            Arc::clone(roots),
+            Arc::clone(provider),
+        )
+        .allow_unauthenticated()
+        .build()
         {
             Ok(verifier) => builder.with_client_cert_verifier(verifier),
             Err(_) => builder.with_no_client_auth(),
         };
-        builder
-            .with_single_cert(chain, key)
-            .map_err(|why| tracing::error!(%why, "the MDM certificate and key do not make a TLS configuration"))
-            .ok()
-            .map(Arc::new)
+        builder.with_single_cert(chain, key).ok()
     }
 }
 

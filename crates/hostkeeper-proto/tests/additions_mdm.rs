@@ -268,6 +268,24 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 abm_last_sync_unix: Some(1_800_000_000),
                 abm_sync_error: "ABM refused the timestamp (timestamp_refused)".to_owned(),
                 abm_unavailable: true,
+                dns_credential: Some(secret_info()),
+                tls_renewal: Some(op::TlsRenewal {
+                    since_unix: 1_800_000_000,
+                    attempts: 3,
+                    message: "the provider refused the credential".to_owned(),
+                    dns_rejected: "the provider refused the credential".to_owned(),
+                    retry_at_unix: Some(1_800_003_600),
+                }),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.TlsRenewal",
+            round_trip(&op::TlsRenewal {
+                since_unix: 1_800_000_000,
+                attempts: 1,
+                message: "no order".to_owned(),
+                dns_rejected: String::new(),
+                retry_at_unix: None,
             }),
         ),
         (
@@ -365,7 +383,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 31);
+    assert_eq!(messages.len(), 32);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

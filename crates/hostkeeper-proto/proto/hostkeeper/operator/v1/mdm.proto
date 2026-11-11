@@ -631,6 +631,29 @@ message MdmStatusResponse {
   // True when this coordinator runs no ABM client, so there is no sync to report; the two fields above
   // are then empty. Not part of `configured`.
   bool abm_unavailable = 19;
+  // What `ListSecrets` shows of the DNS credential in use; absent when none is held. Its value
+  // is never in an answer.
+  optional SecretInfo dns_credential = 20;
+  // The renewal of the TLS certificate by ACME, while it is failing; absent when it is not (no
+  // attempt failed since the last certificate, or the coordinator started after it). Held in
+  // memory: a restart starts clean.
+  optional TlsRenewal tls_renewal = 21;
+}
+
+// A failing renewal of the TLS certificate. It holds no secret: the message is the coordinator's
+// own words for the failure.
+message TlsRenewal {
+  // When the first failure of this run of failures happened.
+  uint64 since_unix = 1;
+  // How many attempts failed in this run.
+  uint32 attempts = 2;
+  // The last failure, in words.
+  string message = 3;
+  // Set when the DNS provider refused the credential at the last attempt that reached it: the
+  // provider's refusal, in words; empty otherwise.
+  string dns_rejected = 4;
+  // When the next attempt may start; absent when none waits.
+  optional uint64 retry_at_unix = 5;
 }
 
 message PutNameRequest {

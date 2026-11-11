@@ -79,7 +79,7 @@ Sign out ends the session on the coordinator.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.
-- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate, ABM and name steps,
+- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate, ABM, name and TLS steps,
   `docs/design/coordinator-mdm.md` sections 4.4, 4.5 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
   because:* and each missing condition in words; the push certificate and key, the ABM token and the TLS certificate and key with the
   version and the first 16 hex digits of the fingerprint `Status` gives, when each expires and the days left. The days left are
@@ -108,6 +108,12 @@ Sign out ends the session on the coordinator.
   refusals of an upload (`abm_clock_refused`, `abm_credential_refused`) the page says what to do. The name step sets the host
   name the Macs enroll at (`Mdm.PutName`) and shows the enrollment URL; the name needs a DNS record that resolves, on the LAN, to
   the coordinator's MDM listener, and once a Mac has enrolled at it the coordinator locks it and the page shows no form for it.
+  The TLS step (`Mdm.PutSecret` and `Mdm.PutSetting`) stores a certificate chain, chosen as a file or pasted, and its key, a file
+  only, as `tls_key` and then `tls_cert`, which works with no ACME; shows the renewal by ACME as off (naming what it lacks), on, or
+  failing (the last error, when it began, the attempts, the DNS provider's refusal, the next attempt, from `Mdm.Status`'s `tls_renewal`,
+  which the coordinator keeps in memory only); saves the settings `dns_zone`, `acme_directory` and `acme_contact`, sending each that
+  changed; and stores the DNS credential (the provider's API key and secret, or a personal access token) from password fields, which
+  are emptied whatever the answer is. No value of a secret is shown.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary
