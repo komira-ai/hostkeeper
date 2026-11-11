@@ -28,11 +28,15 @@
 //!    many looks follow. One the device answered with an error is sent again
 //!    [`CONFIG_RESEND_SECS`] after that answer; one NanoHUB never queued is sent again at the
 //!    next look. The digest counts as delivered only when the answer is `Acknowledged`.
-//! 3. With the pkg install ([`crate::install`]), once the config profile is acknowledged and
+//! 3. With the baseline ([`crate::baseline`]), once the config profile is acknowledged, the
+//!    host group's `EnableRemoteDesktop` (supervised Macs) and profiles, and their `ProfileList`
+//!    check, before the pkg and whether or not the Mac is approved; a failure of any of it
+//!    leaves the rest of the look as it was.
+//! 4. With the pkg install ([`crate::install`]), once the config profile is acknowledged and
 //!    while no request is a candidate (below), the pkg is sent, and sent again an hour after
 //!    the device's last answer to it. A config profile sent again for new settings and not yet
 //!    acknowledged holds the pkg back until it is.
-//! 4. A nonce is issued only when every condition of design 5.1 holds: the device is
+//! 5. A nonce is issued only when every condition of design 5.1 holds: the device is
 //!    supervised (and enrolled, as above); the serial is on the allowlist (as above); no nonce
 //!    issued for the serial is still good: unexpired ([`NONCE_VALID_SECS`] from its issue: at
 //!    3600 seconds it is, at 3601 it is not) and unconsumed (no approval of the serial recorded
@@ -41,7 +45,7 @@
 //!    device's UDID (letter case aside), and posted at or after the first `TokenUpdate` of the
 //!    current enrollment. The nonce is bound to that request; its profile is pushed and the push
 //!    audited `mdm_nonce_pushed`.
-//! 5. While the nonce is good, its profile is pushed again, with the same nonce, when the
+//! 6. While the nonce is good, its profile is pushed again, with the same nonce, when the
 //!    device answered the last push with an error at least [`NONCE_RESEND_SECS`] ago, or NanoHUB
 //!    never queued it. No new nonce is issued.
 //!
@@ -143,6 +147,10 @@ pub trait Enrollments: Send + Sync {
     /// # Errors
     /// [`EnrollmentsError`]: the store cannot be read.
     fn last_approval_unix(&self, serial: &str) -> Result<Option<u64>, EnrollmentsError>;
+
+    /// The host group of `serial`'s allowlist entry, which picks its enrollment baseline
+    /// ([`crate::baseline`]); `None` when the serial is not on the allowlist.
+    fn host_group(&self, serial: &str) -> Option<String>;
 
     /// A new nonce for `serial`, bound to the waiting request `request_id`.
     ///
@@ -284,9 +292,13 @@ impl Gate {
         };
         if last_approval.is_some_and(|at| at >= since) {
             // The nonce's removal first; the config profile follows at the next look. An
-            // approved Mac is sent nothing else, but a config profile whose settings changed.
-            if !self.remove_nonce(side, record.clone(), now).await {
-                self.send_config(side, record, now, true).await;
+            // approved Mac is sent nothing else, but a config profile whose settings changed
+            // and its baseline (design 6.4), which is kept for as long as the Mac is enrolled.
+            if self.remove_nonce(side, record.clone(), now).await {
+                return;
+            }
+            if !self.send_config(side, record.clone(), now, true).await {
+                self.send_baseline(side, record, &serial).await;
             }
             return;
         }
@@ -295,6 +307,9 @@ impl Gate {
         if self.send_config(side, record.clone(), now, false).await {
             return;
         }
+        // The baseline (design 6.4), with the pkg: it never ends the look, and a baseline
+        // that fails changes nothing of the enrollment.
+        let record = self.send_baseline(side, record, &serial).await;
         // The pkg, while no candidate request has appeared (design 5.4); a look that sent it,
         // or changed the record, is done.
         if self

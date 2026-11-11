@@ -7,7 +7,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_mdm_gate::{
     Command, CommandUuid, EnrollmentId, Event, EventError, Handled, WebhookError, is_serial,
-    parse_event,
+    parse_event, webhook,
 };
 use plist::Value;
 use serde_json::json;
@@ -332,7 +332,9 @@ fn a_missing_udid_and_a_missing_status_read_as_empty() {
 #[tokio::test]
 async fn the_gate_reports_an_event_error_and_passes_over_a_topic_it_does_not_read() {
     let rig = Rig::new("event-errors").await;
-    let refused = rig.gate.webhook(b"nope").await.expect_err("refused");
+    let refused = webhook::take(&rig.gate, b"nope")
+        .await
+        .expect_err("refused");
     assert!(
         matches!(refused, WebhookError::Event(EventError::Json(_))),
         "{refused}"
@@ -343,12 +345,12 @@ async fn the_gate_reports_an_event_error_and_passes_over_a_topic_it_does_not_rea
     );
     let other = event("mdm.DeclarativeManagement", "checkin_event", json!({}));
     assert_eq!(
-        rig.gate.webhook(&other).await.expect("taken"),
+        webhook::take(&rig.gate, &other).await.expect("taken"),
         Handled::PassedOver
     );
     let user = checkin_of("Authenticate", UDID, "User", &[], None);
     assert_eq!(
-        rig.gate.webhook(&user).await.expect("taken"),
+        webhook::take(&rig.gate, &user).await.expect("taken"),
         Handled::PassedOver
     );
     assert!(rig.gate.records().is_empty());
@@ -428,6 +430,17 @@ fn a_command_is_the_xml_plist_nanohub_takes() {
         ("DeviceInformation", &uuid)
     );
     assert!(info.is_allowed() && security.is_allowed());
+    let desktop = Command::enable_remote_desktop(uuid.clone());
+    assert_eq!(
+        String::from_utf8(desktop.to_plist()).expect("utf-8"),
+        ENABLE_REMOTE_DESKTOP_PLIST
+    );
+    let list = Command::profile_list(uuid.clone());
+    assert_eq!(
+        String::from_utf8(list.to_plist()).expect("utf-8"),
+        PROFILE_LIST_PLIST
+    );
+    assert!(desktop.is_allowed() && list.is_allowed());
     assert_eq!(
         hostkeeper_mdm_gate::QUERIES,
         ["SerialNumber", "UDID", "IsSupervised"]
@@ -436,3 +449,5 @@ fn a_command_is_the_xml_plist_nanohub_takes() {
 
 const DEVICE_INFORMATION_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>Queries</key>\n\t\t<array>\n\t\t\t<string>SerialNumber</string>\n\t\t\t<string>UDID</string>\n\t\t\t<string>IsSupervised</string>\n\t\t</array>\n\t\t<key>RequestType</key>\n\t\t<string>DeviceInformation</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
 const SECURITY_INFO_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>RequestType</key>\n\t\t<string>SecurityInfo</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
+const ENABLE_REMOTE_DESKTOP_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>RequestType</key>\n\t\t<string>EnableRemoteDesktop</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
+const PROFILE_LIST_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>ManagedOnly</key>\n\t\t<false/>\n\t\t<key>RequestType</key>\n\t\t<string>ProfileList</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";

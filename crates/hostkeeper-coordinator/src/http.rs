@@ -123,8 +123,7 @@ pub enum Surface {
 }
 
 /// The address a connection came from, put in the extensions of each request it carries by
-/// the listener, when its transport has one. It names the peer in the audit and nothing
-/// else decides on it.
+/// the listener, when its transport has one. Nothing reads it yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PeerAddr(pub SocketAddr);
 

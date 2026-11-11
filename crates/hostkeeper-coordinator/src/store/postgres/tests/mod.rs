@@ -233,6 +233,7 @@ mod devices;
 mod generations;
 mod host_groups;
 mod lost;
+mod mdm;
 mod reads;
 mod records;
 mod records_errors;
