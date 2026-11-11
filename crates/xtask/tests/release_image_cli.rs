@@ -1,7 +1,7 @@
-//! `cargo xtask release image-index` and `release image-layout`, run as the built program on a
-//! scratch directory holding two image tarballs written byte by byte as buildx writes them. The
-//! exit status is 0 for a written index or layout, 1 for a refused one and 2 for a usage error.
-//! No toolchain, no network.
+//! `cargo xtask release image-index`, `release image-layout` and `release image-digest`, run as
+//! the built program on a scratch directory holding two image tarballs written byte by byte as
+//! buildx writes them. The exit status is 0 for a written index or layout or a printed digest, 1
+//! for a refused one and 2 for a usage error. No toolchain, no network.
 
 #[path = "../src/testdir.rs"]
 mod testdir;
@@ -423,4 +423,96 @@ fn image_layout_with_env_file_appends_the_digest_of_the_index_as_image_digest() 
         std::fs::read_to_string(&env).expect("env file"),
         format!("IMAGE_DIGEST={}\n", digest_of(&asset))
     );
+}
+
+fn image_digest(r: &Release, extra: &[&str]) -> Output {
+    let mut args = vec![
+        "release",
+        "image-digest",
+        path_str(&r.dir),
+        "--version",
+        VERSION,
+        "--repo",
+        "komira-ai/hostkeeper",
+    ];
+    args.extend_from_slice(extra);
+    run(&r.dir, &args)
+}
+
+fn bundle_path(dir: &TestDir) -> PathBuf {
+    dir.join(format!(
+        "hostkeeper-coordinator-{VERSION}-linux-x86_64.image.tar.sigstore.json"
+    ))
+}
+
+#[test]
+fn image_digest_prints_the_amd64_manifest_digest_and_the_release_addresses_and_appends_them_to_output()
+ {
+    // Catches: a digest of another manifest, the tarball or the image index; an address of
+    // another tag or file; or the lines not written to the output file the workflow reads.
+    let r = release("digest");
+    std::fs::write(bundle_path(&r.dir), "{}").expect("write bundle");
+    let output = r.dir.join("github-output");
+    let o = image_digest(&r, &["--output", path_str(&output)]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    let base = format!("https://github.com/komira-ai/hostkeeper/releases/download/v{VERSION}");
+    let want = format!(
+        "digest={}\nimage-url={base}/hostkeeper-coordinator-{VERSION}-linux-x86_64.image.tar\nbundle-url={base}/hostkeeper-coordinator-{VERSION}-linux-x86_64.image.tar.sigstore.json\n",
+        digest_of(&r.amd64_manifest)
+    );
+    assert_eq!(stdout(&o), want);
+    assert_eq!(stderr(&o), "");
+    assert_eq!(std::fs::read_to_string(&output).expect("output"), want);
+}
+
+#[test]
+fn image_digest_without_the_bundle_is_a_failure_that_names_it_and_writes_no_output() {
+    let r = release("digest-no-bundle");
+    let output = r.dir.join("github-output");
+    let o = image_digest(&r, &["--output", path_str(&output)]);
+    assert_eq!(o.status.code(), Some(1), "{}", stdout(&o));
+    assert!(
+        stderr(&o).contains(&format!(
+            "hostkeeper-coordinator-{VERSION}-linux-x86_64.image.tar.sigstore.json is missing from {}",
+            r.dir.display()
+        )),
+        "{}",
+        stderr(&o)
+    );
+    assert_eq!(stdout(&o), "");
+    assert!(!output.exists());
+}
+
+#[test]
+fn image_digest_without_a_repository_or_with_a_bad_one_is_a_usage_error() {
+    // Catches: an address built from no repository, or from one that is not owner/name.
+    let r = release("digest-usage");
+    std::fs::write(bundle_path(&r.dir), "{}").expect("write bundle");
+    let d = path_str(&r.dir);
+    let cases: [&[&str]; 3] = [
+        &["release", "image-digest", d, "--version", VERSION],
+        &[
+            "release",
+            "image-digest",
+            d,
+            "--version",
+            VERSION,
+            "--repo",
+            "hostkeeper",
+        ],
+        &[
+            "release",
+            "image-digest",
+            d,
+            "--version",
+            "1.2",
+            "--repo",
+            "komira-ai/hostkeeper",
+        ],
+    ];
+    for args in cases {
+        let o = run(&r.dir, args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert_eq!(stdout(&o), "", "{args:?}");
+    }
 }

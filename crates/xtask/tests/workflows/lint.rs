@@ -11,7 +11,8 @@
 //!   the spaces before and after `#` are free), or names a local path (a
 //!   local action or reusable workflow is code this lint does not read);
 //! - a job has no `runs-on` (but a job of [`callers::CALLERS`], or of [`callers::TEMPLATE`], that
-//!   calls the CI client), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
+//!   calls the CI client, and the job of [`cp_deploy::calls_updater`] that calls
+//!   docker-swarm-updater's deploy workflow), or a runner that is not one of [`HOSTED_RUNNERS`]: a runner group, a
 //!   custom label (a
 //!   self-hosted or a paid larger runner), or an expression other than `${{ matrix.<key> }}`,
 //!   whose values are read from the job's own `strategy.matrix` (a list
@@ -56,7 +57,8 @@
 //!   runner outside [`PRIVILEGED_RUNNERS`]. [`WRITE_ALLOWED`] has no entry for it either.
 //!
 //! - it is `release.yml` or `artifacts.yml` and breaks a rule of its own
-//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`]; for its
+//!   ([`release::release_rules`]; for the deploy jobs of `release.yml`, [`super::desired`] and
+//!   [`super::cp_deploy`]; for its
 //!   package-channel jobs, which hold `id-token: write` to assume the cloud role, each under its
 //!   exact `if:`, [`super::packages`]).
 //!
@@ -84,6 +86,7 @@
 
 use super::advisories;
 use super::callers;
+use super::cp_deploy;
 use super::debs;
 use super::desired;
 
@@ -120,6 +123,10 @@ pub struct Allowed {
 /// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
 ///   nothing and holds no other scope), under the `if:` of the deploy
 ///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
+/// - `release.yml` / `cp-deploy`: `id-token`, for docker-swarm-updater's deploy workflow it
+///   calls, which asks GitHub for an OIDC token for every request (it holds no other scope),
+///   under the `if:` of the control-plane deploy ([`cp_deploy::DEPLOY_IF`]);
+///   [`cp_deploy`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.
 pub const WRITE_ALLOWED: &[Allowed] = &[
@@ -158,6 +165,12 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         job: desired::COORDINATOR_JOB,
         scope: "id-token",
         condition: desired::SET_IF,
+    },
+    Allowed {
+        file: "release.yml",
+        job: cp_deploy::JOB,
+        scope: "id-token",
+        condition: cp_deploy::DEPLOY_IF,
     },
     Allowed {
         file: advisories::FILE,
@@ -398,11 +411,12 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         problems.extend(permission_problems(file, name, job));
         problems.extend(image_problems(name, job));
         // A job of `callers::CALLERS` (or the template's) that calls the CI client runs on that
-        // workflow's runner, which its own rules hold; every other job that calls a reusable
-        // workflow is refused.
+        // workflow's runner, which its own rules hold, and so does release.yml's call of
+        // docker-swarm-updater's deploy workflow (`cp_deploy`); every other job that calls a
+        // reusable workflow is refused.
         let calls_client = callers::caller(file, name).is_some()
             && callers::job_uses(job).is_some_and(callers::names_set_desired);
-        if !calls_client {
+        if !calls_client && !cp_deploy::calls_updater(file, name, job) {
             problems.extend(runner_problems(name, job));
         }
         if on_pull_request {

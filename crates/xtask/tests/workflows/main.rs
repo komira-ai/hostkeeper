@@ -20,6 +20,8 @@ mod coordinator_update_release_tests;
 mod coordinator_wait;
 mod coordinator_wait_run_tests;
 mod coordinator_wait_tests;
+mod cp_deploy;
+mod cp_deploy_tests;
 mod debs;
 mod debs_tests;
 mod desired;
