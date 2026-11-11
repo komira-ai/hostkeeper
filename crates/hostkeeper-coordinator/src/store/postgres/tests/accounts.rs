@@ -231,7 +231,7 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
 /// Proves: `0010` does not stop the release before it (the migrations `0001` to `0009`) on a
 /// database this release migrated and holding accounts: its runner takes the database, because
 /// `0010` says `may-run`, and runs nothing, and its load of every table it knows reads the state as
-/// it did; and this release starts on a database the release before migrated, runs `0010` and `0011` (the MDM tables)
+/// it did; and this release starts on a database the release before migrated, runs `0010` to `0012`
 /// and holds no account.
 ///
 /// Catches: accounts that stop the previous coordinator from starting, which backing out of this

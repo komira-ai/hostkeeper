@@ -22,15 +22,15 @@ fn each_setting_has_a_default_from_the_start() {
             ("abm_alert_days", "60"),
             ("tls_renew_days", "30"),
             ("secret_grace_days", "7"),
+            ("push_retry_s", "3600"),
+            ("push_expiry_s", "86400"),
+            ("push_priority", "10"),
+            ("push_timeout_s", "30"),
             ("proxy_wait_s", "10"),
             ("proxy_redirects", "3"),
             ("proxy_index_ttl_s", "300"),
             ("proxy_cache_max_bytes", "21474836480"),
             ("proxy_fetches", "8"),
-            ("push_retry_s", "3600"),
-            ("push_expiry_s", "86400"),
-            ("push_priority", "10"),
-            ("push_timeout_s", "30"),
         ]
     );
     for setting in SETTINGS {

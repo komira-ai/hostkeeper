@@ -58,6 +58,38 @@ pub const SETTINGS: [Setting; 13] = [
         default: "7",
         shape: Shape::Days { min: 0, max: 365 },
     },
+    // The floor, in seconds, between pushes to a Mac that has not connected since the last one
+    // (docs/design/coordinator-mdm.md, section 4.3).
+    Setting {
+        name: "push_retry_s",
+        default: "3600",
+        shape: Shape::Whole {
+            min: 1,
+            max: 2_592_000,
+        },
+    },
+    // How long, in seconds, APNs keeps a push for a Mac that is asleep: `apns-expiration` is this
+    // long after the push; 0 asks APNs to try once and keep nothing.
+    Setting {
+        name: "push_expiry_s",
+        default: "86400",
+        shape: Shape::Whole {
+            min: 0,
+            max: 2_592_000,
+        },
+    },
+    // `apns-priority` of a push: 10 sends at once, 5 when the power allows.
+    Setting {
+        name: "push_priority",
+        default: "10",
+        shape: Shape::OneOf(&["5", "10"]),
+    },
+    // How long, in seconds, a connection to APNs or to mdmcert.download, and its answer, may take.
+    Setting {
+        name: "push_timeout_s",
+        default: "30",
+        shape: Shape::Whole { min: 1, max: 300 },
+    },
     // The package proxy's cache (docs/design/package-proxy.md, section 4).
     // How long a waiter for a file another request is fetching waits for it before it is passed
     // through to the origin on its own.
@@ -95,38 +127,6 @@ pub const SETTINGS: [Setting; 13] = [
         name: "proxy_fetches",
         default: "8",
         shape: Shape::Whole { min: 1, max: 1024 },
-    },
-    // The floor, in seconds, between pushes to a Mac that has not connected since the last one
-    // (docs/design/coordinator-mdm.md, section 4.3).
-    Setting {
-        name: "push_retry_s",
-        default: "3600",
-        shape: Shape::Whole {
-            min: 1,
-            max: 2_592_000,
-        },
-    },
-    // How long, in seconds, APNs keeps a push for a Mac that is asleep: `apns-expiration` is this
-    // long after the push; 0 asks APNs to try once and keep nothing.
-    Setting {
-        name: "push_expiry_s",
-        default: "86400",
-        shape: Shape::Whole {
-            min: 0,
-            max: 2_592_000,
-        },
-    },
-    // `apns-priority` of a push: 10 sends at once, 5 when the power allows.
-    Setting {
-        name: "push_priority",
-        default: "10",
-        shape: Shape::OneOf(&["5", "10"]),
-    },
-    // How long, in seconds, a connection to APNs or to mdmcert.download, and its answer, may take.
-    Setting {
-        name: "push_timeout_s",
-        default: "30",
-        shape: Shape::Whole { min: 1, max: 300 },
     },
 ];
 
@@ -201,15 +201,6 @@ pub fn number_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u
         .unwrap_or(fallback)
 }
 
-/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
-/// does not know or a value that is not one (a store edited by hand).
-#[must_use]
-pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
-    find(name)
-        .and_then(|setting| parse_whole(value_of(set, setting)))
-        .unwrap_or(fallback)
-}
-
 /// The numbers of the list setting `name` (`60,14`) among the `set` ones, in order: the default
 /// for a name this release does not know, or a value that is not a list (a store edited by hand),
 /// and none for a name with no default list.
@@ -221,6 +212,15 @@ pub fn list_of(set: &BTreeMap<String, String>, name: &str) -> Vec<u32> {
     find(name)
         .and_then(|setting| parse(value_of(set, setting)).or_else(|| parse(setting.default)))
         .unwrap_or_default()
+}
+
+/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
+/// does not know or a value that is not one (a store edited by hand).
+#[must_use]
+pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
+    find(name)
+        .and_then(|setting| parse_whole(value_of(set, setting)))
+        .unwrap_or(fallback)
 }
 
 #[cfg(test)]

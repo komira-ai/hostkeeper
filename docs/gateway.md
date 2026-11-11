@@ -34,9 +34,9 @@ who must still choose a new password is `PERMISSION_DENIED` `password_change_req
 that names no live session is no credential. A call with an `Authorization` header never has its
 cookie read, and the gRPC path never reads one. A method may be declared session-only: a bearer is
 refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup are: `Mdm.PutSecret`,
-`Mdm.PutSetting` and the three of the push certificate, `Mdm.CreatePushRequest`, `Mdm.PutPushReply` and
+`Mdm.PutSetting`, `Mdm.PutName` and the three of the push certificate, `Mdm.CreatePushRequest`, `Mdm.PutPushReply` and
 `Mdm.PutPushCertificate` (`docs/design/coordinator-mdm.md`, sections 4.4 and 4.9), which an API token, the tokens file's or one
-made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets` and `Mdm.ListSettings`. `Users` and `ApiTokens` take an operator only (a token
+made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets`, `Mdm.ListSettings` and `Mdm.Status`. `Users` and `ApiTokens` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens").
 `Releases.SetDesired` takes CI's

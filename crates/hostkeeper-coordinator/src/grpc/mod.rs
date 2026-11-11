@@ -239,6 +239,8 @@ const MDM_CREATE_PUSH_REQUEST: &str = "/hostkeeper.operator.v1.Mdm/CreatePushReq
 const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 /// The path of `Mdm.PutPushCertificate`, whose request holds a certificate and a key.
 const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
+/// The path of `Mdm.PutName`.
+const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -248,6 +250,7 @@ const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCerti
 pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_SECRET,
     MDM_PUT_SETTING,
+    MDM_PUT_NAME,
     MDM_CREATE_PUSH_REQUEST,
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,

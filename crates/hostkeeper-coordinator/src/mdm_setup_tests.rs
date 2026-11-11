@@ -329,15 +329,15 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("abm_alert_days", "60".to_owned(), true),
             ("tls_renew_days", "10".to_owned(), false),
             ("secret_grace_days", "7".to_owned(), true),
+            ("push_retry_s", "3600".to_owned(), true),
+            ("push_expiry_s", "86400".to_owned(), true),
+            ("push_priority", "10".to_owned(), true),
+            ("push_timeout_s", "30".to_owned(), true),
             ("proxy_wait_s", "10".to_owned(), true),
             ("proxy_redirects", "3".to_owned(), true),
             ("proxy_index_ttl_s", "300".to_owned(), true),
             ("proxy_cache_max_bytes", "21474836480".to_owned(), true),
             ("proxy_fetches", "8".to_owned(), true),
-            ("push_retry_s", "3600".to_owned(), true),
-            ("push_expiry_s", "86400".to_owned(), true),
-            ("push_priority", "10".to_owned(), true),
-            ("push_timeout_s", "30".to_owned(), true),
         ]
     );
     assert_eq!(
