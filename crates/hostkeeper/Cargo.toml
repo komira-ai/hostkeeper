@@ -31,8 +31,6 @@ hostkeeper = { path = ".", features = ["test-support"] }
 # The macOS pkg's postinstall script, which tests/postinstall.rs runs against this binary.
 hostkeeper-launchd = { path = "../hostkeeper-launchd" }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
-# The effective uid: the postinstall test skips its uid 0 refusal case when it runs as root.
-rustix = { workspace = true, features = ["process"] }
 
 [lints]
 workspace = true

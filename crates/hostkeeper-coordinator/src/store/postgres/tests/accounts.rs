@@ -246,8 +246,8 @@ fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
 
     let (ran, loaded_before) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
-        migrate::refuse_newer(session, &before).expect("0010 does not stop it");
-        let ran = migrate::apply(session, &before).expect("its runner takes the database");
+        let ran = migrate::apply(session, &before)
+            .expect("its runner takes the database and does not refuse 0010");
         (ran, load_all(session, SPENT_NOW).expect("the state reads"))
     });
     assert_eq!(ran, Vec::<i32>::new());

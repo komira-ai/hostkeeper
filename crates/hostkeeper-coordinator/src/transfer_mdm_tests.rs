@@ -1,6 +1,6 @@
-//! `import` and `export` of the MDM gate's device records: the files
-//! `<--enrollment-dir>/mdm-devices/<enrollment id>.pb` of a file store and the rows of
-//! `mdm_devices` of a database (migration `0005`).
+//! `export` of the MDM gate's device records: the rows of `mdm_devices` of a database (migration
+//! `0005`) written as the files `<--enrollment-dir>/mdm-devices/<enrollment id>.pb` of a file
+//! store.
 
 use std::fs;
 use std::path::Path;
@@ -11,12 +11,10 @@ use hostkeeper_mdm_gate::{DeviceRecord, DeviceStore, EnrollmentId, FileDeviceSto
 
 use super::TransferError;
 use super::export;
-use super::tests::{Store, clock, count, export_flags, imported};
+use super::tests::{Store, clock, export_flags, seeded};
 use crate::lock::FileLock;
 use crate::mdm::DEVICES_DIR;
-use crate::store::postgres::PgDevices;
 use crate::store::postgres::tests::TestDatabase;
-use crate::store::postgres::transfer::MoveError;
 
 /// The records of two devices, one enrolled and supervised, one checked out.
 fn devices() -> Vec<DeviceRecord> {
@@ -63,32 +61,6 @@ fn store_with_devices(name: &str) -> Store {
     store
 }
 
-/// The records the database's device store reads.
-fn rows_of(database: &TestDatabase) -> Vec<DeviceRecord> {
-    let (store, _) = database.open("coordinator").expect("the store opens");
-    let records = PgDevices::over(&store).load().expect("the rows read");
-    store.stop();
-    records
-}
-
-/// Proves: importing a file store whose enrollment store holds device records writes each as a
-/// row of `mdm_devices` (the report counts them), which the database's device store reads as the
-/// records the files hold; the files are left as they were.
-///
-/// Catches: an import that leaves the device records behind (the gate on the database would
-/// forget every enrolled Mac), or one that refuses them as it did before the table.
-#[test]
-fn import_writes_each_device_record_file_as_a_row_of_mdm_devices() {
-    let store = store_with_devices("transfer-mdm-import");
-    let before = store.files();
-    let database = TestDatabase::new();
-    let report = imported(&store, &database).expect("imported");
-    assert!(report.contains("  mdm_devices: 2 rows\n"), "{report}");
-    assert_eq!(count(&database, "mdm_devices"), 2);
-    assert_eq!(rows_of(&database), devices());
-    assert_eq!(store.files(), before);
-}
-
 /// Proves: exporting a database that holds device records writes each back as
 /// `mdm-devices/<enrollment id>.pb` of the enrollment store, byte for byte the file the gate's
 /// file store wrote, so the file store of the back-out reads the records the database held; and
@@ -101,7 +73,7 @@ fn import_writes_each_device_record_file_as_a_row_of_mdm_devices() {
 fn export_writes_the_device_records_back_as_the_files_they_were() {
     let from = store_with_devices("transfer-mdm-export-from");
     let database = TestDatabase::new();
-    imported(&from, &database).expect("imported");
+    seeded(&from, &database);
     let mut into = Store::new("transfer-mdm-export-into");
     into.paths.enrollment_dir = Some(into.dir.path().join("enrollment"));
     let report = export(&export_flags(&database, &into), &FileLock, &clock())
@@ -126,34 +98,6 @@ fn export_writes_the_device_records_back_as_the_files_they_were() {
     assert_eq!(fs::read_dir(without.dir.path()).expect("listed").count(), 0);
 }
 
-/// Proves: an import whose read-back of `mdm_devices` differs from the files (a trigger the test
-/// installs drops one row) is rolled back whole, naming `mdm_devices`, and the database holds
-/// none of it.
-///
-/// Catches: an import that commits without comparing the device records it wrote.
-#[test]
-fn an_import_whose_device_rows_read_back_otherwise_is_rolled_back() {
-    let store = store_with_devices("transfer-mdm-differs");
-    let database = TestDatabase::new();
-    let (opened, _) = database.open("coordinator").expect("the store opens");
-    opened.stop();
-    database
-        .run(
-            "CREATE FUNCTION skewed() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN \
-             IF NEW.enrollment_id = 'D4E5-F6' THEN RETURN NULL; END IF; RETURN NEW; END $$; \
-             CREATE TRIGGER skewed BEFORE INSERT ON mdm_devices FOR EACH ROW \
-             EXECUTE FUNCTION skewed()",
-        )
-        .expect("the trigger");
-    match imported(&store, &database) {
-        Err(TransferError::Database(MoveError::Differs { part })) => {
-            assert_eq!(part, "mdm_devices");
-        }
-        other => panic!("{other:?}"),
-    }
-    assert_eq!(count(&database, "mdm_devices"), 0);
-}
-
 /// Proves: an export of a database holding a row of `mdm_devices` the gate's reader refuses is
 /// refused with the gate's own reason, naming the row, and writes no file.
 ///
@@ -163,7 +107,7 @@ fn an_import_whose_device_rows_read_back_otherwise_is_rolled_back() {
 fn an_export_refuses_a_device_row_the_gate_cannot_read() {
     let from = store_with_devices("transfer-mdm-torn-from");
     let database = TestDatabase::new();
-    imported(&from, &database).expect("imported");
+    seeded(&from, &database);
     database
         .run("INSERT INTO mdm_devices (enrollment_id, record) VALUES ('AAAA-1', '\\xffff')")
         .expect("a torn row");
@@ -171,10 +115,7 @@ fn an_export_refuses_a_device_row_the_gate_cannot_read() {
     into.paths.enrollment_dir = Some(into.dir.path().join("enrollment"));
     let refused = export(&export_flags(&database, &into), &FileLock, &clock())
         .expect_err("a row the gate cannot read");
-    assert!(
-        matches!(refused, TransferError::Database(MoveError::Database(_))),
-        "{refused:?}"
-    );
+    assert!(matches!(refused, TransferError::Database(_)), "{refused:?}");
     assert_eq!(
         refused.to_string(),
         "database:mdm_devices/AAAA-1: the file is not a record; the gate does not guess what a \
