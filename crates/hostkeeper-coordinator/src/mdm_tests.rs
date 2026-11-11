@@ -124,6 +124,10 @@ impl hostkeeper_mdm_gate::Enrollments for InGroup {
         Some(self.0.to_owned())
     }
 
+    fn host_name(&self, _serial: &str) -> Option<String> {
+        None
+    }
+
     fn issue_nonce(
         &self,
         _serial: &str,
