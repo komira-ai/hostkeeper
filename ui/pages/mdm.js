@@ -90,7 +90,7 @@ export function expiry(notAfterUnix, now, days) {
 
 // The `value` of the setting `name` in a `ListSettings` reply, or undefined.
 function settingValue(reply, name) {
-  const found = ((reply && reply.settings) || []).find((s) => s.name === name);
+  const found = ((reply && reply.settings) || []).find((s) => s["name"] === name);
   return found === undefined ? undefined : found.value;
 }
 
@@ -162,7 +162,7 @@ function statusPanel(status, now, days) {
         h("th", {}, label), h("td", {}, held), h("td", {}, until), h("td", {}, when)))),
     table(["", ""], [
       ["Push topic", status.pushTopic || "-"],
-      ["MDM name", status.name || "-"],
+      ["MDM name", status["name"] || "-"],
       ["Enrollment URL", status.enrollmentUrl || "-"],
       ["TLS names", (status.tlsNames || []).join(", ") || "-"],
     ].map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))));
@@ -203,7 +203,7 @@ function createSection(ctx, flow) {
     field("Email address", "push-email", flow, "email", { maxlength: 254 }),
     checkbox("Send the request to mdmcert.download", "push-submit", flow, "submit"),
     action(ctx, "Create request", "create-request", async () => {
-      const email = trimmed(flow.email);
+      const email = trimmed(flow["email"]);
       if (email === "") {
         return "Give the email address the request is made for.";
       }
@@ -226,7 +226,7 @@ function createSection(ctx, flow) {
 function requestResult(ctx, request) {
   return h("div", { name: "push-request" },
     request.submitted
-      ? h("p", {}, `The signed request comes by email from mdmcert.download to ${request.email}, `
+      ? h("p", {}, `The signed request comes by email from mdmcert.download to ${request["email"]}, `
         + "as an attachment. Upload that attachment under Check the emailed reply.")
       : h("p", {}, "The request was not sent. Take the CSR to the signer you use."),
     h("p", { class: "note" }, "The CSR and the encryption certificate are public."),

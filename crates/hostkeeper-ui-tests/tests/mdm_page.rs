@@ -635,7 +635,7 @@ const redrawn = seen.shown.length;
 await click(tree, "put-existing");
 const after = seen.shown[seen.shown.length - 1];
 return {{ redrawn, chosen: text(named(after, "existing-key-file-chosen")[0]),
-         keyFields: nodes(after).filter((n) => n.tag === "textarea" && /key/.test(n.attrs.name)).length,
+         keyFields: nodes(after).filter((n) => n.tag === "textarea" && /key/.test(n.attrs["name"])).length,
          everything: JSON.stringify([shown, seen]) + text(after) }};
 "#,
             key = file("key.pem", &format!("[{}]", key_bytes.join(", ")))
