@@ -32,7 +32,12 @@ passed. The job passes when the updater reports the deploy `converged`, and fail
 updater checks the token's claims, fetches the tarball and the bundle, verifies the bundle
 offline against the signer, checks that the tarball's manifest is the digest it was given, and
 then updates the service by digest; Swarm rolls back an update whose task does not become ready.
-The release stays published whatever the deploy says.
+The release stays published whatever the deploy says. hostkeeper's own deploy waits for this one:
+the job `coordinator` of `release.yml` ([github-actions.md](github-actions.md), "Wait for the
+coordinator") needs `cp-deploy`, and while both variables below are set it runs only once
+`cp-deploy` passed, so it never asks the coordinator this deploy is replacing; when `cp-deploy`
+failed or was cancelled, the wait and `set-desired` are skipped and the hosts' desired version is
+not set.
 
 The workflow lint (`crates/xtask/tests/workflows/cp_deploy.rs`) holds both jobs to this shape:
 their `if:`, needs, rights, steps, outputs, the pinned workflow and every input.

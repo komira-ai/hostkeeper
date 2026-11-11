@@ -121,8 +121,9 @@ pub struct Allowed {
 /// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
 ///   the release, to this repository's package in the registry.
 /// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
-///   nothing and holds no other scope), under the `if:` of the deploy
-///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
+///   nothing and holds no other scope), under the `if:` of the deploy after the control-plane
+///   deploy ([`desired::COORDINATOR_IF`]); [`super::coordinator_wait`] holds the rest of its
+///   shape.
 /// - `release.yml` / `cp-deploy`: `id-token`, for docker-swarm-updater's deploy workflow it
 ///   calls, which asks GitHub for an OIDC token for every request (it holds no other scope),
 ///   under the `if:` of the control-plane deploy ([`cp_deploy::DEPLOY_IF`]);
@@ -164,7 +165,7 @@ pub const WRITE_ALLOWED: &[Allowed] = &[
         file: "release.yml",
         job: desired::COORDINATOR_JOB,
         scope: "id-token",
-        condition: desired::SET_IF,
+        condition: desired::COORDINATOR_IF,
     },
     Allowed {
         file: "release.yml",

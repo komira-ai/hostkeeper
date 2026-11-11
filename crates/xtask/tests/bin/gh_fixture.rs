@@ -30,13 +30,20 @@
 //! as curl does. It never waits, whatever retry flags it is given.
 //!
 //! A `curl` with both `--output <file>` and `--write-out <format>` is the coordinator's version
-//! route as release.yml's job `coordinator` asks it (tests/workflows/coordinator_wait_run_tests.rs):
-//! it appends `<METHOD> <path>` to `answers/calls` as below and reads the same answer file. With
-//! one, it writes the body to `<file>`, prints `<format>` with `%{http_code}` made the status and
-//! `\n` a line break, and exits 22 for a status of 400 or more when given `--fail-with-body`
-//! (curl's exit for an HTTP error), else 0. With no answer file the coordinator gave no answer:
-//! it prints `<format>` with the status `000` and exits 7, curl's exit when it cannot connect. It
-//! never waits, whatever retry flags it is given.
+//! route as release.yml's job `coordinator` asks it (tests/workflows/coordinator_wait_run_tests.rs).
+//! Each try appends `<METHOD> <path>` to `answers/calls` as below and reads the answer file of
+//! that try, `answers/<key>-<n>` for the `n`th (from 1), else `answers/<key>`. A status of `000`
+//! there, or no answer file at all, is no answer: curl's exit 7, when it cannot connect. Else the
+//! try writes the body to `<file>`, except for a status of 400 or more with `--fail`, and fails
+//! with curl's exit 22 for a status of 400 or more when given `--fail` or `--fail-with-body`.
+//! A failed try is tried again, up to `--retry <n>` more times, when `--retry-all-errors` is
+//! given (or the try had no answer, or a status curl calls transient: 408, 429, 500, 502, 503,
+//! 504), as curl does; but a try after one that wrote a body into a `<file>` that is not a
+//! regular file (`/dev/null`) ends the run with exit 23 and prints nothing more, as curl 8.5 (the
+//! curl of ubuntu-24.04) does when it cannot truncate that file for the retry. After the last
+//! try it prints `<format>` once, with `%{http_code}` made that try's status and `\n` a line
+//! break, and exits as that try ended. It never waits, whatever `--retry-delay` or
+//! `--retry-max-time` it is given.
 //!
 //! Any other `curl` with `--write-out` is the Docker Engine API and the coordinator's version route of
 //! the coordinator-update unit's test (tests/coordinator_update_unit.rs): it takes the request's
@@ -254,34 +261,61 @@ fn logged_request<'a>(dir: &Path, args: &'a [String]) -> Option<(&'a str, &'a st
     Some((method, path))
 }
 
-/// The fake answer of one `--output <file> --write-out <format>` request (see the module).
+/// The fake answers of an `--output <file> --write-out <format>` request and its retries (see
+/// the module).
 fn curl_status(dir: &Path, args: &[String], file: &str, format: &str) -> ExitCode {
-    let Some((method, path)) = logged_request(dir, args) else {
-        return ExitCode::from(2);
-    };
-    let print = |status: &str| {
+    let retries: u32 = value(args, "--retry")
+        .and_then(|n| n.parse().ok())
+        .unwrap_or(0);
+    let flag = |name: &str| args.iter().any(|a| a == name);
+    let regular = std::fs::metadata(file).map_or(true, |m| m.is_file());
+    let mut written = false;
+    let mut tried = 0;
+    loop {
+        tried += 1;
+        let Some((method, path)) = logged_request(dir, args) else {
+            return ExitCode::from(2);
+        };
+        let key = answer_key(method, path);
+        let answers = dir.join("answers");
+        let text = std::fs::read_to_string(answers.join(format!("{key}-{tried}")))
+            .or_else(|_| std::fs::read_to_string(answers.join(&key)))
+            .unwrap_or_else(|_| "000".to_owned());
+        let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
+        let code: u16 = status.parse().unwrap_or(0);
+        let exit = if code == 0 {
+            eprintln!("curl: (7) Failed to connect");
+            7
+        } else {
+            if !(code >= 400 && flag("--fail")) {
+                if std::fs::write(file, body).is_err() {
+                    return fail("cannot write --output");
+                }
+                written |= !body.is_empty();
+            }
+            if code >= 400 && (flag("--fail") || flag("--fail-with-body")) {
+                eprintln!("curl: (22) The requested URL returned error: {status}");
+                22
+            } else {
+                0
+            }
+        };
+        let transient = code == 0 || [408, 429, 500, 502, 503, 504].contains(&code);
+        if exit != 0 && tried <= retries && (flag("--retry-all-errors") || transient) {
+            if written && !regular {
+                eprintln!("curl: (23) Failed writing received data to disk/application");
+                return ExitCode::from(23);
+            }
+            continue;
+        }
         print!(
             "{}",
-            format.replace("%{http_code}", status).replace("\\n", "\n")
+            format
+                .replace("%{http_code}", if code == 0 { "000" } else { status })
+                .replace("\\n", "\n")
         );
-    };
-    let Ok(text) = std::fs::read_to_string(dir.join("answers").join(answer_key(method, path)))
-    else {
-        print("000");
-        eprintln!("curl: (7) Failed to connect");
-        return ExitCode::from(7);
-    };
-    let (status, body) = text.split_once('\n').unwrap_or((text.as_str(), ""));
-    if std::fs::write(file, body).is_err() {
-        return fail("cannot write --output");
+        return ExitCode::from(exit);
     }
-    print(status);
-    let error = status.parse::<u16>().map_or(true, |s| s >= 400);
-    if error && args.iter().any(|a| a == "--fail-with-body") {
-        eprintln!("curl: (22) The requested URL returned error: {status}");
-        return ExitCode::from(22);
-    }
-    ExitCode::SUCCESS
 }
 
 /// The fake answer of one `--write-out` request (see the module).
