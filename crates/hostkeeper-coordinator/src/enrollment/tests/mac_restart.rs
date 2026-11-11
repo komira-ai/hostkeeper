@@ -27,6 +27,7 @@ fn policy() -> MacPolicy {
             enrolled: true,
             supervised: true,
             enrolled_since_unix: None,
+            enrolled_via_dep: None,
         }),
     );
     MacPolicy {

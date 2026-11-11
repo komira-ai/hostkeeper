@@ -1,0 +1,93 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="Operator login components: the browser logs in with a username and password and holds a session cookie; automation uses bearer API tokens; the deploy script writes the one-hour initial-admin file. Inside the coordinator are the login routes, the session table, the login limiter, the password module, the users and API-token store, the read-only tokens file and the audit log.">
+<title>Operator login components</title>
+<desc>The browser and the generated CLI or CI call the coordinator's private listener. The browser holds a session cookie and a CSRF token; automation sends a bearer API token. The deploy script writes the initial-admin file, which the coordinator adopts. The boxed area is what hostkeeper runs.</desc>
+<defs><marker id="olc-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="600" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16">Operator login: a person signs in with a password and gets a session; automation keeps its bearer token (designed, not built)</text>
+
+<rect x="30" y="80" width="190" height="64" rx="5" class="box"/>
+<text x="125" y="104" class="b" text-anchor="middle">Browser (the UI)</text>
+<text x="125" y="122" class="t-m" text-anchor="middle">cookie + CSRF header</text>
+<rect x="30" y="200" width="190" height="64" rx="5" class="box"/>
+<text x="125" y="224" class="b" text-anchor="middle">hkctl, CI, scripts</text>
+<text x="125" y="242" class="t-m" text-anchor="middle">Authorization: Bearer</text>
+<rect x="30" y="460" width="190" height="80" rx="5" class="box"/>
+<text x="125" y="484" class="b" text-anchor="middle">Deploy script</text>
+<text x="125" y="502" class="t-m" text-anchor="middle">on the host, as root: mints the</text>
+<text x="125" y="518" class="t-m" text-anchor="middle">first password, prints it once</text>
+
+<rect x="290" y="50" width="880" height="530" rx="8" class="box-p"/>
+<text x="305" y="70" class="t-m">hostkeeper-coordinator (what hostkeeper runs), private listener, TLS</text>
+
+<rect x="320" y="90" width="240" height="120" rx="5" class="box-o"/>
+<text x="440" y="112" class="b" text-anchor="middle">Login routes</text>
+<text x="440" y="132" class="t-m" text-anchor="middle">POST /v1/login, /v1/logout</text>
+<text x="440" y="148" class="t-m" text-anchor="middle">GET /v1/session</text>
+<text x="440" y="164" class="t-m" text-anchor="middle">POST /v1/password</text>
+<text x="440" y="186" class="t-m" text-anchor="middle">Origin and CSRF checked here</text>
+
+<rect x="320" y="240" width="240" height="90" rx="5" class="box"/>
+<text x="440" y="262" class="b" text-anchor="middle">Operator API (gateway)</text>
+<text x="440" y="282" class="t-m" text-anchor="middle">same methods as today, plus</text>
+<text x="440" y="298" class="t-m" text-anchor="middle">Users and ApiTokens services</text>
+<text x="440" y="314" class="t-m" text-anchor="middle">caller = a name, session or bearer</text>
+
+<rect x="620" y="90" width="230" height="64" rx="5" class="box"/>
+<text x="735" y="112" class="b" text-anchor="middle">Session table</text>
+<text x="735" y="130" class="t-m" text-anchor="middle">memory: id hash, user, CSRF,</text>
+<text x="735" y="146" class="t-m" text-anchor="middle">idle and absolute expiry</text>
+<rect x="620" y="180" width="230" height="64" rx="5" class="box"/>
+<text x="735" y="202" class="b" text-anchor="middle">Login limiter</text>
+<text x="735" y="220" class="t-m" text-anchor="middle">memory: failures per user,</text>
+<text x="735" y="236" class="t-m" text-anchor="middle">lock-out, hashes in flight</text>
+<rect x="620" y="270" width="230" height="64" rx="5" class="box"/>
+<text x="735" y="292" class="b" text-anchor="middle">Password module</text>
+<text x="735" y="310" class="t-m" text-anchor="middle">Argon2id hash and verify,</text>
+<text x="735" y="326" class="t-m" text-anchor="middle">policy, rehash on login</text>
+
+<rect x="910" y="90" width="230" height="84" rx="5" class="box-b"/>
+<text x="1025" y="112" class="b" text-anchor="middle">Users and API tokens</text>
+<text x="1025" y="130" class="t-m" text-anchor="middle">in the store (files or Postgres,</text>
+<text x="1025" y="146" class="t-m" text-anchor="middle">migration 0009): user, hash,</text>
+<text x="1025" y="162" class="t-m" text-anchor="middle">must_change, token SHA-256</text>
+<rect x="910" y="200" width="230" height="64" rx="5" class="box"/>
+<text x="1025" y="222" class="b" text-anchor="middle">Tokens file</text>
+<text x="1025" y="240" class="t-m" text-anchor="middle">--tokens-file, read-only,</text>
+<text x="1025" y="256" class="t-m" text-anchor="middle">named bearer tokens as today</text>
+<rect x="910" y="290" width="230" height="64" rx="5" class="box"/>
+<text x="1025" y="312" class="b" text-anchor="middle">Audit log</text>
+<text x="1025" y="330" class="t-m" text-anchor="middle">login, logout, password and</text>
+<text x="1025" y="346" class="t-m" text-anchor="middle">user and token changes</text>
+
+<rect x="620" y="420" width="520" height="100" rx="5" class="box-o"/>
+<text x="880" y="444" class="b" text-anchor="middle">Initial-admin file (adopted on the reload tick)</text>
+<text x="880" y="464" class="t-m" text-anchor="middle">mode 0400 in the state volume: id, user, password, valid_until (one hour)</text>
+<text x="880" y="480" class="t-m" text-anchor="middle">the coordinator hashes it into a must-change user, and deletes the file</text>
+<text x="880" y="496" class="t-m" text-anchor="middle">when the password is changed or the hour has passed</text>
+
+<path d="M220,112 L320,125" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M220,232 L320,280" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M560,280 L620,300" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M560,130 L620,122" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M560,160 L620,205" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M850,300 L910,150" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M560,300 L910,225" class="ln" marker-end="url(#olc-ak)"/>
+<path d="M850,130 L910,125" class="ln-d" marker-end="url(#olc-ak)"/>
+<path d="M880,420 L1025,174" class="ln-d" marker-end="url(#olc-ak)"/>
+<path d="M220,500 L620,480" class="ln" marker-end="url(#olc-ak)"/>
+<text x="420" y="508" class="t-m lbl" text-anchor="middle">writes the file, prints the password once</text>
+<text x="600" y="560" class="b" text-anchor="middle">The UI keeps no token. A browser call needs the cookie and the CSRF header; a bearer call needs neither and never uses the cookie.</text>
+</svg>

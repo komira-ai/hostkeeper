@@ -1,0 +1,48 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 640" width="1200" height="640" role="img" aria-label="First admin: the deploy script writes a one-hour password file and prints the password once; the coordinator adopts it into a must-change user; the admin logs in within the hour and sets a new password, after which the file is deleted.">
+<title>First admin bootstrap</title>
+<desc>Sequence between the operator, the deploy script, the initial-admin file, the coordinator and the store. The password is valid for one hour; a change of password deletes the file, and after the hour the coordinator deletes it and the password no longer logs in.</desc>
+<defs><marker id="olb-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="640" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16">First admin: a random password in a file that is good for one hour (designed, not built)</text>
+<rect x="30" y="50" width="150" height="36" rx="5" class="box"/><text x="105" y="73" class="b" text-anchor="middle">Operator</text>
+<rect x="250" y="50" width="170" height="36" rx="5" class="box"/><text x="335" y="73" class="b" text-anchor="middle">Deploy script</text>
+<rect x="500" y="50" width="190" height="36" rx="5" class="box-o"/><text x="595" y="73" class="b" text-anchor="middle">Initial-admin file</text>
+<rect x="770" y="50" width="170" height="36" rx="5" class="box"/><text x="855" y="73" class="b" text-anchor="middle">Coordinator</text>
+<rect x="1010" y="50" width="150" height="36" rx="5" class="box"/><text x="1085" y="73" class="b" text-anchor="middle">Store</text>
+<path d="M105,86 L105,610" class="life"/><path d="M335,86 L335,610" class="life"/><path d="M595,86 L595,610" class="life"/><path d="M855,86 L855,610" class="life"/><path d="M1085,86 L1085,610" class="life"/>
+
+<path d="M105,120 L335,120" class="ln" marker-end="url(#olb-ak)"/>
+<text x="220" y="112" class="t-m lbl" text-anchor="middle">run the deploy</text>
+<path d="M335,160 L395,160 L395,180 L335,180" class="ln" marker-end="url(#olb-ak)"/>
+<text x="410" y="174" class="t-m">random password, valid_until = now + 3600 s</text>
+<path d="M335,220 L595,220" class="ln" marker-end="url(#olb-ak)"/>
+<text x="465" y="212" class="t-m lbl" text-anchor="middle">write, 0400</text>
+<path d="M335,260 L105,260" class="ln" marker-end="url(#olb-ak)"/>
+<text x="220" y="252" class="t-m lbl" text-anchor="middle">print the password once</text>
+<path d="M855,310 L595,310" class="ln-d" marker-end="url(#olb-ak)"/>
+<text x="725" y="302" class="t-m lbl" text-anchor="middle">reload tick: read the file</text>
+<path d="M855,350 L915,350 L915,370 L855,370" class="ln" marker-end="url(#olb-ak)"/>
+<text x="930" y="364" class="t-m">Argon2id hash; user must_change</text>
+<path d="M855,410 L1085,410" class="ln" marker-end="url(#olb-ak)"/>
+<text x="970" y="402" class="t-m lbl" text-anchor="middle">put user, hash, expiry; audit</text>
+<path d="M105,460 L855,460" class="ln" marker-end="url(#olb-ak)"/>
+<text x="480" y="452" class="t-m lbl" text-anchor="middle">login inside the hour: session that may only change the password</text>
+<path d="M105,500 L855,500" class="ln" marker-end="url(#olb-ak)"/>
+<text x="480" y="492" class="t-m lbl" text-anchor="middle">POST /v1/password with the new password</text>
+<path d="M855,540 L595,540" class="ln" marker-end="url(#olb-ak)"/>
+<text x="725" y="532" class="t-m lbl" text-anchor="middle">delete the file</text>
+<path d="M855,580 L1085,580" class="ln" marker-end="url(#olb-ak)"/>
+<text x="970" y="572" class="t-m lbl" text-anchor="middle">new hash, must_change off; audit</text>
+<text x="600" y="628" class="t-m" text-anchor="middle">After an hour with no change the tick deletes the file and the password no longer logs in: run the deploy again.</text>
+</svg>
