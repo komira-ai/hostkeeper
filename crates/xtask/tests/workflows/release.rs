@@ -75,10 +75,11 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 
 /// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
 /// (`plan`, `verify`, `publish`, `image`) and hostkeeper's own deploy ([`desired::TARGETS_JOB`],
-/// [`desired::COORDINATOR_JOB`], [`desired::JOB`]).
-pub const RELEASE_JOBS: [&str; 7] = [
+/// [`desired::COORDINATOR_JOB`], [`super::no_downgrade::JOB`], [`desired::JOB`]).
+pub const RELEASE_JOBS: [&str; 8] = [
     "coordinator",
     "image",
+    "no-downgrade",
     "plan",
     "publish",
     "set-desired",
@@ -404,7 +405,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     want.sort();
     if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, set-desired and the jobs of the package channels ({want:?})"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [

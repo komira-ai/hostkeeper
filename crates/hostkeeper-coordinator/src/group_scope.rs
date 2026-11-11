@@ -1,17 +1,20 @@
 //! The decision by host group (`docs/design/hostgroups.md`, sections 1.4, 2 and 3): what a
-//! heartbeat of one host is decided over once the coordinator holds a host group.
+//! heartbeat of one host is decided over in group mode.
 //!
-//! The coordinator is in group mode while it holds at least one group. In group mode a host runs
+//! The coordinator is in group mode while it holds at least one group, and always when it was
+//! built to place by groups only ([`crate::desired::DesiredStore::by_groups_only`]), as `serve`
+//! builds it. In group mode a host runs
 //! the packages of its group and nothing the rollout file's roles, selectors or an operator's
 //! assignments say places a host. The decision itself is the engine of a coordinator without
 //! groups ([`crate::decide`], [`crate::stages`], [`crate::reconcile`], [`crate::rollouts`],
 //! [`crate::halt`]), given the group's view of its inputs:
 //!
 //! - one [`ServiceDef`] per package of the group, in the order of the group's list, made from
-//!   the group's policy (stages, canary, bake, rollback, backoff) and the rollout file's
-//!   definition of the package, when it has one, for what a package alone has (its version scheme,
-//!   its repository and the floor of its minimum version), the group's own minimum version above
-//!   it. Its roles are the group's name alone: the role the fleet records for a host in group
+//!   the group's policy (stages, canary, bake, rollback, backoff), the coordinator's own
+//!   definition of the package when it has one (a coordinator built in-process; `serve` defines
+//!   none) for its version scheme and the floor of its minimum version, the repository
+//!   `Services.SetRepository` set ([`OpsState::repository_of`]), and the group's own minimum
+//!   version. Its roles are the group's name alone: the role the fleet records for a host in group
 //!   mode is the name of its group, and the empty name for a host in none, so a host is
 //!   assigned a package exactly when its group lists it, and a hold of a role holds the
 //!   group;
@@ -37,7 +40,7 @@ use crate::host_groups::{GroupName, HostGroup};
 use crate::identity::Identity;
 use crate::ops::OpsState;
 use crate::service::Coordinator;
-use crate::services::{DEFAULT_REPOSITORY, ServiceDef, Services, VersionScheme};
+use crate::services::{ServiceDef, Services, VersionScheme};
 use crate::stages::Plan;
 
 /// The host group a [`ServiceDef`] was made for, and what the group's policy says that no key of
@@ -100,10 +103,7 @@ fn def_of(
             state.group_marks(group, package).min_version,
         ),
         defer_backoff: policy.defer_backoff,
-        repository: base.map_or_else(
-            || DEFAULT_REPOSITORY.to_owned(),
-            |def| def.repository.clone(),
-        ),
+        repository: state.repository_of(file, package),
         scope: Some(GroupScope {
             group: group.clone(),
             live_rollouts: policy.live_rollouts.map(|n| n as usize),
@@ -135,6 +135,7 @@ fn leaving_def(
     group: &GroupName,
     listed: &HostGroup,
     file: &Services,
+    state: &OpsState,
     package: &str,
     generation: u64,
 ) -> ServiceDef {
@@ -152,10 +153,7 @@ fn leaving_def(
         rollback_after_failed: crate::reconcile::FailThreshold::default(),
         min_version: None,
         defer_backoff: crate::defer::DeferBackoff::default(),
-        repository: base.map_or_else(
-            || DEFAULT_REPOSITORY.to_owned(),
-            |def| def.repository.clone(),
-        ),
+        repository: state.repository_of(file, package),
         scope: Some(GroupScope {
             group: group.clone(),
             live_rollouts: listed.policy.live_rollouts.map(|n| n as usize),
@@ -182,7 +180,7 @@ pub(crate) fn group_services(
     let leaving = leaving
         .iter()
         .filter(|(package, _)| !listed.packages.contains(package))
-        .map(|(package, generation)| leaving_def(group, listed, file, package, *generation));
+        .map(|(package, generation)| leaving_def(group, listed, file, state, package, *generation));
     Services::from_defs(packages.chain(leaving).collect())
 }
 

@@ -115,7 +115,7 @@ pub struct Allowed {
 /// - `release.yml` / `image`: `packages`, to push the coordinator's image, the checked bytes of
 ///   the release, to this repository's package in the registry.
 /// - `release.yml` / `coordinator`: `id-token`, for the tailnet join alone (it checks out
-///   nothing and holds no other scope), under the `if:` of `set-desired`
+///   nothing and holds no other scope), under the `if:` of the deploy
 ///   ([`desired::SET_IF`]); [`super::coordinator_wait`] holds the rest of its shape.
 /// - `advisories.yml` / `advisories`: `issues`, to open, rewrite or close the one issue that
 ///   lists the security advisories against the dependencies, on a run of main.

@@ -373,9 +373,10 @@ impl Coordinator {
         if named.is_empty() {
             return Ok(());
         }
+        let repository = self.repository_of(&def.name);
         let channels = self.desired.with_repositories(|registry| {
             registry
-                .get(&def.repository)
+                .get(&repository)
                 .map(|kept| registry::channels(&kept.repository))
         });
         match channels {

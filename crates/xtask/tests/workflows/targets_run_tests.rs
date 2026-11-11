@@ -20,7 +20,7 @@
 //!
 //! What is asserted is what decides whether hostkeeper's desired version is set, and with what:
 //! which step fails, and the outputs `version`, `targets` and `newest`. `set-desired` runs only
-//! when the job succeeds and `newest` is `true` (its `if:`, [`SET_IF`], which the lint holds).
+//! when the job succeeds and `newest` is `true` (its `if:`, [`SET_DESIRED_IF`], which the lint holds).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -28,7 +28,7 @@ use std::process::Command;
 
 use serde_json::json;
 
-use super::desired::{SET_IF, TARGETS_JOB};
+use super::desired::{SET_DESIRED_IF, TARGETS_JOB};
 use super::lint::{entries, entry};
 use super::release_files::{self, REPO, sorted};
 use super::release_ref::{self, SURFACE_FILE, floor_problem};
@@ -318,7 +318,7 @@ fn passed(version: &str, newest: bool) -> Ended {
 #[test]
 fn the_set_desired_job_runs_only_when_the_targets_job_says_newest() {
     // Catches: this test's reading of `set-desired`'s `if:` drifting from the workflow's.
-    assert!(SET_IF.contains("needs.targets.outputs.newest == 'true'"));
+    assert!(SET_DESIRED_IF.contains("needs.targets.outputs.newest == 'true'"));
     assert!(!Ended::Failed("x".to_owned()).sets_desired());
     assert!(!passed("1.2.9", false).sets_desired());
     assert!(passed("1.2.9", true).sets_desired());

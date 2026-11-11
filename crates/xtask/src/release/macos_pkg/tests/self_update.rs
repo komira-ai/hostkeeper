@@ -42,9 +42,7 @@ fn parsed(words: &[String]) -> Command {
 /// daemon derives from the state directory of the `daemon` command the plist runs.
 fn started_dir() -> PathBuf {
     let args = program_arguments(&plist_text().expect("the plist"));
-    let Command::Daemon(flags) = parsed(&args) else {
-        panic!("the plist starts the daemon verb");
-    };
+    let Command::Daemon(flags) = parsed(&args);
     binary_dir(&flags.state_dir)
 }
 
@@ -57,9 +55,7 @@ fn the_shipped_plist_starts_the_installed_binary_the_daemons_start_knows_as_pack
     // whose program is not the path the payload installs the binary at; and a job whose
     // arguments the daemon would not run as the daemon with its default state directory.
     let args = program_arguments(&plist_text().expect("the plist"));
-    let Command::Daemon(flags) = parsed(&args) else {
-        panic!("the plist starts the daemon verb");
-    };
+    let Command::Daemon(flags) = parsed(&args);
     assert_eq!(flags.state_dir, Path::new(DEFAULT_STATE_DIR));
     assert_eq!(DAEMON_STATE_DIR, DEFAULT_STATE_DIR);
     assert_eq!(args[0], INSTALLED_BINARY);

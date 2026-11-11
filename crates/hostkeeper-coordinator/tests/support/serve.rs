@@ -1,6 +1,6 @@
 //! The files and flags of a `serve` the start tests drive in process
-//! (`config::{Cli, build, main}`): the TLS files, the OIDC allow-list, the operator token and the
-//! rollout file in a scratch directory, the recorded flags over them, and the calls that build a
+//! (`config::{Cli, build, main}`): the TLS files, the OIDC allow-list, and the operator token in a
+//! scratch directory, the recorded flags over them, and the calls that build a
 //! coordinator from them or say why it is refused.
 
 use std::ffi::OsString;
@@ -16,7 +16,7 @@ use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
 use sha2::{Digest as _, Sha256};
 
-use super::{Ca, OPERATOR, recorded, scratch};
+use super::{Ca, OPERATOR, scratch};
 
 /// The files the flags name, in a directory of their own.
 pub struct Files {
@@ -33,7 +33,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("clients CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         files
     }
 
@@ -83,10 +82,6 @@ impl Files {
             (
                 "--operator-token-file",
                 self.path("operator.token").display().to_string(),
-            ),
-            (
-                "--rollout-file",
-                self.path("rollout.toml").display().to_string(),
             ),
             ("--legacy-service", "kbf".to_owned()),
             ("--role-uri-prefix", "urn:kbf:role:".to_owned()),

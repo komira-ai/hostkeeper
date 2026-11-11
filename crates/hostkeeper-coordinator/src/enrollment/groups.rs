@@ -16,10 +16,12 @@ use hostkeeper_proto::hostkeeper::operator::v1::EnrollmentRefusal;
 use crate::desired::DesiredStore;
 use crate::host_groups::{GroupName, HostGroups};
 
-/// The host groups of `desired` an approval or a record names, now; `None` when it holds none,
-/// and nothing is placed by group.
+/// The host groups of `desired` an approval or a record names, now; `None` when it places no
+/// host by group (it holds none and was not built to place by groups only), and nothing is
+/// placed by group. A coordinator built to place by groups only that holds none answers an
+/// empty set, so a group an approval or a record names is not held.
 pub(crate) fn held_in(desired: &DesiredStore) -> Option<HostGroups> {
-    Some(desired.host_groups()).filter(|groups| !groups.is_empty())
+    desired.in_group_mode().then(|| desired.host_groups())
 }
 
 /// The host group a request names by `host_group`, or else by `role`, checked against `held`,

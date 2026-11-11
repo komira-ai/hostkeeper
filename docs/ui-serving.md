@@ -34,12 +34,13 @@ it again.
 
 ## What the pages do for services
 
-- **Rollout**: for each service, the roles it is assigned to, the operator's assignments (a
-  removal is shown as one), the hosts it is assigned to, the hosts being uninstalled, and the
-  desired version. The same section sets the desired version (a version and, if you have them, the
-  text of the release index and its digest; the text is sent as typed), assigns the service to a role, and unassigns it from a role, with a box to
-  uninstall it from each host that loses its last assignment. Setting the desired version and
-  unassigning with uninstall ask first.
+- **Rollout**: for each service, what `Services.List` says of it (the hosts it runs on, the hosts being uninstalled; the
+  assigned roles and operator assignments it also lists are empty, since a group places it) and the desired version. The same section sets the
+  desired version (a version and, if you have them, the text of the release index and its digest;
+  the text is sent as typed). Setting the desired version asks first. It still shows the Assign and
+  Unassign buttons, but a coordinator places by host group alone, so it refuses both with
+  `placed_by_host_group`, and the page shows that refusal as it is; put a package in a group with
+  `hkctl host-groups put` instead.
   The section also shows the service's update plan from `Releases.Status`: the stage sizes with
   their percents (a stage an operator enters is marked manual) against the eligible hosts, the
   stage the plan is in ("2 of 3"), why it waits (and for which stage, or that an operator paused
@@ -61,8 +62,18 @@ it again.
   `unknown: platform not reported`: the coordinator, which knows it, may pick it an entry. Counts of each pick
   cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
   version never set with targets) is shown as the API says it.
-- **Host**: the services assigned to that host, how each is assigned (to the host or through its
-  role), the installed version against the desired one, and the minimum version.
+- **Host groups** (a section of the Rollout page, under the services): every group the coordinator
+  holds (`HostGroups.List`, every page), with its packages, the policy keys that are set ("default"
+  when none is), its generation, its host count and its desired versions. Opening a group
+  (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
+  and the group's hosts 50 at a time, each a link to its Host page. One action: moving a host to a
+  group (`HostGroups.Move`), which needs the node id, the group and a reason (1 to 256 characters,
+  no control character) and asks to confirm first. Groups are created, changed and removed with
+  `hkctl host-groups put` and `remove`, not on this page. A refused List or Get is shown inline
+  with its code and reason, and the rest of the page still renders.
+- **Host**: the services that host runs because its group lists them (its Source column reads
+  `role <name>`, the name being the host's group), the installed version against the desired one,
+  and the minimum version.
 - Each action is one API call, and the Audit page shows it by the token's name. A refused call
   shows the API's code and reason as they are.
 
