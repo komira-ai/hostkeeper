@@ -222,7 +222,7 @@ fn a_record_file_that_is_not_whole_is_refused_with_its_reason() {
             "a sent command's UUID is malformed",
         ),
         (
-            "type off the five",
+            "type off the list",
             file_of(&bad_sent(GOOD_UUID, "EraseDevice")),
             "a sent command's type is not one the gate sends",
         ),

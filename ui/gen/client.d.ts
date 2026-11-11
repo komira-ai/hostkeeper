@@ -513,6 +513,11 @@ export namespace hostkeeper_operator_v1 {
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export type MdmBaselineState =
+    | "MDM_BASELINE_STATE_UNSPECIFIED"
+    | "MDM_BASELINE_STATE_PENDING"
+    | "MDM_BASELINE_STATE_APPLIED"
+    | "MDM_BASELINE_STATE_FAILED";
   export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
   export interface MdmDevice {
     enrollmentId?: string;
@@ -534,6 +539,8 @@ export namespace hostkeeper_operator_v1 {
     installSends?: number;
     installLastSentUnix?: string;
     installSha256?: string;
+    baselineState?: hostkeeper_operator_v1.MdmBaselineState;
+    baselineReason?: string;
   }
   export type MdmPhase = "MDM_PHASE_UNSPECIFIED" | "MDM_PHASE_AUTHENTICATED" | "MDM_PHASE_ENROLLED" | "MDM_PHASE_CHECKED_OUT";
   export interface MdmSetting { name?: string; value?: string; isDefault?: boolean; }

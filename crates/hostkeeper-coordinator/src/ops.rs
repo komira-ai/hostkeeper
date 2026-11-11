@@ -316,7 +316,7 @@ pub struct AuditEntry {
     /// file an earlier build wrote; enrollment's: `enroll_approve`, `enroll_replace`,
     /// `enroll_approve_refused`, `mac_auto_approve_declined`, and the coordinator's
     /// `enroll_requested`, `enroll_issued`, `cert_renewed` and `request_expired`; the MDM gate's
-    /// `mdm_nonce_pushed` and `mdm_install_sent`, by `mdm-gate`; `state_imported`, by
+    /// `mdm_nonce_pushed`, `mdm_install_sent` and `mdm_baseline`, by `mdm-gate`; `state_imported`, by
     /// `coordinator`, the last row an earlier release's `import` wrote into the database; this
     /// release writes none).
     pub action: String,

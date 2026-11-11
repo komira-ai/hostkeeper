@@ -430,6 +430,17 @@ fn a_command_is_the_xml_plist_nanohub_takes() {
         ("DeviceInformation", &uuid)
     );
     assert!(info.is_allowed() && security.is_allowed());
+    let desktop = Command::enable_remote_desktop(uuid.clone());
+    assert_eq!(
+        String::from_utf8(desktop.to_plist()).expect("utf-8"),
+        ENABLE_REMOTE_DESKTOP_PLIST
+    );
+    let list = Command::profile_list(uuid.clone());
+    assert_eq!(
+        String::from_utf8(list.to_plist()).expect("utf-8"),
+        PROFILE_LIST_PLIST
+    );
+    assert!(desktop.is_allowed() && list.is_allowed());
     assert_eq!(
         hostkeeper_mdm_gate::QUERIES,
         ["SerialNumber", "UDID", "IsSupervised"]
@@ -438,3 +449,5 @@ fn a_command_is_the_xml_plist_nanohub_takes() {
 
 const DEVICE_INFORMATION_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>Queries</key>\n\t\t<array>\n\t\t\t<string>SerialNumber</string>\n\t\t\t<string>UDID</string>\n\t\t\t<string>IsSupervised</string>\n\t\t</array>\n\t\t<key>RequestType</key>\n\t\t<string>DeviceInformation</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
 const SECURITY_INFO_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>RequestType</key>\n\t\t<string>SecurityInfo</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
+const ENABLE_REMOTE_DESKTOP_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>RequestType</key>\n\t\t<string>EnableRemoteDesktop</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
+const PROFILE_LIST_PLIST: &str = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n<!DOCTYPE plist PUBLIC \"-//Apple//DTD PLIST 1.0//EN\" \"http://www.apple.com/DTDs/PropertyList-1.0.dtd\">\n<plist version=\"1.0\">\n<dict>\n\t<key>Command</key>\n\t<dict>\n\t\t<key>ManagedOnly</key>\n\t\t<false/>\n\t\t<key>RequestType</key>\n\t\t<string>ProfileList</string>\n\t</dict>\n\t<key>CommandUUID</key>\n\t<string>00000000-0000-4000-8000-000000000000</string>\n</dict>\n</plist>";
