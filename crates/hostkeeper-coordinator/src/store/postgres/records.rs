@@ -436,11 +436,15 @@ pub(super) fn read_all(
 }
 
 /// The statements that write every record of `snapshot` into tables that hold none, and set the
-/// serial counter to its next serial when one was taken.
+/// serial counter to its next serial when one was taken: how the tests fill a database with a
+/// whole enrollment store ([`super::tests::seed`]). It is here, beside the private statements of a
+/// record it is made of, and is built for the tests alone, since no coordinator path writes a
+/// whole store.
 ///
 /// # Errors
 /// [`StoreError`]: a record's key does not parse, or a counter is above the largest the database
 /// keeps.
+#[cfg(test)]
 pub(super) fn writes(snapshot: &Snapshot) -> Result<Vec<Stmt>, StoreError> {
     let records = snapshot
         .requests

@@ -21,11 +21,10 @@ use std::path::PathBuf;
 use hostkeeper_mdm_gate::{DeviceRecord, DeviceStore, StoreError, decode_record, encode_record};
 
 use super::Postgres;
-use super::rows::{Stmt, Val};
 use super::session::Session;
 
 /// The statement that writes a record over the one of its enrollment id.
-const UPSERT: &str = "INSERT INTO mdm_devices (enrollment_id, record) VALUES ($1, $2) \
+pub(super) const UPSERT: &str = "INSERT INTO mdm_devices (enrollment_id, record) VALUES ($1, $2) \
     ON CONFLICT (enrollment_id) DO UPDATE SET record = EXCLUDED.record";
 
 /// The statement that reads every row, in the order of the enrollment ids' bytes.
@@ -72,28 +71,13 @@ fn records_of(rows: &[(String, Vec<u8>)]) -> Result<Vec<DeviceRecord>, StoreErro
         .collect()
 }
 
-/// Every record `session` holds, in the order of their enrollment ids: what an import compares
-/// and an export writes.
+/// Every record `session` holds, in the order of their enrollment ids: what an export writes.
 ///
 /// # Errors
 /// [`StoreError`]: the table cannot be read, or a row is not a record this release reads.
 pub(super) fn read_all(session: &mut Session) -> Result<Vec<DeviceRecord>, StoreError> {
     let rows = rows(session).map_err(|e| failed(None, &super::session::describe(&e)))?;
     records_of(&rows)
-}
-
-/// The statements that write `records` into an empty table.
-pub(super) fn writes(records: &[DeviceRecord]) -> Vec<Stmt> {
-    records
-        .iter()
-        .map(|record| Stmt {
-            sql: UPSERT.to_owned(),
-            params: vec![
-                Val::Text(record.enrollment_id.as_str().to_owned()),
-                Val::Bytes(encode_record(record)),
-            ],
-        })
-        .collect()
 }
 
 impl PgDevices {

@@ -239,6 +239,7 @@ mod releases;
 mod repositories;
 mod running;
 mod schema;
+pub(crate) mod seed;
 mod serve;
 mod service_repository;
 mod serving;
