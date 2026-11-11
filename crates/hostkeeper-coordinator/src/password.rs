@@ -235,18 +235,15 @@ impl Passwords {
         } else {
             normalise(password)
         };
-        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
         let Ok(parsed) = Phc::new(stored.as_str()) else {
             // Nothing to verify against: spend one hash's work so the time does not say so.
-            let _ = hash_with(&self.argon2, &password);
+            let _ = self.counted_hash(&password);
             return Verdict::Wrong;
         };
-        if oversize
-            || self
-                .argon2
-                .verify_password(password.as_bytes(), &parsed)
-                .is_err()
-        {
+        // The Argon2 work runs for an oversize password too (over the empty string), so the
+        // time does not say the password was over the cap; the answer is still wrong.
+        let matched = self.counted_check(&password, &parsed);
+        if oversize || !matched {
             return Verdict::Wrong;
         }
         let rehash = if self.is_weaker(&parsed) {
@@ -276,6 +273,20 @@ impl Passwords {
     #[must_use]
     pub fn argon2_runs(&self) -> u64 {
         self.argon2_runs.load(Ordering::Relaxed)
+    }
+
+    /// The one place a verify runs Argon2 to hash: counts the run where it happens.
+    fn counted_hash(&self, normalised: &str) -> Result<StoredHash, PasswordError> {
+        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
+        hash_with(&self.argon2, normalised)
+    }
+
+    /// The one place a verify runs Argon2 to check: counts the run where it happens.
+    fn counted_check(&self, normalised: &str, parsed: &Phc) -> bool {
+        self.argon2_runs.fetch_add(1, Ordering::Relaxed);
+        self.argon2
+            .verify_password(normalised.as_bytes(), parsed)
+            .is_ok()
     }
 
     fn is_weaker(&self, parsed: &Phc) -> bool {

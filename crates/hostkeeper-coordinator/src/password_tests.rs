@@ -433,7 +433,9 @@ fn a_password_over_the_cap_never_verifies_even_against_a_hash_of_itself() {
     let passwords = passwords();
     let long = "x".repeat(MAX_PASSWORD_BYTES + 1);
     let stored = hash_under(cheap(), Algorithm::Argon2id, &long);
+    assert_eq!(passwords.argon2_runs(), 0);
     assert_eq!(passwords.verify(&long, &stored), Verdict::Wrong);
+    assert_eq!(passwords.argon2_runs(), 1, "the work was still spent");
     assert_eq!(passwords.verify(&long, &passwords.dummy), Verdict::Wrong);
     assert_eq!(passwords.argon2_runs(), 2, "the work was still spent");
 }
