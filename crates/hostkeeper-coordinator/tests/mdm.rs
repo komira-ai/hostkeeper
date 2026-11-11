@@ -296,7 +296,7 @@ async fn run_serves_the_webhook_and_its_events_show_in_list_devices() {
     );
 
     let before = list_devices(&net, &files, bound.control).await;
-    assert_eq!(before, json!({"gate": true}));
+    assert_eq!(before, json!({"gate": true, "missing": not_configured()}));
     assert_eq!(
         post_webhook(&net, webhook, &authenticate_event()).await,
         200
@@ -319,8 +319,20 @@ async fn run_serves_the_webhook_and_its_events_show_in_list_devices() {
     assert_eq!(asked.len(), 2, "no third address: {asked:?}");
     assert!(net.connect(webhook).is_err(), "nothing serves the webhook");
     let none = list_devices(&net, &files, bound.control).await;
-    assert_eq!(none, json!({}));
+    assert_eq!(none, json!({"missing": not_configured()}));
     serving.abort();
+}
+
+/// The conditions of a coordinator whose MDM setup holds nothing, as the JSON gateway writes them.
+fn not_configured() -> Value {
+    json!([
+        "MDM_CONDITION_PUSH_CERT_MISSING",
+        "MDM_CONDITION_PUSH_KEY_MISSING",
+        "MDM_CONDITION_ABM_TOKEN_MISSING",
+        "MDM_CONDITION_NAME_MISSING",
+        "MDM_CONDITION_TLS_CERT_MISSING",
+        "MDM_CONDITION_TLS_KEY_MISSING"
+    ])
 }
 
 /// The serial and UDID of NanoMDM's recorded `Authenticate`.
