@@ -163,7 +163,7 @@ impl MdmSetup {
         // The new version is stored and in use: from here on the upload is done, and a failure
         // only leaves replaced versions for the next upload to prune.
         let days = match self.store.settings() {
-            Ok(set) => mdm_settings::days_of(&set, "secret_grace_days", 7),
+            Ok(set) => mdm_settings::number_of(&set, "secret_grace_days", 7),
             Err(why) => {
                 tracing::error!(%why, "the settings could not be read: the default grace is used");
                 7

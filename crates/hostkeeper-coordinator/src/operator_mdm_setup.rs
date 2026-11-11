@@ -45,7 +45,7 @@ impl Coordinator {
     }
 
     /// One audit entry, `action` by `by` about `subject`, with `reason`.
-    fn audit_setup(
+    pub(crate) fn audit_setup(
         &self,
         by: &str,
         action: &str,
@@ -225,7 +225,7 @@ fn read_failed(why: SetupFailure) -> MdmRefusal {
 }
 
 /// The answer's row of `info`.
-fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
+pub(crate) fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
     proto::SecretInfo {
         kind: info.kind.as_str().to_owned(),
         version: info.version,

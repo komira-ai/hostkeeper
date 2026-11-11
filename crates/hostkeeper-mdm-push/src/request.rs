@@ -61,6 +61,10 @@ impl std::fmt::Debug for PushRequest {
     }
 }
 
+fn crypto(why: impl std::fmt::Debug) -> RequestError {
+    RequestError::Crypto(format!("{why:?}"))
+}
+
 /// Whether `email` is one plain address: `local@domain`, no space, control or quote character,
 /// no second `@`, and 254 bytes at most.
 #[must_use]
@@ -84,7 +88,7 @@ pub fn email_is_valid(email: &str) -> bool {
 /// # Errors
 /// [`RequestError::Crypto`]: the key could not be generated.
 pub fn new_rsa_key() -> Result<RsaPrivateKey, RequestError> {
-    RsaPrivateKey::new(&mut OsRng, KEY_BITS).map_err(|why| RequestError::Crypto(why.to_string()))
+    RsaPrivateKey::new(&mut OsRng, KEY_BITS).map_err(crypto)
 }
 
 /// The PKCS#1 PEM of `key`.
@@ -94,19 +98,17 @@ pub fn new_rsa_key() -> Result<RsaPrivateKey, RequestError> {
 pub fn pkcs1_pem(key: &RsaPrivateKey) -> Result<KeyBytes, RequestError> {
     key.to_pkcs1_pem(LineEnding::LF)
         .map(|pem| KeyBytes::new(pem.as_bytes().to_vec()))
-        .map_err(|why| RequestError::Crypto(why.to_string()))
+        .map_err(crypto)
 }
 
 /// `key` as the signing key of rcgen.
 fn signing_key(key: &RsaPrivateKey) -> Result<KeyPair, RequestError> {
-    let der = key
-        .to_pkcs8_der()
-        .map_err(|why| RequestError::Crypto(why.to_string()))?;
+    let der = key.to_pkcs8_der().map_err(crypto)?;
     KeyPair::from_pkcs8_der_and_sign_algo(
         &PrivatePkcs8KeyDer::from(der.as_bytes().to_vec()),
         &PKCS_RSA_SHA256,
     )
-    .map_err(|why| RequestError::Crypto(why.to_string()))
+    .map_err(crypto)
 }
 
 /// The CSR of `key` for `email`, PEM.
@@ -129,7 +131,7 @@ pub fn csr_pem(key: &RsaPrivateKey, email: &str) -> Result<String, RequestError>
     params
         .serialize_request(&signing_key(key)?)
         .and_then(|csr| csr.pem())
-        .map_err(|why| RequestError::Crypto(why.to_string()))
+        .map_err(crypto)
 }
 
 /// The self-signed encryption certificate of `key`, valid from `now_unix` for a year, PEM.
@@ -137,22 +139,18 @@ pub fn csr_pem(key: &RsaPrivateKey, email: &str) -> Result<String, RequestError>
 /// # Errors
 /// [`RequestError::Crypto`].
 pub fn encryption_cert_pem(key: &RsaPrivateKey, now_unix: i64) -> Result<String, RequestError> {
-    let crypto = |why: &dyn std::fmt::Display| RequestError::Crypto(why.to_string());
     let mut name = DistinguishedName::new();
     name.push(DnType::CommonName, "mdmcert.download");
     let mut params = CertificateParams::default();
     params.distinguished_name = name;
     params.subject_alt_names = vec![SanType::DnsName(
-        "mdmcert.download"
-            .try_into()
-            .map_err(|why| crypto(&format!("{why:?}")))?,
+        "mdmcert.download".try_into().map_err(crypto)?,
     )];
-    params.not_before =
-        time::OffsetDateTime::from_unix_timestamp(now_unix).map_err(|why| crypto(&why))?;
+    params.not_before = time::OffsetDateTime::from_unix_timestamp(now_unix).map_err(crypto)?;
     params.not_after = time::OffsetDateTime::from_unix_timestamp(
         now_unix.saturating_add(ENCRYPTION_CERT_DAYS * 86_400),
     )
-    .map_err(|why| crypto(&why))?;
+    .map_err(crypto)?;
     params.key_usages = vec![
         KeyUsagePurpose::KeyEncipherment,
         KeyUsagePurpose::DigitalSignature,
@@ -161,7 +159,7 @@ pub fn encryption_cert_pem(key: &RsaPrivateKey, now_unix: i64) -> Result<String,
     params
         .self_signed(&signing_key(key)?)
         .map(|cert| cert.pem())
-        .map_err(|why| crypto(&why))
+        .map_err(crypto)
 }
 
 /// A push certificate request for `email`, with its two new keys, at `now_unix`.

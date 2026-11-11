@@ -5,7 +5,7 @@ use super::*;
 use crate::identity::PushIdentity;
 use crate::request::pkcs1_pem;
 use crate::testkit::{fixture_key, push_certificate_pem};
-use crate::tlsfixture::{Auth, Reply, Server};
+use crate::tls_server_tests::{Auth, Reply, Server};
 
 const TOPIC: &str = "com.apple.mgmt.External.00000000-0000-0000-0000-000000000001";
 const MAGIC: &str = "6C1F0E9A-1111-2222-3333-444455556666";
@@ -36,7 +36,7 @@ const LONG: Duration = Duration::from_secs(60);
 
 #[tokio::test]
 async fn a_push_posts_the_hex_token_url_with_the_mdm_headers_and_the_magic_body() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let sender = sender(&server, LONG);
     let delivered = sender.send(&push(10, 1_700_086_400)).await.unwrap();
     assert_eq!(
@@ -59,7 +59,7 @@ async fn a_push_posts_the_hex_token_url_with_the_mdm_headers_and_the_magic_body(
 
 #[tokio::test]
 async fn the_priority_and_the_expiration_of_the_push_are_the_headers_sent() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let sender = sender(&server, LONG);
     sender.send(&push(5, 0)).await.unwrap();
     let seen = server.requests();
@@ -69,7 +69,7 @@ async fn the_priority_and_the_expiration_of_the_push_are_the_headers_sent() {
 
 #[tokio::test]
 async fn sequential_pushes_reuse_one_connection() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let sender = sender(&server, LONG);
     for _ in 0..3 {
         sender.send(&push(10, 1)).await.unwrap();
@@ -80,7 +80,7 @@ async fn sequential_pushes_reuse_one_connection() {
 
 #[tokio::test]
 async fn a_push_after_a_goaway_connects_again_and_is_delivered() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let mut first = Reply::ok();
     first.then_goaway = true;
     server.answer_next(first);
@@ -95,7 +95,7 @@ async fn a_push_after_a_goaway_connects_again_and_is_delivered() {
 
 #[tokio::test]
 async fn bad_device_token_is_terminal_for_that_token_and_the_setup_is_not_blamed() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     server.answer_next(Reply::status(400, r#"{"reason":"BadDeviceToken"}"#));
     let sender = sender(&server, LONG);
     let error = sender.send(&push(10, 1)).await.unwrap_err();
@@ -111,7 +111,7 @@ async fn bad_device_token_is_terminal_for_that_token_and_the_setup_is_not_blamed
 
 #[tokio::test]
 async fn topic_disallowed_is_a_setup_mistake() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     server.answer_next(Reply::status(400, r#"{"reason":"TopicDisallowed"}"#));
     let error = sender(&server, LONG).send(&push(10, 1)).await.unwrap_err();
     assert_eq!(error, PushError::TopicDisallowed);
@@ -227,15 +227,30 @@ fn a_certificate_alert_and_a_goaway_payload_in_an_error_are_a_certificate_alert(
 }
 
 #[tokio::test]
-async fn a_client_certificate_the_server_refuses_as_expired_is_a_certificate_alert() {
-    let server = Server::start(true, Auth::RefuseExpired).await;
+async fn a_client_certificate_the_server_does_not_accept_is_a_certificate_alert() {
+    // The server trusts another certificate than the one the sender presents.
+    let other = push_certificate_pem(
+        fixture_key(1),
+        "com.example.other",
+        1_000_000,
+        4_000_000_000,
+    );
+    let other = PushIdentity::parse(
+        other.as_bytes(),
+        pkcs1_pem(fixture_key(1)).unwrap().expose(),
+    )
+    .unwrap()
+    .chain[0]
+        .clone();
+    let server = Server::start(true, Auth::Trusting(other)).await;
     let error = sender(&server, LONG).send(&push(10, 1)).await.unwrap_err();
-    assert!(error.is_certificate_alert(), "{error}");
+    assert_eq!(error, PushError::CertificateAlert("UnknownCA".to_owned()));
+    assert!(error.is_certificate_alert());
 }
 
 #[tokio::test]
 async fn a_server_that_is_not_there_is_a_connection_error() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let sender = sender(&server, LONG);
     let dead = {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -250,13 +265,15 @@ async fn a_server_that_is_not_there_is_a_connection_error() {
     drop(sender);
 }
 
-#[tokio::test]
+/// The server never answers, so whatever the order the virtual clock and the sockets are served
+/// in, the only way out is the timeout: the test names no real time.
+#[tokio::test(start_paused = true)]
 async fn an_answer_that_never_comes_ends_in_a_connection_error() {
-    let server = Server::start(true, Auth::Any).await;
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
     let mut never = Reply::ok();
     never.hang = true;
     server.answer_next(never);
-    let error = sender(&server, Duration::from_millis(200))
+    let error = sender(&server, Duration::from_secs(30))
         .send(&push(10, 1))
         .await
         .unwrap_err();
@@ -294,4 +311,54 @@ async fn a_goaway_whose_payload_names_the_certificate_environment_is_a_certifica
         error,
         PushError::CertificateAlert("BadCertificateEnvironment".to_owned())
     );
+}
+
+#[tokio::test]
+async fn a_request_that_fails_on_a_reused_connection_is_sent_again_on_a_new_one() {
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
+    server.answer_next(Reply::ok());
+    server.answer_next(Reply::aborted());
+    server.answer_next(Reply::ok());
+    let sender = sender(&server, LONG);
+    sender.send(&push(10, 1)).await.unwrap();
+    // The second push is aborted on the kept connection, and delivered on a second one.
+    sender.send(&push(10, 1)).await.unwrap();
+    assert_eq!(server.connections.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn a_request_that_fails_on_a_new_connection_is_not_repeated_and_one_that_fails_twice_is_an_error()
+ {
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
+    server.answer_next(Reply::aborted());
+    let sender = sender(&server, LONG);
+    let error = sender.send(&push(10, 1)).await.unwrap_err();
+    assert!(matches!(error, PushError::Connection(_)), "{error}");
+    assert_eq!(
+        server.requests().len(),
+        1,
+        "a push that failed on a new connection is sent once"
+    );
+
+    // Delivered once, then aborted on the kept connection and on the new one.
+    server.answer_next(Reply::ok());
+    server.answer_next(Reply::aborted());
+    server.answer_next(Reply::aborted());
+    sender.send(&push(10, 1)).await.unwrap();
+    let error = sender.send(&push(10, 1)).await.unwrap_err();
+    assert!(matches!(error, PushError::Connection(_)), "{error}");
+}
+
+#[tokio::test]
+async fn an_endpoint_that_is_not_a_host_name_fails_the_push_before_any_connection() {
+    let server = Server::start(true, Auth::Trusting(identity().chain[0].clone())).await;
+    let roots = tls::roots_of(std::slice::from_ref(&server.ca)).unwrap();
+    let endpoint = Endpoint::new("not a host", 443).dialing(&server.addr.to_string());
+    let sender = Http2Sender::new(endpoint, roots, &identity(), LONG).unwrap();
+    let error = sender.send(&push(10, 1)).await.unwrap_err();
+    assert!(
+        error.to_string().contains("the request is not valid"),
+        "{error}"
+    );
+    assert_eq!(server.connections.load(Ordering::SeqCst), 0);
 }

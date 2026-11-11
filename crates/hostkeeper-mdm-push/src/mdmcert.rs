@@ -13,7 +13,6 @@
 //! is still accepted, the name and encoding of the emailed attachment beyond what the client
 //! source says (hex text of the PKCS#7), and what `reason` says for each refusal.
 
-use std::sync::Arc;
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -23,11 +22,11 @@ use http_body_util::{BodyExt as _, Full, Limited};
 use hyper::header::{CONTENT_TYPE, HOST, HeaderValue, USER_AGENT};
 use hyper::{Method, Request};
 use hyper_util::rt::TokioIo;
-use rustls::{ClientConfig, RootCertStore};
+use rustls::RootCertStore;
 use serde::{Deserialize, Serialize};
 
 use crate::BoxFuture;
-use crate::tls::{self, Endpoint, TlsError};
+use crate::tls::{self, Endpoint};
 
 /// The host of the service.
 pub const HOST_NAME: &str = "mdmcert.download";
@@ -59,8 +58,12 @@ pub struct TransportError(pub String);
 
 /// The port the request goes through: the real HTTPS client, or a fake.
 pub trait MdmcertTransport: Send + Sync {
-    /// Posts `body` (JSON) to the service's sign-request URL.
-    fn post_sign_request(&self, body: Vec<u8>) -> BoxFuture<'_, Result<HttpReply, TransportError>>;
+    /// Posts `body` (JSON) to the service's sign-request URL, giving up after `timeout`.
+    fn post_sign_request(
+        &self,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> BoxFuture<'_, Result<HttpReply, TransportError>>;
 }
 
 /// Why the service did not take a request.
@@ -124,9 +127,13 @@ pub async fn submit(
     email: &str,
     csr_pem: &str,
     encryption_cert_pem: &str,
+    timeout: Duration,
 ) -> Result<(), MdmcertError> {
     let reply = transport
-        .post_sign_request(sign_request_body(email, csr_pem, encryption_cert_pem))
+        .post_sign_request(
+            sign_request_body(email, csr_pem, encryption_cert_pem),
+            timeout,
+        )
         .await
         .map_err(|why| MdmcertError::Transport(why.0))?;
     if reply.status != 200 {
@@ -144,46 +151,38 @@ pub async fn submit(
     }
 }
 
+fn failed(why: impl std::fmt::Display) -> TransportError {
+    TransportError(why.to_string())
+}
+
 /// The HTTPS client of the service.
 pub struct HttpsTransport {
     endpoint: Endpoint,
-    config: Arc<ClientConfig>,
-    timeout: Duration,
+    roots: RootCertStore,
 }
 
 impl HttpsTransport {
-    /// The transport to `endpoint` trusting `roots`, giving up after `timeout`.
-    ///
-    /// # Errors
-    /// [`TlsError`].
-    pub fn new(
-        endpoint: Endpoint,
-        roots: RootCertStore,
-        timeout: Duration,
-    ) -> Result<Self, TlsError> {
-        Ok(Self {
-            endpoint,
-            config: tls::client_config(roots, None, &[b"http/1.1"])?,
-            timeout,
-        })
+    /// The transport to `endpoint` trusting `roots`.
+    #[must_use]
+    pub fn new(endpoint: Endpoint, roots: RootCertStore) -> Self {
+        Self { endpoint, roots }
     }
 
     /// The transport to the real service, trusting the public web's roots.
-    ///
-    /// # Errors
-    /// [`TlsError`].
-    pub fn production(timeout: Duration) -> Result<Self, TlsError> {
-        Self::new(Endpoint::new(HOST_NAME, 443), tls::public_roots(), timeout)
+    #[must_use]
+    pub fn production() -> Self {
+        Self::new(Endpoint::new(HOST_NAME, 443), tls::public_roots())
     }
 
-    async fn post(&self, body: Vec<u8>) -> Result<HttpReply, TransportError> {
-        let failed = |why: &dyn std::fmt::Display| TransportError(why.to_string());
-        let stream = tls::connect(&self.endpoint, self.config.clone(), self.timeout)
+    async fn post(&self, body: Vec<u8>, timeout: Duration) -> Result<HttpReply, TransportError> {
+        let config =
+            tls::client_config(self.roots.clone(), None, &[b"http/1.1"]).map_err(failed)?;
+        let stream = tls::connect(&self.endpoint, config, timeout)
             .await
-            .map_err(|why| failed(&why))?;
+            .map_err(failed)?;
         let (mut sender, connection) = hyper::client::conn::http1::handshake(TokioIo::new(stream))
             .await
-            .map_err(|why| failed(&why))?;
+            .map_err(failed)?;
         tokio::spawn(async move {
             drop(connection.await);
         });
@@ -191,24 +190,23 @@ impl HttpsTransport {
             .method(Method::POST)
             .uri(SIGN_REQUEST_PATH)
             .body(Full::new(Bytes::from(body)))
-            .map_err(|why| failed(&why))?;
+            .map_err(failed)?;
         let headers = request.headers_mut();
-        let host = HeaderValue::from_str(&self.endpoint.server_name).map_err(|why| failed(&why))?;
-        headers.insert(HOST, host);
+        headers.insert(
+            HOST,
+            HeaderValue::from_str(&self.endpoint.server_name).map_err(failed)?,
+        );
         headers.insert(CONTENT_TYPE, HeaderValue::from_static("application/json"));
         headers.insert(
             USER_AGENT,
             HeaderValue::from_static("hostkeeper-coordinator"),
         );
-        let answer = sender
-            .send_request(request)
-            .await
-            .map_err(|why| failed(&why))?;
+        let answer = sender.send_request(request).await.map_err(failed)?;
         let status = answer.status().as_u16();
         let body = Limited::new(answer.into_body(), MAX_ANSWER_BYTES)
             .collect()
             .await
-            .map_err(|why| failed(&why))?
+            .map_err(failed)?
             .to_bytes()
             .to_vec();
         Ok(HttpReply { status, body })
@@ -216,9 +214,13 @@ impl HttpsTransport {
 }
 
 impl MdmcertTransport for HttpsTransport {
-    fn post_sign_request(&self, body: Vec<u8>) -> BoxFuture<'_, Result<HttpReply, TransportError>> {
+    fn post_sign_request(
+        &self,
+        body: Vec<u8>,
+        timeout: Duration,
+    ) -> BoxFuture<'_, Result<HttpReply, TransportError>> {
         Box::pin(async move {
-            tokio::time::timeout(self.timeout, self.post(body))
+            tokio::time::timeout(timeout, self.post(body, timeout))
                 .await
                 .unwrap_or_else(|_| Err(TransportError("the request timed out".to_owned())))
         })

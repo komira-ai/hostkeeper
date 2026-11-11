@@ -32,7 +32,7 @@ pub mod token;
 pub mod testkit;
 
 #[cfg(test)]
-mod tlsfixture;
+mod tls_server_tests;
 
 use std::future::Future;
 use std::pin::Pin;
@@ -61,5 +61,18 @@ impl KeyBytes {
 impl std::fmt::Debug for KeyBytes {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str("KeyBytes(<redacted>)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::KeyBytes;
+
+    #[test]
+    fn key_bytes_hold_their_bytes_and_print_nothing_of_them() {
+        let key = KeyBytes::new(vec![1, 2, 3]);
+        assert_eq!(key.expose(), [1, 2, 3]);
+        assert_eq!(format!("{key:?}"), "KeyBytes(<redacted>)");
+        assert_eq!(key.clone(), key);
     }
 }

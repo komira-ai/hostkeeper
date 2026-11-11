@@ -19,3 +19,14 @@ impl Clock for SystemClock {
             .map_or(0, |since| since.as_secs())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_system_clock_says_a_time_after_2023() {
+        // Not a measure of time: a clock that read 0 (before the epoch) would say 0.
+        assert!(SystemClock.now_unix() > 1_700_000_000);
+    }
+}

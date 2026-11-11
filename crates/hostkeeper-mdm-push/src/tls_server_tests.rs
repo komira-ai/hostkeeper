@@ -14,10 +14,9 @@ use hyper::service::service_fn;
 use hyper::{Request, Response};
 use hyper_util::rt::{TokioExecutor, TokioIo};
 use rcgen::{CertificateParams, IsCa, KeyPair};
-use rustls::client::danger::HandshakeSignatureValid;
-use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer, UnixTime};
-use rustls::server::danger::{ClientCertVerified, ClientCertVerifier};
-use rustls::{DigitallySignedStruct, DistinguishedName, ServerConfig, SignatureScheme};
+use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
+use rustls::server::WebPkiClientVerifier;
+use rustls::{RootCertStore, ServerConfig};
 use tokio::net::TcpListener;
 use tokio::sync::Notify;
 use tokio_rustls::TlsAcceptor;
@@ -50,6 +49,8 @@ pub struct Reply {
     pub then_goaway: bool,
     /// Never answer.
     pub hang: bool,
+    /// Fail the request: the connection is torn down with no answer.
+    pub abort: bool,
 }
 
 impl Reply {
@@ -60,6 +61,14 @@ impl Reply {
             apns_id: Some("11111111-2222-3333-4444-555555555555".to_owned()),
             then_goaway: false,
             hang: false,
+            abort: false,
+        }
+    }
+
+    pub fn aborted() -> Self {
+        Self {
+            abort: true,
+            ..Self::ok()
         }
     }
 
@@ -70,84 +79,18 @@ impl Reply {
             apns_id: None,
             then_goaway: false,
             hang: false,
+            abort: false,
         }
     }
 }
 
 /// What the server does at the handshake with a client certificate.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum Auth {
     /// Does not ask for one.
     None,
-    /// Asks for one and takes any.
-    Any,
-    /// Asks for one and refuses it as expired.
-    RefuseExpired,
-}
-
-#[derive(Debug)]
-struct Verifier(Auth);
-
-impl ClientCertVerifier for Verifier {
-    fn offer_client_auth(&self) -> bool {
-        true
-    }
-
-    fn client_auth_mandatory(&self) -> bool {
-        true
-    }
-
-    fn root_hint_subjects(&self) -> &[DistinguishedName] {
-        &[]
-    }
-
-    fn verify_client_cert(
-        &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _now: UnixTime,
-    ) -> Result<ClientCertVerified, rustls::Error> {
-        if self.0 == Auth::RefuseExpired {
-            return Err(rustls::Error::InvalidCertificate(
-                rustls::CertificateError::Expired,
-            ));
-        }
-        Ok(ClientCertVerified::assertion())
-    }
-
-    fn verify_tls12_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls12_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
-    }
-
-    fn verify_tls13_signature(
-        &self,
-        message: &[u8],
-        cert: &CertificateDer<'_>,
-        dss: &DigitallySignedStruct,
-    ) -> Result<HandshakeSignatureValid, rustls::Error> {
-        rustls::crypto::verify_tls13_signature(
-            message,
-            cert,
-            dss,
-            &rustls::crypto::ring::default_provider().signature_verification_algorithms,
-        )
-    }
-
-    fn supported_verify_schemes(&self) -> Vec<SignatureScheme> {
-        rustls::crypto::ring::default_provider()
-            .signature_verification_algorithms
-            .supported_schemes()
-    }
+    /// Asks for one and takes the certificate given (as its own trust anchor) and no other.
+    Trusting(CertificateDer<'static>),
 }
 
 /// A running server.
@@ -178,10 +121,20 @@ impl Server {
             ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
                 .with_safe_default_protocol_versions()
                 .expect("versions");
-        let builder = if auth == Auth::None {
-            builder.with_no_client_auth()
-        } else {
-            builder.with_client_cert_verifier(Arc::new(Verifier(auth)))
+        let builder = match auth {
+            Auth::None => builder.with_no_client_auth(),
+            Auth::Trusting(certificate) => {
+                let mut roots = RootCertStore::empty();
+                roots.add(certificate).expect("a trust anchor");
+                builder.with_client_cert_verifier(
+                    WebPkiClientVerifier::builder_with_provider(
+                        Arc::new(roots),
+                        Arc::new(rustls::crypto::ring::default_provider()),
+                    )
+                    .build()
+                    .expect("a verifier"),
+                )
+            }
         };
         let mut config = builder
             .with_single_cert(
@@ -329,6 +282,9 @@ async fn serve(
             if reply.hang {
                 std::future::pending::<()>().await;
             }
+            if reply.abort {
+                return Err(std::io::Error::other("the server aborts the request"));
+            }
             if reply.then_goaway {
                 signal.notify_one();
             }
@@ -336,7 +292,7 @@ async fn serve(
             if let Some(id) = &reply.apns_id {
                 answer = answer.header("apns-id", id);
             }
-            Ok::<_, std::convert::Infallible>(
+            Ok::<_, std::io::Error>(
                 answer
                     .body(Full::new(Bytes::from(reply.body)))
                     .expect("response"),

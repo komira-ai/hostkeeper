@@ -269,7 +269,7 @@ fn a_content_with_no_algorithm_or_no_encrypted_part_is_refused() {
         &[
             oid_der("1.2.840.113549.1.7.1"),
             der(0x30, &oid_der("2.16.840.1.101.3.4.1.42")),
-            der(0xA0, &[0; 16]),
+            der(0x80, &[0; 16]),
         ]
         .concat(),
     );

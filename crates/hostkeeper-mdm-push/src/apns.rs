@@ -212,11 +212,11 @@ impl Http2Sender {
         }
         let stream = tls::connect(&self.endpoint, self.config.clone(), self.timeout)
             .await
-            .map_err(|why| connection_error(&why))?;
+            .map_err(connection_failed)?;
         let (sender, connection) =
             hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(stream))
                 .await
-                .map_err(|why| connection_error(&why))?;
+                .map_err(connection_failed)?;
         tokio::spawn(async move {
             // The connection ends by GOAWAY or by the peer; the next request connects again.
             drop(connection.await);
@@ -251,21 +251,23 @@ impl Http2Sender {
 
     async fn deliver(&self, push: &Push) -> Result<Delivered, PushError> {
         let request = request_of(push, &self.endpoint)?;
-        let mut last = PushError::Connection("no attempt was made".to_owned());
-        for _ in 0..2 {
-            let (sender, fresh) = self.ready().await?;
-            match self.exchange(sender, request.clone()).await {
-                Ok(answer) => return answer,
-                Err(why) => {
-                    last = connection_error(&why);
-                    *self.connection.lock().await = None;
-                    if fresh {
-                        break;
-                    }
+        let (sender, fresh) = self.ready().await?;
+        match self.exchange(sender, request.clone()).await {
+            Ok(answer) => answer,
+            Err(why) => {
+                // Whatever went wrong, the connection is not kept.
+                *self.connection.lock().await = None;
+                if fresh {
+                    return Err(connection_failed(why));
                 }
+                // The connection kept from the last push is gone, and no answer came: a push is
+                // safe to repeat, so it is sent once more, on a new connection.
+                let (sender, _) = self.ready().await?;
+                self.exchange(sender, request)
+                    .await
+                    .unwrap_or_else(|why| Err(connection_failed(why)))
             }
         }
-        Err(last)
     }
 }
 
@@ -281,12 +283,9 @@ impl PushSender for Http2Sender {
 
 /// The request of `push` to `endpoint`.
 fn request_of(push: &Push, endpoint: &Endpoint) -> Result<Request<Full<Bytes>>, PushError> {
-    let body = serde_json::to_vec(&serde_json::json!({ "mdm": push.magic }))
-        .map_err(|why| PushError::Connection(why.to_string()))?;
-    let header = |text: &str| {
-        HeaderValue::from_str(text)
-            .map_err(|_| PushError::Connection("a header value is not valid".to_owned()))
-    };
+    // A string in a fixed shape: it always serializes.
+    let body = serde_json::to_vec(&serde_json::json!({ "mdm": push.magic })).unwrap_or_default();
+    let header = |text: &str| HeaderValue::from_str(text).map_err(invalid);
     let mut request = Request::builder()
         .method(Method::POST)
         .uri(format!(
@@ -295,7 +294,7 @@ fn request_of(push: &Push, endpoint: &Endpoint) -> Result<Request<Full<Bytes>>, 
             push.token.to_hex()
         ))
         .body(Full::new(Bytes::from(body)))
-        .map_err(|why| PushError::Connection(why.to_string()))?;
+        .map_err(invalid)?;
     let headers = request.headers_mut();
     headers.insert("apns-topic", header(&push.topic)?);
     headers.insert("apns-push-type", HeaderValue::from_static("mdm"));
@@ -305,6 +304,16 @@ fn request_of(push: &Push, endpoint: &Endpoint) -> Result<Request<Full<Bytes>>, 
         header(&push.expiration_unix.to_string())?,
     );
     Ok(request)
+}
+
+/// The error of a request that could not be made: a header value or a URL that is not valid.
+fn invalid(why: impl std::fmt::Display) -> PushError {
+    PushError::Connection(format!("the request is not valid: {why}"))
+}
+
+/// The error of a connection that failed.
+fn connection_failed(why: impl std::error::Error + 'static) -> PushError {
+    connection_error(&why)
 }
 
 /// The error for an answer other than `200`.

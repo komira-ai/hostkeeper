@@ -138,3 +138,21 @@ fn the_error_texts_hold_no_certificate_or_key_bytes() {
         "the topic is not an MDM push topic"
     );
 }
+
+#[test]
+fn a_key_of_a_kind_that_is_not_rsa_or_that_does_not_parse_is_refused_with_the_reason() {
+    let pem = cert(TOPIC, 1_700_000_000, 1_900_000_000);
+    // An EC key in its own SEC1 shape, and a PKCS#1 and a PKCS#8 block of bytes that are no key.
+    let sec1 = "-----BEGIN EC PRIVATE KEY-----\nMHcCAQEEIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAoAoGCCqGSM49\nAwEHoUQDQgAEAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA\nAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\n-----END EC PRIVATE KEY-----\n";
+    let junk = |label: &str| {
+        format!("-----BEGIN {label}-----\nAAAAAAAAAAAAAAAAAAAAAAAA\n-----END {label}-----\n")
+    };
+    for key in [
+        sec1.to_owned(),
+        junk("RSA PRIVATE KEY"),
+        junk("PRIVATE KEY"),
+    ] {
+        let error = PushIdentity::parse(pem.as_bytes(), key.as_bytes()).unwrap_err();
+        assert!(matches!(error, IdentityError::Key(_)), "{error:?}");
+    }
+}

@@ -65,11 +65,17 @@ pub fn public_roots() -> RootCertStore {
 pub fn roots_of(certificates: &[CertificateDer<'static>]) -> Result<RootCertStore, TlsError> {
     let mut roots = RootCertStore::empty();
     for certificate in certificates {
-        roots
-            .add(certificate.clone())
-            .map_err(|why| TlsError::Root(why.to_string()))?;
+        roots.add(certificate.clone()).map_err(root_error)?;
     }
     Ok(roots)
+}
+
+fn root_error(why: rustls::Error) -> TlsError {
+    TlsError::Root(why.to_string())
+}
+
+fn identity_error(why: rustls::Error) -> TlsError {
+    TlsError::Identity(why.to_string())
 }
 
 /// A client configuration trusting `roots`, offering `alpn`, and presenting `identity` (the
@@ -85,12 +91,12 @@ pub fn client_config(
     let provider = Arc::new(rustls::crypto::ring::default_provider());
     let builder = ClientConfig::builder_with_provider(provider)
         .with_safe_default_protocol_versions()
-        .map_err(|why| TlsError::Identity(why.to_string()))?
+        .map_err(identity_error)?
         .with_root_certificates(roots);
     let mut config = match identity {
         Some((chain, key)) => builder
             .with_client_auth_cert(chain, key)
-            .map_err(|why| TlsError::Identity(why.to_string()))?,
+            .map_err(identity_error)?,
         None => builder.with_no_client_auth(),
     };
     config.alpn_protocols = alpn.iter().map(|protocol| protocol.to_vec()).collect();
@@ -107,13 +113,20 @@ pub async fn connect(
     config: Arc<ClientConfig>,
     timeout: Duration,
 ) -> io::Result<TlsStream<TcpStream>> {
-    let name = ServerName::try_from(endpoint.server_name.clone())
-        .map_err(|why| io::Error::new(io::ErrorKind::InvalidInput, why))?;
+    let name = ServerName::try_from(endpoint.server_name.clone()).map_err(invalid_name)?;
     let attempt = async {
         let tcp = TcpStream::connect(&endpoint.dial).await?;
         TlsConnector::from(config).connect(name, tcp).await
     };
     tokio::time::timeout(timeout, attempt)
         .await
-        .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "the connection timed out"))?
+        .unwrap_or_else(|_| Err(io::ErrorKind::TimedOut.into()))
 }
+
+fn invalid_name(why: rustls::pki_types::InvalidDnsNameError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidInput, why)
+}
+
+#[cfg(test)]
+#[path = "tls_tests.rs"]
+mod tests;

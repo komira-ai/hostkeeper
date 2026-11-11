@@ -222,3 +222,11 @@ incremental = false
 [profile.test]
 debug = "line-tables-only"
 incremental = false
+
+# The RSA keys of a push certificate request (hostkeeper-mdm-push) are generated with the `rsa`
+# crate's big-number arithmetic, which takes tens of seconds a key unoptimized; the tests make
+# keys, so these two packages are optimized in dev and test builds.
+[profile.dev.package.num-bigint-dig]
+opt-level = 3
+[profile.test.package.num-bigint-dig]
+opt-level = 3

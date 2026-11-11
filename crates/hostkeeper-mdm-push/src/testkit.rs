@@ -141,7 +141,11 @@ impl FakeMdmcert {
 }
 
 impl MdmcertTransport for FakeMdmcert {
-    fn post_sign_request(&self, body: Vec<u8>) -> BoxFuture<'_, Result<HttpReply, TransportError>> {
+    fn post_sign_request(
+        &self,
+        body: Vec<u8>,
+        _timeout: std::time::Duration,
+    ) -> BoxFuture<'_, Result<HttpReply, TransportError>> {
         self.posted
             .lock()
             .unwrap_or_else(PoisonError::into_inner)

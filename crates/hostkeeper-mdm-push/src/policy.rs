@@ -92,17 +92,13 @@ impl PushPolicy {
     /// The floor of `id` elapsed at `now` (`has_queued`: a command is still queued): whether to
     /// push again. A floor not yet due answers no and stays armed.
     pub fn floor_elapsed(&mut self, id: &str, now: u64, has_queued: bool) -> bool {
-        let due = self
-            .states
-            .get(id)
-            .and_then(|state| state.floor_at)
-            .is_some_and(|at| at <= now);
-        if !due {
+        let Some(state) = self.states.get_mut(id) else {
+            return false;
+        };
+        if state.floor_at.is_none_or(|at| at > now) {
             return false;
         }
-        if let Some(state) = self.states.get_mut(id) {
-            state.floor_at = None;
-        }
+        state.floor_at = None;
         if has_queued {
             self.push(id, now);
         }
@@ -196,6 +192,13 @@ mod tests {
         assert!(!policy.floor_elapsed(MAC, 3_699, true));
         assert!(policy.floor_elapsed(MAC, 3_700, true));
         assert_eq!(policy.next_floor(), Some(7300));
+    }
+
+    #[test]
+    fn a_floor_asked_of_an_enrollment_the_policy_does_not_know_sends_no_push() {
+        let mut policy = PushPolicy::new(3600);
+        assert!(!policy.floor_elapsed("nobody", 1_000_000, true));
+        assert_eq!(policy.next_floor(), None);
     }
 
     #[test]

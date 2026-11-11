@@ -1,7 +1,7 @@
 use super::*;
-use crate::request::{csr_pem, encryption_cert_pem};
+use crate::request::csr_pem;
 use crate::testkit::{FakeMdmcert, fixture_key, signed_request_plist};
-use crate::tlsfixture::{Auth, Reply, Server};
+use crate::tls_server_tests::{Auth, Reply, Server};
 
 const EMAIL: &str = "ops@example.org";
 
@@ -31,7 +31,7 @@ fn the_body_is_the_json_of_micromdms_client_with_the_pem_in_base64() {
 }
 
 async fn submit_to(fake: &FakeMdmcert) -> Result<(), MdmcertError> {
-    submit(fake, EMAIL, "csr", "cert").await
+    submit(fake, EMAIL, "csr", "cert", LONG).await
 }
 
 #[tokio::test]
@@ -83,18 +83,22 @@ async fn every_way_the_service_can_decline_is_its_own_error() {
     );
 }
 
-fn transport(server: &Server, timeout: Duration) -> HttpsTransport {
+const LONG: Duration = Duration::from_secs(60);
+
+fn transport(server: &Server) -> HttpsTransport {
     let roots = tls::roots_of(std::slice::from_ref(&server.ca)).unwrap();
     let endpoint = Endpoint::new("localhost", 443).dialing(&server.addr.to_string());
-    HttpsTransport::new(endpoint, roots, timeout).unwrap()
+    HttpsTransport::new(endpoint, roots)
 }
 
 #[tokio::test]
 async fn the_https_transport_posts_json_with_a_content_type_to_the_sign_request_path() {
     let server = Server::start(false, Auth::None).await;
     server.answer_next(Reply::status(200, r#"{"result":"success"}"#));
-    let transport = transport(&server, Duration::from_secs(60));
-    submit(&transport, EMAIL, "csr", "cert").await.unwrap();
+    let transport = transport(&server);
+    submit(&transport, EMAIL, "csr", "cert", LONG)
+        .await
+        .unwrap();
     let seen = server.requests();
     assert_eq!(seen.len(), 1);
     assert_eq!(seen[0].method, "POST");
@@ -109,9 +113,9 @@ async fn the_https_transport_posts_json_with_a_content_type_to_the_sign_request_
 async fn the_https_transport_reports_a_refusal_status_and_a_service_that_is_not_there() {
     let server = Server::start(false, Auth::None).await;
     server.answer_next(Reply::status(400, r#"{"result":"failure"}"#));
-    let transport_up = transport(&server, Duration::from_secs(60));
+    let transport_up = transport(&server);
     assert_eq!(
-        submit(&transport_up, EMAIL, "csr", "cert").await,
+        submit(&transport_up, EMAIL, "csr", "cert", LONG).await,
         Err(MdmcertError::Status(400))
     );
     let dead = {
@@ -120,29 +124,32 @@ async fn the_https_transport_reports_a_refusal_status_and_a_service_that_is_not_
     };
     let roots = tls::roots_of(std::slice::from_ref(&server.ca)).unwrap();
     let endpoint = Endpoint::new("localhost", 443).dialing(&dead.to_string());
-    let gone = HttpsTransport::new(endpoint, roots, Duration::from_secs(60)).unwrap();
+    let gone = HttpsTransport::new(endpoint, roots);
     assert!(matches!(
-        submit(&gone, EMAIL, "csr", "cert").await,
+        submit(&gone, EMAIL, "csr", "cert", LONG).await,
         Err(MdmcertError::Transport(_))
     ));
 }
 
-#[tokio::test]
+/// The service never answers, so the only way out is the timeout, on a virtual clock.
+#[tokio::test(start_paused = true)]
 async fn a_service_that_never_answers_is_a_transport_error() {
     let server = Server::start(false, Auth::None).await;
     let mut never = Reply::ok();
     never.hang = true;
     server.answer_next(never);
-    let transport = transport(&server, Duration::from_millis(300));
+    let transport = transport(&server);
     assert!(matches!(
-        submit(&transport, EMAIL, "csr", "cert").await,
+        submit(&transport, EMAIL, "csr", "cert", LONG).await,
         Err(MdmcertError::Transport(_))
     ));
 }
 
 #[test]
 fn the_production_transport_is_made_for_the_real_service() {
-    assert!(HttpsTransport::production(Duration::from_secs(5)).is_ok());
+    let transport = HttpsTransport::production();
+    assert_eq!(transport.endpoint, Endpoint::new("mdmcert.download", 443));
+    assert!(!transport.roots.roots.is_empty());
 }
 
 #[test]
@@ -241,5 +248,4 @@ fn a_reply_that_is_not_a_signed_request_for_this_csr_is_refused() {
         SignedRequestError::Missing("PushCertSignature").to_string(),
         "the signed request has no PushCertSignature"
     );
-    let _ = encryption_cert_pem;
 }

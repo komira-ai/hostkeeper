@@ -5,6 +5,8 @@ use x509_parser::prelude::{FromDer as _, X509CertificationRequest};
 use rsa::RsaPublicKey;
 
 use super::*;
+
+const EMAIL: &str = "ops@example.org";
 use crate::testkit::fixture_key;
 
 #[test]
@@ -138,6 +140,20 @@ fn an_email_that_is_not_one_plain_address_is_refused_before_a_key_is_made() {
 fn a_time_out_of_range_is_a_crypto_error_and_not_a_panic() {
     assert!(matches!(
         encryption_cert_pem(fixture_key(0), i64::MAX),
+        Err(RequestError::Crypto(_))
+    ));
+}
+
+#[test]
+fn a_key_too_small_to_sign_with_is_a_crypto_error_and_not_a_panic() {
+    // ring signs with RSA keys of 2048 bits or more.
+    let small = RsaPrivateKey::new(&mut rand_core::OsRng, 1024).unwrap();
+    assert!(matches!(
+        csr_pem(&small, EMAIL),
+        Err(RequestError::Crypto(_))
+    ));
+    assert!(matches!(
+        encryption_cert_pem(&small, 1_800_000_000),
         Err(RequestError::Crypto(_))
     ));
 }
