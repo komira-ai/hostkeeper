@@ -53,6 +53,8 @@ export function createClient(call) {
       putSetting: (request) => call("hostkeeper.operator.v1.Mdm/PutSetting", request),
       listSecrets: (request) => call("hostkeeper.operator.v1.Mdm/ListSecrets", request),
       listSettings: (request) => call("hostkeeper.operator.v1.Mdm/ListSettings", request),
+      status: (request) => call("hostkeeper.operator.v1.Mdm/Status", request),
+      putName: (request) => call("hostkeeper.operator.v1.Mdm/PutName", request),
     }),
     releases: Object.freeze({
       setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),

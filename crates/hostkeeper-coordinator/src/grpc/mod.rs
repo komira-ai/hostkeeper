@@ -232,13 +232,15 @@ pub(crate) enum Transport<'a> {
 const MDM_PUT_SECRET: &str = "/hostkeeper.operator.v1.Mdm/PutSecret";
 /// The path of `Mdm.PutSetting`.
 const MDM_PUT_SETTING: &str = "/hostkeeper.operator.v1.Mdm/PutSetting";
+/// The path of `Mdm.PutName`.
+const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
 /// service, when it must not be done by a token a script holds: the writes of the MDM setup,
 /// which handle the credentials the coordinator can erase every Mac with
 /// (`docs/design/coordinator-mdm.md`, section 4.9).
-pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING];
+pub(crate) const SESSION_ONLY: &[&str] = &[MDM_PUT_SECRET, MDM_PUT_SETTING, MDM_PUT_NAME];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
 /// with `headers`: who the caller is, before any of the request is read. A gRPC call never has
