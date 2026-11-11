@@ -413,9 +413,9 @@ impl LoginLimiter {
                 .iter()
                 .min_by_key(|(key, count)| (Self::locked(count, now), count.last_failure, *key))
                 .map(|(key, _)| key.clone());
-            if let Some(key) = drop {
-                counts.remove(&key);
-            }
+            drop.iter().for_each(|key| {
+                counts.remove(key);
+            });
         }
         let count = counts.entry(username.to_owned()).or_insert(Count {
             failures: 0,
