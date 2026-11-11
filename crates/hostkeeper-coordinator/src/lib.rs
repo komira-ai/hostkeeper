@@ -64,6 +64,8 @@
 //!   changes the ops store;
 //! - [`services`]: services as data, from the rollout file: the roles each runs on and the
 //!   settings of its rollout;
+//! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once
+//!   (not yet used by a route);
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
@@ -169,6 +171,7 @@ pub(crate) mod ops_file;
 pub mod order_terms;
 pub mod orders;
 pub mod origin_https;
+pub mod password;
 pub(crate) mod picks;
 pub mod reconcile;
 pub mod registry;
@@ -396,6 +399,8 @@ mod ops_tests;
 mod order_terms_tests;
 #[cfg(test)]
 mod origin_https_tests;
+#[cfg(test)]
+mod password_tests;
 #[cfg(test)]
 mod picks_private_tests;
 #[cfg(test)]
