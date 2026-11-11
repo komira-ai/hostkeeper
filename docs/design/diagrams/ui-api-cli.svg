@@ -52,7 +52,7 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="920" y="260" width="230" height="60" rx="5" class="box"/>
 <text x="1035" y="279" class="b" text-anchor="middle">Audit log (append-only)</text>
 <text x="1035" y="297" class="t-m" text-anchor="middle">one entry per call,</text>
-<text x="1035" y="315" class="t-m" text-anchor="middle">token name recorded</text>
+<text x="1035" y="315" class="t-m" text-anchor="middle">token or user name recorded</text>
 <path d="M1035,210 L1035,260" class="ln" marker-end="url(#ui-api-cli-ak)"/>
 <rect x="630" y="260" width="230" height="60" rx="5" class="box"/>
 <text x="745" y="279" class="b" text-anchor="middle">State files</text>
@@ -60,11 +60,11 @@ text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font
 <rect x="630" y="380" width="520" height="64" rx="5" class="box-p"/>
 <text x="890" y="399" class="b" text-anchor="middle">Static files</text>
 <text x="890" y="417" class="t-m" text-anchor="middle">served from this listener: same-origin calls, no CORS;</text>
-<text x="890" y="435" class="t-m" text-anchor="middle">the coordinator has no UI handlers, no rendering and no session cookie</text>
+<text x="890" y="435" class="t-m" text-anchor="middle">the coordinator has no UI handlers and no rendering; the session cookie is made by the sign-in routes</text>
 <path d="M530,110 L630,125" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<text x="585" y="140" class="t-m lbl" text-anchor="middle">API call, token</text>
+<text x="585" y="140" class="t-m lbl" text-anchor="middle">API call, token or session</text>
 <path d="M530,245 L630,150" class="ln" marker-end="url(#ui-api-cli-ak)"/>
-<text x="592" y="236" class="t-m lbl" text-anchor="middle">API call, token</text>
+<text x="592" y="236" class="t-m lbl" text-anchor="middle">API call, token or session</text>
 <path d="M630,412 L548,274" class="ln-d" marker-end="url(#ui-api-cli-ak)"/>
 <text x="545" y="350" class="t-m lbl" text-anchor="end">load the app</text>
 <text x="600" y="500" class="b" text-anchor="middle">Every page is a view over API calls and every button is one call. Neither front end reaches a host: only the coordinator's orders do.</text>
