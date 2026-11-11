@@ -89,7 +89,7 @@ Sign out ends the session on the coordinator.
 - **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
   takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the signed-in user's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name or the token's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
