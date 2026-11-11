@@ -132,3 +132,6 @@ fleetdm.com
 # an image index names a manifest's reference by (crates/xtask/src/release/image_index.rs).
 =ghcr.io
 =org.opencontainers.image.ref.name
+
+# The third-party service that signs push-certificate requests (docs/design/coordinator-mdm.md).
+=mdmcert.download
