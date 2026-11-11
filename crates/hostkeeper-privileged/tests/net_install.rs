@@ -13,7 +13,7 @@
 //!    install got no proxy offer (its MAC left the answer set) and booted the disk.
 //! 2. A pending request appears, matched to the record, with claims equal to the guest's UUID and
 //!    serial; the console shows its key hash; `Approve` by that hash succeeds; the first
-//!    heartbeat arrives; the fixture service assigned to the host's role reports installed.
+//!    heartbeat arrives; the fixture service listed by the host's group reports installed.
 //!    The installed system holds exactly the repository files `serve --repositories` was given,
 //!    root's with mode 0644.
 //! 3. Router mode, the enrolled guest rebooted: `pxe` learns its address from its
@@ -37,7 +37,7 @@
 //! time.
 //!
 //! A second test, `an_assigned_pxe_package_prepares_serves_and_uninstalls`, needs no guest: the
-//! `pxe` .deb (the program of the tests and the committed unit) assigned to a host by the
+//! `pxe` .deb (the program of the tests and the committed unit) added to a host's group by the
 //! operator API is installed by the real daemon through apt, its `update-hook prepare` fetches
 //! and seals a boot set from the channel, its unit serves from it under systemd, and an
 //! uninstall takes it off.
@@ -59,7 +59,7 @@ use netinstall::{Rig, SERVICE, VERSION, fixture, heartbeat};
 use serde_json::Value;
 use support::channel::Channel;
 use support::operator_api::{Approval, must};
-use support::pair::{Coordinator, Daemon, HostPaths, PACKAGES_DIR, ROLE, TestCa, put, rollout};
+use support::pair::{BEACON, Coordinator, Daemon, HostPaths, PACKAGES_DIR, ROLE, TestCa, put};
 use support::spawn::poll;
 use support::{Bench, journal, run};
 use tonic::Code;
@@ -148,8 +148,8 @@ fn an_x86_64_machine_installs_by_network_enrolls_gets_its_service_is_reinstalled
     let guest_ip = rig.guest_address().to_string();
 
     // The fixture service: its package in the apt repository the channel serves, its desired
-    // version set by its `apt` entry; the rollout file runs it on the record's role, so the host
-    // is assigned it at its approval.
+    // version set by its `apt` entry; the host group of the record's role lists it, so the host
+    // is placed it at its approval.
     let entry = fixture(&rig.repo);
     rig.channel.serve_tree(rig.repo.dir());
     must(
@@ -416,10 +416,8 @@ const PXE_SETTINGS: &str = "/etc/pxe/pxe.toml";
 const PXE_BOOT_DIR: &str = "/var/lib/pxe";
 /// The hook command of the package (the manifest's `hook.command`).
 const PXE_HOOK: [&str; 2] = ["/usr/lib/pxe/pxe", "update-hook"];
-/// The host, and the role of the `pxe` service in the rollout file (no host has it: only the
-/// assignment brings the service).
+/// The host: it is in the group [`ROLE`], which lists `pxe` only once the operator adds it.
 const PXE_NODE: &str = "ci-pxe-host";
-const NO_HOST_ROLE: &str = "unused";
 
 /// The entry of `list` whose `key` names the `pxe` service, or `null`.
 fn pxe_entry(list: &Value, key: &str) -> Value {
@@ -448,13 +446,13 @@ fn pxe_installed() -> bool {
 }
 
 /// The `pxe` .deb, with the program of the tests at `/usr/lib/pxe/pxe` and the committed unit at
-/// `/usr/lib/systemd/system/pxe.service` (its two files, as the release's .deb), assigned to a
-/// host by the operator API, is installed by the real daemon through apt: `prepare` runs as
+/// `/usr/lib/systemd/system/pxe.service` (its two files, as the release's .deb), added to a
+/// host's group by the operator API, is installed by the real daemon through apt: `prepare` runs as
 /// `/usr/lib/pxe/pxe update-hook prepare <staged> --params <file>`, fetches the netboot release
 /// from the channel (attested by the end-to-end rig's signer, checked by the job's `gh`) and
 /// seals the boot set under `/var/lib/pxe`; `cutover` points `current` at it and starts the unit,
 /// which serves from the host's settings file in router mode with every listener on loopback.
-/// `unassign --uninstall` stops the unit, runs `update-hook uninstall` and purges the package.
+/// Taking it out of the group stops the unit, runs `update-hook uninstall` and purges the package.
 ///
 /// Catches a hook command, params or unit the program does not answer, a `prepare` that does
 /// not seal the boot set under `boot_dir`, a `cutover` that does not point `current` at it and
@@ -523,12 +521,8 @@ fn an_assigned_pxe_package_prepares_serves_and_uninstalls() {
 
     // The coordinator and the daemon, and the host's files: the daemon config the seeds carry,
     // the SSH keys, the settings file.
-    let services = format!(
-        "[[service]]\nname = \"{PXE_SERVICE}\"\nroles = [\"{NO_HOST_ROLE}\"]\n\
-         repository = \"{}\"\n",
-        aptrepo::REGISTRY_NAME
-    );
-    let mut coordinator = Coordinator::start(&scratch, &rollout(&services), &[]);
+    let mut coordinator = Coordinator::start(&scratch, &[]);
+    coordinator.put_group(ROLE, &[BEACON]);
     must(
         "repositories put",
         coordinator
@@ -569,16 +563,14 @@ fn an_assigned_pxe_package_prepares_serves_and_uninstalls() {
     coordinator.approve_first(PXE_NODE, &mut daemon);
     coordinator.wait_heard(PXE_NODE, &mut daemon);
 
-    // The operator sets the desired version and assigns the service to the host.
+    // The operator adds the service to the host's group, from the registry's repository, and
+    // sets the desired version.
+    coordinator.add_package(ROLE, PXE_SERVICE, aptrepo::REGISTRY_NAME);
     must(
         "releases set-desired",
         coordinator
             .api()
             .set_desired_targets_alone(PXE_SERVICE, &version, aptrepo::targets(entry)),
-    );
-    must(
-        "services assign",
-        coordinator.api().assign(PXE_NODE, PXE_SERVICE),
     );
 
     // The install: the host reports the service at the version, with no order under way.
@@ -629,24 +621,20 @@ fn an_assigned_pxe_package_prepares_serves_and_uninstalls() {
     );
     assert!(Path::new(PXE_WANTS).exists(), "the unit is enabled");
 
-    // The operator takes the service off the host with an uninstall.
-    must(
-        "services unassign",
-        coordinator.api().unassign(PXE_NODE, PXE_SERVICE, true),
-    );
+    // The operator takes the service out of the host's group, which orders the uninstall.
+    coordinator.remove_package(ROLE, PXE_SERVICE);
     let packages = Path::new(PACKAGES_DIR).join(PXE_SERVICE);
     poll(&format!("{PXE_NODE} uninstalled pxe"), || {
         coordinator.assert_running();
         daemon.assert_running();
-        let entry = coordinator.service(PXE_SERVICE)?;
-        let uninstalling = entry["uninstalling"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
-        if uninstalling.is_empty() && !packages.exists() {
+        let listed = coordinator
+            .host(PXE_NODE)?
+            .ok_or_else(|| format!("hosts list lists no {PXE_NODE}"))?;
+        let beat = pxe_entry(&listed["heartbeat"]["services"], "name");
+        if beat.is_null() && !packages.exists() {
             Ok(())
         } else {
-            Err(format!("{entry}; the daemon's log:\n{}", daemon.log()))
+            Err(format!("{beat}; the daemon's log:\n{}", daemon.log()))
         }
     });
     for gone in [PXE_BOOT_DIR, PXE_UNIT_FILE, PXE_WANTS] {

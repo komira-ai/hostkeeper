@@ -27,7 +27,7 @@ use hostkeeper_testkit::Scratch;
 use rcgen::{CertificateParams, DistinguishedName, DnType, KeyPair, PublicKeyData, SigningKey};
 use rustls::pki_types::{CertificateDer, PrivateKeyDer, PrivatePkcs8KeyDer};
 use rustls::{ClientConfig, RootCertStore};
-use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, recorded, scratch};
+use support::{BEAT, Ca, Net, OPERATOR, accepting, exchange, scratch};
 
 /// The files the flags name, in a directory of their own.
 struct Files {
@@ -43,7 +43,6 @@ impl Files {
         files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
         files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
         files.put("operator.token", OPERATOR, 0o600);
-        files.put("rollout.toml", &recorded("services.toml"), 0o600);
         files
     }
 
@@ -78,8 +77,6 @@ impl Files {
             "=oidc.toml",
             "--operator-token-file",
             "=operator.token",
-            "--rollout-file",
-            "=rollout.toml",
             "--legacy-service",
             "kbf",
         ];
@@ -194,11 +191,35 @@ fn allowlist(service: &str) -> String {
     )
 }
 
+/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
+/// coordinator started over them, which is stopped again.
+async fn put_build_group(files: &Files) {
+    let first = start(files, &enrollment_flags(true)).expect("started");
+    let operator = first.coordinator.caller(Some(OPERATOR)).await;
+    first
+        .coordinator
+        .host_groups_put(
+            &operator,
+            proto::PutHostGroupRequest {
+                host_group: Some(proto::HostGroup {
+                    name: "build".to_owned(),
+                    packages: vec!["hostkeeper".to_owned()],
+                    policy: None,
+                }),
+                if_generation: None,
+                reason: "the Mac builders".to_owned(),
+            },
+        )
+        .expect("put");
+    // The state files' lock is the running coordinator's: the next start takes it after it.
+    drop(first);
+}
+
 /// Catches the pending cap or the Mac allowlist accepted without enrollment, a cap of 0, an
-/// allowlist that cannot be read or that names a service the rollout file does not define
-/// letting the coordinator start, and the cap not reaching the enrollment it starts.
-#[test]
-fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
+/// allowlist that cannot be read or that names services letting the coordinator start, and the
+/// cap not reaching the enrollment it starts.
+#[tokio::test]
+async fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
     let files = Files::new("enrollment-cap-flags");
     let with = |extra: &[&'static str]| {
         let mut flags = enrollment_flags(true);
@@ -226,11 +247,12 @@ fn the_pending_cap_and_the_mac_allowlist_need_enrollment_and_valid_values() {
     }
     files.put("mac.toml", &allowlist("nosuch"), 0o600);
     match start(&files, &with(&["--mac-serial-allowlist", "=mac.toml"])) {
-        Err(StartError::MacService(service)) => assert_eq!(service, "nosuch"),
+        Err(StartError::MacServicesRetired(serial)) => assert_eq!(serial, "C02XK1ABJG5J"),
         Err(other) => panic!("refused otherwise: {other}"),
-        Ok(_) => panic!("started with a service it does not manage"),
+        Ok(_) => panic!("started with an entry naming services"),
     }
-    files.put("mac.toml", &allowlist("kbf"), 0o600);
+    put_build_group(&files).await;
+    files.put("mac.toml", &allowlist_of("host_group = \"build\""), 0o600);
     let parts = start(
         &files,
         &with(&[
@@ -267,25 +289,7 @@ fn allowlist_of(entry: &str) -> String {
 #[tokio::test]
 async fn a_coordinator_holding_groups_starts_only_with_an_allowlist_it_can_place() {
     let files = Files::new("enrollment-mac-groups");
-    let first = start(&files, &enrollment_flags(true)).expect("started");
-    let operator = first.coordinator.caller(Some(OPERATOR)).await;
-    first
-        .coordinator
-        .host_groups_put(
-            &operator,
-            proto::PutHostGroupRequest {
-                host_group: Some(proto::HostGroup {
-                    name: "build".to_owned(),
-                    packages: vec!["hostkeeper".to_owned()],
-                    policy: None,
-                }),
-                if_generation: None,
-                reason: "the Mac builders".to_owned(),
-            },
-        )
-        .expect("put");
-    // The state files' lock is the running coordinator's: each start below takes it after it.
-    drop(first);
+    put_build_group(&files).await;
     let with_allowlist = || {
         let mut flags = enrollment_flags(false);
         flags.extend_from_slice(&["--mac-serial-allowlist", "=mac.toml"]);
@@ -301,8 +305,8 @@ async fn a_coordinator_holding_groups_starts_only_with_an_allowlist_it_can_place
         Err(why @ StartError::MacServicesRetired(_)) => assert_eq!(
             why.to_string(),
             "--mac-serial-allowlist: the entry of serial C02XK1ABJG5J names services; the \
-             coordinator holds host groups, and the Mac's group decides what it runs: name its \
-             host_group alone"
+             coordinator places hosts by host group, and the Mac's group decides what it runs: name \
+             its host_group alone"
         ),
         Err(other) => panic!("refused otherwise: {other}"),
         Ok(_) => panic!("started with an entry naming services"),

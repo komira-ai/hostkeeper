@@ -1,11 +1,11 @@
-//! `import` and `export` of the host groups: the state file's and the ops file's `host_groups` keys
-//! and an inventory record's `host_group` of a file store, and the tables of migration `0008` of a
-//! database (docs/design/hostgroups.md section 8).
+//! `export` of the host groups: the tables of migration `0008` of a database written as the state
+//! file's and the ops file's `host_groups` keys and an inventory record's `host_group` of a file
+//! store (docs/design/hostgroups.md section 8).
 
 use std::collections::BTreeMap;
 
 use super::export;
-use super::tests::{Store, clock, count, export_flags, files_loaded, imported, loaded};
+use super::tests::{Store, clock, export_flags, seeded};
 use crate::host_groups::tests::{every_mark, web};
 use crate::host_groups::{GroupMarks, HostGroup, HostGroups};
 use crate::lock::FileLock;
@@ -47,48 +47,9 @@ fn store_with_groups(name: &str) -> Store {
     store
 }
 
-/// Proves: importing a file store that holds groups writes them as the rows of `host_groups`,
-/// `host_group_packages` and `group_desired`, the marks as the rows of `group_min_versions`,
-/// `group_services`, `group_rollouts` and `group_rollout_done` (the pair at its default as none),
-/// and the record's group in `inventory` (the report counts the rows); a start on the database
-/// loads the groups, their marks and the record a start on the files loads.
-///
-/// Catches: an import that leaves the groups behind, or reads them back differently and does not
-/// roll back, so the database would place hosts by other groups than the files did.
-#[test]
-fn import_writes_the_groups_and_their_marks_as_rows() {
-    let store = store_with_groups("transfer-host-groups-import");
-    let database = TestDatabase::new();
-    let report = imported(&store, &database).expect("imported");
-    for (table, rows) in [
-        ("host_groups", 2),
-        ("host_group_packages", 3),
-        ("group_desired", 1),
-        ("group_min_versions", 1),
-        ("group_services", 1),
-        ("group_rollouts", 1),
-        ("group_rollout_done", 1),
-    ] {
-        assert!(
-            report.contains(&format!("  {table}: {rows} rows\n")),
-            "{table}: {report}"
-        );
-        assert_eq!(count(&database, table), rows, "{table}");
-    }
-    let held = loaded(&database);
-    let files = files_loaded(&store, None);
-    assert_eq!(held.desired.host_groups, files.desired.host_groups);
-    assert_eq!(
-        held.ops.host_groups,
-        files.ops.host_groups.clone().without_defaults()
-    );
-    assert_eq!(held.ops.inventory, files.ops.inventory);
-    assert_eq!(held.ops.inventory[0].host_group, "web");
-}
-
-/// Proves: exporting the database an import of groups wrote gives back the state file the import
-/// read, byte for byte, and the ops file with the same groups' marks and records; a database that holds no group exports files that name
-/// none.
+/// Proves: exporting a database that holds the groups of a file store gives back that store's
+/// state file, byte for byte, and its ops file with the same groups' marks and records; a database
+/// that holds no group exports files that name none.
 ///
 /// Catches: an export that drops a group, a desired version or a mark, or writes the key for a
 /// database that holds no group (the release before would then refuse the files).
@@ -96,7 +57,7 @@ fn import_writes_the_groups_and_their_marks_as_rows() {
 fn export_gives_back_the_files_of_the_groups_byte_for_byte() {
     let from = store_with_groups("transfer-host-groups-export-from");
     let database = TestDatabase::new();
-    imported(&from, &database).expect("imported");
+    seeded(&from, &database);
     let into = Store::new("transfer-host-groups-export-into");
     let report = export(&export_flags(&database, &into), &FileLock, &clock())
         .expect("exported")
@@ -104,8 +65,8 @@ fn export_gives_back_the_files_of_the_groups_byte_for_byte() {
     assert!(report.contains("  host_groups: 2 rows\n"), "{report}");
     let read = |store: &Store, file: &str| std::fs::read(store.dir.path().join(file)).expect(file);
     assert_eq!(read(&into, "desired.json"), read(&from, "desired.json"));
-    // The ops file is written without the entries at their default the import read and with the
-    // import's own audit line; its groups' marks and records are what the import read.
+    // The ops file is written without the entries at their default the store's file holds; its
+    // groups' marks and records are the store's.
     let ops = |store: &Store| -> serde_json::Value {
         serde_json::from_slice(&read(store, "desired.json.ops")).expect("JSON")
     };
@@ -115,7 +76,7 @@ fn export_gives_back_the_files_of_the_groups_byte_for_byte() {
 
     let plain = Store::recorded("transfer-host-groups-none-from");
     let empty = TestDatabase::new();
-    imported(&plain, &empty).expect("imported");
+    seeded(&plain, &empty);
     let out = Store::new("transfer-host-groups-none-into");
     export(&export_flags(&empty, &out), &FileLock, &clock()).expect("exported");
     for file in ["desired.json", "desired.json.ops"] {

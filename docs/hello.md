@@ -19,10 +19,8 @@ marked **specified, not built**, with the pull request that builds it.
 | running a hook step on a Mac | the daemon runs each step as a launchd job through `LaunchdLauncher` (`hostkeeper-launchd`), and links and loads the package's plists (`docs/macos.md`) | — |
 | the UI's pages and their calls | the pages, and the HTTP/JSON gateway they call (`docs/gateway.md`) | — |
 | placing hello on hosts | a host group that lists hello (`HostGroups.Put`, `examples/hello/host-group.json`), an approval into it (`Enrollment.Approve` or an inventory record naming the group) or `HostGroups.Move` for a host to get into it, the coordinator's `install` order, and the daemon's heartbeat loop, which announces `install-v1` and runs the install | the daemon's heartbeat link to the coordinator: the shipped daemon gives its loop `NoLink`, so no order reaches a host |
-| placing hello by a role, on a coordinator that holds no group | the rollout file's `roles`, `Services.Assign` (komira-ai/hostkeeper#45), the Rollout page's Assign | the same heartbeat link |
 | setting the desired version | `hkctl releases set-desired` (with `--host-group` to name the group), CI's set-desired workflow and its hello caller `hello-desired.yml`, the Rollout page's Set desired (through the gateway) | `host_group` as an input of the CI client: the callers' pinned release does not take it (see "The proof from CI") |
 | taking hello out with uninstall | the daemon's uninstall verb, hello's `uninstall` step, a `Put` of the group without hello, and the daemon's heartbeat loop, which runs the uninstall | the daemon's heartbeat link to the coordinator (`NoLink`) |
-| the same, on a coordinator that holds no group | `Services.Unassign` (komira-ai/hostkeeper#45), the Rollout page's Unassign | the same heartbeat link |
 
 ## The package
 
@@ -99,15 +97,12 @@ makes that directory, owner only, on its first step.
    build's `.deb` is in the separate suite `testing-fail` and has the Debian version
    `<version>~fail.ready` (`~` sorts below `<version>`, so apt never takes it for the release);
    only the dispatch of step 4 orders it, with the repository entry `komira-testing-fail`.
-3. **The rollout entry.** Append `examples/hello/rollout.toml` to the coordinator's rollout file
-   (`--rollout-file`) and restart the coordinator. It defines hello: the rollout file is
-   still read for what a package has alone (its version scheme, its repository, the floor of its
-   `min_version`), also on a coordinator that holds groups
-   ([hostgroups.md](operations/hostgroups.md#group-mode)). On a coordinator that holds no group
-   it also places hello on the hosts of the role `farm` (replace `farm` with the role of the hosts
-   that run the proof) and sets its policy, and steps 1 to 5 below that name a group are then
-   the role's, as the entry's comments say. `cargo test -p hostkeeper-coordinator --test hello_rollout`
-   checks that the coordinator accepts this entry.
+3. **No rollout entry.** hello needs no entry of a rollout file: `serve` refuses
+   `--rollout-file`, and what a package has alone is set through the API. hello comes from the
+   default repository `komira`; to take it from another registry entry, call
+   `Services.SetRepository` (`hkctl services set-repository`) before the first `SetDesired`.
+   The group of `examples/hello/host-group.json` (section 1 below) is what places
+   hello and sets its policy.
 4. **CI's allow-list.** If CI sets the desired version, the allow-list entry that admits its
    token names `hello` (`services = ["hello"]`), and may limit the groups it deploys to
    (`host_groups = ["farm"]`; left out, the token may deploy to any group that lists hello). The entry for `hello-desired.yml`, below, is in
@@ -144,11 +139,10 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 ```
 
 `cargo test -p hostkeeper-coordinator --lib hello_group` puts this file through the gateway and
-reads the group back. The first `Put` of a group puts the coordinator in group mode
-([hostgroups.md](operations/hostgroups.md#group-mode)): from then on a host runs the packages
-its group lists and no others, the rollout file's `roles`, `selector` and policy keys place and
-roll nothing, and a host in no group is ordered nothing, until it is moved into one. A coordinator
-that already holds groups gets `farm` beside them.
+reads the group back. A coordinator places by group alone
+([hostgroups.md](operations/hostgroups.md#how-the-coordinator-places-hosts)): a host runs the packages its group lists
+and no others, and a host in no group is ordered nothing, until it is moved into one. A
+coordinator that already holds groups gets `farm` beside them.
 
 A host already enrolled gets into the group by `Move`:
 
@@ -168,7 +162,7 @@ runs the install. **Specified, not built:** the heartbeat link that carries the 
 the shipped daemon gives its loop `NoLink`. Nothing is ordered for hello until a desired version
 is set.
 
-In group mode `Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`, the
+`Services.Assign` and `Services.Unassign` are refused `placed_by_host_group`, the
 Rollout page's Assign and Unassign with them: the group is the only placement.
 
 **Watch:** nothing is ordered yet for hello. `hkctl host-groups get --host-group farm` answers
@@ -335,20 +329,10 @@ announces `install-v1`, which the daemon's heartbeat loop does. **Specified, not
 heartbeat link that carries the order to the host (`NoLink`).
 
 The daemon then runs hello's `uninstall` step, which stops both slots and removes the hook's
-record. It then removes hello's placed units, its package directory and its step records. Remove
-the entry from the rollout file afterwards.
-
-On a coordinator that holds no group, unassign hello from the role in the Rollout page, section
-`hello` (type the role in `Role`, tick `Uninstall from each host that loses its last assignment`,
-press `Unassign from the role` and confirm), or from each host with `hkctl`:
-
-```sh
-hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
-    services unassign --node-id <host> --service hello --uninstall true
-```
+record. It then removes hello's placed units, its package directory and its step records.
 
 **Watch:** Fleet. The host no longer lists hello. The Audit page shows a `host_group_put` entry
-(an `unassign` entry for the unassign) by the token's name.
+by the token's name.
 The Rollout page's `Uninstalling` lists the hosts until each reports hello gone, and the Host
 page's `Assigned services` shows hello with `State` `uninstalling`.
 

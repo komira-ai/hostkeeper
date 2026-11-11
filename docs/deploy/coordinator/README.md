@@ -74,11 +74,23 @@ chown 65532:65532 secrets/db-dsn && chmod 0400 secrets/db-dsn
 ## The configuration and the local volume
 
 `etc/` holds what the coordinator's flags in `compose.yaml` name under `/etc/hostkeeper-coordinator`:
-`tls.pem`, `tls.key`, `client-ca.pem`, `oidc.toml`, `tokens.toml` and `rollout.toml`. The key and
+`tls.pem`, `tls.key`, `client-ca.pem`, `oidc.toml` and `tokens.toml` (there is no rollout file: `serve` refuses `--rollout-file`). The key and
 the tokens file are read by the coordinator's user only: owned by 65532, mode 0600. Edit the
 command for the farm: the listen addresses (one interface's address each, never a wildcard),
 `--server-name`, and any other flag the coordinator runs with today
 (`hostkeeper-coordinator serve --help`).
+
+**A wildcard private listener.** `--private-listen` refuses a wildcard address (`0.0.0.0`, `[::]`)
+at start, naming the flag. A coordinator in a network namespace of its own, whose interfaces are
+loopback and one private network (for example a container on one overlay network shared with
+nothing that should not reach it), does not know that network's address before it starts; for it,
+`--private-listen-wildcard` takes a wildcard `--private-listen`, and the private listener listens
+on every interface of the namespace. On the host's network, as here, do not give it: the private
+listener would be on every network the host is on. With it or without, the private listener
+trusts no address: every call that reads or changes state still needs an operator token or CI's
+OIDC token, and what it answers with none (`GET /v1/version`, and the files of `--ui-dir`) it
+answers to any peer that reaches it, as on an address of one interface. An address of one
+interface is taken as given, and `--lan-listen` and `--health-listen` are checked as before.
 
 The coordinator gets no compose `healthcheck`: compose runs one inside the container, which has
 no shell or client. To probe it from the machine, add `--health-listen` with a loopback address
@@ -146,9 +158,8 @@ The database is made by explicit steps, never by the image's `POSTGRES_*` variab
    restart policy starts it again, and a database that is not up yet is refused the same way
    (there is no wait loop in the coordinator).
 
-To move a farm from the file store onto this database, run `hostkeeper-coordinator import`
-between steps 3 and 4 ([coordinator-state.md](../../operations/coordinator-state.md), "Moving
-between the stores").
+There is no conversion from the file store to this database: a farm on the file store stays on it,
+or starts a coordinator on this database and enrolls its hosts again.
 
 ## An existing Postgres server
 
@@ -195,6 +206,15 @@ attested image and replaces the container with the old one's command line, mount
 rolling back to the old container when the new one is not ready. The runbook (install, turn on,
 refusals, a failed version, the compose deployment's `image:` line) is
 [../coordinator-update.md](../coordinator-update.md).
+
+**The release that retires the rollout file (HG8)** is not rolled in by that timer alone: a
+container whose command line still has `--rollout-file` refuses to start (the update then rolls
+back to the old container), and a store that places by
+roles moves to groups through the operator API. Turn the update timer off, stop the coordinator,
+take the backup (see Backups below), drop `--rollout-file` from the command and leave the Mac
+allowlist out until the groups exist, start the new release, and place the hosts
+([hostgroups.md](../../operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups)).
+To go back, restore the backup.
 
 ## Backups
 

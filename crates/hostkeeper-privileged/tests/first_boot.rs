@@ -29,7 +29,7 @@ mod support;
 
 use serde_json::Value;
 use support::Bench;
-use support::pair::{Coordinator, Daemon, HostCertificate, HostPaths, ROLE, rollout};
+use support::pair::{BEACON, Coordinator, Daemon, HostCertificate, HostPaths, ROLE};
 use support::spawn::poll;
 
 /// A release channel nothing fetches from: the daemon's config needs one, and no test of this
@@ -84,7 +84,8 @@ fn a_daemon_enrolls_beats_and_keeps_its_identity_across_both_restarts() {
     let node = "ci-host-1";
 
     // 1. The coordinator makes its CA, on ports of loopback the system picks.
-    let mut coordinator = Coordinator::start(scratch, &rollout(""), &[]);
+    let mut coordinator = Coordinator::start(scratch, &[]);
+    coordinator.put_group(ROLE, &[BEACON]);
     // 2. The daemon, pinning that CA, asks to enroll: its request is pending.
     let mut daemon = Daemon::start(scratch, &coordinator, NO_CHANNEL);
     // 3. The operator approves it; the daemon's next poll gets its certificate.
@@ -176,8 +177,8 @@ fn a_short_lived_certificate_is_renewed_and_the_heartbeat_goes_on() {
     let node = "ci-host-2";
 
     // 6. The coordinator issues certificates valid for a minute: the daemon renews at half life.
-    let mut coordinator =
-        Coordinator::start(scratch, &rollout(""), &["--host-cert-validity-secs", "60"]);
+    let mut coordinator = Coordinator::start(scratch, &["--host-cert-validity-secs", "60"]);
+    coordinator.put_group(ROLE, &[BEACON]);
     let mut daemon = Daemon::start(scratch, &coordinator, NO_CHANNEL);
     coordinator.approve_first(node, &mut daemon);
     let first = wait_certificate(&mut coordinator, &mut daemon);

@@ -19,6 +19,7 @@ use hostkeeper_coordinator::grpc::route;
 use hostkeeper_coordinator::http::Surface;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_testkit::Scratch;
 use http_body_util::{BodyExt as _, Full};
 use hyper::Request;
@@ -30,13 +31,6 @@ use crate::rig::{Answer, Loopback, TOKEN};
 
 /// How long the router waits for a request's body; every body here is whole when it is sent.
 const PATIENCE: Duration = Duration::from_secs(30);
-
-/// The services the coordinator manages.
-const ROLLOUT: &str = r#"
-[[service]]
-name = "kbf"
-roles = ["frontend", "storage"]
-"#;
 
 /// A self-signed certificate for `localhost` and its key, as PEM, and the certificate as DER.
 fn issue(ca: bool) -> (String, String, Vec<u8>) {
@@ -57,7 +51,7 @@ fn put(path: PathBuf, text: &str, mode: u32) -> String {
 }
 
 /// The coordinator's state in a scratch directory, and the arguments of its `serve`: the tokens
-/// file holds [`TOKEN`]'s SHA-256, the rollout file [`ROLLOUT`].
+/// file holds [`TOKEN`]'s SHA-256.
 fn serve_args(dir: &Path) -> Vec<OsString> {
     let (server_pem, server_key, _) = issue(false);
     let (clients_pem, _, _) = issue(true);
@@ -83,10 +77,6 @@ fn serve_args(dir: &Path) -> Vec<OsString> {
         (
             "--tokens-file",
             put(dir.join("tokens.toml"), &tokens, 0o600),
-        ),
-        (
-            "--rollout-file",
-            put(dir.join("rollout.toml"), ROLLOUT, 0o600),
         ),
         ("--legacy-service", "kbf".to_owned()),
     ];
@@ -137,6 +127,26 @@ pub fn start(scratch: &Path) -> Loopback {
                 let _entered = runtime.enter();
                 build(&flags, roots).expect("the coordinator starts")
             };
+            // The coordinator manages no service of its own: the calls of the tests name `kbf`,
+            // a package of this group.
+            runtime.block_on(async {
+                let operator = parts.coordinator.caller(Some(TOKEN)).await;
+                parts
+                    .coordinator
+                    .host_groups_put(
+                        &operator,
+                        proto::PutHostGroupRequest {
+                            host_group: Some(proto::HostGroup {
+                                name: "farm".to_owned(),
+                                packages: vec!["hostkeeper".to_owned(), "kbf".to_owned()],
+                                policy: None,
+                            }),
+                            if_generation: None,
+                            reason: "the package the calls name".to_owned(),
+                        },
+                    )
+                    .expect("the group is put");
+            });
             (runtime, parts, dir)
         },
         |(runtime, parts, _), head, body| -> Answer {

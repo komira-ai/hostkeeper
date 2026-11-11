@@ -46,12 +46,14 @@ fn entry(by: &str, action: &str, reason: String) -> AuditEntry {
 }
 
 impl Coordinator {
-    /// The services of the rollout file that name the repository `name`, by name.
+    /// The services that come from the repository `name`, by name: those of the rollout file, the
+    /// packages a host group lists and those with a repository set, each by its repository
+    /// ([`crate::ops::OpsState::repository_of`]).
     fn services_naming(&self, name: &str) -> Vec<String> {
-        self.services
-            .defs()
-            .filter(|def| def.repository == name)
-            .map(|def| def.name.clone())
+        let state = self.ops.state();
+        self.packages_with_repositories(&state)
+            .into_iter()
+            .filter(|package| state.repository_of(&self.services, package) == name)
             .collect()
     }
 
@@ -83,10 +85,11 @@ impl Coordinator {
     ) -> Result<proto::ListRepositoriesResponse, Refusal> {
         caller.operator()?;
         let held = self.desired.with_repositories(Registry::clone);
-        let unregistered: BTreeSet<&str> = self
-            .services
-            .defs()
-            .map(|def| def.repository.as_str())
+        let state = self.ops.state();
+        let unregistered: BTreeSet<String> = self
+            .packages_with_repositories(&state)
+            .iter()
+            .map(|package| state.repository_of(&self.services, package))
             .filter(|name| held.get(name).is_none())
             .collect();
         Ok(proto::ListRepositoriesResponse {
@@ -96,7 +99,7 @@ impl Coordinator {
                 .map(|kept| self.registered(kept, false))
                 .collect(),
             generation: held.generation,
-            unregistered: unregistered.into_iter().map(str::to_owned).collect(),
+            unregistered: unregistered.into_iter().collect(),
         })
     }
 
@@ -167,8 +170,8 @@ impl Coordinator {
         })
     }
 
-    /// `Repositories.Remove`: removes the repository, which no service of the rollout file may
-    /// name, and raises the registry's generation by one. Audited as `repository_remove`.
+    /// `Repositories.Remove`: removes the repository, which no service may come from (the rollout
+    /// file's, a host group's package, or one with the repository set), and raises the registry's generation by one. Audited as `repository_remove`.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request` (the name or the reason),
@@ -184,6 +187,10 @@ impl Coordinator {
         }
         let why = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
         let audit = entry(by, "repository_remove", remove_reason(&why, &request.name));
+        let _naming = self
+            .repository_naming
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let in_use = !self.services_naming(&request.name).is_empty();
         let staged = self.desired.stage_repositories(|held| {
             let next = held

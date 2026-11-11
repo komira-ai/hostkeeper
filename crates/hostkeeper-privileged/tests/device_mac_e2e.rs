@@ -106,7 +106,7 @@ impl Rig {
             coordinator.ca_sha256(),
         ));
         host.start_daemon();
-        coordinator.approve_enrollment(HOST_ID, SERVICE);
+        coordinator.approve_enrollment(HOST_ID);
         Rig {
             coordinator,
             layout,
@@ -377,7 +377,7 @@ fn placed(rig: &Rig) -> Value {
         .unwrap_or(Value::Null)
 }
 
-/// The uninstall the operator orders (`Services.Unassign` with `uninstall`): once the
+/// The uninstall the operator orders (hello taken out of the host group's packages): once the
 /// coordinator lists hello uninstalling on no host and the daemon dropped hello's tombstone from
 /// `placed.json` (the last write of the uninstall, after the package directory and the records
 /// are removed; the coordinator's list follows the heartbeats, so either may come first and the
@@ -387,7 +387,7 @@ fn placed(rig: &Rig) -> Value {
 /// seal in it, `placed.json` holds no record of hello and no tombstone, the hook's slot markers
 /// are gone, nothing answers on the port, and the heartbeat no longer reports hello healthy.
 fn uninstall(rig: &Rig) {
-    rig.coordinator.unassign_uninstall(HOST_ID, SERVICE);
+    rig.coordinator.uninstall(SERVICE);
     wait_for("the uninstall of hello ends", COORDINATED, || {
         let list = rig.coordinator.services();
         let uninstalling_none = list["services"].as_array().is_some_and(|all| {

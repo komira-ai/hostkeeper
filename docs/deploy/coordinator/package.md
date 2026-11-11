@@ -49,13 +49,15 @@ install --mode=0640 --owner=root --group=hostkeeper-coordinator \
   /usr/share/hostkeeper-coordinator/serve.toml.template /etc/hostkeeper-coordinator/serve.toml
 ```
 
-Edit the listen addresses (one interface's address each, never a wildcard) and the store, then
+Edit the listen addresses (one interface's address each, never a wildcard: the package runs on
+the host's network, where `private-listen-wildcard` does not belong,
+[A wildcard private listener](README.md#the-configuration-and-the-local-volume)) and the store, then
 place the files the flags name:
 
 - **Owned by `hostkeeper-coordinator`, mode 0600:** the tokens file, the TLS key, and, for
   Postgres, the connection string of `database-dsn-file` (mode 0400 is also accepted). The
   coordinator refuses these files when they are readable by others.
-- **Root's, readable by the group:** the certificate, `client-ca.pem`, `oidc.toml` and `rollout.toml`.
+- **Root's, readable by the group:** the certificate, `client-ca.pem`, and `oidc.toml`. There is no rollout file: `serve` refuses `--rollout-file`.
 - **Writable by the coordinator:** the state files and the CA's key, under
   `/var/lib/hostkeeper-coordinator`.
 

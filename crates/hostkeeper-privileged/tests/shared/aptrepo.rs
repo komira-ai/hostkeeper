@@ -58,8 +58,8 @@ use repo::{Key, SUITE, Signing, architecture, run, write_index};
 
 /// The directory of the host's repository entries, a fixed place of the daemon.
 pub const REPOSITORIES_DIR: &str = hostkeeper_install::repository::config::REPOSITORIES_DIR;
-/// The name of the repository in the coordinator's registry that the rigs register (the rollout
-/// file of a rig names it as its service's `repository`).
+/// The name of the repository in the coordinator's registry that the rigs register (a rig sets
+/// it as its service's repository).
 pub const REGISTRY_NAME: &str = "hostkeeper";
 /// The channel of that repository, `<registry name>-<suite>`: the name of the host's entry (the
 /// stem of its `.sources` file) and the `repository` of the entries an order carries.

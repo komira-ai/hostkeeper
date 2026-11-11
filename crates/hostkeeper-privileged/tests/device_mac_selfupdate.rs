@@ -47,10 +47,11 @@ mod mac_self_update;
 
 use std::path::Path;
 
-use e2e::coordinator::CoordinatorHandle;
+use e2e::coordinator::{CoordinatorHandle, automatic_rollback};
 use e2e::scenario::{CONFIG_TAIL, COORDINATED};
 use e2e::{HOST_ID, ROLE, wait_for};
 use hostkeeper_hook::{Class, Phase, Verdict};
+use hostkeeper_proto::hostkeeper::operator::v1::RolloutPolicy;
 use hostkeeper_steps::handover::HAND_OVER_TRIES;
 use hostkeeper_steps::record::{Record, State};
 use hostkeeper_testkit::Scratch;
@@ -250,7 +251,7 @@ fn wait_converged(host: &MacSelfHost, coordinator: &CoordinatorHandle, version: 
 /// service as `unmonitored` (the package of hostkeeper names no unit; the daemon's launchd job is
 /// the installer's), so it reported it unhealthy, and the new binary reported no verdict for the
 /// update, so the coordinator kept the host's older verdict. The real coordinator in the test's
-/// process, whose rollout asks two healthy heartbeats of a host at its version, is set to [`N`]
+/// process, whose host group's policy asks two healthy heartbeats of a host at its version, is set to [`N`]
 /// by the `macos-pkg` entry of its `.pkg` and reads it converged with no order, since the daemon
 /// runs that version (its package not yet installed); then it is set to [`NEXT`] and orders
 /// [`NEXT`]: an install or an update, as the last heartbeat it read listed hostkeeper (no package
@@ -262,11 +263,14 @@ fn wait_converged(host: &MacSelfHost, coordinator: &CoordinatorHandle, version: 
 fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd() {
     let scratch = Scratch::under(Path::new(env!("CARGO_TARGET_TMPDIR")), "su-bake")
         .expect("the coordinator's directory");
-    let coordinator = CoordinatorHandle::start_with_rollout(
+    let coordinator = CoordinatorHandle::start_with_policy(
         &scratch.path().join("coordinator"),
         HK,
         ROLE,
-        "bake_beats = 2\n",
+        RolloutPolicy {
+            bake_beats: 2,
+            ..automatic_rollback()
+        },
     );
     let config = format!(
         "coordinator = \"{}\"\nca_sha256 = \"{}\"\n{CONFIG_TAIL}",
@@ -275,7 +279,7 @@ fn the_coordinator_bakes_and_converges_a_mac_that_updated_itself_under_launchd()
     );
     let host = MacSelfHost::new_coordinated("bake", &config);
     let old_pid = host.runs(N);
-    coordinator.approve_enrollment(HOST_ID, HK);
+    coordinator.approve_enrollment(HOST_ID);
 
     coordinator.set_desired_targets_alone(HK, N, host.targets(N));
     wait_converged(&host, &coordinator, N);
