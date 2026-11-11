@@ -634,3 +634,18 @@ fn a_password_hash_is_not_in_the_debug_text_or_the_error_of_a_record() {
         "database/accounts: the record alice: a field has a value of the wrong type or form; the coordinator does not guess which users and tokens exist, so fix or remove the file to start"
     );
 }
+
+/// Proves: accounts made from maps (as a file or a table gives them) are refused when a token's
+/// name, and not only a user's, is not a name of the token grammar, naming that name and why.
+///
+/// Catches: a token stored under `Ci Ops`, which no audit line could name.
+#[test]
+fn accounts_made_with_a_token_whose_name_is_not_a_name_are_refused() {
+    let mut tokens = BTreeMap::new();
+    tokens.insert("Ci Ops".to_owned(), token("Ci Ops", 'a'));
+    let refused = Accounts::new(BTreeMap::new(), tokens).expect_err("refused");
+    assert_eq!(
+        refused.to_string(),
+        "Ci Ops: a token name is 1 to 32 bytes of a-z, 0-9 and -"
+    );
+}
