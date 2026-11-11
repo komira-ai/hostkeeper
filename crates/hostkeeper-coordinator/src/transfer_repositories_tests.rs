@@ -1,9 +1,9 @@
-//! `import` and `export` of the registry of package repositories: the repositories file of a file
-//! store and the tables `repositories` and `repository_generation` of a database
+//! `export` of the registry of package repositories: the tables `repositories` and
+//! `repository_generation` of a database written as the repositories file of a file store
 //! (docs/design/coordinator-storage.md section 3.2).
 
 use super::export;
-use super::tests::{Store, clock, count, export_flags, files_loaded, imported, loaded};
+use super::tests::{Store, clock, export_flags, loaded, seeded};
 use crate::backup_repositories_tests::put_komira;
 use crate::lock::FileLock;
 use crate::repositories::{parse_file, repositories_path};
@@ -16,34 +16,9 @@ fn store_with_repository(name: &str) -> Store {
     store
 }
 
-/// Proves: importing a file store that holds a repositories file writes its registry as a row of
-/// `repositories` and the one row of `repository_generation` (the report counts one of each), and
-/// a start on the database loads the registry a start on the files loads, generation and keyring
-/// alike.
-///
-/// Catches: an import that leaves the repositories file behind, so the database would hold no
-/// registry for a coordinator whose hosts were being sent one.
-#[test]
-fn import_writes_the_repositories_file_as_rows() {
-    let store = store_with_repository("transfer-repositories-import");
-    assert!(repositories_path(&store.paths.state_file).exists());
-    let database = TestDatabase::new();
-    let report = imported(&store, &database).expect("imported");
-    assert!(report.contains("  repositories: 1 rows"), "{report}");
-    assert!(
-        report.contains("  repository_generation: 1 rows"),
-        "{report}"
-    );
-    assert_eq!(count(&database, "repositories"), 1);
-    let held = loaded(&database);
-    let files = files_loaded(&store, None);
-    assert_eq!(held.desired.repositories, files.desired.repositories);
-    assert_eq!(held.desired.repositories.generation, 1);
-}
-
 /// Proves: exporting a database that holds a registry writes the repositories file beside the state
-/// file, which reads as the registry the database held and is the file the import came from, and the
-/// report counts the rows; a database that holds none is exported with no repositories file; a
+/// file, which reads as the registry the database held and is the file of the store it was filled
+/// from, and the report counts the rows; a database that holds none is exported with no repositories file; a
 /// registry emptied by its last removal is exported with its generation.
 ///
 /// Catches: an export that drops the registry, writes an empty file for a state without one, or
@@ -52,7 +27,7 @@ fn import_writes_the_repositories_file_as_rows() {
 fn export_writes_the_repositories_file_only_when_the_database_holds_a_registry() {
     let from = store_with_repository("transfer-repositories-export-from");
     let database = TestDatabase::new();
-    imported(&from, &database).expect("imported");
+    seeded(&from, &database);
     let into = Store::new("transfer-repositories-export-into");
     let report = export(&export_flags(&database, &into), &FileLock, &clock())
         .expect("exported")
@@ -70,7 +45,7 @@ fn export_writes_the_repositories_file_only_when_the_database_holds_a_registry()
 
     let plain = Store::recorded("transfer-repositories-none-from");
     let empty = TestDatabase::new();
-    imported(&plain, &empty).expect("imported");
+    seeded(&plain, &empty);
     let out = Store::new("transfer-repositories-none-into");
     export(&export_flags(&empty, &out), &FileLock, &clock()).expect("exported");
     assert!(!repositories_path(&out.paths.state_file).exists());

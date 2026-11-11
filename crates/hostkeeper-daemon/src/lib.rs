@@ -60,8 +60,7 @@
 //! - [`observer`]: what [`Daemon::status`] reports of a running service.
 //! - [`node`]: the host's enrollment and the heartbeat loop's link, as the loops last wrote them,
 //!   which [`Daemon::status`] reports besides the services.
-//! - [`cli`]: `hostkeeper daemon` and its flags, and `hostkeeper check-repositories`
-//!   ([`repositories`]); the binary only forwards to it.
+//! - [`cli`]: `hostkeeper daemon` and its flags; the binary only forwards to it.
 //! - [`stamp`]: the version `hostkeeper --version` prints, with the commit of a release build.
 //! - [`refusal`]: the closed set of reason tokens.
 //! - [`link_adapters`]: the daemon as the executor, the held halts, the installed services and

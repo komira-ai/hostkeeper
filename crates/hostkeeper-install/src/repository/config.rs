@@ -209,8 +209,7 @@ pub fn load_as(
 }
 
 /// [`load_as`], with the bytes of each keyring the entries name, from the one read that judged
-/// it: `pxe serve` carries them in its seeds, and `hostkeeper check-repositories`
-/// prints their SHA-256.
+/// it: `pxe serve` carries them in its seeds.
 pub fn load_with_keyrings(
     dir: &Path,
     placed: &Path,
