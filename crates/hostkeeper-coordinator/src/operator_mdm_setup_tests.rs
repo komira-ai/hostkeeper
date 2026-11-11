@@ -568,7 +568,7 @@ fn gate_over(name: &str, text: &str) -> (MdmSetup, crate::mdm::Mdm) {
 fn install_json(name: &str, fill: char) -> String {
     let sha = fill.to_string().repeat(64);
     format!(
-        r#"{{"name":"{name}","bundle_id":"com.example.{name}","sha256":"{sha}","version":"1.0","path":"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg"}}"#
+        r#"{{"name":"{name}","bundle_id":"com.example.hostkeeper.{name}","sha256":"{sha}","version":"1.0","path":"/var/lib/hostkeeper-mdm-pkg/{sha}.pkg"}}"#
     )
 }
 

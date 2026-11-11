@@ -22,6 +22,9 @@ use support::{
 };
 
 /// The check interval of the rigs, in seconds.
+/// The bundle identifier the helper gives the install named `tools`.
+const TOOLS_BUNDLE: &str = concat!("com.example.hostkeeper.", "tools");
+
 const CHECK: u64 = 600;
 
 /// The bytes of the hostkeeper pkg and of the two other pkgs the tests install.
@@ -44,7 +47,7 @@ fn put(rig: &EnrollRig, bytes: &[u8]) -> (PkgDigest, PathBuf) {
 /// The JSON of one install of the setting.
 fn install_json(name: &str, digest: &PkgDigest, version: &str, path: &std::path::Path) -> String {
     format!(
-        r#"{{"name":"{name}","bundle_id":"com.example.{name}","sha256":"{digest}","version":"{version}","path":"{}","url":"https://origin.example/{name}.pkg"}}"#,
+        r#"{{"name":"{name}","bundle_id":"com.example.hostkeeper.{name}","sha256":"{digest}","version":"{version}","path":"{}","url":"https://origin.example/{name}.pkg"}}"#,
         path.display()
     )
 }
@@ -446,7 +449,7 @@ async fn a_named_install_is_sent_to_a_baseline_mac_by_its_manifest() {
     let tools: Vec<_> = installs
         .iter()
         .map(manifest_of)
-        .filter(|(_, _, bundle, _)| bundle == "com.example.tools")
+        .filter(|(_, _, bundle, _)| bundle == TOOLS_BUNDLE)
         .collect();
     let digest = PkgDigest::of(TOOLS_PKG);
     assert_eq!(
@@ -454,7 +457,7 @@ async fn a_named_install_is_sent_to_a_baseline_mac_by_its_manifest() {
         [(
             digest.to_string(),
             format!("https://mdm.example.com/pkg/{digest}.pkg"),
-            "com.example.tools".to_owned(),
+            TOOLS_BUNDLE.to_owned(),
             "1.0".to_owned()
         )]
     );
@@ -470,7 +473,7 @@ async fn a_named_install_is_sent_to_a_baseline_mac_by_its_manifest() {
         state(BaselineState::Pending),
         "tools is unanswered"
     );
-    ack_install(&rig, "com.example.tools", 0, 1_023).await;
+    ack_install(&rig, TOOLS_BUNDLE, 0, 1_023).await;
     assert_eq!(status(&rig), state(BaselineState::Applied));
     look(&rig, 1_023 + 10 * CHECK).await;
     assert_eq!(
@@ -502,7 +505,7 @@ async fn a_changed_installs_entry_changes_the_baseline() {
     ack(&rig, "Settings", 0, 1_020).await;
     ack(&rig, "EnableRemoteDesktop", 0, 1_021).await;
     ack(&rig, "InstallProfile", 1, 1_022).await;
-    ack_install(&rig, "com.example.tools", 0, 1_023).await;
+    ack_install(&rig, TOOLS_BUNDLE, 0, 1_023).await;
     assert_eq!(status(&rig), state(BaselineState::Applied));
 
     // Only the origin changes: the same package, so nothing is sent.
@@ -534,7 +537,7 @@ async fn a_changed_installs_entry_changes_the_baseline() {
         (digest, bundle, version),
         (
             PkgDigest::of(TOOLS_PKG_2).to_string(),
-            "com.example.tools".to_owned(),
+            TOOLS_BUNDLE.to_owned(),
             "1.1".to_owned()
         )
     );
@@ -544,7 +547,7 @@ async fn a_changed_installs_entry_changes_the_baseline() {
         3,
         "not again while unanswered"
     );
-    ack_install(&rig, "com.example.tools", 1, 1_050).await;
+    ack_install(&rig, TOOLS_BUNDLE, 1, 1_050).await;
     assert_eq!(status(&rig), state(BaselineState::Applied));
 
     // Removed from the setting: nothing more is sent for it, and the status ignores it.
@@ -569,7 +572,7 @@ async fn an_install_whose_file_is_not_its_digest_is_not_sent() {
         heard_of(rig, "InstallEnterpriseApplication")
             .iter()
             .map(manifest_of)
-            .filter(|(_, _, bundle, _)| bundle == "com.example.tools")
+            .filter(|(_, _, bundle, _)| bundle == TOOLS_BUNDLE)
             .count()
     };
     assert_eq!(tools(&rig), 0);

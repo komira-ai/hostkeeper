@@ -4,6 +4,10 @@
 
 use hostkeeper_mdm_gate::{HOSTKEEPER_INSTALL, Installs, PkgAllowlist};
 
+/// The bundle identifier the helper gives the install named `tools`.
+const TOOLS_BUNDLE: &str = concat!("com.example.hostkeeper.", "tools");
+const TOOLS_2_BUNDLE: &str = concat!("com.example.hostkeeper.", "tools-2");
+
 const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
@@ -14,7 +18,7 @@ fn at(sha256: &str) -> String {
 /// One install as the JSON the setting holds.
 fn entry(name: &str, sha256: &str, version: &str, extra: &str) -> String {
     format!(
-        r#"{{"name":"{name}","bundle_id":"com.example.{name}","sha256":"{sha256}","version":"{version}","path":"{}"{extra}}}"#,
+        r#"{{"name":"{name}","bundle_id":"com.example.hostkeeper.{name}","sha256":"{sha256}","version":"{version}","path":"{}"{extra}}}"#,
         at(sha256)
     )
 }
@@ -53,7 +57,7 @@ fn the_installs_refuse_each_broken_rule() {
             ),
         ),
         (
-            wrap(&entry("tools", A, "1.0", "").replace("com.example.tools", "a b")),
+            wrap(&entry("tools", A, "1.0", "").replace(TOOLS_BUNDLE, "a b")),
             "installs: tools: the bundle_id is not 1 to 255 letters, digits, '.', '-' and '_'",
         ),
         (
@@ -167,7 +171,7 @@ fn the_installs_round_trip_and_pass_over_a_key_they_do_not_know() {
         written
     );
     // Digits and `-` in a name, and `-`, `_` and digits in a bundle identifier, are taken.
-    let odd = entry("tools-2", B, "2.1", "").replace("com.example.tools-2", "com.ex-ample.tool_9");
+    let odd = entry("tools-2", B, "2.1", "").replace(TOOLS_2_BUNDLE, "com.ex-ample.tool_9");
     assert!(Installs::parse(&format!("[{odd}]")).is_ok(), "{odd}");
     assert_eq!(Installs::parse("[]").expect("empty"), Installs::empty());
     assert_eq!(Installs::empty().to_json(), "[]");
@@ -201,7 +205,7 @@ fn an_entry_digest_changes_with_what_is_installed_and_not_with_where_it_is_found
     assert_ne!(base, digest(&entry("tools", A, "1.1", "")), "the version");
     assert_ne!(
         base,
-        digest(&entry("tools", A, "1.0", "").replace("com.example.tools", "com.example.x")),
+        digest(&entry("tools", A, "1.0", "").replace(TOOLS_BUNDLE, "com.example.x")),
         "the bundle identifier"
     );
     assert_ne!(base, digest(&entry("tool", A, "1.0", "")), "the name");
