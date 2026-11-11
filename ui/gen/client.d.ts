@@ -47,6 +47,10 @@ export interface Client {
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
+    putSecret(request: hostkeeper_operator_v1.PutSecretRequest): Promise<hostkeeper_operator_v1.PutSecretResponse>;
+    putSetting(request: hostkeeper_operator_v1.PutSettingRequest): Promise<hostkeeper_operator_v1.PutSettingResponse>;
+    listSecrets(request: hostkeeper_operator_v1.ListSecretsRequest): Promise<hostkeeper_operator_v1.ListSecretsResponse>;
+    listSettings(request: hostkeeper_operator_v1.ListSettingsRequest): Promise<hostkeeper_operator_v1.ListSettingsResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -514,12 +518,18 @@ export namespace hostkeeper_operator_v1 {
     generation?: string;
     unregistered?: string[];
   }
+  export interface ListSecretsRequest {
+  }
+  export interface ListSecretsResponse { secrets?: hostkeeper_operator_v1.SecretInfo[]; sealing?: boolean; }
   export interface ListServicesRequest {
   }
   export interface ListServicesResponse { services?: hostkeeper_operator_v1.ServiceEntry[]; holds?: hostkeeper_operator_v1.HoldMark[]; }
   export interface ListUsersRequest {
   }
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
+  export interface ListSettingsRequest {
+  }
+  export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
   export type LiveReason =
     | "LIVE_REASON_UNSPECIFIED"
     | "LIVE_REASON_UPDATING"
@@ -560,6 +570,7 @@ export namespace hostkeeper_operator_v1 {
     baselineReason?: string;
   }
   export type MdmPhase = "MDM_PHASE_UNSPECIFIED" | "MDM_PHASE_AUTHENTICATED" | "MDM_PHASE_ENROLLED" | "MDM_PHASE_CHECKED_OUT";
+  export interface MdmSetting { name?: string; value?: string; isDefault?: boolean; }
   export type Membership =
     | "MEMBERSHIP_UNSPECIFIED"
     | "MEMBERSHIP_PRESENT"
@@ -636,6 +647,10 @@ export namespace hostkeeper_operator_v1 {
     repository?: hostkeeper_operator_v1.RegisteredRepository;
     entry?: hostkeeper_operator_v1.AuditEntry;
   }
+  export interface PutSecretRequest { kind?: string; material?: string; notAfterUnix?: string; }
+  export interface PutSecretResponse { secret?: hostkeeper_operator_v1.SecretInfo; }
+  export interface PutSettingRequest { name?: string; value?: string; }
+  export interface PutSettingResponse { name?: string; value?: string; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
   export interface RegisteredRepository {
     repository?: hostkeeper_release_v1.Repository;
@@ -689,6 +704,14 @@ export namespace hostkeeper_operator_v1 {
     liveRollouts?: number;
   }
   export interface RunningService { service?: string; version?: string; installer?: string; }
+  export interface SecretInfo {
+    kind?: string;
+    version?: number;
+    fingerprintSha256?: string;
+    notAfterUnix?: string;
+    createdUnix?: string;
+    supersededUnix?: string;
+  }
   export interface ServiceEntry {
     service?: string;
     hosts?: string[];

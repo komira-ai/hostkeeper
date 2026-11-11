@@ -467,6 +467,17 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 InvalidArgument,
                 "invalid_request",
             ),
+            (MdmRefusal::StoreFailed, Internal, "store_failed"),
+            (
+                MdmRefusal::AuditUnavailable,
+                Unavailable,
+                "audit_unavailable",
+            ),
+            (
+                MdmRefusal::SecretsUnavailable,
+                FailedPrecondition,
+                "secrets_unavailable",
+            ),
         ],
         refusal::mdm,
     );

@@ -368,6 +368,25 @@ pub struct Serve {
     /// The MDM policy gate: NanoHUB's API, its key and the webhook listener.
     #[command(flatten)]
     pub mdm: MdmFlags,
+    /// The file that holds the key the MDM server's secrets (the push key, the ABM token and the
+    /// rest of the setup, `docs/design/coordinator-mdm.md` section 4.9) are sealed under in the
+    /// store: 64 hex digits, a regular file of the coordinator's user, mode 0600 or 0400. The
+    /// coordinator makes it (mode 0600) when it is not there and the store holds no sealed
+    /// secret. A file that is not there, or no flag, with sealed secrets in the store, and a key
+    /// that opens none of them, refuse the start: a new key would orphan every secret. Keep the
+    /// file apart from the store's backups. Without the flag the coordinator keeps no MDM secret
+    /// and `Mdm.PutSecret` is refused `secrets_unavailable`.
+    #[arg(long)]
+    pub mdm_secrets_key_file: Option<PathBuf>,
+    /// The package proxy's cache (`docs/design/package-proxy.md`): a directory of the
+    /// coordinator's own, made when missing, holding `objects/` (the committed files, each with
+    /// its sidecar) and `tmp/` (the fills in progress). At start every file of `tmp/` and every
+    /// partial object a crash left is deleted, and the objects past `proxy_cache_max_bytes`
+    /// (a setting, 20 GiB by default) are evicted, the least recently fetched first. No file
+    /// is synced to disk. The directory is the coordinator's alone: not shared with another
+    /// coordinator. Without the flag there is no cache.
+    #[arg(long)]
+    pub proxy_cache_dir: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -535,7 +554,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         held,
         records,
         devices,
+        setup: setup_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
+    let mdm_setup = state::mdm_setup(flags, setup_store)?;
+    let proxy_cache =
+        crate::proxy_cache::open_at_start(flags.proxy_cache_dir.as_deref(), &mdm_setup)?;
     let verifier = Verifier::new(
         oidc,
         Arc::new(keys),
@@ -572,6 +595,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
+    coordinator = coordinator.with_mdm_setup(mdm_setup);
+    coordinator = coordinator.with_proxy_cache(proxy_cache);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
