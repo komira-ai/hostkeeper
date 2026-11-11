@@ -57,6 +57,9 @@ pub struct DeviceStatus {
     /// When its current enrollment began: its first `TokenUpdate` after an `Authenticate` or a
     /// `CheckOut`, by the gate's clock; `None` before one.
     pub enrolled_since_unix: Option<u64>,
+    /// `EnrolledViaDEP` of its `SecurityInfo` answer of this enrollment; `None` until one came.
+    /// What the Mac says about itself: evidence, never an identity (design 4.6).
+    pub enrolled_via_dep: Option<bool>,
 }
 
 /// Why the gate says nothing of a serial.
@@ -269,6 +272,7 @@ impl Gate {
             enrolled: record.is_enrolled(),
             supervised: record.supervised == Some(true),
             enrolled_since_unix: record.enrolled_since_unix,
+            enrolled_via_dep: record.enrolled_via_dep,
         })
     }
 

@@ -1,4 +1,4 @@
-//! The MDM tables of migration `0010` behind [`MdmStore`]: `mdm_enrollments`, `mdm_identities`,
+//! The MDM tables of migration `0011` behind [`MdmStore`]: `mdm_enrollments`, `mdm_identities`,
 //! `mdm_commands`, `abm_devices` and `abm_state` (`docs/design/coordinator-mdm.md`, 9.1).
 //!
 //! A change is one transaction on the writing session, fenced by the lease as every commit is. A

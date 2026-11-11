@@ -70,7 +70,7 @@ fn the_design_rules_hold_every_invariant_over_every_reachable_state() {
     assert!(!report.truncated);
     assert!(report.trace.is_none(), "{:?}", report.trace);
     // Measured: all sixteen combinations of what the device is.
-    assert_eq!(report.states, 683400);
+    assert_eq!(report.states, 929736);
 }
 
 #[test]
@@ -183,7 +183,6 @@ fn a_serial_has_one_live_enrollment() {
             "Scep { challenge: 0, key: 0, lost: false }",
             "Scep { challenge: 1, key: 0, lost: false }",
             "Authenticate { cert: 0 }",
-            "OperatorConfirmCert { cert: 1 }",
             "Authenticate { cert: 1 }",
         ],
     );
@@ -272,21 +271,22 @@ fn a_mac_enrolled_in_the_old_stack_is_refused_and_keeps_no_state_here() {
 }
 
 #[test]
-fn a_live_enrollment_is_never_superseded_by_a_key_that_is_not_the_devices_at_enroll_alone() {
-    // Two requests arrive while nothing is live, the LAN peer replaying a blob it captured. The
-    // check at /enroll alone lets the second Authenticate replace the Mac's enrollment.
+fn a_live_enrollment_is_replaced_only_while_the_serial_is_in_the_abm_or_an_operator_confirmed() {
+    // A serial removed from the ABM table after two challenges were issued cannot replace the
+    // live enrollment: the table is read again when the replacement happens.
     assert_breaks(
         Rules {
-            live_serial_needs_operator_at_authenticate: false,
+            replace_needs_abm_at_authenticate: false,
             ..Rules::design()
         },
-        NO_HIJACK,
+        REPLACE_ONLY_IN_ABM,
         &[
             "AbmAssign",
             "PostEnroll { key: 0, verified: true }",
-            "PostEnroll { key: 1, verified: true }",
+            "PostEnroll { key: 0, verified: true }",
+            "AbmRemove",
             "Scep { challenge: 0, key: 0, lost: false }",
-            "Scep { challenge: 1, key: 1, lost: false }",
+            "Scep { challenge: 1, key: 0, lost: false }",
             "Authenticate { cert: 0 }",
             "Authenticate { cert: 1 }",
         ],
@@ -294,14 +294,78 @@ fn a_live_enrollment_is_never_superseded_by_a_key_that_is_not_the_devices_at_enr
 }
 
 #[test]
-fn the_check_at_authenticate_alone_holds_every_invariant() {
-    let rules = Rules {
-        live_serial_needs_operator_at_enroll: false,
-        ..Rules::design()
+fn a_serial_removed_from_the_abm_cannot_replace_a_live_enrollment_until_an_operator_confirms() {
+    let model = EnrollmentModel {
+        rules: Rules::design(),
     };
-    let report = explore(&EnrollmentModel { rules }, LIMIT);
-    assert!(!report.truncated);
-    assert!(report.trace.is_none(), "{:?}", report.trace);
+    let post = || PostEnroll {
+        key: 0,
+        verified: true,
+    };
+    let s = walk(
+        &model,
+        good_device(&model),
+        vec![
+            AbmAssign,
+            post(),
+            post(),
+            Scep {
+                challenge: 0,
+                key: 0,
+                lost: false,
+            },
+            Scep {
+                challenge: 1,
+                key: 0,
+                lost: false,
+            },
+            Authenticate { cert: 0 },
+            AbmRemove,
+        ],
+    );
+    let held = walk(&model, s.clone(), vec![Authenticate { cert: 1 }]);
+    assert_eq!(held, s);
+    assert_eq!(held.certs[0].state, CertState::Live);
+    assert_eq!(held.certs[1].state, CertState::Issued);
+    let done = walk(
+        &model,
+        held,
+        vec![OperatorConfirmCert { cert: 1 }, Authenticate { cert: 1 }],
+    );
+    assert_eq!(done.certs[1].state, CertState::Live);
+    assert_eq!(done.certs[0].state, CertState::Replaced);
+}
+
+#[test]
+fn a_peer_that_replays_a_captured_blob_replaces_the_macs_enrollment_while_the_serial_is_in_the_abm()
+{
+    // The accepted risk of owner decision B: the replayed blob verifies, the serial is in the
+    // ABM table, so the peer's identity replaces the Mac's. Its nonce never approves, since the
+    // nonce reaches only the Mac, and the Mac's old identity is dead.
+    let model = EnrollmentModel {
+        rules: Rules::design(),
+    };
+    let mut steps = first_enrollment();
+    steps.extend([
+        PostEnroll {
+            key: 1,
+            verified: true,
+        },
+        Scep {
+            challenge: 1,
+            key: 1,
+            lost: false,
+        },
+        Authenticate { cert: 1 },
+        TokenUpdate { cert: 1 },
+        MintNonce { cert: 1 },
+        Approve { nonce: 1 },
+    ]);
+    let s = walk(&model, good_device(&model), steps);
+    assert_eq!(s.certs[1].state, CertState::Live);
+    assert_eq!(s.certs[1].key, 1);
+    assert_eq!(s.certs[0].state, CertState::Replaced);
+    assert_eq!(s.approved, None);
 }
 
 #[test]
@@ -450,7 +514,6 @@ fn a_nonce_approves_only_the_enrollment_it_was_issued_for() {
             "Scep { challenge: 0, key: 0, lost: false }",
             "Scep { challenge: 1, key: 0, lost: false }",
             "Authenticate { cert: 0 }",
-            "OperatorConfirmCert { cert: 1 }",
             "TokenUpdate { cert: 0 }",
             "MintNonce { cert: 0 }",
             "Authenticate { cert: 1 }",
@@ -557,10 +620,9 @@ fn a_nonce_of_an_enrollment_that_checked_out_approves_nothing() {
 }
 
 #[test]
-fn a_replayed_blob_before_the_first_enrollment_squats_the_serial_until_an_operator_confirms_the_mac()
- {
-    // The LAN peer enrolls first. The Mac's own request waits for an operator, and the peer's
-    // enrollment never approves: its nonce reaches only the peer.
+fn a_mac_enrolling_after_a_replayed_blob_took_the_serial_replaces_the_peers_enrollment() {
+    // The LAN peer enrolls first. Its enrollment never approves (its nonce reaches only the
+    // peer), and the Mac's own enrollment replaces it with no operator.
     let model = EnrollmentModel {
         rules: Rules::design(),
     };
@@ -582,20 +644,34 @@ fn a_replayed_blob_before_the_first_enrollment_squats_the_serial_until_an_operat
             TokenUpdate { cert: 0 },
             MintNonce { cert: 0 },
             Approve { nonce: 0 },
-            PostEnroll {
-                key: 0,
-                verified: true,
-            },
         ],
     );
     assert_eq!(s.certs[0].state, CertState::Live);
     assert_eq!(s.certs[0].key, 1);
     assert_eq!(s.approved, None);
-    assert_eq!(s.pending, Some(0));
+    let s = walk(
+        &model,
+        s,
+        vec![
+            PostEnroll {
+                key: 0,
+                verified: true,
+            },
+            Scep {
+                challenge: 1,
+                key: 0,
+                lost: false,
+            },
+            Authenticate { cert: 1 },
+        ],
+    );
+    assert_eq!(s.pending, None);
+    assert_eq!(s.certs[1].state, CertState::Live);
+    assert_eq!(s.certs[0].state, CertState::Replaced);
 }
 
 #[test]
-fn a_wiped_mac_that_did_not_check_out_needs_an_operator_to_replace_its_enrollment() {
+fn a_wiped_mac_that_did_not_check_out_enrolls_again_with_no_operator() {
     let model = EnrollmentModel {
         rules: Rules::design(),
     };
@@ -606,25 +682,18 @@ fn a_wiped_mac_that_did_not_check_out_needs_an_operator_to_replace_its_enrollmen
             key: 0,
             verified: true,
         },
+        Scep {
+            challenge: 1,
+            key: 0,
+            lost: false,
+        },
+        Authenticate { cert: 1 },
     ]);
     let s = walk(&model, good_device(&model), steps);
-    assert_eq!(s.pending, Some(0));
-    assert_eq!(s.challenges[1].state, ChallengeState::Free);
-    let s = walk(
-        &model,
-        s,
-        vec![
-            OperatorConfirm,
-            Scep {
-                challenge: 1,
-                key: 0,
-                lost: false,
-            },
-            Authenticate { cert: 1 },
-        ],
-    );
+    assert_eq!(s.pending, None);
     assert_eq!(s.certs[1].state, CertState::Live);
     assert_eq!(s.certs[0].state, CertState::Replaced);
+    assert_eq!(s.token_for, None);
 }
 
 #[test]
@@ -649,44 +718,8 @@ fn a_wiped_mac_that_checked_out_enrolls_again_with_no_operator() {
     ]);
     let s = walk(&model, good_device(&model), steps);
     assert_eq!(s.certs[1].state, CertState::Live);
+    assert_eq!(s.certs[0].state, CertState::CheckedOut);
     assert_eq!(s.pending, None);
-}
-
-#[test]
-fn an_enrollment_held_at_authenticate_waits_for_the_operator_and_is_then_accepted() {
-    let model = EnrollmentModel {
-        rules: Rules::design(),
-    };
-    let post = || PostEnroll {
-        key: 0,
-        verified: true,
-    };
-    let steps = vec![
-        AbmAssign,
-        post(),
-        post(),
-        Scep {
-            challenge: 0,
-            key: 0,
-            lost: false,
-        },
-        Scep {
-            challenge: 1,
-            key: 0,
-            lost: false,
-        },
-        Authenticate { cert: 0 },
-    ];
-    // Two requests, both issued before the second Authenticate: the first stays live.
-    let s = walk(&model, good_device(&model), steps);
-    let held = walk(&model, s.clone(), vec![Authenticate { cert: 1 }]);
-    assert_eq!(held, s);
-    let done = walk(
-        &model,
-        held,
-        vec![OperatorConfirmCert { cert: 1 }, Authenticate { cert: 1 }],
-    );
-    assert_eq!(done.certs[1].state, CertState::Live);
 }
 
 #[test]
