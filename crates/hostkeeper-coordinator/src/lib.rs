@@ -169,6 +169,7 @@ pub mod membership;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
+pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;

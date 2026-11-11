@@ -276,3 +276,71 @@ async fn the_first_admin_signs_in_changes_the_password_and_the_file_goes() {
     assert_eq!(login(coordinator, "admin", PASSWORD).await.0, 401);
     assert_eq!(login(coordinator, "admin", NEW_PASSWORD).await.0, 200);
 }
+
+/// Proves: a coordinator started from the flags lets a signed-in user make a user through the
+/// operator API with a temporary password good for `--initial-password-secs` and no longer, and
+/// the new user signs in with it and is told to change it; a token made through the API calls the
+/// API under its name.
+///
+/// Catches: a flag that is read for the first admin's file and not for the passwords an operator
+/// makes, and a stored token that the bearer lookup of a started coordinator does not see.
+#[tokio::test]
+async fn a_started_coordinator_makes_users_and_tokens_for_the_operator() {
+    let files = Files::new("login-accounts");
+    let args = cheap(&files, &[("--initial-password-secs", "600")]);
+    let parts = build_given(&flags_of(args)).expect("starts");
+    let coordinator = &parts.coordinator;
+    add_user(coordinator, "alice");
+    let (id, csrf) = session_of(&login(coordinator, "alice", PASSWORD).await);
+    let made = send(
+        coordinator,
+        page(
+            "POST",
+            "/hostkeeper.operator.v1.Users/Create",
+            Some((&id, &csrf)),
+            json!({ "name": "carol" }),
+        ),
+    )
+    .await;
+    assert_eq!(made.0, 200, "{:?}", made.2);
+    let seconds = |field: &str| -> u64 {
+        made.2["user"][field]
+            .as_str()
+            .and_then(|text| text.parse().ok())
+            .unwrap_or_else(|| panic!("{field}: {:?}", made.2))
+    };
+    assert_eq!(
+        seconds("passwordValidUntilUnix") - seconds("createdUnix"),
+        600
+    );
+    let password = made.2["password"].as_str().expect("a password").to_owned();
+    let signed = login(coordinator, "carol", &password).await;
+    assert_eq!(signed.0, 200);
+    assert_eq!(signed.2["must_change"], json!(true));
+
+    let token = send(
+        coordinator,
+        page(
+            "POST",
+            "/hostkeeper.operator.v1.ApiTokens/Create",
+            Some((&id, &csrf)),
+            json!({ "name": "robot" }),
+        ),
+    )
+    .await;
+    assert_eq!(token.0, 200, "{:?}", token.2);
+    let secret = token.2["secret"].as_str().expect("a secret");
+    let mut listed = page(
+        "POST",
+        "/hostkeeper.operator.v1.Users/List",
+        None,
+        json!({}),
+    );
+    listed.headers_mut().insert(
+        "authorization",
+        format!("Bearer {secret}").parse().expect("a value"),
+    );
+    let answer = send(coordinator, listed).await;
+    assert_eq!(answer.0, 200, "{:?}", answer.2);
+    assert_eq!(answer.2["users"].as_array().map(Vec::len), Some(2));
+}
