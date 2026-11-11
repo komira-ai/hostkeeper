@@ -61,6 +61,9 @@ fn device() -> op::MdmDevice {
         install_sha256: "ab".repeat(32),
         baseline_state: op::MdmBaselineState::Failed.into(),
         baseline_reason: "profile com.example.fskit: the device answered an error".to_owned(),
+        host_id: "lab-mac-1".to_owned(),
+        group: "mac-builders".to_owned(),
+        baseline: op::MdmBaseline::Applied.into(),
     }
 }
 
@@ -80,6 +83,8 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 devices: vec![device()],
                 next_page_token: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
                 gate: true,
+                configured: true,
+                missing: vec![op::MdmCondition::NameMissing.into()],
             }),
         ),
         (
@@ -240,6 +245,40 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 expires_unix: 1_800_003_600,
             }),
         ),
+        (
+            "hostkeeper.operator.v1.MdmStatusResponse",
+            round_trip(&op::MdmStatusResponse {
+                configured: true,
+                missing: vec![op::MdmCondition::TlsNameMismatch.into()],
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+                name_locked: true,
+                sealing: true,
+                push_cert: Some(secret_info()),
+                push_key: Some(secret_info()),
+                abm_token: Some(secret_info()),
+                tls_cert: Some(secret_info()),
+                tls_key: Some(secret_info()),
+                push_topic: "com.apple.mgmt.External.0a1b2c3d".to_owned(),
+                push_not_after_unix: Some(1_900_000_000),
+                abm_not_after_unix: Some(1_825_020_096),
+                tls_not_after_unix: Some(1_850_000_000),
+                tls_names: vec!["mdm.example.com".to_owned()],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameRequest",
+            round_trip(&op::PutNameRequest {
+                name: "mdm.example.com".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutNameResponse",
+            round_trip(&op::PutNameResponse {
+                name: "mdm.example.com".to_owned(),
+                enrollment_url: "https://mdm.example.com/enroll".to_owned(),
+            }),
+        ),
     ]
 }
 
@@ -264,6 +303,8 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
     for name in [
         "hostkeeper.operator.v1.MdmRefusal",
         "hostkeeper.operator.v1.MdmPhase",
+        "hostkeeper.operator.v1.MdmCondition",
+        "hostkeeper.operator.v1.MdmBaseline",
         "hostkeeper.operator.v1.MdmBaselineState",
     ] {
         assert!(older.get_enum_by_name(name).is_none(), "{name} is new");

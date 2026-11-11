@@ -1,8 +1,8 @@
-//! `Mdm.PutSecret`, `Mdm.PutSetting`, `Mdm.ListSecrets` and `Mdm.ListSettings` of
+//! `Mdm.PutSecret`, `Mdm.PutSetting`, `Mdm.PutName`, `Mdm.ListSecrets` and `Mdm.ListSettings` of
 //! `hostkeeper.operator.v1`, as plain functions over their messages, as the other operator calls
 //! are ([`crate::operator`]), over the coordinator's MDM setup ([`crate::mdm_setup`]).
 //!
-//! Who may: the two reads take the operator's token or a signed-in user. The two writes are in
+//! Who may: the reads take the operator's token or a signed-in user. The three writes are in
 //! [`crate::grpc::SESSION_ONLY`], so the transport refuses a bearer before the call is made
 //! (`PERMISSION_DENIED`, `session_required`); here a caller is the signed-in user's name or it is
 //! refused as every operator call is.
@@ -24,6 +24,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
 use crate::abm::keys;
 use crate::audit_actions;
+use crate::mdm_name;
 use crate::mdm_secrets::{AbmToken, MAX_SECRET_BYTES, Secret, SecretKind};
 use crate::mdm_settings;
 use crate::mdm_setup::{MdmSetup, SecretInfo, SetupFailure};
@@ -207,6 +208,60 @@ impl Coordinator {
         })
     }
 
+    /// `Mdm.PutName`: sets the MDM name.
+    ///
+    /// # Errors
+    /// `unauthorized`, `forbidden`, `invalid_request` (not a DNS name of the kind
+    /// [`mdm_name::normalize`] takes), `name_locked` (a Mac has enrolled and the name set differs from
+    /// this one), `audit_unavailable`, `store_failed`.
+    pub fn mdm_put_name(
+        &self,
+        caller: &Caller,
+        request: &proto::PutNameRequest,
+    ) -> Result<proto::PutNameResponse, MdmRefusal> {
+        let by = caller.operator()?;
+        let Some(name) = mdm_name::normalize(&request.name) else {
+            return self.refused_name(by, None, MdmRefusal::InvalidRequest);
+        };
+        let held = self.mdm_setup.settings().map_err(read_failed)?;
+        // A first name is always allowed, since Macs that enrolled before this setup hold the
+        // name they enrolled at and the operator sets that one; a change is not, once a Mac has.
+        let changes = held.get(mdm_name::KEY).is_some_and(|set| *set != name);
+        if changes && self.macs_enrolled() {
+            return self.refused_name(by, Some(&name), MdmRefusal::NameLocked);
+        }
+        self.audit_setup(
+            by,
+            audit_actions::MDM_NAME_SET,
+            None,
+            format!("set to {name}"),
+        )?;
+        if let Err(why) = self.mdm_setup.set_setting(mdm_name::KEY, &name) {
+            tracing::error!(%why, "the MDM name could not be stored");
+            return self.refused_name(by, Some(&name), MdmRefusal::StoreFailed);
+        }
+        Ok(proto::PutNameResponse {
+            enrollment_url: mdm_name::enrollment_url(&name),
+            name,
+        })
+    }
+
+    /// The refusal `refusal` of a `PutName`, audited by `by` with its token as the reason, and the
+    /// name when it was one.
+    fn refused_name(
+        &self,
+        by: &str,
+        name: Option<&str>,
+        refusal: MdmRefusal,
+    ) -> Result<proto::PutNameResponse, MdmRefusal> {
+        let reason = match name {
+            Some(name) => format!("refused: {} for {name}", refusal.as_str_name()),
+            None => format!("refused: {}", refusal.as_str_name()),
+        };
+        self.audit_setup(by, audit_actions::MDM_NAME_SET, None, reason)?;
+        Err(refusal)
+    }
+
     /// `Mdm.ListSecrets`: what is shown of every version of every secret.
     ///
     /// # Errors
@@ -247,7 +302,7 @@ impl Coordinator {
 }
 
 /// The refusal of a read the store failed.
-fn read_failed(why: SetupFailure) -> MdmRefusal {
+pub(crate) fn read_failed(why: SetupFailure) -> MdmRefusal {
     tracing::error!(%why, "the MDM setup could not be read");
     MdmRefusal::StoreFailed
 }

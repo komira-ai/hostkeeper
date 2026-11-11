@@ -24,8 +24,8 @@ use rcgen::{
     KeyUsagePurpose, PKCS_RSA_SHA256, SanType,
 };
 use ring::digest;
-use rsa09::Pkcs1v15Sign;
-use rsa09::pkcs8::EncodePrivateKey as _;
+use rsa_legacy::Pkcs1v15Sign;
+use rsa_legacy::pkcs8::EncodePrivateKey as _;
 use rustls::pki_types::{CertificateDer, PrivatePkcs8KeyDer, ServerName};
 use rustls::{ClientConfig, RootCertStore};
 use sha2::{Digest as _, Sha256};
@@ -152,7 +152,7 @@ pub(crate) struct Identity2 {
     pub(crate) der: Vec<u8>,
     pub(crate) key_der: Vec<u8>,
     /// The key to sign with when it is not the fixture key `index`: a Mac that made its own.
-    pub(crate) key: Option<rsa09::RsaPrivateKey>,
+    pub(crate) key: Option<rsa_legacy::RsaPrivateKey>,
 }
 
 impl Identity2 {

@@ -395,6 +395,11 @@ fn a_setting_is_judged_audited_and_listed() {
             ("identity_org", "hostkeeper", true),
             ("enroll_rate_per_min", "60", true),
             ("enroll_pending_max", "256", true),
+            ("proxy_wait_s", "10", true),
+            ("proxy_redirects", "3", true),
+            ("proxy_index_ttl_s", "300", true),
+            ("proxy_cache_max_bytes", "21474836480", true),
+            ("proxy_fetches", "8", true),
         ]
     );
     assert_eq!(

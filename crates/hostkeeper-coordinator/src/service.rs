@@ -264,6 +264,8 @@ pub struct Coordinator {
     /// The ABM client: the sync, the token upload and the key pair ([`crate::abm`]); `None` in a
     /// coordinator built without an MDM store.
     pub(crate) abm: Option<Arc<crate::abm::Abm>>,
+    /// The package proxy's cache (`--proxy-cache-dir`), when there is one.
+    pub(crate) proxy_cache: Option<Arc<crate::proxy_cache::ProxyCache>>,
     ui: Option<UiDir>,
     /// The alerts the last observation found ([`crate::alerts`]).
     pub(crate) alerts: crate::alerts::Book,
@@ -328,6 +330,7 @@ impl Coordinator {
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             abm: None,
+            proxy_cache: None,
             initial_admin: None,
             login: None,
             verifier,

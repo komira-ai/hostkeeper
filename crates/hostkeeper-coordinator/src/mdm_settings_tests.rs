@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use super::{SETTINGS, find, list_of, number_of, text_of, value_of};
+use super::{SETTINGS, find, list_of, number_of, text_of, value_of, whole_of};
 
 fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these nineteen, each with its default from the start
+/// Proves: the settings this release knows are these twenty-four, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -37,6 +37,11 @@ fn each_setting_has_a_default_from_the_start() {
             ("identity_org", "hostkeeper"),
             ("enroll_rate_per_min", "60"),
             ("enroll_pending_max", "256"),
+            ("proxy_wait_s", "10"),
+            ("proxy_redirects", "3"),
+            ("proxy_index_ttl_s", "300"),
+            ("proxy_cache_max_bytes", "21474836480"),
+            ("proxy_fetches", "8"),
         ]
     );
     for setting in SETTINGS {
@@ -217,4 +222,48 @@ fn the_profile_name_is_a_short_printable_text() {
     set.insert("ade_profile_name".to_owned(), "Other".to_owned());
     assert_eq!(text_of(&set, "ade_profile_name"), Some("Other"));
     assert_eq!(text_of(&set, "nothing"), None);
+}
+
+/// Proves: each proxy setting takes a whole number within its range (the bounds included), written
+/// without leading zeros or space, and refuses a sign, a fraction, an empty value or a number out
+/// of range; a number is read with the fallback for an unknown name or a hand-edited value.
+///
+/// Catches: a proxy tunable that takes `0` where zero would stall every request, or a value a
+/// reader parses differently than the setter judged it.
+#[test]
+fn a_proxy_setting_is_a_whole_number_in_its_range() {
+    assert_eq!(check("proxy_wait_s", " 010 ").as_deref(), Some("10"));
+    assert_eq!(check("proxy_wait_s", "1").as_deref(), Some("1"));
+    assert_eq!(check("proxy_wait_s", "3600").as_deref(), Some("3600"));
+    assert_eq!(check("proxy_redirects", "0").as_deref(), Some("0"));
+    assert_eq!(check("proxy_index_ttl_s", "0").as_deref(), Some("0"));
+    assert_eq!(check("proxy_fetches", "1024").as_deref(), Some("1024"));
+    assert_eq!(
+        check("proxy_cache_max_bytes", "1125899906842624").as_deref(),
+        Some("1125899906842624")
+    );
+    for (name, bad) in [
+        ("proxy_wait_s", "0"),
+        ("proxy_wait_s", "3601"),
+        ("proxy_wait_s", "-1"),
+        ("proxy_wait_s", "1.5"),
+        ("proxy_wait_s", ""),
+        ("proxy_redirects", "11"),
+        ("proxy_index_ttl_s", "86401"),
+        ("proxy_fetches", "0"),
+        ("proxy_fetches", "1025"),
+        ("proxy_cache_max_bytes", "0"),
+        ("proxy_cache_max_bytes", "1125899906842625"),
+        ("proxy_cache_max_bytes", "99999999999999999999999"),
+    ] {
+        assert_eq!(check(name, bad), None, "{name} {bad:?}");
+    }
+
+    let mut set = BTreeMap::new();
+    assert_eq!(whole_of(&set, "proxy_fetches", 99), 8);
+    set.insert("proxy_fetches".to_owned(), "16".to_owned());
+    assert_eq!(whole_of(&set, "proxy_fetches", 99), 16);
+    set.insert("proxy_fetches".to_owned(), "many".to_owned());
+    assert_eq!(whole_of(&set, "proxy_fetches", 99), 99);
+    assert_eq!(whole_of(&set, "nothing", 5), 5);
 }

@@ -58,8 +58,6 @@ hostkeeper-tls = { path = "../hostkeeper-tls" }
 hostkeeper-wire = { path = "../hostkeeper-wire" }
 # The Argon2id hash of an operator password (`src/password.rs`).
 argon2.workspace = true
-# The expiry of the ABM token, an RFC 3339 time (`src/operator_abm.rs`).
-time = { workspace = true, features = ["parsing"] }
 # The ABM token's CMS envelope and the RSA key it is encrypted to (`src/abm/p7m.rs`).
 aes.workspace = true
 cbc.workspace = true
@@ -100,6 +98,8 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+# The RFC 3339 expiry of the ABM token (`src/mdm_status.rs`).
+time = { workspace = true, features = ["parsing"] }
 toml.workspace = true
 tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
@@ -141,7 +141,7 @@ plist.workspace = true
 prost-types.workspace = true
 # The RSA keys of the push tests, read back from the sealed records to make a certificate or a
 # reply for them.
-rsa09.workspace = true
+rsa-legacy.workspace = true
 # The `.proto` files of an earlier release, compiled in a test to speak to the coordinator as
 # that release's daemon does (tests/move_v0_1_221.rs).
 protox.workspace = true

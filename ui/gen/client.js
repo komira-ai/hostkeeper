@@ -60,6 +60,8 @@ export function createClient(call) {
       getAbmPublicKey: (request) => call("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", request),
       listEnrollmentRequests: (request) => call("hostkeeper.operator.v1.Mdm/ListEnrollmentRequests", request),
       confirmEnrollment: (request) => call("hostkeeper.operator.v1.Mdm/ConfirmEnrollment", request),
+      status: (request) => call("hostkeeper.operator.v1.Mdm/Status", request),
+      putName: (request) => call("hostkeeper.operator.v1.Mdm/PutName", request),
     }),
     releases: Object.freeze({
       setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),

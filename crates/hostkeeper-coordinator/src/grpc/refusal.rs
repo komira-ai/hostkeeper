@@ -184,6 +184,7 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         | MdmRefusal::EnrollmentUnavailable
         | MdmRefusal::SerialNotInAbm
         | MdmRefusal::NoPendingRequest
+        | MdmRefusal::NameLocked
         | MdmRefusal::AbmUnavailable
         | MdmRefusal::AbmKeyMissing
         | MdmRefusal::AbmCredentialRefused

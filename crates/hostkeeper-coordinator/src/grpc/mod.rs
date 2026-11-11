@@ -247,6 +247,8 @@ const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
 const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
 /// The path of `Mdm.ConfirmEnrollment`, which lets a held `/enroll` request through.
 const MDM_CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
+/// The path of `Mdm.PutName`.
+const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -256,6 +258,7 @@ const MDM_CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollm
 pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_SECRET,
     MDM_PUT_SETTING,
+    MDM_PUT_NAME,
     MDM_CREATE_PUSH_REQUEST,
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,
