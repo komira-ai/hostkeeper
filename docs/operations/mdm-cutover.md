@@ -86,7 +86,7 @@ New flags, with the pull request that adds each and its default:
 | `--session-idle-secs`, `--session-max-secs`, `--session-max-count` | open, #319 (L6b, the routes that use them; the limits are in #318, merged) | default | 1800, 43200, 256 |
 | `--login-max-failures`, `--login-lockout-secs`, `--login-max-tracked` | open, #319 (limiter in #318, merged) | default | 5, 900, 4096 |
 | `--login-max-hashes N` | open, #319 | default | 2: how many password hashes run at once |
-| `--proxy-cache-dir DIR` | open, #326 (PP1) | not set: the package proxy is not part of the cutover | none (no cache). A directory of the coordinator's own for the proxy's cache (its size limit is a setting); the routes that use it are #336 (PP2) |
+| `--proxy-cache-dir DIR` | open, #326 (PP1) | not set: the package proxy is not part of the cutover | none (no cache). A directory of the coordinator's own for the proxy's cache (its size limit is a setting); `GET /pkg/<sha256>.pkg` uses it, when an `installs` entry has a `url` and the pkg is not in `--mdm-pkg-dir` (PP3): the pkg is read from the `url` once, checked against its digest and kept; the apt routes are #336 (PP2) |
 
 There is no flag for ACME or DNS. The MDM name, the certificate (by ACME DNS-01 through GoDaddy, #334 CM17, or
 uploaded) and the GoDaddy credential are setup data entered in the web app in step 5, and so are

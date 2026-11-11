@@ -323,9 +323,9 @@ fn an_unreadable_setting_is_an_error() {
         crate::enrollment::os_random(),
     );
     let digest = PkgDigest::of(b"x");
-    assert_eq!(pkg::is_installed(&setup, &digest), Ok(false));
+    assert!(matches!(pkg::installed(&setup, &digest), Ok(None)));
     store.reads_fail.store(true, Ordering::SeqCst);
-    assert_eq!(pkg::is_installed(&setup, &digest), Err(()));
+    assert!(matches!(pkg::installed(&setup, &digest), Err(())));
 }
 
 /// Proves: only `GET` and `HEAD` are served: any other method on a pkg an install names is `405`

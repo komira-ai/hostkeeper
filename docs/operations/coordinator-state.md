@@ -169,6 +169,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `pool/` is kept until evicted, any other file is served for `proxy_index_ttl_s` (300) and then
   revalidated with one conditional read of the origin. A repository is pointed at the proxy by its
   `https://<mdm name>/apt/<repo>/` URL in a group's entry; the origin is the registry entry's own `uri`.
+  The route `GET /pkg/<sha256>.pkg` on the MDM listener also uses it: a pkg that an `installs` entry names with a `url`
+  and that is not in `--mdm-pkg-dir` is read from that `url`, kept as the object `pkg/<digest>.pkg`, and served from the file.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

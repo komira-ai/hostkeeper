@@ -120,6 +120,8 @@ pub(crate) struct Proxy {
     pub(crate) cache: Option<Arc<ProxyCache>>,
     /// The reads of public origins.
     pub(crate) origin: Option<Arc<ProxyOrigin>>,
+    /// The reader of the origins of pkgs, for the pull-through of `/pkg/`: with the cache only.
+    pub(crate) pkg: Option<Arc<crate::pkg_origin::PkgOrigin>>,
 }
 
 impl Proxy {
@@ -134,9 +136,15 @@ impl Proxy {
         setup: &crate::mdm_setup::MdmSetup,
         roots: Roots,
     ) -> Result<Self, StartError> {
+        let cache = crate::proxy_cache::open_at_start(dir, setup)?.map(Arc::new);
+        let pkg = cache
+            .as_ref()
+            .map(|_| crate::pkg_origin::PkgOrigin::new(roots.clone()).map(Arc::new))
+            .transpose()?;
         Ok(Self {
-            cache: crate::proxy_cache::open_at_start(dir, setup)?.map(Arc::new),
+            cache,
             origin: Some(Arc::new(ProxyOrigin::new(roots)?)),
+            pkg,
         })
     }
 }
