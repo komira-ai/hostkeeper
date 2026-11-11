@@ -1,11 +1,14 @@
 //! The MDM tables as files: one family per file in a directory, each replaced whole as the other
 //! state files are (`desired::write_whole_syncing`). A file is `{"schema": 1, "rows": [...]}`; a
 //! file of another schema, or one that does not read, stops the start naming it, and a field of a
-//! later release is skipped (formats change additively, B8). A family that has no file is empty.
+//! later release is kept as it was read and written back with its row (formats change additively,
+//! B8). A family that has no file is empty.
 //!
 //! Every call makes its change on a copy of the memory ([`MdmState`]), writes the families that
-//! changed, and keeps the copy only when every write succeeded, so a failed change is not made.
+//! changed, and keeps the copy only when every write succeeded; see [`FileMdm::change`] for a write
+//! that fails.
 
+use std::collections::BTreeMap;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
@@ -29,47 +32,122 @@ const IDENTITIES: &str = "identities.json";
 const COMMANDS: &str = "commands.json";
 const ABM_DEVICES: &str = "abm_devices.json";
 const ABM_STATE: &str = "abm_state.json";
+/// The files in the order [`encode`] makes their bytes.
+const FAMILIES: [&str; 5] = [COMMANDS, IDENTITIES, ENROLLMENTS, ABM_DEVICES, ABM_STATE];
 
-#[derive(Serialize, Deserialize)]
-struct Family<T> {
-    schema: u32,
-    rows: Vec<T>,
+/// The fields of a row that this release does not know, by name: kept as read and written back.
+type Extra = BTreeMap<String, serde_json::Value>;
+
+/// A row as read: the fields this release knows and the ones of a later release.
+#[derive(Deserialize)]
+struct RowIn<T> {
+    #[serde(flatten)]
+    row: T,
+    #[serde(flatten)]
+    extra: Extra,
 }
+
+#[derive(Deserialize)]
+struct FamilyIn<T> {
+    schema: u32,
+    rows: Vec<RowIn<T>>,
+}
+
+/// A row as written: its fields and the fields of a later release that were read with it.
+#[derive(Serialize)]
+struct RowOut<'a, T> {
+    #[serde(flatten)]
+    row: &'a T,
+    #[serde(flatten)]
+    extra: &'a Extra,
+}
+
+#[derive(Serialize)]
+struct FamilyOut<'a, T> {
+    schema: u32,
+    rows: Vec<RowOut<'a, T>>,
+}
+
+/// The extra fields of the rows of one family, by the key of the row.
+type Extras = BTreeMap<String, Extra>;
 
 /// The MDM tables in the files of one directory.
 pub(crate) struct FileMdm {
     dir: PathBuf,
+    sync: desired::SyncDir,
     held: Mutex<Held>,
 }
 
-/// The memory, and the bytes each family's file holds, so that a call writes only what changed.
+/// The memory, the bytes each family's file holds, so that a call writes only what changed, and the
+/// fields of a later release that the rows came with.
 struct Held {
     state: MdmState,
-    written: [Vec<u8>; 5],
+    written: Vec<Vec<u8>>,
+    extras: [Extras; 5],
+}
+
+/// The bytes of the family of `rows`, each with its key, which is where its extra fields are
+/// looked up.
+pub(super) fn family_bytes<T: Serialize>(
+    rows: Vec<(&str, &T)>,
+    extras: &Extras,
+) -> Result<Vec<u8>, MdmError> {
+    let none = Extra::new();
+    let family = FamilyOut {
+        schema: SCHEMA,
+        rows: rows
+            .into_iter()
+            .map(|(key, row)| RowOut {
+                row,
+                extra: extras.get(key).unwrap_or(&none),
+            })
+            .collect(),
+    };
+    serde_json::to_vec_pretty(&family).map_err(|e| MdmError::Store(e.to_string()))
 }
 
 /// The bytes of every family of `state`, in the order the files are written: the commands first
 /// and the enrollments after them, so that a change that stops half way leaves commands cancelled
 /// under an enrollment that still stands, which is harmless, and not the other way about.
-fn encode(state: &MdmState) -> Result<[Vec<u8>; 5], MdmError> {
-    fn one<T: Serialize>(rows: Vec<&T>) -> Result<Vec<u8>, MdmError> {
-        serde_json::to_vec_pretty(&Family {
-            schema: SCHEMA,
-            rows,
-        })
-        .map_err(|e| MdmError::Store(e.to_string()))
-    }
-    Ok([
-        one({
-            let mut all: Vec<&Command> = state.commands.values().collect();
-            all.sort_by_key(|c| c.seq);
-            all
-        })?,
-        one(state.identities.values().collect())?,
-        one(state.enrollments.values().collect())?,
-        one(state.abm_devices.values().collect())?,
-        one(state.abm_state.iter().collect())?,
-    ])
+fn encode(state: &MdmState, extras: &[Extras; 5]) -> Result<Vec<Vec<u8>>, MdmError> {
+    let mut commands: Vec<&Command> = state.commands.values().collect();
+    commands.sort_by_key(|c| c.seq);
+    [
+        family_bytes(
+            commands.into_iter().map(|c| (c.id.as_str(), c)).collect(),
+            &extras[0],
+        ),
+        family_bytes(
+            state
+                .identities
+                .iter()
+                .map(|(k, r)| (k.as_str(), r))
+                .collect(),
+            &extras[1],
+        ),
+        family_bytes(
+            state
+                .enrollments
+                .iter()
+                .map(|(k, r)| (k.as_str(), r))
+                .collect(),
+            &extras[2],
+        ),
+        family_bytes(
+            state
+                .abm_devices
+                .iter()
+                .map(|(k, r)| (k.as_str(), r))
+                .collect(),
+            &extras[3],
+        ),
+        family_bytes(
+            state.abm_state.iter().map(|r| ("", r)).collect(),
+            &extras[4],
+        ),
+    ]
+    .into_iter()
+    .collect()
 }
 
 fn failed(path: &Path, why: &dyn std::fmt::Display) -> MdmError {
@@ -80,23 +158,38 @@ fn store(e: &StoreError) -> MdmError {
     MdmError::Store(e.to_string())
 }
 
-/// The rows of the family file `name` in `dir`; none when the file is not there.
-fn read_family<T: DeserializeOwned>(dir: &Path, name: &str) -> Result<Vec<T>, MdmError> {
+/// The rows of the family file `name` in `dir` by their `key`, and the fields of a later release
+/// they came with; none when the file is not there.
+fn read_family<T: DeserializeOwned>(
+    dir: &Path,
+    name: &str,
+    key: fn(&T) -> String,
+) -> Result<(BTreeMap<String, T>, Extras), MdmError> {
     let path = dir.join(name);
     let bytes = match fs::read(&path) {
         Ok(bytes) => bytes,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {
+            return Ok((BTreeMap::new(), Extras::new()));
+        }
         Err(e) => return Err(failed(&path, &e)),
     };
-    let family: Family<T> = serde_json::from_slice(&bytes).map_err(|e| failed(&path, &e))?;
-    if family.schema == SCHEMA {
-        Ok(family.rows)
-    } else {
-        Err(failed(
+    let family: FamilyIn<T> = serde_json::from_slice(&bytes).map_err(|e| failed(&path, &e))?;
+    if family.schema != SCHEMA {
+        return Err(failed(
             &path,
             &format!("schema {} is not one this release reads", family.schema),
-        ))
+        ));
     }
+    let mut rows = BTreeMap::new();
+    let mut extras = Extras::new();
+    for RowIn { row, extra } in family.rows {
+        let key = key(&row);
+        if !extra.is_empty() {
+            extras.insert(key.clone(), extra);
+        }
+        rows.insert(key, row);
+    }
+    Ok((rows, extras))
 }
 
 impl FileMdm {
@@ -105,41 +198,49 @@ impl FileMdm {
     /// # Errors
     /// [`MdmError::Store`]: the directory cannot be made, or a file does not read.
     pub(crate) fn open(dir: &Path) -> Result<Self, MdmError> {
+        Self::open_syncing(dir, desired::sync_dir)
+    }
+
+    /// [`Self::open`], with `sync` as the directory sync of every file written.
+    pub(crate) fn open_syncing(dir: &Path, sync: desired::SyncDir) -> Result<Self, MdmError> {
         fs::create_dir_all(dir).map_err(|e| failed(dir, &e))?;
+        let (enrollments, e2) =
+            read_family::<Enrollment>(dir, ENROLLMENTS, |r| r.enrollment_id.clone())?;
+        let (identities, e1) =
+            read_family::<Identity>(dir, IDENTITIES, |r| r.challenge_sha256.clone())?;
+        let (commands, e0) = read_family::<Command>(dir, COMMANDS, |r| r.id.clone())?;
+        let (abm_devices, e3) = read_family::<AbmDevice>(dir, ABM_DEVICES, |r| r.serial.clone())?;
+        let (abm_state, e4) = read_family::<AbmState>(dir, ABM_STATE, |_| String::new())?;
         let state = MdmState {
-            enrollments: read_family::<Enrollment>(dir, ENROLLMENTS)?
-                .into_iter()
-                .map(|r| (r.enrollment_id.clone(), r))
-                .collect(),
-            identities: read_family::<Identity>(dir, IDENTITIES)?
-                .into_iter()
-                .map(|r| (r.challenge_sha256.clone(), r))
-                .collect(),
-            commands: read_family::<Command>(dir, COMMANDS)?
-                .into_iter()
-                .map(|r| (r.id.clone(), r))
-                .collect(),
-            abm_devices: read_family::<AbmDevice>(dir, ABM_DEVICES)?
-                .into_iter()
-                .map(|r| (r.serial.clone(), r))
-                .collect(),
-            abm_state: read_family::<AbmState>(dir, ABM_STATE)?.into_iter().next(),
+            enrollments,
+            identities,
+            commands,
+            abm_devices,
+            abm_state: abm_state.into_values().next(),
         };
         // What the files hold now is what the memory encodes to, or the first change writes all.
-        let written = [
-            fs::read(dir.join(COMMANDS)).unwrap_or_default(),
-            fs::read(dir.join(IDENTITIES)).unwrap_or_default(),
-            fs::read(dir.join(ENROLLMENTS)).unwrap_or_default(),
-            fs::read(dir.join(ABM_DEVICES)).unwrap_or_default(),
-            fs::read(dir.join(ABM_STATE)).unwrap_or_default(),
-        ];
+        let written = FAMILIES
+            .iter()
+            .map(|name| fs::read(dir.join(name)).unwrap_or_default())
+            .collect();
         Ok(Self {
             dir: dir.to_owned(),
-            held: Mutex::new(Held { state, written }),
+            sync,
+            held: Mutex::new(Held {
+                state,
+                written,
+                extras: [e0, e1, e2, e3, e4],
+            }),
         })
     }
 
     /// Runs `change` on a copy of the memory, writes the families it changed, and keeps the copy.
+    ///
+    /// A write that fails leaves the memory as it was and the call answers the error; the families
+    /// written before it stay on disk, and the next change that writes them puts them back. A file
+    /// that is in place but whose directory could not be synced counts as written (it is on disk
+    /// and was read back by any start): the change is kept, the failure is logged, and the call
+    /// answers its result, so that the memory and the disk do not part.
     fn change<R>(
         &self,
         change: impl FnOnce(&mut MdmState) -> Result<R, MdmError>,
@@ -147,24 +248,33 @@ impl FileMdm {
         let mut held = self.held.lock().unwrap_or_else(PoisonError::into_inner);
         let mut next = held.state.clone();
         let answer = change(&mut next)?;
+        self.keep(&mut held, next)?;
+        Ok(answer)
+    }
+
+    /// Writes the families of `next` that differ from what the files hold, and makes it the memory.
+    fn keep(&self, held: &mut Held, next: MdmState) -> Result<(), MdmError> {
         if next == held.state {
-            return Ok(answer);
+            return Ok(());
         }
-        let bytes = encode(&next)?;
-        let names = [COMMANDS, IDENTITIES, ENROLLMENTS, ABM_DEVICES, ABM_STATE];
-        for (index, name) in names.iter().enumerate() {
+        let bytes = encode(&next, &held.extras)?;
+        for (index, name) in FAMILIES.iter().enumerate() {
             if bytes[index] != held.written[index] {
-                desired::write_whole_syncing(
-                    &self.dir.join(name),
-                    &bytes[index],
-                    desired::sync_dir,
-                )
-                .map_err(|e| store(&e))?;
+                match desired::write_whole_syncing(&self.dir.join(name), &bytes[index], self.sync) {
+                    Ok(()) => {}
+                    Err(unsynced @ StoreError::NotSynced { .. }) => {
+                        tracing::error!(
+                            %unsynced,
+                            "an MDM file is in place but its directory was not synced; the change is kept"
+                        );
+                    }
+                    Err(e) => return Err(store(&e)),
+                }
                 held.written[index].clone_from(&bytes[index]);
             }
         }
         held.state = next;
-        Ok(answer)
+        Ok(())
     }
 
     fn read<R>(&self, read: impl FnOnce(&MdmState) -> R) -> R {

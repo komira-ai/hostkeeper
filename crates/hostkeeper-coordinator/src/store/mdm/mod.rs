@@ -395,6 +395,10 @@ pub(crate) trait MdmStore: Send + Sync {
     /// is another one is replaced, its commands cancelled and its identity retired, in the same
     /// change. Entering an enrollment that is live is a refresh of its row.
     ///
+    /// The store does not check `new.cert_sha256` against an identity: an enrollment without one
+    /// retires no identity when it ends, so the caller enters each with the certificate it presented,
+    /// after it has checked that the identity is issued for the same serial and UDID.
+    ///
     /// # Errors
     /// [`MdmError::EnrollmentEnded`]: `new` was replaced or checked out before.
     /// [`MdmError::Store`]: the change is not made.

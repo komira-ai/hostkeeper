@@ -4,7 +4,7 @@
 use std::fs;
 
 use super::files::FileMdm;
-use super::{Command, Enrollment};
+use super::{AbmBatch, AbmDevice, AbmState, Challenge, Command, Enrollment};
 use super::{
     CommandState, EnrollmentState, IdentityState, Issuance, MdmError, MdmStore, NewCommand,
 };
@@ -71,38 +71,217 @@ fn a_start_is_refused_for_a_file_it_cannot_read() {
         "{why}"
     );
 
+    for name in [
+        "commands.json",
+        "identities.json",
+        "enrollments.json",
+        "abm_devices.json",
+        "abm_state.json",
+    ] {
+        let family = path(&format!("family-{name}"));
+        fs::create_dir_all(&family).expect("a directory");
+        fs::write(family.join(name), b"[]").expect("a file");
+        let why = text(FileMdm::open(&family));
+        assert!(
+            why.starts_with(&format!("{}: ", family.join(name).display())),
+            "{why}"
+        );
+    }
+
     let empty = FileMdm::open(&path("fresh")).expect("a directory with no files");
     assert_eq!(empty.abm_devices(), Ok(Vec::new()));
     assert_eq!(empty.abm_state(), Ok(None));
 }
 
-/// Proves: a file of a later release that carries a field this release does not know is read, the
-/// field skipped, and a change then writes the family back as this release knows it.
+/// Proves: a file of a later release that carries a field this release does not know is read, and a
+/// change by this release writes the field back with its row, in every family, while the rows this
+/// release made carry none.
 ///
-/// Catches: a start that refuses the files of a release that added a field (B8: formats change
-/// additively, so a rollback of one release reads the files of the next).
+/// Catches: a rollback that opens the files of the next release and, at its first change, drops
+/// what the next release added, which a roll forward then does not find (B8: formats change
+/// additively).
 #[test]
-fn a_field_of_a_later_release_is_skipped() {
+fn a_field_of_a_later_release_is_kept_and_written_back() {
     let dir = scratch("mdm-files-later");
     let root = dir.path().join("mdm");
     let store = FileMdm::open(&root).expect("the files open");
     store
         .replace_live(&Enrollment::new("e1", "S1", "u", 1))
         .expect("an enrollment");
-    let file = root.join("enrollments.json");
-    let mut value: serde_json::Value =
-        serde_json::from_slice(&fs::read(&file).expect("the file")).expect("it parses");
-    value["note"] = serde_json::json!("a later release");
-    value["rows"][0]["wake_policy"] = serde_json::json!({"floor": 3600});
-    fs::write(&file, serde_json::to_vec(&value).expect("it encodes"))
-        .expect("the file is rewritten");
+    store
+        .enqueue(&NewCommand {
+            id: "c1".to_owned(),
+            enrollment_id: "e1".to_owned(),
+            command_type: "ProfileList".to_owned(),
+            payload: Vec::new(),
+            created_unix: 2,
+        })
+        .expect("a command");
+    store
+        .issue_challenge(&Challenge {
+            challenge_sha256: "h1".to_owned(),
+            serial: "S1".to_owned(),
+            udid: "u".to_owned(),
+            expires_unix: 99,
+            confirmed: false,
+        })
+        .expect("a challenge");
+    store
+        .abm_apply(&AbmBatch {
+            upserts: vec![AbmDevice {
+                serial: "S1".to_owned(),
+                model: None,
+                description: None,
+                profile_status: "assigned".to_owned(),
+                profile_uuid: None,
+                first_seen_unix: 1,
+                synced_unix: 1,
+                removed_unix: None,
+            }],
+            removed: Vec::new(),
+            removed_unix: 0,
+            state: Some(AbmState {
+                profile_uuid: None,
+                profile_digest: None,
+                cursor: String::new(),
+                synced_unix: Some(1),
+            }),
+        })
+        .expect("a sync");
+    let families = [
+        "enrollments.json",
+        "commands.json",
+        "identities.json",
+        "abm_devices.json",
+        "abm_state.json",
+    ];
+    for name in families {
+        let file = root.join(name);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&fs::read(&file).expect("the file")).expect("it parses");
+        value["note"] = serde_json::json!("a later release");
+        value["rows"][0]["wake_policy"] = serde_json::json!({"floor": 3600});
+        fs::write(&file, serde_json::to_vec(&value).expect("it encodes"))
+            .expect("the file is rewritten");
+    }
 
     let again = FileMdm::open(&root).expect("a later release's file opens");
     assert_eq!(again.enrollment("e1"), store.enrollment("e1"));
     again.record_contact("e1", 5).expect("a change");
-    let written: serde_json::Value =
-        serde_json::from_slice(&fs::read(&file).expect("the file")).expect("it parses");
-    assert_eq!(written["rows"][0].get("wake_policy"), None);
+    again
+        .enqueue(&NewCommand {
+            id: "c2".to_owned(),
+            enrollment_id: "e1".to_owned(),
+            command_type: "ProfileList".to_owned(),
+            payload: Vec::new(),
+            created_unix: 6,
+        })
+        .expect("a second command");
+    again
+        .abm_apply(&AbmBatch {
+            upserts: Vec::new(),
+            removed: vec!["S1".to_owned()],
+            removed_unix: 7,
+            state: None,
+        })
+        .expect("a removal");
+    again
+        .abm_apply(&AbmBatch {
+            upserts: Vec::new(),
+            removed: Vec::new(),
+            removed_unix: 0,
+            state: Some(AbmState {
+                profile_uuid: Some("p".to_owned()),
+                profile_digest: None,
+                cursor: String::new(),
+                synced_unix: Some(1),
+            }),
+        })
+        .expect("a state");
+    again
+        .consume_challenge(
+            "h1",
+            "k",
+            &Issuance {
+                cert_sha256: "c".to_owned(),
+                cert_der: Vec::new(),
+                not_after_unix: 9,
+            },
+            8,
+        )
+        .expect("an issuance");
+    for name in families {
+        let written: serde_json::Value =
+            serde_json::from_slice(&fs::read(root.join(name)).expect("the file"))
+                .expect("it parses");
+        assert_eq!(
+            written["rows"][0].get("wake_policy"),
+            Some(&serde_json::json!({"floor": 3600})),
+            "{name}"
+        );
+    }
+    let commands: serde_json::Value =
+        serde_json::from_slice(&fs::read(root.join("commands.json")).expect("the file"))
+            .expect("it parses");
+    assert_eq!(commands["rows"][1]["id"], "c2");
+    assert_eq!(commands["rows"][1].get("wake_policy"), None);
+}
+
+/// Proves: when the directory sync of a file fails after the file is in place, the change is kept,
+/// the call answers its result, and a restart finds the change: the claimed command is Sent in the
+/// memory and in the file.
+///
+/// Catches: a store whose memory says Queued while the file says Sent after a failed directory
+/// sync, which hands the command out twice or not at all.
+#[test]
+fn a_directory_sync_that_fails_after_the_file_is_in_place_keeps_the_change() {
+    fn refuse(_: &std::path::Path) -> std::io::Result<()> {
+        Err(std::io::Error::other("no sync"))
+    }
+    let dir = scratch("mdm-files-unsynced");
+    let root = dir.path().join("mdm");
+    let store = FileMdm::open_syncing(&root, refuse).expect("the files open");
+    store
+        .replace_live(&Enrollment::new("e1", "S1", "u", 1))
+        .expect("an unsynced change is kept");
+    store
+        .enqueue(&NewCommand {
+            id: "c1".to_owned(),
+            enrollment_id: "e1".to_owned(),
+            command_type: "ProfileList".to_owned(),
+            payload: Vec::new(),
+            created_unix: 2,
+        })
+        .expect("a command");
+    let claimed = store.claim("e1", &[], 3).expect("a claim");
+    assert_eq!(
+        claimed.map(|c| (c.id, c.state, c.deliveries)),
+        Some(("c1".to_owned(), CommandState::Sent, 1))
+    );
+    assert_eq!(
+        store.command("c1").expect("it reads").map(|c| c.state),
+        Some(CommandState::Sent)
+    );
+    let restarted = FileMdm::open(&root).expect("the files open again");
+    assert_eq!(
+        restarted.command("c1").expect("it reads").map(|c| c.state),
+        Some(CommandState::Sent)
+    );
+}
+
+/// Proves: a family that cannot be encoded is an error naming why, and not a file.
+///
+/// Catches: an encoder that writes a half-made file or swallows the failure.
+#[test]
+fn a_row_that_cannot_be_encoded_is_an_error() {
+    struct Unwritable;
+    impl serde::Serialize for Unwritable {
+        fn serialize<S: serde::Serializer>(&self, _: S) -> Result<S::Ok, S::Error> {
+            Err(serde::ser::Error::custom("cannot be written"))
+        }
+    }
+    let got = super::files::family_bytes(vec![("k", &Unwritable)], &Default::default());
+    assert_eq!(got, Err(MdmError::Store("cannot be written".to_owned())));
 }
 
 /// Proves: a change writes the families it changed and no other: a family file removed from

@@ -1,6 +1,6 @@
 //! The MDM tables as memory: the rules of [`MdmStore`](super::MdmStore) written once over maps.
 //! [`FileMdm`](super::files::FileMdm) makes each call on a copy and writes the families that changed
-//! before it keeps the copy, so a change that cannot be written is not made.
+//! before it keeps the copy.
 
 use std::collections::BTreeMap;
 

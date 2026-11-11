@@ -751,7 +751,12 @@ gains the key-file mount and the two flags of 4.9; it is a held script by rule S
   answer matched only to a command in `Sent` through the enrollment it was sent to (`NotNow` queues it again, marked deferred),
   `requeue_timed_out` that hands back the commands for the caller to push, and a challenge consumed once (keyed on the challenge and the
   hash of the key, so a repeat with the same key gets the stored certificate whatever its `transactionID`, and a refusal changes
-  nothing). `import` and `export` between the stores do not carry these tables yet (no code writes them before CM11a). The device record of the gate, `mdm_devices`,
+  nothing). The store is a table store and does not bind an enrollment to its identity: `replace_live` takes the `cert_sha256` it is given, and an
+  enrollment without one retires no identity when it ends. CM11a, which holds the certificate that the Mac presented and looks its identity up, must check before the call that
+  the identity is issued and has the serial and the UDID of the enrollment, and must enter every enrollment with its `cert_sha256`. `FileMdm` writes back, with their rows,
+  the fields of a later release that it read, so that a rollback and a roll forward lose none; a file whose directory could not be synced after the file was put in place is counted
+  as written (the change is kept and the failure is logged), since the memory must not differ from what a restart reads. A write that fails before a file is replaced leaves the memory as it was, and
+  the families written before it stay until the next change that writes them. `import` and `export` between the stores do not carry these tables yet (no code writes them before CM11a). The device record of the gate, `mdm_devices`,
   gains no required field.
 - New flags: `--mdm-listen`, `--mdm-secrets-key-file`, `--mdm-pkg-dir`, `--proxy-cache-dir`; the login flags (`--initial-admin-file`, `--initial-password-secs`, the session, lockout and password settings) are listed in operator-login.md section 10; the rest of MDM and of the
   proxy is setup data (4.9). Every existing flag keeps its meaning until the one that is retired, and that retirement is a release later.
