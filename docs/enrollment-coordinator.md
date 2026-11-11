@@ -309,9 +309,9 @@ does not hold`), also when it holds no group at all: every entry needs a `host_g
 coordinator holds, put before the start. `HostGroups.Remove` refuses a group an entry names
 (`not_empty`). Should the coordinator lose a group while it runs, an entry naming it is refused
 as an operator's approval would be (`unknown_host_group`) until the file is fixed and the
-coordinator started again. `hostkeeper-coordinator host-groups migrate --mac-serial-allowlist
-<file>` prints the `host_group` each older entry needs and the `services` that must go
-([MIGRATION.md](../MIGRATION.md#from-roles-to-host-groups)).
+coordinator started again. An entry written before groups needs its `host_group` and loses its
+`services`, once the group exists
+([Moving a fleet from roles to host groups](operations/hostgroups.md#moving-a-fleet-from-roles-to-host-groups)).
 
 ## The MDM policy gate
 

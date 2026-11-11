@@ -65,9 +65,9 @@ pub enum StartError {
     /// The two certificate URI prefixes are refused.
     #[error("--role-uri-prefix and --host-role-uri-prefix: {0}")]
     Prefixes(#[from] PrefixError),
-    /// `--rollout-file` is given: `serve` does not read it.
+    /// `--rollout-file` is given: `serve` does not read it, and the operator API places the hosts.
     #[error(
-        "--rollout-file is not read by serve: convert it once with hostkeeper-coordinator host-groups migrate (docs/operations/hostgroups.md)"
+        "--rollout-file is not read by serve: start serve without it and place hosts with the operator API: HostGroups.Put each group, HostGroups.Move each host, Services.SetRepository and Services.SetMinVersion where needed, Releases.SetDesired per group (docs/operations/hostgroups.md)"
     )]
     RolloutFileRetired,
     /// An allow-list entry names no services and there is no legacy service for it to stand for.
@@ -164,9 +164,10 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
-    /// A `host-groups migrate --apply` on these state files stopped before it finished.
+    /// A `host-groups migrate --apply` of release 0.1.253, a verb this release does not have, on
+    /// these state files stopped before it finished.
     #[error(
-        "{path}: a host-groups migrate --apply stopped partway; restore the backup taken before it and run it again"
+        "{path}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it"
     )]
     MigrateUnfinished {
         /// The marker file.

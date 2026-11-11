@@ -92,12 +92,13 @@ pub fn restore_marker(state: &Path) -> PathBuf {
 }
 
 /// What is added to the state file's name for the marker of a `host-groups migrate --apply` under
-/// way.
+/// way, a verb of release 0.1.253 that this release does not have.
 const MIGRATE_UNFINISHED: &str = ".migrate-unfinished";
 
-/// The marker of a `host-groups migrate --apply` on the state file `state` that has not finished:
-/// written before its first file and removed after its last, so that `serve`, `import`, `export`,
-/// `backup`, `restore` and `migrate` refuse the files of one that stopped partway.
+/// The marker of a `host-groups migrate --apply` of release 0.1.253 on the state file `state` that
+/// has not finished: that release wrote it before its first file and removed it after its last.
+/// This release writes none, and still refuses the files of one that stopped partway: `serve` and
+/// `backup` refuse them, and `restore` and `export` take the marker for state in their targets.
 #[must_use]
 pub fn migrate_marker(state: &Path) -> PathBuf {
     with_suffix(state, MIGRATE_UNFINISHED)
@@ -316,9 +317,10 @@ pub enum BackupError {
         "the snapshot holds the enrollment store and --enrollment-dir is not given: restoring without it would lose the enrolled hosts"
     )]
     EnrollmentDirNeeded,
-    /// A `host-groups migrate --apply` on these state files stopped before it finished.
+    /// A `host-groups migrate --apply` of release 0.1.253, a verb this release does not have, on
+    /// these state files stopped before it finished.
     #[error(
-        "{path}: a host-groups migrate --apply stopped partway; restore the backup taken before it and run it again"
+        "{path}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it"
     )]
     MigrateUnfinished {
         /// The marker file.
@@ -490,40 +492,6 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
     }
     lines.push(NO_CA_KEY.to_owned());
     Ok(Report(lines))
-}
-
-/// The manifest of the state `paths` names, as a backup's names it: each file there with its
-/// name in a snapshot, its size and its SHA-256, the files of the enrollment store among them.
-/// What an import records of the files it read.
-///
-/// # Errors
-/// [`BackupError::Io`]: a file or directory could not be read.
-pub(crate) fn manifest_of(paths: &StatePaths) -> Result<serde_json::Value, BackupError> {
-    let mut sources = Vec::new();
-    for (name, path) in paths.beside() {
-        if there(&path)? {
-            sources.push((name.to_owned(), path));
-        }
-    }
-    sources.extend(paths.segments()?);
-    if let Some(dir) = &paths.enrollment_dir {
-        store_files(dir, ENROLLMENT, &mut sources, &mut Vec::new())?;
-    }
-    let mut files = Vec::new();
-    for (name, path) in sources {
-        let bytes = fs::read(&path).map_err(io_at(&path))?;
-        files.push(Entry {
-            name,
-            bytes: bytes.len() as u64,
-            sha256: sha256_hex(&bytes),
-        });
-    }
-    let manifest = Manifest {
-        schema: SCHEMA,
-        made_by: format!("hostkeeper-coordinator {}", env!("CARGO_PKG_VERSION")),
-        files,
-    };
-    serde_json::to_value(&manifest).map_err(json_at(Path::new(MANIFEST)))
 }
 
 /// Restores the snapshot `flags.from` into the targets `flags.paths` names, under the lock of
@@ -929,8 +897,8 @@ fn sync_dir(dir: &Path) -> Result<(), BackupError> {
         .map_err(io_at(dir))
 }
 
-/// Refuses the state file `state` while the marker of a `host-groups migrate --apply` that did not
-/// finish stands beside it.
+/// Refuses the state file `state` while the marker of a `host-groups migrate --apply` of release
+/// 0.1.253 that did not finish stands beside it.
 ///
 /// # Errors
 /// [`BackupError::MigrateUnfinished`]: the marker is there.

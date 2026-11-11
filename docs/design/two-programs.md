@@ -36,8 +36,8 @@ the rpm, and `hostkeeper-mdm` ships as its own tarball.
 **After.**
 
 - `hostkeeper daemon` is the only verb of `hostkeeper` that runs the daemon. `hostkeeper --version` stays.
-  `hostkeeper check-repositories` was added after this design: host setup's check of a repositories directory with
-  the daemon's own loader (packages-repositories.md section 3.1), which only the binary the daemon runs can give.
+  `hostkeeper check-repositories` was added after this design and removed: the daemon's start and `pxe serve`'s start
+  make this check.
 - `hostkeeper-coordinator serve` is the only verb of the coordinator once the storage move is done (section 7).
 - `hkctl` is the command line. It is one bash script, generated from the protobuf, released as an attested asset. It
   calls the private listener's JSON gateway with `curl`. Its command tree is the one `hostkeeper ctl` has today
@@ -182,7 +182,7 @@ by the existing scanner (`call_sites`, **Built**) and checked against the real r
 | Program | Verb | Fate |
 |---|---|---|
 | `hostkeeper` | `daemon` | Kept, the only verb that runs the daemon. Gains the seed, the Mac config and the hand-over (2.1). |
-| | `check-repositories` | Added later: checks a repositories directory with the daemon's loader, for host setup (packages-repositories.md section 3.1). |
+| | `check-repositories` | Added later, then removed: the daemon's start and `pxe serve`'s start make this check. |
 | | `--version` | Kept (a flag). |
 | | `admin status` | Deleted (**Built**, K3). `hkctl hosts get --node-id <id>`; on a host the coordinator cannot reach, the journal or `daemon.err.log`. |
 | | `admin abort <service>` | Deleted (**Built**, K3). `hkctl hosts abort` (**Built**: `Hosts.Abort`, for daemons that announce `abort-v1`). Off-line: stop the daemon. |
