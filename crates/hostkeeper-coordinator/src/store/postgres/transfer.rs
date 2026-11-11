@@ -19,7 +19,8 @@ use super::rows::{Stmt, Tables, Val};
 use super::session::{Session, describe};
 use super::writer::try_lock;
 use super::{DatabaseError, Dsn, Timeouts, devices, load_all, logged_of, migrate, records};
-use super::{state, statements};
+use super::{accounts, state, statements};
+use crate::accounts::Accounts;
 use crate::audit_file::AuditLine;
 use crate::desired;
 use crate::ops::OpsState;
@@ -37,7 +38,7 @@ const MOVE_TIMEOUTS: Timeouts = Timeouts {
 
 /// Every table that holds state, in the order an export counts them; `imports` is the import's
 /// own record, and the bookkeeping (`schema_version`, `lease`, `enrollment_serial`) is not here.
-pub(crate) const STATE_TABLES: [&str; 37] = [
+pub(crate) const STATE_TABLES: [&str; 39] = [
     "desired",
     "desired_digests",
     "releases",
@@ -75,6 +76,8 @@ pub(crate) const STATE_TABLES: [&str; 37] = [
     "enrollment_deny",
     "mac_nonces",
     "mdm_devices",
+    "users",
+    "api_tokens",
 ];
 
 /// The rows of each state table, in [`STATE_TABLES`]' order.
@@ -86,7 +89,7 @@ pub(crate) const ACTION_IMPORTED: &str = "state_imported";
 /// Everything the coordinator keeps durable, whole: what an import writes and an export reads.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Moved {
-    /// The desired state, the operations state and the verdicts, with the spent ids not yet
+    /// The desired state, the operations state, the verdicts and the accounts, with the spent ids not yet
     /// past; the ring of the operations state is not part of it, which the audit history holds.
     pub(crate) loaded: Loaded,
     /// The whole audit history, oldest first.
@@ -207,15 +210,17 @@ pub(crate) fn plan(dsn: &Dsn) -> Result<Option<(&'static str, i64)>, DatabaseErr
 /// The statements that write `moved`, its audit lines and `then` after them, into empty tables.
 fn writes(moved: &Moved, lines: &[AuditLine]) -> Result<Vec<Stmt>, MoveError> {
     let load = |e: &dyn std::fmt::Display| MoveError::Database(DatabaseError::Load(e.to_string()));
-    let (desired, ops, verdicts) = (
+    let (desired, ops, verdicts, held) = (
         desired::Held::default(),
         OpsState::default(),
         verdict_file::Held::default(),
+        Accounts::default(),
     );
     let mut out = statements(&Commit {
         desired: Some((&desired, &moved.loaded.desired)),
         ops: Some((&ops, &moved.loaded.ops)),
         verdicts: Some((&verdicts, &moved.loaded.verdicts)),
+        accounts: Some((&held, &moved.loaded.accounts)),
         audit: lines,
     })
     .map_err(|e| load(&e))?;
@@ -241,6 +246,7 @@ fn rows_of(loaded: &Loaded) -> Result<Tables, MoveError> {
     let mut tables = state::desired_rows(&loaded.desired).map_err(|e| load(&e))?;
     tables.extend(state::ops_rows(&loaded.ops).map_err(|e| load(&e))?);
     tables.extend(state::verdicts_rows(&loaded.verdicts).map_err(|e| load(&e))?);
+    tables.extend(accounts::rows(&loaded.accounts));
     Ok(tables)
 }
 
@@ -517,6 +523,7 @@ fn rewritten<T, E: From<MoveError>>(
         desired: Some((&before.loaded.desired, &rewrite.after.loaded.desired)),
         ops: Some((&before.loaded.ops, &rewrite.after.loaded.ops)),
         verdicts: None,
+        accounts: None,
         audit: &rewrite.lines,
     })
     .map_err(|e| load(&e))?;
