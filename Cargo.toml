@@ -15,9 +15,21 @@ publish = false
 [workspace.dependencies]
 # Argon2id, the operator password hash of hostkeeper-coordinator (docs/design/operator-login.md
 # section 6.1). Pure Rust, MIT OR Apache-2.0; the PHC string format comes with it.
-# AES-CBC, one of the content ciphers of the CMS reply of mdmcert.download (hostkeeper-mdm-push).
-aes = "0.8.4"
 argon2 = "0.6.0"
+# AES-CBC and 3DES-CBC, the content ciphers of the ABM server token's CMS envelope (hostkeeper-coordinator
+# `abm::p7m`): the token ABM hands over is encrypted to the server entry's RSA key.
+aes = "0.9"
+cbc = { version = "0.2", features = ["alloc", "block-padding"] }
+des = "0.9"
+# The CMS envelope (RFC 5652) of that token, read with its DER types; `builder` (tests only)
+# makes one. A release candidate: no release of 0.3 exists yet, and it is the one that shares `der`
+# 0.8 with `x509-cert`.
+cms = { version = "0.3.0-rc.2", default-features = false }
+# The RSA key of the ABM server entry: PKCS#1 PEM as Apple's tooling and NanoDEP write it, and
+# the RSA decryption of the CMS key transport.
+rsa = { version = "0.10.0", features = ["encoding", "pkcs1v15"] }
+# PKCS#1 PEM (`-----BEGIN RSA PRIVATE KEY-----`), which rsa's `encoding` feature does not turn on.
+pkcs1 = { version = "0.8.0", features = ["pem"] }
 # The JWT segments of a CI token (hostkeeper-oidc); the attestation bundle's DSSE payload and
 # certificate (hostkeeper-package).
 base64 = "0.23.1"
@@ -27,12 +39,8 @@ base64 = "0.23.1"
 boa_engine = "=0.22.0"
 # The byte buffers of HTTP bodies and of gRPC messages.
 bytes = "1.12.1"
-# CBC mode over `aes` and `des`, the content ciphers of that reply.
-cbc = { version = "0.1.2", features = ["alloc"] }
 clap = { version = "4.6.7", features = ["derive"] }
 # gzip for the tarballs `cargo xtask install-tool` unpacks; the pure-Rust backend.
-# Single and triple DES, the other content ciphers a CMS reply may use (hostkeeper-mdm-push).
-des = "0.8.1"
 flate2 = { version = "1.1.10", default-features = false, features = ["rust_backend"] }
 futures = "0.3.34"
 # The operating system's random bytes, from which hostkeeper-enroll makes the host's key. Already in
@@ -89,9 +97,6 @@ prost-types = "0.14.4"
 # its descriptor.
 # The system's randomness for the RSA keys of a push request (hostkeeper-mdm-push).
 rand_core = { version = "0.6.4", features = ["getrandom"] }
-# The RSA key of a push request, its CSR's and encryption certificate's signing key, and the
-# PKCS#1 decryption of the reply's content key (hostkeeper-mdm-push). MIT OR Apache-2.0.
-rsa = { version = "0.9.10", default-features = false, features = ["std", "pem", "sha2"] }
 prost-reflect = "0.16.5"
 # Compiles .proto files in pure Rust, with no protoc: hostkeeper-proto's and
 # hostkeeper-enrollment's build scripts, and tests.

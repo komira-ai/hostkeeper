@@ -20,9 +20,12 @@ use std::sync::Arc;
 use hostkeeper_enrollment::enroll::records::Records;
 use hostkeeper_enrollment::validity::SystemClock;
 use hostkeeper_mdm_gate::DeviceStore;
-use hostkeeper_oidc::Clock;
+use hostkeeper_oidc::{Clock, Roots};
 
 use super::{Serve, StartError, take_lock};
+use crate::abm::Abm;
+use crate::abm::client::tokio_sleep;
+use crate::abm::transport::{ABM_BASE, HttpsTransport};
 use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
 use crate::backup::{migrate_marker, ops_path, restore_marker};
@@ -34,9 +37,13 @@ use crate::login::Login;
 use crate::mdm_secrets::MasterKey;
 use crate::mdm_setup::MdmSetup;
 use crate::ops::{Marker, OpsState, unlanded};
+use crate::origin_https::OriginUrl;
 use crate::service::Coordinator;
+use crate::store::mdm::MdmStore;
+use crate::store::mdm::files::FileMdm;
 use crate::store::mdm_setup::SetupStore;
 use crate::store::mdm_setup::files::FileSetup;
+use crate::store::postgres::mdm::PgMdm;
 use crate::store::postgres::mdm_setup::PgSetup;
 use crate::store::postgres::{DatabaseError, Dsn, PgDevices, PgRecords, Postgres};
 use crate::store::{Backend, BackendError, Files, Loaded, Shared};
@@ -56,6 +63,10 @@ pub(super) struct Opened {
     pub(super) devices: Option<Box<dyn DeviceStore>>,
     /// The tables of the MDM setup: the directory beside the state file, or the database's.
     pub(super) setup: Arc<dyn SetupStore>,
+    /// The MDM tables (`abm_devices`, `abm_state`, ...): the database's, or with files the
+    /// directory beside the state file, opened only when `--mdm-secrets-key-file` is given, so
+    /// that a farm that does not use MDM gets no directory.
+    pub(super) mdm: Option<Arc<dyn MdmStore>>,
 }
 
 /// Opens the store `flags` name: the database of `--database-dsn-file`, or the files of
@@ -88,6 +99,11 @@ pub(super) fn open_store(
             records: None,
             devices: None,
             setup: Arc::new(FileSetup::open(&mdm_setup_dir(&state))?),
+            mdm: flags
+                .mdm_secrets_key_file
+                .as_ref()
+                .map(|_| FileMdm::open(&mdm_dir(&state)).map(|files| Arc::new(files) as _))
+                .transpose()?,
         });
     };
     let file_flags = [
@@ -134,6 +150,7 @@ pub(super) fn open_store(
         None => None,
     };
     let setup = Arc::new(PgSetup::over(&store));
+    let mdm: Option<Arc<dyn MdmStore>> = Some(Arc::new(PgMdm::over(&store)));
     Ok(Opened {
         backend: Arc::new(store.clone()),
         loaded,
@@ -142,6 +159,7 @@ pub(super) fn open_store(
         records,
         devices,
         setup,
+        mdm,
     })
 }
 
@@ -151,6 +169,30 @@ pub fn mdm_setup_dir(state: &Path) -> PathBuf {
     let mut path = state.as_os_str().to_owned();
     path.push(".mdm-setup");
     PathBuf::from(path)
+}
+
+/// The directory of the MDM tables' files beside the state file `state`: `<state>.mdm`.
+#[must_use]
+pub fn mdm_dir(state: &Path) -> PathBuf {
+    let mut path = state.as_os_str().to_owned();
+    path.push(".mdm");
+    PathBuf::from(path)
+}
+
+/// The ABM client over the MDM tables `store`, speaking to Apple over HTTPS that trusts `roots`.
+///
+/// # Errors
+/// [`StartError::OriginTls`]: `roots` holds no usable certificate, or the TLS client is refused.
+pub(super) fn abm(store: Arc<dyn MdmStore>, roots: Roots) -> Result<Abm, StartError> {
+    // The address is a constant of the client, so it parses.
+    let base = OriginUrl::parse(ABM_BASE).map_err(|_| StartError::NoEnrollmentStore)?;
+    Ok(Abm::new(
+        store,
+        Arc::new(HttpsTransport::new(&base, roots)?),
+        hostkeeper_oidc::system_clock(),
+        os_random(),
+        tokio_sleep(),
+    ))
 }
 
 /// The MDM setup over `store`, sealing under the key of `--mdm-secrets-key-file`, under the start
@@ -266,6 +308,12 @@ fn open(
         settle_unfinished(ops, &numbers, &loaded.ops)?;
     }
     Ok((files, loaded))
+}
+
+impl From<crate::store::mdm::MdmError> for StartError {
+    fn from(why: crate::store::mdm::MdmError) -> Self {
+        Self::MdmSetupStore(why.to_string())
+    }
 }
 
 impl From<crate::store::mdm_setup::SetupError> for StartError {

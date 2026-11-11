@@ -233,6 +233,10 @@ const MDM_PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 const MDM_PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 /// The path of `Mdm.PutName`.
 const MDM_PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
+/// The path of `Mdm.PutAbmToken`, whose request holds a token or a `.p7m` of up to 32 KiB.
+const MDM_PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
+/// The path of `Mdm.GetAbmPublicKey`, which makes the key pair when none is held.
+const MDM_GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
 
 /// The methods only a signed-in person's session may call: a bearer is refused them as
 /// `PERMISSION_DENIED` `session_required`. A method is named here, beside the others of its
@@ -246,6 +250,8 @@ pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,
     MDM_PUT_NAME,
+    MDM_PUT_ABM_TOKEN,
+    MDM_GET_ABM_PUBLIC_KEY,
 ];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
@@ -423,7 +429,8 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// `Mdm.PutSecret`, `Mdm.PutPushReply` and `Mdm.PutPushCertificate`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`,
+/// [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES
@@ -432,6 +439,7 @@ pub(crate) fn operator_limit(path: &str) -> usize {
         MDM_PUT_SECRET,
         MDM_PUT_PUSH_REPLY,
         MDM_PUT_PUSH_CERTIFICATE,
+        MDM_PUT_ABM_TOKEN,
     ]
     .contains(&path)
     {

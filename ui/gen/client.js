@@ -53,6 +53,8 @@ export function createClient(call) {
       putPushCertificate: (request) => call("hostkeeper.operator.v1.Mdm/PutPushCertificate", request),
       status: (request) => call("hostkeeper.operator.v1.Mdm/Status", request),
       putName: (request) => call("hostkeeper.operator.v1.Mdm/PutName", request),
+      putAbmToken: (request) => call("hostkeeper.operator.v1.Mdm/PutAbmToken", request),
+      getAbmPublicKey: (request) => call("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", request),
     }),
     releases: Object.freeze({
       setDesired: (request) => call("hostkeeper.operator.v1.Releases/SetDesired", request),

@@ -512,6 +512,33 @@ another is refused `name_locked`, and the same name is taken again.
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
+#### `hkctl mdm put-abm-token`
+
+`/hostkeeper.operator.v1.Mdm/PutAbmToken`
+
+Takes the ABM server token (docs/design/coordinator-mdm.md, 4.5): either the JSON of its four
+OAuth parts and expiry, which is what a takeover of NanoDEP's token uploads, or the `.p7m` file
+ABM hands over, opened with the `abm_key` the coordinator holds. The token is proved to
+Apple before it is kept (a session is opened with it and `GET /account` is read), so that one
+that is not good is refused and nothing is stored. Session-only, as `PutSecret` is, and
+audited as `mdm_abm_token_put` with the fingerprint and the expiry, never the token. Refused
+`abm_unavailable` when this coordinator has no ABM client, `secrets_unavailable` with no
+master key, `invalid_request` for a token that is not five parts or a request that gives both
+forms or neither, `abm_key_missing` for a `.p7m` with no `abm_key` held, `abm_token_unreadable`
+for a `.p7m` that does not open with it, `abm_credential_refused` and `abm_clock_refused`
+for the two faults Apple names on the session, `abm_unreachable` when no answer came.
+
+Through `--request` only: `token_json` (bytes), `token_p7m` (bytes).
+
+#### `hkctl mdm get-abm-public-key`
+
+`/hostkeeper.operator.v1.Mdm/GetAbmPublicKey`
+
+The certificate of the ABM server entry's key, in PEM, for the operator to add to the entry
+in ABM (the public-key download of the fallback path, when NanoDEP's key cannot be taken
+over). The key pair is made when none is held (RSA 2048, stored as `abm_key` and `abm_cert`),
+which is why the call is session-only; once made, the same certificate is answered. Audited as
+`mdm_abm_cert_get`. The private key is never returned.
 
 ### `releases`
 

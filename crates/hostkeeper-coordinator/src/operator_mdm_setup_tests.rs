@@ -151,12 +151,15 @@ fn an_upload_is_audited_and_nothing_is_returned_after_it() {
 fn each_kind_is_audited_under_its_own_action() {
     let world = world("mdm-setup-actions");
     let token = br#"{"consumer_key":"a","consumer_secret":"b","access_token":"c","access_secret":"d","access_secret_expiry":"2027-10-31T22:01:36Z"}"#;
+    let abm_key = crate::abm::keys::pkcs1_pem(&crate::abm::keys::generate(1024).expect("a key"))
+        .expect("a PEM")
+        .into_bytes();
     for (kind, material) in [
         ("push_cert", &b"cert"[..]),
         ("abm_token", token),
         ("tls_key", b"key"),
         ("dns_credential", b"id:secret"),
-        ("abm_key", b"abm key"),
+        ("abm_key", abm_key.as_slice()),
     ] {
         world
             .coordinator
@@ -381,6 +384,10 @@ fn a_setting_is_judged_audited_and_listed() {
             ("push_expiry_s", "86400", true),
             ("push_priority", "10", true),
             ("push_timeout_s", "30", true),
+            ("abm_sync_s", "300", true),
+            ("abm_request_timeout_s", "30", true),
+            ("abm_retries", "3", true),
+            ("ade_profile_name", "Komira MDM", true),
         ]
     );
     assert_eq!(
