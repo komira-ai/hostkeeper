@@ -270,8 +270,8 @@ is on `--mac-serial-allowlist`, the gate says the device is enrolled and supervi
 is known, unexpired, unused, was issued for that serial and was issued for that request. A nonce
 stored before the request field names no request and is judged without it. The nonce is consumed
 in the approval's own write. Any condition false leaves the request pending for an operator and is
-audited `mac_auto_approve_declined` with one of `serial_not_allowed`, `device_state_unavailable`,
-`device_not_enrolled`, `device_not_supervised`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
+audited `mac_auto_approve_declined` (`device_not_via_dep` only when the coordinator is set to require it, `Enrollment::with_mac_require_dep`; off by default) with one of `serial_not_allowed`, `device_state_unavailable`,
+`device_not_enrolled`, `device_not_supervised`, `device_not_via_dep`, `nonce_unknown`, `nonce_expired`, `nonce_used`,
 `nonce_wrong_serial`, `nonce_wrong_request`; such an attempt does not use the nonce. Another key
 that presents the nonce, a local user's who read it first for instance, is `nonce_wrong_request`.
 
@@ -339,8 +339,9 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
   enrolled from its first `TokenUpdate` until a `CheckOut`; an `Authenticate` begins a new
   enrollment and forgets the serial and supervision the device gave in the last. The serial is the
   one its `DeviceInformation` answer gave, never the `Authenticate`'s alone, and the device is
-  supervised only when that answer says `IsSupervised` true. `SecurityInfo`'s `EnrolledViaDEP` and
-  `UserApprovedEnrollment` are shown and decide nothing.
+  supervised only when that answer says `IsSupervised` true. `SecurityInfo`'s `EnrolledViaDEP` is carried in the device's status
+  (`enrolled_via_dep`, `None` until the answer) and decides only where the coordinator requires it
+  (`device_not_via_dep`); `UserApprovedEnrollment` is shown and decides nothing. Both are what the Mac says of itself: evidence, not an identity.
 - **What it says.** The enrollment's question about a serial is answered from the records, never by
   asking the device: a serial no record has, or one two enrollments that have not checked out
   have, is `device_state_unavailable`; a checked-out device is `device_not_enrolled`; an
@@ -424,6 +425,14 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
     (`install_sha256`). A new enrollment starts the count again.
 
   Without the two flags the gate sends no pkg, and the pkg is installed by hand.
+
+- **The baseline** (`--mdm-baseline-file`, `--mdm-baseline-check-s`; [operations/mdm-baseline.md](operations/mdm-baseline.md)).
+  Once the Mac has acknowledged the config profile, the gate sends it its host group's entries
+  (the group is the role of the Mac's allowlist entry): `EnableRemoteDesktop`, to a supervised Mac
+  only, and an `InstallProfile` for each profile file. It sends a `ProfileList` at each
+  `TokenUpdate` and every check interval, and sends again what is missing. Each send NanoHUB
+  queued is audited `mdm_baseline` by `mdm-gate`; a failure does not fail the enrollment, and
+  `hkctl mdm list-devices` shows `baseline_state` and `baseline_reason`.
 
 ## Backup
 

@@ -1,6 +1,6 @@
 //! The gate's device side against a fake NanoHUB, as design section 10 names its tests (task
 //! M8): enrollment from the check-ins, supervision from `DeviceInformation` alone, a device
-//! without a serial, a serial under two enrollments, the five command types, and a restart.
+//! without a serial, a serial under two enrollments, the seven command types, and a restart.
 
 mod support;
 
@@ -19,6 +19,7 @@ const fn enrolled_supervised(since: u64) -> DeviceStatus {
         enrolled: true,
         supervised: true,
         enrolled_since_unix: Some(since),
+        enrolled_via_dep: None,
     }
 }
 
@@ -79,6 +80,7 @@ async fn a_device_is_enrolled_from_token_update_until_check_out() {
             enrolled: false,
             supervised: true,
             enrolled_since_unix: Some(1_010),
+            enrolled_via_dep: None,
         })
     );
 
@@ -140,6 +142,7 @@ async fn supervised_comes_from_device_information_and_nothing_else() {
         enrolled: true,
         supervised: false,
         enrolled_since_unix: Some(1_000),
+        enrolled_via_dep: Some(true),
     };
     assert_eq!(rig.gate.status(SERIAL), Ok(not_supervised));
 
@@ -154,7 +157,14 @@ async fn supervised_comes_from_device_information_and_nothing_else() {
         None,
     ))
     .await;
-    assert_eq!(rig.gate.status("C02OTHER0001"), Ok(not_supervised));
+    // It has not answered `SecurityInfo`, so its ADE state is unknown.
+    assert_eq!(
+        rig.gate.status("C02OTHER0001"),
+        Ok(DeviceStatus {
+            enrolled_via_dep: None,
+            ..not_supervised
+        })
+    );
 }
 
 /// Catches: a serial taken from the `Authenticate` alone, or a `DeviceInformation` answer with
@@ -197,7 +207,13 @@ async fn a_device_without_a_serial_is_unavailable() {
 async fn a_serial_under_two_enrollments_is_unavailable() {
     let rig = Rig::new("two-enrollments").await;
     rig.enroll(UDID, SERIAL, true).await;
-    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
+    assert_eq!(
+        rig.gate.status(SERIAL),
+        Ok(DeviceStatus {
+            enrolled_via_dep: Some(true),
+            ..enrolled_supervised(1_000)
+        })
+    );
     rig.enroll(OTHER_UDID, SERIAL, false).await;
     assert_eq!(rig.gate.status(SERIAL), Err(Unavailable::Ambiguous));
     rig.post(&check_out(UDID)).await;
@@ -207,16 +223,17 @@ async fn a_serial_under_two_enrollments_is_unavailable() {
             enrolled: true,
             supervised: false,
             enrolled_since_unix: Some(1_000),
+            enrolled_via_dep: Some(true),
         }),
         "once the older checks out, the serial is the newer enrollment's"
     );
 }
 
-/// Catches: a sixth command type reaching NanoHUB, or the list of types changing without this
-/// test. Every type the gate sends in a whole enrollment is on the list; each of the five is
+/// Catches: an eighth command type reaching NanoHUB, or the list of types changing without this
+/// test. Every type the gate sends in a whole enrollment is on the list; each of the seven is
 /// queued; `EraseDevice` (and any other type) is refused before NanoHUB is called.
 #[tokio::test]
-async fn the_gate_enqueues_only_its_five_command_types() {
+async fn the_gate_enqueues_only_its_seven_command_types() {
     assert_eq!(
         COMMAND_TYPES,
         [
@@ -224,10 +241,12 @@ async fn the_gate_enqueues_only_its_five_command_types() {
             "SecurityInfo",
             "InstallProfile",
             "RemoveProfile",
-            "InstallEnterpriseApplication"
+            "InstallEnterpriseApplication",
+            "EnableRemoteDesktop",
+            "ProfileList"
         ]
     );
-    let rig = Rig::new("five-types").await;
+    let rig = Rig::new("seven-types").await;
     rig.enroll(UDID, SERIAL, true).await;
     let kinds: Vec<String> = rig
         .hub
@@ -244,7 +263,7 @@ async fn the_gate_enqueues_only_its_five_command_types() {
         assert!(client.enqueue(&id(UDID), &command).await.is_ok(), "{kind}");
     }
     let heard = rig.hub.heard();
-    assert_eq!(heard.len(), 7);
+    assert_eq!(heard.len(), 9);
     for (kind, uuid) in ["EraseDevice", "DeviceLock", "deviceinformation", ""]
         .into_iter()
         .zip(10u8..)
@@ -259,7 +278,7 @@ async fn the_gate_enqueues_only_its_five_command_types() {
             Err(EnqueueError::NotAllowed(kind.to_owned()))
         );
     }
-    assert_eq!(rig.hub.heard().len(), 7, "NanoHUB heard none of them");
+    assert_eq!(rig.hub.heard().len(), 9, "NanoHUB heard none of them");
     for (heard, kind) in heard.iter().skip(2).zip(COMMAND_TYPES) {
         assert_eq!(heard.command().0, kind);
         assert_eq!(heard.method, "PUT");
@@ -321,4 +340,49 @@ async fn a_device_record_survives_a_coordinator_restart() {
     std::fs::write(&path, &whole).expect("put the file back");
     rig.restart().expect("the whole file opens");
     assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
+}
+
+/// Catches `enrolled_via_dep` taken from anything but the enrollment's own `SecurityInfo`
+/// answer: it is `None` before the answer, `Some(true)` and `Some(false)` as the answer says, and
+/// forgotten by a new enrollment of the device.
+#[tokio::test]
+async fn status_carries_enrolled_via_dep_from_security_info() {
+    let rig = Rig::new("via-dep").await;
+    rig.post(&authenticate(UDID, Some(SERIAL))).await;
+    rig.post(&token_update(UDID, 1)).await;
+    let uuid = rig.sent(UDID, "DeviceInformation");
+    rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
+        .await;
+    // No `SecurityInfo` answer yet: unknown, not false.
+    assert_eq!(rig.gate.status(SERIAL), Ok(enrolled_supervised(1_000)));
+
+    let uuid = rig.sent(UDID, "SecurityInfo");
+    rig.post(&security_info(UDID, &uuid, true, false)).await;
+    assert_eq!(
+        rig.gate
+            .status(SERIAL)
+            .map(|status| status.enrolled_via_dep),
+        Ok(Some(true))
+    );
+
+    // A new enrollment forgets it, and a manual one says false.
+    rig.post(&authenticate(UDID, Some(SERIAL))).await;
+    rig.post(&token_update(UDID, 1)).await;
+    let uuid = rig.sent(UDID, "DeviceInformation");
+    rig.post(&device_information(UDID, &uuid, Some(SERIAL), Some(true)))
+        .await;
+    assert_eq!(
+        rig.gate
+            .status(SERIAL)
+            .map(|status| status.enrolled_via_dep),
+        Ok(None)
+    );
+    let uuid = rig.sent(UDID, "SecurityInfo");
+    rig.post(&security_info(UDID, &uuid, false, true)).await;
+    assert_eq!(
+        rig.gate
+            .status(SERIAL)
+            .map(|status| status.enrolled_via_dep),
+        Ok(Some(false))
+    );
 }

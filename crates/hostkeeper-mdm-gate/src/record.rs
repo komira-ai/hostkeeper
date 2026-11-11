@@ -143,6 +143,71 @@ pub struct InstallRecord {
     pub last: ProfileCommand,
 }
 
+/// The last `InstallProfile` of one baseline profile (design 6.4), by its `PayloadIdentifier`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BaselineProfile {
+    /// The profile's `PayloadIdentifier`.
+    pub identifier: String,
+    /// The last `InstallProfile` of it; its `settings_sha256` is the digest of the profile's
+    /// bytes, so a profile file that changed is sent again.
+    pub command: ProfileCommand,
+}
+
+/// What the gate sent a device of its host group's baseline in this enrollment (design 6.4).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct BaselineRecord {
+    /// The last `EnableRemoteDesktop`.
+    pub remote_desktop: Option<ProfileCommand>,
+    /// The last `InstallProfile` of each baseline profile.
+    pub profiles: Vec<BaselineProfile>,
+    /// The last `ProfileList`.
+    pub list: Option<ProfileCommand>,
+    /// The `PayloadIdentifier`s of the profiles the last answered `ProfileList` named.
+    pub installed: Vec<String>,
+    /// When the last `ProfileList` was answered; `None` before one, and after a `TokenUpdate`,
+    /// which makes the check due again.
+    pub checked_unix: Option<u64>,
+}
+
+impl BaselineRecord {
+    /// The last send of the profile `identifier`.
+    #[must_use]
+    pub fn profile(&self, identifier: &str) -> Option<&ProfileCommand> {
+        self.profiles
+            .iter()
+            .find(|profile| profile.identifier == identifier)
+            .map(|profile| &profile.command)
+    }
+
+    /// The command `uuid`, with the name it is shown by when it fails.
+    fn command_mut(&mut self, uuid: &str) -> Option<(String, &mut ProfileCommand)> {
+        let named = [
+            (
+                "the baseline's remote desktop",
+                self.remote_desktop.as_mut(),
+            ),
+            ("the baseline's profile list", self.list.as_mut()),
+        ]
+        .into_iter()
+        .find_map(|(name, command)| {
+            command
+                .filter(|command| command.uuid.as_str() == uuid)
+                .map(|command| (name.to_owned(), command))
+        });
+        named.or_else(|| {
+            self.profiles
+                .iter_mut()
+                .find(|profile| profile.command.uuid.as_str() == uuid)
+                .map(|profile| {
+                    (
+                        format!("the baseline profile {}", profile.identifier),
+                        &mut profile.command,
+                    )
+                })
+        })
+    }
+}
+
 /// The gate's record of one MDM enrollment id.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeviceRecord {
@@ -191,6 +256,8 @@ pub struct DeviceRecord {
     pub nonce: Option<NonceRecord>,
     /// The pkg sends of this enrollment.
     pub install: Option<InstallRecord>,
+    /// The baseline sends of this enrollment.
+    pub baseline: Option<BaselineRecord>,
 }
 
 impl DeviceRecord {
@@ -218,6 +285,7 @@ impl DeviceRecord {
             config_profile: None,
             nonce: None,
             install: None,
+            baseline: None,
         }
     }
 
@@ -240,6 +308,7 @@ impl DeviceRecord {
         self.refused.clear();
         self.config_profile = None;
         self.install = None;
+        self.baseline = None;
     }
 
     fn heard(&mut self, udid: &str, now: u64) {
@@ -274,6 +343,10 @@ impl DeviceRecord {
             self.checked_out_unix = None;
         }
         self.refused.clear();
+        // The baseline's check is due again (design 6.4).
+        if let Some(baseline) = self.baseline.as_mut() {
+            baseline.checked_unix = None;
+        }
         self.heard(udid, now);
     }
 
@@ -384,13 +457,35 @@ impl DeviceRecord {
         .find_map(|(name, command)| {
             command
                 .filter(|command| command.uuid.as_str() == uuid)
-                .map(|command| (name, command))
+                .map(|command| (name.to_owned(), command))
+        });
+        let which = which.or_else(|| {
+            self.baseline
+                .as_mut()
+                .and_then(|baseline| baseline.command_mut(uuid))
         });
         if let Some((name, command)) = which {
             command.answer = answer;
             if !acknowledged {
                 self.last_error = Some(format!("{name}: the device answered an error"));
             }
+        }
+    }
+
+    /// The answer of the `ProfileList` command `uuid` (already taken off
+    /// [`DeviceRecord::sent`]) at `now`: the identifiers `listed` it named, or `None` when the
+    /// answer is not a `ProfileList` result, which counts as an error answer.
+    pub fn answer_profile_list(&mut self, uuid: &str, listed: Option<Vec<String>>, now: u64) {
+        self.answer_profile(uuid, listed.is_some(), now);
+        let current = self.baseline.as_mut().filter(|baseline| {
+            baseline
+                .list
+                .as_ref()
+                .is_some_and(|list| list.uuid.as_str() == uuid)
+        });
+        if let (Some(baseline), Some(listed)) = (current, listed) {
+            baseline.installed = listed;
+            baseline.checked_unix = Some(now);
         }
     }
 

@@ -45,6 +45,7 @@ pub(super) const GOOD: DeviceStatus = DeviceStatus {
     enrolled: true,
     supervised: true,
     enrolled_since_unix: None,
+    enrolled_via_dep: Some(true),
 };
 
 /// An enrollment over `fs` approving a Mac as `allowlist` and the gate `gate` say.
@@ -54,12 +55,25 @@ pub(super) fn mac_rig(
     gate: &Arc<FakeDeviceState>,
     allowlist: &str,
 ) -> Rig {
+    mac_rig_requiring(name, fs, gate, allowlist, false)
+}
+
+/// [`mac_rig`], declining a Mac the gate does not say enrolled through ADE when `require_dep`.
+pub(super) fn mac_rig_requiring(
+    name: &str,
+    fs: Arc<dyn Fs>,
+    gate: &Arc<FakeDeviceState>,
+    allowlist: &str,
+    require_dep: bool,
+) -> Rig {
     let policy = MacPolicy {
         device_state: gate.clone(),
         allowlist: MacAllowlist::parse(allowlist).expect("an allowlist"),
     };
     Rig::configured(name, fs, os_random(), |enrollment| {
-        enrollment.with_mac(policy)
+        enrollment
+            .with_mac(policy)
+            .with_mac_require_dep(require_dep)
     })
 }
 
@@ -107,6 +121,8 @@ enum Change {
     WrongSerial,
     NotEnrolled,
     NotSupervised,
+    NotViaDep,
+    ViaDepUnknown,
     NotAllowlisted,
     GateError,
 }
@@ -123,6 +139,8 @@ async fn mac_auto_approve_requires_every_condition() {
         (Change::WrongSerial, Some(MacDecline::NonceWrongSerial)),
         (Change::NotEnrolled, Some(MacDecline::DeviceNotEnrolled)),
         (Change::NotSupervised, Some(MacDecline::DeviceNotSupervised)),
+        (Change::NotViaDep, Some(MacDecline::DeviceNotViaDep)),
+        (Change::ViaDepUnknown, Some(MacDecline::DeviceNotViaDep)),
         (Change::NotAllowlisted, Some(MacDecline::SerialNotAllowed)),
         (Change::GateError, Some(MacDecline::DeviceStateUnavailable)),
     ];
@@ -136,6 +154,14 @@ async fn mac_auto_approve_requires_every_condition() {
                 supervised: false,
                 ..GOOD
             }),
+            Change::NotViaDep => Ok(DeviceStatus {
+                enrolled_via_dep: Some(false),
+                ..GOOD
+            }),
+            Change::ViaDepUnknown => Ok(DeviceStatus {
+                enrolled_via_dep: None,
+                ..GOOD
+            }),
             Change::GateError => Err(DeviceStateError("the gate is down".to_owned())),
             _ => Ok(GOOD),
         };
@@ -145,7 +171,7 @@ async fn mac_auto_approve_requires_every_condition() {
         };
         let gate = gate_saying(SERIAL, status);
         let name = format!("mac-row-{n}");
-        let enrollment = mac_rig(&name, Arc::new(RealFs), &gate, allowlist);
+        let enrollment = mac_rig_requiring(&name, Arc::new(RealFs), &gate, allowlist, true);
         let rig = coordinator_over(&format!("{name}-coordinator"), &enrollment).await;
         let e = &enrollment.enrollment;
         let issued_for = match change {
@@ -257,6 +283,30 @@ async fn a_declined_attempt_does_not_burn_the_nonce() {
     let late = e.enroll(request).expect("posted once more");
     assert_eq!(late.state, EnrollState::Unspecified as i32);
     assert_eq!(state_of(e, &key), RequestState::Approved);
+}
+
+/// Catches `device_not_via_dep` applied when the setting is off (an allowlisted Mac enrolled by
+/// hand, or one that has not answered `SecurityInfo`, is approved as before), or the token's text
+/// changed.
+#[tokio::test]
+async fn without_require_dep_a_mac_not_via_dep_is_approved() {
+    assert_eq!(MacDecline::DeviceNotViaDep.token(), "device_not_via_dep");
+    for via_dep in [Some(false), None] {
+        let gate = gate_saying(
+            SERIAL,
+            Ok(DeviceStatus {
+                enrolled_via_dep: via_dep,
+                ..GOOD
+            }),
+        );
+        let enrollment = mac_rig("mac-dep-off", Arc::new(RealFs), &gate, ALLOWED);
+        let e = &enrollment.enrollment;
+        let key = HostKey::new();
+        let nonce = e.issue_mac_nonce(SERIAL, &key.key_hash()).expect("a nonce");
+        e.enroll(mac_request(&key, "machine-mac", SERIAL, nonce.as_bytes()))
+            .expect("enrolled");
+        assert_eq!(state_of(e, &key), RequestState::Approved);
+    }
 }
 
 /// The allowlist of [`SERIAL`] and of a second serial approved as another host with another
