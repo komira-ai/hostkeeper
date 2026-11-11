@@ -67,6 +67,7 @@ use hostkeeper_wire::identity::{
 };
 use tokio::io::{AsyncRead, AsyncWrite};
 
+use crate::accounts::AccountStore;
 use crate::alerts::{
     DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
 };
@@ -80,7 +81,7 @@ use crate::host_groups::GroupName;
 use crate::http::Surface;
 use crate::inventory::RecordWindow;
 use crate::listen::{
-    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, accept_tcp, reload_every, serve, together,
+    CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, accept_tcp, reload_every, serve, together,
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
@@ -551,6 +552,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     let ops = OpsStore::over(Arc::clone(&backend), loaded.ops)
         .with_marker(marker)
         .with_record_window(record_window);
+    let accounts = AccountStore::over(Arc::clone(&backend), loaded.accounts);
     let verdicts = VerdictFile::over(backend, loaded.verdicts);
     let ui = flags.ui_dir.as_deref().map(UiDir::new).transpose()?;
     let interval = Duration::from_secs(flags.tls_reload_secs);
@@ -569,6 +571,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_prefixes(prefixes)
         .with_ops(ops)
         .with_verdicts(verdicts)
+        .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
@@ -719,7 +722,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     run_as(parts, bind, ready, Serving::default()).await
 }
@@ -736,7 +739,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let (health, probing) = match parts.health_listen {
         Some(addr) => {
@@ -776,7 +779,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     // The lock of the state files is held for as long as this serves.
     let _held = parts.lock;
@@ -899,7 +902,7 @@ where
     Binding: Future<Output = io::Result<(SocketAddr, Accept)>>,
     Accept: FnMut() -> Next + Send,
     Next: Future<Output = io::Result<Stream>> + Send,
-    Stream: AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    Stream: AsyncRead + AsyncWrite + Remote + Unpin + Send + 'static,
 {
     let parts = build(&flags, roots)?;
     let health = Serving::default();

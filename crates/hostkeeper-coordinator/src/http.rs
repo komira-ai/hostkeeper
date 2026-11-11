@@ -52,6 +52,7 @@
 //! The heartbeat's caller check ([`beat_caller`]) and the reading and answering of its bytes
 //! ([`beat`]) are shared with the gRPC `Heartbeat`, so the two transports have one rule.
 
+use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -116,6 +117,11 @@ pub enum Surface {
     /// The private listener: the listener of CI and the operator.
     Control,
 }
+
+/// The address a connection came from, put in the extensions of each request it carries by
+/// the listener, when its transport has one. Nothing reads it yet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PeerAddr(pub SocketAddr);
 
 /// The leaf of the client certificate a connection presented, DER.
 pub type Peer = Option<Arc<[u8]>>;

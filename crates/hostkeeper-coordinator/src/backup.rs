@@ -52,6 +52,7 @@ use clap::Args;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+use crate::accounts::accounts_path;
 use crate::audit_file;
 use crate::jti_file::jti_path;
 use crate::lock::{LockError, StateLock, lock_path};
@@ -114,9 +115,9 @@ const AUDIT: &str = "ops-audit";
 pub struct StatePaths {
     /// The desired-state file, as `serve --state-file` names it. The releases
     /// (`<state-file>.releases`), the registry of package repositories
-    /// (`<state-file>.repositories`), the spent ids of CI's tokens (`<state-file>.jti`) and the
-    /// verdicts (`<state-file>.verdicts`) are beside it, and the lock taken is
-    /// `<state-file>.lock`, the one `serve` holds.
+    /// (`<state-file>.repositories`), the spent ids of CI's tokens (`<state-file>.jti`), the
+    /// verdicts (`<state-file>.verdicts`) and the users and API tokens (`<state-file>.accounts`)
+    /// are beside it, and the lock taken is `<state-file>.lock`, the one `serve` holds.
     #[arg(long)]
     pub state_file: PathBuf,
     /// The ops file, as `serve --ops-file` names it. Default: the state file's name with `.ops`
@@ -148,6 +149,7 @@ impl StatePaths {
             ("state-repositories", repositories_path(state)),
             ("state-jti", jti_path(state)),
             ("state-verdicts", verdicts_path(state)),
+            ("state-accounts", accounts_path(state)),
             ("ops", ops.clone()),
             (AUDIT, audit_file::path_of(&ops)),
             ("ops-halts", halts_path(&ops)),
