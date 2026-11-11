@@ -35,6 +35,7 @@ use plist::{Dictionary, Value};
 use serde_json::json;
 use tokio::net::TcpListener;
 
+pub mod baseline;
 pub mod enrollment;
 
 /// The UDID (and so the enrollment id) and the serial of NanoMDM's recorded events.
