@@ -13,7 +13,7 @@
 //! The crate is pure: bytes in, values out, the time passed in, no I/O. What it does not claim:
 //! no real blob from a Mac has been seen (`docs/design/coordinator-mdm-cm12a.md`), so the chain it
 //! accepts is the one RFC 5652 and RFC 5280 describe, with RSA (SHA-1, SHA-256, SHA-384 and SHA-512
-//! digests) and ECDSA P-256 with SHA-256 signatures, DER encodings only, and a signer named by
+//! digests) and ECDSA signatures (P-256 with SHA-256, P-384 with SHA-384), DER encodings only, and a signer named by
 //! issuer and serial. A blob outside that is refused as not verified, which the coordinator answers
 //! by waiting for an operator; it never lets it through.
 

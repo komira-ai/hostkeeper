@@ -130,6 +130,7 @@ cipher.workspace = true
 const-oid.workspace = true
 der.workspace = true
 p256.workspace = true
+p384.workspace = true
 rand.workspace = true
 signature.workspace = true
 spki.workspace = true

@@ -7,6 +7,7 @@ use common::*;
 use der::{Decode, Encode};
 use hostkeeper_mdm_ade::blob::{claims, verify};
 use hostkeeper_mdm_ade::{Device, Error};
+use x509_cert::Certificate;
 
 fn check(spec: &Spec) -> Result<Device, Error> {
     verify(&blob(spec), &roots(), now())
@@ -81,7 +82,7 @@ fn an_ecdsa_signer_and_an_ecdsa_issuer_are_verified() {
         assert_eq!(check(&spec), Ok(device()), "{algorithm}");
     }
     let ca_key = ec();
-    let ca = cert(
+    let ca = ca_cert(
         "CN=Fake EC CA",
         "CN=Fake Apple Root",
         &ca_key,
@@ -142,7 +143,7 @@ fn ecdsa_with_another_hash_is_unsupported_and_a_garbled_one_is_bad() {
     };
     assert_eq!(
         check(&named),
-        Err(Error::Unsupported("signature algorithm"))
+        Err(Error::Unsupported("ECDSA digest other than SHA-256"))
     );
     let garbled = Spec {
         signature_der: Some(vec![1, 2, 3]),
@@ -158,7 +159,7 @@ fn ecdsa_with_another_hash_is_unsupported_and_a_garbled_one_is_bad() {
     };
     assert_eq!(
         check(&rsa_key_for_ec),
-        Err(Error::Unsupported("the signer's key is not P-256"))
+        Err(Error::Unsupported("the signer's key is not P-256 or P-384"))
     );
     let ec_key_for_rsa = Spec {
         signature_alg: SHA256_RSA,
@@ -361,13 +362,13 @@ fn a_chain_that_does_not_reach_the_root_is_not_trusted() {
         ..Spec::default()
     };
     assert_eq!(check(&no_intermediate), none);
-    let other_root = cert("CN=Other Root", "CN=Other Root", &rsa(3), &rsa(3), valid());
+    let other_root = ca_cert("CN=Other Root", "CN=Other Root", &rsa(3), &rsa(3), valid());
     assert_eq!(
         verify(&blob(&Spec::default()), &[der(&other_root)], now()),
         none
     );
     assert_eq!(verify(&blob(&Spec::default()), &[], now()), none);
-    let forged_inter = cert(
+    let forged_inter = ca_cert(
         "CN=Fake Device CA",
         "CN=Fake Apple Root",
         &pki.inter_key,
@@ -433,7 +434,7 @@ fn every_certificate_of_the_chain_is_checked_for_its_validity() {
         ..Spec::default()
     };
     assert_eq!(check(&spec), outside);
-    let early = cert(
+    let early = ca_cert(
         "CN=Fake Device CA",
         "CN=Fake Apple Root",
         &pki.inter_key,
@@ -455,13 +456,14 @@ fn every_certificate_of_the_chain_is_checked_for_its_validity() {
 /// Catches: a verifier that a pair of cross-signed certificates holds forever.
 #[test]
 fn a_circular_chain_is_refused() {
-    let (key_a, key_b) = (rsa(0), rsa(1));
-    let a = cert("CN=A", "CN=B", &key_a, &key_b, valid());
-    let b = cert("CN=B", "CN=A", &key_b, &key_a, valid());
+    let (key_a, key_b, key_leaf) = (rsa(0), rsa(1), rsa(2));
+    let leaf = cert("CN=Leaf", "CN=B", &key_leaf, &key_b, valid());
+    let a = ca_cert("CN=A", "CN=B", &key_a, &key_b, valid());
+    let b = ca_cert("CN=B", "CN=A", &key_b, &key_a, valid());
     let spec = Spec {
-        signer: key_a,
-        signer_cert: a.clone(),
-        certs: vec![a, b],
+        signer: key_leaf,
+        signer_cert: leaf.clone(),
+        certs: vec![leaf, a, b],
         ..Spec::default()
     };
     assert_eq!(check(&spec), Err(Error::Untrusted("the chain is too long")));
@@ -495,12 +497,8 @@ fn a_certificate_signature_without_a_hash_is_not_proof() {
         certs: vec![patched_device, pki.inter.clone()],
         ..Spec::default()
     };
-    assert_eq!(
-        check(&spec),
-        Err(Error::Untrusted(
-            "a certificate has no issuer that signed it"
-        ))
-    );
+    // The algorithm the issuer's signature names is the reason, not a missing issuer.
+    assert_eq!(check(&spec), Err(Error::Unsupported("signature algorithm")));
 }
 
 /// Proves: bytes that are not a `SignedData` of the layout read are malformed, each saying which
@@ -780,4 +778,228 @@ fn a_verified_blob_that_names_no_device_is_refused() {
         ..Spec::default()
     };
     assert_eq!(check(&spec), Err(Error::NoDevice("no SERIAL")));
+}
+
+/// Builds the blob of a leaf `signer_cert` (keyed `signer`) under the CA certificates `cas`.
+fn under(signer: &Key, signer_cert: &Certificate, cas: &[&Certificate]) -> Spec {
+    let mut certs = vec![signer_cert.clone()];
+    certs.extend(cas.iter().map(|ca| (*ca).clone()));
+    Spec {
+        signer: signer.clone(),
+        signer_cert: signer_cert.clone(),
+        certs,
+        ..Spec::default()
+    }
+}
+
+const NOT_CA: Error = Error::Untrusted("an issuer in the chain is not a CA");
+
+/// Proves: a certificate that is not a CA does not vouch for the certificate it signs, whatever
+/// Apple's root says of it: an end-entity certificate Apple gave a developer, one that says
+/// `cA` false, one with no `basicConstraints`, and a CA whose `keyUsage` leaves out
+/// `keyCertSign`, each as the issuer of the device's signer.
+///
+/// Catches: a chain walk that takes any certificate with the right name and key as an issuer, so
+/// that anyone holding an Apple-issued certificate mints a signer for any serial.
+#[test]
+fn an_issuer_that_is_not_a_ca_does_not_vouch_for_what_it_signs() {
+    let pki = pki();
+    let forged_key = rsa(3);
+    for kind in [
+        Kind::NotCa,
+        Kind::Plain,
+        Kind::Device,
+        Kind::CaWithoutCertSign,
+        Kind::CaWithGarbledUsage,
+    ] {
+        let developer = cert_of(
+            kind,
+            "CN=Developer",
+            "CN=Fake Device CA",
+            &pki.device_key,
+            &pki.inter_key,
+            valid(),
+        );
+        let forged = cert(
+            "CN=Forged Mac",
+            "CN=Developer",
+            &forged_key,
+            &pki.device_key,
+            valid(),
+        );
+        let spec = under(&forged_key, &forged, &[&developer, &pki.inter]);
+        assert_eq!(check(&spec), Err(NOT_CA));
+    }
+}
+
+/// Proves: a signer's own certificate that says it is a CA is refused, and one that says it is
+/// not is taken.
+///
+/// Catches: a CA certificate taken as a device identity.
+#[test]
+fn the_signers_certificate_is_not_a_ca() {
+    let pki = pki();
+    let sub_ca = ca_cert(
+        "CN=Sub CA",
+        "CN=Fake Device CA",
+        &pki.device_key,
+        &pki.inter_key,
+        valid(),
+    );
+    let spec = under(&pki.device_key, &sub_ca, &[&pki.inter]);
+    assert_eq!(
+        check(&spec),
+        Err(Error::Untrusted("the signer's certificate is a CA"))
+    );
+    let plain = cert_of(
+        Kind::NotCa,
+        "CN=Fake Device",
+        "CN=Fake Device CA",
+        &pki.device_key,
+        &pki.inter_key,
+        valid(),
+    );
+    let spec = under(&pki.device_key, &plain, &[&pki.inter]);
+    assert_eq!(check(&spec), Ok(device()));
+}
+
+/// Proves: an issuer's `pathLenConstraint` bounds the CAs under it: zero allows the device
+/// directly beneath it and no CA between, and one allows one.
+///
+/// Catches: a CA with a path length limit that signs further CAs.
+#[test]
+fn a_path_length_limit_of_an_issuer_is_kept() {
+    let pki = pki();
+    let (top_key, mid_key) = (rsa(3), rsa(0));
+    let make_leaf = |issuer: &str, key: &Key| {
+        cert_of(
+            Kind::Device,
+            "CN=Fake Device",
+            issuer,
+            &pki.device_key,
+            key,
+            valid(),
+        )
+    };
+    let chain_with = |limit: Option<u8>| {
+        let top = cert_of(
+            Kind::Ca(limit),
+            "CN=Top CA",
+            "CN=Fake Apple Root",
+            &top_key,
+            &pki.root_key,
+            valid(),
+        );
+        let mid = ca_cert("CN=Mid CA", "CN=Top CA", &mid_key, &top_key, valid());
+        let leaf = make_leaf("CN=Mid CA", &mid_key);
+        under(&pki.device_key, &leaf, &[&mid, &top])
+    };
+    assert_eq!(check(&chain_with(Some(1))), Ok(device()));
+    assert_eq!(check(&chain_with(None)), Ok(device()));
+    assert_eq!(
+        check(&chain_with(Some(0))),
+        Err(Error::Untrusted("an issuer's path length is exceeded"))
+    );
+}
+
+/// Proves: a chain whose CAs are P-384 keys signing with SHA-384 (the shape of Apple Root CA - G3)
+/// verifies, for a P-384 device and for a P-256 device under a P-384 CA.
+///
+/// Catches: a verifier that cannot walk a chain through the G3 hierarchy and holds every Mac
+/// under it for an operator, with a reason that says no issuer.
+#[test]
+fn a_chain_through_a_p384_root_is_verified() {
+    let (root_key, ca_key, device_key) = (ec384(5), ec384(6), ec384(7));
+    let root = ca_cert(
+        "CN=P384 Root",
+        "CN=P384 Root",
+        &root_key,
+        &root_key,
+        valid(),
+    );
+    let ca = ca_cert("CN=P384 CA", "CN=P384 Root", &ca_key, &root_key, valid());
+    let leaf = cert_of(
+        Kind::Device,
+        "CN=P384 Device",
+        "CN=P384 CA",
+        &device_key,
+        &ca_key,
+        valid(),
+    );
+    let spec = Spec {
+        signature_alg: ECDSA_SHA384,
+        digest_alg: SHA384,
+        ..under(&device_key, &leaf, &[&ca])
+    };
+    assert_eq!(verify(&blob(&spec), &[der(&root)], now()), Ok(device()));
+    let p256_leaf = cert_of(
+        Kind::Device,
+        "CN=P256 Device",
+        "CN=P384 CA",
+        &ec(),
+        &ca_key,
+        valid(),
+    );
+    let spec = Spec {
+        signature_alg: ECDSA_SHA256,
+        ..under(&ec(), &p256_leaf, &[&ca])
+    };
+    assert_eq!(verify(&blob(&spec), &[der(&root)], now()), Ok(device()));
+}
+
+/// Proves: a P-384 signature under SHA-256, a P-384 signature that is not DER and one that is
+/// wrong are refused for what they are, and an issuer's algorithm that is not implemented is
+/// named, not reported as a missing issuer.
+///
+/// Catches: a P-384 key used with the wrong hash, or a refusal that misleads the operator.
+#[test]
+fn p384_signatures_of_another_hash_or_shape_are_refused() {
+    let (root_key, device_key) = (ec384(5), ec384(7));
+    let root = ca_cert(
+        "CN=P384 Root",
+        "CN=P384 Root",
+        &root_key,
+        &root_key,
+        valid(),
+    );
+    let leaf = cert_of(
+        Kind::Device,
+        "CN=P384 Device",
+        "CN=P384 Root",
+        &device_key,
+        &root_key,
+        valid(),
+    );
+    let base = Spec {
+        signature_alg: ECDSA_SHA384,
+        digest_alg: SHA384,
+        ..under(&device_key, &leaf, &[])
+    };
+    let roots = [der(&root)];
+    assert_eq!(verify(&blob(&base), &roots, now()), Ok(device()));
+    let sha256 = Spec {
+        signature_alg: EC_KEY,
+        digest_alg: SHA256,
+        ..base.clone()
+    };
+    assert_eq!(
+        verify(&blob(&sha256), &roots, now()),
+        Err(Error::Unsupported("ECDSA digest other than SHA-384"))
+    );
+    let garbled = Spec {
+        signature_der: Some(vec![1, 2, 3]),
+        ..base.clone()
+    };
+    assert_eq!(
+        verify(&blob(&garbled), &roots, now()),
+        Err(Error::BadSignature("a signature does not verify"))
+    );
+    let broken = Spec {
+        break_signature: true,
+        ..base
+    };
+    assert_eq!(
+        verify(&blob(&broken), &roots, now()),
+        Err(Error::BadSignature("a signature does not verify"))
+    );
 }

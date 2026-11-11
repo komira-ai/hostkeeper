@@ -19,6 +19,7 @@ use sha2::{Digest, Sha256, Sha384, Sha512};
 use signature::Verifier;
 use spki::DecodePublicKey;
 use x509_cert::Certificate;
+use x509_cert::ext::pkix::{BasicConstraints, KeyUsage};
 
 use crate::asn1::{Bad, R, as_set, children, children_of, decode};
 use crate::oids;
@@ -293,27 +294,85 @@ fn chain(
     now: SystemTime,
 ) -> Result<(), Error> {
     let mut current = leaf;
-    for _ in 0..MAX_CHAIN {
+    for step in 0..MAX_CHAIN {
         valid_at(current, now)?;
         if roots.iter().any(|root| root == current) {
             return Ok(());
         }
+        if step == 0 && is_ca(current) {
+            return Err(Error::Untrusted("the signer's certificate is a CA"));
+        }
         let tbs = current.tbs_certificate();
-        let issuers = roots.iter().chain(pool).filter(|candidate| {
-            candidate.tbs_certificate().subject() == tbs.issuer() && *candidate != current
-        });
         let signed = tbs.to_der().ok().ok_or(Error::Malformed("certificate"))?;
         let signature = current.signature().as_bytes().unwrap_or_default();
         let algorithm = current.signature_algorithm().oid;
-        let mut issuers = issuers;
-        let next = issuers.find(|candidate| {
-            verify_signature(candidate, algorithm, None, &signed, signature).is_ok()
-        });
-        current = next.ok_or(Error::Untrusted(
-            "a certificate has no issuer that signed it",
-        ))?;
+        // The reason no candidate was taken, the most telling first: a signer that is no CA, an
+        // algorithm that is not implemented, and, when no certificate even names the issuer or
+        // signed, that.
+        let mut refused: Option<Error> = None;
+        let mut next = None;
+        for candidate in roots.iter().chain(pool) {
+            if candidate.tbs_certificate().subject() != tbs.issuer() {
+                continue;
+            }
+            match verify_signature(candidate, algorithm, None, &signed, signature) {
+                Ok(()) => match may_issue(candidate, step) {
+                    Ok(()) => {
+                        next = Some(candidate);
+                        break;
+                    }
+                    Err(error) => refused = Some(error),
+                },
+                Err(error @ Error::Unsupported(_)) => {
+                    refused = refused.or(Some(error));
+                }
+                Err(_) => {}
+            }
+        }
+        current = next.ok_or_else(|| {
+            refused.unwrap_or(Error::Untrusted(
+                "a certificate has no issuer that signed it",
+            ))
+        })?;
     }
     Err(Error::Untrusted("the chain is too long"))
+}
+
+/// Whether `cert` says it is a CA (`basicConstraints` with `cA` set). A certificate whose
+/// extension does not read is not one.
+fn is_ca(cert: &Certificate) -> bool {
+    matches!(
+        cert.tbs_certificate().get_extension::<BasicConstraints>(),
+        Ok(Some((_, constraints))) if constraints.ca
+    )
+}
+
+/// Whether `cert` may issue, with `below` CAs between it and the signer's certificate: it is a CA
+/// by `basicConstraints`, it may sign certificates by `keyUsage` when that is present, and its
+/// `pathLenConstraint` allows those `below`. A certificate that is none of these, an
+/// end-entity certificate Apple gave a developer, say, proves nothing about the certificates it
+/// signs.
+fn may_issue(cert: &Certificate, below: usize) -> Result<(), Error> {
+    let not_ca = Error::Untrusted("an issuer in the chain is not a CA");
+    let tbs = cert.tbs_certificate();
+    let Ok(Some((_, constraints))) = tbs.get_extension::<BasicConstraints>() else {
+        return Err(not_ca);
+    };
+    if !constraints.ca {
+        return Err(not_ca);
+    }
+    match tbs.get_extension::<KeyUsage>() {
+        Ok(Some((_, usage))) if !usage.key_cert_sign() => return Err(not_ca),
+        Ok(_) => {}
+        Err(_) => return Err(not_ca),
+    }
+    if constraints
+        .path_len_constraint
+        .is_some_and(|limit| below > usize::from(limit))
+    {
+        return Err(Error::Untrusted("an issuer's path length is exceeded"));
+    }
+    Ok(())
 }
 
 fn valid_at(cert: &Certificate, now: SystemTime) -> Result<(), Error> {
@@ -345,6 +404,7 @@ fn verify_signature(
     let hash = match algorithm {
         oids::SHA1_WITH_RSA => oids::SHA1,
         oids::SHA256_WITH_RSA | oids::ECDSA_WITH_SHA256 => oids::SHA256,
+        oids::ECDSA_WITH_SHA384 => oids::SHA384,
         oids::SHA384_WITH_RSA => oids::SHA384,
         oids::SHA512_WITH_RSA => oids::SHA512,
         oids::RSA_ENCRYPTION | oids::EC_PUBLIC_KEY => {
@@ -402,14 +462,25 @@ where
     })
 }
 
+/// An ECDSA signature by a P-256 key under SHA-256 or by a P-384 key under SHA-384 (the curves and
+/// hashes of Apple's two root hierarchies); any other pairing is not implemented.
 fn verify_ecdsa(spki: &[u8], hash: Oid, message: &[u8], signature: &[u8]) -> Result<bool, Error> {
-    if hash != oids::SHA256 {
-        return Err(Error::Unsupported("ECDSA digest other than SHA-256"));
+    if let Ok(key) = p256::ecdsa::VerifyingKey::from_public_key_der(spki) {
+        if hash != oids::SHA256 {
+            return Err(Error::Unsupported("ECDSA digest other than SHA-256"));
+        }
+        let Ok(signature) = p256::ecdsa::DerSignature::try_from(signature) else {
+            return Ok(false);
+        };
+        return Ok(key.verify(message, &signature).is_ok());
     }
-    let key = p256::ecdsa::VerifyingKey::from_public_key_der(spki)
+    let key = p384::ecdsa::VerifyingKey::from_public_key_der(spki)
         .ok()
-        .ok_or(Error::Unsupported("the signer's key is not P-256"))?;
-    let Ok(signature) = p256::ecdsa::DerSignature::try_from(signature) else {
+        .ok_or(Error::Unsupported("the signer's key is not P-256 or P-384"))?;
+    if hash != oids::SHA384 {
+        return Err(Error::Unsupported("ECDSA digest other than SHA-384"));
+    }
+    let Ok(signature) = p384::ecdsa::DerSignature::try_from(signature) else {
         return Ok(false);
     };
     Ok(key.verify(message, &signature).is_ok())

@@ -99,6 +99,8 @@ pub fn plist(serial: &str, udid: &str) -> Vec<u8> {
 pub enum Key {
     Rsa(PrivateKey),
     Ec(EcKey),
+    /// A P-384 key, signing with SHA-384.
+    Ec384(p384::ecdsa::SigningKey),
 }
 
 impl Key {
@@ -107,6 +109,10 @@ impl Key {
             Self::Rsa(key) => key.to_public_key().to_public_key_der().expect("DER"),
             Self::Ec(key) => {
                 use p256::pkcs8::EncodePublicKey as _;
+                key.verifying_key().to_public_key_der().expect("DER")
+            }
+            Self::Ec384(key) => {
+                use p384::pkcs8::EncodePublicKey as _;
                 key.verifying_key().to_public_key_der().expect("DER")
             }
         };
@@ -123,13 +129,36 @@ pub fn rsa(index: usize) -> Key {
     Key::Rsa(rsa_key(index).clone())
 }
 
+pub fn ec384(seed: u8) -> Key {
+    Key::Ec384(p384::ecdsa::SigningKey::from_slice(&[seed; 48]).expect("a key"))
+}
+
 pub fn ec() -> Key {
     Key::Ec(EcKey::from_slice(&[7_u8; 32]).expect("a key"))
+}
+
+/// What a certificate says it is.
+#[derive(Clone, Copy, Default)]
+pub enum Kind {
+    /// No extensions at all.
+    #[default]
+    Plain,
+    /// A CA: `cA` set, `keyCertSign`, and a path length limit when given.
+    Ca(Option<u8>),
+    /// `cA` set and a `keyUsage` that leaves out `keyCertSign`.
+    CaWithoutCertSign,
+    /// `cA` set and a `keyUsage` that is not a bit string.
+    CaWithGarbledUsage,
+    /// `basicConstraints` with `cA` false.
+    NotCa,
+    /// An end-entity certificate with only a `keyUsage` of `digitalSignature`.
+    Device,
 }
 
 struct Profile {
     issuer: Name,
     subject: Name,
+    kind: Kind,
 }
 impl BuilderProfile for Profile {
     fn get_issuer(&self, _: &Name) -> Name {
@@ -144,7 +173,36 @@ impl BuilderProfile for Profile {
         _: spki::SubjectPublicKeyInfoRef<'_>,
         _: &x509_cert::certificate::TbsCertificate,
     ) -> x509_cert::builder::Result<Vec<x509_cert::ext::Extension>> {
-        Ok(Vec::new())
+        use x509_cert::ext::ToExtension as _;
+        use x509_cert::ext::pkix::{BasicConstraints, KeyUsage, KeyUsages};
+        let subject = self.subject.clone();
+        let bc = |ca, path_len_constraint| {
+            (&BasicConstraints {
+                ca,
+                path_len_constraint,
+            })
+                .to_extension(&subject, &[])
+        };
+        let usage = |flags: der::flagset::FlagSet<KeyUsages>| {
+            (&KeyUsage(flags)).to_extension(&subject, &[])
+        };
+        Ok(match self.kind {
+            Kind::Plain => Vec::new(),
+            Kind::Ca(path) => vec![bc(true, path)?, usage(KeyUsages::KeyCertSign.into())?],
+            Kind::CaWithoutCertSign => {
+                vec![bc(true, None)?, usage(KeyUsages::DigitalSignature.into())?]
+            }
+            Kind::CaWithGarbledUsage => vec![
+                bc(true, None)?,
+                x509_cert::ext::Extension {
+                    extn_id: const_oid::db::rfc5280::ID_CE_KEY_USAGE,
+                    critical: false,
+                    extn_value: der::asn1::OctetString::new(vec![1, 2, 3]).expect("octets"),
+                },
+            ],
+            Kind::NotCa => vec![bc(false, None)?],
+            Kind::Device => vec![usage(KeyUsages::DigitalSignature.into())?],
+        })
     }
 }
 
@@ -170,9 +228,32 @@ pub fn cert(
     signer: &Key,
     v: Validity,
 ) -> Certificate {
+    cert_of(Kind::Plain, subject, issuer_name, subject_key, signer, v)
+}
+
+/// A CA certificate, with no path length limit.
+pub fn ca_cert(
+    subject: &str,
+    issuer_name: &str,
+    subject_key: &Key,
+    signer: &Key,
+    v: Validity,
+) -> Certificate {
+    cert_of(Kind::Ca(None), subject, issuer_name, subject_key, signer, v)
+}
+
+pub fn cert_of(
+    kind: Kind,
+    subject: &str,
+    issuer_name: &str,
+    subject_key: &Key,
+    signer: &Key,
+    v: Validity,
+) -> Certificate {
     let profile = Profile {
         issuer: Name::from_str(issuer_name).expect("a name"),
         subject: Name::from_str(subject).expect("a name"),
+        kind,
     };
     let builder = CertificateBuilder::new(
         profile,
@@ -187,6 +268,9 @@ pub fn cert(
             .expect("a certificate"),
         Key::Ec(key) => builder
             .build::<_, DerSignature>(key)
+            .expect("a certificate"),
+        Key::Ec384(key) => builder
+            .build::<_, p384::ecdsa::DerSignature>(key)
             .expect("a certificate"),
     }
 }
@@ -209,21 +293,22 @@ pub fn pki() -> &'static Pki {
     static PKI: OnceLock<Pki> = OnceLock::new();
     PKI.get_or_init(|| {
         let (root_key, inter_key, device_key) = (rsa(0), rsa(1), rsa(2));
-        let root = cert(
+        let root = ca_cert(
             "CN=Fake Apple Root",
             "CN=Fake Apple Root",
             &root_key,
             &root_key,
             valid(),
         );
-        let inter = cert(
+        let inter = ca_cert(
             "CN=Fake Device CA",
             "CN=Fake Apple Root",
             &inter_key,
             &root_key,
             valid(),
         );
-        let device = cert(
+        let device = cert_of(
+            Kind::Device,
             "CN=Fake Device",
             "CN=Fake Device CA",
             &device_key,
@@ -311,6 +396,10 @@ fn sign(spec: &Spec, message: &[u8]) -> Vec<u8> {
     match &spec.signer {
         Key::Ec(key) => {
             let signature: DerSignature = key.sign(message);
+            signature.to_vec()
+        }
+        Key::Ec384(key) => {
+            let signature: p384::ecdsa::DerSignature = key.sign(message);
             signature.to_vec()
         }
         Key::Rsa(key) => {

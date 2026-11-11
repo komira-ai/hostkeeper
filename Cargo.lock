@@ -1241,6 +1241,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "fiat-crypto"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "64cd1e32ddd350061ae6edb1b082d7c54915b5c672c389143b9a63403a109f24"
+
+[[package]]
 name = "filetime"
 version = "0.2.29"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1650,6 +1656,7 @@ dependencies = [
  "hyper-util",
  "libc",
  "p256",
+ "p384",
  "pkcs1 0.8.0",
  "plist",
  "postgres",
@@ -1925,6 +1932,7 @@ dependencies = [
  "const-oid 0.10.2",
  "der 0.8.3",
  "p256",
+ "p384",
  "plist",
  "rand 0.10.3",
  "rsa 0.10.0",
@@ -3366,6 +3374,20 @@ checksum = "d2c9239b2dbc807adbbe147e8cf72ea7450c3a0aabe62cb8e75ff4ec22e1f72a"
 dependencies = [
  "ecdsa",
  "elliptic-curve",
+ "primefield",
+ "primeorder",
+ "sha2 0.11.0",
+]
+
+[[package]]
+name = "p384"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d17b851e6b3e378ab4ecb07fa2ed23f4d15f075735f8fec9fa1e7bdce5f8301f"
+dependencies = [
+ "ecdsa",
+ "elliptic-curve",
+ "fiat-crypto",
  "primefield",
  "primeorder",
  "sha2 0.11.0",

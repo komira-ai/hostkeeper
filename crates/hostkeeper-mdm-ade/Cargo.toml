@@ -15,6 +15,7 @@ cms.workspace = true
 const-oid.workspace = true
 der.workspace = true
 p256.workspace = true
+p384.workspace = true
 plist.workspace = true
 rsa.workspace = true
 sha1.workspace = true
