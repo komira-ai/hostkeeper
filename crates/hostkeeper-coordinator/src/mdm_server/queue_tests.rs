@@ -541,6 +541,9 @@ async fn a_queue_without_a_pusher_still_takes_contact_and_not_now() {
         .answer("e1", &Rig::command_id(1), Answer::NotNow, b"<plist/>");
     assert_eq!(taken.expect("answered"), Answered::Taken);
     rig.queue.forget("e1");
+    // The command is still queued and no push identity is held: the sweep arms nothing to push.
+    rig.queue.sweep().await.expect("swept");
+    assert!(rig.apns.sent().is_empty());
     rig.store_push();
     assert_eq!(rig.queue.push("ghost", super::Why::Queued).await, None);
 }

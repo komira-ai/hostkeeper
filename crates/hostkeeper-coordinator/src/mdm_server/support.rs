@@ -815,6 +815,10 @@ pub(super) struct Spec {
     pub(super) sid_tag: Option<u8>,
     pub(super) flip_signature: bool,
     pub(super) drop_certificates: bool,
+    /// Only the first this many fields of the signer info are sent, when set.
+    pub(super) keep_fields: Option<usize>,
+    /// The signer is named by a sequence of one part, not issuer and serial.
+    pub(super) lone_sid: bool,
 }
 
 impl Default for Spec {
@@ -833,6 +837,8 @@ impl Default for Spec {
             sid_tag: None,
             flip_signature: false,
             drop_certificates: false,
+            keep_fields: None,
+            lone_sid: false,
         }
     }
 }
@@ -877,6 +883,7 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     }
     let (_, parsed) = x509_parser::parse_x509_certificate(&mac.der).expect("a certificate");
     let sid = match (&spec.ski, spec.sid_tag) {
+        _ if spec.lone_sid => der(0x30, &der(0x02, &[1])),
         (_, Some(tag)) => der(tag, b"x"),
         (Some(ski), None) => der(0x80, ski),
         (None, None) => {
@@ -896,17 +903,17 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     } else {
         der(0xa0, &attributes)
     };
+    let fields = [
+        der(0x02, &[1]),
+        sid,
+        algorithm(spec.digest),
+        attributes_field,
+        algorithm(spec.signature),
+        der(0x04, &signature),
+    ];
     let info = der(
         0x30,
-        &[
-            der(0x02, &[1]),
-            sid,
-            algorithm(spec.digest),
-            attributes_field,
-            algorithm(spec.signature),
-            der(0x04, &signature),
-        ]
-        .concat(),
+        &fields[..spec.keep_fields.unwrap_or(fields.len())].concat(),
     );
     let infos = vec![info; spec.signers].concat();
     let certificates = if spec.drop_certificates {
