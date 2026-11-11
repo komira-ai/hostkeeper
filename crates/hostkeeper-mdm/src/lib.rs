@@ -42,7 +42,9 @@
 //!   the proxy started once the certificate is there.
 //! * `hostkeeper-mdm verify --settings FILE [--ignore LINE]...`: read only. Health checks (units
 //!   active, listeners, certificate lifetime, modes), then one line per installed file
-//!   compared with `hostkeeper-mdm-core`'s render of the same settings.
+//!   compared with `hostkeeper-mdm-core`'s render of the same settings. Before the checks it
+//!   waits, a minute at most, for the services to be active and listening, so it can run
+//!   straight after `install`, `tls` or `migrate`.
 //!
 //! * `hostkeeper-mdm push-cert --settings FILE (--cert PEM --key PEM | --profile-only [--topic
 //!   TOPIC]) [--apply]`: as root, the APNs push certificate checked (an MDM push certificate,
@@ -117,6 +119,7 @@ pub mod tls;
 pub mod verify;
 
 use std::io;
+use std::time::Duration;
 
 use hostkeeper_mdm_step::{Host, Trustee};
 
@@ -179,4 +182,7 @@ pub struct System<'a> {
     pub random: &'a dyn Fn(&mut [u8]) -> io::Result<()>,
     /// Unix seconds now.
     pub now: u64,
+    /// Waits the time it is given: `verify` pauses between two looks for the services'
+    /// listeners. The real one sleeps; a test's returns at once.
+    pub pause: &'a dyn Fn(Duration),
 }

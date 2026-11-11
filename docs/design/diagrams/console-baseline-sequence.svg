@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 674" width="1200" height="674" role="img" aria-label="Time runs down the page across the Mac, NanoHUB and the coordinator's MDM gate. The baseline is sent after the config profile is acknowledged and re-applied when a ProfileList check finds an item missing.">
+<title>Mac enrollment: the group's baseline is sent with the pkg, and kept</title>
+<desc>Time runs down the page across the Mac, NanoHUB and the coordinator's MDM gate. The baseline is sent after the config profile is acknowledged and re-applied when a ProfileList check finds an item missing.</desc>
+<defs><marker id="console-baseline-sequence-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="674" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Mac enrollment: the group's baseline is sent with the pkg, and kept</text>
+<path d="M200,92 L200,634" class="life"/>
+<path d="M600,92 L600,634" class="life"/>
+<path d="M1000,92 L1000,634" class="life"/>
+<rect x="90" y="44" width="220" height="48" rx="5" class="box"/>
+<text x="200" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="200" y="82" class="t-m" text-anchor="middle">ADE enrollment</text>
+<rect x="490" y="44" width="220" height="48" rx="5" class="box-p"/>
+<text x="600" y="64" class="b" text-anchor="middle">NanoHUB</text>
+<text x="600" y="82" class="t-m" text-anchor="middle">MDM server</text>
+<rect x="890" y="44" width="220" height="48" rx="5" class="box-b"/>
+<text x="1000" y="64" class="b" text-anchor="middle">Coordinator</text>
+<text x="1000" y="82" class="t-m" text-anchor="middle">MDM gate</text>
+<path d="M200,140 L600,140" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="400" y="133" class="t-m lbl" text-anchor="middle">1. Authenticate, TokenUpdate (enrolled)</text>
+<path d="M600,188 L1000,188" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="800" y="181" class="t-m lbl" text-anchor="middle">2. check-in event to the gate</text>
+<path d="M1000,236 L600,236" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="800" y="229" class="t-m lbl" text-anchor="middle">3. InstallProfile: the hostkeeper config profile</text>
+<path d="M200,284 L600,284" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="400" y="277" class="t-m lbl" text-anchor="middle">4. Acknowledged</text>
+<rect x="809.9" y="318" width="380.2" height="28" rx="5" class="box-o"/>
+<text x="1000" y="336" class="t-m" text-anchor="middle">5. serial &gt; allowlist entry &gt; host group &gt; baseline group</text>
+<path d="M1000,380 L600,380" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="800" y="373" class="t-m lbl" text-anchor="middle">6. pkg + each baseline entry (profile, EnableRemoteDesktop)</text>
+<path d="M200,428 L600,428" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="400" y="421" class="t-m lbl" text-anchor="middle">7. results; a failed entry sets baseline_pending only</text>
+<path d="M1000,476 L600,476" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="800" y="469" class="t-m lbl" text-anchor="middle">8. ProfileList, on TokenUpdate and every check interval</text>
+<path d="M200,524 L600,524" class="ln" marker-end="url(#console-baseline-sequence-ak)"/>
+<text x="400" y="517" class="t-m lbl" text-anchor="middle">9. installed profiles</text>
+<rect x="857.15" y="558" width="285.7" height="28" rx="5" class="box-o"/>
+<text x="1000" y="576" class="t-m" text-anchor="middle">10. item missing: send it again; audit line</text>
+<text x="20" y="656" class="t-m" text-anchor="start">EnableRemoteDesktop goes to supervised Macs only. Nobody enables Screen Sharing later, and Console open never calls MDM.</text>
+</svg>
