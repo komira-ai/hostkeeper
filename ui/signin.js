@@ -67,16 +67,16 @@ export function signInView({ username, message, submit }) {
 // coordinator will stop taking the change (unix seconds; 0 when it did not say), `message` why the
 // last try failed, `submit(current, next, again)` takes what was typed and `signOut()` leaves.
 export function changeView({ username, until, message, submit, signOut }) {
-  const form = { current: "", next: "", again: "" };
+  const form = { current: "", fresh: "", again: "" };
   return h("form", {
     class: "sign-in",
     on: {
       submit: () => {
         const typed = { ...form };
         form.current = "";
-        form.next = "";
+        form.fresh = "";
         form.again = "";
-        submit(typed.current, typed.next, typed.again);
+        submit(typed.current, typed.fresh, typed.again);
       },
     },
   },
@@ -92,7 +92,7 @@ export function changeView({ username, until, message, submit, signOut }) {
   h("label", {}, "New password",
     h("input", {
       type: "password", name: "new", autocomplete: "new-password", spellcheck: "false",
-      on: { input: (e) => { form.next = e.target.value; } },
+      on: { input: (e) => { form.fresh = e.target.value; } },
     })),
   h("label", {}, "New password again",
     h("input", {
