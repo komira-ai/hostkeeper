@@ -75,3 +75,21 @@ pub fn security_info(payload: &[u8], uuid: &str) -> Option<SecurityInfo> {
         user_approved: flag("UserApprovedEnrollment"),
     })
 }
+
+/// The `PayloadIdentifier` of each profile in the `ProfileList` answer in `payload` to the
+/// command `uuid` (Apple's `mdm/commands/profile.list.yaml`: `ProfileList`, an array of
+/// dictionaries, each with a required `PayloadIdentifier`); `None` when the payload is not a
+/// result of that command or holds no `ProfileList` array. An item with no identifier is left
+/// out.
+#[must_use]
+pub fn profile_list(payload: &[u8], uuid: &str) -> Option<Vec<String>> {
+    let dict = result_of(payload, uuid)?;
+    let items = dict.get("ProfileList")?.as_array()?;
+    Some(
+        items
+            .iter()
+            .filter_map(|item| item.as_dictionary()?.get("PayloadIdentifier")?.as_string())
+            .map(str::to_owned)
+            .collect(),
+    )
+}

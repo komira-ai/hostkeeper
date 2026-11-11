@@ -635,6 +635,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
                 }
                 None => None,
             };
+            Mdm::check_baseline_groups(mdm.as_ref(), &allowlist)?;
             let enrollment = setup(
                 Arc::new(RealFs),
                 &Setup {
