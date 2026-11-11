@@ -33,8 +33,14 @@ use crate::service::Coordinator;
 impl Coordinator {
     /// The same coordinator keeping the MDM setup in `setup`.
     #[must_use]
-    pub fn with_mdm_setup(mut self, setup: MdmSetup) -> Self {
-        self.mdm_setup = Arc::new(setup);
+    pub fn with_mdm_setup(self, setup: MdmSetup) -> Self {
+        self.with_shared_mdm_setup(Arc::new(setup))
+    }
+
+    /// The same coordinator keeping the MDM setup in `setup`, which the MDM server shares.
+    #[must_use]
+    pub fn with_shared_mdm_setup(mut self, setup: Arc<MdmSetup>) -> Self {
+        self.mdm_setup = setup;
         self
     }
 
@@ -45,7 +51,7 @@ impl Coordinator {
     }
 
     /// One audit entry, `action` by `by` about `subject`, with `reason`.
-    fn audit_setup(
+    pub(crate) fn audit_setup(
         &self,
         by: &str,
         action: &str,
@@ -225,7 +231,7 @@ fn read_failed(why: SetupFailure) -> MdmRefusal {
 }
 
 /// The answer's row of `info`.
-fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
+pub(crate) fn secret_proto(info: &SecretInfo) -> proto::SecretInfo {
     proto::SecretInfo {
         kind: info.kind.as_str().to_owned(),
         version: info.version,

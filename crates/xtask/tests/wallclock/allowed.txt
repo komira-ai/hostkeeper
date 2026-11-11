@@ -44,3 +44,7 @@ crates/hostkeeper-mdm/src/system.rs
 # measurement runner records (`runner_ms`) for the analysis to subtract; its polls and deadlines
 # read the monotonic clock.
 crates/hostkeeper-measure/src/clock.rs
+# The production implementation of the `Clock` that the MDM push policy and the APNs expiration
+# read: `apns-expiration` is an absolute unix time that APNs reads, and every decision of the
+# policy reads the injected `Clock`, which tests set (`ManualClock`).
+crates/hostkeeper-mdm-push/src/clock.rs

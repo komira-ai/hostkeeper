@@ -382,6 +382,10 @@ fn a_setting_is_judged_audited_and_listed() {
             ("proxy_index_ttl_s", "300", true),
             ("proxy_cache_max_bytes", "21474836480", true),
             ("proxy_fetches", "8", true),
+            ("push_retry_s", "3600", true),
+            ("push_expiry_s", "86400", true),
+            ("push_priority", "10", true),
+            ("push_timeout_s", "30", true),
         ]
     );
     assert_eq!(

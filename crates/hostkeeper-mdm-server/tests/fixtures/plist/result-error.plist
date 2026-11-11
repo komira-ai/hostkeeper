@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>Status</key><string>Error</string>
+	<key>UDID</key><string>00000000-0000-4000-8000-0000000000AA</string>
+	<key>CommandUUID</key><string>F431F51C-AF60-441E-BB4E-921669EF989D</string>
+	<key>ErrorChain</key><array><dict>
+		<key>ErrorCode</key><integer>12021</integer>
+		<key>ErrorDomain</key><string>MCProfileErrorDomain</string>
+		<key>LocalizedDescription</key><string>The profile could not be installed.</string>
+		<key>USEnglishDescription</key><string>The profile could not be installed.</string>
+	</dict></array>
+</dict>
+</plist>

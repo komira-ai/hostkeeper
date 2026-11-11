@@ -391,6 +391,10 @@ impl MdmStore for FileMdm {
         Ok(self.read(|s| s.commands_of(enrollment_id)))
     }
 
+    fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError> {
+        Ok(self.read(MdmState::enrollments_with_queued))
+    }
+
     fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError> {
         self.change(|s| {
             s.abm_apply(batch);
