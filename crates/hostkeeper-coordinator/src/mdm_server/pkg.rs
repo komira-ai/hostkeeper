@@ -4,10 +4,15 @@
 //!
 //! **What is served.** Only a digest that an entry of the setting `installs` names *now* (read at
 //! every request, so an edit of the setting takes effect at once). Any other digest, a name that is
-//! not 64 lower-case hexadecimal digits and `.pkg` (so no `..`, no separator, no `%`), a digest
-//! with no file, and a coordinator started without `--mdm-pkg-dir` are `404 not_found`, and for a
-//! digest that is not in the setting the directory is not touched. A method other than `GET` and
-//! `HEAD` is `405 method_not_allowed`.
+//! not 64 lower-case hexadecimal digits and `.pkg` (so no `..`, no separator, no `%`) are `404
+//! not_found`, and for a digest that is not in the setting the directory is not touched. A method
+//! other than `GET` and `HEAD` is `405 method_not_allowed`.
+//!
+//! **Where the file comes from.** The file in `--mdm-pkg-dir` is used first. A digest the setting
+//! names that has no such file (or when the coordinator is started without `--mdm-pkg-dir`) is
+//! pulled through the package proxy from the entry's `url` ([`super::pkg_pull`]). It is `404
+//! not_found` only when that cannot be done: the entry has no `url`, the coordinator has no
+//! `--proxy-cache-dir`, or what is at the path is not a regular file (a directory in its place).
 //!
 //! **The digest check.** The file is read once, in chunks, and never held whole. A full `GET` sends
 //! `Content-Length` and the bytes as they are read, hashing as it goes; the last chunk is held
