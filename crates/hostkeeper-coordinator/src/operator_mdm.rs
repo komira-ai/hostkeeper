@@ -5,11 +5,13 @@
 //! It takes the operator token only: a valid CI token is `forbidden`, and no token or any other
 //! `unauthorized`, before the request is looked at. It reads the gate's records and asks no
 //! device and not NanoHUB; nothing is audited, since nothing changes. A coordinator without
-//! the gate answers no device, with `gate` false.
+//! the gate answers no device, with `gate` false. Each row says where the device is in applying
+//! its host group's enrollment baseline ([`hostkeeper_mdm_gate::baseline`]), from the records
+//! and the baseline file alone.
 
 use std::sync::Arc;
 
-use hostkeeper_mdm_gate::{DeviceRecord, EnrollmentId, Phase};
+use hostkeeper_mdm_gate::{BaselineState, BaselineStatus, DeviceRecord, EnrollmentId, Phase};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
@@ -85,7 +87,10 @@ impl Coordinator {
             _ => String::new(),
         };
         Ok(proto::ListDevicesResponse {
-            devices: records.iter().map(device_proto).collect(),
+            devices: records
+                .iter()
+                .map(|record| device_proto(record, mdm.gate.baseline_status(record)))
+                .collect(),
             next_page_token,
             gate: true,
         })
@@ -100,8 +105,20 @@ fn phase_proto(phase: Phase) -> proto::MdmPhase {
     }
 }
 
-/// The answer's row of `record`.
-fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
+fn baseline_proto(state: BaselineState) -> proto::MdmBaselineState {
+    match state {
+        BaselineState::Pending => proto::MdmBaselineState::Pending,
+        BaselineState::Applied => proto::MdmBaselineState::Applied,
+        BaselineState::Failed => proto::MdmBaselineState::Failed,
+    }
+}
+
+/// The answer's row of `record`, whose baseline the gate says is `baseline`.
+fn device_proto(record: &DeviceRecord, baseline: Option<BaselineStatus>) -> proto::MdmDevice {
+    let (baseline_state, baseline_reason) = baseline.map_or_else(
+        || (proto::MdmBaselineState::Unspecified, String::new()),
+        |status| (baseline_proto(status.state), status.reason),
+    );
     proto::MdmDevice {
         enrollment_id: record.enrollment_id.as_str().to_owned(),
         udid: record.udid.clone(),
@@ -137,5 +154,11 @@ fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
             .as_ref()
             .map(|install| install.sha256.as_str().to_owned())
             .unwrap_or_default(),
+        baseline_state: baseline_state.into(),
+        baseline_reason,
     }
 }
+
+#[cfg(test)]
+#[path = "operator_mdm_tests.rs"]
+mod tests;
