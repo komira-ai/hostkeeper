@@ -59,6 +59,8 @@ fn device() -> op::MdmDevice {
         install_sends: 2,
         install_last_sent_unix: Some(1_800_000_040),
         install_sha256: "ab".repeat(32),
+        baseline_state: op::MdmBaselineState::Failed.into(),
+        baseline_reason: "profile com.example.fskit: the device answered an error".to_owned(),
         host_id: "lab-mac-1".to_owned(),
         group: "mac-builders".to_owned(),
         baseline: op::MdmBaseline::Applied.into(),
@@ -207,6 +209,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         "hostkeeper.operator.v1.MdmPhase",
         "hostkeeper.operator.v1.MdmCondition",
         "hostkeeper.operator.v1.MdmBaseline",
+        "hostkeeper.operator.v1.MdmBaselineState",
     ] {
         assert!(older.get_enum_by_name(name).is_none(), "{name} is new");
     }

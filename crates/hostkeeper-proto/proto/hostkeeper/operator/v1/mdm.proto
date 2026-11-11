@@ -156,6 +156,23 @@ enum MdmPhase {
   MDM_PHASE_CHECKED_OUT = 3;
 }
 
+// Where a device is in applying its host group's enrollment baseline (`--mdm-baseline-file`,
+// docs/design/hostkeeper-mdm.md section 6.4).
+enum MdmBaselineState {
+  // The device has no baseline: the coordinator runs none, the device is not an enrolled Mac of
+  // the allowlist, or its host group is not in the baseline file.
+  MDM_BASELINE_STATE_UNSPECIFIED = 0;
+  // An entry is not sent or not answered yet, or the Mac has no config profile yet. The gate
+  // sends it, or sends it again, at its next look.
+  MDM_BASELINE_STATE_PENDING = 1;
+  // Every entry was acknowledged, and none is missing from the Mac's last profile list.
+  MDM_BASELINE_STATE_APPLIED = 2;
+  // The Mac answered an entry with an error, or Screen Sharing is listed for a Mac that is not
+  // supervised; `baseline_reason` says which. An entry the Mac answered with an error is sent
+  // again after the check interval. Enrollment is not affected.
+  MDM_BASELINE_STATE_FAILED = 3;
+}
+
 message ListDevicesRequest {
   // At most this many devices; 0 means the cap.
   uint32 limit = 1;
@@ -229,13 +246,19 @@ message MdmDevice {
   optional uint64 install_last_sent_unix = 18;
   // The SHA-256 of the pkg it last sent, 64 lower-case hex digits; empty before the first send.
   string install_sha256 = 19;
+  // Where the device is in applying its host group's enrollment baseline; unspecified when it
+  // has none.
+  MdmBaselineState baseline_state = 20;
+  // For a failed baseline, what failed, as `profile <identifier>: ...` or
+  // `remote_desktop: ...`; empty otherwise.
+  string baseline_reason = 21;
   // The host id of the inventory record whose serial is this device's; empty when no record, or
   // more than one, has it.
-  string host_id = 20;
+  string host_id = 22;
   // The host group that record names; empty when it names none.
-  string group = 21;
+  string group = 23;
   // How far the settings profile has got in this enrollment.
-  MdmBaseline baseline = 22;
+  MdmBaseline baseline = 24;
 }
 
 message PutSecretRequest {
