@@ -162,7 +162,7 @@ One launchd daemon, `com.<reverse-dns>.hostkeeper`, as root. Paths follow macOS 
 
 ### 4.3 The coordinator
 
-One process with two listeners (and an optional third, a LAN listener serving only the agent service to network-installed hosts: network-install.md section 7): a **heartbeat listener** (mutual TLS, client certificate chaining to the farm CA; host identity from the certificate only) and one **private listener** (TLS, bound to the private network, off the public one) that serves the operator API (section 4.8) to the generated CLI and the UI, and serves the UI's static files (section 5.10). On it a CI OIDC token may set a desired version for services its allow-list entry names; every other action needs an operator token. A token either operates or does not; there are no per-token grants.
+One process with two listeners (and an optional third, a LAN listener serving only the agent service to network-installed hosts: network-install.md section 7): a **heartbeat listener** (mutual TLS, client certificate chaining to the farm CA; host identity from the certificate only) and one **private listener** (TLS, bound to the private network, off the public one) that serves the operator API (section 4.8) to the generated CLI and the UI, and serves the UI's static files (section 5.10). On it a CI OIDC token may set a desired version for services its allow-list entry names; every other action needs an operator token or a signed-in user. A token or a user either operates or does not; there are no per-token or per-user grants.
 
 Operator tokens are one per person, listed by name in a tokens file the coordinator reads, each revocable and replaceable without a restart; every action records the token's name in the audit log (an append-only file, `<ops-file>.audit`; an append-only table once the state is in Postgres, **Designed**, [coordinator-storage.md](coordinator-storage.md)). A shared anonymous token is not supported (**Designed, B6**; PR #5 has one token today). A person signing in to the UI with a username and password and a session, with tokens kept for automation, is **Designed** in [operator-login.md](operator-login.md).
 
@@ -190,7 +190,7 @@ A service ships as a native package, a `.deb` or a `.pkg`, installed by the host
 
 ### 4.8 The operator API
 
-The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSON gateway on the private listener. The generated CLI and the UI are its only clients; each sends the operator's token, and each action is one method call, audited under the token's name. A CI token reaches only the methods its allow-list names.
+The operator API is protobuf services (`operator.proto`, PR #3) with an HTTP/JSON gateway on the private listener. The generated CLI and the UI are its only clients; the CLI sends the operator's token, and the UI sends the signed-in user's session cookie with its CSRF header (a person signs in with a user name and a password: [operator-login.md](operator-login.md)). Each action is one method call, audited under the token's or the user's name. The `Users` and `ApiTokens` services make the users and the API tokens. A CI token reaches only the methods its allow-list names.
 
 | Service | Methods | State |
 |---|---|---|
@@ -443,7 +443,7 @@ Mac enrollment auto-approval, designed: the gate installs a managed config profi
 
 ### 5.10 The UI
 
-Designed, not built. The UI is a front end for the operator API and nothing more: a static web app that runs in the operator's browser and calls the coordinator's HTTP/JSON gateway (section 4.8) with the operator's token, exactly as the CLI does. The coordinator has no UI-specific handlers, renders no pages and exchanges no session cookies. The supported deployment serves the app's static files from the coordinator's private listener, so its calls are same-origin; the gateway allows no cross-origin access. Every page is a view over API calls and every button is one call. A test requires each call the app makes to be a method in the protobuf descriptors **(to build, B25)**.
+Designed, not built. The UI is a front end for the operator API and nothing more: a static web app that runs in the operator's browser and calls the coordinator's HTTP/JSON gateway (section 4.8) with the operator's session, which a person gets by signing in with a user name and a password ([operator-login.md](operator-login.md)). The coordinator has no UI-specific handlers and renders no pages; its only cookie is the session cookie of the sign-in routes, which no static file sets or reads. The supported deployment serves the app's static files from the coordinator's private listener, so its calls are same-origin; the gateway allows no cross-origin access. Every page is a view over API calls and every button is one call. A test requires each call the app makes to be a method in the protobuf descriptors **(to build, B25)**.
 
 ![UI, CLI and API: the generated CLI and the static web app both call the coordinator's HTTP/JSON gateway with the operator token; the coordinator has no UI-specific code and serves the static files from the same listener](diagrams/ui-api-cli.svg)
 
