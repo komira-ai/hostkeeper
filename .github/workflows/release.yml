@@ -79,10 +79,11 @@
 # targets, coordinator, no-downgrade, set-desired
 #          only while the repository variable RELEASE_SETS_DESIRED is `true`, after every
 #          publish of the run: write the targets of the newest release, wait until the
-#          coordinator runs at least that release (its own machine updates it; these four jobs
-#          never change it) and the package channels its targets point at list it (the apt
-#          suite `testing`, written by testing-apt-write; the installers' `testing` directory,
-#          by testing-pkg-upload), check again, in the same attempt of the run as the set, that
+#          coordinator runs at least that release (after cp-deploy while that deploy is on; else
+#          its own machine updates it; these four jobs never change it) and the package channels
+#          its targets point at list it (the apt suite `testing`, written by
+#          testing-apt-write; the installers' `testing` directory, by testing-pkg-upload),
+#          check again, in the same attempt of the run as the set, that
 #          no newer release is published (a re-run of an older release's jobs must not move the
 #          fleet back), then set the release as hostkeeper's desired version on the
 #          coordinator, by one call of the CI client (set-desired.yml) with an OIDC token. See
@@ -92,8 +93,8 @@
 #          not empty, after `newest`: deploy the newest release's linux-x86_64 coordinator image
 #          to the control plane's Docker Swarm service `hostkeeper-coordinator` by calling the
 #          reusable workflow deploy.yml of komira-ai/docker-swarm-updater (the job `cp-deploy`
-#          holds `id-token: write` for that alone, and no other scope). See the comment above
-#          the two jobs.
+#          holds `id-token: write` for that alone, and no other scope); the job coordinator
+#          waits for it. See the comment above the two jobs.
 #
 # newest, testing-apt-*, testing-fail-apt-*, testing-rpm-*, testing-pkg-upload, check-apt,
 # check-rpm, check-pkg, promote-check, stable-apt-*, stable-rpm-*, promote-pkg
@@ -431,22 +432,30 @@ jobs:
 
   # coordinator  waits until the coordinator runs at least this release, so that set-desired
   #          never sends the fields of a newer release to an older coordinator (it would
-  #          answer `invalid_request`). The jobs targets, coordinator, no-downgrade and set-desired never change the coordinator: the coordinator's
+  #          answer `invalid_request`). The jobs targets, coordinator, no-downgrade and set-desired never change the coordinator: the job
+  #          cp-deploy deploys it to the control plane, and without that deploy the coordinator's
   #          own machine updates it from each published release (the release asset
   #          `hostkeeper-coordinator-update` on a timer there, docs/deploy/coordinator-update.md).
+  #          So the job needs cp-deploy: while CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS are
+  #          both set it runs only once cp-deploy succeeded, never beside it (the coordinator the
+  #          deploy is replacing answers 409); while either is empty (cp-deploy skipped for that)
+  #          it runs after targets alone; when cp-deploy failed, was cancelled, or was skipped
+  #          for a failure before it, the job is skipped, and set-desired with it.
   #          The job joins the tailnet as set-desired does, and asks the private listener
   #          `GET /v1/version?at_least=<version>`, which takes no token: 200 once the coordinator
   #          is at least that version, 409 while it is older, 404 from a coordinator before the
-  #          route; curl retries for 30 minutes, then the job fails and the hosts' desired version
-  #          is not set. curl writes the last answer's HTTP status (000 for none) to the step's
+  #          route; curl retries every failed answer (`--fail`, `--retry-all-errors`) for 30
+  #          minutes, then the job fails and the hosts' desired version is not set. `--fail`, not
+  #          `--fail-with-body`: curl 8.5 (ubuntu-24.04's) cannot retry once it has written a
+  #          body to /dev/null, and ends at the first 409 with exit 23 and no status. curl writes the last answer's HTTP status (000 for none) to the step's
   #          output `status`, and one of two error steps says why the wait failed: after a 409 or
   #          a 404, that no coordinator updater reported this release (is the timer installed?);
   #          after anything else, that the coordinator did not answer. It holds `id-token: write`
   #          for the tailnet join alone, and no repository: no checkout, no artifact, no code of
   #          ours; curl, jq and the pinned tailscale action only.
   coordinator:
-    needs: [plan, targets]
-    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}
+    needs: [plan, targets, cp-deploy]
+    if: ${{ !cancelled() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.result == 'success' && needs.targets.outputs.newest == 'true' && (needs.cp-deploy.result == 'success' || (needs.cp-deploy.result == 'skipped' && (vars.CP_DEPLOY_ENDPOINT == '' || vars.CP_DEPLOY_TAILSCALE_TAGS == ''))) }}
     runs-on: ubuntu-24.04
     timeout-minutes: 40
     permissions:
@@ -480,13 +489,13 @@ jobs:
         env:
           COORDINATOR_URL: ${{ vars.HOSTKEEPER_COORDINATOR_URL }}
           VERSION: ${{ needs.targets.outputs.version }}
-        run: curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail-with-body --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --output /dev/null --write-out 'status=%{http_code}\n' --url "$COORDINATOR_URL/v1/version?at_least=$VERSION" >> "$GITHUB_OUTPUT"
+        run: curl --proto =https --tlsv1.2 --cacert "$RUNNER_TEMP/coordinator-ca.pem" --fail --silent --show-error --max-time 20 --retry 180 --retry-delay 10 --retry-max-time 1800 --retry-all-errors --output /dev/null --write-out 'status=%{http_code}\n' --url "$COORDINATOR_URL/v1/version?at_least=$VERSION" >> "$GITHUB_OUTPUT"
       - name: Say that no coordinator updater reported this release
         if: ${{ failure() && steps.wait.outcome == 'failure' && (steps.wait.outputs.status == '409' || steps.wait.outputs.status == '404') }}
         env:
           STATUS: ${{ steps.wait.outputs.status }}
           VERSION: ${{ needs.targets.outputs.version }}
-        run: echo "::error::No coordinator updater reported this release ($VERSION) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP $STATUS; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. The hosts' desired version is not set."
+        run: echo "::error::No coordinator updater reported this release ($VERSION) (is the timer installed?). For 30 minutes the coordinator answered that it runs an older release (its last answer was HTTP $STATUS; 404 is a coordinator from before the version route). Install the timer of hostkeeper-coordinator-update on the coordinator's machine, or read its journal there, as docs/deploy/coordinator-update.md says. With the control-plane deploy on (CP_DEPLOY_ENDPOINT and CP_DEPLOY_TAILSCALE_TAGS both set), the job cp-deploy reported this release deployed, so check that HOSTKEEPER_COORDINATOR_URL names the coordinator it deploys. The hosts' desired version is not set."
       - name: Say that the coordinator did not answer
         if: ${{ failure() && steps.wait.outcome == 'failure' && steps.wait.outputs.status != '409' && steps.wait.outputs.status != '404' }}
         env:
@@ -629,7 +638,8 @@ jobs:
   #          before the one the service runs, then updates the service by digest, and Swarm rolls
   #          back an update whose task does not become ready. The job ends once the deploy is
   #          reported converged and fails otherwise, waiting up to 60 minutes. The release stays
-  #          published whatever it says.
+  #          published whatever it says; the job coordinator (and so set-desired) runs only once
+  #          it succeeded.
   cp-deploy-digest:
     needs: [plan, newest]
     if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.CP_DEPLOY_ENDPOINT != '' && vars.CP_DEPLOY_TAILSCALE_TAGS != '' }}

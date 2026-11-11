@@ -4,8 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use super::coordinator_wait::{JOB, NO_ANSWER_IF, NO_UPDATER_IF, STEPS};
-use super::desired::SET_IF;
+use super::coordinator_wait::{JOB, NEEDS, NO_ANSWER_IF, NO_UPDATER_IF, STEPS};
+use super::desired::{COORDINATOR_IF, SET_IF};
 use super::expr::{Context, holds};
 use super::lint::{ID_TOKEN_ALLOWED, WRITE_ALLOWED, lint};
 use super::{with_in, workflows};
@@ -67,14 +67,14 @@ fn the_coordinator_job_of_the_repository_passes() {
 }
 
 #[test]
-fn id_token_write_is_allowed_to_the_coordinator_job_alone_and_under_the_set_desired_if() {
+fn id_token_write_is_allowed_to_the_coordinator_job_alone_and_under_its_if() {
     // Catches: the OIDC scope granted to the whole table of release.yml's jobs, a second scope
-    // for the coordinator job, or a condition other than set-desired's.
+    // for the coordinator job, or a condition other than the job's own.
     let mine: Vec<_> = WRITE_ALLOWED.iter().filter(|a| a.job == JOB).collect();
     assert_eq!(mine.len(), 1);
     assert_eq!(
         (mine[0].file, mine[0].scope, mine[0].condition),
-        ("release.yml", "id-token", SET_IF)
+        ("release.yml", "id-token", COORDINATOR_IF)
     );
     assert!(
         ID_TOKEN_ALLOWED
@@ -86,24 +86,146 @@ fn id_token_write_is_allowed_to_the_coordinator_job_alone_and_under_the_set_desi
 #[test]
 fn a_coordinator_job_under_another_if_is_refused() {
     // Catches: the wait run on a branch other than main, with the deploy off, or for a release
-    // that is not the newest, any of which would hold the OIDC scope under a wider condition.
-    let line = format!("    if: {SET_IF}\n");
+    // that is not the newest, any of which would hold the OIDC scope under a wider condition;
+    // and the clauses that order it after the control-plane deploy dropped or loosened.
+    let line = format!("    if: {COORDINATOR_IF}\n");
+    let refused = [
+        format!("job coordinator: `id-token: write` needs the exact `if: {COORDINATOR_IF}`"),
+        format!("release.yml: job coordinator needs the exact `if: {COORDINATOR_IF}`"),
+    ];
     let narrower = "    if: ${{ needs.plan.outputs.release == 'true' }}\n";
-    let got = found(&line, narrower);
-    assert_eq!(
-        got,
-        [
-            format!("job coordinator: `id-token: write` needs the exact `if: {SET_IF}`"),
-            format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
-        ]
-    );
+    assert_eq!(found(&line, narrower), refused);
+    for (from, to) in [
+        ("!cancelled() && ", "always() && "),
+        ("!cancelled() && ", ""),
+        ("needs.targets.result == 'success' && ", ""),
+        (
+            " && (needs.cp-deploy.result == 'success' || (needs.cp-deploy.result == 'skipped' && (vars.CP_DEPLOY_ENDPOINT == '' || vars.CP_DEPLOY_TAILSCALE_TAGS == '')))",
+            "",
+        ),
+        (
+            "needs.cp-deploy.result == 'success' ||",
+            "needs.cp-deploy.result != 'cancelled' ||",
+        ),
+        ("needs.cp-deploy.result == 'skipped' && ", ""),
+        (" || vars.CP_DEPLOY_TAILSCALE_TAGS == ''", ""),
+    ] {
+        let changed = line.replacen(from, to, 1);
+        assert_ne!(changed, line, "{from:?} is in the condition");
+        assert_eq!(found(&line, &changed), refused, "{from:?}");
+    }
     let without = found(&line, "");
     assert_eq!(
         about_the_job(without),
         [format!(
-            "release.yml: job coordinator needs the exact `if: {SET_IF}`"
+            "release.yml: job coordinator needs the exact `if: {COORDINATOR_IF}`"
         )]
     );
+}
+
+/// Whether the job's committed `if:` lets it run when `cp-deploy` ended `cp_deploy`, with the
+/// deploy's two repository variables `set` or not, the targets job `targets` and the run
+/// `cancelled` or not (the release planned, on main, the deploy on, this release the newest).
+fn coordinator_runs(cp_deploy: &str, set: bool, targets: &str, cancelled: bool) -> bool {
+    let mut names = BTreeMap::from([
+        ("needs.plan.outputs.release".to_owned(), "true".to_owned()),
+        ("github.ref".to_owned(), "refs/heads/main".to_owned()),
+        ("vars.RELEASE_SETS_DESIRED".to_owned(), "true".to_owned()),
+        ("needs.targets.result".to_owned(), targets.to_owned()),
+        ("needs.targets.outputs.newest".to_owned(), "true".to_owned()),
+        ("needs.cp-deploy.result".to_owned(), cp_deploy.to_owned()),
+    ]);
+    if set {
+        names.insert(
+            "vars.CP_DEPLOY_ENDPOINT".to_owned(),
+            "https://cp.example.com".to_owned(),
+        );
+        names.insert(
+            "vars.CP_DEPLOY_TAILSCALE_TAGS".to_owned(),
+            "tag:ci".to_owned(),
+        );
+    }
+    let context = Context {
+        names,
+        cancelled,
+        failed: cp_deploy == "failure" || targets == "failure",
+    };
+    assert_eq!(
+        coordinator_job()
+            .lines()
+            .find_map(|l| l.strip_prefix("    if: ")),
+        Some(COORDINATOR_IF),
+        "the job's if is the one evaluated"
+    );
+    holds(COORDINATOR_IF, &context).expect("the condition evaluates")
+}
+
+#[test]
+fn the_wait_runs_after_a_deploy_that_succeeded_or_was_turned_off_and_never_beside_one() {
+    // Catches: the wait started while cp-deploy still runs (its first 409 answered by the
+    // coordinator the deploy is replacing), run after a deploy that failed, was cancelled or was
+    // skipped for a failure before it, skipped in a repository without the deploy's variables,
+    // or run in a cancelled run or after a failed targets job.
+    assert!(coordinator_runs("success", true, "success", false));
+    assert!(coordinator_runs("skipped", false, "success", false));
+    for (cp_deploy, set) in [
+        ("failure", true),
+        ("cancelled", true),
+        ("skipped", true),
+        ("failure", false),
+    ] {
+        assert!(
+            !coordinator_runs(cp_deploy, set, "success", false),
+            "{cp_deploy} with the variables set: {set}"
+        );
+    }
+    for (cp_deploy, set) in [("success", true), ("skipped", false)] {
+        assert!(
+            !coordinator_runs(cp_deploy, set, "success", true),
+            "{cp_deploy} cancelled"
+        );
+        for targets in ["failure", "skipped", "cancelled"] {
+            assert!(
+                !coordinator_runs(cp_deploy, set, targets, false),
+                "{targets}"
+            );
+        }
+    }
+    // Either variable empty turns the deploy off, as cp-deploy's own `if:` reads them.
+    for (endpoint, tags) in [("", "tag:ci"), ("https://cp.example.com", "")] {
+        let mut names = BTreeMap::from([
+            ("needs.plan.outputs.release".to_owned(), "true".to_owned()),
+            ("github.ref".to_owned(), "refs/heads/main".to_owned()),
+            ("vars.RELEASE_SETS_DESIRED".to_owned(), "true".to_owned()),
+            ("needs.targets.result".to_owned(), "success".to_owned()),
+            ("needs.targets.outputs.newest".to_owned(), "true".to_owned()),
+            ("needs.cp-deploy.result".to_owned(), "skipped".to_owned()),
+        ]);
+        names.insert("vars.CP_DEPLOY_ENDPOINT".to_owned(), endpoint.to_owned());
+        names.insert("vars.CP_DEPLOY_TAILSCALE_TAGS".to_owned(), tags.to_owned());
+        let context = Context {
+            names,
+            cancelled: false,
+            failed: false,
+        };
+        assert!(
+            holds(COORDINATOR_IF, &context).expect("evaluates"),
+            "{endpoint:?} {tags:?}"
+        );
+    }
+}
+
+#[test]
+fn the_coordinator_if_holds_every_clause_of_the_set_condition() {
+    // Catches: the wait's condition drifting from the set's (another branch, the gate, the
+    // newest release), which the exact-`if:` rule alone would carry along unnoticed.
+    let core = SET_IF
+        .strip_prefix("${{ ")
+        .and_then(|c| c.strip_suffix(" }}"))
+        .expect("an expression");
+    for clause in core.split(" && ") {
+        assert!(COORDINATOR_IF.contains(clause), "{clause}");
+    }
 }
 
 #[test]
@@ -148,25 +270,37 @@ fn a_coordinator_job_with_another_token_right_than_the_oidc_token_is_refused() {
 }
 
 #[test]
-fn a_coordinator_job_that_does_not_wait_for_the_targets_is_refused() {
+fn a_coordinator_job_that_does_not_wait_for_the_targets_and_the_deploy_is_refused() {
     // Catches: the wait started before the targets job decided whether this run's release is
-    // the newest (the version it asks for is the targets job's output), or after nothing.
+    // the newest (the version it asks for is the targets job's output), or after nothing; and
+    // the wait started beside the control-plane deploy rather than after it (the shape that
+    // failed a release on the old coordinator's first 409), or after its digest job alone.
     for (to, got) in [
+        ("[plan, targets]", "[\"plan\", \"targets\"]"),
+        ("[plan, cp-deploy]", "[\"cp-deploy\", \"plan\"]"),
+        (
+            "[plan, targets, cp-deploy-digest]",
+            "[\"cp-deploy-digest\", \"plan\", \"targets\"]",
+        ),
+        (
+            "[plan, targets, cp-deploy, newest]",
+            "[\"cp-deploy\", \"newest\", \"plan\", \"targets\"]",
+        ),
         ("[plan]", "[\"plan\"]"),
-        ("[plan, publish]", "[\"plan\", \"publish\"]"),
         ("targets", "[\"targets\"]"),
     ] {
         assert_eq!(
             about_the_job(found(
-                "    needs: [plan, targets]\n",
+                "    needs: [plan, targets, cp-deploy]\n",
                 &format!("    needs: {to}\n")
             )),
             [format!(
-                "release.yml: job coordinator needs {got}, not [\"plan\", \"targets\"]"
+                "release.yml: job coordinator needs {got}, not {NEEDS:?}"
             )],
             "{to}"
         );
     }
+    assert_eq!(NEEDS, ["cp-deploy", "plan", "targets"]);
 }
 
 #[test]
@@ -240,7 +374,9 @@ fn a_wait_that_is_not_the_one_exact_request_is_refused() {
     // Catches: the request without the pinned CA (any certificate accepted, or the runner's
     // trust store), over a plain-HTTP or older TLS, with a token header (the route takes none),
     // asking another route or no version, with fewer retries than the 30 minutes, ignoring
-    // the answer's status, or not handing the last status to the error steps (no write-out, the
+    // the answer's status (no `--fail`) or writing an error's body (`--fail-with-body`, with
+    // which ubuntu-24.04's curl 8.5 cannot retry into /dev/null and ends the wait at the
+    // first 409), or not handing the last status to the error steps (no write-out, the
     // body written into the step's outputs, or the outputs never written).
     let wait = STEPS[3].split(" env ").next().expect("the command");
     let command = wait.strip_prefix("run ").expect("a run step");
@@ -253,7 +389,8 @@ fn a_wait_that_is_not_the_one_exact_request_is_refused() {
         ),
         (" --proto =https", ""),
         (" --tlsv1.2", ""),
-        (" --fail-with-body", ""),
+        (" --fail", ""),
+        (" --fail", " --fail-with-body"),
         (" --retry 180", " --retry 6"),
         (" --retry-max-time 1800", " --retry-max-time 60"),
         (" --retry-all-errors", ""),
@@ -574,7 +711,7 @@ fn a_coordinator_job_missing_is_refused() {
     assert_eq!(
         mine,
         [
-            format!("release.yml: job coordinator needs the exact `if: {SET_IF}`"),
+            format!("release.yml: job coordinator needs the exact `if: {COORDINATOR_IF}`"),
             "release.yml: job coordinator is missing".to_owned(),
         ]
     );

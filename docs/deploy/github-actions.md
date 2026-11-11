@@ -46,20 +46,29 @@ one credential is the OIDC token GitHub issues to the job.
    (a late run of an older commit, released after a newer one), the next step is skipped, so
    that the fleet is never moved back. The job reads the repository (`contents: read`) and holds
    no other token right; it joins no tailnet.
-5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets`, under
-   the same condition as `targets`, plus that its release is the newest published). The coordinator is updated by its own machine
+5. **Wait for the coordinator** (job `coordinator` of `release.yml`, after `targets` and
+   `cp-deploy`, under the same condition as `targets`, plus that its release is the newest
+   published). While the repository variables `CP_DEPLOY_ENDPOINT` and `CP_DEPLOY_TAILSCALE_TAGS`
+   are both set, `cp-deploy` deploys the coordinator to the control plane
+   ([control-plane.md](control-plane.md)) and this job runs only once it passed; when it failed
+   or was cancelled, this job and `set-desired` are skipped. While either is empty, `cp-deploy`
+   is skipped and the coordinator is updated by its own machine
    (`hostkeeper-coordinator-update`, a release asset, on a timer there, [coordinator-update.md](coordinator-update.md)),
    not by CI. The job joins the tailnet as `set-desired` does (the same pinned action and the
    same repository variables, after a check of `HOSTKEEPER_TAILNET_TAG`), writes the CA from
    `HOSTKEEPER_COORDINATOR_CA`, and asks the private listener, with one `curl` that retries for
    30 minutes, `GET /v1/version?at_least=<X.Y.Z>`. The route takes no token: it answers 200 when
    the coordinator is at least that version, 409 (`coordinator_older`) while it is older, and
-   a coordinator from before the route answers 404; curl retries until 200. The job holds
+   a coordinator from before the route answers 404; curl retries every other answer than 200
+   (`--fail` with `--retry-all-errors`, which writes no error body, so that ubuntu-24.04's curl
+   can retry into `/dev/null`). The job holds
    `id-token: write` for the tailnet join alone, reads no repository and runs none of our code
    (curl, jq and the pinned tailscale action). curl writes the last answer's HTTP status to the
    step's output. When the 30 minutes pass, the job fails, `set-desired` does not run (the hosts'
    desired version is not set), and one error annotation says why: after a 409 or a 404, `No
-   coordinator updater reported this release (<X.Y.Z>) (is the timer installed?)`; after anything
+   coordinator updater reported this release (<X.Y.Z>) (is the timer installed?)`, which also
+   says, for the control-plane deploy, to check that `HOSTKEEPER_COORDINATOR_URL` names the
+   coordinator `cp-deploy` deploys; after anything
    else (000, no answer: the tailnet join, the CA or the URL variable), that the coordinator did
    not answer, with the last status.
 6. **Check again that no newer release is published** (job `no-downgrade` of `release.yml`,
@@ -260,7 +269,7 @@ which re-runs `set-desired` after it.
 | job and step | what it means | what to do |
 |---|---|---|
 | `targets`: The targets of the release | A file of the release does not check out: one of hostkeeper's `.deb`s, its bundle or its control file. Its log names every problem. Nothing is set. | Fix the release (a new commit releases again), then the next run sets it. |
-| `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | On the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)); once the coordinator runs the release, **Re-run failed jobs**. |
+| `coordinator`: Wait until the coordinator runs this release | After 30 minutes the coordinator was still older than the release (409 `coordinator_older`, or 404 from one before the route), or not reachable (the tailnet join, the CA or the URL variables). The job's error annotation says which (`No coordinator updater reported this release ... (is the timer installed?)` for the first), and `set-desired` did not run: the hosts' desired version is not set. | With the control-plane deploy on, check that `HOSTKEEPER_COORDINATOR_URL` names the coordinator `cp-deploy` deployed. Without it, on the coordinator's machine, install the timer of `hostkeeper-coordinator-update` from the release asset if it is not there, or read its journal ([coordinator-update.md](coordinator-update.md)). Once the coordinator runs the release, **Re-run failed jobs**. |
 | `testing-apt-write`, `testing-apt-write-3` or `testing-pkg-upload` | A package channel was not written (the last apt attempt lost the race for the index too, or a write failed), so `set-desired` did not run: nothing is set. A channel without its settings ends green with a notice, and `set-desired` is skipped too. | Fix the channel ([package-repositories.md](package-repositories.md)), then **Re-run failed jobs**. |
 | `no-downgrade`: Say that an older release is not set | A newer release than this run's is published (this run is a re-run of an older release's jobs, or a late run), so `set-desired` was skipped and nothing is set; the job is green. | Nothing: the newest release's own run sets the fleet. A move back is an operator's step on the coordinator. |
 | `set-desired`: any verification step | The pinned hostkeeper release is not the one that was built ([When it fails](ci-client.md#when-it-fails)). Nothing is set. | Check the pin, then **Re-run job** on `no-downgrade`. |

@@ -23,9 +23,10 @@
 //!   expression (`${{`): a value reaches a command through the step's `env:` and, for a command
 //!   of ours, a flag, never as text written into the script, which a value holding shell syntax
 //!   would run;
-//! - [`COORDINATOR_JOB`] lacks the exact `if:` [`SET_IF`] or has `continue-on-error`, or breaks
-//!   the rules of [`super::coordinator_wait`] (it waits until the coordinator runs the release,
-//!   and holds `id-token: write` for the tailnet join alone);
+//! - [`COORDINATOR_JOB`] lacks the exact `if:` [`COORDINATOR_IF`] ([`SET_IF`], after the
+//!   control-plane deploy when that deploy is on) or has `continue-on-error`, or breaks the rules
+//!   of [`super::coordinator_wait`] (it waits until the coordinator runs the release, and holds
+//!   `id-token: write` for the tailnet join alone);
 //! - [`JOB`] lacks the exact `if:` [`SET_DESIRED_IF`] ([`SET_IF`], and only once a write of each
 //!   channel the targets point at has landed), or does not need exactly `plan`, [`TARGETS_JOB`],
 //!   [`COORDINATOR_JOB`], the jobs of [`CHANNEL_WRITES`] and [`super::no_downgrade::JOB`] (it
@@ -63,9 +64,19 @@ pub const GATE: &str = "RELEASE_SETS_DESIRED";
 /// The `if:` of [`TARGETS_JOB`]: a release of main was planned, and [`GATE`] is `true`.
 pub const DESIRED_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' }}";
 
-/// The `if:` of [`JOB`]: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release the newest
-/// published, so that a late run of an older commit never moves the fleet back.
+/// The condition of the set: [`DESIRED_IF`], and [`TARGETS_JOB`] found this run's release the
+/// newest published, so that a late run of an older commit never moves the fleet back. Every
+/// clause of it is a clause of [`COORDINATOR_IF`] and of [`SET_DESIRED_IF`].
 pub const SET_IF: &str = "${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.outputs.newest == 'true' }}";
+
+/// The `if:` of [`COORDINATOR_JOB`], which needs `plan`, [`TARGETS_JOB`] and
+/// [`super::cp_deploy::JOB`]: [`SET_IF`], once [`TARGETS_JOB`] succeeded, and only after the
+/// control-plane deploy succeeded, or after it was skipped because its repository variables are
+/// not both set (so a repository without that deploy still waits for the coordinator's own
+/// updater). `!cancelled()` lets the job run after a skipped `cp-deploy`, which a job's default
+/// `success()` would not; a `cp-deploy` that failed, was cancelled, or was skipped with the deploy
+/// on (a failure before it) skips the wait, and set-desired with it.
+pub const COORDINATOR_IF: &str = "${{ !cancelled() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && vars.RELEASE_SETS_DESIRED == 'true' && needs.targets.result == 'success' && needs.targets.outputs.newest == 'true' && (needs.cp-deploy.result == 'success' || (needs.cp-deploy.result == 'skipped' && (vars.CP_DEPLOY_ENDPOINT == '' || vars.CP_DEPLOY_TAILSCALE_TAGS == ''))) }}";
 
 /// The `if:` of [`JOB`]: [`SET_IF`], once [`COORDINATOR_JOB`] succeeded and a write of each
 /// channel of [`CHANNEL_WRITES`] has landed: one of the three attempts of the apt write reported
@@ -205,7 +216,7 @@ pub fn problems(doc: &Node) -> Vec<String> {
     let mut problems = Vec::new();
     for (name, condition) in [
         (TARGETS_JOB, DESIRED_IF),
-        (COORDINATOR_JOB, SET_IF),
+        (COORDINATOR_JOB, COORDINATOR_IF),
         (JOB, SET_DESIRED_IF),
     ] {
         let j = job(doc, name);
