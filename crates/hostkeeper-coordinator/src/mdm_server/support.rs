@@ -277,6 +277,7 @@ impl Rig {
             Arc::clone(&self.store) as Arc<dyn MdmStore>,
             Arc::clone(&self.time) as Arc<dyn UnixClock>,
             Arc::new(|| None),
+            Lease::new(|| true),
             Arc::clone(&self.setup),
             86_400,
         )
