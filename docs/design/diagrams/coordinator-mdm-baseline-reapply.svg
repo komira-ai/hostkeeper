@@ -1,0 +1,70 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 636" width="1200" height="636" role="img" aria-label="The gate compares the Mac against its group baseline on a timer and after a push-less change, and re-sends only what is missing.">
+<title>Baseline re-apply</title>
+<desc>On the check interval, or when the group baseline changes, the gate asks the Mac for ProfileList. It compares the answer with the desired state of the Mac host group: profiles by identifier and digest, the Screen Sharing state, the device name and the installs. It enqueues only what differs and records the reason.</desc>
+<defs><marker id="coordinator-mdm-baseline-reapply-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-baseline-reapply-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="636" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">Baseline re-apply</text>
+<rect x="30" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="136" y="64" class="b" text-anchor="middle">Timer / baseline change</text>
+<text x="136" y="80" class="t-m" text-anchor="middle">check interval</text>
+<path d="M136,92 L136,622" class="life"/>
+<rect x="262" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="368" y="64" class="b" text-anchor="middle">Gate</text>
+<text x="368" y="80" class="t-m" text-anchor="middle">baseline.rs</text>
+<path d="M368,92 L368,622" class="life"/>
+<rect x="494" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="600" y="64" class="b" text-anchor="middle">Queue + store</text>
+<text x="600" y="80" class="t-m" text-anchor="middle"></text>
+<path d="M600,92 L600,622" class="life"/>
+<rect x="726" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="832" y="64" class="b" text-anchor="middle">Mac</text>
+<text x="832" y="80" class="t-m" text-anchor="middle">Setup Assistant, then macOS</text>
+<path d="M832,92 L832,622" class="life"/>
+<rect x="958" y="44" width="212" height="46" rx="5" class="box-b"/>
+<text x="1064" y="64" class="b" text-anchor="middle">Enrollment</text>
+<text x="1064" y="80" class="t-m" text-anchor="middle">inventory, groups</text>
+<path d="M1064,92 L1064,622" class="life"/>
+<path d="M136,136 L368,136" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="252" y="130" class="t-m lbl" text-anchor="middle">1. tick (default 21600 s) or baseline digest changed</text>
+<path d="M368,176 L1064,176" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="170" class="t-m lbl" text-anchor="middle">2. host group and name of this serial</text>
+<path d="M368,216 L600,216" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="484" y="210" class="t-m lbl" text-anchor="middle">3. enqueue ProfileList (+ DeviceInformation if name unknown)</text>
+<path d="M832,256 L600,256" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="250" class="t-m lbl" text-anchor="middle">4. Idle (push if asleep: section 4.4)</text>
+<path d="M600,296 L832,296" class="ln-d" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="290" class="t-m lbl" text-anchor="middle">5. ProfileList, DeviceInformation</text>
+<path d="M832,336 L600,336" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="330" class="t-m lbl" text-anchor="middle">6. answers</text>
+<path d="M600,376 L368,376" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="484" y="370" class="t-m lbl" text-anchor="middle">7. Event::Result</text>
+<rect x="100" y="392" width="536" height="40" rx="4" class="box-o"/>
+<text x="368" y="407" class="t-m" text-anchor="middle">diff desired and reported: missing profile, wrong DeviceName, Screen Sharing off</text>
+<text x="368" y="422" class="t-m" text-anchor="middle">no diff: record baseline = ok, send nothing</text>
+<path d="M368,464 L600,464" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="484" y="458" class="t-m lbl" text-anchor="middle">8. enqueue only the differences</text>
+<path d="M600,504 L832,504" class="ln-d" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="498" class="t-m lbl" text-anchor="middle">9. InstallProfile | Settings | EnableRemoteDesktop</text>
+<path d="M832,544 L600,544" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="716" y="538" class="t-m lbl" text-anchor="middle">10. Acknowledged</text>
+<path d="M600,584 L368,584" class="ln" marker-end="url(#coordinator-mdm-baseline-reapply-ak)"/>
+<text x="484" y="578" class="t-m lbl" text-anchor="middle">11. baseline_state = applied; audit mdm_baseline</text>
+</svg>

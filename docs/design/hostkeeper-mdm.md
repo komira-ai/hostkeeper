@@ -17,6 +17,13 @@ Two points are decided and are not reopened here:
   installed with. Changing it is free while no Mac is enrolled. After the first enrollment it
   costs a re-enrollment of every Mac, because a Mac keeps one profile per identifier.
 
+**Superseded in part by [coordinator-mdm.md](coordinator-mdm.md).** The MDM server is to run inside the coordinator, not as a separate
+stack. Superseded there: section 2's rows for the server stack, TLS, ABM token, ADE profile and the kit; section 3's rows for the server
+stack and the kit, and the NanoHUB API on loopback; the source of section 6.1's "enrolled" (a call, not a webhook); section 8, the
+migration of the live stack; the Caddy and `lego` parts of section 9; section 12's tasks M2 to M5, M6a, M6b and M7. Standing: sections 4
+and 5, section 7, the gate and its record, and the Mac path as drawn. Nothing below is rewritten until the tasks of coordinator-mdm.md
+delete what it describes.
+
 The launchd label prefix, `dev.hostkeeper` (**Built**: `crates/hostkeeper-launchd/src/label.rs`),
 is a different identity: the product's, the same in every farm. It names the daemon's job, the
 pkg identifier, and the managed preference domains of this design (`dev.hostkeeper.config`,
