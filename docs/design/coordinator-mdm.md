@@ -200,9 +200,17 @@ time it is needed and held encrypted in the store (4.9). The identity's subject 
 shared empty DN. The challenge is per request: `POST /enroll` verifies the device-information blob, finds the serial in the ABM table,
 makes a 32-byte challenge valid for one hour, and builds the enrollment profile with that challenge. The challenge is bound to the
 serial, the blob's UDID and the ABM record's `profile_status` (`pushed`). `PKIOperation` is **idempotent**: consumption is keyed on the
-challenge and the hash of the CSR's public key, in the transaction that records the issued certificate. A repeat with the same challenge,
-key and `transactionID` (a client whose CertRep was lost) gets the stored certificate again; a different key presenting a consumed challenge
-is refused.
+challenge and the hash of the CSR's public key, in the transaction that records the issued certificate. A repeat with the same challenge
+and key (a client whose CertRep was lost) gets the stored certificate again, **whatever its `transactionID`**, because the Mac's client
+opens a new session with a new `transactionID` when it retries (measured on the live stack, `coordinator-mdm-cm12a.md`); a different key
+presenting a consumed challenge is refused. A refused request still gets HTTP 200 with a signed FAILURE `CertRep` (what the Mac's client
+reads), and a refusal consumes nothing. The library is `hostkeeper-mdm-scep` (CM12b): the challenge store is a port it calls once, atomically
+(`Challenges::redeem`), and CM12c implements it on the store. It hashes the signed attributes as received and does not re-encode them, so a
+sender's BER encoding does not break a valid message; `cms` (a pinned release candidate under R6, licences and bans pass) has no verify or decrypt
+side, which the crate writes, and its builder omits `contentType` and `messageDigest` from a reply with no content, which the crate supplies
+(a test checks a failure reply with a verifier of its own). `GetCACaps` answers `POSTPKIOperation`, `SHA-256`, `AES` and `SCEPStandard`; DES3 and
+SHA-1 requests are accepted and not advertised, and there is no `Renewal` (renewal is the `InstallProfile` below). Which capabilities the Mac's
+client requires is not measured; the first real-Mac run decides whether `DES3`, `SHA-1` or `Renewal` must be advertised.
 
 **Why SCEP and not the alternatives.**
 
@@ -651,7 +659,7 @@ operator action are involved.
 |---|---|
 | A Mac installs the enrollment profile by hand, unsupervised | `IsSupervised` is false: declined `device_not_supervised`; the serial must also be in the ABM table, and a manual install has no ADE record |
 | A client on the LAN posts `/enroll` for someone's serial | the blob must verify against Apple (4.2); no challenge otherwise |
-| `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key and `transactionID` gets the stored certificate, a different key is refused; tests for both |
+| `PKIOperation` replayed by an attacker, or retried by the Mac after a lost `CertRep` | consumption is keyed on the challenge and the CSR key hash (4.2): the same key gets the stored certificate, a different key is refused; tests for both |
 | Identity certificate's serial differs from `Authenticate.SerialNumber` | refused, audited `mdm_serial_mismatch` |
 | Two coordinators on one Postgres | MDM is single-node in v1 (4.9): a second coordinator serving MDM refuses to start while the lease holder serves it; the gate's saves run under the lease (**Built**) |
 | The push certificate expires | `403` from APNs raises the alert; commands queue; the Macs still `Idle` on their own, so nothing is lost, only delayed |
@@ -795,7 +803,8 @@ does not block a PR under R6; this note is the reason to keep CM12c's limits.
     at `/enroll` alone fails: the shortest trace is two `/enroll` requests before either `Authenticate`; the check at `Authenticate`
     alone holds. A replay before the Mac's first enrollment still lets the peer hold the serial's enrollment until an operator confirms
     the Mac, and that enrollment never approves, since its nonce reaches only the peer.
-- **SCEP tests** (CM12b): a lost `CertRep` retried with the same key and `transactionID` gets the stored certificate; a different key
+- **SCEP tests** (CM12b, `crates/hostkeeper-mdm-scep/tests`): a lost `CertRep` retried with the same key and `transactionID`, or with a new
+  `transactionID`, gets the stored certificate; a different key
   reusing a consumed challenge is refused; `/enroll` for a serial with a live enrollment issues nothing without verification or an
   operator. **Listener tests** (CM11a): `/enroll` accepts no client certificate while `/checkin` refuses without one; an unknown
   enrollment keeps the fake Mac's state. **Push tests**: a command after an answered push is pushed at once; `apns-priority` and
@@ -837,7 +846,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM11c | `GET /pkg/<sha256>.pkg`, streamed and digest-checked | CM11a, CM8 | S |
 | CM13 | ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
 | CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |
-| CM12b | SCEP library: `GetCACaps`, `GetCACert`, `PKIOperation`, signed and enveloped `CertRep`, idempotent consumption, fixtures and the farm Mac | CM12a, CM5 | L |
+| CM12b | SCEP library: `GetCACaps`, `GetCACert`, `PKIOperation`, signed and enveloped `CertRep`, idempotent consumption, fixtures and the farm Mac | CM12a, CM4, CM5 | L |
 | CM12c | `/enroll` wiring: the verified blob, the per-serial challenge, the MDM CA (sealed key), renewal alert, fail-closed rules | CM11a, CM12b, CM6, CM13 | M |
 | CM17 | **In-process ACME for the MDM name, moved ahead of the cutover.** Account key, DNS-01 through one DNS provider port with the owner's provider first, renewal timer under the lease, alerts, the credential and directory as setup data; the certificate upload of 4.9 works until it lands. Reads the crate and the provider first (section 12, item 14) | CM20, CM11a | L |
 | CM22c | UI: the TLS step, first upload of a certificate and key, then the DNS credential, ACME directory and renewal status | CM11a, CM21, CM22a (CM17 for the second half) | S |
