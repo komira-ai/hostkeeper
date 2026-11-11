@@ -26,6 +26,7 @@ const OBSERVE: &str = "hostkeeper-observe";
 const LAUNCHD: &str = "hostkeeper-launchd";
 const OPENRC: &str = "hostkeeper-openrc";
 const MDM: &str = "hostkeeper-mdm";
+const MDM_MODEL: &str = "hostkeeper-mdm-model";
 const MDM_SERVER: &str = "hostkeeper-mdm-server";
 const MDM_STEP: &str = "hostkeeper-mdm-step";
 const MEASURE: &str = "hostkeeper-measure";
@@ -124,6 +125,7 @@ pub const LAYERS: [Layer; 33] = [
     (MDM, &[HOOK, MDM_CORE, MDM_STEP], &[]),
     (MDM_CORE, &[], &[]),
     (MDM_GATE, &[CONFIG, ENROLLMENT, INSTALL, PACKAGE, WIRE], &[]),
+    (MDM_MODEL, &[], &[]),
     (MDM_SERVER, &[], &[]),
     (MDM_STEP, &[], &[]),
     (MEASURE, &[], &[]),
