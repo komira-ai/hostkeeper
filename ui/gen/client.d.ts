@@ -523,6 +523,11 @@ export namespace hostkeeper_operator_v1 {
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export type MdmBaseline = "MDM_BASELINE_UNSPECIFIED" | "MDM_BASELINE_PENDING" | "MDM_BASELINE_APPLIED" | "MDM_BASELINE_FAILED";
+  export type MdmBaselineState =
+    | "MDM_BASELINE_STATE_UNSPECIFIED"
+    | "MDM_BASELINE_STATE_PENDING"
+    | "MDM_BASELINE_STATE_APPLIED"
+    | "MDM_BASELINE_STATE_FAILED";
   export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
   export type MdmCondition =
     | "MDM_CONDITION_UNSPECIFIED"
@@ -561,6 +566,8 @@ export namespace hostkeeper_operator_v1 {
     installSends?: number;
     installLastSentUnix?: string;
     installSha256?: string;
+    baselineState?: hostkeeper_operator_v1.MdmBaselineState;
+    baselineReason?: string;
     hostId?: string;
     group?: string;
     baseline?: hostkeeper_operator_v1.MdmBaseline;

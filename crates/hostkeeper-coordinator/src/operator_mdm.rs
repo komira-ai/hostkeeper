@@ -5,16 +5,18 @@
 //! It takes the operator token only: a valid CI token is `forbidden`, and no token or any other
 //! `unauthorized`, before the request is looked at. It reads the gate's records and asks no
 //! device and not NanoHUB; nothing is audited, since nothing changes. A coordinator without
-//! the gate answers no device, with `gate` false.
+//! the gate answers no device, with `gate` false. Each row says where the device is in applying
+//! its host group's enrollment baseline ([`hostkeeper_mdm_gate::baseline`]), from the records
+//! and the baseline file alone (`baseline_state`, `baseline_reason`).
 //!
 //! Each answer also says whether the MDM setup is complete (`configured`) and, when it is not,
 //! what is missing ([`Coordinator::setup_status`]); the devices are listed either way. A device's
-//! host id and group are those of the one inventory record that has its serial, and its baseline
-//! is how far the config profile has got in its enrollment.
+//! host id and group are those of the one inventory record that has its serial, and its
+//! `baseline` is how far the config profile has got in its enrollment.
 
 use std::sync::Arc;
 
-use hostkeeper_mdm_gate::{DeviceRecord, EnrollmentId, Phase};
+use hostkeeper_mdm_gate::{BaselineState, BaselineStatus, DeviceRecord, EnrollmentId, Phase};
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
@@ -89,7 +91,7 @@ impl Coordinator {
             records
                 .iter()
                 .map(|record| {
-                    let mut device = device_proto(record);
+                    let mut device = device_proto(record, mdm.gate.baseline_status(record));
                     if let Some(inventory) = record
                         .serial
                         .as_deref()
@@ -134,7 +136,7 @@ fn inventory_of<'a>(records: &'a [InventoryRecord], serial: &str) -> Option<&'a 
 }
 
 /// How far the config profile has got.
-fn baseline_proto(record: &DeviceRecord) -> proto::MdmBaseline {
+fn config_profile_proto(record: &DeviceRecord) -> proto::MdmBaseline {
     match record.config_profile.as_ref().map(|sent| sent.answer) {
         None => proto::MdmBaseline::Unspecified,
         Some(None) => proto::MdmBaseline::Pending,
@@ -151,8 +153,20 @@ fn phase_proto(phase: Phase) -> proto::MdmPhase {
     }
 }
 
-/// The answer's row of `record`.
-fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
+fn baseline_proto(state: BaselineState) -> proto::MdmBaselineState {
+    match state {
+        BaselineState::Pending => proto::MdmBaselineState::Pending,
+        BaselineState::Applied => proto::MdmBaselineState::Applied,
+        BaselineState::Failed => proto::MdmBaselineState::Failed,
+    }
+}
+
+/// The answer's row of `record`, whose baseline the gate says is `baseline`.
+fn device_proto(record: &DeviceRecord, baseline: Option<BaselineStatus>) -> proto::MdmDevice {
+    let (baseline_state, baseline_reason) = baseline.map_or_else(
+        || (proto::MdmBaselineState::Unspecified, String::new()),
+        |status| (baseline_proto(status.state), status.reason),
+    );
     proto::MdmDevice {
         enrollment_id: record.enrollment_id.as_str().to_owned(),
         udid: record.udid.clone(),
@@ -188,8 +202,14 @@ fn device_proto(record: &DeviceRecord) -> proto::MdmDevice {
             .as_ref()
             .map(|install| install.sha256.as_str().to_owned())
             .unwrap_or_default(),
+        baseline_state: baseline_state.into(),
+        baseline_reason,
         host_id: String::new(),
         group: String::new(),
-        baseline: baseline_proto(record).into(),
+        baseline: config_profile_proto(record).into(),
     }
 }
+
+#[cfg(test)]
+#[path = "operator_mdm_tests.rs"]
+mod tests;
