@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 614" width="1200" height="614" role="img" aria-label="The coordinator polls Apple Business Manager with its OAuth session, records serials, defines and assigns the ADE profile, and survives an expired cursor.">
+<title>ABM sync, in the coordinator</title>
+<desc>A timer in the coordinator exchanges its token for a session, fetches changes since the stored cursor, records each serial in the ABM table, assigns the ADE profile to any device without it, and stores the new cursor. An expired or invalid cursor makes the next run a full fetch.</desc>
+<defs><marker id="coordinator-mdm-abm-sync-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker><marker id="coordinator-mdm-abm-sync-ao" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#FD4F1D"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.box-b{fill:#E8EEF4;stroke:#0B0B0A;stroke-width:1.4}
+.box-o{fill:#FFFAF5;stroke:#FD4F1D;stroke-width:1.4}
+.box-t{fill:none;stroke:#FD4F1D;stroke-width:2}
+.box-p{fill:none;stroke:#5A5A57;stroke-width:1.4;stroke-dasharray:6 4}
+.dash{stroke-dasharray:6 4}
+.tb{stroke:#FD4F1D;fill:none;stroke-width:2.2;stroke-dasharray:8 5}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.ln-o{stroke:#FD4F1D;fill:none;stroke-width:1.6}
+.ln-od{stroke:#FD4F1D;fill:none;stroke-width:1.6;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="614" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16" text-anchor="start">ABM sync, in the coordinator</text>
+<rect x="30" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="165" y="64" class="b" text-anchor="middle">Sync task</text>
+<text x="165" y="80" class="t-m" text-anchor="middle">interval, default 300 s</text>
+<path d="M165,92 L165,600" class="life"/>
+<rect x="320" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="455" y="64" class="b" text-anchor="middle">ABM client</text>
+<text x="455" y="80" class="t-m" text-anchor="middle">OAuth 1.0a session</text>
+<path d="M455,92 L455,600" class="life"/>
+<rect x="610" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="745" y="64" class="b" text-anchor="middle">Store</text>
+<text x="745" y="80" class="t-m" text-anchor="middle">abm_devices, cursor</text>
+<path d="M745,92 L745,600" class="life"/>
+<rect x="900" y="44" width="270" height="46" rx="5" class="box-b"/>
+<text x="1035" y="64" class="b" text-anchor="middle">mdmenrollment.apple.com</text>
+<text x="1035" y="80" class="t-m" text-anchor="middle">Apple</text>
+<path d="M1035,92 L1035,600" class="life"/>
+<path d="M165,136 L455,136" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="310" y="130" class="t-m lbl" text-anchor="middle">1. run (single flight, under the store lease)</text>
+<path d="M455,176 L1035,176" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="170" class="t-m lbl" text-anchor="middle">2. GET /session  (only when no live session)</text>
+<path d="M1035,216 L455,216" class="ln-d" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="210" class="t-m lbl" text-anchor="middle">3. X-ADM-Auth-Session</text>
+<path d="M455,256 L745,256" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="600" y="250" class="t-m lbl" text-anchor="middle">4. load cursor</text>
+<path d="M455,296 L1035,296" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="290" class="t-m lbl" text-anchor="middle">5. POST /devices/sync {cursor}</text>
+<path d="M1035,336 L455,336" class="ln-d" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="330" class="t-m lbl" text-anchor="middle">6. devices, more_to_follow, new cursor</text>
+<rect x="190" y="352" width="530" height="25" rx="4" class="box-o"/>
+<text x="455" y="367" class="t-m" text-anchor="middle">cursor expired or invalid (older than 7 days): POST /server/devices, full fetch</text>
+<path d="M455,409 L745,409" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="600" y="403" class="t-m lbl" text-anchor="middle">7. upsert serials; mark disowned (op_type deleted)</text>
+<path d="M455,449 L1035,449" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="443" class="t-m lbl" text-anchor="middle">8. PUT /profile/devices for serials with no profile</text>
+<path d="M1035,489 L455,489" class="ln-d" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="745" y="483" class="t-m lbl" text-anchor="middle">9. per-serial result</text>
+<path d="M455,529 L745,529" class="ln" marker-end="url(#coordinator-mdm-abm-sync-ak)"/>
+<text x="600" y="523" class="t-m lbl" text-anchor="middle">10. store profile_assigned, save the new cursor</text>
+<rect x="187" y="545" width="536" height="25" rx="4" class="box-o"/>
+<text x="455" y="560" class="t-m" text-anchor="middle">token expiry within the alert window: audit + alert (same path as the push cert)</text>
+</svg>
