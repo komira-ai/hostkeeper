@@ -299,20 +299,27 @@ fn a_marker_whose_changes_all_landed_is_removed_at_start_on_the_database() {
     );
 }
 
+/// A client of the database, as the test's own, with the coordinator's schema first on its
+/// search path.
+fn in_schema(database: &Database) -> postgres::Client {
+    let mut session = client(Some(database.name()));
+    session
+        .batch_execute("SET search_path TO hostkeeper")
+        .expect("the schema");
+    session
+}
+
 /// Runs `sql` on the database, as the test's own client.
 fn run(database: &Database, sql: &str) {
-    client(Some(database.name()))
+    in_schema(database)
         .batch_execute(sql)
         .expect("the statements run");
 }
 
 /// The versions `schema_version` holds.
 fn schema_versions(database: &Database) -> Vec<i32> {
-    client(Some(database.name()))
-        .query(
-            "SELECT version FROM hostkeeper.schema_version ORDER BY version",
-            &[],
-        )
+    in_schema(database)
+        .query("SELECT version FROM schema_version ORDER BY version", &[])
         .expect("schema_version")
         .iter()
         .map(|row| row.get(0))
@@ -353,8 +360,8 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
     // The schema of 0.1.252: `0009` taken back, its column and its `schema_version` row.
     run(
         &database,
-        "ALTER TABLE hostkeeper.services DROP COLUMN repository; \
-         DELETE FROM hostkeeper.schema_version WHERE version = 9",
+        "ALTER TABLE services DROP COLUMN repository; \
+         DELETE FROM schema_version WHERE version = 9",
     );
     assert_eq!(schema_versions(&database), (1..=8).collect::<Vec<i32>>());
     assert!(!services_have_repository(&database));
@@ -389,7 +396,7 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     drop(start(args.clone()));
     database.lock_is_free();
 
-    let put = "INSERT INTO hostkeeper.schema_version (version, name, older_releases) \
+    let put = "INSERT INTO schema_version (version, name, older_releases) \
                VALUES (10, 'from_the_future', ";
     run(&database, &format!("{put}'refuse')"));
     let why = refusal(args.clone());
@@ -400,10 +407,7 @@ fn a_serve_refuses_a_database_newer_than_this_release() {
     );
     database.lock_is_free();
 
-    run(
-        &database,
-        "DELETE FROM hostkeeper.schema_version WHERE version = 10",
-    );
+    run(&database, "DELETE FROM schema_version WHERE version = 10");
     run(&database, &format!("{put}'may-run')"));
     drop(start(args));
 }
