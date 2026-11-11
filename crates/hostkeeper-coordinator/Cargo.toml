@@ -42,6 +42,9 @@ hostkeeper-mdm-gate = { path = "../hostkeeper-mdm-gate" }
 # The MDM push side: the push certificate and its request, the mdmcert.download request and the
 # APNs sender and push policy (`src/mdm_push.rs`).
 hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push" }
+# The check-in, result and command messages of the Macs' MDM protocol, which the listener's
+# `/checkin` and `/mdm` routes read (`src/mdm_server`).
+hostkeeper-mdm-server = { path = "../hostkeeper-mdm-server" }
 hostkeeper-oidc = { path = "../hostkeeper-oidc" }
 # The messages and refusals of the operator's calls, the orders a typed heartbeat answer
 # carries, and the messages of `Enroll`, `Poll` and `Renew`.

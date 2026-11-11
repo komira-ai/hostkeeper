@@ -888,7 +888,7 @@ async fn a_gate_does_not_open_over_a_record_it_cannot_read_and_shows_no_key() {
     let gate = support::open(&dir, &hub, &clock).expect("opens");
     let shown = format!("{gate:?}");
     assert!(
-        shown.starts_with("Gate { nanohub: NanoHub { url: ApiUrl {"),
+        shown.starts_with("Gate { queue: NanoHub { url: ApiUrl {"),
         "{shown}"
     );
     assert!(

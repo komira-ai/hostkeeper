@@ -163,6 +163,7 @@ pub(crate) mod login_routes;
 pub mod mdm;
 pub mod mdm_push;
 pub mod mdm_secrets;
+pub(crate) mod mdm_server;
 pub mod mdm_settings;
 pub mod mdm_setup;
 pub mod membership;

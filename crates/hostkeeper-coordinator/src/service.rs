@@ -254,6 +254,8 @@ pub struct Coordinator {
     enrollment: Option<Arc<Enrollment>>,
     /// The MDM policy gate; `None` without `--mdm-api-url`.
     pub(crate) mdm: Option<Arc<crate::mdm::Mdm>>,
+    /// The MDM server of the Macs' listener (`--mdm-listen`); `None` without it.
+    pub(crate) mdm_server: Option<Arc<crate::mdm_server::MdmServer>>,
     /// The MDM setup: the sealed secrets and the settings ([`crate::mdm_setup`]).
     pub(crate) mdm_setup: Arc<crate::mdm_setup::MdmSetup>,
     /// Where the request for a push certificate is posted to mdmcert.download
@@ -316,6 +318,7 @@ impl Coordinator {
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
+            mdm_server: None,
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             mdmcert: Arc::new(crate::mdm_push::NoMdmcert),
             initial_admin: None,
