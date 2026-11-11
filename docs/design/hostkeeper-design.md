@@ -73,7 +73,7 @@ hostkeeper replaces all of that with one daemon per host, one coordinator per fa
 
 ## 3. The design in one picture
 
-![Components and trust boundaries: coordinator with service assignment, one root daemon per host with its daemon config, the signed package, hook, service, trusted signer, release channel, operator and CI, with the trust boundary drawn at each crossing](diagrams/components-and-trust.svg)
+![Components and trust boundaries: coordinator with service assignment, one root daemon per host with its daemon config, the signed package, hook, service, trusted signer, package repository, operator and CI, with the trust boundary drawn at each crossing](diagrams/components-and-trust.svg)
 
 - **The coordinator** (`hostkeeper-coordinator serve`) holds which services each host or role runs, the desired version and `min_version` of each service, the farm's membership and the operator's marks (excluded hosts, holds, halts, bad versions). The rollout gate (section 5.4) decides, per heartbeat, whether to order a host to do something. An order is a verb and typed arguments. It also serves the operator API (section 4.8), which the generated CLI and the UI both call.
 - **The daemon** (`hostkeeper`) runs on every host as root. It connects out to the coordinator over mutual TLS, heartbeats, and executes orders. It listens on no network port. Its local interface is a root-only unix socket for three verbs (`status`, `abort`, `clear_record`, section 4.1). It executes only the verbs compiled into it (section 4.1).
@@ -314,7 +314,7 @@ Holds show on the Fleet and Holds pages and in `Hosts.Get` and `Services.List`.
 
 ### 5.5 Fetching, verifying and unpacking a package
 
-A package is fetched by the host's package tool from the project's repository or installer store, and its attestation is checked when it is published ([packages-native.md](packages-native.md), sections 10.1, 10.3 and 10.7). The release channel, the release index and hostkeeper's archive format are deleted. The platforms a release is built for are in [verify-a-release.md](../deploy/verify-a-release.md); the downgrade bound is still the coordinator's `min_version` (Q13).
+A package is fetched by the host's package tool from the project's repository or installer store, and its attestation is checked when it is published ([packages-native.md](packages-native.md), sections 10.1, 10.3 and 10.7). The release channel, the release index and hostkeeper's archive format are deleted. On the lab LAN the coordinator offers a caching pass-through for the apt repository and the macOS pkg (design: [package-proxy.md](package-proxy.md), **Designed**, not built); clients still verify every byte themselves, so the proxy can only serve bytes or refuse to, and the tailnet-only download server it replaces is retired by the owner's steps in package-proxy.md section 6. The platforms a release is built for are in [verify-a-release.md](../deploy/verify-a-release.md); the downgrade bound is still the coordinator's `min_version` (Q13).
 
 ### 5.6 Force: the fleet-wide fix
 
@@ -439,7 +439,7 @@ The flow is the same; these differ (a Linux host under OpenRC, an Alpine host, i
 | Package verification | attestation, archive shape | plus no quarantine attribute and a valid code signature | as Linux |
 | Self-update | the hand-over: the old binary execs the new one, three tries (no unit) | the same, under launchd `KeepAlive` (no timer job) | the same, under supervise-daemon's respawn of the packaged binary, which execs `current` |
 
-Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall loads the launchd job, whose daemon writes `hostkeeper.toml` from that profile at its start; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
+Mac enrollment auto-approval, designed: the gate installs a managed config profile (coordinator, CA hash, release channel and trusted signers; no secret), then the hostkeeper installer pkg by allowlisted digest; the pkg's postinstall loads the launchd job, whose daemon writes `hostkeeper.toml` from that profile at its start; once the daemon's request is pending the gate pushes a per-device one-time nonce, bound to that request, as a managed configuration profile; the daemon enrolls with the nonce; the coordinator auto-approves only if the nonce is valid, unexpired (one hour), unused, consumed in the same durable transaction as the approval, issued for the claimed serial and the request, the gate reports the device enrolled and supervised, and the serial is on the allowlist. **MDM is part of hostkeeper, decided:** the policy gate and installer kit are components of this repository with their own design document, [hostkeeper-mdm.md](hostkeeper-mdm.md); this document states only the interface the enrollment path needs. The MDM server itself is designed to run inside the coordinator: [coordinator-mdm.md](coordinator-mdm.md), which supersedes parts of hostkeeper-mdm.md. The MDM profile identifier is renamed to `com.komira.hostkeeper.mdm`, the farm's setting, before any Mac enrolls (a build gate on B18).
 
 ### 5.10 The UI
 
@@ -712,7 +712,7 @@ Naming: `updater` names (`/var/lib/updater/{state,hooks}`, unit names, reserved 
 - A coordinator high-availability build: coordinator-storage.md section 7 designs a standby by advisory lock, and does not build it.
 - Automated rollback rehearsal in every release.
 - TPM-based hardware identity for enrollment.
-- Power control through the BMC. The BMC MAC of each inventory record (section 5.7) is kept for it: the host's out-of-band handle, to find the BMC's address and power-cycle a host that stopped answering.
+- Power control through the BMC. The BMC MAC of each inventory record (section 5.7) is kept for it: the host's out-of-band handle, to find the BMC's address and power-cycle a host that stopped answering. Designed in [console-broker.md](console-broker.md): through the coordinator's operator API and web UI, a serial console (IPMI SOL on COM2), power and boot device for each Linux server, and a desktop (Screen Sharing) for each Mac, with no relay and no new daemon code.
 
 ### 12.2 Build order, from today's code to done
 
@@ -837,7 +837,7 @@ Built as (b), with the BMC MAC required only of a record that holds one, and the
 - **Placed path:** a system path (a unit, or a `files/` entry) that the daemon links from `current`; `placed.json` records which package owns it, and a second claim is refused.
 - **Platform:** one operating system and CPU family a package is built for: `linux-x86_64`, `linux-arm64` or `macos-arm64`. The daemon's own is the target it was compiled for.
 - **Promotion pending:** the update succeeded but the hook cannot yet call it final; the coordinator holds the slot.
-- **Release channel:** the daemon config's `release_channel` key, kept for the packages that were served from it; deleted with hostkeeper's archive format (section 5.5).
+- **Release channel:** the daemon config's `release_channel` key, kept for the packages that were served from it; deleted with hostkeeper's archive format (section 5.5). The package channel for the lab LAN is the coordinator's package proxy ([package-proxy.md](package-proxy.md), **Designed**).
 - **Release index:** `index.json` of one service version, per platform the package file, its size and its SHA-256; no longer built (section 5.5).
 - **Rollout gate:** the coordinator's `decide()`: halts, excluded hosts, holds, bad versions, the quiet start, one update on a host at a time, then the service's update plan (pause, the other services' live rollouts, the stage, `max_updating`, `min_up`, bake). Order construction (`install` or `update`, up to date, backoff) is outside it.
 - **Role:** a label on a host (1 to 32 bytes, `a-z0-9-`) used by service assignment and Force targets.

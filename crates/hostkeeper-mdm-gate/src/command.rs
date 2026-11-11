@@ -9,14 +9,17 @@ use plist::{Dictionary, Value};
 
 use crate::ids::CommandUuid;
 
-/// The five command types the gate sends (design section 3): the two queries it asks a new
-/// device, and the profile and package commands the enrollment side sends.
-pub const COMMAND_TYPES: [&str; 5] = [
+/// The seven command types the gate sends (design section 3): the two queries it asks a new
+/// device, the profile and package commands the enrollment side sends, and the two commands of
+/// the enrollment baseline (design section 6.4).
+pub const COMMAND_TYPES: [&str; 7] = [
     "DeviceInformation",
     "SecurityInfo",
     "InstallProfile",
     "RemoveProfile",
     "InstallEnterpriseApplication",
+    "EnableRemoteDesktop",
+    "ProfileList",
 ];
 
 /// `DeviceInformation`, whose answer decides a device's serial and supervision.
@@ -34,6 +37,14 @@ pub const REMOVE_PROFILE: &str = "RemoveProfile";
 
 /// `InstallEnterpriseApplication`, which installs the hostkeeper pkg by its inline manifest.
 pub const INSTALL_ENTERPRISE_APPLICATION: &str = "InstallEnterpriseApplication";
+
+/// `EnableRemoteDesktop`, which turns Screen Sharing on for a supervised Mac (Apple's
+/// `mdm/commands/remotedesktop.enable.yaml`: no keys, `supervised: true`).
+pub const ENABLE_REMOTE_DESKTOP: &str = "EnableRemoteDesktop";
+
+/// `ProfileList`, which lists the profiles installed on a Mac (Apple's
+/// `mdm/commands/profile.list.yaml`); the baseline's check reads its `ProfileList` answer.
+pub const PROFILE_LIST: &str = "ProfileList";
 
 /// The queries of `DeviceInformation`: the serial, the UDID and the supervision.
 pub const QUERIES: [&str; 3] = ["SerialNumber", "UDID", "IsSupervised"];
@@ -97,6 +108,22 @@ impl Command {
         let mut fields = Dictionary::new();
         fields.insert("Manifest".to_owned(), Value::Dictionary(manifest));
         Self::new(INSTALL_ENTERPRISE_APPLICATION, uuid, fields)
+    }
+
+    /// `EnableRemoteDesktop`, which takes no keys.
+    #[must_use]
+    pub fn enable_remote_desktop(uuid: CommandUuid) -> Self {
+        Self::new(ENABLE_REMOTE_DESKTOP, uuid, Dictionary::new())
+    }
+
+    /// `ProfileList` of every installed profile (`ManagedOnly` false, so a profile the Mac
+    /// holds from another source is listed too, and a baseline profile is judged by its
+    /// identifier alone).
+    #[must_use]
+    pub fn profile_list(uuid: CommandUuid) -> Self {
+        let mut fields = Dictionary::new();
+        fields.insert("ManagedOnly".to_owned(), Value::Boolean(false));
+        Self::new(PROFILE_LIST, uuid, fields)
     }
 
     /// The request type.
