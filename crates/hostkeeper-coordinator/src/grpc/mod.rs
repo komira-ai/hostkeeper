@@ -256,7 +256,6 @@ pub(crate) const SESSION_ONLY: &[&str] = &[
     MDM_CREATE_PUSH_REQUEST,
     MDM_PUT_PUSH_REPLY,
     MDM_PUT_PUSH_CERTIFICATE,
-    MDM_PUT_NAME,
 ];
 
 /// The credential step of a gRPC call, or a gateway call, of `path` on `surface` from `peer`
