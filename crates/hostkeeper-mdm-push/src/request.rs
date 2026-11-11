@@ -11,14 +11,14 @@
 //!
 //! Keys are written as PKCS#1 PEM (`BEGIN RSA PRIVATE KEY`), as the migrated key is.
 
-use rand_core::OsRng;
+use rand_core_legacy::OsRng;
 use rcgen::{
     CertificateParams, DistinguishedName, DnType, DnValue, ExtendedKeyUsagePurpose, KeyPair,
     KeyUsagePurpose, PKCS_RSA_SHA256, SanType,
 };
-use rsa09::RsaPrivateKey;
-use rsa09::pkcs1::EncodeRsaPrivateKey as _;
-use rsa09::pkcs8::{EncodePrivateKey as _, LineEnding};
+use rsa_legacy::RsaPrivateKey;
+use rsa_legacy::pkcs1::EncodeRsaPrivateKey as _;
+use rsa_legacy::pkcs8::{EncodePrivateKey as _, LineEnding};
 use rustls::pki_types::PrivatePkcs8KeyDer;
 
 use crate::KeyBytes;

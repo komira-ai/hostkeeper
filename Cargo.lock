@@ -1633,6 +1633,7 @@ dependencies = [
  "hostkeeper-enrollment",
  "hostkeeper-mdm-gate",
  "hostkeeper-mdm-push",
+ "hostkeeper-mdm-server",
  "hostkeeper-oidc",
  "hostkeeper-proto",
  "hostkeeper-release",
@@ -1652,6 +1653,7 @@ dependencies = [
  "protox",
  "rcgen",
  "ring",
+ "rsa 0.10.0",
  "rsa 0.9.10",
  "rustls",
  "rustls-native-certs",
@@ -1923,6 +1925,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.23.1",
  "bytes",
+ "futures",
  "hostkeeper-config",
  "hostkeeper-enrollment",
  "hostkeeper-install",

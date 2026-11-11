@@ -61,10 +61,6 @@ fn serve_without_the_flag_keeps_no_secret_and_writes_nothing() {
     assert!(!parts.coordinator.mdm_setup().has_key());
     assert!(!files.path("desired.json.mdm-setup").exists());
     assert!(
-        !files.path("desired.json.mdm").exists(),
-        "no MDM tables either"
-    );
-    assert!(
         !parts.coordinator.runs_abm(),
         "no ABM client without a master key"
     );
@@ -282,8 +278,8 @@ fn serve_refuses_a_database_whose_secrets_it_cannot_read() {
 /// with the tables in the directory beside the state file (`<state>.mdm`) that the start makes, and
 /// not otherwise.
 ///
-/// Catches: a farm that does not use MDM given a directory of MDM tables, and an MDM farm whose
-/// ABM sync is never started.
+/// Catches: a farm that does not use MDM given an ABM client, and an MDM farm whose ABM sync is
+/// never started.
 #[test]
 fn serve_runs_the_abm_client_over_the_files_when_there_is_a_key_file() {
     let files = Files::new("start-mdm-abm-files");

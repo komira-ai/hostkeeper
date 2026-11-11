@@ -15,8 +15,8 @@ use hostkeeper_mdm_push::testkit::{
 };
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
-use rsa09::RsaPrivateKey;
-use rsa09::pkcs1::DecodeRsaPrivateKey as _;
+use rsa_legacy::RsaPrivateKey;
+use rsa_legacy::pkcs1::DecodeRsaPrivateKey as _;
 use sha2::Digest as _;
 
 use crate::login_support::World;

@@ -582,7 +582,28 @@ fn what_was_written_is_there_after_a_restart(subject: &dyn Subject) -> Outcome {
     )
 }
 
-const CLAUSES: [(&str, Clause); 9] = [
+fn queued_commands_name_only_live_enrollments(subject: &dyn Subject) -> Outcome {
+    let s = subject.live();
+    let s = &*s;
+    store(s.replace_live(&enrollment("e1", "SER1", None, 1)))?;
+    store(s.replace_live(&enrollment("e2", "SER2", None, 1)))?;
+    store(s.replace_live(&enrollment("e3", "SER3", None, 1)))?;
+    for (id, owner) in [("a", "e2"), ("b", "e2"), ("c", "e3"), ("d", "e1")] {
+        store(s.enqueue(&command(id, owner, b"p", 2)))?;
+    }
+    store(s.claim("e1", &[], 5))?;
+    store(s.check_out("e3", 6))?;
+    let ids = store(s.enrollments_with_queued())?;
+    check(ids == ["e2".to_owned()], || {
+        format!("named {ids:?}: e1 has none queued, e3 is checked out, e2 once")
+    })
+}
+
+const CLAUSES: [(&str, Clause); 10] = [
+    (
+        "queued_commands_name_only_live_enrollments",
+        queued_commands_name_only_live_enrollments,
+    ),
     (
         "one_live_enrollment_per_serial",
         one_live_enrollment_per_serial,
@@ -655,6 +676,7 @@ impl MdmStore for Handle {
         requeue_timed_out(before: i64) -> Result<Vec<(String, String)>, MdmError>;
         command(id: &str) -> Result<Option<Command>, MdmError>;
         commands(id: &str) -> Result<Vec<Command>, MdmError>;
+        enrollments_with_queued() -> Result<Vec<String>, MdmError>;
         abm_apply(b: &AbmBatch) -> Result<(), MdmError>;
         abm_device(serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         abm_devices() -> Result<Vec<AbmDevice>, MdmError>;
@@ -828,6 +850,7 @@ impl MdmStore for Flawed {
         enqueue(c: &NewCommand) -> Result<Enqueued, MdmError>;
         command(id: &str) -> Result<Option<Command>, MdmError>;
         commands(id: &str) -> Result<Vec<Command>, MdmError>;
+        enrollments_with_queued() -> Result<Vec<String>, MdmError>;
         abm_apply(b: &AbmBatch) -> Result<(), MdmError>;
         abm_device(serial: &str) -> Result<Option<AbmDevice>, MdmError>;
         abm_devices() -> Result<Vec<AbmDevice>, MdmError>;

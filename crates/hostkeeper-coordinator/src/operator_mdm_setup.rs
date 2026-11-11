@@ -35,8 +35,14 @@ use crate::service::Coordinator;
 impl Coordinator {
     /// The same coordinator keeping the MDM setup in `setup`.
     #[must_use]
-    pub fn with_mdm_setup(mut self, setup: MdmSetup) -> Self {
-        self.mdm_setup = Arc::new(setup);
+    pub fn with_mdm_setup(self, setup: MdmSetup) -> Self {
+        self.with_shared_mdm_setup(Arc::new(setup))
+    }
+
+    /// The same coordinator keeping the MDM setup in `setup`, which the MDM server shares.
+    #[must_use]
+    pub fn with_shared_mdm_setup(mut self, setup: Arc<MdmSetup>) -> Self {
+        self.mdm_setup = setup;
         self
     }
 

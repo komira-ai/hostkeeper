@@ -213,9 +213,6 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 abm_not_after_unix: Some(1_825_020_096),
                 tls_not_after_unix: Some(1_850_000_000),
                 tls_names: vec!["mdm.example.com".to_owned()],
-                abm_last_sync_unix: Some(1_800_000_000),
-                abm_sync_error: "ABM refused the timestamp (timestamp_refused)".to_owned(),
-                abm_unavailable: true,
             }),
         ),
         (

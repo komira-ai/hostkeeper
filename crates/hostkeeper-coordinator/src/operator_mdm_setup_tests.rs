@@ -390,6 +390,10 @@ fn a_setting_is_judged_audited_and_listed() {
             ("proxy_index_ttl_s", "300", true),
             ("proxy_cache_max_bytes", "21474836480", true),
             ("proxy_fetches", "8", true),
+            ("abm_sync_s", "300", true),
+            ("abm_request_timeout_s", "30", true),
+            ("abm_retries", "3", true),
+            ("ade_profile_name", "Komira MDM", true),
         ]
     );
     assert_eq!(

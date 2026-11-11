@@ -176,6 +176,20 @@ enum MdmRefusal {
   // INVALID_ARGUMENT: the certificate in use has another topic: every enrollment carries it, so a
   // renewal keeps it.
   MDM_REFUSAL_TOPIC_CHANGED = 16;
+  // FAILED_PRECONDITION: this coordinator has no ABM client.
+  MDM_REFUSAL_ABM_UNAVAILABLE = 17;
+  // FAILED_PRECONDITION: a `.p7m` was uploaded and no `abm_key` is held to open it.
+  MDM_REFUSAL_ABM_KEY_MISSING = 18;
+  // INVALID_ARGUMENT: the `.p7m` is not a CMS message encrypted to the `abm_key` held.
+  MDM_REFUSAL_ABM_TOKEN_UNREADABLE = 19;
+  // FAILED_PRECONDITION: Apple refused the token's signature (`signature_invalid`): the parts do
+  // not belong together, or the token was revoked.
+  MDM_REFUSAL_ABM_CREDENTIAL_REFUSED = 20;
+  // FAILED_PRECONDITION: Apple refused the timestamp (`timestamp_refused`): the clock of the
+  // machine the coordinator runs on is an hour or more off.
+  MDM_REFUSAL_ABM_CLOCK_REFUSED = 21;
+  // UNAVAILABLE: no answer came from Apple, or it answered something the call cannot use.
+  MDM_REFUSAL_ABM_UNREACHABLE = 22;
 }
 
 // One condition of the setup that is not met, which keeps it from being `configured`. The token

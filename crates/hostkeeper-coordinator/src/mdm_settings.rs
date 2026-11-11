@@ -35,7 +35,7 @@ pub struct Setting {
 }
 
 /// Every setting this release knows, in the order the status lists them.
-pub const SETTINGS: [Setting; 13] = [
+pub const SETTINGS: [Setting; 17] = [
     // The days before the push certificate expires at which an alert is raised.
     Setting {
         name: "push_alert_days",
@@ -129,6 +129,35 @@ pub const SETTINGS: [Setting; 13] = [
         name: "proxy_fetches",
         default: "8",
         shape: Shape::Whole { min: 1, max: 1024 },
+    },
+    // Seconds between two passes of the ABM sync (`docs/design/coordinator-mdm.md`, 4.5): one
+    // request when nothing changed.
+    Setting {
+        name: "abm_sync_s",
+        default: "300",
+        shape: Shape::Whole {
+            min: 60,
+            max: 86_400,
+        },
+    },
+    // Seconds one request to ABM may take, connecting to the last byte of the answer.
+    Setting {
+        name: "abm_request_timeout_s",
+        default: "30",
+        shape: Shape::Whole { min: 5, max: 300 },
+    },
+    // How many times a request ABM answered 429 is made again, each after the wait its
+    // `Retry-After` names (never longer than one sync interval).
+    Setting {
+        name: "abm_retries",
+        default: "3",
+        shape: Shape::Whole { min: 0, max: 10 },
+    },
+    // The name of the ADE profile the sync defines at ABM.
+    Setting {
+        name: "ade_profile_name",
+        default: "Komira MDM",
+        shape: Shape::Name,
     },
 ];
 
@@ -227,6 +256,13 @@ pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u6
     find(name)
         .and_then(|setting| parse_whole(value_of(set, setting)))
         .unwrap_or(fallback)
+}
+
+/// The text of the setting `name` among the `set` ones: what was set or its default, and none for
+/// a name this release does not know.
+#[must_use]
+pub fn text_of<'a>(set: &'a BTreeMap<String, String>, name: &str) -> Option<&'a str> {
+    find(name).map(|setting| value_of(set, setting))
 }
 
 #[cfg(test)]

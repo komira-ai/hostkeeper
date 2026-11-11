@@ -13,6 +13,7 @@
 
 pub mod beats;
 pub mod database;
+pub mod mdm;
 pub mod readers;
 pub mod replay;
 pub mod rig;
@@ -425,6 +426,7 @@ impl Farm {
             heartbeat_listen: HEARTBEAT_ADDR.parse().expect("an address"),
             control_listen: CONTROL_ADDR.parse().expect("an address"),
             lan_listen: None,
+            mdm_listen: None,
             health_listen: None,
             reload,
             lock: hostkeeper_coordinator::lock::LockGuard::new(()),

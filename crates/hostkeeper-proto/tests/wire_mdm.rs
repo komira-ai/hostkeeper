@@ -282,6 +282,12 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("key_mismatch", 14),
             ("certificate_expired", 15),
             ("topic_changed", 16),
+            ("abm_unavailable", 17),
+            ("abm_key_missing", 18),
+            ("abm_token_unreadable", 19),
+            ("abm_credential_refused", 20),
+            ("abm_clock_refused", 21),
+            ("abm_unreachable", 22),
         ])
     );
     assert_eq!(

@@ -179,10 +179,14 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
         MdmRefusal::StoreFailed => Code::Internal,
         MdmRefusal::AuditUnavailable => Code::Unavailable,
-        MdmRefusal::SecretsUnavailable | MdmRefusal::NameLocked | MdmRefusal::NoPendingRequest => {
-            Code::FailedPrecondition
-        }
-        MdmRefusal::MdmcertUnavailable => Code::Unavailable,
+        MdmRefusal::SecretsUnavailable
+        | MdmRefusal::NameLocked
+        | MdmRefusal::NoPendingRequest
+        | MdmRefusal::AbmUnavailable
+        | MdmRefusal::AbmKeyMissing
+        | MdmRefusal::AbmCredentialRefused
+        | MdmRefusal::AbmClockRefused => Code::FailedPrecondition,
+        MdmRefusal::MdmcertUnavailable | MdmRefusal::AbmUnreachable => Code::Unavailable,
         MdmRefusal::ReplyUndecryptable
         | MdmRefusal::ReplyNotForRequest
         | MdmRefusal::CertificateInvalid

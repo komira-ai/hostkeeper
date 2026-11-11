@@ -39,7 +39,7 @@ use crate::command::{Command, DEVICE_INFORMATION, PROFILE_LIST, SECURITY_INFO};
 use crate::enroll::{EnrollSide, Held};
 use crate::event::Event;
 use crate::ids::{CommandUuid, EnrollmentId, shown};
-use crate::nanohub::{EnqueueError, NanoHub};
+use crate::nanohub::{CommandQueue, EnqueueError};
 use crate::pkg::Install;
 use crate::record::{DeviceRecord, NonceRecord, Phase, Sent};
 use crate::store::{DeviceStore, StoreError};
@@ -86,7 +86,7 @@ pub enum Handled {
 /// The gate's device side.
 pub struct Gate {
     store: Box<dyn DeviceStore>,
-    nanohub: NanoHub,
+    queue: Box<dyn CommandQueue>,
     clock: Arc<dyn UnixClock>,
     random: Random,
     devices: Mutex<BTreeMap<EnrollmentId, DeviceRecord>>,
@@ -107,20 +107,20 @@ pub struct Gate {
 impl std::fmt::Debug for Gate {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Gate")
-            .field("nanohub", &self.nanohub)
+            .field("queue", &self.queue)
             .finish_non_exhaustive()
     }
 }
 
 impl Gate {
-    /// The gate over the records of `store`, queueing commands through `nanohub`, reading the
+    /// The gate over the records of `store`, queueing commands through `queue`, reading the
     /// time from `clock` and drawing command UUIDs from `random`.
     ///
     /// # Errors
     /// [`StoreError`]: a record cannot be read or is not whole; the gate does not start.
     pub fn open(
         store: Box<dyn DeviceStore>,
-        nanohub: NanoHub,
+        queue: impl CommandQueue + 'static,
         clock: Arc<dyn UnixClock>,
         random: Random,
     ) -> Result<Self, StoreError> {
@@ -131,7 +131,7 @@ impl Gate {
             .collect();
         Ok(Self {
             store,
-            nanohub,
+            queue: Box::new(queue),
             clock,
             random,
             devices: Mutex::new(devices),
@@ -322,7 +322,7 @@ impl Gate {
         id: &EnrollmentId,
         command: &Command,
     ) -> Result<(), EnqueueError> {
-        let queued = self.nanohub.enqueue(id, command).await.inspect_err(|why| {
+        let queued = self.queue.enqueue(id, command).await.inspect_err(|why| {
             tracing::warn!(enrollment_id = %id, command = command.request_type(), %why,
                 "NanoHUB did not queue the command; it is asked again at the device's next check-in");
         })?;

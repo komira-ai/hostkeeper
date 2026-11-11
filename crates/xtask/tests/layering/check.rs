@@ -100,7 +100,7 @@ pub const LAYERS: [Layer; 36] = [
     (
         COORDINATOR,
         &[
-            CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, OIDC, PROTO, RELEASE, TLS, WIRE,
+            CONFIG, ENROLLMENT, MDM_GATE, MDM_PUSH, MDM_SERVER, OIDC, PROTO, RELEASE, TLS, WIRE,
         ],
         &[MDM_PUSH, OIDC],
     ),

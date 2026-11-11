@@ -2,13 +2,13 @@
 
 use std::collections::BTreeMap;
 
-use super::{SETTINGS, find, list_of, number_of, value_of, whole_of};
+use super::{SETTINGS, find, list_of, number_of, text_of, value_of, whole_of};
 
 fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these thirteen, each with its default from the start
+/// Proves: the settings this release knows are these seventeen, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -31,6 +31,10 @@ fn each_setting_has_a_default_from_the_start() {
             ("proxy_index_ttl_s", "300"),
             ("proxy_cache_max_bytes", "21474836480"),
             ("proxy_fetches", "8"),
+            ("abm_sync_s", "300"),
+            ("abm_request_timeout_s", "30"),
+            ("abm_retries", "3"),
+            ("ade_profile_name", "Komira MDM"),
         ]
     );
     for setting in SETTINGS {
@@ -203,4 +207,56 @@ fn a_proxy_setting_is_a_whole_number_in_its_range() {
     set.insert("proxy_fetches".to_owned(), "many".to_owned());
     assert_eq!(whole_of(&set, "proxy_fetches", 99), 99);
     assert_eq!(whole_of(&set, "nothing", 5), 5);
+}
+
+/// Proves: the counts of the ABM sync are whole numbers within their range, written without leading
+/// zeros, and refused outside it or with anything but digits; `number_of` reads one with the
+/// fallback `number_of` gives.
+///
+/// Catches: a sync interval of zero (a request in a loop) or of a week that nothing would notice.
+#[test]
+fn the_counts_of_the_abm_sync_are_judged_within_their_range() {
+    assert_eq!(check("abm_sync_s", " 0300 ").as_deref(), Some("300"));
+    assert_eq!(check("abm_sync_s", "60").as_deref(), Some("60"));
+    assert_eq!(check("abm_sync_s", "86400").as_deref(), Some("86400"));
+    for bad in ["59", "86401", "-1", "1.5", "", "x"] {
+        assert_eq!(check("abm_sync_s", bad), None, "{bad:?}");
+    }
+    assert_eq!(check("abm_request_timeout_s", "5").as_deref(), Some("5"));
+    assert_eq!(check("abm_request_timeout_s", "301"), None);
+    assert_eq!(check("abm_retries", "0").as_deref(), Some("0"));
+    assert_eq!(check("abm_retries", "10").as_deref(), Some("10"));
+    assert_eq!(check("abm_retries", "11"), None);
+    let mut set = BTreeMap::new();
+    assert_eq!(number_of(&set, "abm_sync_s", 1), 300);
+    set.insert("abm_sync_s".to_owned(), "120".to_owned());
+    assert_eq!(number_of(&set, "abm_sync_s", 1), 120);
+    set.insert("abm_sync_s".to_owned(), "soon".to_owned());
+    assert_eq!(number_of(&set, "abm_sync_s", 1), 1);
+}
+
+/// Proves: the profile name is 1 to 64 printable characters (space and non-ASCII letters allowed),
+/// kept as written but for the whitespace around it, and refused empty, over 64 characters or with
+/// a control character; `text_of` reads a setting's text, its default when unset, and none for a
+/// name this release does not know.
+///
+/// Catches: a profile name ABM would refuse and a sync that then fails every five minutes.
+#[test]
+fn the_profile_name_is_a_short_printable_text() {
+    assert_eq!(
+        check("ade_profile_name", "  Mac Ünit 1 ").as_deref(),
+        Some("Mac Ünit 1")
+    );
+    assert_eq!(
+        check("ade_profile_name", &"n".repeat(64)).as_deref(),
+        Some(&*"n".repeat(64))
+    );
+    for bad in ["", "   ", &"n".repeat(65), "a\nb", "tab\there"] {
+        assert_eq!(check("ade_profile_name", bad), None, "{bad:?}");
+    }
+    let mut set = BTreeMap::new();
+    assert_eq!(text_of(&set, "ade_profile_name"), Some("Komira MDM"));
+    set.insert("ade_profile_name".to_owned(), "Other".to_owned());
+    assert_eq!(text_of(&set, "ade_profile_name"), Some("Other"));
+    assert_eq!(text_of(&set, "nothing"), None);
 }
