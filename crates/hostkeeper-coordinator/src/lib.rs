@@ -118,6 +118,7 @@ pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
+mod alerts_mdm;
 pub mod assign;
 pub mod assignment;
 pub mod audit_actions;
@@ -164,10 +165,11 @@ pub(crate) mod login_routes;
 pub mod mdm;
 pub(crate) mod mdm_acme;
 pub(crate) mod mdm_certs;
+pub(crate) mod mdm_enroll;
 pub(crate) mod mdm_name;
 pub mod mdm_push;
 pub mod mdm_secrets;
-pub(crate) mod mdm_server;
+mod mdm_server;
 pub mod mdm_settings;
 pub mod mdm_setup;
 pub mod mdm_status;
@@ -181,6 +183,7 @@ pub mod operator_accounts;
 pub mod operator_enrollment;
 pub mod operator_host_groups;
 pub mod operator_mdm;
+mod operator_mdm_enroll;
 pub mod operator_mdm_push;
 #[cfg(test)]
 #[path = "operator_mdm_push_cert_tests.rs"]

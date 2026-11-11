@@ -354,6 +354,26 @@ impl MdmState {
         ids
     }
 
+    pub(crate) fn identities_expiring(&self, before_unix: i64) -> Vec<(String, i64)> {
+        let mut expiring: Vec<(String, i64)> = self
+            .enrollments
+            .values()
+            .filter(|e| e.state == EnrollmentState::Live)
+            .filter_map(|e| {
+                let cert = e.cert_sha256.as_deref()?;
+                self.identities
+                    .values()
+                    .filter(|i| i.state == IdentityState::Issued)
+                    .filter_map(|i| i.issued.as_ref().map(|issued| (&e.serial, issued)))
+                    .find(|(_, issued)| issued.cert_sha256 == cert)
+                    .map(|(serial, issued)| (serial.clone(), issued.not_after_unix))
+            })
+            .filter(|(_, not_after)| *not_after < before_unix)
+            .collect();
+        expiring.sort_by(|a, b| (a.1, &a.0).cmp(&(b.1, &b.0)));
+        expiring
+    }
+
     pub(crate) fn abm_apply(&mut self, batch: &AbmBatch) {
         for device in &batch.upserts {
             let first_seen_unix = self

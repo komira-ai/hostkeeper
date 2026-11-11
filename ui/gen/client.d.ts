@@ -59,6 +59,8 @@ export interface Client {
     verify(request: hostkeeper_operator_v1.VerifyRequest): Promise<hostkeeper_operator_v1.VerifyResponse>;
     putAbmToken(request: hostkeeper_operator_v1.PutAbmTokenRequest): Promise<hostkeeper_operator_v1.PutAbmTokenResponse>;
     getAbmPublicKey(request: hostkeeper_operator_v1.GetAbmPublicKeyRequest): Promise<hostkeeper_operator_v1.GetAbmPublicKeyResponse>;
+    listEnrollmentRequests(request: hostkeeper_operator_v1.ListEnrollmentRequestsRequest): Promise<hostkeeper_operator_v1.ListEnrollmentRequestsResponse>;
+    confirmEnrollment(request: hostkeeper_operator_v1.ConfirmEnrollmentRequest): Promise<hostkeeper_operator_v1.ConfirmEnrollmentResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -230,6 +232,7 @@ export namespace hostkeeper_operator_v1 {
     | "ALERT_KIND_PUSH_CERT_NEAR_EXPIRY"
     | "ALERT_KIND_MDM_TLS_RENEWAL_FAILED"
     | "ALERT_KIND_MDM_DNS_CREDENTIAL_REJECTED";
+    | "ALERT_KIND_MDM_IDENTITY_NEAR_EXPIRY";
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
@@ -270,6 +273,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ClearHaltResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface ClearRecordRequest { nodeId?: string; service?: string; }
   export interface ClearRecordResponse { orderId?: string; }
+  export interface ConfirmEnrollmentRequest { serial?: string; }
+  export interface ConfirmEnrollmentResponse { serial?: string; expiresUnix?: string; }
   export interface ConvergeRequest { service?: string; hostGroup?: string; }
   export interface ConvergeResponse { convergence?: hostkeeper_operator_v1.Convergence; }
   export interface Convergence {
@@ -311,6 +316,17 @@ export namespace hostkeeper_operator_v1 {
   export interface DisableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
   export interface EnableUserRequest { name?: string; }
   export interface EnableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
+  export interface EnrollmentRequest {
+    serial?: string;
+    udid?: string;
+    product?: string;
+    reason?: string;
+    firstUnix?: string;
+    lastUnix?: string;
+    count?: number;
+    inAbm?: boolean;
+    confirmedUntilUnix?: string;
+  }
   export type EnrollmentRequestState =
     | "ENROLLMENT_REQUEST_STATE_UNSPECIFIED"
     | "ENROLLMENT_REQUEST_STATE_PENDING"
@@ -525,6 +541,9 @@ export namespace hostkeeper_operator_v1 {
     configured?: boolean;
     missing?: hostkeeper_operator_v1.MdmCondition[];
   }
+  export interface ListEnrollmentRequestsRequest {
+  }
+  export interface ListEnrollmentRequestsResponse { requests?: hostkeeper_operator_v1.EnrollmentRequest[]; }
   export interface ListHostGroupsRequest { limit?: number; pageToken?: string; }
   export interface ListHostGroupsResponse { hostGroups?: hostkeeper_operator_v1.HostGroupState[]; nextPageToken?: string; }
   export interface ListHostsRequest { limit?: number; pageToken?: string; }

@@ -195,6 +195,58 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
             }),
         ),
         (
+            "hostkeeper.operator.v1.PutAbmTokenRequest",
+            round_trip(&op::PutAbmTokenRequest {
+                token_json: b"{}".to_vec(),
+                token_p7m: vec![0x30, 0x80, 0xff],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.PutAbmTokenResponse",
+            round_trip(&op::PutAbmTokenResponse {
+                secret: Some(secret_info()),
+                server_name: "js-mdm".to_owned(),
+                org_name: "Org".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+            round_trip(&op::GetAbmPublicKeyResponse {
+                certificate_pem: "-----BEGIN CERTIFICATE-----".to_owned(),
+                fingerprint_sha256: "ab".repeat(32),
+                created: true,
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+            round_trip(&op::ListEnrollmentRequestsResponse {
+                requests: vec![op::EnrollmentRequest {
+                    serial: "P24LH9H6JT".to_owned(),
+                    udid: "00008112-001A2B3C4D5E6F70".to_owned(),
+                    product: Some("Mac14,13".to_owned()),
+                    reason: "the blob is not trusted".to_owned(),
+                    first_unix: 1_800_000_000,
+                    last_unix: 1_800_000_060,
+                    count: 3,
+                    in_abm: true,
+                    confirmed_until_unix: Some(1_800_003_600),
+                }],
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+            round_trip(&op::ConfirmEnrollmentRequest {
+                serial: "P24LH9H6JT".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+            round_trip(&op::ConfirmEnrollmentResponse {
+                serial: "P24LH9H6JT".to_owned(),
+                expires_unix: 1_800_003_600,
+            }),
+        ),
+        (
             "hostkeeper.operator.v1.MdmStatusResponse",
             round_trip(&op::MdmStatusResponse {
                 configured: true,
@@ -313,7 +365,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 28);
+    assert_eq!(messages.len(), 31);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

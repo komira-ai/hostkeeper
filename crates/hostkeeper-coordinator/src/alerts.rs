@@ -40,6 +40,8 @@
 //! - `mdm_tls_renewal_failed` and `mdm_dns_credential_rejected`: the renewal of the certificate for
 //!   the MDM name is failing, or its DNS provider refuses the credential ([`crate::mdm_acme`]);
 //!   each stands until an attempt ends in a certificate;
+//! - `mdm_identity_near_expiry`: an issued identity of a live Mac enrollment, or the CA that issues
+//!   them, expires within the setting `renew_alert_days`, or has; the message lists the serials;
 //! - `store_unreachable`: the store's link to its database is lost (`Fleet::store_lost`); it
 //!   stands until the link is back. While it stands, an enrollment store that cannot be read
 //!   gives no facts rather than refusing the list, so the alert is seen;
@@ -125,6 +127,8 @@ pub enum Kind {
     MdmTlsRenewalFailed,
     /// The DNS provider refused the credential of the MDM name's challenge.
     MdmDnsCredentialRejected,
+    /// A Mac's identity certificate or the CA that issues them expires within `renew_alert_days`.
+    MdmIdentityNearExpiry,
 }
 
 impl Kind {
@@ -148,6 +152,7 @@ impl Kind {
             Self::PushCertNearExpiry => "push_cert_near_expiry",
             Self::MdmTlsRenewalFailed => "mdm_tls_renewal_failed",
             Self::MdmDnsCredentialRejected => "mdm_dns_credential_rejected",
+            Self::MdmIdentityNearExpiry => "mdm_identity_near_expiry",
         }
     }
 
@@ -168,6 +173,7 @@ impl Kind {
             | Self::PushCertNearExpiry
             | Self::MdmTlsRenewalFailed
             | Self::MdmDnsCredentialRejected => proto::AlertSeverity::Warning,
+            Self::MdmIdentityNearExpiry => proto::AlertSeverity::Warning,
         }
     }
 
@@ -189,6 +195,7 @@ impl Kind {
             Self::PushCertNearExpiry => proto::AlertKind::PushCertNearExpiry,
             Self::MdmTlsRenewalFailed => proto::AlertKind::MdmTlsRenewalFailed,
             Self::MdmDnsCredentialRejected => proto::AlertKind::MdmDnsCredentialRejected,
+            Self::MdmIdentityNearExpiry => proto::AlertKind::MdmIdentityNearExpiry,
         }
     }
 }
@@ -267,6 +274,13 @@ pub struct EnrollmentFacts {
     /// What the renewal of the certificate for the MDM name reports
     /// ([`crate::mdm_acme::status`]).
     pub tls: crate::mdm_acme::status::Snapshot,
+    /// The serials of the live Mac enrollments whose identity certificate expires within the
+    /// window, with the unix second it does, soonest first.
+    pub mdm_identities: Vec<(String, u64)>,
+    /// When the CA of the identities expires, unix seconds, when one is held.
+    pub mdm_ca_not_after: Option<u64>,
+    /// The window in days (the setting `renew_alert_days`); none when the setup was not read.
+    pub mdm_renew_alert_days: Option<u32>,
 }
 
 /// When an observation is made: by the coordinator's clock (since its start, the clock the
@@ -333,6 +347,9 @@ pub(crate) fn derive_in(
     ));
     alerts.extend(push_cert_near_expiry(enrollment, at.unix));
     alerts.extend(crate::mdm_acme::alerts::derive(&enrollment.tls));
+    alerts.extend(crate::alerts_mdm::mdm_identity_near_expiry(
+        enrollment, at.unix,
+    ));
     alerts.extend(store_unreachable(fleet));
     alerts.extend(trusted_roots(fleet));
     alerts.sort_by(|a, b| a.subject.cmp(&b.subject));
@@ -821,6 +838,7 @@ impl Coordinator {
             };
             self.note_push_certificate(&mut enrollment);
             enrollment.tls = self.mdm_setup.tls_status().snapshot();
+            self.note_identities(&mut enrollment);
             let at = At {
                 now: (self.clock)(),
                 unix: self.ops.unix_now(),

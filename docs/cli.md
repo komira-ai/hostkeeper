@@ -594,6 +594,31 @@ over). The key pair is made when none is held (RSA 2048, stored as `abm_key` and
 which is why the call is session-only; once made, the same certificate is answered. Audited as
 `mdm_abm_cert_get`. The private key is never returned.
 
+#### `hkctl mdm list-enrollment-requests`
+
+`/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests`
+
+The enrollment requests that wait for an operator (docs/design/coordinator-mdm.md, 4.2): each
+is a Mac whose Setup Assistant posted a device blob to `/enroll` that the coordinator could not
+verify against Apple's roots, so it was given no challenge. The list is in memory (a restart
+empties it and the Mac's next post fills it again). Each entry says whether the ABM table lists
+the serial now. Changes nothing.
+
+#### `hkctl mdm confirm-enrollment`
+
+`/hostkeeper.operator.v1.Mdm/ConfirmEnrollment`
+
+Confirms the waiting request of `serial`: the next post of that serial from the UDID that
+waited is given a challenge, once, for `challenge_ttl_s` seconds. The ABM table is read again
+here, and a serial it does not list (or lists as removed) is refused `serial_not_in_abm`. A
+confirmation says that the operator saw this Mac enroll; it cannot be made for a serial that
+is not waiting (`no_pending_enrollment`). Session-only; audited as `mdm_enroll_confirmed`.
+Refused also `enrollment_unavailable` when this coordinator has no MDM listener, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--serial` | STRING | The serial, 1 to 64 ASCII letters and digits. |
+
 ### `releases`
 
 The service `Releases` of the package `hostkeeper.operator.v1`. The desired version of each service, how far the hosts are, and the operator's overrides.

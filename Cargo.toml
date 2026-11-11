@@ -72,6 +72,7 @@ nix = { version = "0.30.1", default-features = false, features = ["fs"] }
 # signature, so a reposted enrollment request is byte for byte the same) and its PKCS#8 encoding
 # (hostkeeper-enroll). Pure Rust: no OpenSSL, no C.
 p256 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
+p384 = { version = "0.14.0", features = ["ecdsa", "pem", "pkcs8"] }
 # `proc_pidpath` and the start time of a process on macOS (hostkeeper-launchd's process probe), a
 # safe wrapper over libproc: a macOS-only target dependency, never compiled on Linux. Its build
 # script runs bindgen on macOS.

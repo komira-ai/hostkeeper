@@ -179,8 +179,11 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::InvalidRequest => Code::InvalidArgument,
         MdmRefusal::StoreFailed => Code::Internal,
         MdmRefusal::AuditUnavailable => Code::Unavailable,
+        MdmRefusal::NoPendingEnrollment => Code::NotFound,
         MdmRefusal::SecretsUnavailable
         | MdmRefusal::NameLocked
+        | MdmRefusal::EnrollmentUnavailable
+        | MdmRefusal::SerialNotInAbm
         | MdmRefusal::NoPendingRequest
         | MdmRefusal::AbmUnavailable
         | MdmRefusal::AbmKeyMissing

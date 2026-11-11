@@ -154,6 +154,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `mdm_tls_renewal_failed`, and a provider that answers 401 or 403 raises `mdm_dns_credential_rejected`;
   both stand until an attempt ends in a certificate. The coordinator needs outbound HTTPS to the ACME
   directory and to `api.godaddy.com`. A credential is called 60 times a minute at most.
+- **The ABM sync.** The tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store.
+- **The identity CA and the Macs' identities.** The CA that issues the Macs' identity certificates is made by the first `/enroll` or `/scep` that needs it and kept as one sealed secret of `mdm_secrets`, `mdm_ca_key` (a four-byte big-endian length of the certificate, the certificate in DER, the key in PKCS#8 DER; its expiry is the certificate's). It is not uploaded and not shown; losing it (a store restored without the key file, or a secret that no longer opens) makes every identity issued under it unusable, and a new CA is made only when none is held, so a secret that does not read is an error and is never replaced. The challenges and the identities issued under them are in the tables `mdm_identities` (the file `identities.json`), the challenge as its SHA-256 only. The settings `identity_days` (1095), `renew_alert_days` (90, the window of the alert `mdm_identity_near_expiry`), `challenge_ttl_s` (3600), `ca_days` (3650), `identity_org` (`hostkeeper`), `enroll_rate_per_min` (60) and `enroll_pending_max` (256) are those of enrollment. The requests that wait for an operator are in memory only.
 - **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
   (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
   committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, `Last-Modified`
@@ -167,7 +169,6 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `pool/` is kept until evicted, any other file is served for `proxy_index_ttl_s` (300) and then
   revalidated with one conditional read of the origin. A repository is pointed at the proxy by its
   `https://<mdm name>/apt/<repo>/` URL in a group's entry; the origin is the registry entry's own `uri`.
-  The MDM tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

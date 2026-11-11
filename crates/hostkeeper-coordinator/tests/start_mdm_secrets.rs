@@ -275,8 +275,7 @@ fn serve_refuses_a_database_whose_secrets_it_cannot_read() {
 }
 
 /// Proves: with files the coordinator runs the ABM client when `--mdm-secrets-key-file` is given,
-/// with the tables in the directory beside the state file (`<state>.mdm`) that the start makes, and
-/// not otherwise.
+/// with the tables in the directory beside the state file (`<state>.mdm`) that the start makes.
 ///
 /// Catches: a farm that does not use MDM given an ABM client, and an MDM farm whose ABM sync is
 /// never started.

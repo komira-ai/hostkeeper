@@ -885,3 +885,16 @@ fn a_record_with_no_status_is_empty() {
         ("empty", Some("M"), 5)
     );
 }
+
+/// Proves: a coordinator that holds no master key (a farm that does not use MDM) has no token and
+/// nothing to sync, and that is not an error.
+///
+/// Catches: an error logged every sync interval on a farm that never set MDM up.
+#[tokio::test]
+async fn a_coordinator_without_a_master_key_has_nothing_to_sync() {
+    let rig = simulated("abm-nokey", false, true, |_| {});
+    let keyless = MdmSetup::volatile();
+    assert!(!keyless.has_key());
+    assert_eq!(rig.abm.sync_once(&keyless).await, Ok(Pass::NoToken));
+    assert!(rig.fake.seen().is_empty());
+}

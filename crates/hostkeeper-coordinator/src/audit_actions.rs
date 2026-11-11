@@ -67,6 +67,15 @@ pub const MDM_ENROLLMENT_REPLACED: &str = "mdm_enrollment_replaced";
 pub const MDM_REPLACE_REFUSED: &str = "mdm_replace_refused";
 /// An `Authenticate` named another serial than the identity's, which is `subject`.
 pub const MDM_SERIAL_MISMATCH: &str = "mdm_serial_mismatch";
+/// The coordinator made the CA of the Macs' identities (the first `/enroll` or `/scep` needing it).
+pub const MDM_CA_CREATED: &str = "mdm_ca_created";
+/// `/enroll` declined the serial `subject`: it is not in the ABM table. Audited once for a while.
+pub const MDM_ENROLL_DECLINED: &str = "mdm_enroll_declined";
+/// `/enroll` could not verify the blob of the serial `subject` and holds the request for an
+/// operator; the reason is the verifier's.
+pub const MDM_ENROLL_HELD: &str = "mdm_enroll_held";
+/// An operator confirmed the held request of the serial `subject`, after the ABM table listed it.
+pub const MDM_ENROLL_CONFIRMED: &str = "mdm_enroll_confirmed";
 
 /// The entry of `action` by `by` concerning `subject`.
 #[must_use]

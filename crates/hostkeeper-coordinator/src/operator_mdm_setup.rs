@@ -19,10 +19,9 @@
 
 use std::sync::Arc;
 
+use hostkeeper_mdm_gate::Installs;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
-
-use hostkeeper_mdm_gate::Installs;
 
 use crate::abm::keys;
 use crate::audit_actions;

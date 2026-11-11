@@ -11,16 +11,16 @@ use rsa_legacy::Pkcs1v15Sign;
 use super::Identity2;
 
 // The CMS messages of a client that signs its messages.
-pub(in crate::mdm_server) const SHA1: &str = "1.3.14.3.2.26";
-pub(in crate::mdm_server) const SHA256: &str = "2.16.840.1.101.3.4.2.1";
-pub(in crate::mdm_server) const SHA384: &str = "2.16.840.1.101.3.4.2.2";
-pub(in crate::mdm_server) const SHA512: &str = "2.16.840.1.101.3.4.2.3";
-pub(in crate::mdm_server) const RSA: &str = "1.2.840.113549.1.1.1";
-pub(in crate::mdm_server) const SHA256_RSA: &str = "1.2.840.113549.1.1.11";
-pub(in crate::mdm_server) const BODY: &[u8] = b"<plist>a check-in</plist>";
+pub(crate) const SHA1: &str = "1.3.14.3.2.26";
+pub(crate) const SHA256: &str = "2.16.840.1.101.3.4.2.1";
+pub(crate) const SHA384: &str = "2.16.840.1.101.3.4.2.2";
+pub(crate) const SHA512: &str = "2.16.840.1.101.3.4.2.3";
+pub(crate) const RSA: &str = "1.2.840.113549.1.1.1";
+pub(crate) const SHA256_RSA: &str = "1.2.840.113549.1.1.11";
+pub(crate) const BODY: &[u8] = b"<plist>a check-in</plist>";
 
 /// The DER prefix of a `DigestInfo` for the digest `oid`, and the digest algorithm.
-pub(in crate::mdm_server) fn digest_info(oid: &str) -> (&'static [u8], &'static digest::Algorithm) {
+pub(crate) fn digest_info(oid: &str) -> (&'static [u8], &'static digest::Algorithm) {
     match oid {
         SHA1 => (
             &[
@@ -55,29 +55,29 @@ pub(in crate::mdm_server) fn digest_info(oid: &str) -> (&'static [u8], &'static 
 
 /// How a message is built.
 #[derive(Clone)]
-pub(in crate::mdm_server) struct Spec {
-    pub(in crate::mdm_server) digest: &'static str,
-    pub(in crate::mdm_server) signature: &'static str,
-    pub(in crate::mdm_server) attributes: bool,
-    pub(in crate::mdm_server) ski: Option<Vec<u8>>,
+pub(crate) struct Spec {
+    pub(crate) digest: &'static str,
+    pub(crate) signature: &'static str,
+    pub(crate) attributes: bool,
+    pub(crate) ski: Option<Vec<u8>>,
     /// The digest in the attributes is of this instead of the body, when set.
-    pub(in crate::mdm_server) claimed: Option<Vec<u8>>,
-    pub(in crate::mdm_server) leave_out_digest_attribute: bool,
-    pub(in crate::mdm_server) certificates: usize,
-    pub(in crate::mdm_server) names_other_serial: bool,
-    pub(in crate::mdm_server) indefinite_attributes: bool,
-    pub(in crate::mdm_server) signers: usize,
-    pub(in crate::mdm_server) sid_tag: Option<u8>,
-    pub(in crate::mdm_server) flip_signature: bool,
-    pub(in crate::mdm_server) drop_certificates: bool,
+    pub(crate) claimed: Option<Vec<u8>>,
+    pub(crate) leave_out_digest_attribute: bool,
+    pub(crate) certificates: usize,
+    pub(crate) names_other_serial: bool,
+    pub(crate) indefinite_attributes: bool,
+    pub(crate) signers: usize,
+    pub(crate) sid_tag: Option<u8>,
+    pub(crate) flip_signature: bool,
+    pub(crate) drop_certificates: bool,
     /// Keeps only this many of the six fields of the signer's info, when set.
-    pub(in crate::mdm_server) info_fields: Option<usize>,
+    pub(crate) info_fields: Option<usize>,
     /// Names the signer by its issuer alone, without a serial number.
-    pub(in crate::mdm_server) short_sid: bool,
+    pub(crate) short_sid: bool,
     /// Only the first this many fields of the signer info are sent, when set.
-    pub(in crate::mdm_server) keep_fields: Option<usize>,
+    pub(crate) keep_fields: Option<usize>,
     /// The signer is named by a sequence of one part, not issuer and serial.
-    pub(in crate::mdm_server) lone_sid: bool,
+    pub(crate) lone_sid: bool,
 }
 
 impl Default for Spec {
@@ -113,8 +113,8 @@ fn algorithm(oid: &str) -> Vec<u8> {
 }
 
 /// The cms message for `body` signed by `mac`, built as `spec` says.
-pub(in crate::mdm_server) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
-    let key = fixture_key(mac.index);
+pub(crate) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
+    let key = mac.key.as_ref().unwrap_or_else(|| fixture_key(mac.index));
     let (prefix, algorithm_of) = digest_info(spec.digest);
     let body_digest = digest::digest(algorithm_of, body).as_ref().to_vec();
     let claimed = spec.claimed.clone().unwrap_or_else(|| body_digest.clone());
@@ -206,6 +206,6 @@ pub(in crate::mdm_server) fn message(body: &[u8], mac: &Identity2, spec: &Spec) 
     )
 }
 
-pub(in crate::mdm_server) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
+pub(crate) fn header(body: &[u8], mac: &Identity2, spec: &Spec) -> String {
     STANDARD.encode(message(body, mac, spec))
 }

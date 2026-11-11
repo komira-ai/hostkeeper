@@ -35,6 +35,8 @@ path = "src/main.rs"
 # The platform and the service name grammars it shares with the daemon.
 hostkeeper-config = { path = "../hostkeeper-config" }
 # The CA and the enrollment store (`--enrollment-dir`, `--ca-key-file`).
+hostkeeper-mdm-ade = { path = "../hostkeeper-mdm-ade" }
+hostkeeper-mdm-scep = { path = "../hostkeeper-mdm-scep" }
 hostkeeper-enrollment = { path = "../hostkeeper-enrollment" }
 # The MDM policy gate's device side (`--mdm-api-url`): its records answer the Mac path's
 # `DeviceState`, and it serves NanoHUB's webhook.
@@ -102,7 +104,6 @@ serde_json.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
-# The RFC 3339 expiry of the ABM token (`src/mdm_status.rs`).
 toml.workspace = true
 tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
@@ -131,6 +132,17 @@ hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.
 hyper = { workspace = true, features = ["client"] }
+# The fake Mac of the enrollment tests builds a device blob signed by a fake Apple
+# (hostkeeper-mdm-ade's test helper) and a SCEP request (hostkeeper-mdm-scep's), with their crates.
+cipher.workspace = true
+const-oid.workspace = true
+der.workspace = true
+p256.workspace = true
+p384.workspace = true
+rand.workspace = true
+signature.workspace = true
+spki.workspace = true
+x509-cert.workspace = true
 # The MDM commands and profiles a fake NanoHUB heard, read in the gate's tests.
 plist.workspace = true
 # The descriptors of the enrollment calls, read in their tests.

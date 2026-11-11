@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 32] = [
+const FIELDS: [(&str, &[Field]); 41] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -170,6 +170,54 @@ const FIELDS: [(&str, &[Field]); 32] = [
             ("renewal", 5, false),
         ],
     ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenRequest",
+        &[("token_json", 1, false), ("token_p7m", 2, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.PutAbmTokenResponse",
+        &[
+            ("secret", 1, true),
+            ("server_name", 2, false),
+            ("org_name", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.GetAbmPublicKeyRequest", &[]),
+    (
+        "hostkeeper.operator.v1.GetAbmPublicKeyResponse",
+        &[
+            ("certificate_pem", 1, false),
+            ("fingerprint_sha256", 2, false),
+            ("created", 3, false),
+        ],
+    ),
+    ("hostkeeper.operator.v1.ListEnrollmentRequestsRequest", &[]),
+    (
+        "hostkeeper.operator.v1.ListEnrollmentRequestsResponse",
+        &[("requests", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.EnrollmentRequest",
+        &[
+            ("serial", 1, false),
+            ("udid", 2, false),
+            ("product", 3, true),
+            ("reason", 4, false),
+            ("first_unix", 5, false),
+            ("last_unix", 6, false),
+            ("count", 7, false),
+            ("in_abm", 8, false),
+            ("confirmed_until_unix", 9, true),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentRequest",
+        &[("serial", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.ConfirmEnrollmentResponse",
+        &[("serial", 1, false), ("expires_unix", 2, false)],
+    ),
     ("hostkeeper.operator.v1.MdmStatusRequest", &[]),
     (
         "hostkeeper.operator.v1.MdmStatusResponse",
@@ -291,6 +339,8 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "Verify(VerifyRequest) VerifyResponse",
             "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
             "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
+            "ListEnrollmentRequests(ListEnrollmentRequestsRequest) ListEnrollmentRequestsResponse",
+            "ConfirmEnrollment(ConfirmEnrollmentRequest) ConfirmEnrollmentResponse",
         ]
     );
 
@@ -323,6 +373,9 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("abm_credential_refused", 20),
             ("abm_clock_refused", 21),
             ("abm_unreachable", 22),
+            ("enrollment_unavailable", 23),
+            ("no_pending_enrollment", 24),
+            ("serial_not_in_abm", 25),
         ])
     );
     assert_eq!(

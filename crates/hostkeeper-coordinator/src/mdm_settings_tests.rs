@@ -8,7 +8,7 @@ fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
 }
 
-/// Proves: the settings this release knows are these twenty-eight, each with its default from the start
+/// Proves: the settings this release knows are these thirty-five, each with its default from the start
 /// (design 4.9), and a name outside them is none.
 ///
 /// Catches: a tunable with no default, which would make the setup page a precondition.
@@ -49,6 +49,13 @@ fn each_setting_has_a_default_from_the_start() {
             ("abm_request_timeout_s", "30"),
             ("abm_retries", "3"),
             ("ade_profile_name", "Komira MDM"),
+            ("identity_days", "1095"),
+            ("renew_alert_days", "90"),
+            ("challenge_ttl_s", "3600"),
+            ("ca_days", "3650"),
+            ("identity_org", "hostkeeper"),
+            ("enroll_rate_per_min", "60"),
+            ("enroll_pending_max", "256"),
         ]
     );
     for setting in SETTINGS {

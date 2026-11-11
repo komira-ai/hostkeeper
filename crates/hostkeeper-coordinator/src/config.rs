@@ -69,7 +69,7 @@ use tokio::io::{AsyncRead, AsyncWrite};
 
 use crate::accounts::AccountStore;
 use crate::alerts::{
-    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, Thresholds, observe_every,
+    DEFAULT_CERT_WINDOW_SECS, DEFAULT_SILENT_HOST_SECS, OBSERVE_EVERY, observe_every,
 };
 use crate::audit_file::wall_clock;
 use crate::backup::{Backup, Report, Restore, backup, restore};
@@ -84,7 +84,7 @@ use crate::inventory::RecordWindow;
 use crate::listen::{
     CLIENT_PATIENCE, Listener, MAX_CONNECTIONS, Remote, reload_every, serve, together,
 };
-use crate::lock::{FileLock, LockError, LockGuard, StateLock};
+use crate::lock::{FileLock, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
 use crate::ops::OpsStore;
 use crate::proxy_origin::Proxy;
@@ -129,6 +129,7 @@ use mac::check_allowlist;
 /// settled.
 #[path = "config_state.rs"]
 mod state;
+pub(crate) use state::alert_thresholds;
 
 #[cfg(test)]
 pub(crate) use state::{
@@ -705,28 +706,6 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         health_listen: flags.health_listen,
         reload: interval,
         lock: held,
-    })
-}
-
-/// The thresholds of the alerts `flags` name: `--alert-silent-host-secs` and
-/// `--alert-cert-window-secs`.
-pub(crate) fn alert_thresholds(flags: &Serve) -> Thresholds {
-    Thresholds {
-        silent_after: Duration::from_secs(flags.alert_silent_host_secs),
-        cert_window_secs: flags.alert_cert_window_secs,
-    }
-}
-
-/// The lock of `path`, taken by `lock`.
-fn take_lock(lock: &dyn StateLock, path: &Path) -> Result<LockGuard, StartError> {
-    lock.acquire(path).map_err(|why| match why {
-        LockError::Held => StartError::Locked {
-            path: path.to_owned(),
-        },
-        LockError::Io(source) => StartError::Lock {
-            path: path.to_owned(),
-            source,
-        },
     })
 }
 

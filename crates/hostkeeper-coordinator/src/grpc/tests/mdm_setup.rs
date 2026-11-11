@@ -28,6 +28,8 @@ const PUT_PUSH_REPLY: &str = "/hostkeeper.operator.v1.Mdm/PutPushReply";
 const PUT_PUSH_CERTIFICATE: &str = "/hostkeeper.operator.v1.Mdm/PutPushCertificate";
 const PUT_ABM_TOKEN: &str = "/hostkeeper.operator.v1.Mdm/PutAbmToken";
 const GET_ABM_PUBLIC_KEY: &str = "/hostkeeper.operator.v1.Mdm/GetAbmPublicKey";
+const LIST_ENROLLMENT_REQUESTS: &str = "/hostkeeper.operator.v1.Mdm/ListEnrollmentRequests";
+const CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
 const STATUS: &str = "/hostkeeper.operator.v1.Mdm/Status";
@@ -110,7 +112,16 @@ fn mdm_paths() -> (Vec<&'static str>, Vec<&'static str>) {
 #[test]
 fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
     let (reads, writes) = mdm_paths();
-    assert_eq!(reads, [LIST_DEVICES, LIST_SECRETS, LIST_SETTINGS, STATUS]);
+    assert_eq!(
+        reads,
+        [
+            LIST_DEVICES,
+            LIST_SECRETS,
+            LIST_SETTINGS,
+            STATUS,
+            LIST_ENROLLMENT_REQUESTS
+        ]
+    );
     assert_eq!(
         writes,
         [
@@ -122,7 +133,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             PUT_NAME,
             VERIFY,
             PUT_ABM_TOKEN,
-            GET_ABM_PUBLIC_KEY
+            GET_ABM_PUBLIC_KEY,
+            CONFIRM_ENROLLMENT
         ]
     );
     for path in &writes {
@@ -474,7 +486,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         .await;
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
-    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(28));
+    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(35));
 }
 
 /// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most
@@ -487,8 +499,8 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
 #[tokio::test]
 async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
     assert_eq!(operator_limit(PUT_SECRET), 65_536);
-    // The emailed reply of mdmcert.download and a certificate with its key are larger than 4 KiB
-    // once the gateway has them as base64.
+    // The emailed reply of mdmcert.download, a certificate with its key and an ABM token are larger
+    // than 4 KiB once the gateway has them as base64.
     assert_eq!(operator_limit(PUT_PUSH_REPLY), 65_536);
     assert_eq!(operator_limit(PUT_PUSH_CERTIFICATE), 65_536);
     assert_eq!(operator_limit(PUT_ABM_TOKEN), 65_536);
@@ -710,4 +722,41 @@ async fn a_session_verifies_the_setup_through_the_gateway_and_a_token_cannot() {
             ("alice".to_owned(), "mdm_verify".to_owned()),
         ]
     );
+}
+
+/// Proves: a signed-in user reaches the two calls of the enrollment requests through the gateway as
+/// themselves: the list answers, and a confirmation on a coordinator with no MDM listener is
+/// refused `enrollment_unavailable` as a precondition that failed, with nothing audited but the
+/// login; a bearer token is refused the confirmation `session_required` and not the list.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, and a refusal
+/// shown with another status than its token says.
+#[tokio::test]
+async fn a_session_lists_and_confirms_enrollment_requests_through_the_gateway() {
+    let world = world("mdm-enroll-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let listed = world.send(alice.post(LIST_ENROLLMENT_REQUESTS, "{}")).await;
+    assert_eq!(listed.status, StatusCode::OK, "{listed:?}");
+    assert_eq!(listed.json(), json!({}));
+    let confirmed = world
+        .send(alice.post(
+            CONFIRM_ENROLLMENT,
+            &json!({ "serial": "P24LH9H6JT" }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        confirmed.json(),
+        json!({ "code": "FAILED_PRECONDITION", "reason": "enrollment_unavailable" })
+    );
+    let token = world
+        .send(bearer_post(CONFIRM_ENROLLMENT, "{}", OPERATOR))
+        .await;
+    assert_eq!(
+        token.json(),
+        json!({ "code": "PERMISSION_DENIED", "reason": "session_required" })
+    );
+    let token_list = world
+        .send(bearer_post(LIST_ENROLLMENT_REQUESTS, "{}", OPERATOR))
+        .await;
+    assert_eq!(token_list.status, StatusCode::OK);
 }

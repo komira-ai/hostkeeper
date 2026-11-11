@@ -44,11 +44,16 @@ pub(super) struct Wiring {
     pkg_dir: Option<std::path::PathBuf>,
 }
 
-/// The issuers a client certificate of the MDM listener may chain to. The CA of the Macs'
-/// identities (CM12c) is added here when it exists; until then no client certificate is trusted at
-/// the handshake and a Mac authenticates by its `Mdm-Signature`.
-fn trusted_issuers() -> Trust {
-    Arc::new(Vec::new)
+/// The issuers a client certificate of the MDM listener may chain to: the CA of the Macs'
+/// identities once it exists (it is made when the first Mac needs it). Until then no client
+/// certificate is trusted at the handshake, and a Mac authenticates by its `Mdm-Signature` in
+/// any case.
+fn trusted_issuers(setup: Arc<MdmSetup>) -> Trust {
+    Arc::new(move || {
+        crate::mdm_enroll::ca::held_certificate(&setup)
+            .into_iter()
+            .collect()
+    })
 }
 
 /// The renewer of the certificate for the MDM name that reaches the real ACME directory and the
@@ -95,7 +100,10 @@ pub(super) fn wire(
         store: Arc::clone(store),
         queue,
         pushers,
-        tls: Arc::new(MdmTls::new(Arc::clone(setup), trusted_issuers())),
+        tls: Arc::new(MdmTls::new(
+            Arc::clone(setup),
+            trusted_issuers(Arc::clone(setup)),
+        )),
         renewer: Arc::new(production_renewer(setup)),
         pkg_dir: flags.mdm.mdm_pkg_dir.clone(),
     })
