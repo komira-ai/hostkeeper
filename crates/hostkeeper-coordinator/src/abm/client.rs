@@ -59,7 +59,7 @@ pub(crate) enum AbmError {
     #[error("ABM refused the session twice")]
     SessionRefused,
     /// The cursor is not one ABM takes (too old or unknown): a full fetch gives a new one.
-    #[error("ABM refused the cursor (INVALID_CURSOR)")]
+    #[error("ABM refused the cursor (a CURSOR error)")]
     InvalidCursor,
     /// ABM asked for fewer requests (429).
     #[error("ABM asked for fewer requests (429), retry after {retry_after:?} seconds")]
@@ -305,7 +305,7 @@ impl Api<'_> {
                     refreshed = true;
                     self.client.forget();
                 }
-                400 if contains(&answer.body, "INVALID_CURSOR") => {
+                400 if contains(&answer.body, "CURSOR") => {
                     return Err(AbmError::InvalidCursor);
                 }
                 status => return Err(AbmError::Status(status)),

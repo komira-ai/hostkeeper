@@ -36,7 +36,7 @@ fn a_made_key_round_trips_and_its_certificate_is_for_it() {
     let parsed = pem.parse_x509().expect("a certificate");
     assert_eq!(parsed.subject().to_string(), "CN=hostkeeper-mdm-abm");
     let validity = parsed.validity();
-    // NOW is in November 2023.
+    // NOW is 1_700_000_000 seconds after the epoch.
     assert_eq!(validity.not_before.to_datetime().year(), 2022);
     assert_eq!(validity.not_after.to_datetime().year(), 2033);
 }

@@ -61,10 +61,10 @@ pub(crate) struct DeviceRecord {
 }
 
 impl DeviceRecord {
-    /// Whether ABM says the device is no longer ours: a sync's `deleted`, or a status of `removed`.
+    /// Whether ABM says the device is no longer ours: a sync's `deleted`. A `profile_status` of
+    /// `removed` says only that the MDM profile left the device, which is still in the account.
     pub(crate) fn is_removed(&self) -> bool {
         self.op_type.as_deref() == Some("deleted")
-            || self.profile_status.as_deref() == Some("removed")
     }
 }
 

@@ -274,6 +274,9 @@ pub struct Coordinator {
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
     pub(crate) repository_naming: Mutex<()>,
+    /// Held by `Mdm.GetAbmPublicKey` from its read of the held pair to its write, so two calls do
+    /// not each make a pair and show a certificate whose key is then replaced.
+    pub(crate) abm_pairing: tokio::sync::Mutex<()>,
     /// Told when CI's set of a desired state finds the fleet's lock held and waits for it: a
     /// test's progress event, so a race is made to happen rather than waited for.
     #[cfg(test)]
@@ -335,6 +338,7 @@ impl Coordinator {
             running: crate::running::Kept::default(),
             repository_origin: None,
             repository_naming: Mutex::new(()),
+            abm_pairing: tokio::sync::Mutex::new(()),
             #[cfg(test)]
             set_waits: Mutex::new(None),
         }

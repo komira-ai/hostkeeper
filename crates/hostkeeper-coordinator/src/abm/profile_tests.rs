@@ -14,10 +14,10 @@ use crate::abm::profile::{AdeProfile, is_host_name};
 /// profile does (so that the change is never sent to ABM).
 #[test]
 fn the_profile_keeps_a_mac_enrolled_and_its_digest_follows_it() {
-    let profile = AdeProfile::new("Komira MDM", "mdm.internal.komira.dev");
+    let profile = AdeProfile::new("Komira MDM", "mdm.example.com");
     let value = profile.json();
     assert_eq!(value["profile_name"], "Komira MDM");
-    assert_eq!(value["url"], "https://mdm.internal.komira.dev/enroll");
+    assert_eq!(value["url"], "https://mdm.example.com/enroll");
     for (flag, want) in [
         ("is_supervised", true),
         ("is_mandatory", true),
@@ -36,12 +36,12 @@ fn the_profile_keeps_a_mac_enrolled_and_its_digest_follows_it() {
     let keys: Vec<&String> = value.as_object().expect("an object").keys().collect();
     assert_eq!(keys.len(), 10);
 
-    let again = AdeProfile::new("Komira MDM", "mdm.internal.komira.dev");
+    let again = AdeProfile::new("Komira MDM", "mdm.example.com");
     assert_eq!(again, profile);
     assert_eq!(again.digest(), profile.digest());
     assert_eq!(profile.digest().len(), 64);
     assert_ne!(
-        AdeProfile::new("Other", "mdm.internal.komira.dev").digest(),
+        AdeProfile::new("Other", "mdm.example.com").digest(),
         profile.digest()
     );
     assert_ne!(
@@ -59,7 +59,7 @@ fn the_profile_keeps_a_mac_enrolled_and_its_digest_follows_it() {
 #[test]
 fn only_a_host_name_may_be_the_enrollment_host() {
     for good in [
-        "mdm.internal.komira.dev",
+        "mdm.example.com",
         "a",
         "A-1.b2",
         "xn--bcher-kva.example",

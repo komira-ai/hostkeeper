@@ -66,7 +66,7 @@ fn rig_with(name: &str, token: bool, named: bool, sim: Sim, handler: Handler) ->
     }
     if named {
         setup
-            .set_setting("mdm_name", "mdm.internal.komira.dev")
+            .set_setting("mdm_name", "mdm.example.com")
             .expect("the name");
     }
     let fake = FakeAbm::new(handler);
@@ -215,7 +215,7 @@ async fn the_profile_is_defined_once_and_given_to_devices_that_have_none() {
     let uuid = format!("PROFILE{:028}", 1);
     let profile = rig.sim.state().profiles[&uuid].clone();
     assert_eq!(profile["profile_name"], "Komira MDM");
-    assert_eq!(profile["url"], "https://mdm.internal.komira.dev/enroll");
+    assert_eq!(profile["url"], "https://mdm.example.com/enroll");
     for (flag, want) in [
         ("is_supervised", true),
         ("is_mandatory", true),
@@ -261,9 +261,8 @@ async fn the_profile_is_defined_once_and_given_to_devices_that_have_none() {
 }
 
 /// Proves: a sync's records change the table as `op_type` says: `added` and `modified` write the
-/// device, `deleted` marks it removed (so that it is not ours), a device added again is ours again,
-/// and a record whose status is `removed` is a removal too; the cursor moves to the one ABM
-/// answered; nothing is written to ABM.
+/// device, `deleted` marks it removed (so that it is not ours) and a device added again is ours
+/// again; the cursor moves to the one ABM answered; nothing is written to ABM.
 ///
 /// Catches: a disowned Mac that stays approvable, and one that comes back and stays removed.
 #[tokio::test]
@@ -312,18 +311,12 @@ async fn a_sync_adds_changes_and_removes_devices() {
     {
         let mut state = rig.sim.state();
         state.log.push(("GONE".to_owned(), "added".to_owned()));
-        state
-            .devices
-            .iter_mut()
-            .find(|d| d.serial == "KEEP")
-            .expect("keep")
-            .profile_status = "removed".to_owned();
         state.log.push(("KEEP".to_owned(), "modified".to_owned()));
     }
     let report = done(&rig).await;
-    assert_eq!((report.upserted, report.removed), (1, 1));
+    assert_eq!((report.upserted, report.removed), (2, 0));
     assert!(rig.abm.serial_in_abm("GONE").expect("read"));
-    assert!(!rig.abm.serial_in_abm("KEEP").expect("read"));
+    assert!(rig.abm.serial_in_abm("KEEP").expect("read"));
     assert!(
         !rig.fake
             .calls()
@@ -331,6 +324,41 @@ async fn a_sync_adds_changes_and_removes_devices() {
             .any(|c| c.contains("PUT") || c == "POST /profile"),
         "nothing is written to ABM"
     );
+}
+
+/// Proves: a device whose `profile_status` is `removed` (its MDM profile left it, as after a wipe)
+/// is still in our ABM, in a sync and in a full fetch, and is given the ADE profile again so that
+/// it can enroll; only `deleted` and absence from a full fetch remove it.
+///
+/// Catches: a wiped Mac that is declined as not in ABM and never assigned again.
+#[tokio::test]
+async fn a_device_whose_profile_was_removed_is_still_ours_and_assigned_again() {
+    let rig = simulated("abm-profile-removed", true, true, |sim| {
+        sim.device("WIPED", "removed", Some("P"));
+    });
+    let report = done(&rig).await;
+    assert_eq!((report.upserted, report.removed), (1, 0));
+    assert!(rig.abm.serial_in_abm("WIPED").expect("read"));
+    assert_eq!(report.assigned, 1);
+    assert_eq!(rows(&rig)["WIPED"].profile_status, "assigned");
+
+    {
+        let mut state = rig.sim.state();
+        state
+            .devices
+            .iter_mut()
+            .find(|d| d.serial == "WIPED")
+            .expect("wiped")
+            .profile_status = "removed".to_owned();
+        state.log.push(("WIPED".to_owned(), "modified".to_owned()));
+    }
+    let report = done(&rig).await;
+    assert_eq!(
+        (report.upserted, report.removed, report.assigned),
+        (1, 0, 1)
+    );
+    assert!(rig.abm.serial_in_abm("WIPED").expect("read"));
+    assert_eq!(rows(&rig)["WIPED"].removed_unix, None);
 }
 
 /// Proves: a full fetch marks removed every serial the table held and ABM no longer lists, keeps

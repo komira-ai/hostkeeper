@@ -174,9 +174,11 @@ impl Coordinator {
         }
     }
 
-    /// The certificate of the pair held and whether it was made now: the key made when none is
-    /// held, and the certificate made when the key has none.
+    /// The certificate of the pair held and whether it was made now: the key and the certificate
+    /// made when neither is held, the certificate made when only the key is held; a certificate
+    /// held without its key is `abm_key_missing`, never replaced.
     async fn pair(&self, now: u64) -> Result<(Secret, bool), MdmRefusal> {
+        let _pairing = self.abm_pairing.lock().await;
         let setup = &self.mdm_setup;
         let stored = i64::try_from(now).unwrap_or(i64::MAX);
         let held = |kind| setup.open(kind).map_err(|why| store_failed(&why));
@@ -184,6 +186,10 @@ impl Coordinator {
         let key = held(SecretKind::AbmKey)?;
         if let (Some(cert), Some(_)) = (&cert, &key) {
             return Ok((cert.clone(), false));
+        }
+        if cert.is_some() && key.is_none() {
+            // A held certificate is the one the operator may have given ABM: never replace it.
+            return Err(MdmRefusal::AbmKeyMissing);
         }
         let (key, key_made) = match key {
             Some(pem) => (keys::parse_key(pem.expose()).map_err(unkept)?, false),

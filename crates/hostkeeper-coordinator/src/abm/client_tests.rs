@@ -425,6 +425,37 @@ async fn pages_carry_their_cursors_and_an_invalid_cursor_is_its_own_error() {
     );
 }
 
+/// Proves: every 400 whose body names a cursor error (`EXPIRED_CURSOR`, `EXHAUSTED_CURSOR`,
+/// `CURSOR_ALREADY_USED`, besides `INVALID_CURSOR`) is [`AbmError::InvalidCursor`], the signal for
+/// a full fetch, and a 400 that names none is a status.
+///
+/// Catches: a sync that fails for ever on a cursor Apple calls expired or used, until someone
+/// clears the state by hand.
+#[tokio::test]
+async fn each_cursor_error_of_apple_is_the_signal_for_a_full_fetch() {
+    let token = sample_token();
+    for code in [
+        "EXPIRED_CURSOR",
+        "EXHAUSTED_CURSOR",
+        "CURSOR_ALREADY_USED",
+        "INVALID_CURSOR",
+    ] {
+        let handler: Handler = Box::new(move |request: &AbmRequest| {
+            if request.path == "/session" {
+                json_reply(200, &json!({ "auth_session_token": "s" }))
+            } else {
+                json_reply(400, &json!({ "code": code }))
+            }
+        });
+        let (client, _) = client_over(FakeAbm::new(handler));
+        assert_eq!(
+            client.api(&token, pacing()).changes("c0").await.map(drop),
+            Err(AbmError::InvalidCursor),
+            "{code}"
+        );
+    }
+}
+
 /// Proves: a profile is defined with `POST /profile`, which answers its uuid, and an answer that
 /// has no uuid is a bad answer.
 ///

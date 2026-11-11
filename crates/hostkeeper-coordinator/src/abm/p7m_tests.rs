@@ -246,7 +246,7 @@ fn only_a_recipient_of_our_key_opens_the_message() {
 
     let good = by_hand(&framed(), &key, Transport::OaepSha1, AES_256, 32, aes256);
     let odd = RecipientInfo::Ori(OtherRecipientInfo {
-        ori_type: ObjectIdentifier::new_unwrap("1.2.3.4"),
+        ori_type: ObjectIdentifier::new_unwrap("1.2.3.4.5"),
         ori_value: Any::encode_from(&OctetString::new(vec![1]).expect("octets")).expect("encodes"),
     });
     let unknown = by_hand(&framed(), &key, Transport::Unknown, AES_256, 32, aes256);
@@ -275,7 +275,7 @@ fn only_a_recipient_of_our_key_opens_the_message() {
     );
     let only_odd = envelope(
         vec![RecipientInfo::Ori(OtherRecipientInfo {
-            ori_type: ObjectIdentifier::new_unwrap("1.2.3.4"),
+            ori_type: ObjectIdentifier::new_unwrap("1.2.3.4.5"),
             ori_value: Any::encode_from(&OctetString::new(vec![1]).expect("octets"))
                 .expect("encodes"),
         })],

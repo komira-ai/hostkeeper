@@ -627,6 +627,76 @@ async fn the_public_key_is_made_once_and_the_private_key_never_leaves() {
     );
 }
 
+/// Proves: two certificate calls at once make one pair: both answer the same certificate, one says
+/// it was made, and the key held is the one that certificate is for; a certificate held with no
+/// key is refused `abm_key_missing` (audited) and stays as it was, not replaced by one for a new
+/// key.
+///
+/// Catches: a double click that shows a certificate for a key that is then overwritten, so that
+/// ABM encrypts the token to a key the coordinator no longer has.
+#[tokio::test]
+async fn two_calls_at_once_make_one_pair_and_a_held_certificate_is_never_replaced() {
+    let rig = start("abm-pubkey-race", true, true);
+    let coordinator = &rig.world.coordinator;
+    let request = proto::GetAbmPublicKeyRequest {};
+    let caller = alice();
+    let (a, b) = tokio::join!(
+        coordinator.mdm_get_abm_public_key(&caller, &request),
+        coordinator.mdm_get_abm_public_key(&caller, &request)
+    );
+    let (a, b) = (a.expect("a"), b.expect("b"));
+    assert_eq!(a.certificate_pem, b.certificate_pem);
+    assert_eq!(a.fingerprint_sha256, b.fingerprint_sha256);
+    assert_eq!(u8::from(a.created) + u8::from(b.created), 1);
+    let key = coordinator
+        .mdm_setup()
+        .open(SecretKind::AbmKey)
+        .expect("opens")
+        .expect("held");
+    let parsed = parse_key(key.expose()).expect("a key");
+    crate::abm::keys::check_certificate(a.certificate_pem.as_bytes(), Some(&parsed))
+        .expect("the certificate shown is for the key held");
+
+    let lone = start_over("abm-pubkey-cert-only", true, true, None);
+    let key = generate(2048).expect("a key");
+    let cert = crate::abm::keys::self_signed(&key, 1).expect("a certificate");
+    lone.world
+        .coordinator
+        .mdm_setup()
+        .put_secret(
+            SecretKind::AbmCert,
+            &Secret::new(cert.into_bytes()),
+            None,
+            1,
+        )
+        .expect("stored");
+    assert_eq!(
+        lone.world
+            .coordinator
+            .mdm_get_abm_public_key(&alice(), &request)
+            .await,
+        Err(MdmRefusal::AbmKeyMissing)
+    );
+    let kinds: Vec<(String, u32)> = lone
+        .world
+        .coordinator
+        .mdm_list_secrets(&alice())
+        .expect("listed")
+        .secrets
+        .into_iter()
+        .map(|s| (s.kind, s.version))
+        .collect();
+    assert_eq!(kinds, [("abm_cert".to_owned(), 1)]);
+    assert_eq!(
+        audit(&lone.world).last(),
+        Some(&refusal_audit(
+            "mdm_abm_cert_get",
+            "abm_cert",
+            "MDM_REFUSAL_ABM_KEY_MISSING"
+        ))
+    );
+}
+
 /// Proves: the certificate call refuses when the coordinator has no ABM client (`abm_unavailable`)
 /// or no master key (`secrets_unavailable`), each audited; a store that cannot be read or written is
 /// `store_failed`, with the key pair not half-made when the write of the key fails.

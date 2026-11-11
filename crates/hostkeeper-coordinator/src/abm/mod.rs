@@ -10,7 +10,7 @@
 //! ([`Abm::public_certificate`]) and the question the approval of a Mac asks ([`Abm::serial_in_abm`]).
 //!
 //! **A pass.** The cursor in `abm_state` says where the last pass ended. With none, or when the
-//! last pass is older than a cursor lives (seven days), or when ABM answers `INVALID_CURSOR`, the
+//! last pass is older than a cursor lives (seven days), or when ABM answers a cursor error (`INVALID_CURSOR` and the other `*_CURSOR` codes), the
 //! pass is a full fetch (`POST /server/devices`, pages of 1000), after which every serial the
 //! table holds and ABM did not list is marked removed; the cursor of a full fetch seeds
 //! `POST /devices/sync`. Every other pass is `POST /devices/sync`, whose records say `added`,
@@ -300,7 +300,8 @@ impl Abm {
             .into_iter()
             .filter(|device| {
                 device.removed_unix.is_none()
-                    && (device.profile_uuid.is_none() || device.profile_status == "empty")
+                    && (device.profile_uuid.is_none()
+                        || matches!(device.profile_status.as_str(), "empty" | "removed"))
             })
             .collect();
         for chunk in waiting.chunks(PAGE_LIMIT as usize) {
