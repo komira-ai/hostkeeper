@@ -23,8 +23,10 @@
 //! request ([`MdmServer::serves`]), so a Linux-only farm that never uploads an Apple credential
 //! serves its packages. In this task the MDM family's prerequisite is a push identity; the CA of
 //! the Macs' identities (CM12c) and the ABM token (CM13) add theirs there. `/enroll` and `/scep`
-//! stay with the old stack until CM12c (Caddy routes them), and the proxy's routes land with PP2:
-//! a request for any of them answers `404` once its family is served. Every other path answers
+//! stay with the old stack until CM12c (Caddy routes them), and the proxy's `/apt/` routes land with
+//! PP2: a request for any of them answers `404` once its family is served. `/pkg/<sha256>.pkg` is
+//! served from `--mdm-pkg-dir` ([`pkg`], CM11c); it is answered by the router (`grpc::route`),
+//! since its body is streamed. Every other path answers
 //! `404`, whoever asks.
 //!
 //! **What an unknown enrollment is answered** (section 6, lesson 3; section 12 item 12, not
@@ -39,6 +41,7 @@
 pub(crate) mod auth;
 pub(crate) mod checkin;
 pub(crate) mod connect;
+pub(crate) mod pkg;
 pub(crate) mod pushing;
 pub(crate) mod queue;
 pub(crate) mod signature;
@@ -208,6 +211,8 @@ pub(crate) struct Parts {
     pub(crate) tls: Arc<MdmTls>,
     /// How often the queue looks at what is due ([`sweep_every`]).
     pub(crate) sweep: Duration,
+    /// `--mdm-pkg-dir`: the files `/pkg/<sha256>.pkg` serves; none without the flag.
+    pub(crate) pkg_dir: Option<std::path::PathBuf>,
 }
 
 /// The MDM server: what the routes of the Macs' listener use.
@@ -220,6 +225,7 @@ pub(crate) struct MdmServer {
     pushers: Pushers,
     tls: Arc<MdmTls>,
     sweep: Duration,
+    pub(crate) pkgs: pkg::Pkgs,
     /// One `Authenticate` at a time: the live enrollment of a serial is read, then replaced.
     pub(crate) authenticating: tokio::sync::Mutex<()>,
 }
@@ -235,6 +241,7 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            pkg_dir,
         } = parts;
         Self {
             store,
@@ -245,6 +252,7 @@ impl MdmServer {
             pushers,
             tls,
             sweep,
+            pkgs: pkg::Pkgs::new(pkg_dir),
             authenticating: tokio::sync::Mutex::new(()),
         }
     }
@@ -309,7 +317,7 @@ where
     }
     if client_cert(&path) != Some(ClientCert::Required) {
         // The routes whose task has not landed: `/enroll` and `/scep` (CM12c), which read no
-        // certificate, and the proxy's (PP2).
+        // certificate, and the proxy's `/apt/` (PP2). `/pkg/` is answered by [`pkg::serve`].
         return error(StatusCode::NOT_FOUND, "not_found");
     }
     if request.method() != Method::PUT {

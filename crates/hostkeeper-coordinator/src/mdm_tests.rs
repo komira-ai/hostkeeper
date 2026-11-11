@@ -73,6 +73,7 @@ pub(crate) fn flags_in(dir: &Scratch) -> MdmFlags {
         mdm_listen: None,
         mdm_command_timeout_s: crate::mdm::DEFAULT_COMMAND_TIMEOUT_S,
         mdm_queue_sweep_s: crate::mdm::DEFAULT_QUEUE_SWEEP_S,
+        mdm_pkg_dir: None,
         mdm_baseline_file: None,
         mdm_baseline_check_s: DEFAULT_CHECK_SECS,
     }

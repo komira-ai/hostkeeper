@@ -129,6 +129,12 @@ pub struct MdmFlags {
         requires = "mdm_listen"
     )]
     pub mdm_queue_sweep_s: u64,
+    /// The directory of the pkg files the host provides, `<sha256>.pkg` each, which the MDM
+    /// listener serves at `GET /pkg/<sha256>.pkg` for the digests the setting `installs` names
+    /// (`docs/design/coordinator-mdm.md` section 4.7). The files are read, never written, by the
+    /// coordinator's user. Without it `/pkg/` answers `404`.
+    #[arg(long, requires = "mdm_listen")]
+    pub mdm_pkg_dir: Option<PathBuf>,
     /// NanoHUB's API, on loopback: `http://<loopback address>:<port>`, as
     /// `http://127.0.0.1:9004`. With it the coordinator runs the MDM policy gate: it keeps a
     /// record per MDM device and answers whether a Mac is enrolled and supervised, so a Mac on

@@ -89,7 +89,7 @@ sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
 toml.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tokio-rustls.workspace = true
 # NFKC of a password before it is hashed.
 unicode-normalization.workspace = true

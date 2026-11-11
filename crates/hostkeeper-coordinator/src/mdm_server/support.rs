@@ -279,6 +279,19 @@ impl Rig {
         Self::build(name, None, counting())
     }
 
+    /// A rig started without `--mdm-pkg-dir`, with the certificate and the push identity.
+    pub(super) fn without_pkg_dir(name: &str) -> Self {
+        let rig = Self::build_with(name, None, counting(), false);
+        rig.store_tls();
+        rig.store_push();
+        rig
+    }
+
+    /// The directory `--mdm-pkg-dir` names in this rig (it is made by the test that fills it).
+    pub(super) fn pkg_dir(&self) -> std::path::PathBuf {
+        self.dir.path().join("pkgs")
+    }
+
     /// A queue as a restarted coordinator builds it: new pushers and nothing armed, over the same
     /// tables, setup, clock and fake APNs.
     pub(super) fn restarted_queue(&self) -> MdmQueue {
@@ -317,11 +330,20 @@ impl Rig {
         rig
     }
 
+    fn build(name: &str, gate: Option<GateBuilder>, random: crate::enrollment::Random) -> Self {
+        Self::build_with(name, gate, random, true)
+    }
+
     #[allow(
         clippy::type_complexity,
         reason = "a test builder takes a closure that builds the gate over the queue"
     )]
-    fn build(name: &str, gate: Option<GateBuilder>, random: crate::enrollment::Random) -> Self {
+    fn build_with(
+        name: &str,
+        gate: Option<GateBuilder>,
+        random: crate::enrollment::Random,
+        pkg_dir: bool,
+    ) -> Self {
         let dir = scratch(name);
         let tables = FileMdm::open(&dir.path().join("mdm")).expect("the tables open");
         let store = Arc::new(Flaky::new(tables));
@@ -364,6 +386,7 @@ impl Rig {
             pushers: Arc::clone(&pushers),
             tls: Arc::new(MdmTls::new(Arc::clone(&setup), trust)),
             sweep: Duration::from_secs(60),
+            pkg_dir: pkg_dir.then(|| dir.path().join("pkgs")),
         }));
         let fake = Fake::new();
         let coordinator = Arc::new(
@@ -588,6 +611,26 @@ impl Session {
         self.try_request(method, path, headers, body)
             .await
             .expect("an answer")
+    }
+
+    /// `method path` with `headers` and no body: the head of the answer and its body, which is
+    /// read to the end (or fails where the server cut it).
+    pub(super) async fn fetch(
+        &mut self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, String)],
+    ) -> Result<(hyper::http::response::Parts, Vec<u8>), hyper::Error> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "localhost");
+        for (name, value) in headers {
+            request = request.header(*name, value);
+        }
+        let request = request.body(Full::new(Bytes::new())).expect("a request");
+        let (head, body) = self.send.send_request(request).await?.into_parts();
+        Ok((head, body.collect().await?.to_bytes().to_vec()))
     }
 
     /// [`Self::request`], or the error of a connection the server ended.
