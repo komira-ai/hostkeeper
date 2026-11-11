@@ -5,7 +5,7 @@
 //!
 //! Two stores implement it and one suite ([`conformance_tests`]) runs against both: [`files::FileMdm`],
 //! one file per family beside each other in a directory, each replaced whole, and
-//! [`crate::store::postgres::mdm::PgMdm`], the tables of migration `0010`. The rules are the ones the
+//! [`crate::store::postgres::mdm::PgMdm`], the tables of migration `0011`. The rules are the ones the
 //! model check of the queue and of enrollment (`crates/hostkeeper-mdm-model`, CM4) found necessary,
 //! each kept by the store itself so that no caller can forget it:
 //!

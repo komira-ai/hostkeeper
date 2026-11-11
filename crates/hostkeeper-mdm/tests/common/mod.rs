@@ -490,6 +490,7 @@ pub fn with_system_api<T>(
         api,
         random: &fill,
         now: 1_700_000_000,
+        pause: &|_| {},
     };
     f(&system)
 }
