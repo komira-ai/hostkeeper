@@ -4,8 +4,9 @@
 //! have their default.
 //!
 //! Each setting says what it takes, so a value is judged once, when it is set: a number of days,
-//! a list of them that falls, a number of seconds, or one of a few values. A later release adds names and a store keeps a name this release
-//! does not know as it was written.
+//! a list of them that falls, a whole number of seconds, bytes or a count, or one of a few values.
+//! A later release adds names and a store keeps a name this release does not know as it was
+//! written.
 
 use std::collections::BTreeMap;
 
@@ -210,12 +211,21 @@ pub fn value_of<'a>(set: &'a BTreeMap<String, String>, setting: &'a Setting) -> 
         .map_or(setting.default, String::as_str)
 }
 
-/// The value of the setting `name` among the `set` ones, as a number (days, seconds or a
-/// count): `fallback` for a name this release does not know or a value that is not one (a store edited by hand).
+/// The days of the setting `name` among the `set` ones, as a number: `fallback` for a name this
+/// release does not know or a value that is not one (a store edited by hand).
 #[must_use]
-pub fn number_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32 {
+pub fn days_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32 {
     find(name)
         .and_then(|setting| parse_days(value_of(set, setting)))
+        .unwrap_or(fallback)
+}
+
+/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
+/// does not know or a value that is not one (a store edited by hand).
+#[must_use]
+pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
+    find(name)
+        .and_then(|setting| parse_whole(value_of(set, setting)))
         .unwrap_or(fallback)
 }
 
@@ -230,15 +240,6 @@ pub fn list_of(set: &BTreeMap<String, String>, name: &str) -> Vec<u32> {
     find(name)
         .and_then(|setting| parse(value_of(set, setting)).or_else(|| parse(setting.default)))
         .unwrap_or_default()
-}
-
-/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
-/// does not know or a value that is not one (a store edited by hand).
-#[must_use]
-pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
-    find(name)
-        .and_then(|setting| parse_whole(value_of(set, setting)))
-        .unwrap_or(fallback)
 }
 
 #[cfg(test)]

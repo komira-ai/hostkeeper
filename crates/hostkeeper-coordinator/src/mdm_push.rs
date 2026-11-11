@@ -93,12 +93,11 @@ impl MdmSetup {
     pub fn push_settings(&self) -> Result<(PushSettings, Duration), SetupFailure> {
         let set = self.settings()?;
         let settings = PushSettings {
-            retry_s: u64::from(mdm_settings::number_of(&set, "push_retry_s", 3600)),
-            expiry_s: u64::from(mdm_settings::number_of(&set, "push_expiry_s", 86_400)),
-            priority: u8::try_from(mdm_settings::number_of(&set, "push_priority", 10))
-                .unwrap_or(10),
+            retry_s: mdm_settings::whole_of(&set, "push_retry_s", 3600),
+            expiry_s: mdm_settings::whole_of(&set, "push_expiry_s", 86_400),
+            priority: u8::try_from(mdm_settings::whole_of(&set, "push_priority", 10)).unwrap_or(10),
         };
-        let timeout = u64::from(mdm_settings::number_of(&set, "push_timeout_s", 30));
+        let timeout = mdm_settings::whole_of(&set, "push_timeout_s", 30);
         Ok((settings, Duration::from_secs(timeout)))
     }
 }

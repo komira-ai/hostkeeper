@@ -2,7 +2,7 @@
 
 use std::collections::BTreeMap;
 
-use super::{SETTINGS, find, list_of, number_of, value_of, whole_of};
+use super::{SETTINGS, days_of, find, list_of, value_of, whole_of};
 
 fn check(name: &str, value: &str) -> Option<String> {
     find(name).expect("a setting").check(value)
@@ -113,13 +113,13 @@ fn a_setting_not_set_is_its_default() {
     let mut set = BTreeMap::new();
     let grace = find("secret_grace_days").expect("a setting");
     assert_eq!(value_of(&set, grace), "7");
-    assert_eq!(number_of(&set, "secret_grace_days", 99), 7);
+    assert_eq!(days_of(&set, "secret_grace_days", 99), 7);
     set.insert("secret_grace_days".to_owned(), "2".to_owned());
     assert_eq!(value_of(&set, grace), "2");
-    assert_eq!(number_of(&set, "secret_grace_days", 99), 2);
+    assert_eq!(days_of(&set, "secret_grace_days", 99), 2);
     set.insert("secret_grace_days".to_owned(), "two".to_owned());
-    assert_eq!(number_of(&set, "secret_grace_days", 99), 99);
-    assert_eq!(number_of(&set, "nothing", 5), 5);
+    assert_eq!(days_of(&set, "secret_grace_days", 99), 99);
+    assert_eq!(days_of(&set, "nothing", 5), 5);
 }
 
 /// Proves: the push settings take a whole number of seconds in their range (the expiry may be 0,

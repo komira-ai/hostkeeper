@@ -595,7 +595,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
-    coordinator = coordinator.with_mdm_setup(mdm_setup).with_mdmcert(Arc::new(
+    coordinator = coordinator.with_mdm_setup(mdm_setup);
+    coordinator = coordinator.with_mdmcert(Arc::new(
         hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
     ));
     coordinator = coordinator.with_proxy_cache(proxy_cache);
