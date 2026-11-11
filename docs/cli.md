@@ -513,6 +513,27 @@ another is refused `name_locked`, and the same name is taken again.
 |---|---|---|
 | `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
 
+#### `hkctl mdm verify`
+
+`/hostkeeper.operator.v1.Mdm/Verify`
+
+Reads the setup back and proves its parts work, as a button of the setup page: the status as
+`Status` computes it; whether the Macs' listener runs and which names the certificate it serves
+names; with an ABM token held, whether Apple accepts it (`GET /account` of the ABM service,
+which answers only an accepted token); and, when `enrollment_id` names an enrolled Mac, one
+push to it through the sender the queue uses, which proves the push certificate, its topic and
+the environment. The push is a plain push with no command behind it: the Mac that gets it
+connects, is idle, and nothing is queued or recorded for it. What APNs, or the connection to
+it, answered is one class of `MdmPushResult`, so that a wrong topic, a dead token and a
+certificate of the wrong environment are told apart. Session-only; audited as `mdm_verify`
+with the enrollment id, before the push is sent. A failed check is in the answer, not a
+refusal. Refused `unauthorized`, `forbidden`, `invalid_request` (the enrollment id is not
+one), `audit_unavailable`, `store_failed`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--enrollment-id` | STRING | The enrollment id of the enrolled Mac to send the test push to (as `ListDevices` lists it); empty sends none and checks the rest. |
+
 ### `releases`
 
 The service `Releases` of the package `hostkeeper.operator.v1`. The desired version of each service, how far the hosts are, and the operator's overrides.

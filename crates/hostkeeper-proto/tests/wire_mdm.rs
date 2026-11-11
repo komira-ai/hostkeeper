@@ -34,7 +34,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32, bool)> {
 type Field = (&'static str, u32, bool);
 
 /// The fields of the messages of `Mdm`, pinned by name, number and presence.
-const FIELDS: [(&str, &[Field]); 24] = [
+const FIELDS: [(&str, &[Field]); 28] = [
     (
         "hostkeeper.operator.v1.ListDevicesRequest",
         &[("limit", 1, false), ("page_token", 2, false)],
@@ -197,6 +197,40 @@ const FIELDS: [(&str, &[Field]); 24] = [
         "hostkeeper.operator.v1.PutNameResponse",
         &[("name", 1, false), ("enrollment_url", 2, false)],
     ),
+    (
+        "hostkeeper.operator.v1.VerifyRequest",
+        &[("enrollment_id", 1, false)],
+    ),
+    (
+        "hostkeeper.operator.v1.MdmAbmCheck",
+        &[
+            ("result", 1, false),
+            ("organization", 2, false),
+            ("detail", 3, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.MdmPushCheck",
+        &[
+            ("enrollment_id", 1, false),
+            ("result", 2, false),
+            ("detail", 3, false),
+            ("apns_id", 4, false),
+            ("topic", 5, false),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.VerifyResponse",
+        &[
+            ("status", 1, true),
+            ("listener", 2, false),
+            ("serving", 3, false),
+            ("served_names", 4, false),
+            ("served_names_the_name", 5, false),
+            ("abm", 6, true),
+            ("push", 7, true),
+        ],
+    ),
 ];
 
 /// Catches: a name of the MDM gate's API renamed or renumbered without this test changing with
@@ -227,6 +261,7 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
             "Status(MdmStatusRequest) MdmStatusResponse",
             "PutName(PutNameRequest) PutNameResponse",
+            "Verify(VerifyRequest) VerifyResponse",
         ]
     );
 
@@ -296,6 +331,48 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             ("authenticated", 1),
             ("enrolled", 2),
             ("checked_out", 3),
+        ])
+    );
+
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmAbmResult",
+            "MDM_ABM_RESULT_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("no_token", 1),
+            ("not_checked", 2),
+            ("accepted", 3),
+            ("rejected", 4),
+            ("unreachable", 5),
+            ("unreadable", 6),
+        ])
+    );
+    assert_eq!(
+        tokens(
+            &pool,
+            "hostkeeper.operator.v1.MdmPushResult",
+            "MDM_PUSH_RESULT_"
+        ),
+        owned(&[
+            ("unspecified", 0),
+            ("sent", 1),
+            ("no_push_identity", 2),
+            ("no_listener", 3),
+            ("no_such_enrollment", 4),
+            ("no_push_token", 5),
+            ("bad_device_token", 6),
+            ("unregistered", 7),
+            ("topic_disallowed", 8),
+            ("bad_certificate_environment", 9),
+            ("certificate_rejected", 10),
+            ("no_client_certificate", 11),
+            ("throttled", 12),
+            ("apns_unavailable", 13),
+            ("rejected", 14),
+            ("connection_failed", 15),
         ])
     );
 

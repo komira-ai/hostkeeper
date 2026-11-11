@@ -1,7 +1,8 @@
-// MDM setup: the status panel and the push certificate step. Calls: Mdm.Status and Mdm.ListSettings
-// (the thresholds of the reminders) on every drawing; on a button, Mdm.CreatePushRequest,
-// Mdm.PutPushReply and Mdm.PutPushCertificate (a certificate for the pending request, or, with a key,
-// an existing certificate and key).
+// MDM setup: the status panel, the push certificate step and the verification. Calls: Mdm.Status
+// and Mdm.ListSettings (the thresholds of the reminders) on every drawing; on a button,
+// Mdm.CreatePushRequest, Mdm.PutPushReply and Mdm.PutPushCertificate (a certificate for the pending
+// request, or, with a key, an existing certificate and key), Mdm.ListDevices (the Macs to push to)
+// and Mdm.Verify.
 //
 // The status panel is what the coordinator computes from its records: *configured*, or what is
 // missing, in words; the name; and, for the push certificate and key, the ABM token and the TLS
@@ -18,13 +19,20 @@
 // portal. *Store certificate* takes the certificate Apple returns. The migration takes an existing
 // certificate and its key (PKCS#1 or PKCS#8) in one step.
 //
+// *Verify* reads the setup back and proves its parts work: the listener and the certificate it
+// serves, whether Apple accepts the ABM token and, for the Mac chosen from the enrolled ones, one
+// test push. A failure of the push is told by its class (a dead token, a wrong topic, a
+// certificate of the wrong environment), because each is mended differently. The Macs are loaded
+// by a button, so that drawing the page asks for nothing it does not show.
+//
 // Uploads are read when the button is pressed, sent and dropped: a file is kept only as the file
 // the browser handed over, never its contents, and a key is never typed or pasted. The page shows
 // no value of a secret, only what the coordinator says of it (kind, version, fingerprint, expiry).
 
 import { toBase64, utf8 } from "../bytes.js";
 import {
-  h, action, area, checkbox, errorView, field, filePicker, fmtUnix, table, trimmed,
+  h, action, allPages, area, checkbox, enumLabel, errorView, field, filePicker, fmtUnix, select, table,
+  trimmed,
 } from "../view.js";
 
 const TITLE = "MDM setup";
@@ -346,6 +354,118 @@ function migrationSection(ctx, flow) {
     }));
 }
 
+// What the ABM check says, by the token of `MdmAbmResult`.
+const ABM_WORDS = {
+  no_token: "No ABM token is held: nothing to check.",
+  not_checked: "An ABM token is held and this coordinator cannot ask Apple about it.",
+  accepted: "Apple accepts the ABM token.",
+  rejected: "Apple refused the ABM token.",
+  unreachable: "Apple could not be reached, or its answer says nothing of the token.",
+  unreadable: "The ABM token held cannot be read, so Apple was not asked.",
+};
+
+// What the test push says, by the token of `MdmPushResult`: what happened and what it means.
+const PUSH_WORDS = {
+  sent: "APNs took the push: the push certificate, its topic and its environment are right. "
+    + "It does not show that the Mac woke.",
+  no_push_identity: "No push certificate with a matching key is held, so nothing was sent.",
+  no_listener: "The coordinator runs no MDM listener (--mdm-listen), so nothing was sent.",
+  no_such_enrollment: "No live enrollment has that id, so nothing was sent.",
+  no_push_token: "The Mac has sent no push token yet, so nothing was sent.",
+  bad_device_token: "APNs refused the Mac's push token (BadDeviceToken). The token is not one APNs knows "
+    + "for this topic; this Mac may have to enroll again. It says nothing against the setup.",
+  unregistered: "APNs says the Mac's push token is no longer active. This Mac may have to enroll again.",
+  topic_disallowed: "APNs refused the topic (TopicDisallowed): the push certificate may not push to the "
+    + "topic the Macs enrolled with. The certificate and the topic do not belong together, for every Mac.",
+  bad_certificate_environment: "The push certificate is for the other APNs environment "
+    + "(BadCertificateEnvironment): a development certificate cannot push to the production service. "
+    + "Store a production push certificate.",
+  certificate_rejected: "APNs or the connection refused the push certificate. Store a valid push certificate.",
+  no_client_certificate: "APNs saw no client certificate.",
+  throttled: "APNs says there are too many pushes for this Mac or topic. Try again later.",
+  apns_unavailable: "APNs cannot take a push now. Try again later.",
+  rejected: "APNs refused the push.",
+  connection_failed: "The connection to APNs failed, or did not answer in time.",
+};
+
+// The sentence for a value of `missing`'s token or a check's token, from `words`; a token this
+// page does not know is shown as it is.
+function wordsOf(value, prefix, words) {
+  const token = enumLabel(value, prefix);
+  return words[token] || token;
+}
+
+// The Mac's label in the chooser: its host id, else its serial, else its enrollment id.
+function macLabel(device) {
+  const name = device.hostId || device.serial || device.enrollmentId;
+  return device["group"] ? `${name} (${device["group"]}, ${device.enrollmentId})` : `${name} (${device.enrollmentId})`;
+}
+
+// The detail an answer gives, in brackets after the sentence.
+function withDetail(sentence, detail) {
+  return detail ? `${sentence} (${detail})` : sentence;
+}
+
+// What the listener does, in a sentence.
+function listenerWords(reply) {
+  if (reply.listener !== true) {
+    return "The Macs' listener is not running (--mdm-listen is not set).";
+  }
+  if (reply.serving !== true) {
+    return "The Macs' listener runs and has no TLS certificate to serve: no Mac can connect.";
+  }
+  const names = (reply.servedNames || []).join(", ") || "-";
+  return reply.servedNamesTheName === true
+    ? `The Macs' listener serves a certificate for ${names}, which names the MDM name.`
+    : `The Macs' listener serves a certificate for ${names}, which does not name the MDM name.`;
+}
+
+// The result of a verification, as a table of what each part found.
+function verifyResult(reply) {
+  const status = reply.status || {};
+  const missing = status.missing || [];
+  const rows = [
+    ["Setup", status.configured === true ? "Configured." : `Not configured: ${missing.map(conditionWords).join(" ")}`],
+    ["Listener", listenerWords(reply)],
+    ["ABM", withDetail(
+      wordsOf(reply.abm && reply.abm.result, "MDM_ABM_RESULT_", ABM_WORDS)
+        + (reply.abm && reply.abm.organization ? ` Account: ${reply.abm.organization}.` : ""),
+      reply.abm && reply.abm.detail)],
+  ];
+  if (reply.push) {
+    const push = reply.push;
+    const sentence = wordsOf(push.result, "MDM_PUSH_RESULT_", PUSH_WORDS);
+    rows.push([`Test push to ${push.enrollmentId}`, withDetail(sentence, push.detail)
+      + (push.apnsId ? ` APNs id ${push.apnsId}.` : "")]);
+  }
+  return h("div", { name: "verify-result" },
+    table(["", "Found"], rows.map(([k, v]) => h("tr", {}, h("th", {}, k), h("td", {}, v)))));
+}
+
+function verifySection(ctx, flow) {
+  const options = [["", "None: do not push"]].concat(flow.macs.map((d) => [d.enrollmentId, macLabel(d)]));
+  return h("fieldset", {},
+    h("legend", {}, "Verify the setup"),
+    h("p", { class: "note" },
+      "Reads the setup back, asks Apple whether the ABM token is accepted and, for the Mac chosen, sends "
+      + "one test push through the push certificate. The push carries no command: the Mac that gets it "
+      + "only connects."),
+    action(ctx, "Load enrolled Macs", "load-macs", async () => {
+      const devices = await allPages((token) => ctx.api.mdm.listDevices({ pageToken: token }), "devices");
+      flow.macs = devices.filter((d) => d.phase === "MDM_PHASE_ENROLLED");
+      flow.mac = "";
+      await again(ctx, flow);
+      return `${flow.macs.length} enrolled Mac${flow.macs.length === 1 ? "" : "s"}.`;
+    }),
+    select("Mac to push to", "verify-mac", flow, "mac", options),
+    action(ctx, "Verify", "verify", async () => {
+      flow.verified = await ctx.api.mdm.verify(flow.mac === "" ? {} : { enrollmentId: flow.mac });
+      await again(ctx, flow);
+      return "Verified. See what each part found.";
+    }),
+    flow.verified === null ? null : verifyResult(flow.verified));
+}
+
 async function view(ctx, flow) {
   let status;
   try {
@@ -363,7 +483,9 @@ async function view(ctx, flow) {
     createSection(ctx, flow),
     replySection(ctx, flow),
     certificateSection(ctx, flow),
-    migrationSection(ctx, flow));
+    migrationSection(ctx, flow),
+    h("h3", {}, "Verify"),
+    verifySection(ctx, flow));
 }
 
 export async function render(ctx) {
@@ -379,5 +501,8 @@ export async function render(ctx) {
     existingCertFile: null,
     existingCertText: "",
     existingKeyFile: null,
+    macs: [],
+    mac: "",
+    verified: null,
   });
 }

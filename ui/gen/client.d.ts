@@ -51,6 +51,7 @@ export interface Client {
     putPushCertificate(request: hostkeeper_operator_v1.PutPushCertificateRequest): Promise<hostkeeper_operator_v1.PutPushCertificateResponse>;
     status(request: hostkeeper_operator_v1.MdmStatusRequest): Promise<hostkeeper_operator_v1.MdmStatusResponse>;
     putName(request: hostkeeper_operator_v1.PutNameRequest): Promise<hostkeeper_operator_v1.PutNameResponse>;
+    verify(request: hostkeeper_operator_v1.VerifyRequest): Promise<hostkeeper_operator_v1.VerifyResponse>;
   };
   readonly releases: {
     setDesired(request: hostkeeper_operator_v1.SetDesiredRequest): Promise<hostkeeper_operator_v1.SetDesiredResponse>;
@@ -522,6 +523,15 @@ export namespace hostkeeper_operator_v1 {
   export interface LiveRollout { service?: string; reason?: hostkeeper_operator_v1.LiveReason; nodeId?: string; }
   export interface MarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface MarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface MdmAbmCheck { result?: hostkeeper_operator_v1.MdmAbmResult; organization?: string; detail?: string; }
+  export type MdmAbmResult =
+    | "MDM_ABM_RESULT_UNSPECIFIED"
+    | "MDM_ABM_RESULT_NO_TOKEN"
+    | "MDM_ABM_RESULT_NOT_CHECKED"
+    | "MDM_ABM_RESULT_ACCEPTED"
+    | "MDM_ABM_RESULT_REJECTED"
+    | "MDM_ABM_RESULT_UNREACHABLE"
+    | "MDM_ABM_RESULT_UNREADABLE";
   export type MdmBaseline = "MDM_BASELINE_UNSPECIFIED" | "MDM_BASELINE_PENDING" | "MDM_BASELINE_APPLIED" | "MDM_BASELINE_FAILED";
   export interface MdmCommand { requestType?: string; commandUuid?: string; sentUnix?: string; }
   export type MdmCondition =
@@ -566,6 +576,30 @@ export namespace hostkeeper_operator_v1 {
     baseline?: hostkeeper_operator_v1.MdmBaseline;
   }
   export type MdmPhase = "MDM_PHASE_UNSPECIFIED" | "MDM_PHASE_AUTHENTICATED" | "MDM_PHASE_ENROLLED" | "MDM_PHASE_CHECKED_OUT";
+  export interface MdmPushCheck {
+    enrollmentId?: string;
+    result?: hostkeeper_operator_v1.MdmPushResult;
+    detail?: string;
+    apnsId?: string;
+    topic?: string;
+  }
+  export type MdmPushResult =
+    | "MDM_PUSH_RESULT_UNSPECIFIED"
+    | "MDM_PUSH_RESULT_SENT"
+    | "MDM_PUSH_RESULT_NO_PUSH_IDENTITY"
+    | "MDM_PUSH_RESULT_NO_LISTENER"
+    | "MDM_PUSH_RESULT_NO_SUCH_ENROLLMENT"
+    | "MDM_PUSH_RESULT_NO_PUSH_TOKEN"
+    | "MDM_PUSH_RESULT_BAD_DEVICE_TOKEN"
+    | "MDM_PUSH_RESULT_UNREGISTERED"
+    | "MDM_PUSH_RESULT_TOPIC_DISALLOWED"
+    | "MDM_PUSH_RESULT_BAD_CERTIFICATE_ENVIRONMENT"
+    | "MDM_PUSH_RESULT_CERTIFICATE_REJECTED"
+    | "MDM_PUSH_RESULT_NO_CLIENT_CERTIFICATE"
+    | "MDM_PUSH_RESULT_THROTTLED"
+    | "MDM_PUSH_RESULT_APNS_UNAVAILABLE"
+    | "MDM_PUSH_RESULT_REJECTED"
+    | "MDM_PUSH_RESULT_CONNECTION_FAILED";
   export interface MdmSetting { name?: string; value?: string; isDefault?: boolean; }
   export interface MdmStatusRequest {
   }
@@ -816,6 +850,16 @@ export namespace hostkeeper_operator_v1 {
   export interface UnholdResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnmarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface VerifyRequest { enrollmentId?: string; }
+  export interface VerifyResponse {
+    status?: hostkeeper_operator_v1.MdmStatusResponse;
+    listener?: boolean;
+    serving?: boolean;
+    servedNames?: string[];
+    servedNamesTheName?: boolean;
+    abm?: hostkeeper_operator_v1.MdmAbmCheck;
+    push?: hostkeeper_operator_v1.MdmPushCheck;
+  }
   export interface WaitConvergedRequest { service?: string; version?: string; waitSecs?: number; hostGroup?: string; }
   export interface WaitConvergedResponse { outcome?: hostkeeper_operator_v1.WaitOutcome; convergence?: hostkeeper_operator_v1.Convergence; }
   export type WaitOutcome =

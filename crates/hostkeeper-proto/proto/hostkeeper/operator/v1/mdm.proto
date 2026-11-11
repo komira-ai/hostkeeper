@@ -111,6 +111,20 @@ service Mdm {
   // (Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
   // another is refused `name_locked`, and the same name is taken again.
   rpc PutName(PutNameRequest) returns (PutNameResponse);
+
+  // Reads the setup back and proves its parts work, as a button of the setup page: the status as
+  // `Status` computes it; whether the Macs' listener runs and which names the certificate it serves
+  // names; with an ABM token held, whether Apple accepts it (`GET /account` of the ABM service,
+  // which answers only an accepted token); and, when `enrollment_id` names an enrolled Mac, one
+  // push to it through the sender the queue uses, which proves the push certificate, its topic and
+  // the environment. The push is a plain push with no command behind it: the Mac that gets it
+  // connects, is idle, and nothing is queued or recorded for it. What APNs, or the connection to
+  // it, answered is one class of `MdmPushResult`, so that a wrong topic, a dead token and a
+  // certificate of the wrong environment are told apart. Session-only; audited as `mdm_verify`
+  // with the enrollment id, before the push is sent. A failed check is in the answer, not a
+  // refusal. Refused `unauthorized`, `forbidden`, `invalid_request` (the enrollment id is not
+  // one), `audit_unavailable`, `store_failed`.
+  rpc Verify(VerifyRequest) returns (VerifyResponse);
 }
 
 // Why `Mdm` refused a request. The token is the value's name without the prefix, in lower case.
@@ -468,4 +482,109 @@ message PutNameResponse {
   string name = 1;
   // `https://<name>/enroll`.
   string enrollment_url = 2;
+}
+
+// What the ABM check found.
+enum MdmAbmResult {
+  MDM_ABM_RESULT_UNSPECIFIED = 0;
+  // No ABM token is held: nothing to check.
+  MDM_ABM_RESULT_NO_TOKEN = 1;
+  // A token is held and this coordinator has no ABM client to ask Apple with.
+  MDM_ABM_RESULT_NOT_CHECKED = 2;
+  // Apple answered the account request: the token is accepted.
+  MDM_ABM_RESULT_ACCEPTED = 3;
+  // Apple refused the token (a 401 or 403 answer, or an OAuth session refused).
+  MDM_ABM_RESULT_REJECTED = 4;
+  // Apple could not be reached, or answered in a way that says nothing of the token.
+  MDM_ABM_RESULT_UNREACHABLE = 5;
+  // The token held cannot be read, so Apple was not asked.
+  MDM_ABM_RESULT_UNREADABLE = 6;
+}
+
+// What the test push found: one class for each way a push to a Mac ends.
+enum MdmPushResult {
+  MDM_PUSH_RESULT_UNSPECIFIED = 0;
+  // APNs took the push (`200`). It proves the certificate, the topic and the environment, not
+  // that the Mac woke.
+  MDM_PUSH_RESULT_SENT = 1;
+  // No push certificate with a matching key is held, so there is nothing to push with.
+  MDM_PUSH_RESULT_NO_PUSH_IDENTITY = 2;
+  // The coordinator runs no MDM listener (`--mdm-listen`), so it has no sender or Macs.
+  MDM_PUSH_RESULT_NO_LISTENER = 3;
+  // No live enrollment has that id.
+  MDM_PUSH_RESULT_NO_SUCH_ENROLLMENT = 4;
+  // The enrollment has sent no `TokenUpdate`, so it has no push token to push.
+  MDM_PUSH_RESULT_NO_PUSH_TOKEN = 5;
+  // APNs `400 BadDeviceToken`: the token is not one APNs knows for this topic. Specific to this
+  // Mac; the setup may be right.
+  MDM_PUSH_RESULT_BAD_DEVICE_TOKEN = 6;
+  // APNs `410`: the token is no longer active.
+  MDM_PUSH_RESULT_UNREGISTERED = 7;
+  // APNs `400 TopicDisallowed`: the certificate may not push to the topic. A setup mistake, the
+  // same for every Mac.
+  MDM_PUSH_RESULT_TOPIC_DISALLOWED = 8;
+  // The connection ended with `BadCertificateEnvironment`: the certificate is for the other APNs
+  // environment (sandbox, not production).
+  MDM_PUSH_RESULT_BAD_CERTIFICATE_ENVIRONMENT = 9;
+  // APNs, or the TLS handshake, refused the push certificate for another reason (a `403`, or a
+  // certificate alert such as expired or unknown CA); the detail is in `detail`.
+  MDM_PUSH_RESULT_CERTIFICATE_REJECTED = 10;
+  // APNs saw no client certificate.
+  MDM_PUSH_RESULT_NO_CLIENT_CERTIFICATE = 11;
+  // APNs `429`: too many pushes for the device or the topic.
+  MDM_PUSH_RESULT_THROTTLED = 12;
+  // APNs `500` or `503`: APNs cannot take it now.
+  MDM_PUSH_RESULT_APNS_UNAVAILABLE = 13;
+  // Any other answer of APNs; the status and reason are in `detail`.
+  MDM_PUSH_RESULT_REJECTED = 14;
+  // The connection to APNs could not be made, broke, or did not answer in time.
+  MDM_PUSH_RESULT_CONNECTION_FAILED = 15;
+}
+
+message VerifyRequest {
+  // The enrollment id of the enrolled Mac to send the test push to (as `ListDevices` lists it);
+  // empty sends none and checks the rest.
+  string enrollment_id = 1;
+}
+
+// What the ABM check found.
+message MdmAbmCheck {
+  MdmAbmResult result = 1;
+  // The organisation name Apple's account answer gave, when accepted: the account the token is
+  // for. Public, and never a token part.
+  string organization = 2;
+  // Why not accepted, in words, when it was not; never holds a token part.
+  string detail = 3;
+}
+
+// What the test push found.
+message MdmPushCheck {
+  // The enrollment id asked for.
+  string enrollment_id = 1;
+  MdmPushResult result = 2;
+  // What APNs or the connection said, when the push failed: the reason or the alert, in words.
+  // Never holds a token or a key.
+  string detail = 3;
+  // The `apns-id` APNs gave a push it took; empty otherwise.
+  string apns_id = 4;
+  // The topic pushed to; empty when no push was made.
+  string topic = 5;
+}
+
+message VerifyResponse {
+  // The setup read back, exactly as `Status` computes it at this call.
+  MdmStatusResponse status = 1;
+  // Whether the Macs' listener runs (`--mdm-listen`).
+  bool listener = 2;
+  // Whether the listener has a TLS certificate to serve now; the Macs' handshakes fail without.
+  bool serving = 3;
+  // The DNS names of the certificate the listener serves now (the one in use, once it and its key
+  // make a TLS configuration); empty when it serves none.
+  repeated string served_names = 4;
+  // Whether a certificate is served that names the MDM name; false when no name is set.
+  bool served_names_the_name = 5;
+  // What Apple said of the ABM token.
+  MdmAbmCheck abm = 6;
+  // The test push; absent when `enrollment_id` was empty.
+  optional MdmPushCheck push = 7;
 }

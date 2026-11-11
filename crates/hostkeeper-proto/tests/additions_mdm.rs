@@ -225,6 +225,51 @@ fn mdm_messages() -> Vec<(&'static str, Vec<u8>)> {
                 enrollment_url: "https://mdm.example.com/enroll".to_owned(),
             }),
         ),
+        (
+            "hostkeeper.operator.v1.VerifyRequest",
+            round_trip(&op::VerifyRequest {
+                enrollment_id: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmAbmCheck",
+            round_trip(&op::MdmAbmCheck {
+                result: op::MdmAbmResult::Accepted.into(),
+                organization: "Example Org".to_owned(),
+                detail: "no detail".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.MdmPushCheck",
+            round_trip(&op::MdmPushCheck {
+                enrollment_id: "66ADE930-5FDF-5EC4-8429-15640684C489".to_owned(),
+                result: op::MdmPushResult::BadCertificateEnvironment.into(),
+                detail: "BadCertificateEnvironment".to_owned(),
+                apns_id: "0a1b2c3d".to_owned(),
+                topic: "com.apple.mgmt.External.0a1b2c3d".to_owned(),
+            }),
+        ),
+        (
+            "hostkeeper.operator.v1.VerifyResponse",
+            round_trip(&op::VerifyResponse {
+                status: Some(op::MdmStatusResponse {
+                    configured: true,
+                    ..op::MdmStatusResponse::default()
+                }),
+                listener: true,
+                serving: true,
+                served_names: vec!["mdm.example.com".to_owned()],
+                served_names_the_name: true,
+                abm: Some(op::MdmAbmCheck {
+                    result: op::MdmAbmResult::NotChecked.into(),
+                    ..op::MdmAbmCheck::default()
+                }),
+                push: Some(op::MdmPushCheck {
+                    result: op::MdmPushResult::Sent.into(),
+                    ..op::MdmPushCheck::default()
+                }),
+            }),
+        ),
     ]
 }
 
@@ -239,7 +284,7 @@ fn the_mdm_messages_round_trip_and_an_older_reader_keeps_unknown_fields() {
         .expect("released");
     assert_eq!(blind.fields().count(), 0);
     let messages = mdm_messages();
-    assert_eq!(messages.len(), 21);
+    assert_eq!(messages.len(), 25);
     for (name, bytes) in messages {
         assert!(older.get_message_by_name(name).is_none(), "{name} is new");
         assert!(!bytes.is_empty(), "{name} sets its fields");

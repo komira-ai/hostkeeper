@@ -73,6 +73,7 @@ const SESSION_ONLY_CALLS: &[&str] = &[
     "hostkeeper.operator.v1.Mdm/CreatePushRequest",
     "hostkeeper.operator.v1.Mdm/PutPushCertificate",
     "hostkeeper.operator.v1.Mdm/PutPushReply",
+    "hostkeeper.operator.v1.Mdm/Verify",
 ];
 
 /// One request for each method of `ui/calls.json`, as proto3 JSON, in the shape the page that
@@ -156,6 +157,7 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Mdm/CreatePushRequest",
         r#"{"email": "ops@example.org", "submit": false}"#,
     ),
+    ("hostkeeper.operator.v1.Mdm/ListDevices", "{}"),
     ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),
     (
         "hostkeeper.operator.v1.Mdm/PutPushCertificate",
@@ -166,6 +168,10 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"reply": "MDBmZg=="}"#,
     ),
     ("hostkeeper.operator.v1.Mdm/Status", "{}"),
+    (
+        "hostkeeper.operator.v1.Mdm/Verify",
+        r#"{"enrollmentId": "mac-1"}"#,
+    ),
     (
         "hostkeeper.operator.v1.Releases/ClearHalt",
         r#"{"service": "kbf", "reason": "fixed"}"#,

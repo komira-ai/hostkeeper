@@ -582,6 +582,18 @@ file (PKCS#1 or PKCS#8) in one call. The page reads a file when its button is pr
 unchanged. The request made in the page is kept in the page only: after a reload the coordinator still holds it pending, and the reply can be checked without it; the CSR is shown again only by making a new request.
 The ABM, name and TLS steps are CM22b and CM22c. The page's downloads go through a `download` function the browser entry gives the app (a blob link); tests give it a recorder.
 
+**What CM11b built of `mdm verify`.** (`mdm_verify.rs`, `Pusher::test_push`, the *Verify* section of `ui/pages/mdm.js`.) `Mdm.Verify` (session-only, audited as
+`mdm_verify` with the enrollment id before anything is sent or asked) answers in one call: the status as `Status` computes it at that call; whether the Macs' listener runs, whether it has a TLS configuration, the
+names of the certificate it serves and whether they cover the MDM name; the ABM check; and, when the caller names an enrolled Mac, a test push. The ABM check asks Apple through a port,
+`AbmAccountCheck`, which the ABM client (CM13) implements and the MDM server holds; `GET /account` is the proof, since it answers only an accepted token (spike `abm.md`). A coordinator with
+no such client answers `not_checked`, never `accepted`; with no token it answers `no_token`, and a token that does not read `unreadable`, without asking. The test push goes through the sender of the queue and
+its pusher, by `Pusher::test_push`, which is outside the push policy: it waits for no floor, arms none and leaves no push outstanding, with `apns-expiration` 0, so that a test push
+a Mac got later proves nothing; no command is queued and nothing is recorded against the Mac. Its result is one class: sent, no push identity, no listener, no such (live) enrollment, no push token,
+and the answers of APNs apart: `BadDeviceToken` and `410` (this Mac's token), `TopicDisallowed` (the certificate and topic do not belong together, for every Mac),
+`BadCertificateEnvironment` (a development certificate on the production service, which arrives as a connection alert, not a response), another certificate refusal, no client certificate, throttled, unavailable, any
+other refusal and a failed connection. A check that fails is a field of the answer, not a refusal. The page loads the enrolled Macs by a button, so that drawing the page asks for nothing it does not show.
+**Not verified:** the ABM check against Apple (only the port and a fake are built until CM13 gives the client), and a test push against the real APNs; the classes are those of the spikes and of `apns.rs`.
+
 **What CM21 built of the status, the name and the device list.** (`mdm_status.rs`, `mdm_certs.rs`, `mdm_name.rs`, `operator_mdm.rs`.) `Mdm.Status` (any operator caller; a read, not audited) computes *configured* at each call from the
 records and stores it nowhere. It holds when: the push certificate and key are held, the key is the certificate's (their public keys are compared; a PKCS#1 or PKCS#8 PEM, RSA or P-256) and the certificate has not
 expired; the ABM token is held, reads, and its `access_secret_expiry` (RFC 3339, as the spike read `2027-10-31T22:01:36Z`) is in the future; the name is set; and a TLS certificate whose subject alternative
@@ -973,7 +985,7 @@ prerequisites are done. Each task updates the docs its change makes stale. Statu
 | CM22a | (**Built**) **UI MDM setup page, first slice** (smallest usable): the status panel with expiry reminders, and the push step (create, mdmcert reply, certificate upload, migration upload). With CM2, CM5 and CM11a this is enough for the interim milestone below | CM7, CM21, L8a | M |
 | CM8 | Named installs (the `installs` setting, with the old file read once), `Settings` and the device name in the baseline, the pinned command list of eight | CM2, CM20 | M |
 | CM11a | MDM listener: `/checkin`, `/mdm`, the optional-client-certificate verifier with per-route checks and the hint list, TLS from the store with a resolver that serves a renewal at once, the in-process queue replacing `NanoHub` with the rules of 4.3 and 5.2 (a claim skips what the connection tried, `NotNow` and a timeout return arm the push, delivery is at least once) and the replacement of an enrollment under 4.2 (the ABM table read at `Authenticate`), signature or certificate checks, the unknown-enrollment answer. **Built.** The webhook is not used with `--mdm-listen` (CM14a deletes it) | CM2, CM5, CM6, CM7, CM20 | L |
-| CM11b | `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
+| CM11b | (**Built**) `mdm verify` (reads back the state, sends a push), as a button on the setup page | CM11a, CM22a | S |
 | CM11c | `GET /pkg/<sha256>.pkg`, streamed and digest-checked | CM11a, CM8 | S |
 | CM13 | ABM client: OAuth session, token decrypt, sync, assign (`POST`, `PUT` fallback), ADE profile definition, the public-key download and token upload as `Mdm` rpcs | CM5, CM6, CM20 | L |
 | CM22b | UI: the ABM step (public key, token upload, last sync, expiry) and the name step with the enrollment URL | CM13, CM21, CM22a | S |

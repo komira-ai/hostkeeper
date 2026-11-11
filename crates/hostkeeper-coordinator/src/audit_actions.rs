@@ -56,6 +56,8 @@ pub const MDM_ACME_CREDENTIAL_PUT: &str = "mdm_acme_credential_put";
 pub const MDM_SECRET_PUT: &str = "mdm_secret_put";
 /// An MDM setting was set.
 pub const MDM_SETTING_SET: &str = "mdm_setting_set";
+/// The MDM setup was verified (`Mdm.Verify`): `subject` the enrollment a test push went to, if any.
+pub const MDM_VERIFY: &str = "mdm_verify";
 
 /// A new enrollment replaced the live enrollment of the serial `subject` (owner decision B):
 /// the serial is in the ABM table, or an operator confirmed the identity.
