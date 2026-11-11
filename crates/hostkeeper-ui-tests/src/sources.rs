@@ -39,6 +39,7 @@ ui_files![
     "app.js",
     "main.js",
     "session.js",
+    "signin.js",
     "view.js",
     "gen/client.js",
     "gen/client.d.ts",
