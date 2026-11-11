@@ -104,7 +104,7 @@ settings add the origin list (section 4). The path passes the locator grammar `r
 - *The cache* is a directory flag, `--proxy-cache-dir` (a directory the host provides; unset means the proxy answers 404 to the routes
   above, which is the state before a deployment opts in). Files are written to `tmp/` and renamed into `objects/` in the same
   filesystem, named by the SHA-256 of the key (origin and path); a sidecar holds the origin's validator, the fetch time and the length.
-  Leftover `tmp/` files are removed at start.
+  Leftover `tmp/` files are removed at start, and so are a body whose length is not its sidecar's and a sidecar with no body (nothing is synced to disk, so a crash can leave them). A commit renames the sidecar first and the body last. Recency is kept in memory; a start orders the objects by fetch time.
 - *Eviction* is least recently used when a commit would pass `proxy_cache_max_bytes` (default 20 GiB), deleting only committed objects.
   Every number here is a setting of the setup page with its default from the start (coordinator-mdm.md 4.9): `proxy_index_ttl_s`,
   `proxy_cache_max_bytes`, `proxy_fetches` (concurrent origin fetches, default 8), `proxy_redirects` (default 3), `proxy_wait_s`.
@@ -207,7 +207,7 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 
 | # | Task | After | Size |
 |---|---|---|---|
-| PP1 | The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults | coordinator-mdm.md CM20 | M |
+| PP1 | (**Built**, `hostkeeper-coordinator/src/proxy_cache.rs` and `proxy_cache_disk.rs`) The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults. It is a library with `--proxy-cache-dir` opening it at start; no route uses it until PP2. The settings built are `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`; `proxy_origins` comes with PP2 | coordinator-mdm.md CM20 | M |
 | PP2 | `GET /apt/<repo>/...` on the MDM listener: public-repository routes, index TTL and revalidation, redirect-following origin client | PP1, CM11a | M |
 | PP3 | `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit | PP1, CM11c | S |
 | PP4 | Docs: the packages-native.md and hostkeeper-design.md statements about the channel | none | S |
