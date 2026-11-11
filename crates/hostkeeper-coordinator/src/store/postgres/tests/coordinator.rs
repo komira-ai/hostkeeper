@@ -139,7 +139,11 @@ pub(super) fn start_on_postgres(
             .with_marker(marker.to_owned())
             .with_unix(Arc::new(|| AT)),
     )
-    .with_verdicts(VerdictFile::over(backend, loaded.verdicts))
+    .with_verdicts(VerdictFile::over(Arc::clone(&backend), loaded.verdicts))
+    .with_accounts(crate::accounts::AccountStore::over(
+        backend,
+        loaded.accounts,
+    ))
 }
 
 impl Farm {
@@ -472,6 +476,35 @@ async fn a_commit_that_landed_before_its_session_was_lost_is_taken_into_memory()
         .expect("the call made again succeeds");
     assert_eq!(farm.rig.coordinator.ops().state().excluded.len(), 1);
     assert_eq!(farm.count("exclusions"), 1);
+}
+
+/// Proves: a change of the users and API tokens that landed before its session was lost is taken
+/// into the coordinator's account store at the next heartbeat after the revival: the change is
+/// refused, memory lacks the user while the table holds it, and afterwards memory holds the user
+/// and the token.
+///
+/// Catches: an account store that never learns of a user the database holds, so an admin's retry
+/// is refused as a name already taken while nobody can sign in as that user until a restart.
+#[tokio::test]
+async fn an_accounts_change_that_landed_before_its_session_was_lost_is_taken_into_memory() {
+    let farm = Farm::plain("pg-accounts-landed").seeded().await;
+    let held = crate::store::conformance_tests::rich_accounts();
+    farm.store
+        .on_writer(|writer| writer.fault = Some(Fault::LoseAfterCommit))
+        .expect("the writer runs");
+
+    let refused = farm.rig.coordinator.accounts().change(|_| Ok(held.clone()));
+    assert!(refused.is_err(), "{refused:?}");
+    assert_eq!(
+        farm.rig.coordinator.accounts().snapshot(),
+        crate::accounts::Accounts::default()
+    );
+    assert_eq!(farm.count("users"), 2, "the table holds them");
+
+    farm.revive();
+    ask(&farm.rig, "d1", DAEMON, daemon("1.0"));
+    assert_eq!(farm.rig.coordinator.accounts().snapshot(), held);
+    assert_eq!(farm.count("api_tokens"), 2);
 }
 
 /// Proves: a commit whose session was lost before the server committed it is not taken: the

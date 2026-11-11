@@ -64,7 +64,7 @@ fn restore_refuses_targets_that_hold_state_and_leaves_them_as_they_were() {
     let paths = targets_in(&target);
     let ops = paths.ops_file();
     let state = paths.state_file.clone();
-    let mut held: Vec<PathBuf> = [".jti", ".verdicts"]
+    let mut held: Vec<PathBuf> = [".jti", ".verdicts", ".accounts"]
         .iter()
         .map(|suffix| PathBuf::from(format!("{}{suffix}", state.display())))
         .collect();
@@ -476,6 +476,7 @@ fn a_backup_copies_the_store_files_alone_and_names_what_it_passed_over() {
             format!("{state}.releases"),
             format!("{state}.repositories"),
             format!("{state}.verdicts"),
+            format!("{state}.accounts"),
             ops.clone(),
             format!("{ops}.audit"),
             format!("{ops}.halts"),

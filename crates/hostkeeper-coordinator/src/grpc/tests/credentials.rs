@@ -32,7 +32,7 @@ const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]
 
 /// The path of each method of the operator API that has a handler: every one but those of
 /// [`PENDING`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
-fn operator_paths() -> Vec<&'static str> {
+pub(super) fn operator_paths() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .filter(|command| command.package == "hostkeeper.operator.v1")
@@ -477,10 +477,10 @@ async fn admitted_debug_never_prints_the_bearer() {
     let text = format!("{operator:?}");
     assert_eq!(
         text,
-        format!("Operator {{ caller: {:?}, .. }}", Caller::Operator(name))
+        format!("Operator {{ caller: {:?} }}", Caller::Operator(name))
     );
     assert!(!text.contains(OPERATOR), "{text}");
-    assert!(matches!(operator, Admitted::Operator { bearer, .. } if bearer == OPERATOR));
+    assert!(matches!(operator, Admitted::Operator { .. }));
 
     let certificate = updater("host-1", "storage");
     let der = certificate.as_deref().expect("a certificate");

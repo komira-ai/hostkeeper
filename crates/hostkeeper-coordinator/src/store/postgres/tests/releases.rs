@@ -529,7 +529,6 @@ impl Releasing {
         let mut request = Request::new(message);
         request.extensions_mut().insert(Admitted::Operator {
             caller: self.coordinator.caller(Some(OPERATOR)).await,
-            bearer: OPERATOR.to_owned(),
         });
         request
     }

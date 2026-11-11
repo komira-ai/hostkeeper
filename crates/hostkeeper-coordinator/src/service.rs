@@ -13,6 +13,7 @@ use hostkeeper_wire::version::Version;
 use hostkeeper_wire::wire::{Answer, Heartbeat, ORDER_FEATURE, ServiceReply, VerdictAck};
 use serde::Serialize;
 
+use crate::accounts::AccountStore;
 use crate::desired::{Desired, DesiredError, DesiredStore, StoreError};
 use crate::enrollment::Enrollment;
 use crate::fleet::{Fleet, Node, QUIET_START};
@@ -237,6 +238,12 @@ pub struct Coordinator {
     /// Shared with enrollment, which audits its approvals there.
     pub(crate) ops: Arc<OpsStore>,
     pub(crate) verdicts: VerdictFile,
+    accounts: AccountStore,
+    /// The initial-admin file of `--initial-admin-file` ([`crate::initial_admin`]).
+    pub(crate) initial_admin: Option<crate::initial_admin::InitialAdmin>,
+    /// The sessions, the limiter and the passwords of the sign-in ([`crate::login`]); none: the
+    /// sign-in routes are not served and no cookie is read.
+    login: Option<crate::login::Login>,
     verifier: Arc<Verifier>,
     tokens: OperatorTokens,
     pub(crate) clock: Clock,
@@ -303,6 +310,9 @@ impl Coordinator {
             prefixes: SanPrefixes::default(),
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
+            accounts: AccountStore::volatile(),
+            initial_admin: None,
+            login: None,
             verifier,
             tokens: operator.into(),
             clock,
@@ -398,6 +408,41 @@ impl Coordinator {
         }
         self.verdicts = verdicts;
         self
+    }
+
+    /// The same coordinator over the users and API tokens of `accounts` instead of a store that
+    /// keeps nothing.
+    #[must_use]
+    pub fn with_accounts(mut self, accounts: AccountStore) -> Self {
+        self.accounts = accounts;
+        self
+    }
+
+    /// The same coordinator looking at `initial_admin` ([`Coordinator::look_at_initial_admin`]).
+    #[must_use]
+    pub fn with_initial_admin(mut self, initial_admin: crate::initial_admin::InitialAdmin) -> Self {
+        self.initial_admin = Some(initial_admin);
+        self
+    }
+
+    /// The same coordinator serving the sign-in routes and reading the session cookie of the
+    /// JSON gateway, over `login`.
+    #[must_use]
+    pub fn with_login(mut self, login: crate::login::Login) -> Self {
+        self.login = Some(login);
+        self
+    }
+
+    /// The sign-in's sessions, limiter and passwords, if the coordinator has them.
+    #[must_use]
+    pub fn login(&self) -> Option<&crate::login::Login> {
+        self.login.as_ref()
+    }
+
+    /// The operator's users and API tokens the store keeps.
+    #[must_use]
+    pub fn accounts(&self) -> &AccountStore {
+        &self.accounts
     }
 
     /// The same coordinator advertising `features` instead of [`FEATURES`].
@@ -818,8 +863,17 @@ impl Coordinator {
     /// [`OperateError`].
     pub fn operate(&self, bearer: Option<&str>, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let by = self.operator(bearer)?;
+        self.operate_as(by.as_str(), body)
+    }
+
+    /// [`Self::operate`] for the operator `by`, whom the transport has already identified: by a
+    /// bearer, or by the session of a signed-in user.
+    ///
+    /// # Errors
+    /// [`OperateError`].
+    pub(crate) fn operate_as(&self, by: &str, body: &[u8]) -> Result<AuditEntry, OperateError> {
         let groups = self.desired.host_groups();
-        let entry = crate::operate::operate(&self.ops, &self.services, &groups, by.as_str(), body)?;
+        let entry = crate::operate::operate(&self.ops, &self.services, &groups, by, body)?;
         self.reconcile();
         Ok(entry)
     }
@@ -853,9 +907,14 @@ impl Coordinator {
     /// [`Unauthorized`].
     pub fn status(&self, bearer: Option<&str>) -> Result<Status, Unauthorized> {
         self.operator(bearer)?;
+        Ok(self.status_now())
+    }
+
+    /// The status as it is now, for an operator the transport has already identified.
+    pub(crate) fn status_now(&self) -> Status {
         let now = (self.clock)();
         let fleet = self.lock_fleet();
-        Ok(self.status_in(&fleet, now))
+        self.status_in(&fleet, now)
     }
 
     /// The status of `fleet` at `now`, which the caller holds locked: what [`Self::status`]

@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use super::{Backend, BackendError, Commit, Health, Loaded};
+use crate::accounts::Accounts;
 use crate::audit_file::{AuditLine, Logged, Query};
 use crate::desired;
 use crate::ops::OpsState;
@@ -25,6 +26,7 @@ struct Durable {
     desired: desired::Held,
     ops: OpsState,
     verdicts: verdict_file::Held,
+    accounts: Accounts,
     audit: Vec<AuditLine>,
     spent: BTreeMap<String, u64>,
     commits: u64,
@@ -127,6 +129,11 @@ impl Fake {
         self.lock().verdicts.clone()
     }
 
+    /// The accounts committed.
+    pub(crate) fn accounts(&self) -> Accounts {
+        self.lock().accounts.clone()
+    }
+
     /// Every audit line committed, in order.
     pub(crate) fn audit(&self) -> Vec<AuditLine> {
         self.lock().audit.clone()
@@ -158,6 +165,7 @@ impl Backend for Fake {
             desired: durable.desired.clone(),
             ops: durable.ops.clone(),
             verdicts: durable.verdicts.clone(),
+            accounts: durable.accounts.clone(),
             spent: durable
                 .spent
                 .iter()
@@ -180,6 +188,9 @@ impl Backend for Fake {
         }
         if let Some((_, after)) = change.verdicts {
             durable.verdicts = after.clone();
+        }
+        if let Some((_, after)) = change.accounts {
+            durable.accounts = after.clone();
         }
         durable.audit.extend(change.audit.iter().cloned());
         durable.commits += 1;
