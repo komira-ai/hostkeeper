@@ -11,12 +11,9 @@ The coordinator keeps its durable state in one of two stores, chosen by the flag
   `--halt-marker-file` beside it ([The database store](#the-database-store) below). `backup` and
   `restore` are for the file store only.
 
-`hostkeeper-coordinator import` moves the state of a stopped file coordinator into the database, and
 `hostkeeper-coordinator export` writes the database's state back into files
-([Moving between the stores](#moving-between-the-stores-import-and-export) below). And
-`hostkeeper-coordinator host-groups migrate` converts either store from placement by roles to host
-groups ([Converting a store from roles to host groups](#converting-a-store-from-roles-to-host-groups)
-below).
+([Moving from the database to the files](#moving-from-the-database-to-the-files) below). There is
+no verb that moves a file store into a database.
 
 The CA's key is not part of the state in either store and never in a snapshot: back it up once,
 sealed and offline, as [ca-backup.md](ca-backup.md) says.
@@ -92,7 +89,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   a coordinator of the release before is refused on a database that has it (`the database's
   schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
   release is restoring the dump taken before it. The tables of placement by roles stay as they
-  are, and are not read once a group is held (`host-groups migrate` leaves them, as the ops file
+  are, and are not read once a group is held (moving a fleet to groups leaves them, as the ops file
   keeps its `assignments`).
 - **A service's repository.** Migration `0009` adds the column `services.repository` (text, `NULL`
   for the default, `komira`): the repository `Services.SetRepository` set for the package
@@ -141,57 +138,7 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   week of dumps; its runbook has the one-time setup, the restore (into an empty database, then the
   serial counter moved on) and the monthly restore drill.
 
-## Moving between the stores: import and export
-
-`import` moves the state of a file coordinator into a database that holds none. It takes the file
-store's flags, as `serve` names them, and the database's:
-
-```
-hostkeeper-coordinator import --state-file <file> [--ops-file <file>] [--enrollment-dir <dir>] \
-    [--legacy-service <name>] --database-dsn-file <file> [--apply]
-```
-
-- **Without `--apply`** it reads every file and the database and writes nothing anywhere: no lock
-  file is made, no migration runs. It prints the rows each table would hold and whether the
-  database holds state already, which `--apply` would refuse; a database of a newer schema is
-  refused, as `--apply` refuses it.
-- Flags that name no file of a file store (a mistyped `--state-file`) are refused, with
-  `--apply` and without: an import of nothing would leave a database that refuses the next
-  import.
-- **With `--apply`** it takes the lock `<state-file>.lock`, so a running file coordinator refuses it,
-  and then the database's lock, so a coordinator serving on the database refuses it too. It refuses
-  `<ops-file>.halts.unfinished` (start the file coordinator once on the files, so that it settles
-  the changes the marker lists, and stop it), `<state-file>.restore-unfinished` and `<state-file>.migrate-unfinished`. It reads every
-  file with the readers `serve` reads them with, and refuses what `serve` refuses. It runs the
-  migrations, and refuses a database that holds any state row, naming the table. Then, in one
-  transaction, it writes every table; the whole audit history, every sealed segment and the active
-  file, each line with its own number and time; the record of the import in the table `imports`
-  (the name, size and SHA-256 of every file it read, and the time of the oldest audit line the files
-  still held, when older segments were deleted); and the audit row `state_imported` by
-  `coordinator`. It reads it all back through the readers a start uses and compares it with the
-  files. A difference rolls the whole import back and names the first table that differs.
-- A desired-state file in the single-state form is the state of `--legacy-service`, as `serve`
-  reads it.
-- Audit lines this release cannot read (one cut short, one a newer release wrote) are not
-  imported, and the import says how many.
-- The entries of the ops file's audit ring that its audit file has no line of (changes older than
-  the audit file) are not imported, and the import says how many; the row `state_imported` is
-  numbered past them.
-- The MDM gate's device records (`<enrollment-dir>/mdm-devices/<enrollment id>.pb`) are read by the
-  gate's own reader, which refuses a record `serve` would refuse, and written as the rows of
-  `mdm_devices`; `export` writes them back as the same files, byte for byte.
-- What each host's daemon last said it runs, kept in the host's file (`hosts/<host id>.pb`), is the
-  row of the host in `enrollment_host_running`; `export` writes it back into the host's file.
-- The host groups and their desired versions (the state file's `host_groups`) are the rows of
-  `host_groups`, `host_group_packages` and `group_desired`; each (group, package)'s marks (the ops
-  file's `host_groups`) the rows of `group_min_versions`, `group_services`, `group_rollouts` and
-  `group_rollout_done`; `export` writes both keys back only when the database holds one.
-- The registry of package repositories (`<state-file>.repositories`) is written as the rows of
-  `repositories`, one per repository, and the one row of `repository_generation`; `export` writes
-  the file back, also for a registry whose last repository was removed (its generation is not 0).
-- No file is changed: the file coordinator can start again on the same files.
-
-A second import needs an empty database: drop it and create it again first.
+## Moving from the database to the files
 
 `export` writes the state a database holds into files of the file store that hold none:
 
@@ -207,7 +154,7 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
   `<state-file>.restore-unfinished` while it writes, and what it wrote removed again when a write
   fails. A database that holds the enrollment store needs `--enrollment-dir`.
 - The desired-state file is in the single-state form exactly when `--legacy-service` names the only
-  service. The whole audit history is one audit file; a history the import found pruned is written
+  service. The whole audit history is one audit file; a history the database holds as pruned is written
   as the sealed segment `<ops-file>.audit.2`, so the file store says the same time of its oldest
   line.
 - It prints the files it wrote, the rows of every table, and the lines of the audit file.
@@ -216,29 +163,6 @@ To go back from the database to the files: stop the coordinator on the database,
 --into-empty` into new paths, and start the file coordinator on them. Changes made on the
 database are kept. CI's spent token ids that are past are not exported, as the file store drops
 them.
-
-## Converting a store from roles to host groups
-
-`host-groups migrate` converts the store of a stopped coordinator from placement by roles, the
-rollout file and assignments to host groups, which is the only placement `serve` has (it refuses
-`--rollout-file`):
-
-```
-hostkeeper-coordinator host-groups migrate --rollout-file <file> \
-    ( --state-file <file> [--ops-file <file>] --enrollment-dir <dir> | --database-dsn-file <file> ) \
-    [--legacy-service <name>] [--live-rollouts <n>] [--mac-serial-allowlist <file>] [--apply]
-```
-
-Without `--apply` it prints the plan and writes nothing; with it, the plan is written in one commit
-of the files or one transaction of the database, with one audit entry per group by `migration`. The
-plan, its errors, the marker `<state-file>.migrate-unfinished` that a `--apply` stopped partway
-leaves (which `serve`, `backup`, `restore`, `import`, `export` and `migrate` refuse) and the update
-window are in [hostgroups.md](hostgroups.md#migrating-from-roles). On the files, rehearse the dry run
-on a copy made with `export --into-empty` or the backup; `--apply` takes the lock
-`<state-file>.lock`, so a running coordinator refuses it, and, on the database, the database's lock.
-After it the ops file keeps its `assignments`, `rollouts` and per-role state as they were, unread,
-and the state file's and ops file's `host_groups` hold the groups; a coordinator of the release
-before refuses them.
 
 The rest of this page is the file store.
 
@@ -334,7 +258,7 @@ What the restore checks and refuses:
   restored audit as it read before the backup.
 - Before its first file it writes `<state-file>.restore-unfinished`, and it removes the marker
   after its last. A restore that stopped partway (killed, or the machine lost) leaves the marker:
-  `serve` refuses to start while it is there, and so does a second restore. A `<state-file>.migrate-unfinished` (left by a `host-groups migrate --apply` that stopped partway) refuses `serve`, `backup`, `restore` and the other verbs the same way: restore the backup taken before that migration. Remove the files the
+  `serve` refuses to start while it is there, and so does a second restore. A `<state-file>.migrate-unfinished` (left by a `host-groups migrate --apply` of release 0.1.253 that stopped partway) refuses `serve` and `backup`: `<state-file>.migrate-unfinished: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it`; `restore` and `export` take it, in their targets, for state already there, and refuse as for any other file there. Remove the files the
   restore wrote and the marker, and restore again.
 - A write that fails removes what the restore had written. The error names anything it could not
   remove; remove that before restoring again.

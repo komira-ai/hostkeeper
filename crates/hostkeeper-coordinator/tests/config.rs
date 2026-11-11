@@ -640,7 +640,8 @@ fn a_tokens_file_gives_each_token_its_name_and_is_read_again() {
     assert_eq!(exit_code(open), ExitCode::from(1));
 }
 
-/// Proves that a wildcard `--private-listen` is refused at start, however it is spelled (IPv4,
+/// Proves that, without `--private-listen-wildcard`, a wildcard `--private-listen` is refused at
+/// start, however it is spelled (IPv4,
 /// IPv6 and IPv4-mapped IPv6) and through the old flag name too, with the text that names the
 /// flag and the address and exit 1; an address of one interface is accepted, and so is a
 /// wildcard `--heartbeat-listen`, whose flag is unchanged.
@@ -661,7 +662,7 @@ fn a_wildcard_private_listen_is_refused_at_start() {
         assert_eq!(
             why.to_string(),
             format!(
-                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
             )
         );
         assert_eq!(exit_code(given), ExitCode::from(1));

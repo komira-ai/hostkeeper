@@ -201,7 +201,7 @@ pub const CALLERS: &[Caller] = &[
     Caller {
         file: desired::FILE,
         job: desired::JOB,
-        condition: desired::SET_IF,
+        condition: desired::SET_DESIRED_IF,
     },
 ];
 

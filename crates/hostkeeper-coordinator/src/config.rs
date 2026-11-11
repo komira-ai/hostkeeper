@@ -1,9 +1,8 @@
 //! `hostkeeper-coordinator serve`'s flags and start-up: read every file, bind the listeners,
 //! print the start line, then serve until SIGTERM or SIGINT. The binary's other verbs: `backup`
 //! and `restore` copy the state files `serve` keeps and put a copy back ([`crate::backup`]),
-//! under the same lock; `import` and `export` move the state from those files into the database
-//! and back ([`crate::transfer`]); `host-groups migrate` converts a store from roles to host
-//! groups ([`crate::migrate`]).
+//! under the same lock; `export` writes the state the database holds into files of the file
+//! store ([`crate::transfer`]).
 //!
 //! Everything is a flag; the coordinator reads no environment variable. `serve --config <file>`
 //! takes flags from a TOML file, put in place of it before the arguments are parsed
@@ -23,7 +22,8 @@
 //! `--legacy-service` names the one whose heartbeat is the top level of a heartbeat;
 //! the operator's tokens are those of `--tokens-file`, or the one token of
 //! `--operator-token-file`. The private listener (`--private-listen`) serves CI's calls and the
-//! operator's; it takes the address of one interface. With `--ui-dir` it also serves the static
+//! operator's; it takes the address of one interface, or with `--private-listen-wildcard` a
+//! wildcard address. With `--ui-dir` it also serves the static
 //! files of that directory under `/ui/` (`crate::ui`); without the flag, the binary serves
 //! [`DEFAULT_UI_DIR`], where the container image holds the operator web app, when that path is
 //! a directory ([`Serve::with_default_ui_dir`]).
@@ -84,12 +84,11 @@ use crate::listen::{
 };
 use crate::lock::{FileLock, LockError, LockGuard, StateLock};
 use crate::mdm::{Devices, Mdm, MdmFlags};
-use crate::migrate::{HostGroupsCommand, migrate};
 use crate::ops::OpsStore;
 use crate::service::{Clock, Coordinator};
 use crate::store::Spent;
 use crate::tokens::OperatorTokens;
-use crate::transfer::{Export, Import, export, import};
+use crate::transfer::{Export, export};
 use crate::ui::UiDir;
 use crate::verdict_file::VerdictFile;
 
@@ -105,6 +104,10 @@ pub use error::StartError;
 #[path = "config_secs.rs"]
 mod secs;
 use secs::{record_window_secs, request_ttl_secs};
+
+/// The start's checks of the listen addresses.
+#[path = "config_listen.rs"]
+mod listen;
 
 /// The start's check of the Mac serial allowlist against the host groups the store holds.
 #[path = "config_mac.rs"]
@@ -159,16 +162,9 @@ pub enum Command {
     Backup(Backup),
     /// Put a copy `backup` made back, into targets that hold no state.
     Restore(Restore),
-    /// Move the state of a stopped file coordinator into the database of --database-dsn-file, in
-    /// one transaction that reads it back and compares it; without --apply, say what would be
-    /// moved and write nothing. No file is changed.
-    Import(Import),
     /// Write the state the database of --database-dsn-file holds into files of the file store
     /// that hold no state, and the rows of each table.
     Export(Export),
-    /// The conversion of a store from roles to host groups.
-    #[command(subcommand)]
-    HostGroups(HostGroupsCommand),
 }
 
 /// The flags of `serve`.
@@ -189,11 +185,20 @@ pub struct Serve {
     /// The private listener (TLS): where CI sets the desired state and reads the convergence
     /// with its OIDC token, and where an operator reads the status and acts with a token. It
     /// takes the address of one interface (loopback, a tunnel or a management network): a
-    /// wildcard address is refused at start.
+    /// wildcard address is refused at start, unless --private-listen-wildcard is given.
     // The name this flag had, `--control-listen`, is a hidden alias; giving both is refused. It
     // is not in the doc comment above because that is the flag's help, which does not show it.
     #[arg(long, alias = "control-listen")]
     pub private_listen: SocketAddr,
+    /// Take a wildcard --private-listen (`0.0.0.0` or `[::]`): the private listener then
+    /// listens on every interface of the coordinator's network namespace. Give it only in a
+    /// namespace whose interfaces are loopback and one private network, such as a container's
+    /// on one overlay network, where the address of that interface is not known before the
+    /// container starts. No address is trusted: what needs a token without the flag needs it
+    /// with the flag.
+    /// An address of one interface is taken with it as without it.
+    #[arg(long)]
+    pub private_listen_wildcard: bool,
     /// A third listener, on the farm LAN, for network-installed hosts, which have no tailnet:
     /// it serves what the heartbeat listener serves (`Enroll` and `Poll` with no client
     /// certificate, the heartbeat and `Renew` with a host's) and never the operator API, the
@@ -466,14 +471,15 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` or `--lan-listen` is a wildcard address, `--health-listen` is not a
+/// `--private-listen` (without `--private-listen-wildcard`) or `--lan-listen` is a wildcard
+/// address, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,
 /// another coordinator holds the lock of the state files, a halt was being written when the
 /// coordinator stopped, both token flags or neither is given, an allow-list entry names no
 /// services with no legacy service set or names a host group by a name that is no group name,
 /// an entry of the Mac allowlist names services or a group the store does not hold,
-/// `--rollout-file` is given (it is not read; `host-groups migrate` converts it), the two URI
+/// `--rollout-file` is given (it is not read: hosts are placed by the `HostGroups` calls), the two URI
 /// prefixes are refused, or the MDM gate's flags or device records are
 /// ([`crate::mdm::MdmError`]).
 pub fn build(flags: &Serve, roots: Roots) -> Result<Parts, StartError> {
@@ -488,21 +494,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
     if flags.rollout_file.is_some() {
         return Err(StartError::RolloutFileRetired);
     }
-    if flags.private_listen.ip().to_canonical().is_unspecified() {
-        return Err(StartError::PrivateListen(flags.private_listen));
-    }
-    if let Some(lan) = flags
-        .lan_listen
-        .filter(|lan| lan.ip().to_canonical().is_unspecified())
-    {
-        return Err(StartError::LanListen(lan));
-    }
-    if let Some(health) = flags
-        .health_listen
-        .filter(|health| !health.ip().to_canonical().is_loopback())
-    {
-        return Err(StartError::HealthListen(health));
-    }
+    listen::check_listen(flags)?;
     if flags.quiet_secs < QUIET_START.as_secs() {
         return Err(StartError::QuietBelowFloor {
             secs: flags.quiet_secs,
@@ -936,9 +928,9 @@ fn runtime(flags: Serve) -> Result<(), StartError> {
     runtime.block_on(start(flags, Roots::System, bind_tcp, signalled()))
 }
 
-/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore,
-/// import or export is exit 1; SIGTERM or SIGINT, a backup made, a restore, import or export
-/// done, and an import's plan said are exit 0. `serve` without
+/// The binary: flags in, exit code out. Bad flags are exit 2; a failed start, backup, restore or
+/// export is exit 1; SIGTERM or SIGINT, a backup made, and a restore or export done are exit 0.
+/// `serve` without
 /// `--ui-dir` serves [`DEFAULT_UI_DIR`] when it is a directory ([`Serve::with_default_ui_dir`]).
 #[must_use]
 pub fn main(args: Vec<OsString>) -> ExitCode {
@@ -969,15 +961,11 @@ pub fn main(args: Vec<OsString>) -> ExitCode {
         },
         Command::Backup(flags) => finish(backup(&flags, &FileLock)),
         Command::Restore(flags) => finish(restore(&flags, &FileLock)),
-        Command::Import(flags) => finish(import(&flags, &FileLock, &wall_clock())),
         Command::Export(flags) => finish(export(&flags, &FileLock, &wall_clock())),
-        Command::HostGroups(HostGroupsCommand::Migrate(flags)) => {
-            finish(migrate(&flags, &FileLock, &wall_clock()))
-        }
     }
 }
 
-/// The exit of a backup, a restore, an import or an export: its report on standard output and
+/// The exit of a backup, a restore or an export: its report on standard output and
 /// exit 0, or why it was refused on standard error and exit 1.
 fn finish(done: Result<Report, impl std::fmt::Display>) -> ExitCode {
     match done {

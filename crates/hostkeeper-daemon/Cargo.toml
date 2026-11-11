@@ -59,8 +59,7 @@ hostkeeper-proto = { path = "../hostkeeper-proto" }
 # The receipt check of an order's entry and the grammars of its locations (packages.md section 4.4).
 hostkeeper-release = { path = "../hostkeeper-release" }
 hostkeeper-steps = { path = "../hostkeeper-steps" }
-# The SHA-256 of each keyring `check-repositories` prints, as hex (`repositories::report`); the
-# tests' fixture digests too.
+# The SHA-256 digests as hex (`mirror`); the tests' fixture digests too.
 hex.workspace = true
 # `O_NOFOLLOW` for the lock file.
 libc.workspace = true

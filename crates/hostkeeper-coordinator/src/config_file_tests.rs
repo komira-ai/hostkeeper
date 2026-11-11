@@ -342,3 +342,51 @@ fn the_packaged_template_parses_as_the_flags_of_serve_the_unit_starts_with() {
         Some(PathBuf::from("/var/lib/hostkeeper-coordinator/state.json"))
     );
 }
+
+/// A file of the flags of `serve` with a wildcard `private-listen` and the opt-in set `true`.
+const WILDCARD_ON: &str = r#"
+heartbeat-listen = "192.0.2.10:8443"
+private-listen = "0.0.0.0:8444"
+private-listen-wildcard = true
+tls-cert = "/c"
+tls-key = "/k"
+client-ca = "/ca"
+oidc-config = "/o"
+tokens-file = "/t"
+state-file = "/s"
+"#;
+
+/// [`WILDCARD_ON`] with the opt-in set `false`.
+const WILDCARD_OFF: &str = r#"
+heartbeat-listen = "192.0.2.10:8443"
+private-listen = "0.0.0.0:8444"
+private-listen-wildcard = false
+tls-cert = "/c"
+tls-key = "/k"
+client-ca = "/ca"
+oidc-config = "/o"
+tokens-file = "/t"
+state-file = "/s"
+"#;
+
+/// Proves: the file turns the opt-in for a wildcard private listener on with
+/// `private-listen-wildcard = true` and leaves it off with `false`, as the flag given or not.
+#[test]
+fn the_file_turns_the_wildcard_private_listener_on_with_true_only() {
+    let parsed = |text: &'static str| {
+        let args = os(&["hostkeeper-coordinator", "serve", "--config", "/f"]);
+        let expanded = expand(args, reads("/f", text)).expect("the file holds flags");
+        let Command::Serve(flags) = Cli::try_parse_from(expanded)
+            .expect("the flags of serve")
+            .command
+        else {
+            panic!("serve");
+        };
+        (
+            flags.private_listen.to_string(),
+            flags.private_listen_wildcard,
+        )
+    };
+    assert_eq!(parsed(WILDCARD_ON), ("0.0.0.0:8444".to_owned(), true));
+    assert_eq!(parsed(WILDCARD_OFF), ("0.0.0.0:8444".to_owned(), false));
+}

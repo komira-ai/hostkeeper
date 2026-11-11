@@ -19,15 +19,15 @@ fn release_yml() -> String {
         .expect("release.yml exists")
 }
 
-/// The text of the job from its line to the comment of `set-desired` that follows it.
+/// The text of the job from its line to the comment of `no-downgrade` that follows it.
 fn coordinator_job() -> String {
     let text = release_yml();
     let at = text
         .find("\n  coordinator:\n")
         .expect("release.yml has a job coordinator");
     let end = text
-        .find("\n  # set-desired ")
-        .expect("release.yml has the comment of set-desired after it");
+        .find("\n  # no-downgrade ")
+        .expect("release.yml has the comment of no-downgrade after it");
     text[at..end].to_owned()
 }
 
