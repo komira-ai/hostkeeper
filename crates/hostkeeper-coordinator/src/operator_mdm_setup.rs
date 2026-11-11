@@ -22,6 +22,8 @@ use std::sync::Arc;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
+use hostkeeper_mdm_gate::Installs;
+
 use crate::audit_actions;
 use crate::mdm_acme::dns::DnsCredential;
 use crate::mdm_name;
@@ -182,6 +184,11 @@ impl Coordinator {
                 format!("refused: {}", MdmRefusal::StoreFailed.as_str_name()),
             )?;
             return Err(MdmRefusal::StoreFailed);
+        }
+        // The gate sends by the installs as they are now. `value` is what `check` made of the
+        // text, which parses.
+        if let (Some(mdm), true) = (&self.mdm, setting.name == mdm_settings::INSTALLS) {
+            let _ = Installs::parse(&value).map(|installs| mdm.gate.set_installs(installs));
         }
         Ok(proto::PutSettingResponse {
             name: setting.name.to_owned(),

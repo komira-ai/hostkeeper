@@ -340,6 +340,7 @@ fn list_settings_prints_every_setting_at_its_default() {
             ("acme_timeout_s", "300", true),
             ("tls_check_s", "300", true),
             ("tls_retry_s", "3600", true),
+            ("installs", "[]", true),
             ("proxy_wait_s", "10", true),
             ("proxy_redirects", "3", true),
             ("proxy_index_ttl_s", "300", true),

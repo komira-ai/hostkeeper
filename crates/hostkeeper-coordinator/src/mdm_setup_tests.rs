@@ -347,6 +347,7 @@ fn unknown_kinds_are_not_listed_and_settings_show_their_defaults() {
             ("acme_timeout_s", "300".to_owned(), true),
             ("tls_check_s", "300".to_owned(), true),
             ("tls_retry_s", "3600".to_owned(), true),
+            ("installs", "[]".to_owned(), true),
             ("proxy_wait_s", "10".to_owned(), true),
             ("proxy_redirects", "3".to_owned(), true),
             ("proxy_index_ttl_s", "300".to_owned(), true),

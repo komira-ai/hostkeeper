@@ -76,6 +76,27 @@ pub fn security_info(payload: &[u8], uuid: &str) -> Option<SecurityInfo> {
     })
 }
 
+/// Whether the `Settings` answer in `payload` to the command `uuid` applied every item: the
+/// answer carries a `Settings` array of one result per item, each with its own `Status`, and an
+/// acknowledged command can hold an item that failed. False when the payload is not a result of
+/// that command, or an item's `Status` is missing or is not `Acknowledged`; true when the answer
+/// holds no `Settings` array to judge.
+#[must_use]
+pub fn settings_applied(payload: &[u8], uuid: &str) -> bool {
+    let Some(dict) = result_of(payload, uuid) else {
+        return false;
+    };
+    let Some(items) = dict.get("Settings").and_then(Value::as_array) else {
+        return true;
+    };
+    items.iter().all(|item| {
+        item.as_dictionary()
+            .and_then(|item| item.get("Status"))
+            .and_then(Value::as_string)
+            == Some("Acknowledged")
+    })
+}
+
 /// The `PayloadIdentifier` of each profile in the `ProfileList` answer in `payload` to the
 /// command `uuid` (Apple's `mdm/commands/profile.list.yaml`: `ProfileList`, an array of
 /// dictionaries, each with a required `PayloadIdentifier`); `None` when the payload is not a
