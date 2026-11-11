@@ -32,7 +32,7 @@ const OTHER_SERVICE: &str = "[[service]]\nname = \"other\"\nroles = [\"daemon\"]
 
 /// The path of each method of the operator API that has a handler: every one but those of
 /// [`PENDING`], which answer `UNIMPLEMENTED` before any credential is looked at (`pending.rs`).
-fn operator_paths() -> Vec<&'static str> {
+pub(super) fn operator_paths() -> Vec<&'static str> {
     COMMANDS
         .iter()
         .filter(|command| command.package == "hostkeeper.operator.v1")

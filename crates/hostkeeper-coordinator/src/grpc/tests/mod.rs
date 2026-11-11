@@ -5,6 +5,7 @@ mod acks;
 mod adapters;
 mod agent;
 mod alerts;
+mod cookie_separation;
 mod credentials;
 mod enrollment;
 mod enrollment_groups;
