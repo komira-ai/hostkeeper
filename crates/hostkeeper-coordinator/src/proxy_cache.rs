@@ -453,6 +453,30 @@ impl ProxyCache {
         }))
     }
 
+    /// The committed object of `key` opened for reading, if there is one: no read of the origin
+    /// and no wait. The file is the whole object and stays readable while it is evicted or
+    /// replaced (it is the open file that is read), so a caller that serves it as a file, with its
+    /// ranges and validators, reads one object from the first byte to the last.
+    pub fn open_hit(&self, key: &Key) -> Option<File> {
+        let digest = key.digest();
+        let born = {
+            let mut state = self.shared.state();
+            state.tick += 1;
+            let tick = state.tick;
+            let entry = state.entries.get_mut(&digest)?;
+            entry.used = tick;
+            entry.born
+        };
+        if let Ok(file) = File::open(self.shared.layout.object(&digest)) {
+            self.shared.state().stats.hits += 1;
+            return Some(file);
+        }
+        // The file is gone (the directory was wiped): forget the object, if it is still the one
+        // that was read, and the next ask fills it.
+        self.shared.forget(&digest, born);
+        None
+    }
+
     /// Makes the asker the leader of the key's fill, or gives it the flight to wait on.
     fn claim(&self, digest: &str) -> Claim {
         let mut state = self.shared.state();

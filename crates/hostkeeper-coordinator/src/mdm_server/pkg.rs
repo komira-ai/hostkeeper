@@ -49,10 +49,12 @@ use sha2::{Digest, Sha256};
 use tokio::fs::File;
 use tokio::io::{AsyncRead, AsyncReadExt as _, AsyncSeek, AsyncSeekExt as _};
 
+use super::pkg_pull::{Install, pull};
 use super::{Family, MdmServer};
 use crate::grpc::RouteBody;
 use crate::http::error;
 use crate::mdm_setup::MdmSetup;
+use crate::proxy_cache::Limits;
 use crate::service::Coordinator;
 
 /// A file as the route reads it. Only `File` is one in production; a test's reader that fails is
@@ -137,7 +139,7 @@ fn digest_in(path: &str) -> Option<PkgDigest> {
 }
 
 /// A JSON error as the route's body.
-fn failure(status: StatusCode, code: &'static str) -> Response<RouteBody> {
+pub(super) fn failure(status: StatusCode, code: &'static str) -> Response<RouteBody> {
     error(status, code).map(Either::Left)
 }
 
@@ -148,14 +150,15 @@ fn empty(status: StatusCode) -> Response<RouteBody> {
     response
 }
 
-/// Whether the setting `installs` names `digest` now. A setting that cannot be read is an error:
-/// the answer is `500`, not a guess.
-fn is_installed(setup: &MdmSetup, digest: &PkgDigest) -> Result<bool, ()> {
+/// The install of the setting `installs` that names `digest` now, with the proxy's limits of the
+/// same read of the settings. A setting that cannot be read is an error: the answer is `500`, not
+/// a guess.
+fn installed(setup: &MdmSetup, digest: &PkgDigest) -> Result<Option<Install>, ()> {
     let settings = setup.settings().map_err(|why| {
         tracing::error!(%why, "the MDM settings could not be read for a pkg");
     })?;
     let Some(text) = settings.get(hostkeeper_mdm_gate::SETTING_NAME) else {
-        return Ok(false);
+        return Ok(None);
     };
     let installs = Installs::parse(text).map_err(|why| {
         tracing::error!(%why, "the MDM setting installs does not read, so no pkg is served");
@@ -163,7 +166,11 @@ fn is_installed(setup: &MdmSetup, digest: &PkgDigest) -> Result<bool, ()> {
     Ok(installs
         .entries()
         .iter()
-        .any(|entry| entry.sha256 == *digest))
+        .find(|entry| entry.sha256 == *digest)
+        .map(|entry| Install {
+            url: entry.url.clone(),
+            limits: Limits::from_settings(&settings),
+        }))
 }
 
 /// The part of the file a request asks for.
@@ -381,26 +388,28 @@ pub(crate) async fn serve(
             .insert(ALLOW, HeaderValue::from_static("GET, HEAD"));
         return response;
     }
-    match is_installed(coordinator.mdm_setup(), &digest) {
-        Ok(true) => {}
-        Ok(false) => return failure(StatusCode::NOT_FOUND, "not_found"),
+    let install = match installed(coordinator.mdm_setup(), &digest) {
+        Ok(Some(install)) => install,
+        Ok(None) => return failure(StatusCode::NOT_FOUND, "not_found"),
         Err(()) => return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal"),
-    }
-    let Some(dir) = &server.pkgs.dir else {
-        return failure(StatusCode::NOT_FOUND, "not_found");
     };
     let digest = digest.to_string();
-    let opened = File::open(dir.join(format!("{digest}.pkg"))).await;
+    // The file the host provides comes first; a pkg that is not there is pulled from the install's
+    // `url` (the proxy), and is a file of the cache from then on.
+    let opened = match &server.pkgs.dir {
+        Some(dir) => Some(File::open(dir.join(format!("{digest}.pkg"))).await),
+        None => None,
+    };
     let mut file = match opened {
-        Ok(file) => file,
-        Err(why) if why.kind() == io::ErrorKind::NotFound => {
-            tracing::warn!(%digest, "an install names a pkg that is not in the pkg directory");
-            return failure(StatusCode::NOT_FOUND, "not_found");
-        }
-        Err(why) => {
+        Some(Ok(file)) => file,
+        Some(Err(why)) if why.kind() != io::ErrorKind::NotFound => {
             tracing::error!(%why, %digest, "a pkg could not be opened");
             return failure(StatusCode::INTERNAL_SERVER_ERROR, "internal");
         }
+        _ => match pull(coordinator, &digest, &install).await {
+            Ok(file) => file,
+            Err(response) => return response,
+        },
     };
     let Some(meta) = file
         .metadata()

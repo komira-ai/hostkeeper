@@ -42,6 +42,7 @@ pub(crate) mod auth;
 pub(crate) mod checkin;
 pub(crate) mod connect;
 pub(crate) mod pkg;
+mod pkg_pull;
 pub(crate) mod pushing;
 pub(crate) mod queue;
 pub(crate) mod signature;

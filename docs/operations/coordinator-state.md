@@ -141,7 +141,9 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   sidecar's and a sidecar with no body are deleted, and the objects past `proxy_cache_max_bytes`
   (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
   (it refills from the origins) and is not shared between coordinators. Without the flag there is no
-  cache. In this release nothing serves from it yet.
+  cache. In this release `GET /pkg/<sha256>.pkg` on the MDM listener is the one route that
+  uses it: a pkg that an `installs` entry names with a `url` and that is not in `--mdm-pkg-dir` is
+  read from that `url`, kept as the object `pkg/<digest>.pkg`, and served from the file.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a
   link. When it is not there and the store holds no sealed secret, the start makes it (mode 0600, never

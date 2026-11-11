@@ -121,10 +121,19 @@ a file, the pattern of `repository_serve.rs`.
 client follows up to `proxy_redirects` redirects, https only, and never to a host named by the client. The pkg digest check below is what
 makes that safe.
 
-**Digest rule for the pkg.** The coordinator hashes the body while it streams, and the file is renamed into `objects/` only if the
-SHA-256 equals the one in the path; on a mismatch the client gets `502 origin_failed` and nothing is kept. A pkg digest is the capability,
-so only digests an `installs` entry names are fetched at all. This is a second check, not the first: the Mac still verifies the pkg's
-signature, and the daemon still verifies what it fetches.
+**Digest rule for the pkg.** The coordinator hashes the body while it reads it, and the file is renamed into `objects/` only if the
+SHA-256 equals the one in the path (the origin's body ends in an error instead of its end when it does not, so the cache discards the
+fill). A pkg digest is the capability, so only digests an `installs` entry names are fetched at all. This is a second check, not the
+first: the Mac still verifies the pkg's signature, and the daemon still verifies what it fetches.
+
+**How the pkg route differs from the other files (PP3).** A status can be `502` only before the first byte, so a pkg is read from its
+origin to the end, and judged, before the Mac is answered at all; the Mac is then answered from the committed file (its ranges,
+`ETag` and `304` as for a provided pkg). Three consequences, each a deliberate departure from the streaming of 4's other files:
+the first Mac waits for the whole read (a pkg of tens of MB, over the uplink); a Mac whose wait for another's read ends first
+(`proxy_wait_s`) is answered `503 pkg_pending` with `Retry-After` and not given a read of its own, since fifty second reads of the
+same file are what the single flight prevents; and a pkg the cache cannot keep (disk trouble, or larger than `proxy_cache_max_bytes`)
+is `503 pkg_not_stored`, since there is no file to answer from. The cache's key for a pkg is its digest (`pkg/<digest>.pkg`), not the
+`url`, so a changed `url` does not fetch the same bytes again. A file in `--mdm-pkg-dir` is served first and the origin is not read.
 
 **Failure of the cache is not failure of the answer.** If the disk is full or a write fails, the body is still streamed from the origin and
 nothing is stored; `Status` counts the pass-throughs. If the origin is down and the entry is in the cache, an immutable entry is served; an
@@ -146,7 +155,9 @@ is task PP5.
 | The coordinator is down or the proxy's certificate has expired | `apt update` fails for the groups pointed at the proxy; groups on the public URL are unaffected; the operator repoints a group (one entry) or restores the coordinator; the certificate's expiry is alerted by 4.10 |
 | `apt` asks with `Range` or `If-Modified-Since`, or sends `HEAD` | served from the cache as `206`, `304` or headers only (section 3); a partial origin body is never stored |
 | One slow fill and fifty waiters | each waiter waits `proxy_wait_s` at most, then is passed through directly; the fill still commits |
-| An arbitrary digest asked of `/pkg/` | 404, and no origin request is made, since only digests of the current manifest's `installs` are fetched |
+| An arbitrary digest asked of `/pkg/` | 404, and no origin request is made, since only digests of the current manifest's `installs` are fetched; so too a digest whose entry has no `url`, and any digest on a coordinator without `--proxy-cache-dir` |
+| The origin's pkg is not the digest's | the read ends in an error, nothing is stored, the Mac gets `502 origin_failed`; the next ask reads the origin again |
+| A pkg redirect | followed at most `proxy_redirects` times, to `https://` or a path of the same host only; a redirect to `http://` or to another form of `Location` is `502`. No URL is in any answer or error text (a release host's redirect carries a signed query) |
 | The origin serves a poisoned or truncated file | apt rejects a bad hash or signature; the daemon rejects a bad digest; the coordinator rejects a pkg whose digest differs from its path; a truncated body (length short) is not committed |
 | A client disconnects mid-fill | the fill continues to its end (bounded by the 30 s idle deadline per frame) so the next asker hits; a fill that fails leaves only a `tmp/` file, removed at start; a client that stays connected but stops reading is cut when its eight-frame buffer is full (its body ends with an error, `FetchError::Behind`) and the fill goes on, so one stuck client holds neither the flight nor a place of `proxy_fetches` |
 | Two coordinators on one cache directory | not supported: the proxy is part of the single-node MDM listener (coordinator-mdm.md 4.9); the directory is the coordinator's |
@@ -210,7 +221,7 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 |---|---|---|---|
 | PP1 | (**Built**, `hostkeeper-coordinator/src/proxy_cache.rs` and `proxy_cache_disk.rs`) The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults. It is a library with `--proxy-cache-dir` opening it at start; no route uses it until PP2. The settings built are `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`; `proxy_origins` comes with PP2 | coordinator-mdm.md CM20 | M |
 | PP2 | `GET /apt/<repo>/...` on the MDM listener: public-repository routes, index TTL and revalidation, redirect-following origin client | PP1, CM11a | M |
-| PP3 | `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit | PP1, CM11c | S |
+| PP3 | (**Built**, `hostkeeper-coordinator/src/mdm_server/pkg_pull.rs` and `pkg_origin.rs`) `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit; the settings are the PP1 ones (`proxy_redirects`, `proxy_wait_s`, `proxy_fetches`, `proxy_cache_max_bytes`) | PP1, CM11c | S |
 | PP4 | Docs: the packages-native.md and hostkeeper-design.md statements about the channel | none | S |
 | PP5 | The loader no longer requires `release_channel` (additive read), then configs stop carrying it one release later | PP2 | S |
 | PP6 | Farm: retire the download server and repoint hosts and Macs (held scripts, the owner's), in the order of section 6 | PP2, PP3, and stage 9's counts at zero (packages-native.md A24 converged) | S |
@@ -218,9 +229,11 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 ## 10. Where the macOS pkg is published
 
 The signed macOS pkg is published to packages.komira.ai, next to the apt repository, so every package a host or Mac installs has one
-public origin. The release workflow uploads the pkg there (a task of the release side, alongside the apt publish); an `installs` entry's
+public origin. The release workflow uploads the pkg there (a task of the release side, alongside the apt publish; **not part of PP3**,
+which reads whatever `url` the entry names and does not touch the release workflow); an `installs` entry's
 `url` names it, and the proxy relays it like any other immutable file. GitHub release assets keep their copy for attestation and as a
-fallback origin.
+fallback origin: an entry may name the asset's URL, and the proxy follows its redirect to the storage host within the rules of
+section 4 (https only, `proxy_redirects` hops, the digest check). Until the upload exists, an entry names the GitHub asset or has no `url`.
 
 ## 11. Not verified
 

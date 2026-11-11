@@ -92,7 +92,7 @@ pub(crate) enum Origin {
 }
 
 /// Aborts the task that drives a connection when it is dropped.
-struct Driver(JoinHandle<()>);
+pub(crate) struct Driver(pub(crate) JoinHandle<()>);
 
 impl Drop for Driver {
     fn drop(&mut self) {
@@ -106,6 +106,18 @@ pub(crate) struct Forwarded {
     inner: Pin<Box<Incoming>>,
     idle: Pin<Box<Sleep>>,
     _driver: Driver,
+}
+
+impl Forwarded {
+    /// The body of `response`, each frame within [`IDLE`] of the one before it, which keeps
+    /// `driver` alive.
+    pub(crate) fn new(response: Incoming, driver: Driver) -> Self {
+        Self {
+            inner: Box::pin(response),
+            idle: Box::pin(tokio::time::sleep(IDLE)),
+            _driver: driver,
+        }
+    }
 }
 
 impl Body for Forwarded {
@@ -201,11 +213,7 @@ impl RepositoryOrigin {
             .ok_or(OriginError::NoLength)?;
         Ok(Origin::Found {
             length,
-            body: Forwarded {
-                inner: Box::pin(response.into_body()),
-                idle: Box::pin(tokio::time::sleep(IDLE)),
-                _driver: driver,
-            },
+            body: Forwarded::new(response.into_body(), driver),
         })
     }
 
