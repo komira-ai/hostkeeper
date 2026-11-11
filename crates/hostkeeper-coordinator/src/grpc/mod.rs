@@ -642,6 +642,17 @@ where
         .await
     } else if surface == Surface::Mdm {
         // The listener of the Macs serves its own routes only: no gRPC, no gateway, no cookie.
+        if let Some(proxied) = crate::proxy_apt::route(
+            coordinator,
+            request.method(),
+            request.uri().path(),
+            request.headers(),
+        )
+        .await
+        {
+            coordinator.waits.changed();
+            return proxied;
+        }
         handle(coordinator, surface, peer, request, patience)
             .await
             .map(Either::Left)

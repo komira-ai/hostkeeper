@@ -6,7 +6,7 @@ use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
 use hostkeeper_mdm_push::testkit::{der, oid_der};
 
-use super::{MAX_HEADER_BYTES, SignatureError, signer};
+use super::{MAX_HEADER_BYTES, SignatureError, signer, signer_certificate, values, verify};
 use crate::mdm_server::support::{
     BODY, Ca, Identity2, RSA, SHA1, SHA256, SHA256_RSA, SHA384, SHA512, Spec, header, message,
 };
@@ -364,6 +364,45 @@ fn a_signer_info_cut_short_or_a_signer_sequence_of_one_part_is_refused_as_encodi
     };
     assert_eq!(
         signer(BODY, &header(BODY, &mac, &one_part)),
+        Err(SignatureError::Encoding)
+    );
+}
+
+/// Proves: a SignerInfo with fewer than the three fields every one has, or with no signature
+/// algorithm and signature after them, and a signer named by a sequence that is not an issuer
+/// and a serial, are refused as encoding.
+///
+/// Catches: a short or malformed SignerInfo read past its end, or a signer named by a sequence of
+/// the wrong shape matched to a certificate.
+#[test]
+fn a_signer_info_or_signer_name_of_the_wrong_shape_is_refused_as_encoding() {
+    let version = der(0x02, &[1]);
+    let sid = der(0x30, &[der(0x30, &[]), der(0x02, &[1])].concat());
+    let algorithm = der(0x30, &oid_der(SHA256));
+    let certificates = values(&[]).expect("no certificates");
+
+    let two = [version.clone(), sid.clone()].concat();
+    let short = values(&two).expect("two fields");
+    assert_eq!(
+        verify(BODY, &short, &certificates),
+        Err(SignatureError::Encoding)
+    );
+    let three = [version, sid, algorithm].concat();
+    let unsigned = values(&three).expect("three fields");
+    assert_eq!(
+        verify(BODY, &unsigned, &certificates),
+        Err(SignatureError::Encoding)
+    );
+
+    let mac = mac();
+    let carried = values(&mac.der).expect("a certificate");
+    let odd = der(
+        0x30,
+        &[der(0x30, &[]), der(0x02, &[1]), der(0x02, &[2])].concat(),
+    );
+    let three_parts = values(&odd).expect("a sequence of three");
+    assert_eq!(
+        signer_certificate(&three_parts[0], &carried),
         Err(SignatureError::Encoding)
     );
 }

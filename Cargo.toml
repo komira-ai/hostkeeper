@@ -46,6 +46,8 @@ jaq-std = "3.0.4"
 # The coordinator's HTTP/1.1 and HTTP/2 server and the OIDC key fetch's client (hostkeeper-coordinator,
 # hostkeeper-oidc); members turn on the parts they use.
 http-body-util = "0.1.5"
+# The dates of `Last-Modified` and `If-Modified-Since` (hostkeeper-coordinator's package proxy).
+httpdate = "1.0.3"
 hyper = { version = "1.12.0", default-features = false }
 # The ACME client of the coordinator's certificate for the MDM name (hostkeeper-coordinator,
 # docs/design/coordinator-mdm.md 4.10). Apache-2.0; ring only (no aws-lc), the same rustls as

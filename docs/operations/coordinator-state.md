@@ -156,13 +156,17 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   directory and to `api.godaddy.com`. A credential is called 60 times a minute at most.
 - **The package proxy's cache.** `--proxy-cache-dir` names a directory of the coordinator's own
   (`docs/design/package-proxy.md`), made at start: `objects/<sha256 of origin and path>` holds a
-  committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, fetch time,
-  length), and `tmp/` the fills in progress. A fill is written to `tmp/` and renamed into place, the
+  committed file and `objects/<sha256>.meta` its sidecar (JSON: origin, path, validator, `Last-Modified`
+  when the origin gave one, fetch time, length), and `tmp/` the fills in progress. A fill is written to `tmp/` and renamed into place, the
   sidecar first. No file is synced: at start every file of `tmp/`, a body whose length is not its
   sidecar's and a sidecar with no body are deleted, and the objects past `proxy_cache_max_bytes`
   (20 GiB by default) are evicted, the oldest fetch first. The directory is not exported or backed up
   (it refills from the origins) and is not shared between coordinators. Without the flag there is no
-  cache. In this release nothing serves from it yet.
+  cache, and the `/apt/<repo>/...` routes of the MDM listener answer `404`. With it, and the certificate of the
+  name stored, those routes serve the public repositories of the registry from the cache: a file under
+  `pool/` is kept until evicted, any other file is served for `proxy_index_ttl_s` (300) and then
+  revalidated with one conditional read of the origin. A repository is pointed at the proxy by its
+  `https://<mdm name>/apt/<repo>/` URL in a group's entry; the origin is the registry entry's own `uri`.
   The MDM tables of the ABM sync (`abm_devices`, `abm_state`) are in the database from `0011_mdm`, and in the directory `<state-file>.mdm/` of a file store.
 - **The key of the MDM secrets.** `--mdm-secrets-key-file` names a file of 64 hex digits (the 256-bit
   key): a regular file of the coordinator's user, mode 0600 or 0400, which is not followed through a

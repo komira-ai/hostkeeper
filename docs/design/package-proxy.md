@@ -87,9 +87,10 @@ are answered `304` from the cache's validator when it still matches, with no ori
 is served as `206` from the file, and on a miss a range request is passed through to the origin without being stored (a partial body is
 never committed), after which a full request fills the cache.
 
-`<repo>` must be a name in the registry (**Built**, `hostkeeper-coordinator/src/registry.rs`) marked public, with a base URL; the proxy's
-settings add the origin list (section 4). The path passes the locator grammar `repository_serve.rs` already uses
-(`hostkeeper_release::grammar::check_locator`: no empty, `.` or `..` segment, no `%`).
+`<repo>` must be a name in the registry of repositories (**Built**; `hostkeeper-release/src/registry.rs` says what an entry is) whose
+`access` is public. Its `uri` is the base URL of the origin, so the proxy has no setting of origins (answered in section 11 item 1; PP2).
+The path passes the locator grammar `repository_serve.rs` already uses
+(`hostkeeper_release::grammar::check_locator`: no empty, `.` or `..` segment, no `%`), after the escapes of `+` (`%2b`) and `~` (`%7e`), which apt writes, are read as those characters: `+` and `%2b` are one file, one cache entry and one origin path. Every other escape, `%2f`, `%2e` and `%25` among them, is still refused.
 
 ## 4. Decisions
 
@@ -130,8 +131,7 @@ signature, and the daemon still verifies what it fetches.
 nothing is stored; `Status` counts the pass-throughs. If the origin is down and the entry is in the cache, an immutable entry is served; an
 index older than its TTL is not (a stale index could hide a release), the client gets `502 origin_failed`.
 
-**Where the origins come from.** A public repository's base URL (the registry entry, or the setting `proxy_origins` when the registry holds
-none), and for a pkg, the `url` of its `installs` entry: the signed macOS pkg is published to packages.komira.ai (section 10).
+**Where the origins come from.** A public repository's base URL (the registry entry's `uri`; no `proxy_origins` setting, section 11 item 1), and for a pkg, the `url` of its `installs` entry: the signed macOS pkg is published to packages.komira.ai (section 10).
 
 **Host configuration.** A group's repository entry names `https://<mdm name>/apt/<repo>/` as its URI. The daemon config's `release_channel`
 key stays required by the loader (above); until a loader that does not read it has shipped for a release, every config sets it to
@@ -209,7 +209,7 @@ An older coordinator does not have the routes: a host pointed at it gets `404` a
 | # | Task | After | Size |
 |---|---|---|---|
 | PP1 | (**Built**, `hostkeeper-coordinator/src/proxy_cache.rs` and `proxy_cache_disk.rs`) The cache: directory layout, atomic commit, LRU eviction, single-flight, with the settings and their defaults. It is a library with `--proxy-cache-dir` opening it at start; no route uses it until PP2. The settings built are `proxy_wait_s`, `proxy_redirects`, `proxy_index_ttl_s`, `proxy_cache_max_bytes` and `proxy_fetches`; `proxy_origins` comes with PP2 | coordinator-mdm.md CM20 | M |
-| PP2 | `GET /apt/<repo>/...` on the MDM listener: public-repository routes, index TTL and revalidation, redirect-following origin client | PP1, CM11a | M |
+| PP2 | (**Built**, `hostkeeper-coordinator/src/proxy_apt.rs`, `proxy_origin.rs` and `proxy_cache_stale.rs`; section 12) `GET /apt/<repo>/...` on the MDM listener: public-repository routes, index TTL and revalidation, redirect-following origin client | PP1, CM11a | M |
 | PP3 | `GET /pkg/<sha256>.pkg` pulls through from the `installs` entry's `url`, digest-checked before commit | PP1, CM11c | S |
 | PP4 | Docs: the packages-native.md and hostkeeper-design.md statements about the channel | none | S |
 | PP5 | The loader no longer requires `release_channel` (additive read), then configs stop carrying it one release later | PP2 | S |
@@ -224,13 +224,65 @@ fallback origin.
 
 ## 11. Not verified
 
-1. Where the registry entry of a public repository keeps its base URL, or whether `proxy_origins` is needed (read `registry.rs` before PP2).
-2. That apt on the farm's hosts accepts the proxy's certificate with system roots alone (the farm's hosts have the public roots; confirm with
-   one host before PP6).
+1. ~~Where the registry entry of a public repository keeps its base URL, or whether `proxy_origins` is needed.~~ Answered by PP2: the entry's `uri`
+   is the base URL (`hostkeeper_release::registry::check` requires `https://`, a host, an optional port and path), and `proxy_origins` is not added.
+2. **Not verified, for PP6.** That apt on the farm's hosts accepts the proxy's certificate with system roots alone (the farm's hosts have the
+   public roots; confirm with one host before PP6). PP2's tests serve the routes over a certificate the test's own root signs and say nothing of apt.
 3. That a GitHub release asset's redirect chain stays within https and three hops (only if the fallback origin is used).
-4. That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host before PP6.
+4. **Not verified, for PP6.** That apt treats two URIs of one deb822 stanza as two sources and not as a fallback (section 3); check with one host
+   before PP6. PP2 writes no repository entry, so nothing built depends on it.
+6. **Not verified (PP2).** How the farm's apt behaves against the proxy's answers, none of which has been run against apt itself: `Range` with
+   `If-Range` on a resumed download, `If-Modified-Since` on an index whose origin gives an `ETag` and no `Last-Modified` (the proxy then
+   answers 200 and apt takes the index again), `Accept-Ranges: bytes` on a file served chunked (no `Content-Length`, no range support), and
+   that apt takes a 200 to a `Range` request when the origin has a newer index than the stored one. Check with one `apt update` and one
+   interrupted `apt install` on a host before PP6.
 5. Whether the proxy's routes can be served with the name and certificate alone while the MDM routes still answer 503 (section 3):
    **yes, built in CM11a** (read in the listener): `MdmServer::serves(family)` is decided for each request; the proxy family needs the
    certificate and key of the name, the MDM family needs that and a push identity, and a family that is not served answers `503` for each
    of its routes while the other is served (coordinator-mdm.md 4.1; test `the_mdm_routes_answer_503_while_the_package_routes_are_served`).
-   `/pkg/` is served from `--mdm-pkg-dir` (CM11c) and `/apt/` answers `404` until PP2; both join the switch with no change to it.
+   `/apt/` is mounted by PP2 and joins the switch with no change to it (test `the_apt_routes_are_served_without_any_mdm_credential`: with the
+   certificate alone `/apt/...` is served and `/mdm` is `503`); `/pkg/` is served from `--mdm-pkg-dir` (CM11c).
+
+## 12. What PP2 built
+
+Paths under `crates/hostkeeper-coordinator/src/`; the decisions above stand, and these are the facts of the code.
+
+- **`proxy_apt.rs`**: `GET` and `HEAD` of `/apt/<repo>/<path>`, called by `grpc::route` on the MDM surface before the JSON router. A method
+  other than `GET` and `HEAD` is 405; a `<repo>` that is not a repository name, is not in the registry or is private, a coordinator without
+  `--proxy-cache-dir` and an entry whose `uri` cannot be read from are 404; a `<path>` outside the locator grammar (and the bare
+  `/apt/<repo>/`) is 400. Each refusal is made before any origin is read. While the name has no certificate every `/apt/` path is 503
+  (`MdmServer::serves`). The origin is the entry's `uri` and the cache key is that URL with the path, so a repository whose `uri` changes
+  does not inherit the old URL's objects.
+- **What is an index.** A file under `pool/` is immutable and kept until evicted. Every other file of the repository is an index: served
+  while its age is under `proxy_index_ttl_s`, then revalidated (`proxy_cache_stale.rs`, `ProxyCache::get_index`). This takes in
+  `dists/**/by-hash/`, which is immutable but gains nothing from being treated so, and whatever else a repository serves at its root.
+- **Revalidation.** The first asker of a stale index leads one conditional read (`If-None-Match` from the stored `ETag`, `If-Modified-Since`
+  from the stored `Last-Modified`; the sidecar keeps both, `Meta::last_modified` is additive and a sidecar written without it reads). A 304
+  renews the fetch time in memory and in the sidecar (a temp file renamed over it). A 200 forgets the old object as the new body begins to
+  stream, so no stale index is served while the replacement is written, and the commit replaces it. A 404 forgets the object and is the
+  answer. Any other failure is the asker's, and the stored index stays for the next ask. Other askers of the key wait at most `proxy_wait_s`
+  and ask again; a waiter whose wait ended first, or whose fill could not be stored, is passed through to the origin on its own. The cost: a
+  range request of a stale index whose origin has a newer one is answered with the whole new index, 200.
+- **Conditional requests of the client** are judged against the validators of the answer (`If-None-Match` before `If-Modified-Since`, weak
+  comparison, `*`), after the cache has answered; 304 has no body, and for a stored file inside its TTL it costs no origin read. A
+  conditional request of a file not held fills it all the same.
+- **Ranges.** One span of `first-last`, `first-` or `-suffix`. A stored file answers 206 from the file, and 416 with
+  `Content-Range: bytes */<length>` past its end. A file not held passes the range to the origin and stores nothing; the origin's
+  `Content-Range` is the answer's. A suffix span of a file not held, several spans, an invalid span, another unit and a span with an
+  `If-Range` that is not the stored file's strong tag or its `Last-Modified` are ignored, and the whole file is the answer.
+- **`HEAD`** is answered from the stored file when it is held (a pool file, or an index inside its TTL), else by one `HEAD` of the origin
+  under a place among `proxy_fetches`, and never stores anything.
+- **`proxy_origin.rs`**: the origin client of the cache. HTTPS only, HTTP/1.1, one connection per hop (`Connection: close`), 30 s to the
+  headers (`repository_origin::CONNECT`) and 30 s per body frame (`IDLE`). It follows 301, 302, 303, 307 and 308 up to `proxy_redirects`, to
+  an `https://` URL (no user, a host TLS can check) or to a path of the same host; a redirect to `http://`, to another form, without
+  `Location`, with more than 4096 bytes of it, or past the limit is a failure. Only `Range` and the validators are sent. A 200 needs a
+  `Content-Length` or chunks (a body cut short must be seen as cut), a 206 needs a usable `Content-Range`, a 304 answers a conditional read,
+  and 404 is `FetchError::NotFound`.
+- **B16.** A body is streamed frame by frame from the origin (or the file) to the client, through the cache's fill; a body that breaks off
+  after its headers ends the response in an error, so a client never takes it for whole. No size cap.
+- **Compatibility (B8).** Additive: new routes, `Meta::last_modified` with a default in the sidecar, `httpdate` (already in the lock file
+  through `hyper`) as a dependency of the coordinator. Nothing shipped is renamed or removed.
+- **Tests** (section 8): `mdm_server/proxy_route_tests.rs` (the routes through the listener: refusals with no origin read, TTL and
+  revalidation, conditional and range requests, HEAD, redirects, a crowd, failures), `proxy_cache_stale_tests.rs` (the revalidation:
+  304, changed, withdrawn, failing, a crowd, a hung leader, an oversize replacement, a late renewal), `proxy_origin_tests.rs` (the origin
+  client), `proxy_apt_tests.rs`. Not covered: the real apt (item 6 of section 11).

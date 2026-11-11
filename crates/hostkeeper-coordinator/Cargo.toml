@@ -75,6 +75,8 @@ getrandom = { workspace = true, features = ["sys_rng"] }
 # The sealed MDM secrets in a file, and their fingerprints.
 hex.workspace = true
 http-body-util.workspace = true
+# The dates of `Last-Modified` and `If-Modified-Since` in the package proxy (`src/proxy_apt.rs`).
+httpdate.workspace = true
 # The server of the listeners.
 hyper = { workspace = true, features = ["client", "http1", "http2", "server"] }
 hyper-util = { workspace = true, features = ["tokio"] }

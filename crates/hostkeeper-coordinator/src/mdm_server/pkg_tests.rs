@@ -118,7 +118,7 @@ async fn a_pkg_an_install_names_is_served_with_its_length_and_digest() {
     let (digest, bytes) = provided(&rig, 1, 150_000);
     let mut session = Session::dial(&rig, None).await.expect("connected");
     let (head, body) = session
-        .fetch("GET", &format!("/pkg/{digest}.pkg"), &[])
+        .fetch_parts("GET", &format!("/pkg/{digest}.pkg"), &[])
         .await
         .expect("an answer");
     assert_eq!(head.status, StatusCode::OK);
@@ -128,7 +128,7 @@ async fn a_pkg_an_install_names_is_served_with_its_length_and_digest() {
     assert_eq!(head.headers["accept-ranges"], "bytes");
     assert_eq!(head.headers["content-type"], "application/octet-stream");
     let (head, body) = session
-        .fetch("HEAD", &format!("/pkg/{digest}.pkg"), &[])
+        .fetch_parts("HEAD", &format!("/pkg/{digest}.pkg"), &[])
         .await
         .expect("an answer");
     assert_eq!(head.status, StatusCode::OK);
@@ -180,14 +180,14 @@ async fn bytes_that_differ_from_the_digest_are_refused() {
     let mut session = Session::dial(&rig, None).await.expect("connected");
     assert!(
         session
-            .fetch("GET", &format!("/pkg/{digest}.pkg"), &[])
+            .fetch_parts("GET", &format!("/pkg/{digest}.pkg"), &[])
             .await
             .is_err(),
         "the connection is cut before the body is whole"
     );
     let mut session = Session::dial(&rig, None).await.expect("connected");
     let (head, body) = session
-        .fetch("HEAD", &format!("/pkg/{digest}.pkg"), &[])
+        .fetch_parts("HEAD", &format!("/pkg/{digest}.pkg"), &[])
         .await
         .expect("an answer");
     assert_eq!(head.status, StatusCode::INTERNAL_SERVER_ERROR);
@@ -340,7 +340,7 @@ async fn a_method_other_than_get_and_head_is_refused() {
     for method in ["POST", "PUT", "DELETE", "PATCH", "OPTIONS"] {
         for named in [digest.clone(), sha(b"other")] {
             let (head, body) = session
-                .fetch(method, &format!("/pkg/{named}.pkg"), &[])
+                .fetch_parts(method, &format!("/pkg/{named}.pkg"), &[])
                 .await
                 .expect("an answer");
             assert_eq!(head.status, StatusCode::METHOD_NOT_ALLOWED, "{method}");

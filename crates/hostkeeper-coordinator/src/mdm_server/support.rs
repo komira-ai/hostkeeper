@@ -305,9 +305,8 @@ impl Rig {
         )
     }
 
-    /// A queue as a restarted coordinator builds it before any push certificate is set: nothing
-    /// armed, and no pusher to ask.
-    pub(super) fn restarted_queue_without_pushers(&self) -> MdmQueue {
+    /// A queue as a coordinator builds it before a push identity is stored: nobody pushes.
+    pub(super) fn queue_without_pusher(&self) -> MdmQueue {
         MdmQueue::new(
             Arc::clone(&self.store) as Arc<dyn MdmStore>,
             Arc::clone(&self.time) as Arc<dyn UnixClock>,
@@ -602,13 +601,22 @@ pub(super) struct Session {
 impl Session {
     /// A connection from a client that offers `identity` (none: no certificate) to the rig's listener.
     pub(super) async fn dial(rig: &Rig, identity: Option<&Identity2>) -> Option<Self> {
+        Self::dial_to(rig, &rig.coordinator, identity).await
+    }
+
+    /// [`Self::dial`] to the listener of `coordinator`, which serves the rig's server.
+    pub(super) async fn dial_to(
+        rig: &Rig,
+        coordinator: &Arc<Coordinator>,
+        identity: Option<&Identity2>,
+    ) -> Option<Self> {
         let config = rig.server.tls().config()?;
         let (client, server) = tokio::io::duplex(256 * 1024);
         tokio::spawn(crate::listen::connection_with(
             server,
             config,
             crate::http::Surface::Mdm,
-            Arc::clone(&rig.coordinator),
+            Arc::clone(coordinator),
             Duration::from_secs(10),
         ));
         let tls = connector(rig, identity)
@@ -651,7 +659,7 @@ impl Session {
 
     /// `method path` with `headers` and no body: the head of the answer and its body, which is
     /// read to the end (or fails where the server cut it).
-    pub(super) async fn fetch(
+    pub(super) async fn fetch_parts(
         &mut self,
         method: &str,
         path: &str,
@@ -667,6 +675,28 @@ impl Session {
         let request = request.body(Full::new(Bytes::new())).expect("a request");
         let (head, body) = self.send.send_request(request).await?.into_parts();
         Ok((head, body.collect().await?.to_bytes().to_vec()))
+    }
+
+    /// `method path` with the `headers`: the status, the headers and the body of the answer, or
+    /// the error of a connection the server ended.
+    pub(super) async fn fetch(
+        &mut self,
+        method: &str,
+        path: &str,
+        headers: &[(&str, &str)],
+    ) -> Result<(StatusCode, hyper::HeaderMap, Vec<u8>), hyper::Error> {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .header("host", "localhost");
+        for (name, value) in headers {
+            request = request.header(*name, *value);
+        }
+        let request = request.body(Full::new(Bytes::new())).expect("a request");
+        let response = self.send.send_request(request).await?;
+        let (parts, body) = response.into_parts();
+        let bytes = body.collect().await?.to_bytes();
+        Ok((parts.status, parts.headers, bytes.to_vec()))
     }
 
     /// [`Self::request`], or the error of a connection the server ended.

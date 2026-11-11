@@ -387,6 +387,15 @@ pub fn days_of(set: &BTreeMap<String, String>, name: &str, fallback: u32) -> u32
         .unwrap_or(fallback)
 }
 
+/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
+/// does not know or a value that is not one (a store edited by hand).
+#[must_use]
+pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
+    find(name)
+        .and_then(|setting| parse_whole(value_of(set, setting)))
+        .unwrap_or(fallback)
+}
+
 /// The numbers of the list setting `name` (`60,14`) among the `set` ones, in order: the default
 /// for a name this release does not know, or a value that is not a list (a store edited by hand),
 /// and none for a name with no default list.
@@ -398,15 +407,6 @@ pub fn list_of(set: &BTreeMap<String, String>, name: &str) -> Vec<u32> {
     find(name)
         .and_then(|setting| parse(value_of(set, setting)).or_else(|| parse(setting.default)))
         .unwrap_or_default()
-}
-
-/// The whole number of the setting `name` among the `set` ones: `fallback` for a name this release
-/// does not know or a value that is not one (a store edited by hand).
-#[must_use]
-pub fn whole_of(set: &BTreeMap<String, String>, name: &str, fallback: u64) -> u64 {
-    find(name)
-        .and_then(|setting| parse_whole(value_of(set, setting)))
-        .unwrap_or(fallback)
 }
 
 #[cfg(test)]

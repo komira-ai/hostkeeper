@@ -23,11 +23,11 @@
 //! request ([`MdmServer::serves`]), so a Linux-only farm that never uploads an Apple credential
 //! serves its packages. In this task the MDM family's prerequisite is a push identity; the CA of
 //! the Macs' identities (CM12c) and the ABM token (CM13) add theirs there. `/enroll` and `/scep`
-//! stay with the old stack until CM12c (Caddy routes them), and the proxy's `/apt/` routes land with
-//! PP2: a request for any of them answers `404` once its family is served. `/pkg/<sha256>.pkg` is
-//! served from `--mdm-pkg-dir` ([`pkg`], CM11c); it is answered by the router (`grpc::route`),
-//! since its body is streamed. Every other path answers
-//! `404`, whoever asks.
+//! stay with the old stack until CM12c (Caddy routes them): a request for either answers `404` once its
+//! family is served. `/apt/...` is the package proxy's ([`crate::proxy_apt`]), served by
+//! [`crate::grpc::route`] before this module is asked, and answers `503` while its family is not
+//! served. `/pkg/<sha256>.pkg` is served from `--mdm-pkg-dir` ([`pkg`], CM11c); it is answered by the
+//! router (`grpc::route`), since its body is streamed. Every other path answers `404`, whoever asks.
 //!
 //! **What an unknown enrollment is answered** (section 6, lesson 3; section 12 item 12, not
 //! verified): `401` with `{"error":"unauthorized"}`, for a request without a certificate or a
@@ -340,7 +340,7 @@ where
     }
     if client_cert(&path) != Some(ClientCert::Required) {
         // The routes whose task has not landed: `/enroll` and `/scep` (CM12c), which read no
-        // certificate, and the proxy's `/apt/` (PP2). `/pkg/` is answered by [`pkg::serve`].
+        // certificate. `/pkg/` is answered by [`pkg::serve`]; `/apt/` by the router.
         return error(StatusCode::NOT_FOUND, "not_found");
     }
     if request.method() != Method::PUT {
@@ -372,6 +372,10 @@ mod support;
 
 #[cfg(test)]
 mod verify_tests;
+
+#[cfg(test)]
+#[path = "proxy_route_tests.rs"]
+mod proxy_route_tests;
 
 /// A queued `DeviceInformation` number `n` for the enrollment `enrollment_id`, as the store takes it.
 #[cfg(test)]

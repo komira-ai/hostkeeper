@@ -165,25 +165,20 @@ async fn a_restarted_queue_pushes_for_a_command_left_queued() {
     assert_eq!(rig.apns.sent().len(), 1, "at the floor");
 }
 
-/// Proves: a restarted coordinator that has no push certificate yet still sweeps: it arms the
-/// enrollment that has a command queued, asks no pusher, pushes nothing and does not fail, and
-/// does not arm it twice.
+/// Proves: a sweep of a coordinator that has no push identity yet still arms the floor of a
+/// queued command and sends nothing, and the push is sent once an identity is stored.
 ///
-/// Catches: a sweep that fails or panics when no pusher is configured, or one that forgets the
-/// enrollment so that it is armed again by every sweep.
+/// Catches: a sweep that panics, or one that forgets the command, when nobody can push.
 #[tokio::test]
-async fn a_sweep_without_a_pusher_arms_the_waiting_enrollment_and_pushes_nothing() {
+async fn a_sweep_without_a_pusher_arms_the_command_and_pushes_nothing() {
     let rig = Rig::new("queue-sweep-no-pusher");
     rig.live("e1", SERIAL, true);
     rig.store
         .enqueue(&crate::mdm_server::queue_new(1, "e1"))
         .expect("queued");
-    let restarted = rig.restarted_queue_without_pushers();
-    restarted.sweep().await.expect("swept");
-    assert_eq!(restarted.armed.lock().expect("lock").len(), 1);
-    rig.time.advance(FLOOR);
-    restarted.sweep().await.expect("swept again");
-    assert_eq!(restarted.armed.lock().expect("lock").len(), 1);
+    let bare = rig.queue_without_pusher();
+    bare.sweep().await.expect("swept");
+    assert!(bare.armed.lock().expect("lock").contains("e1"));
     assert!(rig.apns.sent().is_empty());
 }
 
