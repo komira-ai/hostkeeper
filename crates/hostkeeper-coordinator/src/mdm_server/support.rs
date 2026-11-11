@@ -856,6 +856,10 @@ pub(super) struct Spec {
     pub(super) sid_tag: Option<u8>,
     pub(super) flip_signature: bool,
     pub(super) drop_certificates: bool,
+    /// Keeps only this many of the six fields of the signer's info, when set.
+    pub(super) info_fields: Option<usize>,
+    /// Names the signer by its issuer alone, without a serial number.
+    pub(super) short_sid: bool,
 }
 
 impl Default for Spec {
@@ -874,6 +878,8 @@ impl Default for Spec {
             sid_tag: None,
             flip_signature: false,
             drop_certificates: false,
+            info_fields: None,
+            short_sid: false,
         }
     }
 }
@@ -927,7 +933,11 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
             } else {
                 parsed.raw_serial().to_vec()
             };
-            der(0x30, &[issuer, der(0x02, &serial)].concat())
+            if spec.short_sid {
+                der(0x30, &issuer)
+            } else {
+                der(0x30, &[issuer, der(0x02, &serial)].concat())
+            }
         }
     };
     let attributes_field = if !spec.attributes {
@@ -937,18 +947,18 @@ pub(super) fn message(body: &[u8], mac: &Identity2, spec: &Spec) -> Vec<u8> {
     } else {
         der(0xa0, &attributes)
     };
-    let info = der(
-        0x30,
-        &[
-            der(0x02, &[1]),
-            sid,
-            algorithm(spec.digest),
-            attributes_field,
-            algorithm(spec.signature),
-            der(0x04, &signature),
-        ]
-        .concat(),
-    );
+    let mut fields = vec![
+        der(0x02, &[1]),
+        sid,
+        algorithm(spec.digest),
+        attributes_field,
+        algorithm(spec.signature),
+        der(0x04, &signature),
+    ];
+    if let Some(keep) = spec.info_fields {
+        fields.truncate(keep);
+    }
+    let info = der(0x30, &fields.concat());
     let infos = vec![info; spec.signers].concat();
     let certificates = if spec.drop_certificates {
         Vec::new()
