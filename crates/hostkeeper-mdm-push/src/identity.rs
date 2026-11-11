@@ -6,10 +6,10 @@
 //! `BEGIN PRIVATE KEY` (PKCS#8) or an EC key. Only an RSA key can be the key of a push
 //! certificate made through [`crate::request`], and the match check is for RSA.
 
-use rsa::pkcs1::DecodeRsaPrivateKey as _;
-use rsa::pkcs8::DecodePrivateKey as _;
-use rsa::pkcs8::DecodePublicKey as _;
-use rsa::{RsaPrivateKey, RsaPublicKey};
+use rsa_legacy::pkcs1::DecodeRsaPrivateKey as _;
+use rsa_legacy::pkcs8::DecodePrivateKey as _;
+use rsa_legacy::pkcs8::DecodePublicKey as _;
+use rsa_legacy::{RsaPrivateKey, RsaPublicKey};
 use rustls::pki_types::pem::PemObject as _;
 use rustls::pki_types::{CertificateDer, PrivateKeyDer};
 use x509_parser::prelude::{FromDer as _, X509Certificate};

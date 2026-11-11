@@ -12,141 +12,21 @@ mod support;
 use std::ffi::OsString;
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::ExitCode;
 use std::sync::{Arc, Mutex};
 
 use clap::Parser;
-use hostkeeper_coordinator::config::{Bound, Cli, Command, Parts, Serve, StartError, build, run};
+use hostkeeper_coordinator::config::{Bound, Cli, Parts, StartError, build, run};
 use hostkeeper_oidc::Roots;
-use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
-use hostkeeper_proto::hostkeeper::operator::v1 as proto;
-use hostkeeper_testkit::Scratch;
 use rustls::pki_types::CertificateDer;
 use serde_json::{Value, json};
-use support::{Ca, Net, OPERATOR, accepting, client_config, exchange, scratch};
+use support::mdm::{
+    API_URL, DAEMON_CONFIG, Files, IDENTIFIER, WEBHOOK, enrollment, flags_of, gate, good,
+    put_build_group, refusal, start,
+};
+use support::{Ca, Net, OPERATOR, accepting, client_config, exchange};
 use tokio::io::{AsyncReadExt as _, AsyncWriteExt as _};
-
-/// The URL of NanoHUB's API: loopback, and nothing listens there.
-const API_URL: &str = "http://127.0.0.1:9004";
-
-/// Where the webhook is served.
-const WEBHOOK: &str = "127.0.0.1:9100";
-
-/// The files the flags name, in a directory of their own, and the CA of the private listener.
-struct Files {
-    dir: Scratch,
-    private_ca: Ca,
-}
-
-impl Files {
-    fn new(name: &str) -> Self {
-        let files = Self {
-            dir: scratch(name),
-            private_ca: Ca::new("private listener CA"),
-        };
-        let leaf = files.private_ca.coordinator();
-        files.put("tls.pem", &leaf.cert_pem, 0o644);
-        files.put("tls.key", &leaf.key_pem, 0o600);
-        files.put("ca.pem", &Ca::new("farm CA").pem, 0o644);
-        files.put("oidc.toml", &config_text(STATIC_ISSUER), 0o644);
-        files.put("operator.token", OPERATOR, 0o600);
-        files.put("mdm.key", "a-nanohub-api-key-for-the-tests\n", 0o600);
-        files
-    }
-
-    fn put(&self, file: &str, text: &str, mode: u32) {
-        let path = self.path(file);
-        std::fs::write(&path, text).expect("written");
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
-    }
-
-    fn path(&self, file: &str) -> PathBuf {
-        self.dir.path().join(file)
-    }
-
-    /// The arguments of a `serve`, then `extra`; each `=name` is the path of `name` in the
-    /// directory.
-    fn args(&self, extra: &[&str]) -> Vec<OsString> {
-        let mut args: Vec<OsString> = vec!["hostkeeper-coordinator".into(), "serve".into()];
-        let base = [
-            "--heartbeat-listen",
-            "192.0.2.1:1",
-            "--private-listen",
-            "192.0.2.1:2",
-            "--tls-cert",
-            "=tls.pem",
-            "--tls-key",
-            "=tls.key",
-            "--client-ca",
-            "=ca.pem",
-            "--state-file",
-            "=desired.json",
-            "--oidc-config",
-            "=oidc.toml",
-            "--operator-token-file",
-            "=operator.token",
-            "--legacy-service",
-            "kbf",
-        ];
-        for arg in base.iter().chain(extra) {
-            args.push(match arg.strip_prefix('=') {
-                Some(file) => self.path(file).into_os_string(),
-                None => OsString::from(arg),
-            });
-        }
-        args
-    }
-}
-
-/// The enrollment flags, which make the CA.
-fn enrollment() -> Vec<&'static str> {
-    vec![
-        "--enrollment-dir",
-        "=enrollment",
-        "--ca-key-file",
-        "=ca.key",
-        "--server-cert-file",
-        "=server.pem",
-        "--server-name",
-        "localhost",
-        "--ca-init",
-    ]
-}
-
-/// The enrollment flags and the three gate flags, with `url`, `key` and `listen` for them.
-fn gate(url: &'static str, key: &'static str, listen: &'static str) -> Vec<&'static str> {
-    let mut flags = enrollment();
-    flags.extend(["--mdm-api-url", url, "--mdm-api-key-file", key]);
-    flags.extend(["--mdm-webhook-listen", listen]);
-    flags
-}
-
-/// The good gate flags.
-fn good() -> Vec<&'static str> {
-    gate(API_URL, "=mdm.key", WEBHOOK)
-}
-
-fn flags_of(args: Vec<OsString>) -> Serve {
-    let Command::Serve(flags) = Cli::try_parse_from(args).expect("flags").command else {
-        panic!("serve")
-    };
-    flags
-}
-
-fn start(files: &Files, extra: &[&str]) -> Result<Parts, StartError> {
-    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
-    build(&flags_of(files.args(extra)), roots)
-}
-
-/// The text of why a start was refused.
-fn refusal(files: &Files, extra: &[&str]) -> String {
-    match start(files, extra) {
-        Err(why) => why.to_string(),
-        Ok(_) => panic!("started with {extra:?}"),
-    }
-}
 
 /// Catches: a gate flag accepted without its partners, or the gate asked for without
 /// enrollment (its records live in the enrollment store): each of the three alone, each pair,
@@ -443,24 +323,9 @@ async fn run_serves_the_webhook_and_its_events_show_in_list_devices() {
     serving.abort();
 }
 
-/// The farm's profile identifier in these tests.
-const IDENTIFIER: &str = "com.example.hostkeeper.mdm";
-
 /// The serial and UDID of NanoMDM's recorded `Authenticate`.
 const SERIAL: &str = "C02MT66KFLHH";
 const UDID: &str = "66ADE930-5FDF-5EC4-8429-15640684C489";
-
-/// A daemon config the daemon's loader accepts.
-const DAEMON_CONFIG: &str = r#"coordinator = "https://coordinator.example:8443"
-ca_sha256 = "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08"
-release_channel = "https://releases.example"
-
-[trusted_signers]
-organisation = "komira-ai"
-workflow = ".github/workflows/release.yml"
-refs = ["refs/tags/*"]
-hosted_runner = true
-"#;
 
 /// The good gate flags, NanoHUB at `url`, with the enrollment side's two flags and an
 /// allowlist of [`SERIAL`].
@@ -807,29 +672,6 @@ fn device_information(uuid: &str) -> Vec<u8> {
     .expect("json")
 }
 
-/// Puts the host group `build` into the state files of `files`, through `HostGroups.Put` of a
-/// coordinator started over them, which is stopped again.
-async fn put_build_group(files: &Files) {
-    let roots = Roots::Given(vec![CertificateDer::from(Ca::new("issuer roots").der)]);
-    let first = build(&flags_of(files.args(&enrollment())), roots).expect("started");
-    first
-        .coordinator
-        .host_groups_put(
-            &first.coordinator.caller(Some(OPERATOR)).await,
-            proto::PutHostGroupRequest {
-                host_group: Some(proto::HostGroup {
-                    name: "build".to_owned(),
-                    packages: vec!["hostkeeper".to_owned()],
-                    policy: None,
-                }),
-                if_generation: None,
-                reason: "the Mac builders".to_owned(),
-            },
-        )
-        .expect("put");
-    drop(first);
-}
-
 /// Catches: the two flags parsed but not reaching the gate the coordinator starts (no config
 /// profile sent, or one of another identifier or without the daemon config's keys), or the
 /// gate's enrollment not attached at start (the allowlisted serial not allowed).
@@ -991,91 +833,4 @@ async fn run_binds_the_macs_listener_and_serves_no_webhook() {
     );
     serving.abort();
     let _ = serving.await;
-}
-
-/// Catches: the new flags missing from the usage, or read from the environment.
-#[test]
-fn serve_help_lists_the_macs_listener_flags() {
-    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
-        .expect_err("help")
-        .to_string();
-    for flag in [
-        "--mdm-listen <MDM_LISTEN>",
-        "--mdm-command-timeout-s <MDM_COMMAND_TIMEOUT_S>",
-        "--mdm-queue-sweep-s <MDM_QUEUE_SWEEP_S>",
-        "--mdm-pkg-dir <MDM_PKG_DIR>",
-    ] {
-        assert!(help.contains(flag), "{flag}: {help}");
-    }
-}
-
-/// Catches: a baseline flag accepted without its partners (`--mdm-baseline-file` without
-/// `--mdm-profile-identifier` or without `--mac-serial-allowlist`, the check interval without
-/// the file, an interval of 0), a baseline file that is not root's let through the start (it
-/// says what every Mac is configured with), and a default check interval other than six hours.
-#[tokio::test]
-async fn the_baseline_flags_go_with_the_side_and_the_allowlist_and_the_file_must_be_roots() {
-    let files = Files::new("mdm-baseline-flags");
-    put_build_group(&files).await;
-    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
-    files.put(
-        "mac.toml",
-        "[[mac]]\nserial = \"C02XK1ABJG5J\"\nhost_id_prefix = \"mac-\"\nrole = \"build\"\n",
-        0o600,
-    );
-    files.put(
-        "baseline.toml",
-        "[[group]]\nhost_group = \"build\"\n[[group.entry]]\nremote_desktop = true\n",
-        0o644,
-    );
-    let side = [
-        "--mdm-profile-identifier",
-        IDENTIFIER,
-        "--mdm-daemon-config",
-        "=hostkeeper.toml",
-    ];
-    let allowlist = ["--mac-serial-allowlist", "=mac.toml"];
-    let baseline = ["--mdm-baseline-file", "=baseline.toml"];
-    let refused: [Vec<&str>; 4] = [
-        good()
-            .into_iter()
-            .chain(allowlist)
-            .chain(baseline)
-            .collect(),
-        good().into_iter().chain(side).chain(baseline).collect(),
-        good()
-            .into_iter()
-            .chain(side)
-            .chain(allowlist)
-            .chain(["--mdm-baseline-check-s", "60"])
-            .collect(),
-        good()
-            .into_iter()
-            .chain(side)
-            .chain(allowlist)
-            .chain(baseline)
-            .chain(["--mdm-baseline-check-s", "0"])
-            .collect(),
-    ];
-    for args in refused {
-        assert_eq!(
-            hostkeeper_coordinator::config::main(files.args(&args)),
-            ExitCode::from(2),
-            "{args:?}"
-        );
-    }
-    let all: Vec<&str> = good()
-        .into_iter()
-        .chain(side)
-        .chain(allowlist)
-        .chain(baseline)
-        .collect();
-    assert_eq!(flags_of(files.args(&all)).mdm.mdm_baseline_check_s, 21_600);
-    assert_eq!(
-        refusal(&files, &all),
-        format!(
-            "--mdm-baseline-file {}: it is not owned by root; the baseline and its profiles must be files of root's that no one else can write",
-            files.path("baseline.toml").display()
-        )
-    );
 }
