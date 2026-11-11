@@ -218,7 +218,7 @@ fn a_proxy_setting_is_a_whole_number_in_its_range() {
 
 /// Proves: the counts of the ABM sync are whole numbers within their range, written without leading
 /// zeros, and refused outside it or with anything but digits; `number_of` reads one with the
-/// fallback it is given.
+/// fallback `number_of` gives.
 ///
 /// Catches: a sync interval of zero (a request in a loop) or of a week that nothing would notice.
 #[test]

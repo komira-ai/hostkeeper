@@ -115,11 +115,11 @@ tracing-subscriber.workspace = true
 x509-parser.workspace = true
 
 [dev-dependencies]
+# `builder`: the test makes the CMS envelope the ABM token is delivered in.
+cms = { workspace = true, features = ["builder"] }
 # The fakes of the clock, the APNs sender and the mdmcert.download transport, and the keys and
 # certificates the push tests make.
 hostkeeper-mdm-push = { path = "../hostkeeper-mdm-push", features = ["testkit"] }
-# `builder`: the test makes the CMS envelope the ABM token is delivered in.
-cms = { workspace = true, features = ["builder"] }
 hostkeeper-oidc = { path = "../hostkeeper-oidc", features = ["testkit"] }
 hostkeeper-testkit = { path = "../hostkeeper-testkit" }
 # The HTTP/2 client that calls a listener in the listener's tests.

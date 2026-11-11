@@ -595,8 +595,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
-        )?)
-        .with_abm(state::abm(Arc::clone(&mdm_store), roots)?);
+        )?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator
@@ -605,6 +604,10 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
             hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
         ));
     coordinator = coordinator.with_proxy_cache(proxy_cache);
+    // Over files the ABM client runs when the key flag is given; over the database always.
+    if flags.mdm_secrets_key_file.is_some() || flags.database_dsn_file.is_some() {
+        coordinator = coordinator.with_abm(state::abm(Arc::clone(&mdm_store), roots.clone())?);
+    }
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),

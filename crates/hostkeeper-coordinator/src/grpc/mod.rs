@@ -442,7 +442,8 @@ where
 
 /// The most bytes an operator's call of `path` reads: [`MAX_SET_DESIRED_BYTES`] for
 /// `SetDesired` and `Repositories.Put`, [`MAX_HOST_GROUPS_PUT_BYTES`] for `HostGroups.Put`,
-/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`, [`MAX_OPERATOR_BYTES`] for every other method.
+/// `Mdm.PutSecret`, `Mdm.PutPushReply`, `Mdm.PutPushCertificate` and `Mdm.PutAbmToken`,
+/// [`MAX_OPERATOR_BYTES`] for every other method.
 pub(crate) fn operator_limit(path: &str) -> usize {
     if path == SET_DESIRED || path == REPOSITORIES_PUT {
         MAX_SET_DESIRED_BYTES

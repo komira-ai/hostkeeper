@@ -275,12 +275,12 @@ fn wire_names_of_the_mdm_api_are_pinned() {
             "CreatePushRequest(CreatePushRequestRequest) CreatePushRequestResponse",
             "PutPushReply(PutPushReplyRequest) PutPushReplyResponse",
             "PutPushCertificate(PutPushCertificateRequest) PutPushCertificateResponse",
+            "Status(MdmStatusRequest) MdmStatusResponse",
+            "PutName(PutNameRequest) PutNameResponse",
             "PutAbmToken(PutAbmTokenRequest) PutAbmTokenResponse",
             "GetAbmPublicKey(GetAbmPublicKeyRequest) GetAbmPublicKeyResponse",
             "ListEnrollmentRequests(ListEnrollmentRequestsRequest) ListEnrollmentRequestsResponse",
             "ConfirmEnrollment(ConfirmEnrollmentRequest) ConfirmEnrollmentResponse",
-            "Status(MdmStatusRequest) MdmStatusResponse",
-            "PutName(PutNameRequest) PutNameResponse",
         ]
     );
 

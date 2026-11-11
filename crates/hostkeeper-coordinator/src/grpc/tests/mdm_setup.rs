@@ -75,6 +75,10 @@ fn write_body(path: &str) -> String {
         PUT_SECRET => secret_body(),
         PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
         PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
+        PUT_ABM_TOKEN => {
+            json!({ "tokenJson": base64::engine::general_purpose::STANDARD.encode(b"{}") })
+                .to_string()
+        }
         _ => "{}".to_owned(),
     }
 }
@@ -113,8 +117,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             LIST_DEVICES,
             LIST_SECRETS,
             LIST_SETTINGS,
-            LIST_ENROLLMENT_REQUESTS,
-            STATUS
+            STATUS,
+            LIST_ENROLLMENT_REQUESTS
         ]
     );
     assert_eq!(
@@ -125,10 +129,10 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             CREATE_PUSH_REQUEST,
             PUT_PUSH_REPLY,
             PUT_PUSH_CERTIFICATE,
+            PUT_NAME,
             PUT_ABM_TOKEN,
             GET_ABM_PUBLIC_KEY,
-            CONFIRM_ENROLLMENT,
-            PUT_NAME
+            CONFIRM_ENROLLMENT
         ]
     );
     for path in &writes {
@@ -183,6 +187,15 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 proto::PutSettingRequest {
                     name: "tls_renew_days".to_owned(),
                     value: "12".to_owned(),
+                },
+                Some(OPERATOR),
+            )
+        } else if *path == PUT_ABM_TOKEN {
+            grpc_request(
+                path,
+                proto::PutAbmTokenRequest {
+                    token_json: b"{}".to_vec(),
+                    token_p7m: Vec::new(),
                 },
                 Some(OPERATOR),
             )
@@ -524,78 +537,6 @@ async fn a_session_uploads_a_secret_of_32_kib_and_no_more() {
     );
 }
 
-/// Proves: a signed-in user makes the three calls of the push certificate through the JSON gateway
-/// as themselves: the request is made (nothing is posted without `submit`), a reply that does not
-/// decrypt and a certificate that is none are refused with their tokens and the codes the proto
-/// names, each audited under the user's name, and the answers hold the CSR and the encryption
-/// certificate only.
-///
-/// Catches: a handler of the service that does not reach the coordinator's call, a refusal that has
-/// another status than its token says, and a key in an answer.
-#[tokio::test]
-async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
-    let world = world("mdm-setup-push-gateway");
-    let alice = world.sign_in("alice", PASSWORD).await;
-    let made = world
-        .send(alice.post(
-            CREATE_PUSH_REQUEST,
-            &json!({ "email": "ops@example.org" }).to_string(),
-        ))
-        .await;
-    assert_eq!(made.status, StatusCode::OK, "{made:?}");
-    let answer = made.json();
-    assert!(
-        answer["csrPem"]
-            .as_str()
-            .expect("a csr")
-            .starts_with("-----BEGIN CERTIFICATE REQUEST")
-    );
-    assert!(
-        answer["encryptionCertificatePem"]
-            .as_str()
-            .expect("a certificate")
-            .starts_with("-----BEGIN CERTIFICATE")
-    );
-    assert!(!String::from_utf8_lossy(&made.body).contains("PRIVATE KEY"));
-
-    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
-    let reply = world
-        .send(alice.post(
-            PUT_PUSH_REPLY,
-            &json!({ "reply": b64(b"not a message") }).to_string(),
-        ))
-        .await;
-    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reply:?}");
-    assert_eq!(
-        reply.json(),
-        json!({ "code": "INVALID_ARGUMENT", "reason": "reply_undecryptable" })
-    );
-    let certificate = world
-        .send(alice.post(
-            PUT_PUSH_CERTIFICATE,
-            &json!({ "certificatePem": b64(b"not a certificate") }).to_string(),
-        ))
-        .await;
-    assert_eq!(
-        certificate.json(),
-        json!({ "code": "INVALID_ARGUMENT", "reason": "certificate_invalid" })
-    );
-    let said: Vec<(String, String)> = world
-        .said()
-        .into_iter()
-        .map(|(by, action, _, _)| (by, action))
-        .collect();
-    assert_eq!(
-        said,
-        [
-            ("alice".to_owned(), "login".to_owned()),
-            ("alice".to_owned(), "mdm_push_csr".to_owned()),
-            ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
-            ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
-        ]
-    );
-}
-
 /// Proves: a signed-in user uploads an ABM token and asks for the public key through the JSON
 /// gateway as themselves, the answers hold what `ListSecrets` shows and who Apple says the
 /// token is for and no part of the token or of the key, the audit holds the user's name, and a
@@ -667,6 +608,78 @@ async fn a_session_uploads_the_abm_token_and_asks_for_the_public_key() {
             ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
             ("alice".to_owned(), "mdm_abm_cert_get".to_owned()),
             ("alice".to_owned(), "mdm_abm_token_put".to_owned()),
+        ]
+    );
+}
+
+/// Proves: a signed-in user makes the three calls of the push certificate through the JSON gateway
+/// as themselves: the request is made (nothing is posted without `submit`), a reply that does not
+/// decrypt and a certificate that is none are refused with their tokens and the codes the proto
+/// names, each audited under the user's name, and the answers hold the CSR and the encryption
+/// certificate only.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, a refusal that has
+/// another status than its token says, and a key in an answer.
+#[tokio::test]
+async fn a_session_makes_the_push_certificate_calls_through_the_gateway() {
+    let world = world("mdm-setup-push-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let made = world
+        .send(alice.post(
+            CREATE_PUSH_REQUEST,
+            &json!({ "email": "ops@example.org" }).to_string(),
+        ))
+        .await;
+    assert_eq!(made.status, StatusCode::OK, "{made:?}");
+    let answer = made.json();
+    assert!(
+        answer["csrPem"]
+            .as_str()
+            .expect("a csr")
+            .starts_with("-----BEGIN CERTIFICATE REQUEST")
+    );
+    assert!(
+        answer["encryptionCertificatePem"]
+            .as_str()
+            .expect("a certificate")
+            .starts_with("-----BEGIN CERTIFICATE")
+    );
+    assert!(!String::from_utf8_lossy(&made.body).contains("PRIVATE KEY"));
+
+    let b64 = |bytes: &[u8]| base64::engine::general_purpose::STANDARD.encode(bytes);
+    let reply = world
+        .send(alice.post(
+            PUT_PUSH_REPLY,
+            &json!({ "reply": b64(b"not a message") }).to_string(),
+        ))
+        .await;
+    assert_eq!(reply.status, StatusCode::BAD_REQUEST, "{reply:?}");
+    assert_eq!(
+        reply.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "reply_undecryptable" })
+    );
+    let certificate = world
+        .send(alice.post(
+            PUT_PUSH_CERTIFICATE,
+            &json!({ "certificatePem": b64(b"not a certificate") }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        certificate.json(),
+        json!({ "code": "INVALID_ARGUMENT", "reason": "certificate_invalid" })
+    );
+    let said: Vec<(String, String)> = world
+        .said()
+        .into_iter()
+        .map(|(by, action, _, _)| (by, action))
+        .collect();
+    assert_eq!(
+        said,
+        [
+            ("alice".to_owned(), "login".to_owned()),
+            ("alice".to_owned(), "mdm_push_csr".to_owned()),
+            ("alice".to_owned(), "mdm_push_reply_put".to_owned()),
+            ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
         ]
     );
 }
