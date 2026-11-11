@@ -203,7 +203,6 @@ impl Tx<'_> {
     ///
     /// # Errors
     /// The client's error.
-    #[cfg(test)]
     pub(crate) fn query(
         &mut self,
         sql: &str,

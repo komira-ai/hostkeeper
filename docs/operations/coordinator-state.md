@@ -96,6 +96,10 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   ([hostgroups.md](hostgroups.md#where-a-packages-repository-and-minimum-version-come-from)). Older
   releases may run on it (`may-run`): they never read the column, and their writes of a service's
   row leave it as it is (a row an older release deletes takes the value with it).
+- **MDM tables.** Migration `0010` adds the tables of the MDM server inside the coordinator
+  (`mdm_enrollments`, `mdm_identities`, `mdm_commands`, `abm_devices`, `abm_state`). Nothing writes
+  them yet. `0010` says older releases may run on it (the release before never reads these tables),
+  so going back one release needs no restore.
 - **Bounded waits.** Each session connects within 5 seconds, a statement runs at most 5 seconds and
   waits for a lock at most 3, and the connection's keepalives drop a peer that is gone. A wait
   that runs out loses the session. The same bounds hold at start, for each statement of a
