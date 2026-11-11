@@ -72,6 +72,51 @@ fn fetch(max_package_bytes: u64, fetch_timeout_secs: u64) -> Bounds {
     }
 }
 
+/// B8, previous release on new data: the daemon config as the previous release's loader required it
+/// (with `release_channel`) loads with this loader, and every other field is what it was.
+#[test]
+fn a_config_the_previous_release_required_to_carry_release_channel_still_loads() {
+    let config = DaemonConfig::parse(EXAMPLE).expect("the previous release's config loads");
+    assert_eq!(
+        config.release_channel.as_ref().map(|u| u.as_str()),
+        Some("https://releases.example")
+    );
+    assert_eq!(config.ca_sha256.as_str(), CA);
+}
+
+/// B8, new release on the data the next release writes: a config with no `release_channel` loads
+/// and equals the previous release's config in every other field. (The previous release's loader
+/// refuses that config, which is why the generated configs keep the key for one more release.)
+#[test]
+fn a_config_without_release_channel_loads_and_differs_only_in_that_field() {
+    let without: String = EXAMPLE
+        .lines()
+        .filter(|line| !line.starts_with("release_channel"))
+        .map(|line| format!("{line}\n"))
+        .collect();
+    assert!(!without.contains("release_channel"), "{without}");
+    let new = DaemonConfig::parse(&without).expect("a config without release_channel loads");
+    let old = DaemonConfig::parse(EXAMPLE).expect("the example loads");
+    assert_eq!(new.release_channel, None);
+    assert_eq!(
+        DaemonConfig {
+            release_channel: old.release_channel.clone(),
+            ..new
+        },
+        old
+    );
+}
+
+/// A `release_channel` that is present is still checked: a wrong type is refused with its name.
+#[test]
+fn a_release_channel_of_the_wrong_type_is_refused_by_name() {
+    let text = with(
+        "release_channel = \"https://releases.example\"",
+        "release_channel = 1",
+    );
+    assert_eq!(invalid_key(refusal(&text)), "release_channel");
+}
+
 /// Catches a renamed key or a changed default: the example parses and every field is its value.
 #[test]
 fn design_example_loads_with_every_value() {
@@ -81,7 +126,10 @@ fn design_example_loads_with_every_value() {
         "https://coordinator.example:8443"
     );
     assert_eq!(config.ca_sha256.as_str(), CA);
-    assert_eq!(config.release_channel.as_str(), "https://releases.example");
+    assert_eq!(
+        config.release_channel.as_ref().map(|u| u.as_str()),
+        Some("https://releases.example")
+    );
     assert_eq!(
         config.trusted_signers,
         TrustedSigners {
@@ -181,10 +229,6 @@ fn missing_required_key_names_the_key() {
             "coordinator",
         ),
         ("ca_sha256       = \"", "ca_sha256"),
-        (
-            "release_channel = \"https://releases.example\"",
-            "release_channel",
-        ),
         (
             "organisation = \"komira-ai\"",
             "trusted_signers.organisation",
@@ -406,7 +450,10 @@ fn bad_ca_digest_and_non_https_urls_are_refused() {
     ] {
         let text = with("https://releases.example", url);
         let config = DaemonConfig::parse(&text).unwrap_or_else(|e| panic!("{url}: {e}"));
-        assert_eq!(config.release_channel.as_str(), url);
+        assert_eq!(
+            config.release_channel.as_ref().map(|u| u.as_str()),
+            Some(url)
+        );
     }
     for (from, to, key) in [
         ("\"komira-ai\"", "\"\"", "trusted_signers.organisation"),
@@ -469,7 +516,10 @@ fn bracketed_hosts_and_url_paths_are_checked_as_url_parts() {
     ] {
         let text = with("https://releases.example", url);
         let config = DaemonConfig::parse(&text).unwrap_or_else(|e| panic!("{url}: {e}"));
-        assert_eq!(config.release_channel.as_str(), url);
+        assert_eq!(
+            config.release_channel.as_ref().map(|u| u.as_str()),
+            Some(url)
+        );
     }
 }
 
