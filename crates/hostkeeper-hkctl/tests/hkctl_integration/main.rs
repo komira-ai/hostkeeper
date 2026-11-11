@@ -15,6 +15,7 @@
 //! - `surface`: the curl arguments, the hold of a `wait_secs` field, the help, the version, the
 //!   global flags' usage errors, and a new RPC of the fixture appearing with no edit.
 
+mod accounts;
 mod answers;
 mod flags;
 mod gateway;

@@ -278,6 +278,7 @@ async fn every_operator_method_admits_exactly_its_credential() {
         services,
         BTreeSet::from([
             "Alerts",
+            "ApiTokens",
             "Audit",
             "Enrollment",
             "HostGroups",
@@ -286,7 +287,8 @@ async fn every_operator_method_admits_exactly_its_credential() {
             "Releases",
             "Repositories",
             "Rollouts",
-            "Services"
+            "Services",
+            "Users"
         ])
     );
     let ci_methods = [SET_DESIRED, CONVERGE, WAIT_CONVERGED, GET_RELEASE];
