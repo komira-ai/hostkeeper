@@ -1,4 +1,4 @@
-use rsa09::pkcs8::EncodePrivateKey as _;
+use rsa_legacy::pkcs8::EncodePrivateKey as _;
 
 use super::*;
 use crate::request::pkcs1_pem;
@@ -32,7 +32,7 @@ fn a_pkcs1_key_the_migrated_shape_and_a_pkcs8_key_both_match_their_certificate()
     let identity = PushIdentity::parse(pem.as_bytes(), pkcs1.expose()).unwrap();
     assert_eq!(identity.info.topic, TOPIC);
     assert_eq!(identity.chain.len(), 1);
-    let pkcs8 = key.to_pkcs8_pem(rsa09::pkcs8::LineEnding::LF).unwrap();
+    let pkcs8 = key.to_pkcs8_pem(rsa_legacy::pkcs8::LineEnding::LF).unwrap();
     assert!(pkcs8.starts_with("-----BEGIN PRIVATE KEY-----"));
     PushIdentity::parse(pem.as_bytes(), pkcs8.as_bytes()).unwrap();
     let (chain, _key) = identity.tls_identity();

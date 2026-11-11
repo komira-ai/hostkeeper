@@ -387,6 +387,15 @@ pub struct Serve {
     /// and `Mdm.PutSecret` is refused `secrets_unavailable`.
     #[arg(long)]
     pub mdm_secrets_key_file: Option<PathBuf>,
+    /// The package proxy's cache (`docs/design/package-proxy.md`): a directory of the
+    /// coordinator's own, made when missing, holding `objects/` (the committed files, each with
+    /// its sidecar) and `tmp/` (the fills in progress). At start every file of `tmp/` and every
+    /// partial object a crash left is deleted, and the objects past `proxy_cache_max_bytes`
+    /// (a setting, 20 GiB by default) are evicted, the least recently fetched first. No file
+    /// is synced to disk. The directory is the coordinator's alone: not shared with another
+    /// coordinator. Without the flag there is no cache.
+    #[arg(long)]
+    pub proxy_cache_dir: Option<PathBuf>,
     /// A directory of static files (the operator web app) that the private listener serves
     /// under `/ui/`, to `GET` and `HEAD` only: `/ui/` is its `index.html`, and only files ending
     /// in .html, .css, .js, .json, .svg, .png or .ico of at most 4 MiB inside it are served.
@@ -547,6 +556,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         mdm: mdm_store,
     } = state::open_store(flags, legacy, lock, &oidc_clock)?;
     let mdm_setup = Arc::new(state::mdm_setup(flags, setup_store)?);
+    let proxy_cache =
+        crate::proxy_cache::open_at_start(flags.proxy_cache_dir.as_deref(), &mdm_setup)?;
     let wiring = mdm_listener::wire(flags, &mdm_store, &mdm_setup);
     let verifier = Verifier::new(
         oidc,
@@ -581,9 +592,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_accounts(accounts)
         .with_ui(ui)
         .with_alert_thresholds(alert_thresholds(flags))
-        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
-            roots.clone(),
-        )?);
+        .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(roots)?);
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator
@@ -591,7 +600,7 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_mdmcert(Arc::new(
             hostkeeper_mdm_push::mdmcert::HttpsTransport::production(),
         ));
-    coordinator = coordinator.with_abm(state::abm(Arc::clone(&mdm_store), roots.clone())?);
+    coordinator = coordinator.with_proxy_cache(proxy_cache);
     let store = match (&flags.enrollment_dir, records) {
         (Some(dir), _) => Some(StoreAt::Dir(dir)),
         (None, Some(records)) => Some(StoreAt::Records(records)),
@@ -843,7 +852,6 @@ where
     let watching = Arc::clone(&coordinator);
     let observing = observe_every(Arc::clone(&coordinator), OBSERVE_EVERY);
     let adopting = watch_every(Arc::clone(&coordinator), parts.reload);
-    let syncing = crate::operator_abm::abm_sync_every(Arc::clone(&coordinator));
     // Without a LAN listener, a future that never finishes stands in for it.
     let serving_lan = match lan {
         Some(lan) => Either::Left(serve(
@@ -880,10 +888,7 @@ where
     );
     let all = together(
         together(together(serving, serving_lan), serving_macs),
-        together(
-            reloading,
-            together(observing, together(webhook, together(adopting, syncing))),
-        ),
+        together(reloading, together(observing, together(webhook, adopting))),
     );
     // A store another coordinator led while this one's link was lost stops the serve: its memory
     // is stale (`docs/design/coordinator-storage.md`, section 5).

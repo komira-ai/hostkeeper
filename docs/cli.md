@@ -575,6 +575,28 @@ Refused also `enrollment_unavailable` when this coordinator has no MDM listener,
 | flag | value | meaning |
 |---|---|---|
 | `--serial` | STRING | The serial, 1 to 64 ASCII letters and digits. |
+#### `hkctl mdm status`
+
+`/hostkeeper.operator.v1.Mdm/Status`
+
+Whether the MDM setup is complete (`configured`), and when it is not, which conditions are
+missing; the name, its enrollment URL, and what is shown of the push certificate and key, the
+ABM token and the TLS certificate and key in use, with the expiry and topic read from their
+material. Computed from the records at each call and never stored, so it cannot go stale.
+Never returns a value of a secret. Changes nothing.
+
+#### `hkctl mdm put-name`
+
+`/hostkeeper.operator.v1.Mdm/PutName`
+
+Sets the MDM name, the host name the Macs enroll at (`https://<name>/enroll`). Session-only,
+as `PutSecret` is. Audited as `mdm_name_set` with the name. The first name is always taken
+(Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
+another is refused `name_locked`, and the same name is taken again.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The name: a DNS name of two or more labels of letters, digits and `-`, each 1 to 63 long and not starting or ending with `-`, at most 253 in all, whose last label is not all digits; kept in lower case. Else `invalid_request`. |
 
 ### `releases`
 

@@ -181,6 +181,7 @@ pub(crate) fn mdm(refusal: MdmRefusal) -> Status {
         MdmRefusal::AuditUnavailable => Code::Unavailable,
         MdmRefusal::NoPendingEnrollment => Code::NotFound,
         MdmRefusal::SecretsUnavailable
+        | MdmRefusal::NameLocked
         | MdmRefusal::EnrollmentUnavailable
         | MdmRefusal::SerialNotInAbm
         | MdmRefusal::NoPendingRequest

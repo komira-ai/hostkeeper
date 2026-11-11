@@ -5,7 +5,7 @@ use der::Encode as _;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hyper::StatusCode;
 use rsa::pkcs8::EncodePrivateKey as _;
-use rsa09::pkcs8::DecodePrivateKey as _;
+use rsa_legacy::pkcs8::DecodePrivateKey as _;
 
 use super::ca::pack;
 use super::scep_client::{self, Client, check_rep, open_rep};
@@ -71,7 +71,7 @@ async fn redeem(session: &mut Session, challenge: &str, transaction: &str) -> Id
         index: 0,
         der: identity.to_der().expect("DER"),
         key_der: key_der.as_bytes().to_vec(),
-        key: Some(rsa09::RsaPrivateKey::from_pkcs8_der(key_der.as_bytes()).expect("the key reads")),
+        key: Some(rsa_legacy::RsaPrivateKey::from_pkcs8_der(key_der.as_bytes()).expect("the key reads")),
     }
 }
 

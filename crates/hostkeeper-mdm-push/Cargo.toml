@@ -22,19 +22,21 @@ description = "The coordinator's MDM push side: the APNs sender, the push policy
 testkit = []
 
 [dependencies]
-aes08.workspace = true
+# The CMS reply of mdmcert.download is read with the RustCrypto 0.8-era ciphers and rsa 0.9, which
+# this crate was written against (the `-legacy` aliases of the root manifest).
+aes-legacy.workspace = true
 base64.workspace = true
 bytes.workspace = true
-cbc01.workspace = true
-des08.workspace = true
+cbc-legacy.workspace = true
+des-legacy.workspace = true
 hex.workspace = true
 http-body-util.workspace = true
 hyper = { workspace = true, features = ["client", "http1", "http2"] }
 hyper-util = { workspace = true, features = ["tokio"] }
 plist.workspace = true
-rand_core.workspace = true
+rand_core-legacy.workspace = true
 rcgen.workspace = true
-rsa09.workspace = true
+rsa-legacy.workspace = true
 rustls = { workspace = true, features = ["tls12"] }
 rustls-pki-types.workspace = true
 serde.workspace = true

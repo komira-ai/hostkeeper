@@ -32,6 +32,8 @@ const LIST_ENROLLMENT_REQUESTS: &str = "/hostkeeper.operator.v1.Mdm/ListEnrollme
 const CONFIRM_ENROLLMENT: &str = "/hostkeeper.operator.v1.Mdm/ConfirmEnrollment";
 const LIST_SECRETS: &str = "/hostkeeper.operator.v1.Mdm/ListSecrets";
 const LIST_SETTINGS: &str = "/hostkeeper.operator.v1.Mdm/ListSettings";
+const STATUS: &str = "/hostkeeper.operator.v1.Mdm/Status";
+const PUT_NAME: &str = "/hostkeeper.operator.v1.Mdm/PutName";
 const LIST_DEVICES: &str = "/hostkeeper.operator.v1.Mdm/ListDevices";
 
 const MATERIAL: &[u8] = b"-----BEGIN RSA PRIVATE KEY-----\nMIIEowIBAAKCAQEAgatewaymarker\n-----END RSA PRIVATE KEY-----\n";
@@ -71,6 +73,7 @@ fn bearer_post(path: &str, body: &str, token: &str) -> Request<Full<Bytes>> {
 fn write_body(path: &str) -> String {
     match path {
         PUT_SECRET => secret_body(),
+        PUT_NAME => json!({ "name": "mdm.example.com" }).to_string(),
         PUT_SETTING => json!({ "name": "tls_renew_days", "value": "12" }).to_string(),
         _ => "{}".to_owned(),
     }
@@ -81,7 +84,12 @@ fn mdm_paths() -> (Vec<&'static str>, Vec<&'static str>) {
     let all = COMMANDS
         .iter()
         .filter(|command| command.service == "Mdm")
-        .map(|command| (command.method.starts_with("List"), command.path));
+        .map(|command| {
+            (
+                command.method.starts_with("List") || command.method == "Status",
+                command.path,
+            )
+        });
     let reads = all
         .clone()
         .filter(|(read, _)| *read)
@@ -105,7 +113,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             LIST_DEVICES,
             LIST_SECRETS,
             LIST_SETTINGS,
-            LIST_ENROLLMENT_REQUESTS
+            LIST_ENROLLMENT_REQUESTS,
+            STATUS
         ]
     );
     assert_eq!(
@@ -118,7 +127,8 @@ fn every_write_of_the_mdm_service_is_session_only_and_no_read_is() {
             PUT_PUSH_CERTIFICATE,
             PUT_ABM_TOKEN,
             GET_ABM_PUBLIC_KEY,
-            CONFIRM_ENROLLMENT
+            CONFIRM_ENROLLMENT,
+            PUT_NAME
         ]
     );
     for path in &writes {
@@ -149,7 +159,15 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
             json!({ "code": "PERMISSION_DENIED", "reason": "session_required" }),
             "{path}"
         );
-        let message = if *path == PUT_SECRET {
+        let message = if *path == PUT_NAME {
+            grpc_request(
+                path,
+                proto::PutNameRequest {
+                    name: "mdm.example.com".to_owned(),
+                },
+                Some(OPERATOR),
+            )
+        } else if *path == PUT_SECRET {
             grpc_request(
                 path,
                 proto::PutSecretRequest {
@@ -215,6 +233,7 @@ async fn a_token_is_refused_every_setup_write_and_allowed_every_read() {
                 grpc_request(path, proto::ListDevicesRequest::default(), Some(OPERATOR))
             }
             LIST_SECRETS => grpc_request(path, proto::ListSecretsRequest {}, Some(OPERATOR)),
+            STATUS => grpc_request(path, proto::MdmStatusRequest {}, Some(OPERATOR)),
             _ => grpc_request(path, proto::ListSettingsRequest {}, Some(OPERATOR)),
         };
         let (code, said, _) = call(&world.coordinator, Surface::Control, &None, message).await;
@@ -252,6 +271,20 @@ async fn a_session_makes_the_setup_writes_and_no_answer_shows_the_secret() {
         json!({ "name": "tls_renew_days", "value": "12" })
     );
 
+    let named = world
+        .send(alice.post(PUT_NAME, &write_body(PUT_NAME)))
+        .await;
+    assert_eq!(
+        named.json(),
+        json!({ "name": "mdm.example.com", "enrollmentUrl": "https://mdm.example.com/enroll" })
+    );
+    let status = world.send(alice.post(STATUS, "{}")).await;
+    let by_token_status = world.send(bearer_post(STATUS, "{}", OPERATOR)).await;
+    assert_eq!(status.json(), by_token_status.json());
+    assert_eq!(status.json()["name"], "mdm.example.com");
+    assert_eq!(status.json()["configured"], Value::Null);
+    assert_eq!(status.json()["pushKey"]["kind"], "push_key");
+
     let listed = world.send(alice.post(LIST_SECRETS, "{}")).await;
     let by_token = world.send(bearer_post(LIST_SECRETS, "{}", OPERATOR)).await;
     assert_eq!(listed.json(), by_token.json());
@@ -281,6 +314,7 @@ async fn a_session_makes_the_setup_writes_and_no_answer_shows_the_secret() {
             ("alice".to_owned(), "login".to_owned()),
             ("alice".to_owned(), "mdm_push_cert_put".to_owned()),
             ("alice".to_owned(), "mdm_setting_set".to_owned()),
+            ("alice".to_owned(), "mdm_name_set".to_owned()),
         ]
     );
 
@@ -291,7 +325,7 @@ async fn a_session_makes_the_setup_writes_and_no_answer_shows_the_secret() {
         sent.json(),
         json!({ "code": "PERMISSION_DENIED", "reason": "csrf" })
     );
-    assert_eq!(world.said().len(), 3);
+    assert_eq!(world.said().len(), 4);
     assert_eq!(
         world
             .coordinator
@@ -373,11 +407,13 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
     every.extend([
         PUT_SECRET,
         PUT_SETTING,
+        PUT_NAME,
         CREATE_PUSH_REQUEST,
         PUT_PUSH_REPLY,
         PUT_PUSH_CERTIFICATE,
         LIST_SECRETS,
         LIST_SETTINGS,
+        STATUS,
     ]);
     for path in every {
         let json_call = bearer_post(path, "{}", OPERATOR);
@@ -431,7 +467,7 @@ async fn the_mdm_listener_answers_404_to_everything_outside_its_table() {
         .await;
     assert_eq!(version.status, StatusCode::OK);
     let setup: Value = world.send(alice.post(LIST_SETTINGS, "{}")).await.json();
-    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(19));
+    assert_eq!(setup["settings"].as_array().map(Vec::len), Some(24));
 }
 
 /// Proves: a signed-in user's `PutSecret` through the gateway reads a value of 32 KiB (the most
