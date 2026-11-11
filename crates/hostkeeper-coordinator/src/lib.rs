@@ -66,6 +66,7 @@
 //!   settings of its rollout;
 //! - [`password`]: Argon2id password hashes, the length policy and the cap on hashes at once
 //!   (not yet used by a route);
+//! - [`session`]: the browser sessions and the login limiter, in memory (not yet used by a route);
 //! - [`tokens`]: the operator's named tokens, kept as hashes and re-read while the coordinator
 //!   runs;
 //! - [`service`]: the coordinator itself: heartbeats in, the desired state set by CI's OIDC
@@ -189,6 +190,7 @@ mod running;
 pub mod service;
 pub(crate) mod service_repository;
 pub mod services;
+pub mod session;
 pub mod stages;
 pub mod stamp;
 pub mod status;
@@ -481,6 +483,8 @@ mod service_tests;
 mod services_repository_tests;
 #[cfg(test)]
 mod services_tests;
+#[cfg(test)]
+mod session_tests;
 #[cfg(test)]
 mod stages_edge_tests;
 #[cfg(test)]
