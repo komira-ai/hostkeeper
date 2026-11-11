@@ -2,8 +2,8 @@
 //! of the name and the push identity, a manual clock, a fake APNs, a CA that issues the Macs'
 //! identities, and a fake Mac that dials the listener in memory.
 
+use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use base64::Engine as _;
@@ -34,6 +34,7 @@ use tokio_rustls::TlsConnector;
 use tokio_rustls::client::TlsStream;
 
 use super::auth::fingerprint;
+pub(crate) use super::flaky::Flaky;
 use super::pushing::{SenderFactory, SetupPushers};
 use super::queue::{MdmQueue, Pushers};
 use super::tls::{MdmTls, Trust};
@@ -44,10 +45,7 @@ use crate::mdm_setup::MdmSetup;
 use crate::service::Coordinator;
 use crate::store::Fake;
 use crate::store::mdm::files::FileMdm;
-use crate::store::mdm::{
-    AbmBatch, AbmDevice, AbmState, Answer, Answered, Challenge, Command as Row, Consumed, Enqueued,
-    Enrollment, Identity, Issuance, MdmError, MdmStore, NewCommand,
-};
+use crate::store::mdm::{AbmBatch, AbmDevice, Challenge, Consumed, Enrollment, Issuance, MdmStore};
 use crate::testutil::scratch;
 
 /// The push topic of the test certificate.
@@ -85,123 +83,6 @@ impl UnixClock for Time {
 impl Clock for Time {
     fn now_unix(&self) -> u64 {
         self.0.load(Ordering::SeqCst)
-    }
-}
-
-/// The tables with a switch: a call of the method named in [`Flaky::fail`] fails with a store
-/// error, any other is the real table's.
-pub(crate) struct Flaky {
-    inner: FileMdm,
-    failing: Mutex<Option<&'static str>>,
-    not_live: std::sync::atomic::AtomicBool,
-    /// Runs once on the tables just before the next `consume_challenge`: a competing request.
-    race: Mutex<Option<RaceHook>>,
-}
-
-/// What a competing request does to the tables.
-type RaceHook = Box<dyn FnOnce(&FileMdm) + Send>;
-
-impl Flaky {
-    fn new(inner: FileMdm) -> Self {
-        Self {
-            inner,
-            failing: Mutex::new(None),
-            not_live: std::sync::atomic::AtomicBool::new(false),
-            race: Mutex::new(None),
-        }
-    }
-
-    /// Before the next `consume_challenge`, `competitor` runs on the tables.
-    pub(crate) fn race_before_consume(&self, competitor: impl FnOnce(&FileMdm) + Send + 'static) {
-        *self.race.lock().unwrap_or_else(PoisonError::into_inner) = Some(Box::new(competitor));
-    }
-
-    /// From now on the method `name` fails; `None` mends it.
-    pub(crate) fn fail(&self, name: Option<&'static str>) {
-        *self.failing.lock().unwrap_or_else(PoisonError::into_inner) = name;
-    }
-
-    /// From now on `set_push` finds the enrollment not live.
-    pub(crate) fn end_enrollments_before_set_push(&self) {
-        self.not_live.store(true, Ordering::SeqCst);
-    }
-
-    fn check(&self, name: &'static str) -> Result<(), MdmError> {
-        match *self.failing.lock().unwrap_or_else(PoisonError::into_inner) {
-            Some(failing) if failing == name => Err(MdmError::Store(format!("{name} failed"))),
-            _ => Ok(()),
-        }
-    }
-}
-
-macro_rules! delegate {
-    ($(fn $name:ident(&self $(, $arg:ident: $ty:ty)*) -> $ret:ty;)*) => {
-        $(fn $name(&self $(, $arg: $ty)*) -> $ret {
-            self.check(stringify!($name))?;
-            self.inner.$name($($arg),*)
-        })*
-    };
-}
-
-impl MdmStore for Flaky {
-    fn set_push(
-        &self,
-        enrollment_id: &str,
-        token: &[u8],
-        magic: &str,
-        topic: &str,
-    ) -> Result<bool, MdmError> {
-        self.check("set_push")?;
-        if self.not_live.load(Ordering::SeqCst) {
-            // The enrollment ended between the read and this write.
-            return Ok(false);
-        }
-        self.inner.set_push(enrollment_id, token, magic, topic)
-    }
-
-    fn consume_challenge(
-        &self,
-        challenge_sha256: &str,
-        key_sha256: &str,
-        issuance: &Issuance,
-        now_unix: i64,
-    ) -> Result<Consumed, MdmError> {
-        self.check("consume_challenge")?;
-        let competitor = self
-            .race
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .take();
-        if let Some(competitor) = competitor {
-            competitor(&self.inner);
-        }
-        self.inner
-            .consume_challenge(challenge_sha256, key_sha256, issuance, now_unix)
-    }
-
-    delegate! {
-        fn replace_live(&self, new: &Enrollment) -> Result<Vec<String>, MdmError>;
-        fn check_out(&self, enrollment_id: &str, now_unix: i64) -> Result<bool, MdmError>;
-        fn record_push(&self, enrollment_id: &str, now_unix: i64) -> Result<(), MdmError>;
-        fn record_contact(&self, enrollment_id: &str, now_unix: i64) -> Result<(), MdmError>;
-        fn enrollment(&self, enrollment_id: &str) -> Result<Option<Enrollment>, MdmError>;
-        fn live_enrollment(&self, serial: &str) -> Result<Option<Enrollment>, MdmError>;
-        fn issue_challenge(&self, challenge: &Challenge) -> Result<(), MdmError>;
-        fn challenge(&self, challenge_sha256: &str) -> Result<Option<Identity>, MdmError>;
-        fn identity(&self, cert_sha256: &str) -> Result<Option<Identity>, MdmError>;
-        fn kill_identity(&self, cert_sha256: &str) -> Result<bool, MdmError>;
-        fn enqueue(&self, command: &NewCommand) -> Result<Enqueued, MdmError>;
-        fn claim(&self, enrollment_id: &str, tried: &[String], now_unix: i64) -> Result<Option<Row>, MdmError>;
-        fn answer(&self, enrollment_id: &str, id: &str, answer: Answer, response: Option<&[u8]>, now_unix: i64) -> Result<Answered, MdmError>;
-        fn requeue_timed_out(&self, sent_before_unix: i64) -> Result<Vec<(String, String)>, MdmError>;
-        fn command(&self, id: &str) -> Result<Option<Row>, MdmError>;
-        fn commands(&self, enrollment_id: &str) -> Result<Vec<Row>, MdmError>;
-        fn enrollments_with_queued(&self) -> Result<Vec<String>, MdmError>;
-        fn identities_expiring(&self, before_unix: i64) -> Result<Vec<(String, i64)>, MdmError>;
-        fn abm_apply(&self, batch: &AbmBatch) -> Result<(), MdmError>;
-        fn abm_device(&self, serial: &str) -> Result<Option<AbmDevice>, MdmError>;
-        fn abm_devices(&self) -> Result<Vec<AbmDevice>, MdmError>;
-        fn abm_state(&self) -> Result<Option<AbmState>, MdmError>;
     }
 }
 
@@ -310,7 +191,18 @@ impl Rig {
 
     /// A rig with nothing in the setup but the master key.
     pub(crate) fn bare(name: &str) -> Self {
-        Self::build(name, None, counting(), None)
+        Self::build(name, None, counting(), None, None)
+    }
+
+    /// [`Self::with_apple`] over the setup `setup`, whose store a test makes fail.
+    pub(crate) fn with_apple_over(name: &str, roots: Vec<Vec<u8>>, setup: MdmSetup) -> Self {
+        let rig = Self::build(name, None, counting(), Some(roots), Some(setup));
+        rig.store_tls();
+        rig.store_push();
+        rig.setup
+            .set_setting("mdm_name", "localhost")
+            .expect("the name is set");
+        rig
     }
 
     /// [`Self::with_apple`] with a source of random bytes of its own.
@@ -319,7 +211,7 @@ impl Rig {
         roots: Vec<Vec<u8>>,
         random: crate::enrollment::Random,
     ) -> Self {
-        let rig = Self::build(name, None, random, Some(roots));
+        let rig = Self::build(name, None, random, Some(roots), None);
         rig.store_tls();
         rig.store_push();
         rig.setup
@@ -331,7 +223,7 @@ impl Rig {
     /// A rig as [`Self::new`] makes it whose device blobs must chain to `roots` (DER), the fake
     /// Apple of a test, and whose name is `localhost`.
     pub(crate) fn with_apple(name: &str, roots: Vec<Vec<u8>>) -> Self {
-        let rig = Self::build(name, None, counting(), Some(roots));
+        let rig = Self::build(name, None, counting(), Some(roots), None);
         rig.store_tls();
         rig.store_push();
         rig.setup
@@ -360,7 +252,7 @@ impl Rig {
 
     /// A rig whose source of random bytes is `random`, with the certificate and the push identity.
     pub(crate) fn with_random(name: &str, random: crate::enrollment::Random) -> Self {
-        let rig = Self::build(name, None, random, None);
+        let rig = Self::build(name, None, random, None, None);
         rig.store_tls();
         rig.store_push();
         rig
@@ -372,7 +264,7 @@ impl Rig {
         gate: impl FnOnce(Arc<MdmQueue>, &Scratch, Arc<Time>) -> Arc<hostkeeper_mdm_gate::Gate>
         + 'static,
     ) -> Self {
-        let rig = Self::build(name, Some(Box::new(gate)), counting(), None);
+        let rig = Self::build(name, Some(Box::new(gate)), counting(), None, None);
         rig.store_tls();
         rig.store_push();
         rig
@@ -387,13 +279,14 @@ impl Rig {
         gate: Option<GateBuilder>,
         random: crate::enrollment::Random,
         roots: Option<Vec<Vec<u8>>>,
+        setup: Option<MdmSetup>,
     ) -> Self {
         let dir = scratch(name);
         let tables = FileMdm::open(&dir.path().join("mdm")).expect("the tables open");
         let store = Arc::new(Flaky::new(tables));
-        let setup = Arc::new(
-            MdmSetup::volatile().with_key(MasterKey::from_bytes(&[0x21; 32]).expect("a key")),
-        );
+        let setup = Arc::new(setup.unwrap_or_else(|| {
+            MdmSetup::volatile().with_key(MasterKey::from_bytes(&[0x21; 32]).expect("a key"))
+        }));
         let time = Arc::new(Time::at(NOW));
         let apns = Arc::new(FakeApns::new());
         let factory: SenderFactory = {

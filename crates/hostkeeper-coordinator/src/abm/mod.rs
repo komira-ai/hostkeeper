@@ -158,7 +158,12 @@ impl Abm {
 
     /// The token held, opened; none when none is held.
     fn token(setup: &MdmSetup) -> Result<Option<AbmToken>, SyncError> {
-        let Some(secret) = setup.open(SecretKind::AbmToken)? else {
+        // A coordinator with no master key keeps no token: there is nothing to sync, and no error.
+        let Some(secret) = setup.open(SecretKind::AbmToken).or_else(|why| match why {
+            SetupFailure::NoKey => Ok(None),
+            other => Err(other),
+        })?
+        else {
             return Ok(None);
         };
         AbmToken::parse(secret.expose())

@@ -371,3 +371,30 @@ async fn a_peer_past_its_rate_is_refused_before_the_message_is_read() {
     assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
     assert_eq!(super::testkit::error_of(&body), "rate_limited");
 }
+
+/// Proves: a challenge the table holds for a serial the CA will not sign (not letters and digits)
+/// is refused with a failure reply and stays unconsumed.
+///
+/// Catches: a certificate with a subject made of a serial that is not one.
+#[tokio::test]
+async fn a_challenge_for_a_serial_the_ca_cannot_name_is_refused_and_not_consumed() {
+    let rig = scep_rig("scep-bad-serial");
+    rig.store
+        .issue_challenge(&Challenge {
+            challenge_sha256: challenge_hash("bad-serial-challenge"),
+            serial: "NOT-A-SERIAL".to_owned(),
+            udid: UDID.to_owned(),
+            expires_unix: now() + 3600,
+            confirmed: false,
+        })
+        .expect("issued");
+    let client = Client::new(2048);
+    let (_, rep) = pki(&rig, &request(&client, &spec("bad-serial-challenge", "T1"))).await;
+    assert_eq!(rep.status, "2");
+    let row = rig
+        .store
+        .challenge(&challenge_hash("bad-serial-challenge"))
+        .expect("reads")
+        .expect("row");
+    assert_eq!(row.state, IdentityState::Challenged);
+}

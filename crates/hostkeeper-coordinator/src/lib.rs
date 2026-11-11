@@ -118,6 +118,7 @@ pub mod accounts;
 pub mod acks;
 pub(crate) mod agent_service;
 pub mod alerts;
+mod alerts_mdm;
 pub mod assign;
 pub mod assignment;
 pub mod audit_actions;

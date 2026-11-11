@@ -376,23 +376,29 @@ fn verify_rsa(spki: &[u8], hash: Oid, message: &[u8], signature: &[u8]) -> Resul
     let key = PublicKey::from_public_key_der(spki)
         .ok()
         .ok_or(Error::Unsupported("the signer's key is not RSA"))?;
-    let Ok(signature) = RsaSignature::try_from(signature) else {
-        return Ok(false);
-    };
+    if !matches!(
+        hash,
+        oids::SHA1 | oids::SHA256 | oids::SHA384 | oids::SHA512
+    ) {
+        return Err(Error::Unsupported("digest algorithm"));
+    }
     Ok(match hash {
-        oids::SHA1 => RsaVerifyingKey::<sha1::Sha1>::new(key)
+        oids::SHA1 => rsa_good::<sha1::Sha1>(key, message, signature),
+        oids::SHA256 => rsa_good::<Sha256>(key, message, signature),
+        oids::SHA384 => rsa_good::<Sha384>(key, message, signature),
+        _ => rsa_good::<Sha512>(key, message, signature),
+    })
+}
+
+/// Whether `signature` is `key`'s PKCS#1 v1.5 signature of `message` under the digest `D`.
+fn rsa_good<D>(key: PublicKey, message: &[u8], signature: &[u8]) -> bool
+where
+    D: Digest + const_oid::AssociatedOid,
+{
+    RsaSignature::try_from(signature).is_ok_and(|signature| {
+        RsaVerifyingKey::<D>::new(key)
             .verify(message, &signature)
-            .is_ok(),
-        oids::SHA256 => RsaVerifyingKey::<Sha256>::new(key)
-            .verify(message, &signature)
-            .is_ok(),
-        oids::SHA384 => RsaVerifyingKey::<Sha384>::new(key)
-            .verify(message, &signature)
-            .is_ok(),
-        oids::SHA512 => RsaVerifyingKey::<Sha512>::new(key)
-            .verify(message, &signature)
-            .is_ok(),
-        _ => return Err(Error::Unsupported("digest algorithm")),
+            .is_ok()
     })
 }
 

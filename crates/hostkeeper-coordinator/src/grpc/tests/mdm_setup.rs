@@ -634,3 +634,40 @@ async fn a_session_uploads_the_abm_token_and_asks_for_the_public_key() {
         ]
     );
 }
+
+/// Proves: a signed-in user reaches the two calls of the enrollment requests through the gateway as
+/// themselves: the list answers, and a confirmation on a coordinator with no MDM listener is
+/// refused `enrollment_unavailable` as a precondition that failed, with nothing audited but the
+/// login; a bearer token is refused the confirmation `session_required` and not the list.
+///
+/// Catches: a handler of the service that does not reach the coordinator's call, and a refusal
+/// shown with another status than its token says.
+#[tokio::test]
+async fn a_session_lists_and_confirms_enrollment_requests_through_the_gateway() {
+    let world = world("mdm-enroll-gateway");
+    let alice = world.sign_in("alice", PASSWORD).await;
+    let listed = world.send(alice.post(LIST_ENROLLMENT_REQUESTS, "{}")).await;
+    assert_eq!(listed.status, StatusCode::OK, "{listed:?}");
+    assert_eq!(listed.json(), json!({}));
+    let confirmed = world
+        .send(alice.post(
+            CONFIRM_ENROLLMENT,
+            &json!({ "serial": "P24LH9H6JT" }).to_string(),
+        ))
+        .await;
+    assert_eq!(
+        confirmed.json(),
+        json!({ "code": "FAILED_PRECONDITION", "reason": "enrollment_unavailable" })
+    );
+    let token = world
+        .send(bearer_post(CONFIRM_ENROLLMENT, "{}", OPERATOR))
+        .await;
+    assert_eq!(
+        token.json(),
+        json!({ "code": "PERMISSION_DENIED", "reason": "session_required" })
+    );
+    let token_list = world
+        .send(bearer_post(LIST_ENROLLMENT_REQUESTS, "{}", OPERATOR))
+        .await;
+    assert_eq!(token_list.status, StatusCode::OK);
+}

@@ -60,10 +60,11 @@ use tonic::{Code, Status};
 
 use self::agent::{AgentService, beat_status};
 use self::operator::{
-    AlertsService, AuditService, EnrollmentService, HostsService, MdmService, ReleasesService,
-    RolloutsService, ServicesService,
+    AlertsService, AuditService, EnrollmentService, HostsService, ReleasesService, RolloutsService,
+    ServicesService,
 };
 use self::operator_host_groups::HostGroupsService;
+use self::operator_mdm::MdmService;
 use self::operator_repositories::RepositoriesService;
 use self::refusal::token_status;
 use crate::enrollment::MAX_MESSAGE_BYTES;
@@ -82,6 +83,7 @@ mod beat_map;
 pub(crate) mod gateway;
 pub(crate) mod operator;
 mod operator_host_groups;
+mod operator_mdm;
 mod operator_repositories;
 pub(crate) mod refusal;
 pub(crate) mod report;

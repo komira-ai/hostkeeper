@@ -155,9 +155,9 @@ impl Pending {
                 .iter()
                 .min_by_key(|(serial, last)| (**last, (*serial).clone()))
                 .map(|(serial, _)| serial.clone());
-            if let Some(oldest) = oldest {
-                inner.declined.remove(&oldest);
-            }
+            oldest.iter().for_each(|oldest| {
+                inner.declined.remove(oldest);
+            });
         }
         inner.declined.insert(serial.to_owned(), now);
         true

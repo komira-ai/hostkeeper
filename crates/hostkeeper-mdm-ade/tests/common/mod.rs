@@ -267,6 +267,10 @@ pub struct Spec {
     pub detached: bool,
     pub outer_type: &'static str,
     pub signer_count: usize,
+    /// An unsigned attribute `[1]` after the signature.
+    pub unsigned_attributes: bool,
+    /// A signed attribute of a kind the verifier does not read.
+    pub extra_attribute: bool,
 }
 
 impl Default for Spec {
@@ -288,6 +292,8 @@ impl Default for Spec {
             detached: false,
             outer_type: SIGNED_DATA,
             signer_count: 1,
+            unsigned_attributes: false,
+            extra_attribute: false,
         }
     }
 }
@@ -357,6 +363,9 @@ pub fn blob(spec: &Spec) -> Vec<u8> {
         wanted[0] ^= 1;
     }
     attributes.push(attr(MESSAGE_DIGEST, octets(&wanted)));
+    if spec.extra_attribute {
+        attributes.push(attr("1.2.840.113549.1.9.5", octets(b"a signing time")));
+    }
     let attributes = attributes.concat();
     let signed = if spec.signed_attributes {
         set_bytes(&attributes)
@@ -377,6 +386,9 @@ pub fn blob(spec: &Spec) -> Vec<u8> {
     }
     fields.push(alg(spec.signature_alg));
     fields.push(octets(&signature));
+    if spec.unsigned_attributes {
+        fields.push(context(1, true, &attr("1.2.3.4", octets(b"x"))));
+    }
     let signer = seq(&fields);
     let signers: Vec<Vec<u8>> = (0..spec.signer_count).map(|_| signer.clone()).collect();
     let content = if spec.detached {

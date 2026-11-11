@@ -9,6 +9,7 @@ use super::testkit::{
 use super::{fake_apple, scep};
 use crate::audit_actions;
 use crate::mdm_server::support::{NOW, Rig};
+use crate::operator::Caller;
 use crate::store::mdm::MdmStore as _;
 
 fn now() -> i64 {
@@ -274,4 +275,99 @@ async fn a_peer_past_its_rate_is_refused_until_the_next_minute() {
     );
     rig.time.advance(60);
     assert_eq!(post(&rig, &blob).await.0, StatusCode::OK);
+}
+
+/// Proves: a coordinator whose settings cannot be read refuses `/enroll` and `/scep` `503` and
+/// the operator's confirmation `store_failed`, and issues and consumes nothing.
+///
+/// Catches: an enrollment that runs on defaults it made up when the setup is unreadable.
+#[tokio::test]
+async fn a_coordinator_that_cannot_read_its_settings_serves_nothing() {
+    use std::sync::atomic::Ordering;
+
+    use hostkeeper_proto::hostkeeper::operator::v1 as proto;
+    use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
+
+    use crate::mdm_secrets::MasterKey;
+    use crate::mdm_setup::MdmSetup;
+    use crate::operator_mdm_push_tests::Flaky;
+
+    let store = Flaky::new();
+    let shared: std::sync::Arc<dyn crate::store::mdm_setup::SetupStore> = store.clone();
+    let setup = MdmSetup::new(
+        shared,
+        Some(MasterKey::from_bytes(&[3; 32]).expect("a key")),
+        crate::enrollment::os_random(),
+    );
+    let rig = Rig::with_apple_over("enroll-unreadable", fake_apple::roots(), setup);
+    rig.list_in_abm(SERIAL);
+    post(&rig, &forged_for(SERIAL, UDID)).await;
+    store.reads_fail.store(true, Ordering::SeqCst);
+    let (status, body) = post(&rig, &blob_for(SERIAL, UDID)).await;
+    assert_eq!(
+        (status, error_of(&body).as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+    );
+    let (status, _, _) =
+        super::testkit::scep_request(&rig, &Method::GET, Some("operation=GetCACaps"), b"").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let confirmed = rig.coordinator.mdm_confirm_enrollment(
+        &Caller::Operator("alice".parse().expect("a token name")),
+        &proto::ConfirmEnrollmentRequest {
+            serial: SERIAL.to_owned(),
+        },
+    );
+    assert_eq!(confirmed, Err(MdmRefusal::StoreFailed));
+    assert_eq!(rig.server.enroll.pending.list()[0].1.confirmed_until, None);
+}
+
+/// Proves: with every waiting row confirmed and the list full, a request of another serial is
+/// answered `503 unavailable` and not recorded, so a confirmed row is never pushed out.
+///
+/// Catches: confirmations dropped by a flood of serials that ABM lists.
+#[tokio::test]
+async fn a_full_list_of_confirmed_requests_takes_no_more() {
+    let rig = rig("enroll-full");
+    rig.setup
+        .set_setting("enroll_pending_max", "1")
+        .expect("set");
+    rig.list_in_abm("OTHER2");
+    post(&rig, &forged_for(SERIAL, UDID)).await;
+    rig.server
+        .enroll
+        .pending
+        .confirm(SERIAL, now() + 600)
+        .expect("waits");
+    let (status, body) = post(&rig, &forged_for("OTHER2", UDID)).await;
+    assert_eq!(
+        (status, error_of(&body).as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+    );
+    let serials: Vec<String> = rig
+        .server
+        .enroll
+        .pending
+        .list()
+        .into_iter()
+        .map(|(s, _)| s)
+        .collect();
+    assert_eq!(serials, [SERIAL]);
+}
+
+/// Proves: a CA that does not open makes both routes `503 unavailable` and does not replace it.
+///
+/// Catches: a damaged CA answered with a profile whose identities nothing could sign.
+#[tokio::test]
+async fn a_ca_that_does_not_open_makes_the_routes_unavailable() {
+    let rig = rig("enroll-ca-damaged");
+    rig.put(crate::mdm_secrets::SecretKind::MdmCaKey, b"damaged");
+    let (status, body) = post(&rig, &blob_for(SERIAL, UDID)).await;
+    assert_eq!(
+        (status, error_of(&body).as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, "unavailable")
+    );
+    let (status, _, _) =
+        super::testkit::scep_request(&rig, &Method::GET, Some("operation=GetCACert"), b"").await;
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(rig.audited(), Vec::<String>::new());
 }

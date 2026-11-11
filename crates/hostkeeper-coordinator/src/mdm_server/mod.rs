@@ -384,6 +384,9 @@ where
 mod tests;
 
 #[cfg(test)]
+mod flaky;
+
+#[cfg(test)]
 pub(crate) mod support;
 
 /// A queued `DeviceInformation` number `n` for the enrollment `enrollment_id`, as the store takes it.

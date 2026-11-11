@@ -287,3 +287,62 @@ async fn a_replay_before_the_first_enrollment_holds_the_serial_and_approves_noth
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(rig.store.live_enrollment(SERIAL).expect("reads"), None);
 }
+
+/// Proves: through the routed listener the peer is the address of the connection: one address past
+/// its rate is refused while another is served, for `/enroll` and `/scep` alike.
+///
+/// Catches: a limit keyed on something every Mac shares, which one noisy Mac would use up.
+#[tokio::test]
+async fn the_rate_is_per_address_of_the_connection() {
+    use bytes::Bytes;
+    use http_body_util::Full;
+    use hyper::Request;
+
+    let rig = flow_rig("flow-rate");
+    rig.setup
+        .set_setting("enroll_rate_per_min", "1")
+        .expect("set");
+    let from = |address: &str, method: &str, path: &str| {
+        let mut request = Request::builder()
+            .method(method)
+            .uri(path)
+            .body(Full::new(Bytes::new()))
+            .expect("a request");
+        request
+            .extensions_mut()
+            .insert(crate::http::PeerAddr(address.parse().expect("an address")));
+        request
+    };
+    let status = |request| {
+        let rig = &rig;
+        async move {
+            crate::mdm_server::answer(
+                &rig.coordinator,
+                &rig.server,
+                crate::mdm_server::Family::Mdm,
+                &None,
+                request,
+                std::time::Duration::from_secs(5),
+            )
+            .await
+            .status()
+        }
+    };
+    let caps = "/scep?operation=GetCACaps";
+    assert_eq!(
+        status(from("192.0.2.1:50000", "GET", caps)).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(from("192.0.2.1:50001", "GET", caps)).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        status(from("192.0.2.2:50000", "GET", caps)).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(from("192.0.2.2:50001", "POST", "/enroll")).await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}

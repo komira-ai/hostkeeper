@@ -173,3 +173,32 @@ fn the_packed_ca_round_trips_and_a_bad_length_is_nothing() {
     assert_eq!(unpack(&[0, 0, 0, 9, 1, 2]), None);
     let _ = (testkit::SERIAL, Secret::new(Vec::new()));
 }
+
+/// Proves: a setup that cannot be read is a `Setup` error that names the setup, and neither a CA
+/// is made nor an audit row written.
+///
+/// Catches: a CA made over a store that could not say whether one is held.
+#[tokio::test]
+async fn an_unreadable_setup_is_an_error_and_makes_no_ca() {
+    use std::sync::atomic::Ordering;
+
+    use crate::mdm_secrets::MasterKey;
+    use crate::mdm_setup::MdmSetup;
+    use crate::operator_mdm_push_tests::Flaky;
+
+    let store = Flaky::new();
+    let shared: std::sync::Arc<dyn crate::store::mdm_setup::SetupStore> = store.clone();
+    let setup = MdmSetup::new(
+        shared,
+        Some(MasterKey::from_bytes(&[3; 32]).expect("a key")),
+        crate::enrollment::os_random(),
+    );
+    let rig = Rig::with_apple_over("enroll-ca-unreadable", super::fake_apple::roots(), setup);
+    let tune = tunables(&rig);
+    store.reads_fail.store(true, Ordering::SeqCst);
+    let error = identity_ca(&rig.coordinator, &rig.server, &tune)
+        .await
+        .expect_err("the setup cannot be read");
+    assert!(matches!(error, CaError::Setup(_)), "{error:?}");
+    assert_eq!(rig.audited(), Vec::<String>::new());
+}

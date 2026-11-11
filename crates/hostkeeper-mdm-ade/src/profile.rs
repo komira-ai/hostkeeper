@@ -101,9 +101,11 @@ pub fn render(e: &Enrollment<'_>) -> Result<Vec<u8>, Error> {
     let mut out = Vec::new();
     profile
         .to_writer_xml(&mut out)
-        .map_err(|why| Error(why.to_string()))?;
-    out.push(b'\n');
-    Ok(out)
+        .map(|()| {
+            out.push(b'\n');
+            out
+        })
+        .map_err(|why| Error(why.to_string()))
 }
 
 fn text(s: &str) -> Value {

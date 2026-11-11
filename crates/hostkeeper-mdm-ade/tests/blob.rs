@@ -170,6 +170,30 @@ fn ecdsa_with_another_hash_is_unsupported_and_a_garbled_one_is_bad() {
     );
 }
 
+/// Proves: attributes of kinds the verifier does not read, signed or not, do not stop a good blob,
+/// and the signature is checked whether or not an unsigned attribute follows it.
+///
+/// Catches: a verifier that refuses the attributes real senders add (a signing time).
+#[test]
+fn attributes_the_verifier_does_not_read_are_passed_over() {
+    let extra = Spec {
+        extra_attribute: true,
+        ..Spec::default()
+    };
+    assert_eq!(check(&extra), Ok(device()));
+    let unsigned = Spec {
+        unsigned_attributes: true,
+        signed_attributes: false,
+        ..Spec::default()
+    };
+    assert_eq!(check(&unsigned), Ok(device()));
+    let signed_and_unsigned = Spec {
+        unsigned_attributes: true,
+        ..Spec::default()
+    };
+    assert_eq!(check(&signed_and_unsigned), Ok(device()));
+}
+
 /// Proves: a blob with no signed attributes is verified over its content directly.
 ///
 /// Catches: a verifier that insists on attributes that RFC 5652 makes optional.
@@ -187,6 +211,14 @@ fn a_blob_without_signed_attributes_is_verified_over_its_content() {
     };
     assert_eq!(
         check(&broken),
+        Err(Error::BadSignature("a signature does not verify"))
+    );
+    let empty = Spec {
+        signature_der: Some(Vec::new()),
+        ..Spec::default()
+    };
+    assert_eq!(
+        check(&empty),
         Err(Error::BadSignature("a signature does not verify"))
     );
 }
@@ -519,6 +551,7 @@ fn a_blob_of_another_layout_is_malformed() {
         malformed(&seq(&[oid_der(SIGNED_DATA), context(0, true, &int(1))])),
         "signed data"
     );
+    assert_eq!(malformed(&signed(&[int(1), set(&[])])), "signed data");
     assert_eq!(
         malformed(&signed(&[int(1), set(&[]), int(3)])),
         "encapsulated content"

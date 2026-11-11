@@ -52,6 +52,8 @@ const TLS_DEP: &str = "hostkeeper-tls = { path = \"../hostkeeper-tls\" }\n";
 const ENROLLMENT_DEP: &str = "hostkeeper-enrollment = { path = \"../hostkeeper-enrollment\" }\n";
 const PROTO_DEP: &str = "hostkeeper-proto = { path = \"../hostkeeper-proto\" }\n";
 const MDM_GATE_DEP: &str = "hostkeeper-mdm-gate = { path = \"../hostkeeper-mdm-gate\" }\n";
+const MDM_ADE_DEP: &str = "hostkeeper-mdm-ade = { path = \"../hostkeeper-mdm-ade\" }\n";
+const MDM_SCEP_DEP: &str = "hostkeeper-mdm-scep = { path = \"../hostkeeper-mdm-scep\" }\n";
 const MDM_PUSH_DEP: &str = "hostkeeper-mdm-push = { path = \"../hostkeeper-mdm-push\" }\n";
 const MDM_SERVER_DEP: &str = "hostkeeper-mdm-server = { path = \"../hostkeeper-mdm-server\" }\n";
 const RELEASE_DEP: &str = "hostkeeper-release = { path = \"../hostkeeper-release\" }\n";
@@ -712,7 +714,7 @@ fn coordinator(deps: &str) -> (String, String) {
 fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
     let mut edits = bare_crate("vendored", "kbf-types");
     edits.push(coordinator(&format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{}",
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_ADE_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SCEP_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{}",
         vendored_dep("kbf-types")
     )));
     let dir = fixture("clean", edits);
@@ -724,50 +726,51 @@ fn layering_refuses_a_coordinator_with_a_kbf_dependency() {
 
 /// The coordinator's workspace dependencies, as the layers want them.
 const COORDINATOR_DEPS: &str = "{hostkeeper-config, hostkeeper-enrollment, \
-                                hostkeeper-mdm-gate, hostkeeper-mdm-push, hostkeeper-mdm-server, \
+                                hostkeeper-mdm-ade, hostkeeper-mdm-gate, hostkeeper-mdm-push, hostkeeper-mdm-scep, hostkeeper-mdm-server, \
                                 hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, hostkeeper-tls, \
                                 hostkeeper-wire}";
 
-/// Catches: the coordinator losing one of its ten workspace dependencies (the set must be
-/// exactly wire, oidc, tls, enrollment, the MDM gate, the MDM push side, the MDM server's wire layer, proto, config and release, not a subset of
+/// Catches: the coordinator losing one of its twelve workspace dependencies (the set must be
+/// exactly wire, oidc, tls, enrollment, the MDM gate, the MDM push side, the MDM server's wire layer, the ADE blob and SCEP libraries, proto, config and release, not a subset of
 /// them).
 #[test]
 fn a_coordinator_missing_a_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
+            "{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_ADE_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SCEP_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
         ))],
     );
     assert_eq!(
         check(&dir),
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-mdm-gate, hostkeeper-mdm-push, \
-             hostkeeper-mdm-server, hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, \
-             hostkeeper-tls}}, \
+             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-mdm-ade, hostkeeper-mdm-gate, \
+             hostkeeper-mdm-push, hostkeeper-mdm-scep, hostkeeper-mdm-server, hostkeeper-oidc, \
+             hostkeeper-proto, hostkeeper-release, hostkeeper-tls}}, \
              but must depend on exactly {COORDINATOR_DEPS}"
         ))
     );
 }
 
-/// Catches: the coordinator gaining an eleventh workspace dependency (here the hook contract)
-/// beside wire, oidc, tls, enrollment, the MDM gate, the MDM push side, the MDM server's wire layer, proto, config and release.
+/// Catches: the coordinator gaining a thirteenth workspace dependency (here the hook contract)
+/// beside wire, oidc, tls, enrollment, the MDM gate, the MDM push side, the MDM server's wire layer, the ADE blob and SCEP libraries, proto, config and release.
 #[test]
 fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
     let dir = fixture(
         "clean",
         vec![coordinator(&format!(
-            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{HOOK_DEP}"
+            "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_ADE_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SCEP_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}{HOOK_DEP}"
         ))],
     );
     assert_eq!(
         check(&dir),
         refused(&format!(
             "hostkeeper-coordinator depends (normal or build) on the workspace crates \
-             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-hook, hostkeeper-mdm-gate, \
-             hostkeeper-mdm-push, hostkeeper-mdm-server, hostkeeper-oidc, hostkeeper-proto, \
-             hostkeeper-release, hostkeeper-tls, hostkeeper-wire}}, but must depend \
+             {{hostkeeper-config, hostkeeper-enrollment, hostkeeper-hook, hostkeeper-mdm-ade, \
+             hostkeeper-mdm-gate, hostkeeper-mdm-push, hostkeeper-mdm-scep, hostkeeper-mdm-server, \
+             hostkeeper-oidc, hostkeeper-proto, hostkeeper-release, hostkeeper-tls, \
+             hostkeeper-wire}}, but must depend \
              on exactly {COORDINATOR_DEPS}"
         ))
     );
@@ -778,7 +781,7 @@ fn a_coordinator_with_an_extra_workspace_dependency_is_refused() {
 #[test]
 fn a_coordinator_may_have_oidc_as_a_dev_dependency_and_no_other_layer_crate() {
     let deps = format!(
-        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
+        "{WIRE_DEP}{OIDC_DEP}{TLS_DEP}{ENROLLMENT_DEP}{MDM_ADE_DEP}{MDM_GATE_DEP}{MDM_PUSH_DEP}{MDM_SCEP_DEP}{MDM_SERVER_DEP}{PROTO_DEP}{CONFIG_DEP}{RELEASE_DEP}"
     );
     let with_dev = |dev: &str| {
         manifest_of(
