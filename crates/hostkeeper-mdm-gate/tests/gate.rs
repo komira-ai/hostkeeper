@@ -1,6 +1,6 @@
 //! The gate's device side against a fake NanoHUB, as design section 10 names its tests (task
 //! M8): enrollment from the check-ins, supervision from `DeviceInformation` alone, a device
-//! without a serial, a serial under two enrollments, the five command types, and a restart.
+//! without a serial, a serial under two enrollments, the seven command types, and a restart.
 
 mod support;
 
@@ -229,11 +229,11 @@ async fn a_serial_under_two_enrollments_is_unavailable() {
     );
 }
 
-/// Catches: a sixth command type reaching NanoHUB, or the list of types changing without this
-/// test. Every type the gate sends in a whole enrollment is on the list; each of the five is
+/// Catches: an eighth command type reaching NanoHUB, or the list of types changing without this
+/// test. Every type the gate sends in a whole enrollment is on the list; each of the seven is
 /// queued; `EraseDevice` (and any other type) is refused before NanoHUB is called.
 #[tokio::test]
-async fn the_gate_enqueues_only_its_five_command_types() {
+async fn the_gate_enqueues_only_its_seven_command_types() {
     assert_eq!(
         COMMAND_TYPES,
         [
@@ -241,10 +241,12 @@ async fn the_gate_enqueues_only_its_five_command_types() {
             "SecurityInfo",
             "InstallProfile",
             "RemoveProfile",
-            "InstallEnterpriseApplication"
+            "InstallEnterpriseApplication",
+            "EnableRemoteDesktop",
+            "ProfileList"
         ]
     );
-    let rig = Rig::new("five-types").await;
+    let rig = Rig::new("seven-types").await;
     rig.enroll(UDID, SERIAL, true).await;
     let kinds: Vec<String> = rig
         .hub
@@ -261,7 +263,7 @@ async fn the_gate_enqueues_only_its_five_command_types() {
         assert!(client.enqueue(&id(UDID), &command).await.is_ok(), "{kind}");
     }
     let heard = rig.hub.heard();
-    assert_eq!(heard.len(), 7);
+    assert_eq!(heard.len(), 9);
     for (kind, uuid) in ["EraseDevice", "DeviceLock", "deviceinformation", ""]
         .into_iter()
         .zip(10u8..)
@@ -276,7 +278,7 @@ async fn the_gate_enqueues_only_its_five_command_types() {
             Err(EnqueueError::NotAllowed(kind.to_owned()))
         );
     }
-    assert_eq!(rig.hub.heard().len(), 7, "NanoHUB heard none of them");
+    assert_eq!(rig.hub.heard().len(), 9, "NanoHUB heard none of them");
     for (heard, kind) in heard.iter().skip(2).zip(COMMAND_TYPES) {
         assert_eq!(heard.command().0, kind);
         assert_eq!(heard.method, "PUT");
