@@ -10,7 +10,7 @@ use hostkeeper_daemon::adapters::{Adapters, RunnerLauncher, SYSTEMCTL_DEADLINE, 
 use hostkeeper_launchd::{Platform, PlatformKind};
 use hostkeeper_observe::fake::FakeCommandRunner;
 use hostkeeper_observe::{CommandOutput, RunError};
-use hostkeeper_placed::{CommandLauncher, UnitControlError};
+use hostkeeper_placed::{CommandLauncher, LaunchError, UnitControlError};
 
 const DEADLINE: Duration = Duration::from_secs(7);
 
@@ -119,6 +119,46 @@ fn a_systemctl_that_fails_is_an_error_naming_the_command() {
     assert_eq!(runner.calls().len(), 6);
 }
 
+/// Proves the launcher keeps an exit code typed: exit 5 is [`LaunchError::Exit`] with 5, an end by
+/// a signal is [`LaunchError::Failed`]; and through the Linux unit control, a `systemctl stop`
+/// that exits 5 (the unit is not loaded: a first install's package never installed) is a stop
+/// that succeeded, while a `systemctl start` that exits 5 is still an error.
+///
+/// Catches: the rollback of a first install ending `link_failed` because its run unit does not
+/// exist yet.
+#[test]
+fn a_stop_of_a_unit_that_is_not_loaded_succeeds_and_a_start_of_one_fails() {
+    let runner = FakeCommandRunner::default();
+    runner.then(exit(Some(5)));
+    runner.then(exit(None));
+    let launcher = RunnerLauncher::new(runner.clone(), DEADLINE);
+    assert_eq!(launcher.run(&["systemctl"]), Err(LaunchError::Exit(5)));
+    assert_eq!(
+        launcher.run(&["systemctl"]),
+        Err(LaunchError::Failed("ended by a signal".to_owned()))
+    );
+
+    let runner = FakeCommandRunner::default();
+    runner.then(exit(Some(5)));
+    runner.then(exit(Some(5)));
+    let units = linux(&runner).units;
+    assert_eq!(units.stop_unit("js-agent-crun.service"), Ok(()));
+    assert_eq!(
+        units.start_unit("js-agent-crun.service"),
+        Err(UnitControlError {
+            action: "systemctl start -- js-agent-crun.service".to_owned(),
+            why: "exit status 5".to_owned(),
+        })
+    );
+    assert_eq!(
+        runner.calls(),
+        vec![
+            argv(&["systemctl", "stop", "--", "js-agent-crun.service"]),
+            argv(&["systemctl", "start", "--", "js-agent-crun.service"]),
+        ]
+    );
+}
+
 /// Catches a runner launcher that passes on other words than it was given, or an empty argument
 /// vector as a command: the words reach the runner as they are, and the runner's refusal of
 /// nothing to run is the error.
@@ -131,7 +171,7 @@ fn the_runner_launcher_passes_the_words_as_they_are() {
     assert_eq!(launcher.run(&["prog", "a b", ""]), Ok(()));
     assert_eq!(
         launcher.run(&[]),
-        Err("there is no program to run".to_owned())
+        Err(LaunchError::Failed("there is no program to run".to_owned()))
     );
     assert_eq!(
         runner.calls(),

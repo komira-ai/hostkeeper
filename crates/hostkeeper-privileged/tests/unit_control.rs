@@ -4,7 +4,8 @@
 //! of the hook fixture linked from the test's scratch directory: `start_unit` starts it and
 //! `is_active` reports it active, `daemon_reload` makes systemd read its changed unit file, then
 //! `stop_unit` stops it and `is_active` reports it not active; a start of a unit systemd does not
-//! know is an error naming the command.
+//! know is an error naming the command, with systemd's exit 5 for a unit it has not loaded; a stop
+//! of that unit is no error.
 
 mod support;
 
@@ -65,6 +66,9 @@ fn the_linux_unit_control_reloads_starts_and_stops_a_real_unit() {
     let nowhere = service_unit(&rig.unit());
     let refused = units.start_unit(&nowhere).expect_err("no such unit");
     assert_eq!(refused.action, format!("systemctl start -- {nowhere}"));
-    assert!(refused.why.starts_with("exit status "), "{refused}");
+    assert_eq!(refused.why, "exit status 5", "{refused}");
     assert_eq!(units.is_active(&nowhere), Ok(false));
+    // Nothing of a unit systemd has not loaded runs: the rollback of a first install whose
+    // package was never installed stops it without error.
+    assert_eq!(units.stop_unit(&nowhere), Ok(()));
 }

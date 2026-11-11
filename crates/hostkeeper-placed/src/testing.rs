@@ -16,7 +16,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use crate::fs::{FileKind, Fs, RealFs};
-use crate::unit_control::{CommandLauncher, UnitControl, UnitControlError};
+use crate::unit_control::{CommandLauncher, LaunchError, UnitControl, UnitControlError};
 
 /// One write of a [`FaultFs`], with the paths as the host names them.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -372,11 +372,12 @@ impl UnitControl for FakeUnitControl {
 }
 
 /// A [`CommandLauncher`] that records each argument vector; built with
-/// [`FakeLauncher::failing`], every run is recorded and then fails.
+/// [`FakeLauncher::failing`] or [`FakeLauncher::failing_with`], every run is recorded and then
+/// fails.
 #[derive(Debug, Default)]
 pub struct FakeLauncher {
     runs: Mutex<Vec<Vec<String>>>,
-    failing: bool,
+    fault: Option<LaunchError>,
 }
 
 impl FakeLauncher {
@@ -384,9 +385,15 @@ impl FakeLauncher {
         FakeLauncher::default()
     }
 
+    /// Every run exits 1.
     pub fn failing() -> FakeLauncher {
+        FakeLauncher::failing_with(LaunchError::Exit(1))
+    }
+
+    /// Every run ends with `error`.
+    pub fn failing_with(error: LaunchError) -> FakeLauncher {
         FakeLauncher {
-            failing: true,
+            fault: Some(error),
             ..FakeLauncher::default()
         }
     }
@@ -401,14 +408,14 @@ impl FakeLauncher {
 }
 
 impl CommandLauncher for FakeLauncher {
-    fn run(&self, argv: &[&str]) -> Result<(), String> {
+    fn run(&self, argv: &[&str]) -> Result<(), LaunchError> {
         self.runs
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(argv.iter().map(|arg| (*arg).to_owned()).collect());
-        match self.failing {
-            true => Err("exit status 1".to_owned()),
-            false => Ok(()),
+        match &self.fault {
+            Some(error) => Err(error.clone()),
+            None => Ok(()),
         }
     }
 }
