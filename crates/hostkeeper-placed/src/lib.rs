@@ -36,4 +36,4 @@ pub use fs::{FileKind, Fs, RealFs};
 pub use placer::{PlacedLock, Placer};
 pub use roots::{PackageDirs, Roots};
 pub use store::{InstalledEntry, PlacedRecord, Store, Tombstone};
-pub use unit_control::{CommandLauncher, Systemctl, UnitControl, UnitControlError};
+pub use unit_control::{CommandLauncher, LaunchError, Systemctl, UnitControl, UnitControlError};
