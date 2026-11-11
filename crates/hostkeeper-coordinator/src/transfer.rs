@@ -170,11 +170,16 @@ fn read_records(dir: &Path) -> Result<(Snapshot, Vec<DeviceRecord>), TransferErr
 
 /// Everything the file store `paths` names holds, read by the strict readers `serve` uses and
 /// without writing anything, the single-state desired file read as the state of `legacy` and
-/// CI's spent ids past at `now` left out. The markers a stop left refuse it.
+/// CI's spent ids past at `now` left out. The markers a stop left refuse it, those of a restore
+/// and of a `host-groups migrate --apply` that stopped partway among them.
 ///
 /// # Errors
 /// [`TransferError`]: a marker is there, or a file is refused or cannot be read.
-fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Moved, TransferError> {
+pub(crate) fn read_files(
+    paths: &StatePaths,
+    legacy: Option<&str>,
+    now: u64,
+) -> Result<Moved, TransferError> {
     let state = &paths.state_file;
     let ops = paths.ops_file();
     let unfinished = ops_file::unfinished_path(&ops);
@@ -185,6 +190,7 @@ fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Move
     if restoring.exists() {
         return Err(StartError::RestoreUnfinished { path: restoring }.into());
     }
+    backup::refuse_migrating(state)?;
     let files = Files::default()
         .with_desired(state, legacy)
         .with_verdicts(&verdicts_path(state))

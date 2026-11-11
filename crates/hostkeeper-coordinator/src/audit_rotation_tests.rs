@@ -449,8 +449,6 @@ fn serve_args(extra: &[&str]) -> Vec<String> {
         "desired.json",
         "--oidc-config",
         "oidc.toml",
-        "--rollout-file",
-        "rollout.toml",
     ]
     .map(str::to_owned)
     .into();

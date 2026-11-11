@@ -128,6 +128,14 @@ pub(crate) enum MoveError {
         /// The first table, or part, that differs.
         part: &'static str,
     },
+    /// What the transaction read back is not what the migration wrote.
+    #[error(
+        "what the database read back differs from what the migration wrote in {part}: the migration was rolled back, and the database holds none of it"
+    )]
+    Rewritten {
+        /// The first table, or part, that differs.
+        part: &'static str,
+    },
 }
 
 /// A failed statement as the database's refusal.
@@ -432,6 +440,103 @@ fn written_and_read(
     match first_difference(moved, lines, &read)? {
         Some(part) => Err(MoveError::Differs { part }),
         None => Ok(()),
+    }
+}
+
+/// What `host-groups migrate --apply` changes in a database: the whole store as it is after, the
+/// records it changed (the hosts and requests whose record differs, and no other) and the audit
+/// lines it adds, which are the last of `after.audit`.
+#[derive(Clone, Debug)]
+pub(crate) struct Rewrite {
+    /// The store after the migration.
+    pub(crate) after: Moved,
+    /// The records to write.
+    pub(crate) changed: Snapshot,
+    /// The audit lines to add, in their order.
+    pub(crate) lines: Vec<AuditLine>,
+}
+
+/// Everything the database of `dsn` holds, read in one read-only snapshot at `now` and with no
+/// lock and no write: no migration is run, so a database whose schema is older than this build
+/// is refused by the read, and one that is newer is refused.
+///
+/// # Errors
+/// [`MoveError`]: the database is not up, refused, holds a newer schema, or does not load.
+pub(crate) fn read_only(dsn: &Dsn, now: u64) -> Result<Moved, MoveError> {
+    let mut session = connect(dsn, false)?;
+    session
+        .batch("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .map_err(|e| refused(&e))?;
+    let set =
+        migrate::checked(&migrate::SHIPPED).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    migrate::refuse_newer(&mut session, &set).map_err(|e| DatabaseError::Schema(e.to_string()))?;
+    let moved = read_moved(&mut session, now)?;
+    session.batch("COMMIT").map_err(|e| refused(&e))?;
+    Ok(moved)
+}
+
+/// Rewrites the database of `dsn` as `make` says from what it holds (`host-groups migrate
+/// --apply`): takes the coordinator's lock, runs the migrations, and in one transaction reads the
+/// store, asks `make` for the [`Rewrite`], writes the difference of the desired state and the
+/// operations state, the changed records and the audit lines, reads it all back and compares it
+/// with `after`. A refusal of `make`, a failed statement or a difference rolls the whole
+/// transaction back; otherwise it commits. The epoch is not raised: no coordinator commits.
+///
+/// # Errors
+/// What `make` refuses with, or [`MoveError`]: the database is not up or refused, another
+/// coordinator holds its lock, or what it read back differs.
+pub(crate) fn rewrite<T, E: From<MoveError>>(
+    dsn: &Dsn,
+    now: u64,
+    make: impl FnOnce(&Moved) -> Result<(Rewrite, T), E>,
+) -> Result<T, E> {
+    let mut session = connect(dsn, true).map_err(MoveError::from)?;
+    migrated(&mut session).map_err(MoveError::from)?;
+    session
+        .batch("BEGIN")
+        .map_err(|e| MoveError::from(refused(&e)))?;
+    match rewritten(&mut session, now, make) {
+        Ok(made) => {
+            session
+                .batch("COMMIT")
+                .map_err(|e| MoveError::from(refused(&e)))?;
+            Ok(made)
+        }
+        Err(why) => {
+            // A failed statement ended the transaction's use; the rollback ends it whole.
+            let _ = session.batch("ROLLBACK");
+            Err(why)
+        }
+    }
+}
+
+/// The body of [`rewrite`] in its open transaction.
+fn rewritten<T, E: From<MoveError>>(
+    session: &mut Session,
+    now: u64,
+    make: impl FnOnce(&Moved) -> Result<(Rewrite, T), E>,
+) -> Result<T, E> {
+    let before = read_moved(session, now)?;
+    let (rewrite, made) = make(&before)?;
+    let load = |e: &dyn std::fmt::Display| MoveError::Database(DatabaseError::Load(e.to_string()));
+    let mut statements = statements(&Commit {
+        desired: Some((&before.loaded.desired, &rewrite.after.loaded.desired)),
+        ops: Some((&before.loaded.ops, &rewrite.after.loaded.ops)),
+        verdicts: None,
+        accounts: None,
+        audit: &rewrite.lines,
+    })
+    .map_err(|e| load(&e))?;
+    statements.extend(records::writes(&rewrite.changed).map_err(|e| load(&e))?);
+    for statement in &statements {
+        session
+            .execute(&statement.sql, &statement.refs())
+            .map_err(|e| MoveError::from(refused(&e)))?;
+    }
+    let read = read_moved(session, now)?;
+    match first_difference(&rewrite.after, &rewrite.after.audit, &read)? {
+        Some(part) => Err(MoveError::Rewritten { part }.into()),
+        None => Ok(made),
     }
 }
 

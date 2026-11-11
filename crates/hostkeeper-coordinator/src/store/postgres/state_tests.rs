@@ -64,7 +64,16 @@ fn full_ops() -> OpsState {
         request_id: "ab".repeat(32),
         at_unix: 1_900_000_050,
     });
+    // A service whose only mark is the repository it is installed from has a row of its own.
+    state.services.insert(
+        "only-repository".to_owned(),
+        crate::ops::ServiceOps {
+            repository: Some("private".to_owned()),
+            ..crate::ops::ServiceOps::default()
+        },
+    );
     let marks = state.services.get_mut("kbf").expect("kbf marks");
+    marks.repository = Some("komira-next".to_owned());
     marks.force = Some(ForceRecord {
         version: version("2.0"),
         generation: 2,
@@ -128,7 +137,12 @@ fn an_operations_state_round_trips_through_its_rows() {
     assert_eq!(empty, Vec::<&str>::new(), "tables without a row");
     assert_eq!(
         tables["services"].keys().cloned().collect::<Vec<_>>(),
-        vec![key(&["bare"]), key(&["kbf"]), key(&["only-assigned"])],
+        vec![
+            key(&["bare"]),
+            key(&["kbf"]),
+            key(&["only-assigned"]),
+            key(&["only-repository"])
+        ],
         "the default entry `idle` is not stored"
     );
     assert_eq!(round(&state), as_loaded(&state));

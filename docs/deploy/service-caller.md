@@ -159,9 +159,7 @@ the tailnet's admin, not by the service's CI.
 4. **The coordinator manages the service.** A host group lists `my-service`
    ([Host groups](../operations/hostgroups.md)), and the group's policy is its plan
    ([Rollout plans](../operations/rollout-plans.md)); otherwise the set is refused
-   (`not_in_host_group`). On a coordinator that holds no group, the rollout file has a
-   `[[service]]` table for `my-service`, with its roles and its plan, and the set is otherwise
-   refused (`unknown_service`).
+   (`not_in_host_group`). There is no rollout file: `serve` refuses `--rollout-file`.
 5. **The allow-list entry.** The coordinator's `--oidc-config` file has a `[[remote_operator]]`
    entry for the service's repository ([The allow-list entry](ci-client.md#the-allow-list-entry)):
    its `repository` and `repository_id`, `job_workflow_ref` naming

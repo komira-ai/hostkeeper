@@ -24,7 +24,7 @@ use hostkeeper_oidc::Clock;
 use super::{Serve, StartError, take_lock};
 use crate::accounts::accounts_path;
 use crate::audit_file::{DEFAULT_MAX_BYTES, DEFAULT_RETAINED, Rotation, wall_clock};
-use crate::backup::{ops_path, restore_marker};
+use crate::backup::{migrate_marker, ops_path, restore_marker};
 use crate::jti_file::jti_path;
 use crate::lock::{LockGuard, StateLock, lock_path};
 use crate::ops::{Marker, OpsState, unlanded};
@@ -198,6 +198,7 @@ fn open(
 ) -> Result<(Files, Loaded), StartError> {
     let marker = refuse_unfinished_halt(ops)?;
     refuse_unfinished_restore(state)?;
+    refuse_unfinished_migrate(state)?;
     let rotation = Rotation {
         max_bytes: flags.audit_max_bytes.unwrap_or(DEFAULT_MAX_BYTES),
         retained: flags.audit_retained_segments.unwrap_or(DEFAULT_RETAINED),
@@ -281,6 +282,19 @@ pub(crate) fn refuse_unfinished_restore(state: &Path) -> Result<(), StartError> 
     let marker = restore_marker(state);
     if marker.exists() {
         return Err(StartError::RestoreUnfinished { path: marker });
+    }
+    Ok(())
+}
+
+/// Refuses to start over the marker of a `host-groups migrate --apply` that did not finish
+/// ([`crate::backup::migrate_marker`]): the state files may hold part of the migration only.
+///
+/// # Errors
+/// [`StartError::MigrateUnfinished`]: the marker is there.
+pub(crate) fn refuse_unfinished_migrate(state: &Path) -> Result<(), StartError> {
+    let marker = migrate_marker(state);
+    if marker.exists() {
+        return Err(StartError::MigrateUnfinished { path: marker });
     }
     Ok(())
 }

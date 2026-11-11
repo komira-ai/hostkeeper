@@ -214,10 +214,19 @@ impl DesiredStore {
         })
     }
 
-    /// Whether the coordinator holds a host group: the mode in which hosts are placed by group.
+    /// This store, placing hosts by host group whether or not it holds a group yet: with none
+    /// held, no host is placed anywhere. `serve` builds its coordinator so.
+    #[must_use]
+    pub(crate) const fn by_groups_only(mut self) -> Self {
+        self.by_groups = true;
+        self
+    }
+
+    /// Whether hosts are placed by host group: the coordinator holds a host group, or was built
+    /// to place by groups only ([`DesiredStore::by_groups_only`]).
     #[must_use]
     pub fn in_group_mode(&self) -> bool {
-        !self.lock().host_groups.is_empty()
+        self.by_groups || !self.lock().host_groups.is_empty()
     }
 
     /// The desired state with the groups `edit` makes of the groups now, staged under the

@@ -5,7 +5,7 @@
 //! The accounts are a part of the store of their own, beside the desired state, the operations
 //! state and the verdicts. They are written whole, when a commit changes them: `<state-file>.accounts`
 //! on the file store ([`encode_file`], [`parse_file`]), the tables `users` and `api_tokens`
-//! (migration `0009`, `may-run`) on Postgres. An older coordinator never reads either, and a
+//! (migration `0010`, `may-run`) on Postgres. An older coordinator never reads either, and a
 //! coordinator that finds neither starts with no user and no stored token, which is the state it
 //! starts in.
 //!

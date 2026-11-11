@@ -1,9 +1,9 @@
 //! The operator's users and API tokens ([`crate::accounts`]) as the rows of the tables that
-//! migration `0009` adds: `users` and `api_tokens`, one row per user and per token, keyed by
+//! migration `0010` adds: `users` and `api_tokens`, one row per user and per token, keyed by
 //! name, holding the record as the `jsonb` the accounts file holds for it, without the name.
 //!
 //! A database that holds no row holds no user and no token. An older release never reads either
-//! table (`0009` is `may-run`). A load reads every row through the file's reader, so it is as
+//! table (`0010` is `may-run`). A load reads every row through the file's reader, so it is as
 //! strict as a start on the files, and refuses accounts that break a rule of
 //! [`Accounts::new`], naming the table.
 

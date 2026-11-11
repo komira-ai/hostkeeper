@@ -1,5 +1,5 @@
 //! The operator's users and API tokens over the Postgres store (`docs/design/operator-login.md`,
-//! section 9; migration `0009`): the tables `users` and `api_tokens`, what a commit writes to
+//! section 9; migration `0010`): the tables `users` and `api_tokens`, what a commit writes to
 //! them, how a load reads them, what a commit of unknown outcome gives back to memory, and the
 //! release before this one on a database this release migrated.
 
@@ -228,25 +228,25 @@ fn an_account_store_takes_a_landed_change_and_leaves_what_it_had_no_part_in() {
     assert!(taken.user("alice").is_some() && taken.token("ci-ops").is_some());
 }
 
-/// Proves: `0009` does not stop the release before it (the migrations `0001` to `0008`) on a
+/// Proves: `0010` does not stop the release before it (the migrations `0001` to `0009`) on a
 /// database this release migrated and holding accounts: its runner takes the database, because
-/// `0009` says `may-run`, and runs nothing, and its load of every table it knows reads the state as
-/// it did; and this release starts on a database the release before migrated, runs `0009` alone
+/// `0010` says `may-run`, and runs nothing, and its load of every table it knows reads the state as
+/// it did; and this release starts on a database the release before migrated, runs `0010` alone
 /// and holds no account.
 ///
 /// Catches: accounts that stop the previous coordinator from starting, which backing out of this
 /// release would need the database restored for, or a migration this release does not run on a
 /// database of the release before.
 #[test]
-fn the_release_before_starts_on_a_database_with_0009_and_this_one_on_its() {
+fn the_release_before_starts_on_a_database_with_0010_and_this_one_on_its() {
     let db = TestDatabase::new();
     let (store, _) = db.open("this release").expect("the store opens");
     commit(&store, &Accounts::default(), &rich_accounts());
     store.stop();
 
     let (ran, loaded_before) = with_session(&db, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
-        migrate::refuse_newer(session, &before).expect("0009 does not stop it");
+        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
+        migrate::refuse_newer(session, &before).expect("0010 does not stop it");
         let ran = migrate::apply(session, &before).expect("its runner takes the database");
         (ran, load_all(session, SPENT_NOW).expect("the state reads"))
     });
@@ -256,16 +256,16 @@ fn the_release_before_starts_on_a_database_with_0009_and_this_one_on_its() {
 
     let older = TestDatabase::new();
     let ran = with_session(&older, |session| {
-        let before = migrate::checked(&migrate::SHIPPED[..8]).expect("the release before's set");
+        let before = migrate::checked(&migrate::SHIPPED[..9]).expect("the release before's set");
         migrate::apply(session, &before).expect("the release before migrates")
     });
-    assert_eq!(ran, (1..=8).collect::<Vec<i32>>());
+    assert_eq!(ran, (1..=9).collect::<Vec<i32>>());
     let (store, loaded) = older.open("this release").expect("this release starts");
     assert_eq!(loaded.accounts, Accounts::default());
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=9)
+        (1..=10)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

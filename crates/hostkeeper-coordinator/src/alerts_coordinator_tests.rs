@@ -260,8 +260,6 @@ fn serve_with(extra: &[&str]) -> Result<crate::config::Serve, clap::Error> {
         "oidc.toml",
         "--operator-token-file",
         "operator.token",
-        "--rollout-file",
-        "rollout.toml",
     ];
     args.extend_from_slice(extra);
     let crate::config::Command::Serve(flags) = crate::config::Cli::try_parse_from(args)?.command

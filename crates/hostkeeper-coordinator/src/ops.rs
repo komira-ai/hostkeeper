@@ -287,6 +287,12 @@ pub struct ServiceOps {
     /// Of `bad`, the versions a force left; written only when there are any.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub bad_by_force: Vec<Version>,
+    /// The repository of the registry the service is installed from, as
+    /// `Services.SetRepository` set it; none for the default ([`crate::services::DEFAULT_REPOSITORY`]).
+    /// Written only while one is set, so a file of a service that names none reads as it
+    /// always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repository: Option<String>,
 }
 
 /// One change, as the ring and the log say it.
@@ -301,7 +307,7 @@ pub struct AuditEntry {
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`, `halt`,
     /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `hold`, `unhold`, `assign`, `unassign`,
-    /// `set_min_version`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
+    /// `set_min_version`, `set_repository`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
     /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
     /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan
     /// enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and

@@ -48,7 +48,8 @@
 //!   `clear_record`, `install`, `uninstall`), with [`clear_record`], `Hosts.ClearRecord`;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
-//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`operator_enrollment`], its
+//!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`service_repository`], its
+//!   `Services.SetRepository`, [`operator_enrollment`], its
 //!   `Enrollment.List` and `Enrollment.Approve`, and [`hosts`], its `Hosts.List` and `Hosts.Get`;
 //! - [`inventory`]: the host inventory (`Enrollment.AddRecord`, `ListRecords`, `RemoveRecord`,
 //!   `OpenRecord`), kept in the ops file, the match of each request `Enrollment.List` shows
@@ -154,6 +155,10 @@ mod live;
 pub mod lock;
 pub mod mdm;
 pub mod membership;
+pub mod migrate;
+pub(crate) mod migrate_apply;
+pub(crate) mod migrate_plan;
+pub(crate) mod migrate_policy;
 pub(crate) mod moving;
 pub mod operate;
 pub mod operator;
@@ -178,6 +183,7 @@ pub(crate) mod repository_serve;
 pub mod rollouts;
 mod running;
 pub mod service;
+pub(crate) mod service_repository;
 pub mod services;
 pub mod stages;
 pub mod stamp;
@@ -231,6 +237,8 @@ mod backup_tests;
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
+#[cfg(test)]
+mod by_groups_only_tests;
 #[cfg(test)]
 #[cfg(test)]
 #[cfg(test)]
@@ -319,6 +327,8 @@ mod host_held_tests;
 #[cfg(test)]
 mod host_inventory_tests;
 #[cfg(test)]
+mod hosts_groups_tests;
+#[cfg(test)]
 mod hosts_tests;
 #[cfg(test)]
 mod http_tests;
@@ -344,6 +354,28 @@ mod marks_support;
 mod marks_tests;
 #[cfg(test)]
 mod membership_tests;
+#[cfg(test)]
+mod migrate_apply_tests;
+#[cfg(test)]
+mod migrate_cli_tests;
+#[cfg(test)]
+mod migrate_orders_tests;
+#[cfg(test)]
+mod migrate_pg_tests;
+#[cfg(test)]
+mod migrate_plan_errors_tests;
+#[cfg(test)]
+mod migrate_plan_tests;
+#[cfg(test)]
+mod migrate_policy_tests;
+#[cfg(test)]
+mod migrate_refusal_tests;
+#[cfg(test)]
+mod migrate_roundtrip_tests;
+#[cfg(test)]
+mod migrate_support;
+#[cfg(test)]
+mod migrate_tests;
 #[cfg(test)]
 mod moving_facts_tests;
 #[cfg(test)]
@@ -435,6 +467,8 @@ mod rollouts_state_tests;
 mod running_tests;
 #[cfg(test)]
 mod self_update_fallback_tests;
+#[cfg(test)]
+mod service_repository_tests;
 #[cfg(test)]
 mod service_tests;
 #[cfg(test)]

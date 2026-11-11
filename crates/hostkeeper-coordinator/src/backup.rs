@@ -91,6 +91,18 @@ pub fn restore_marker(state: &Path) -> PathBuf {
     with_suffix(state, RESTORE_UNFINISHED)
 }
 
+/// What is added to the state file's name for the marker of a `host-groups migrate --apply` under
+/// way.
+const MIGRATE_UNFINISHED: &str = ".migrate-unfinished";
+
+/// The marker of a `host-groups migrate --apply` on the state file `state` that has not finished:
+/// written before its first file and removed after its last, so that `serve`, `import`, `export`,
+/// `backup`, `restore` and `migrate` refuse the files of one that stopped partway.
+#[must_use]
+pub fn migrate_marker(state: &Path) -> PathBuf {
+    with_suffix(state, MIGRATE_UNFINISHED)
+}
+
 /// The name in a snapshot of the marker of changes that were not yet written.
 const UNFINISHED: &str = "ops-halts-unfinished";
 
@@ -304,6 +316,14 @@ pub enum BackupError {
         "the snapshot holds the enrollment store and --enrollment-dir is not given: restoring without it would lose the enrolled hosts"
     )]
     EnrollmentDirNeeded,
+    /// A `host-groups migrate --apply` on these state files stopped before it finished.
+    #[error(
+        "{path}: a host-groups migrate --apply stopped partway; restore the backup taken before it and run it again"
+    )]
+    MigrateUnfinished {
+        /// The marker file.
+        path: PathBuf,
+    },
     /// A target holds state.
     #[error(
         "{path} is already there; restore writes only into targets that hold no state, never over a file"
@@ -401,6 +421,7 @@ pub fn backup(flags: &Backup, lock: &dyn StateLock) -> Result<Report, BackupErro
         });
     }
     let _held = take(lock, &flags.paths.state_file)?;
+    refuse_migrating(&flags.paths.state_file)?;
     let mut sources = Vec::new();
     let mut absent = Vec::new();
     for (name, path) in flags.paths.beside() {
@@ -807,8 +828,11 @@ fn read_no_follow(path: &Path) -> io::Result<Vec<u8>> {
 /// Refuses targets that hold state: a file beside the state file or the ops file, a sealed
 /// segment of the audit file, or an enrollment directory with anything in it.
 fn refuse_state(paths: &StatePaths) -> Result<(), BackupError> {
-    let marker = ("restore marker", restore_marker(&paths.state_file));
-    for (_, path) in paths.beside().into_iter().chain([marker]) {
+    let markers = [
+        ("restore marker", restore_marker(&paths.state_file)),
+        ("migrate marker", migrate_marker(&paths.state_file)),
+    ];
+    for (_, path) in paths.beside().into_iter().chain(markers) {
         if there(&path)? {
             return Err(BackupError::NotEmpty { path });
         }
@@ -903,6 +927,19 @@ fn sync_dir(dir: &Path) -> Result<(), BackupError> {
     File::open(dir)
         .and_then(|file| file.sync_all())
         .map_err(io_at(dir))
+}
+
+/// Refuses the state file `state` while the marker of a `host-groups migrate --apply` that did not
+/// finish stands beside it.
+///
+/// # Errors
+/// [`BackupError::MigrateUnfinished`]: the marker is there.
+pub(crate) fn refuse_migrating(state: &Path) -> Result<(), BackupError> {
+    let path = migrate_marker(state);
+    if there(&path)? {
+        return Err(BackupError::MigrateUnfinished { path });
+    }
+    Ok(())
 }
 
 /// Whether something (a file, a directory, a link) is at `path`.

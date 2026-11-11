@@ -401,6 +401,7 @@ const RPCS: [(&str, &[&str]); 7] = [
             "Assign(AssignRequest) AssignResponse",
             "Unassign(UnassignRequest) UnassignResponse",
             "SetMinVersion(SetMinVersionRequest) SetMinVersionResponse",
+            "SetRepository(SetRepositoryRequest) SetRepositoryResponse",
             "Hold(HoldRequest) HoldResponse",
             "Unhold(UnholdRequest) UnholdResponse",
         ],
@@ -861,6 +862,7 @@ fn wire_names_are_pinned() {
                 "placed_by_host_group",
                 "unknown_host_group",
                 "not_in_host_group",
+                "repository_unknown",
             ],
         ),
         (
