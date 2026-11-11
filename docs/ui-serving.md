@@ -2,7 +2,9 @@
 
 The operator web app in [`ui/`](../ui) is static files. The coordinator serves them from its
 private listener, the same listener as the operator API, so the app's calls are same-origin:
-there is no cross-origin access, no cookie and no session.
+there is no cross-origin access. The static files set no cookie and read none; a person's session
+is made by the sign-in routes of the operator API (see
+[the operator login design](design/operator-login.md)).
 
 ## The directory the coordinator serves
 
@@ -28,9 +30,12 @@ The flag is the only way to set it: no environment variable is read.
 
 ## Open the app
 
-Browse to `https://<private-address>/ui/` and paste an operator token when the page asks for one.
-The page keeps the token in memory only and sends it on each API call; reloading the page asks for
-it again.
+Browse to `https://<private-address>/ui/` and sign in with your user name and password. The
+browser keeps the session in a cookie the page cannot read; the page keeps only the session's CSRF
+token, in memory, and sends it in the `X-HK-CSRF` header of each API call. Reloading the page asks
+the coordinator for the session again, so a reload does not sign you out. A first sign-in, or a
+sign-in with a temporary password an admin set, shows only the form for choosing a new password.
+Sign out ends the session on the coordinator.
 
 ## What the pages do for services
 
@@ -84,7 +89,7 @@ it again.
 - **API tokens** (`ApiTokens.List`; `Create` and `Revoke` on a button): each token's name, source, maker and time. Create
   takes a name and shows the token once, as Users does a password. Revoke asks first and is offered for the tokens of the
   store only: a token of the tokens file is marked read-only, and the page says it is removed by editing that file.
-- Each action is one API call, and the Audit page shows it by the token's name. A refused call
+- Each action is one API call, and the Audit page shows it by the signed-in user's name. A refused call
   shows the API's code and reason as they are.
 
 ## What is served
@@ -104,8 +109,8 @@ it again.
   `Referrer-Policy: no-referrer` and
   `Content-Security-Policy: default-src 'self'; frame-ancestors 'none'`. No answer of the
   coordinator carries an `Access-Control-*` header.
-- The files need no token. The operator API the app calls still needs the operator token on every
-  call.
+- The files need no sign-in. The operator API the app calls still needs a session (with its CSRF
+  header) or an operator token on every call.
 
 ## Where the app comes from
 
