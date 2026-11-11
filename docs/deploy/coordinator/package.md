@@ -49,7 +49,9 @@ install --mode=0640 --owner=root --group=hostkeeper-coordinator \
   /usr/share/hostkeeper-coordinator/serve.toml.template /etc/hostkeeper-coordinator/serve.toml
 ```
 
-Edit the listen addresses (one interface's address each, never a wildcard) and the store, then
+Edit the listen addresses (one interface's address each, never a wildcard: the package runs on
+the host's network, where `private-listen-wildcard` does not belong,
+[A wildcard private listener](README.md#the-configuration-and-the-local-volume)) and the store, then
 place the files the flags name:
 
 - **Owned by `hostkeeper-coordinator`, mode 0600:** the tokens file, the TLS key, and, for

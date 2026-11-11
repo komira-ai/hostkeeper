@@ -221,7 +221,8 @@ route, and the probe runs outside the container:
 - **A health listener.** `serve --health-listen <loopback address:port>` binds one more listener, plain HTTP, that
   answers only `GET /healthz` (and `HEAD`) and 404 to everything else, with no authentication and no TLS. `serve`
   refuses an address that is not loopback (`127.0.0.0/8` or `::1`), as it refuses a wildcard for `--private-listen`
-  today (`crates/hostkeeper-coordinator/src/config.rs`, **Built**), so nothing off the machine reaches it. Without the
+  unless `--private-listen-wildcard` is given (`crates/hostkeeper-coordinator/src/config_listen.rs`, **Built**), so
+  nothing off the machine reaches it. Without the
   flag there is no such listener, as today.
 - **What it says.** `200` with the body `ok` when every listener the flags name is bound and serving, the store is
   open and, with the Postgres store, this coordinator holds the single-writer lock (coordinator-storage.md section 5);
