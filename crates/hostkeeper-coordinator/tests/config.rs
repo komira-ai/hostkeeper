@@ -49,14 +49,13 @@ fn the_flags_are_parsed_and_refused_as_the_usage_says() {
         "--tokens-file",
         "--operator-token-file",
         "--oidc-config",
-        "--rollout-file",
         "--legacy-service",
         "--role-uri-prefix",
         "--host-role-uri-prefix",
     ] {
         assert!(text.contains(flag), "{flag} is missing from {text}");
     }
-    for hidden in ["--services-file", "--control-listen"] {
+    for hidden in ["--rollout-file", "--control-listen"] {
         assert!(!text.contains(hidden), "{hidden} is hidden");
     }
     assert_eq!(
@@ -198,10 +197,9 @@ fn the_recorded_flags_build_a_coordinator_that_has_them() {
 }
 
 /// Catches: a start that goes on with a file it cannot use, or flags that do not fit: a missing
-/// certificate, an operator token file others can read, a bad allow-list, a missing rollout
-/// file, an allow-list entry naming a service that is not defined, a host group that is not a
-/// host group name, or no service with no legacy service to stand for, a legacy service that is not defined, namespaces that overlap and a
-/// state file that is not a state each stop it with a reason that names the file or the flag; and
+/// certificate, an operator token file others can read, a bad allow-list, a host group that is
+/// not a host group name, or no service with no legacy service to stand for, namespaces that
+/// overlap and a state file that is not a state each stop it with a reason that names the file or the flag; and
 /// the binary exits 1.
 #[test]
 fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
@@ -229,24 +227,6 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     let why = refusal(with(&args, "--oidc-config", &bad));
     assert!(matches!(why, StartError::Oidc(_)), "{why}");
     assert!(why.to_string().contains("remote_operator"), "{why}");
-
-    let nope = files.path("nope.toml").display().to_string();
-    let why = refusal(with(&args, "--rollout-file", &nope));
-    assert!(matches!(why, StartError::Services(_)), "{why}");
-    assert!(why.to_string().contains("--rollout-file"), "{why}");
-
-    let unknown = format!(
-        "{}services = [\"kbf\", \"nope\"]\n",
-        config_text(STATIC_ISSUER)
-    );
-    files.put("unknown.toml", &unknown, 0o644);
-    let path = files.path("unknown.toml").display().to_string();
-    let why = refusal(with(&args, "--oidc-config", &path));
-    assert!(
-        matches!(&why, StartError::OidcEntryService { entry: 1, service } if service == "nope"),
-        "{why}"
-    );
-    assert!(why.to_string().contains("--oidc-config"), "{why}");
 
     // Each `host_groups` name is a host group name: a bad one is refused at start, named in
     // full, and a name at the grammar's bound of 32 bytes is accepted.
@@ -288,13 +268,6 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     assert!(matches!(why, StartError::OidcEntryUnnamed(1)), "{why}");
     assert!(why.to_string().contains("--legacy-service"), "{why}");
 
-    let why = refusal(with(&args, "--legacy-service", "nope"));
-    assert!(
-        matches!(&why, StartError::LegacyService(name) if name == "nope"),
-        "{why}"
-    );
-    assert!(why.to_string().contains("--legacy-service"), "{why}");
-
     let why = refusal(with(&args, "--host-role-uri-prefix", "urn:kbf:role:"));
     assert!(matches!(why, StartError::Prefixes(_)), "{why}");
     assert!(why.to_string().contains("--role-uri-prefix"), "{why}");
@@ -306,14 +279,13 @@ fn a_start_with_a_bad_file_or_flag_is_refused_with_a_reason() {
     assert!(why.to_string().contains("state.json"), "{why}");
 }
 
-/// Catches: a coordinator that manages no service being unable to start: an empty rollout
-/// file, no `--legacy-service` and an allow-list entry with `services = []` (which grants CI
-/// nothing) build a coordinator whose status lists no service, through `build` and through
-/// `start`; an entry that names a service the file does not define is still refused.
+/// Catches: a coordinator that manages no service being unable to start: no `--legacy-service`
+/// and an allow-list entry with `services = []` (which grants CI nothing) build a coordinator
+/// whose status lists no service, through `build` and through `start`; the coordinator reads no
+/// rollout file, so an entry that names a service is not checked against one.
 #[tokio::test]
 async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
     let files = Files::new("config-empty");
-    files.put("rollout.toml", "", 0o600);
     files.put(
         "empty.toml",
         &format!("{}services = []\n", config_text(STATIC_ISSUER)),
@@ -345,8 +317,8 @@ async fn a_coordinator_with_no_services_starts_and_grants_nothing() {
     let named = format!("{}services = [\"kbf\"]\n", config_text(STATIC_ISSUER));
     files.put("named.toml", &named, 0o644);
     let path = files.path("named.toml").display().to_string();
-    let why = refusal(with(&args, "--oidc-config", &path));
-    assert!(matches!(why, StartError::OidcEntryService { .. }), "{why}");
+    build_given(&flags_of(with(&args, "--oidc-config", &path)))
+        .expect("an entry names a service no file defines");
 }
 
 /// Catches: a state file in the single-state form read with no legacy service to own it: a file
@@ -518,40 +490,22 @@ async fn start_runs_until_stopped_and_says_why_it_ended() {
     assert_eq!(*untouched.lock().expect("count"), 0, "nothing was bound");
 }
 
-/// Proves that the names the flags had are still accepted and hidden: `--services-file` and
-/// `--control-listen` parse as `--rollout-file` and `--private-listen` and build a start, and
-/// giving a flag with its old name beside it is a usage error (exit 2) naming the new flag.
+/// Proves that the name `--control-listen` is still accepted and hidden: it parses as
+/// `--private-listen` and builds a start, and giving the flag with its old name beside it is a
+/// usage error (exit 2) naming the new flag.
 ///
 /// Catches: a rename that breaks the start line of a coordinator already deployed, or one that
 /// lets the two names set the flag twice and the last one win.
 #[test]
-fn the_old_flag_names_are_hidden_aliases_and_both_together_are_refused() {
+fn the_old_flag_name_is_a_hidden_alias_and_both_together_are_refused() {
     let files = Files::new("config-aliases");
-    let old = renamed(
-        &renamed(&files.args(), "--rollout-file", "--services-file"),
-        "--private-listen",
-        "--control-listen",
-    );
+    let old = renamed(&files.args(), "--private-listen", "--control-listen");
     let flags = flags_of(old.clone());
-    assert_eq!(flags.rollout_file, files.path("rollout.toml"));
     assert_eq!(
         flags.private_listen,
         "192.0.2.1:2".parse::<SocketAddr>().expect("an address")
     );
-    build_given(&flags).expect("a start through the old names");
-
-    let mut both = files.args();
-    both.extend([
-        OsString::from("--services-file"),
-        files.path("rollout.toml").into_os_string(),
-    ]);
-    let conflict = Cli::try_parse_from(both.clone()).expect_err("both names of one flag");
-    assert_eq!(conflict.kind(), ErrorKind::ArgumentConflict);
-    assert!(
-        conflict.to_string().contains("--rollout-file"),
-        "{conflict}"
-    );
-    assert_eq!(exit_code(both), ExitCode::from(2));
+    build_given(&flags).expect("a start through the old name");
 
     let mut both = files.args();
     both.extend([
@@ -631,7 +585,7 @@ fn the_legacy_single_token_flag_is_one_token_named_operator() {
     let entry = c
         .operate(
             Some(OPERATOR),
-            br#"{"action":"exclude","service":"kbf","node_id":"d1","reason":"disk"}"#,
+            br#"{"action":"set_labels","node_id":"d1","labels":{"rack":"r1"}}"#,
         )
         .expect("the action is done");
     assert_eq!(entry.by, "operator");
@@ -686,7 +640,8 @@ fn a_tokens_file_gives_each_token_its_name_and_is_read_again() {
     assert_eq!(exit_code(open), ExitCode::from(1));
 }
 
-/// Proves that a wildcard `--private-listen` is refused at start, however it is spelled (IPv4,
+/// Proves that, without `--private-listen-wildcard`, a wildcard `--private-listen` is refused at
+/// start, however it is spelled (IPv4,
 /// IPv6 and IPv4-mapped IPv6) and through the old flag name too, with the text that names the
 /// flag and the address and exit 1; an address of one interface is accepted, and so is a
 /// wildcard `--heartbeat-listen`, whose flag is unchanged.
@@ -707,7 +662,7 @@ fn a_wildcard_private_listen_is_refused_at_start() {
         assert_eq!(
             why.to_string(),
             format!(
-                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+                "--private-listen: {addr} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
             )
         );
         assert_eq!(exit_code(given), ExitCode::from(1));

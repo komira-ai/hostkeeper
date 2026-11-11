@@ -34,6 +34,9 @@ use hostkeeper_coordinator::config::{
 use hostkeeper_coordinator::enrollment::pem;
 use hostkeeper_oidc::Roots;
 use hostkeeper_oidc::testkit::{STATIC_ISSUER, config_text};
+use hostkeeper_proto::hostkeeper::operator::v1::{
+    FailThreshold, HostGroup, RollbackMode, RolloutPolicy,
+};
 use hostkeeper_proto::hostkeeper::release::v1::{Repository, TargetList};
 use rcgen::KeyUsagePurpose;
 use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
@@ -55,10 +58,29 @@ struct Started {
     ca_sha256: String,
 }
 
+/// The policy of the group a coordinator is started with: the service rolls back by itself when
+/// its release fails on the one host (`rollback` automatic, threshold 100% and at least one
+/// host).
+pub fn automatic_rollback() -> RolloutPolicy {
+    RolloutPolicy {
+        rollback: RollbackMode::Automatic as i32,
+        rollback_after_failed: Some(FailThreshold {
+            percent: Some(100),
+            min_hosts: Some(1),
+        }),
+        ..RolloutPolicy::default()
+    }
+}
+
 /// A coordinator serving in this process, and the operator's way to call it.
 pub struct CoordinatorHandle {
-    /// The role the hosts of the fixture service enroll as.
+    /// The host group the hosts of the fixture service enroll into: an approval's role is read
+    /// as its name.
     role: String,
+    /// The fixture service, which the group lists after `hostkeeper`.
+    service: String,
+    /// The group's policy, which a later put of the group keeps.
+    policy: RolloutPolicy,
     /// Where the listeners are bound.
     bound: Bound,
     started: Started,
@@ -108,7 +130,6 @@ fn serve_flags(dir: &Path, service: &str) -> Serve {
         ("--state-file", file("desired.json")),
         ("--oidc-config", file("oidc.toml")),
         ("--operator-token-file", file("operator.token")),
-        ("--rollout-file", file("rollout.toml")),
         ("--legacy-service", OsString::from(service)),
         ("--enrollment-dir", file("enrollment")),
         ("--ca-key-file", file("ca.key")),
@@ -188,31 +209,33 @@ fn serve_until_stopped(
 }
 
 impl CoordinatorHandle {
-    /// Starts a coordinator that manages `service` for hosts of role `host_role`, with its
-    /// files in `dir` (made here, mode 0700), and waits until both listeners are bound.
+    /// Starts a coordinator that manages `service` for hosts of the host group `host_role`, with
+    /// its files in `dir` (made here, mode 0700), and waits until both listeners are bound. It
+    /// puts the group, which lists `hostkeeper` and `service`, with the policy
+    /// [`automatic_rollback`].
     ///
-    /// The service rolls back by itself when its release fails on the one host
-    /// (`rollback = "automatic"`, threshold 100% and at least one host). It names the repository
-    /// `hostkeeper` for the service, which a test that orders `apt` entries registers
-    /// ([`CoordinatorHandle::put_repository`]); a test that orders none leaves it unregistered.
+    /// The service comes from the registry's repository a test that orders `apt` entries
+    /// registers ([`CoordinatorHandle::put_repository`], which also sets it as the service's
+    /// repository); a test that orders none leaves the default, unregistered.
     ///
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
     pub fn start(dir: &Path, service: &str, host_role: &str) -> CoordinatorHandle {
-        CoordinatorHandle::start_with_rollout(dir, service, host_role, "")
+        CoordinatorHandle::start_with_policy(dir, service, host_role, automatic_rollback())
     }
 
-    /// [`CoordinatorHandle::start`], with `rollout` (lines of keys, each ending in a newline)
-    /// added to the service's table of the rollout file: the keys of a rollout that the
-    /// defaults above do not set (`bake_beats = 2`, a host baked for two healthy heartbeats).
+    /// [`CoordinatorHandle::start`], with the group's policy `policy` instead of
+    /// [`automatic_rollback`]: the keys of a rollout that it does not set (for example
+    /// `bake_beats: 2`, a host baked for two healthy heartbeats; build it from
+    /// [`automatic_rollback`] with `..`).
     ///
     /// # Panics
     /// A file cannot be written or the coordinator does not start.
-    pub fn start_with_rollout(
+    pub fn start_with_policy(
         dir: &Path,
         service: &str,
         host_role: &str,
-        rollout: &str,
+        policy: RolloutPolicy,
     ) -> CoordinatorHandle {
         fs::create_dir_all(dir).unwrap_or_else(|e| panic!("create {}: {e}", dir.display()));
         fs::set_permissions(dir, fs::Permissions::from_mode(0o700)).expect("chmod the directory");
@@ -220,19 +243,6 @@ impl CoordinatorHandle {
         let mut random = [0u8; 32];
         getrandom::fill(&mut random).expect("random bytes");
         put(&dir.join("operator.token"), &hex::encode(random), 0o600);
-        put(
-            &dir.join("rollout.toml"),
-            &format!(
-                "[[service]]\n\
-                 name = \"{service}\"\n\
-                 roles = [\"{host_role}\"]\n\
-                 repository = \"hostkeeper\"\n\
-                 rollback = \"automatic\"\n\
-                 rollback_after_failed = {{ percent = 100, min_hosts = 1 }}\n\
-                 {rollout}"
-            ),
-            0o600,
-        );
         put(&dir.join("oidc.toml"), &config_text(STATIC_ISSUER), 0o600);
         let (client_ca_pem, client_ca_der) = throwaway_ca();
         put(&dir.join("client-ca.pem"), &client_ca_pem, 0o644);
@@ -267,14 +277,35 @@ impl CoordinatorHandle {
             &dir.join("ca.pem"),
             &dir.join("operator.token"),
         );
-        CoordinatorHandle {
+        let handle = CoordinatorHandle {
             role: host_role.to_owned(),
+            service: service.to_owned(),
+            policy,
             bound,
             started,
             api,
             stop: Some(stop_tx),
             thread: Some(thread),
-        }
+        };
+        handle.put_group(&[service]);
+        handle
+    }
+
+    /// Puts the host group the hosts enroll into, listing `hostkeeper` and then `packages`
+    /// (`hostkeeper` once), with the policy of this handle.
+    fn put_group(&self, packages: &[&str]) {
+        let packages = std::iter::once("hostkeeper")
+            .chain(packages.iter().copied().filter(|p| *p != "hostkeeper"))
+            .map(str::to_owned)
+            .collect();
+        must(
+            "host-groups put",
+            self.api.put_host_group(HostGroup {
+                name: self.role.clone(),
+                packages,
+                policy: Some(self.policy.clone()),
+            }),
+        );
     }
 
     /// Where the daemon's `coordinator_url` points: the heartbeat listener. The name is
@@ -295,12 +326,13 @@ impl CoordinatorHandle {
     }
 
     /// Waits for the daemon's enrollment request to be listed, then approves it as `host_id`
-    /// with the role the coordinator was started for and the service `service` assigned.
+    /// with the role the coordinator was started for, which is read as the name of the host
+    /// group the host goes into.
     ///
     /// # Panics
     /// No request is listed (the daemon cannot reach the coordinator, or pins another CA) or
     /// the approval is refused.
-    pub fn approve_enrollment(&self, host_id: &str, service: &str) {
+    pub fn approve_enrollment(&self, host_id: &str) {
         let mut request = None;
         wait_for("a pending enrollment request", ENROLLMENT_TRIES, || {
             let Ok(listed) = self.api.pending() else {
@@ -320,7 +352,6 @@ impl CoordinatorHandle {
                 key_sha256: key,
                 host_id,
                 role: &self.role,
-                services: &[service],
                 reason: "privileged test",
                 ..Approval::default()
             }),
@@ -351,11 +382,16 @@ impl CoordinatorHandle {
         );
     }
 
-    /// Registers `repository` in the coordinator's registry of package repositories (the rollout
-    /// file names `hostkeeper` for the service, so a set of apt entries needs that one, with the
-    /// entries' repository one of its channels).
+    /// Registers `repository` in the coordinator's registry of package repositories and sets it
+    /// as the repository of the fixture service (a set of apt entries needs the service's
+    /// repository, with the entries' repository one of its channels).
     pub fn put_repository(&self, repository: Repository) {
+        let name = repository.name.clone();
         must("repositories put", self.api.put_repository(repository));
+        must(
+            "services set-repository",
+            self.api.set_repository(&self.service, &name),
+        );
     }
 
     /// Forces `service` to `version` on the host `host_id` at once, with no hook.
@@ -385,12 +421,14 @@ impl CoordinatorHandle {
         must("services list", self.api.list_services())
     }
 
-    /// Orders `host_id` to uninstall `service` and takes it off the host.
-    pub fn unassign_uninstall(&self, host_id: &str, service: &str) {
-        must(
-            "services unassign",
-            self.api.unassign(host_id, service, true),
-        );
+    /// Takes `service` out of the packages of the host group, which orders its hosts to
+    /// uninstall it.
+    pub fn uninstall(&self, service: &str) {
+        let packages: Vec<&str> = [self.service.as_str()]
+            .into_iter()
+            .filter(|p| *p != service)
+            .collect();
+        self.put_group(&packages);
     }
 
     /// The text of `Releases.Status` of `service` for a failed test's report: the JSON of the

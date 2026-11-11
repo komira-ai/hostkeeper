@@ -1,8 +1,7 @@
-//! `hostkeeper-coordinator import` and `export` as the binary runs them, through `config::main`:
-//! the recorded files of the release before moved into a database and written back out, and the
-//! files the export writes held to the strict readers of the release before
-//! (`support::readers`), which refuse a key they do not know and a schema newer than their own.
-//! What the two verbs move, check and refuse is in the crate's `transfer_tests`.
+//! `hostkeeper-coordinator export` as the binary runs it, through `config::main`: its exit code
+//! when it writes and when it is refused. What an export writes, checks and refuses, and the files
+//! it writes held to the strict readers of the release before, are in the crate's
+//! `transfer_tests` and `transfer_readers_tests`.
 
 mod support;
 
@@ -13,8 +12,7 @@ use std::process::ExitCode;
 
 use hostkeeper_coordinator::config::main;
 use support::database::Database;
-use support::readers::Readers;
-use support::{recorded_bytes, scratch};
+use support::scratch;
 
 fn args(words: &[&str]) -> Vec<OsString> {
     std::iter::once("hostkeeper-coordinator")
@@ -33,112 +31,18 @@ fn dsn_file(path: &Path, database: &Database) {
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600)).expect("owner-only");
 }
 
-/// Proves: the files an export writes are read by the strict readers of the release before: the
-/// recorded files of that release, in both forms of the desired-state file, imported into a
-/// database and exported again, give a desired-state file, an ops file and a halts file each of
-/// its readers takes whole, the halts file naming the digest of the ops file beside it.
+/// Proves: an export of a database into targets that hold no state exits 0 and writes the
+/// desired-state file and the ops file; an export over the files it wrote is refused, exit 1.
 ///
-/// Catches: an export that writes a key the release before refuses, a newer schema, a halts file
-/// that does not go with its ops file, or the single form where that release reads the map.
+/// Catches: a refused export whose exit code says it was made, which an operator's script (the
+/// restore drill) would go on from, or one that exits 0 having written nothing.
 #[test]
-fn exported_files_are_read_by_the_strict_readers_of_the_release_before() {
-    let readers = Readers::recorded();
-    for (desired, legacy, reader) in [
-        ("desired-map.json", None, "desired-map"),
-        ("desired-single.json", Some("kbf"), "desired-single"),
-    ] {
-        let from = scratch("transfer-readers-from");
-        let state = from.path().join("desired.json");
-        std::fs::write(&state, recorded_bytes(desired)).expect("the desired state");
-        std::fs::write(
-            from.path().join("desired.json.ops"),
-            recorded_bytes("ops.json"),
-        )
-        .expect("the ops file");
-        std::fs::write(
-            from.path().join("desired.json.ops.halts"),
-            recorded_bytes("ops.json.halts"),
-        )
-        .expect("the halts file");
-        let database = Database::new();
-        let dsn = from.path().join("database.dsn");
-        dsn_file(&dsn, &database);
-        let legacy_flags: Vec<&str> = legacy
-            .map(|name| vec!["--legacy-service", name])
-            .unwrap_or_default();
-
-        let mut import = vec![
-            "import",
-            "--state-file",
-            text(&state),
-            "--database-dsn-file",
-            text(&dsn),
-        ];
-        import.extend(&legacy_flags);
-        assert_eq!(
-            main(args(&import)),
-            ExitCode::SUCCESS,
-            "{desired}: the plan"
-        );
-        import.push("--apply");
-        assert_eq!(
-            main(args(&import)),
-            ExitCode::SUCCESS,
-            "{desired}: the import"
-        );
-
-        let into = scratch("transfer-readers-into");
-        let target = into.path().join("desired.json");
-        let mut export = vec![
-            "export",
-            "--database-dsn-file",
-            text(&dsn),
-            "--state-file",
-            text(&target),
-            "--into-empty",
-        ];
-        export.extend(&legacy_flags);
-        assert_eq!(
-            main(args(&export)),
-            ExitCode::SUCCESS,
-            "{desired}: the export"
-        );
-        readers.check_desired_in(into.path(), reader);
-        readers.check_ops_in(into.path());
-        assert!(
-            into.path().join("desired.json.ops.halts").exists(),
-            "{desired}: the halt the recorded halts file holds is written back"
-        );
-    }
-}
-
-/// Proves: an import or an export that is refused exits 1: a second import into the database it
-/// filled, and an export over the files it wrote.
-///
-/// Catches: a refused move whose exit code says it was made, which an operator's script would
-/// go on from.
-#[test]
-fn a_refused_import_or_export_exits_1() {
-    let from = scratch("transfer-exit");
-    let state = from.path().join("desired.json");
-    std::fs::write(&state, recorded_bytes("desired-map.json")).expect("the desired state");
+fn an_export_exits_0_and_a_refused_export_exits_1() {
+    let dir = scratch("transfer-exit");
+    let state = dir.path().join("desired.json");
     let database = Database::new();
-    let dsn = from.path().join("database.dsn");
+    let dsn = dir.path().join("database.dsn");
     dsn_file(&dsn, &database);
-    let import = [
-        "import",
-        "--state-file",
-        text(&state),
-        "--database-dsn-file",
-        text(&dsn),
-        "--apply",
-    ];
-    assert_eq!(main(args(&import)), ExitCode::SUCCESS);
-    assert_eq!(
-        main(args(&import)),
-        ExitCode::from(1),
-        "the database holds state"
-    );
     let export = [
         "export",
         "--database-dsn-file",
@@ -147,6 +51,9 @@ fn a_refused_import_or_export_exits_1() {
         text(&state),
         "--into-empty",
     ];
+    assert_eq!(main(args(&export)), ExitCode::SUCCESS);
+    assert!(state.exists(), "the desired-state file");
+    assert!(dir.path().join("desired.json.ops").exists(), "the ops file");
     assert_eq!(
         main(args(&export)),
         ExitCode::from(1),

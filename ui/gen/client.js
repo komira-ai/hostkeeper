@@ -73,6 +73,7 @@ export function createClient(call) {
       assign: (request) => call("hostkeeper.operator.v1.Services/Assign", request),
       unassign: (request) => call("hostkeeper.operator.v1.Services/Unassign", request),
       setMinVersion: (request) => call("hostkeeper.operator.v1.Services/SetMinVersion", request),
+      setRepository: (request) => call("hostkeeper.operator.v1.Services/SetRepository", request),
       hold: (request) => call("hostkeeper.operator.v1.Services/Hold", request),
       unhold: (request) => call("hostkeeper.operator.v1.Services/Unhold", request),
     }),

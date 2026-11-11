@@ -430,7 +430,14 @@ fn rollout_page_shows_desired_against_converged() {
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
     let out = render(&mut ui, "rollout", "{}");
-    assert_eq!(ui.methods(), [m("Releases/Status"), m("Services/List")]);
+    assert_eq!(
+        ui.methods(),
+        [
+            m("Releases/Status"),
+            m("Services/List"),
+            m("HostGroups/List")
+        ]
+    );
     assert_shows(
         &out,
         &[
@@ -502,6 +509,7 @@ await click(tree, "converge");
         [
             (m("Releases/Status"), json!({})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Releases/MarkBad"),
                 json!({"service": "api", "version": "1.4.0", "reason": "crash loop"})

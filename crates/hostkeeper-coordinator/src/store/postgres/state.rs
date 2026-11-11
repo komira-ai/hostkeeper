@@ -93,6 +93,7 @@ pub(crate) const OPS: [Table; 18] = [
             ("force_generation", Ty::Int),
             ("uninstall_generation", Ty::Int),
             ("force", Ty::Json),
+            ("repository", Ty::Text),
         ],
     },
     Table {
@@ -512,8 +513,17 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
             Val::Int(int(marks.force_generation)?),
             Val::Int(int(assigned.uninstall_generation)?),
             marks.force.as_ref().map_or(Val::Null, json),
+            Val::text_or_null(marks.repository.as_deref()),
         ];
-        if row != [Val::Null, Val::Int(0), Val::Int(0), Val::Int(0), Val::Null] {
+        let default = [
+            Val::Null,
+            Val::Int(0),
+            Val::Int(0),
+            Val::Int(0),
+            Val::Null,
+            Val::Null,
+        ];
+        if row != default {
             put("services", vec![s()], row);
         }
         for (position, version) in marks.bad.iter().enumerate() {
@@ -699,6 +709,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
         marks.halt_generation = at.count(1)?;
         marks.force_generation = at.count(2)?;
         marks.force = at.json::<ForceRecord>(4)?;
+        marks.repository = at.text(5)?;
         let uninstall = at.count(3)?;
         if uninstall != 0 {
             state

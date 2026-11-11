@@ -223,7 +223,7 @@ impl Rig {
         #[cfg(target_os = "linux")]
         rig.coordinator.put_repository(rig.repository.entry());
         rig.start_released(&first);
-        rig.coordinator.approve_enrollment(HOST_ID, HK);
+        rig.coordinator.approve_enrollment(HOST_ID);
         rig
     }
 

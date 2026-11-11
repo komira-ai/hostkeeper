@@ -1,5 +1,6 @@
-//! The GitHub Actions expressions the conditions and outputs of `pr-device.yml` are written in,
-//! evaluated, so a test can run a condition of the file against each outcome of the jobs it names.
+//! The GitHub Actions expressions the conditions and outputs of `pr-device.yml` (and the `if:` of
+//! `release.yml`'s `set-desired`) are written in, evaluated, so a test can run a condition of the
+//! file against each outcome of the jobs it names.
 //!
 //! The subset: `${{ … }}` around the expression; `||`, `&&`, `!`, `==` and `!=` with GitHub's
 //! precedence (`!` binds tightest, then the comparisons, then `&&`, then `||`); parentheses;
@@ -16,7 +17,8 @@ pub struct Context {
     pub names: BTreeMap<String, String>,
     /// Whether the run was cancelled (`cancelled()`).
     pub cancelled: bool,
-    /// Whether an earlier step of the job failed (`failure()`, as a step's condition reads it).
+    /// What `failure()` answers: in a step's condition, whether an earlier step of the job failed;
+    /// in a job's, whether a job it needs, at any depth, failed.
     pub failed: bool,
 }
 

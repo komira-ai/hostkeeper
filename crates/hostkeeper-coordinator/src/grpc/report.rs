@@ -364,15 +364,30 @@ pub(crate) fn host(
     let mut services = Vec::new();
     let mut beats = Vec::new();
     let mut platform = None;
-    for (name, one) in &status.per_service {
+    // The packages of the host groups first (a host is in one group, so each is shown once), then
+    // the services of the coordinator's own definition that no group's entry showed already.
+    let grouped = status
+        .groups
+        .iter()
+        .flatten()
+        .map(|((_, package), one)| (package, one));
+    let mut shown = std::collections::BTreeSet::new();
+    for (name, one) in grouped.chain(&status.per_service) {
+        if shown.contains(name) {
+            continue;
+        }
         if let Some(heard) = one.hosts.iter().find(|h| h.host.node_id == node_id) {
             services.push(host_service(name, heard, one, &status.ops));
             beats.push(service_beat(name, &heard.host.beat));
             platform = platform.or(Some(heard.host.beat.platform));
+            shown.insert(name);
         } else if let Some(member) = one.members.iter().find(|m| m.node_id == node_id) {
             services.push(member_service(name, member, &status.ops));
+            shown.insert(name);
         }
     }
+    services.sort_by(|a, b| a.service.cmp(&b.service));
+    beats.sort_by(|a, b| a.name.cmp(&b.name));
     let silent = now.saturating_sub(node.seen).as_secs();
     proto::Host {
         live: node.is_live(now),

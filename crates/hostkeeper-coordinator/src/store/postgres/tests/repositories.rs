@@ -345,9 +345,9 @@ fn the_release_before_starts_on_a_database_with_0007_and_this_one_on_its() {
 
     let (ran, held) = with_session(&db, |session| {
         let before = migrate::checked(&migrate::SHIPPED[..6]).expect("the release before's set");
-        let refused = migrate::refuse_newer(session, &before).expect_err("0008 stops it");
-        let ran = migrate::apply(session, &before).expect_err("its runner is refused");
-        let ran = [refused.to_string(), ran.to_string()];
+        let ran = migrate::apply(session, &before)
+            .expect_err("its runner is refused")
+            .to_string();
         let mut tables = Tables::new();
         for table in &state::DESIRED[..3] {
             let rows = session
@@ -361,9 +361,10 @@ fn the_release_before_starts_on_a_database_with_0007_and_this_one_on_its() {
             state::desired_of(&tables).expect("its load reads the state"),
         )
     });
-    let refused = "the database's schema is newer than this coordinator (migration 8, host_groups)"
-        .to_owned();
-    assert_eq!(ran, [refused.clone(), refused]);
+    assert_eq!(
+        ran,
+        "the database's schema is newer than this coordinator (migration 8, host_groups)"
+    );
     assert!(held.repositories.entries.is_empty(), "it reads no registry");
     assert_eq!(rows(&db).0.len(), 1, "its tables are left");
 
@@ -381,7 +382,7 @@ fn the_release_before_starts_on_a_database_with_0007_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=8)
+        (1..=9)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

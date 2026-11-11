@@ -1,78 +1,36 @@
-//! `hostkeeper-coordinator import` and `export`: the coordinator's state moved from the file
-//! store into the database of `--database-dsn-file`, and back (`docs/design/coordinator-storage.md`,
+//! `hostkeeper-coordinator export`: the coordinator's state moved out of the database of
+//! `--database-dsn-file` into files of the file store (`docs/design/coordinator-storage.md`,
 //! section 11; `docs/operations/coordinator-state.md`).
-//!
-//! [`import`] reads every file `serve` keeps (the files named by `--state-file`, `--ops-file` and
-//! `--enrollment-dir`, the single-state desired file read as the state of `--legacy-service`)
-//! with the strict readers `serve` uses, and writes nothing to them: no staged halts file is
-//! settled, no file of spent ids rewritten, no directory of the enrollment store made. Without
-//! `--apply` it says what it would import, table by table, and whether the database holds state,
-//! and writes nothing anywhere. With `--apply` it first takes the lock of `<state-file>.lock`, so
-//! a running file coordinator refuses it, and refuses the marker of changes that were not yet
-//! written and the marker of a restore that stopped partway; then, in one transaction of the
-//! database ([`crate::store::postgres::transfer`]), writes every table, the whole audit history
-//! with its numbers, the import's record (the manifest of the files it read and the time of the
-//! oldest audit line they still held) and the audit row `state_imported`, reads it all back and
-//! compares it with the files. It changes no file: the file coordinator can start again on them.
 //!
 //! [`export`] reads the whole state of the database under its lock, and writes it with the file
 //! store's own encodings into targets that hold no state, through the write path of `restore`
 //! ([`crate::backup`]): never over a file, with the marker of an unfinished restore while it
 //! writes, and what it wrote removed again when a write fails. The desired-state file is in the
 //! single-state form exactly when the file store would write it so (the legacy service is the
-//! only service). An audit history the import found pruned is written as a sealed segment past
-//! the first, so the file store says the same time of the oldest line it holds. It prints the
-//! rows of every table.
+//! only service). An audit history the database's import record says was pruned is written as a
+//! sealed segment past the first, so the file store says the same time of the oldest line it
+//! holds. It prints the rows of every table.
 
-use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 
 use clap::Args;
 use hostkeeper_enrollment::enroll::StoreError as RecordsError;
-use hostkeeper_enrollment::enroll::records::{FileRecords, Snapshot};
-use hostkeeper_enrollment::fs::RealFs;
-use hostkeeper_mdm_gate::{
-    DeviceRecord, DeviceStore as _, FileDeviceStore, StoreError as DevicesError, encode_record,
-};
+use hostkeeper_mdm_gate::encode_record;
 
-use crate::audit_file::{self, AuditLine, AuditLog, DEFAULT_ROTATION, Detail, UnixClock};
-use crate::backup::{self, BackupError, Report, StatePaths, restore_marker};
+use crate::audit_file::{self, UnixClock};
+use crate::backup::{self, BackupError, Report, StatePaths};
 use crate::config::StartError;
 use crate::desired;
 use crate::jti_file::{self, jti_path};
 use crate::lock::StateLock;
 use crate::mdm::DEVICES_DIR;
-use crate::ops::{self, Marker, OpsState};
 use crate::ops_file;
-use crate::reconcile::COORDINATOR;
 use crate::releases::{self, releases_path};
 use crate::repositories::{self, Registry, repositories_path};
-use crate::store::postgres::transfer::{self, ACTION_IMPORTED, MoveError, Moved};
+use crate::store::postgres::transfer::{self, Moved};
 use crate::store::postgres::{DatabaseError, Dsn};
-use crate::store::{Files, Loaded};
 use crate::verdict_file::{self, verdicts_path};
-
-/// The flags of `import`.
-#[derive(Clone, Debug, Args)]
-pub struct Import {
-    /// Where the file store's state is: the flags `serve` names it by.
-    #[command(flatten)]
-    pub paths: StatePaths,
-    /// The legacy service, as `serve --legacy-service` names it: a desired-state file in the
-    /// single-state form is the state of this service.
-    #[arg(long)]
-    pub legacy_service: Option<String>,
-    /// The database to import into, as `serve --database-dsn-file` names it: it must hold no
-    /// state.
-    #[arg(long)]
-    pub database_dsn_file: PathBuf,
-    /// Import. Without it, the files and the database are read, what would be imported is said
-    /// table by table, and nothing is written.
-    #[arg(long)]
-    pub apply: bool,
-}
 
 /// The flags of `export`.
 #[derive(Clone, Debug, Args)]
@@ -95,7 +53,7 @@ pub struct Export {
     pub into_empty: bool,
 }
 
-/// Why an import or an export was refused, or failed.
+/// Why an export was refused, or failed.
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum TransferError {
     /// A lock, a target, or a file of the state could not be taken, read or written.
@@ -107,32 +65,15 @@ pub(crate) enum TransferError {
     /// The enrollment store holds what `serve` refuses.
     #[error("--enrollment-dir: {0}")]
     Records(#[from] RecordsError),
-    /// The database refused the import or the export.
+    /// The database refused the export.
     #[error(transparent)]
-    Database(#[from] MoveError),
-    /// Changes stood in memory and were not yet written when the file coordinator stopped.
-    #[error(
-        "{path}: changes stood in memory and were not yet written when the file coordinator stopped; start it once on these files, so that it settles them, stop it, and import again"
-    )]
-    Unsettled {
-        /// The marker.
-        path: PathBuf,
-    },
-    /// A device record of the MDM gate is one `serve` refuses.
-    #[error("--enrollment-dir: the MDM device records: {0}")]
-    Devices(#[from] DevicesError),
+    Database(#[from] DatabaseError),
     /// The database holds the enrollment store or the MDM gate's device records, and no
     /// `--enrollment-dir` says where they go.
     #[error(
         "the database holds the enrollment store or the MDM gate's device records, and --enrollment-dir is not given: exporting without it would lose them"
     )]
     EnrollmentDirNeeded,
-}
-
-impl From<DatabaseError> for TransferError {
-    fn from(why: DatabaseError) -> TransferError {
-        TransferError::Database(MoveError::Database(why))
-    }
 }
 
 /// The error of a file at `path` that could not be read or written.
@@ -143,192 +84,12 @@ fn io_at(path: &Path) -> impl FnOnce(io::Error) -> BackupError + '_ {
     }
 }
 
-/// The records of the enrollment store in `dir`, and the MDM gate's device records in its
-/// `mdm-devices`, read without writing by the readers `serve` uses: a directory that is not
-/// there is refused (a store `serve` would make empty, so every host would enroll again); a
-/// store without `mdm-devices` holds no device record. The device records are in the order of
-/// their enrollment ids.
-fn read_records(dir: &Path) -> Result<(Snapshot, Vec<DeviceRecord>), TransferError> {
-    if !fs::symlink_metadata(dir).is_ok_and(|meta| meta.is_dir()) {
-        return Err(BackupError::NoEnrollmentDir {
-            path: dir.to_path_buf(),
-        }
-        .into());
-    }
-    let devices = dir.join(DEVICES_DIR);
-    let mut records = match fs::read_dir(&devices) {
-        // The directory is there, so opening the store over it makes nothing.
-        Ok(_) => FileDeviceStore::open(Arc::new(RealFs), &devices)?.load()?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => Vec::new(),
-        Err(e) => return Err(io_at(&devices)(e).into()),
-    };
-    records.sort_by(|a, b| a.enrollment_id.as_str().cmp(b.enrollment_id.as_str()));
-    let snapshot = FileRecords::read_snapshot(Arc::new(RealFs), dir)?;
-    Ok((snapshot, records))
-}
-
-/// Everything the file store `paths` names holds, read by the strict readers `serve` uses and
-/// without writing anything, the single-state desired file read as the state of `legacy` and
-/// CI's spent ids past at `now` left out. The markers a stop left refuse it.
-///
-/// # Errors
-/// [`TransferError`]: a marker is there, or a file is refused or cannot be read.
-fn read_files(paths: &StatePaths, legacy: Option<&str>, now: u64) -> Result<Moved, TransferError> {
-    let state = &paths.state_file;
-    let ops = paths.ops_file();
-    let unfinished = ops_file::unfinished_path(&ops);
-    if Marker::read(&unfinished).is_some() {
-        return Err(TransferError::Unsettled { path: unfinished });
-    }
-    let restoring = restore_marker(state);
-    if restoring.exists() {
-        return Err(StartError::RestoreUnfinished { path: restoring }.into());
-    }
-    let files = Files::default()
-        .with_desired(state, legacy)
-        .with_verdicts(&verdicts_path(state));
-    let desired = files.load_desired().map_err(StartError::from)?;
-    let parsed = match fs::read(&ops) {
-        Ok(bytes) => ops::parse(&ops, &bytes).map_err(StartError::from)?,
-        Err(e) if e.kind() == io::ErrorKind::NotFound => OpsState::default(),
-        Err(e) => return Err(io_at(&ops)(e).into()),
-    };
-    let ops_state = ops_file::read_joined(&ops, parsed).map_err(StartError::from)?;
-    let verdicts = files.load_verdicts().map_err(StartError::from)?;
-    let spent = jti_file::read_live(&jti_path(state), now).map_err(StartError::from)?;
-    let active = audit_file::path_of(&ops);
-    let mut audit = Vec::new();
-    let unread = AuditLog::open(active.clone(), DEFAULT_ROTATION)
-        .and_then(|log| log.each_counted(&mut |line| audit.push(line)))
-        .map_err(StartError::from)?;
-    let pruned_before = audit_file::pruned_before(&active).map_err(StartError::from)?;
-    let (records, devices) = match &paths.enrollment_dir {
-        Some(dir) => read_records(dir)?,
-        None => (Snapshot::default(), Vec::new()),
-    };
-    Ok(Moved {
-        loaded: Loaded {
-            desired,
-            ops: ops_state,
-            verdicts,
-            spent,
-        },
-        audit,
-        records,
-        devices,
-        pruned_before,
-        unread,
-    })
-}
-
 /// The lines that say how many rows of each table `counts` holds.
 fn table_lines(counts: &[(&str, i64)]) -> Vec<String> {
     counts
         .iter()
         .map(|(table, rows)| format!("  {table}: {rows} rows"))
         .collect()
-}
-
-/// Imports the file store `flags.paths` names into the database of `flags.database_dsn_file`,
-/// or with no `--apply` says what it would import; with `--apply`, under the lock of the state
-/// files taken by `lock`. The import is made at the time `clock` says.
-///
-/// # Errors
-/// [`TransferError`]: a file coordinator holds the lock, a marker is there, a file is refused,
-/// or the database refused the import, holds state, or read back what the files do not hold.
-pub(crate) fn import(
-    flags: &Import,
-    lock: &dyn StateLock,
-    clock: &UnixClock,
-) -> Result<Report, TransferError> {
-    let paths = &flags.paths;
-    let _held = flags
-        .apply
-        .then(|| backup::take(lock, &paths.state_file))
-        .transpose()?;
-    let now = clock();
-    let moved = read_files(paths, flags.legacy_service.as_deref(), now)?;
-    // The record of the files read; none read is a flag that names the wrong place, whose import
-    // would fill the database with nothing and so refuse the import of the right one.
-    let manifest = backup::manifest_of(paths)?;
-    if manifest["files"].as_array().is_none_or(Vec::is_empty) {
-        return Err(BackupError::NothingThere {
-            path: paths.state_file.clone(),
-        }
-        .into());
-    }
-    let dsn = Dsn::read(&flags.database_dsn_file).map_err(DatabaseError::from)?;
-    let counts = transfer::counts_of(&moved)?;
-    let mut lines = vec![format!(
-        "hostkeeper-coordinator import: the state of {} {}",
-        paths.state_file.display(),
-        if flags.apply {
-            "is imported into the database"
-        } else {
-            "would be imported into the database, nothing written"
-        }
-    )];
-    lines.extend(table_lines(&counts));
-    let unlogged = moved
-        .loaded
-        .ops
-        .audit
-        .iter()
-        .filter(|entry| {
-            moved
-                .audit
-                .binary_search_by_key(&entry.seq, |line| line.seq)
-                .is_err()
-        })
-        .count();
-    if moved.unread > 0 {
-        lines.push(format!(
-            "{} lines of the audit files are not ones this build reads (written by a newer release, or cut short): they are not imported",
-            moved.unread
-        ));
-    }
-    if unlogged > 0 {
-        lines.push(format!(
-            "{unlogged} entries of the ops file's audit ring are older than its audit file, which holds no line of them: they are not imported"
-        ));
-    }
-    if !flags.apply {
-        lines.push(match transfer::plan(&dsn)? {
-            Some((table, rows)) => format!(
-                "the database holds state ({rows} rows in {table}): import --apply refuses it; drop it and create it again first"
-            ),
-            None => "the database holds no state: import --apply writes the rows above".to_owned(),
-        });
-        return Ok(Report::of(lines));
-    }
-    // The ring of the ops file may name changes older than its audit file, which has no line, and
-    // so no time, for them: they are not imported, and no number they took is taken again.
-    let ring = &moved.loaded.ops.audit;
-    let newest = ring
-        .iter()
-        .map(|entry| entry.seq)
-        .chain(moved.audit.last().map(|line| line.seq))
-        .max()
-        .unwrap_or(0);
-    let imported = AuditLine {
-        seq: newest + 1,
-        at_unix: now,
-        by: COORDINATOR.to_owned(),
-        action: ACTION_IMPORTED.to_owned(),
-        detail: Detail {
-            reason: Some(format!(
-                "from the file store of {}",
-                paths.state_file.display()
-            )),
-            ..Detail::default()
-        },
-    };
-    transfer::import(&dsn, &moved, &manifest, &imported, now)?;
-    lines.push(format!(
-        "imported in one transaction, read back and compared; the audit row {} is {ACTION_IMPORTED}; no file was changed",
-        imported.seq
-    ));
-    Ok(Report::of(lines))
 }
 
 /// The files of the file store `paths` names that hold `moved`, each with its bytes, the
@@ -452,3 +213,7 @@ mod host_groups_tests;
 #[cfg(test)]
 #[path = "transfer_mdm_tests.rs"]
 mod mdm_tests;
+
+#[cfg(test)]
+#[path = "transfer_readers_tests.rs"]
+mod readers_tests;

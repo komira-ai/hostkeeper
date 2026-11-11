@@ -85,7 +85,8 @@ impl Fleet {
         self.marks.group_mode = on;
     }
 
-    /// Whether the coordinator holds a host group, as of the last refresh of the marks.
+    /// Whether the coordinator is in group mode (it holds a host group, or places by groups only),
+    /// as of the last refresh of the marks.
     #[must_use]
     pub(crate) fn in_group_mode(&self) -> bool {
         self.marks.group_mode
