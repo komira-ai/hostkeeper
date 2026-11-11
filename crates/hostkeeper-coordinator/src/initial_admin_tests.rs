@@ -16,7 +16,7 @@ use crate::audit_actions::about;
 use crate::initial_admin::{FLAG, InitialAdmin, InitialAdminError, MAX_VALID_SECS, Outcome, watch};
 use crate::ops::{AuditEntry, OpsState, OpsStore};
 use crate::password::{PasswordSettings, Passwords, PolicyError, Verdict};
-use crate::store::{Fake, audit_failure};
+use crate::store::{Fake, audit_failure, store_failure};
 use crate::testutil::{Rig, scratch};
 
 const PASSWORD: &str = "k7Pq9xWm3Rt5Vb2NcH8dZs4F";
@@ -444,7 +444,9 @@ fn no_file_is_nothing_and_a_file_of_the_wrong_mode_is_the_secret_file_error() {
 fn a_store_that_cannot_write_leaves_the_file_for_the_next_look() {
     let look = Look::new("ia-store-down");
     look.put_for("id-1", "admin", 3000);
-    look.fake.fail();
+    // The audit is taken; the accounts are not.
+    look.fake
+        .refuse(|commit| commit.accounts.is_some().then(store_failure));
     assert!(matches!(
         look.look(),
         Err(InitialAdminError::Store(AccountsError::Io(_)))
@@ -466,6 +468,56 @@ fn an_audit_that_cannot_be_written_is_an_error_of_the_look() {
     assert!(
         why.to_string()
             .starts_with("--initial-admin-file: the audit entry was not written")
+    );
+}
+
+#[test]
+fn a_bootstrap_whose_audit_failed_once_is_audited_by_the_next_look() {
+    let look = Look::new("ia-audit-once");
+    look.put_for("id-1", "admin", 3000);
+    look.fake
+        .refuse(|commit| commit.accounts.is_none().then(audit_failure));
+    assert!(matches!(look.look(), Err(InitialAdminError::Audit(_))));
+    assert!(look.accounts.snapshot().is_empty());
+    look.fake.heal();
+    assert_eq!(look.look().unwrap(), Outcome::Adopted);
+    assert_eq!(look.look().unwrap(), Outcome::AlreadyAdopted);
+    assert_eq!(look.audit(), entries(&[("user_bootstrap", "admin")]));
+}
+
+#[test]
+fn an_expired_file_that_is_already_gone_when_deleted_is_deleted() {
+    let look = Look::new("ia-gone");
+    look.put_for("id-1", "admin", 100);
+    look.at(NOW + 500);
+    // The file is read, then another look deletes it before this one does.
+    let file = super::read(&look.path()).unwrap().unwrap();
+    fs::remove_file(look.path()).unwrap();
+    assert_eq!(
+        look.admin.expire(&file, &look.accounts, &look.ops).unwrap(),
+        Outcome::Expired
+    );
+}
+
+#[tokio::test]
+async fn a_look_that_panicked_or_was_cancelled_is_a_refusal_that_says_so() {
+    let panicked = tokio::task::spawn_blocking(|| -> Result<Option<Outcome>, InitialAdminError> {
+        panic!("a look that panics")
+    })
+    .await;
+    let why = super::joined(panicked).unwrap_err();
+    assert_eq!(
+        why.to_string(),
+        "--initial-admin-file: the look did not finish (it panicked)"
+    );
+    let task = tokio::spawn(std::future::pending::<
+        Result<Option<Outcome>, InitialAdminError>,
+    >());
+    task.abort();
+    let why = super::joined(task.await).unwrap_err();
+    assert_eq!(
+        why.to_string(),
+        "--initial-admin-file: the look did not finish (it was cancelled)"
     );
 }
 

@@ -402,7 +402,10 @@ The coordinator reads it at start and on every `--tls-reload-secs`, by its own w
 - the user's record already holds this `id`: nothing, so a restart does not reset a password twice;
 - otherwise hashes the password with Argon2id and makes the user (or, for a name that exists, gives it the new hash and enables
   it), with `must_change` on, the deadline `valid_until`, and the `id`; audits `user_bootstrap` by
-  `coordinator`. The plain password is in the file only, never in the store, the audit or a log.
+  `coordinator`. The plain password is in the file only, never in the store, the audit or a log. The entry is written before
+  the user is stored, so an audit that cannot be written leaves the user unmade and the next look does both; a store that
+  cannot write after the entry repeats the entry at the next look. Expiry is in the same order (void, audit, delete), and a
+  file already gone when it is deleted counts as deleted.
 
 A file that asks for a `valid_until` further than `--initial-password-secs` (default 3600, at most 3600) past the clock, a
 password under the policy, a bad mode or a text this build cannot read is refused naming the flag: at start the coordinator does

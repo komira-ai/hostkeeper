@@ -149,6 +149,9 @@ pub enum InitialAdminError {
     /// The expired file could not be deleted.
     #[error("--initial-admin-file: the expired file was not deleted: {0}")]
     Delete(io::ErrorKind),
+    /// The look did not finish: it panicked (`true`) or was cancelled (`false`).
+    #[error("--initial-admin-file: the look did not finish ({})", if *.0 { "it panicked" } else { "it was cancelled" })]
+    Panicked(bool),
     /// The audit entry could not be written.
     #[error("--initial-admin-file: the audit entry was not written: {0}")]
     Audit(#[from] OpsError),
@@ -272,8 +275,12 @@ impl InitialAdmin {
             .check_policy(&file.password, &file.user, None)
             .map_err(InitialAdminError::Policy)?;
         let hash = self.passwords.hash(&file.password)?.as_str().to_owned();
-        accounts.change(|held| adopt(held, &file, hash, now))?;
+        // Audited first, as the expiry is: an audit that cannot be written leaves the user
+        // unmade and the next look does both again, where an audit after the store would be
+        // lost for good (the next look finds the id adopted). A store that cannot write after
+        // the entry repeats the entry at the next look, until it can.
         audit(ops, USER_BOOTSTRAP, &file.user)?;
+        accounts.change(|held| adopt(held, &file, hash, now))?;
         Ok(Outcome::Adopted)
     }
 
@@ -304,7 +311,13 @@ impl InitialAdmin {
         if !changed {
             audit(ops, INITIAL_PASSWORD_EXPIRED, &file.user)?;
         }
-        std::fs::remove_file(&self.path).map_err(|e| InitialAdminError::Delete(e.kind()))?;
+        // A file that is already gone (another look, or a password change, deleted it) is deleted.
+        match std::fs::remove_file(&self.path) {
+            Err(e) if e.kind() != io::ErrorKind::NotFound => {
+                return Err(InitialAdminError::Delete(e.kind()));
+            }
+            _ => {}
+        }
         Ok(Outcome::Expired)
     }
 }
@@ -389,12 +402,18 @@ async fn watch(
         ticks.tick().await;
         let looking = Arc::clone(&coordinator);
         // File reads, a hash and file writes: off the runtime's threads.
-        let looked = tokio::task::spawn_blocking(move || looking.look_at_initial_admin())
-            .await
-            .unwrap_or(Ok(None));
-        report(looked);
+        let looked = tokio::task::spawn_blocking(move || looking.look_at_initial_admin()).await;
+        report(joined(looked));
         let _ = done.send(());
     }
+}
+
+/// The result of a look that ran off the runtime's threads: one that panicked or was cancelled is
+/// a refusal, so that it is logged.
+fn joined(
+    looked: Result<Result<Option<Outcome>, InitialAdminError>, tokio::task::JoinError>,
+) -> Result<Option<Outcome>, InitialAdminError> {
+    looked.unwrap_or_else(|e| Err(InitialAdminError::Panicked(e.is_panic())))
 }
 
 /// Logs what a look did: a change at info, a refusal at warn.
