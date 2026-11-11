@@ -678,16 +678,16 @@ impl Shared {
     /// has been evicted or replaced since it was read: then the files are another's.
     fn forget(&self, digest: &str, born: u64) {
         let mut state = self.state();
-        if state
+        let Some(length) = state
             .entries
             .get(digest)
-            .is_none_or(|entry| entry.born != born)
-        {
+            .filter(|entry| entry.born == born)
+            .map(|entry| entry.meta.length)
+        else {
             return;
-        }
-        if let Some(entry) = state.entries.remove(digest) {
-            state.total -= entry.meta.length;
-        }
+        };
+        state.entries.remove(digest);
+        state.total -= length;
         // Under the lock: a commit of the key waits for the files to be gone.
         self.layout.remove(digest);
     }

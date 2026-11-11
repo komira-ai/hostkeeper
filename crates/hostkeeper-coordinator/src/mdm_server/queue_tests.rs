@@ -165,6 +165,23 @@ async fn a_restarted_queue_pushes_for_a_command_left_queued() {
     assert_eq!(rig.apns.sent().len(), 1, "at the floor");
 }
 
+/// Proves: a sweep of a coordinator that has no push identity yet still arms the floor of a
+/// queued command and sends nothing, and the push is sent once an identity is stored.
+///
+/// Catches: a sweep that panics, or one that forgets the command, when nobody can push.
+#[tokio::test]
+async fn a_sweep_without_a_pusher_arms_the_command_and_pushes_nothing() {
+    let rig = Rig::new("queue-sweep-no-pusher");
+    rig.live("e1", SERIAL, true);
+    rig.store
+        .enqueue(&crate::mdm_server::queue_new(1, "e1"))
+        .expect("queued");
+    let bare = rig.queue_without_pusher();
+    bare.sweep().await.expect("swept");
+    assert!(bare.armed.lock().expect("lock").contains("e1"));
+    assert!(rig.apns.sent().is_empty());
+}
+
 /// Proves: a sweep whose store cannot say which enrollments wait carries on with the timed-out
 /// commands and the enrollments already armed.
 ///
