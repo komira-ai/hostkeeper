@@ -70,7 +70,7 @@ impl<L: CommandLauncher> RcService<L> {
             why,
         };
         service_name(unit).map_err(|e| error(e.to_string()))?;
-        self.launcher.run(&argv).map_err(error)
+        self.launcher.run(&argv).map_err(|e| error(e.to_string()))
     }
 }
 

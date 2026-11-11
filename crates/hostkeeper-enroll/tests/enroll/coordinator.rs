@@ -359,6 +359,7 @@ impl DeviceState for Supervised {
             enrolled: true,
             supervised: true,
             enrolled_since_unix: None,
+            enrolled_via_dep: None,
         })
     }
 }

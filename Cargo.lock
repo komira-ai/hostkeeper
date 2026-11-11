@@ -1554,7 +1554,6 @@ dependencies = [
  "hostkeeper-daemon",
  "hostkeeper-launchd",
  "hostkeeper-testkit",
- "rustix",
 ]
 
 [[package]]

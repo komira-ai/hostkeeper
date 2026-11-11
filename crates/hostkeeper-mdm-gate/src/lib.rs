@@ -4,7 +4,8 @@
 //! - [`NanoHub`]: the client of NanoHUB's command queue, on loopback, with the API key read
 //!   from a file ([`ApiKey`]); it sends only the five [`COMMAND_TYPES`].
 //! - [`webhook::serve`]: the loopback listener NanoHUB's webhook posts each check-in and
-//!   command result to.
+//!   command result to; a thin adapter that reads the body ([`parse_event`]) and calls
+//!   [`Gate::handle`], the one entry point for events.
 //! - [`Gate`]: the records of the devices, kept behind [`DeviceStore`] ([`FileDeviceStore`]: a
 //!   file per device; the coordinator's database is another, held to the same cases by
 //!   [`conformance`]), the `DeviceInformation` and `SecurityInfo` it asks each newly enrolled
@@ -41,7 +42,7 @@ pub use command::{
 };
 pub use enroll::{EnrollSide, Enrollments, EnrollmentsError, Nonce, Waiting};
 pub use event::{Event, EventError, parse as parse_event};
-pub use gate::{DeviceStatus, Gate, Handled, Random, Unavailable, WebhookError};
+pub use gate::{DeviceStatus, Gate, Handled, Random, Unavailable};
 pub use ids::{CommandUuid, EnrollmentId, is_serial};
 pub use nanohub::{
     ApiKey, ApiKeyError, ApiUrl, ApiUrlError, CALL_TIMEOUT, EnqueueError, KEY_FLAG, NanoHub,
@@ -61,3 +62,4 @@ pub use record::{
     DeviceRecord, InstallRecord, NonceRecord, Phase, ProfileAnswer, ProfileCommand, Sent,
 };
 pub use store::{DeviceStore, FileDeviceStore, SCHEMA, StoreError, decode_record, encode_record};
+pub use webhook::WebhookError;

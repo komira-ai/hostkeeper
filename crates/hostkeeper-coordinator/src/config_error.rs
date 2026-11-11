@@ -37,9 +37,9 @@ pub enum StartError {
     /// Neither is given.
     #[error("one of --tokens-file and --operator-token-file is required")]
     NoTokenFlag,
-    /// `--private-listen` is a wildcard address.
+    /// `--private-listen` is a wildcard address and `--private-listen-wildcard` is not given.
     #[error(
-        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface"
+        "--private-listen: {0} is a wildcard address; the private listener takes CI's calls and the operator's, so name the address of one interface, or give --private-listen-wildcard in a network namespace whose interfaces are loopback and one private network"
     )]
     PrivateListen(SocketAddr),
     /// `--lan-listen` is a wildcard address.
@@ -58,9 +58,9 @@ pub enum StartError {
     /// The two certificate URI prefixes are refused.
     #[error("--role-uri-prefix and --host-role-uri-prefix: {0}")]
     Prefixes(#[from] PrefixError),
-    /// `--rollout-file` is given: `serve` does not read it.
+    /// `--rollout-file` is given: `serve` does not read it, and the operator API places the hosts.
     #[error(
-        "--rollout-file is not read by serve: convert it once with hostkeeper-coordinator host-groups migrate (docs/operations/hostgroups.md)"
+        "--rollout-file is not read by serve: start serve without it and place hosts with the operator API: HostGroups.Put each group, HostGroups.Move each host, Services.SetRepository and Services.SetMinVersion where needed, Releases.SetDesired per group (docs/operations/hostgroups.md)"
     )]
     RolloutFileRetired,
     /// An allow-list entry names no services and there is no legacy service for it to stand for.
@@ -157,9 +157,10 @@ pub enum StartError {
         /// The marker file.
         path: PathBuf,
     },
-    /// A `host-groups migrate --apply` on these state files stopped before it finished.
+    /// A `host-groups migrate --apply` of release 0.1.253, a verb this release does not have, on
+    /// these state files stopped before it finished.
     #[error(
-        "{path}: a host-groups migrate --apply stopped partway; restore the backup taken before it and run it again"
+        "{path}: a host-groups migrate --apply of release 0.1.253 stopped partway; restore the backup taken before it"
     )]
     MigrateUnfinished {
         /// The marker file.

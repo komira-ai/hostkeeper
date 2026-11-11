@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 600" width="1200" height="600" role="img" aria-label="Login, an operator call with cookie and CSRF header, and logout between the browser, the coordinator and the store.">
+<title>Login, call and logout</title>
+<desc>The browser posts the username and password to the coordinator, which reads the user from the store, checks the limiter, verifies the Argon2id hash, sets the session cookie and returns the CSRF token. Each call carries the cookie and the CSRF header; the coordinator checks the session, the Origin and the CSRF token. Logout drops the session.</desc>
+<defs><marker id="ols-ak" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#0B0B0A"/></marker></defs>
+<style>
+.box{fill:#FFFFFF;stroke:#0B0B0A;stroke-width:1.4}
+.ln{stroke:#0B0B0A;fill:none;stroke-width:1.4}
+.ln-d{stroke:#0B0B0A;fill:none;stroke-width:1.4;stroke-dasharray:6 4}
+.life{stroke:#5A5A57;stroke-width:1;stroke-dasharray:2 4}
+text{fill:#1E1E1D;font-family:system-ui,-apple-system,'Segoe UI',sans-serif;font-size:13px}
+.b{font-weight:600}
+.t-m{fill:#5A5A57;font-size:12px}
+.lbl{paint-order:stroke;stroke:#FFFFFF;stroke-width:4px;stroke-linejoin:round}
+</style>
+<rect x="0" y="0" width="1200" height="600" fill="#FFFFFF"/>
+<text x="20" y="28" class="b" font-size="16">Login, one call and logout: the cookie proves the session, the header proves the page (designed, not built)</text>
+<rect x="60" y="50" width="170" height="36" rx="5" class="box"/><text x="145" y="73" class="b" text-anchor="middle">Browser (the UI)</text>
+<rect x="470" y="50" width="260" height="36" rx="5" class="box"/><text x="600" y="73" class="b" text-anchor="middle">Coordinator, private listener</text>
+<rect x="970" y="50" width="170" height="36" rx="5" class="box"/><text x="1055" y="73" class="b" text-anchor="middle">Store</text>
+<path d="M145,86 L145,580" class="life"/><path d="M600,86 L600,580" class="life"/><path d="M1055,86 L1055,580" class="life"/>
+
+<path d="M145,120 L600,120" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="112" class="t-m lbl" text-anchor="middle">POST /v1/login {username, password}</text>
+<path d="M600,155 L1055,155" class="ln" marker-end="url(#ols-ak)"/>
+<text x="828" y="147" class="t-m lbl" text-anchor="middle">read the user (a dummy hash if unknown)</text>
+<path d="M600,190 L660,190 L660,210 L600,210" class="ln" marker-end="url(#ols-ak)"/>
+<text x="675" y="204" class="t-m">limiter, then Argon2id verify, one error text</text>
+<path d="M600,255 L145,255" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="237" class="t-m lbl" text-anchor="middle">200, Set-Cookie __Host-hk_session (Secure, HttpOnly, Strict)</text>
+<text x="372" y="273" class="t-m lbl" text-anchor="middle">body: csrf token, must_change; audit login</text>
+
+<path d="M145,320 L600,320" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="302" class="t-m lbl" text-anchor="middle">POST /Hosts.List/... cookie + X-HK-CSRF</text>
+<path d="M600,345 L660,345 L660,365 L600,365" class="ln" marker-end="url(#ols-ak)"/>
+<text x="675" y="359" class="t-m">session live, Origin same, CSRF equal, no must_change</text>
+<path d="M600,400 L145,400" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="392" class="t-m lbl" text-anchor="middle">200, the same bytes as a bearer call; audit by the user's name</text>
+
+<path d="M145,460 L600,460" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="452" class="t-m lbl" text-anchor="middle">POST /v1/logout (cookie + CSRF)</text>
+<path d="M600,495 L145,495" class="ln" marker-end="url(#ols-ak)"/>
+<text x="372" y="487" class="t-m lbl" text-anchor="middle">200, Set-Cookie expired; session dropped; audit logout</text>
+<text x="600" y="560" class="t-m" text-anchor="middle">A call without the header, from another Origin, or after the idle or absolute expiry gets 403 or 401 and changes nothing.</text>
+</svg>
