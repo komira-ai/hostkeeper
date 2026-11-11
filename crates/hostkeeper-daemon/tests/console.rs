@@ -25,7 +25,7 @@ use hostkeeper_enroll::{
 use hostkeeper_launchd::PlatformKind;
 use hostkeeper_link::StopFlag;
 use hostkeeper_link::testing::{FakeClock, ManualDispatch, RecordingLog, ScriptedSleeper};
-use hostkeeper_placed::CommandLauncher;
+use hostkeeper_placed::{CommandLauncher, LaunchError};
 use sha2::{Digest, Sha256};
 use support::{Rig, Scratch, idle_links, open_once};
 use x509_cert::der::{Decode, Encode};
@@ -141,12 +141,12 @@ struct FakeAgetty {
 }
 
 impl CommandLauncher for FakeAgetty {
-    fn run(&self, argv: &[&str]) -> Result<(), String> {
+    fn run(&self, argv: &[&str]) -> Result<(), LaunchError> {
         let text = fs::read_to_string(&self.issue).unwrap_or_else(|e| format!("unread: {e}"));
         let argv = argv.iter().map(|arg| (*arg).to_owned()).collect();
         self.runs.lock().expect("the runs").push((argv, text));
         match self.failing.lock().expect("the failure").clone() {
-            Some(why) => Err(why),
+            Some(why) => Err(LaunchError::Failed(why)),
             None => Ok(()),
         }
     }
