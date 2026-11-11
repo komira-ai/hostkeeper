@@ -21,6 +21,12 @@
 //!   coordinator's) and its macOS installer (signed by the release, not notarized) reaching the repositories at
 //!   `packages.komira.ai`: testing first, the install checks, then the decision to promote and
 //!   the promotion. Copied from komira-ai/tierstore (`channels`).
+//! - `debs`: the Debian packages a CI job installs with `dpkg`, pinned by version and SHA-256 in a
+//!   file of `.github/debs/`, kept from the actions cache or fetched from the pinned mirrors in
+//!   turn (`debs`), so that no job runs `apt-get`.
+//! - `netboot-iso`: the Ubuntu ISO of a network-install job, by its pin in
+//!   `packaging/netboot/pins.toml`, from the pinned URL or the mirrors given in turn
+//!   (`netboot_iso`).
 //! - `db-backup`: one dump of the coordinator's database into a directory of dumps, keeping the
 //!   newest of them (`db_backup`). Not a CI step: the backup timer of the compose deployment runs
 //!   it (`docs/deploy/coordinator/`).
@@ -42,8 +48,11 @@ mod advisories;
 mod channels;
 mod coordinator_update;
 mod db_backup;
+mod debs;
 mod install;
 mod mdm_signing_test;
+mod mirrored;
+mod netboot_iso;
 mod netinstall_report;
 mod release;
 mod stamp;
@@ -58,6 +67,8 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
+
+use coordinator_update::public::{self, UreqWeb};
 
 /// Why a verb failed.
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
@@ -79,6 +90,13 @@ enum Error {
     DbBackup(#[from] db_backup::Error),
     #[error(transparent)]
     Channels(#[from] channels::Error),
+    #[error(transparent)]
+    Debs(#[from] debs::Error),
+    #[error(transparent)]
+    NetbootIso(#[from] netboot_iso::Error),
+    /// The roots of `--ca-bundle` could not be read.
+    #[error(transparent)]
+    CaBundle(#[from] release::ports::PortError),
 }
 
 #[derive(Parser)]
@@ -144,6 +162,41 @@ enum Verb {
         #[command(subcommand)]
         verb: channels::Verb,
     },
+    /// Make `--dir` hold exactly the Debian packages the pins file pins for this host's
+    /// architecture: keep each file already there whose SHA-256 is its pin's, fetch each missing
+    /// one from the pinned mirrors in turn (three rounds), and refuse a file of other bytes or
+    /// one no pin names. One line per package.
+    Debs {
+        /// The pins file (`.github/debs/<set>.toml`).
+        #[arg(long)]
+        pins: PathBuf,
+        /// The directory the actions cache restores and saves; created when missing.
+        #[arg(long)]
+        dir: PathBuf,
+        /// The roots a download trusts: every certificate of this PEM file.
+        #[arg(long, default_value = coordinator_update::public::CA_BUNDLE)]
+        ca_bundle: PathBuf,
+    },
+    /// Fetch the ISO of a boot set of network install into `--dir`, by its pin in the pins
+    /// file: from the pinned URL, then each `--mirror` in turn (three rounds), its size and
+    /// SHA-256 checked. A file of its name and pin already there is kept.
+    NetbootIso {
+        /// The pins of the boot sets (`packaging/netboot/pins.toml`).
+        #[arg(long)]
+        pins: PathBuf,
+        /// The platform whose ISO is fetched (`linux-x86_64`, `linux-arm64`).
+        #[arg(long)]
+        platform: String,
+        /// The directory the ISO is written into, under the file name of its URL.
+        #[arg(long)]
+        dir: PathBuf,
+        /// A base URL that stands for the pinned URL's `https://<host>`, tried after it.
+        #[arg(long)]
+        mirror: Vec<String>,
+        /// The roots a download trusts: every certificate of this PEM file.
+        #[arg(long, default_value = coordinator_update::public::CA_BUNDLE)]
+        ca_bundle: PathBuf,
+    },
 }
 
 fn run(cli: Cli) -> Result<Vec<String>, Error> {
@@ -174,6 +227,38 @@ fn run(cli: Cli) -> Result<Vec<String>, Error> {
         Verb::NetinstallReport(flags) => Ok(netinstall_report::run(&flags)?),
         Verb::DbBackup(flags) => Ok(db_backup::run(&flags)?),
         Verb::Channels { verb } => Ok(channels::run(verb, &release::real::exec())?),
+        Verb::Debs {
+            pins,
+            dir,
+            ca_bundle,
+        } => {
+            let arch = debs::Arch::of(std::env::consts::ARCH)?;
+            let web = UreqWeb::new(&public::roots(&ca_bundle)?);
+            Ok(vec![debs::run(
+                &pins,
+                arch,
+                &dir,
+                &web,
+                &std::thread::sleep,
+            )?])
+        }
+        Verb::NetbootIso {
+            pins,
+            platform,
+            dir,
+            mirror,
+            ca_bundle,
+        } => {
+            let web = UreqWeb::new(&public::roots(&ca_bundle)?);
+            Ok(vec![netboot_iso::run(
+                &pins,
+                &platform,
+                &mirror,
+                &dir,
+                &web,
+                &std::thread::sleep,
+            )?])
+        }
     }
 }
 
@@ -196,7 +281,10 @@ pub fn main() -> ExitCode {
                 | Error::SigningTest(_)
                 | Error::NetinstallReport(_)
                 | Error::DbBackup(_)
-                | Error::Channels(_) => ExitCode::FAILURE,
+                | Error::Channels(_)
+                | Error::Debs(_)
+                | Error::NetbootIso(_)
+                | Error::CaBundle(_) => ExitCode::FAILURE,
             }
         }
     }

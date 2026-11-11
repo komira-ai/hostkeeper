@@ -77,7 +77,7 @@ mod locate;
 mod macos_pkg;
 mod mdm_fetch;
 pub(crate) mod native;
-mod netboot;
+pub(crate) mod netboot;
 #[cfg(test)]
 mod no_network;
 mod package;

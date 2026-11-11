@@ -8,7 +8,8 @@
 //! names ([`DENIED_FILE`]) is not scanned, because its job is to hold the digests of those
 //! names. The licence text ([`LICENCE_FILE`]) and the Sigstore trusted root ([`TRUSTED_ROOT_FILE`])
 //! are scanned by every rule but the date rule, because each is verbatim third-party text with
-//! its authors' dates. Test sources that need a text a
+//! its authors' dates; so are the pin lines of the pinned Debian packages (`.github/debs/*.toml`),
+//! each a package's version and path as Canonical's signed index spells them. Test sources that need a text a
 //! rule refuses build it from pieces at run time, so that this directory passes its own lint.
 
 mod links;
@@ -24,8 +25,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use rules::{
-    EXACT, Finding, LICENCE_FILE, Lists, TRUSTED_ROOT_FILE, dates, emails, entries, home_paths,
-    hostnames, ipv4s, lint, repositories,
+    DEBS_DIR, EXACT, Finding, LICENCE_FILE, Lists, PIN_LINE, TRUSTED_ROOT_FILE, dates, emails,
+    entries, home_paths, hostnames, ipv4s, lint, repositories,
 };
 use sha2::{Digest, Sha256};
 use tlds::{FILE_SUFFIXES, IANA_TEXT, PRIVATE_TLDS, is_tld, parse_tlds};
@@ -675,6 +676,38 @@ fn hygiene_lint_reports_every_finding_at_once() {
         ),
     ];
     assert_eq!(reasons(lint("x.md", &text, &lists)), want);
+}
+
+#[test]
+fn hygiene_lint_skips_dates_only_on_the_pin_lines_of_a_debs_pins_file() {
+    // Catches: a package version that holds its snapshot's date (a pin line of
+    // `.github/debs/<set>.toml`) refused; and the exemption reaching a comment or another line of
+    // that file, a pin line of a file outside the directory or of another kind, or a rule other
+    // than the date rule.
+    let lists = Lists {
+        public: public(),
+        denied: HashSet::new(),
+    };
+    let old = ["2022", "01", "13"].join("");
+    let pin = format!("{PIN_LINE}x\", version = \"1.0+git-{old}.fbbdc39-1\" }},");
+    let pins = format!("{DEBS_DIR}set.toml");
+    assert_clean(lint(&pins, &format!("{pin}\n"), &lists), "a pin line");
+    let refused =
+        |path: &str, line: usize| format!("{path}:{line}: the date `{old}` is before 2026-09-01");
+    let text = format!("# taken {old}\n{pin}\nmirrors = [\"{old}\"]\n");
+    assert_eq!(
+        reasons(lint(&pins, &text, &lists)),
+        [refused(&pins, 1), refused(&pins, 3)]
+    );
+    for other in ["notes/set.toml", &format!("{DEBS_DIR}set.md")] {
+        assert_eq!(
+            reasons(lint(other, &format!("{pin}\n"), &lists)),
+            [refused(other, 1)]
+        );
+    }
+    let ip = ["10", "0", "0", "1"].join(".");
+    let with_ip = format!("{PIN_LINE}x\", version = \"{ip}\" }},\n");
+    assert_eq!(lint(&pins, &with_ip, &lists).len(), 1);
 }
 
 #[test]

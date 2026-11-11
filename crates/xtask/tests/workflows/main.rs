@@ -20,6 +20,8 @@ mod coordinator_update_release_tests;
 mod coordinator_wait;
 mod coordinator_wait_run_tests;
 mod coordinator_wait_tests;
+mod debs;
+mod debs_tests;
 mod desired;
 mod desired_channels_tests;
 mod desired_tests;
@@ -404,8 +406,8 @@ fn a_privileged_job_on_pull_request_is_refused() {
     let step = "      - run: cargo test --workspace --locked\n";
     let cases: [(&str, &str); 4] = [
         (
-            "      - run: sudo apt-get install --yes nftables\n",
-            "job test: privileged on pull_request (`sudo apt-get install --yes nftables`)",
+            "      - run: sudo nft list ruleset\n",
+            "job test: privileged on pull_request (`sudo nft list ruleset`)",
         ),
         (
             "      - run: cargo test --config \"target.'cfg(unix)'.runner = 'sudo'\"\n",

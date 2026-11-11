@@ -1,0 +1,48 @@
+# The packages of qemu-system-arm and qemu-efi-aarch64 (QEMU for arm64 and its AAVMF UEFI
+# firmware), for the job `net-install-arm64` of net-install.yml: the packages
+# `apt-get install --no-install-recommends` added to the ubuntu-24.04 runner image, the
+# packages the image already has left out. `cargo xtask debs` (crates/xtask/src/debs.rs) reads
+# this file; the job restores the packages from the actions cache under a key made of this
+# set's name, the runner's architecture and this file's hash (which covers every SHA-256 below),
+# fetches them from the mirrors below in order only when the cache missed, checks every file
+# against its SHA-256 either way, and installs them with `dpkg --install`. A run needs neither
+# `apt-get update` nor, when its cache hit, any package archive.
+#
+# Each entry is a package of Ubuntu 24.04's release pocket (`noble`), not the `noble-updates`
+# version apt took (QEMU 1:8.2.2+ds-0ubuntu1.18, the firmware 2024.02-2ubuntu0.10): a release
+# pocket's files stay in the archive's pool for as long as the release is supported, while an
+# update's go when the next one supersedes it. The two have the same dependencies. Each was taken
+# from that pocket's `Packages` index (main, `binary-amd64`), the index's own SHA-256 checked
+# against `InRelease`, whose signature is the Ubuntu archive's key. The packages the runner image
+# already has (glib, libslirp, libibverbs and the other libraries QEMU links) are not pinned: dpkg
+# refuses the install, naming the missing one, if the image ever lacks one. Both network-install
+# jobs run on an x86-64 runner, so the set has an `amd64` table only.
+#
+# `mirrors` are tried in order: Canonical's archive, then two mirrors run by others, so that
+# an outage of Canonical's names leaves a job whose cache missed a way to its packages.
+#
+# To move a pin, take the version, path and SHA-256 from the signed `Packages` index, never
+# from a file you downloaded yourself; the cache key changes with this file.
+
+[amd64]
+mirrors = [
+  "https://archive.ubuntu.com/ubuntu",
+  "https://mirrors.edge.kernel.org/ubuntu",
+  "https://mirrors.mit.edu/ubuntu",
+]
+debs = [
+  { package = "libbrlapi0.8", version = "6.6-4ubuntu5", path = "pool/main/b/brltty/libbrlapi0.8_6.6-4ubuntu5_amd64.deb", sha256 = "82272b3090c912e45d92ff7ed200de289c47e504513559377a6f6c5a372cbcf5" },
+  { package = "libcacard0", version = "1:2.8.0-3build4", path = "pool/main/libc/libcacard/libcacard0_2.8.0-3build4_amd64.deb", sha256 = "7a75de14b0fdff2828a3d218a49e7fe4da2df533185ba9ccbabd0647db05e33c" },
+  { package = "libdaxctl1", version = "77-2ubuntu2", path = "pool/main/n/ndctl/libdaxctl1_77-2ubuntu2_amd64.deb", sha256 = "c6629b49c79343fb11ae404aeaa3156f051168da6c6d3d9d8d516acd94705061" },
+  { package = "libfdt1", version = "1.7.0-2build1", path = "pool/main/d/device-tree-compiler/libfdt1_1.7.0-2build1_amd64.deb", sha256 = "274d20dfab9d6b216b5de85446a93f6ce5b2cd82c847b8dfdc508577f76eb96a" },
+  { package = "libndctl6", version = "77-2ubuntu2", path = "pool/main/n/ndctl/libndctl6_77-2ubuntu2_amd64.deb", sha256 = "4eab53588a8fa9e3192635e118c2d91bc069cde46a4a3785c77a0bb1ae001d02" },
+  { package = "libpcsclite1", version = "2.0.3-1build1", path = "pool/main/p/pcsc-lite/libpcsclite1_2.0.3-1build1_amd64.deb", sha256 = "703bacc9204a7ecc24486ac8c96d15d0b9e2c91c385388e132ad4fd8f56f035a" },
+  { package = "libpmem1", version = "1.13.1-1.1ubuntu2", path = "pool/main/p/pmdk/libpmem1_1.13.1-1.1ubuntu2_amd64.deb", sha256 = "8f1be1cc834a98f0cf5c0950153f7f939a0c2c92095e98cd7bb40c752c545c1b" },
+  { package = "librdmacm1t64", version = "50.0-2build2", path = "pool/main/r/rdma-core/librdmacm1t64_50.0-2build2_amd64.deb", sha256 = "553a33a0ec101d2a0784d27b55288067048df80e87f8a63426813d0ffef40250" },
+  { package = "liburing2", version = "2.5-1build1", path = "pool/main/libu/liburing/liburing2_2.5-1build1_amd64.deb", sha256 = "c2aef62accee92a06263c3ad4ef46132c13e409b54296c44792a20491830a7b0" },
+  { package = "libusbredirparser1t64", version = "0.13.0-2.1build1", path = "pool/main/u/usbredir/libusbredirparser1t64_0.13.0-2.1build1_amd64.deb", sha256 = "78be9176f05512bcac369fcada499686b1dd34320965d27e3405c7aacbc4e461" },
+  { package = "qemu-efi-aarch64", version = "2024.02-2", path = "pool/main/e/edk2/qemu-efi-aarch64_2024.02-2_all.deb", sha256 = "9ae5a0a3373296cf37b51fc2470219471bcc0d30fd7876163beddaa01fdd9fe1" },
+  { package = "qemu-system-arm", version = "1:8.2.2+ds-0ubuntu1", path = "pool/main/q/qemu/qemu-system-arm_8.2.2+ds-0ubuntu1_amd64.deb", sha256 = "650392a7e9b747eb4184592114de5acda3b5acfa87e4a0884dac1137c5cd0d33" },
+  { package = "qemu-system-common", version = "1:8.2.2+ds-0ubuntu1", path = "pool/main/q/qemu/qemu-system-common_8.2.2+ds-0ubuntu1_amd64.deb", sha256 = "5621403c1d41428f832aa33cc0e030615aa7f6aa3086c4f6e90882caf90cc9d9" },
+  { package = "qemu-system-data", version = "1:8.2.2+ds-0ubuntu1", path = "pool/main/q/qemu/qemu-system-data_8.2.2+ds-0ubuntu1_all.deb", sha256 = "1d8753eb4d044449ff2ff37669aa0586d881c62964f8aacb48466a96e0ed991f" },
+]

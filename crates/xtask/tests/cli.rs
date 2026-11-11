@@ -821,3 +821,188 @@ fn channels_assume_outside_a_job_with_a_token_is_a_failure_with_status_1() {
     );
     assert!(!d.join("env").exists());
 }
+
+/// A CA bundle of one self-signed certificate, in `d`: what `--ca-bundle` reads before any
+/// download.
+fn ca_bundle(d: &Path) -> String {
+    let certified =
+        rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).expect("a certificate");
+    let path = d.join("ca.pem");
+    std::fs::write(&path, certified.cert.pem()).expect("the bundle");
+    path.to_str().expect("utf8").to_owned()
+}
+
+const DEB: &[u8] = b"a pinned package";
+
+/// A pins file of `.github/debs` pinning `DEB` as `a 1.0` for both architectures, in `d`.
+fn debs_pins(d: &Path) -> String {
+    let table = |arch: &str| {
+        format!(
+            "[{arch}]\nmirrors = [\"https://mirror.example/ubuntu\"]\ndebs = [\n  {{ package = \"a\", version = \"1.0\", path = \"pool/main/a/a_1.0_all.deb\", sha256 = \"{}\" }},\n]\n",
+            sha256(DEB)
+        )
+    };
+    let path = d.join("pins.toml");
+    std::fs::write(&path, format!("{}{}", table("amd64"), table("arm64"))).expect("pins");
+    path.to_str().expect("utf8").to_owned()
+}
+
+#[test]
+fn debs_keeps_a_restored_set_with_status_0_and_refuses_a_stray_file_with_status_1() {
+    // Proves: `debs` reaches its verb with `--pins`, `--dir` and `--ca-bundle`; a set the cache
+    // restored is kept with one line and no download (so no network); a file no pin names fails
+    // with status 1 naming it, a bundle that cannot be read fails with status 1 before anything
+    // else, and a missing `--dir` is a usage error (2).
+    let d = dir("debs");
+    let pins = debs_pins(&d);
+    let bundle = ca_bundle(&d);
+    let set = d.join("set");
+    std::fs::create_dir(&set).expect("set");
+    std::fs::write(set.join("a_1.0_all.deb"), DEB).expect("the restored deb");
+    let set_arg = set.to_str().expect("utf8");
+    let args = [
+        "debs",
+        "--pins",
+        &pins,
+        "--dir",
+        set_arg,
+        "--ca-bundle",
+        &bundle,
+    ];
+    let o = run(&d, &args);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        format!("ok: the cached a_1.0_all.deb has SHA-256 {}\n", sha256(DEB))
+    );
+
+    std::fs::write(set.join("evil.deb"), b"x").expect("a stray file");
+    let o = run(&d, &args);
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        stderr(&o),
+        format!("xtask: {set:?} holds \"evil.deb\", which no pin names; nothing was installed\n")
+    );
+
+    let missing = d.join("missing.pem");
+    let missing_arg = missing.to_str().expect("utf8");
+    let o = run(
+        &d,
+        &[
+            "debs",
+            "--pins",
+            &pins,
+            "--dir",
+            set_arg,
+            "--ca-bundle",
+            missing_arg,
+        ],
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        stderr(&o).starts_with(&format!("xtask: --ca-bundle {}: ", missing.display())),
+        "{}",
+        stderr(&o)
+    );
+
+    let o = run(&d, &["debs", "--pins", &pins]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+}
+
+/// Pins of both boot sets whose linux-arm64 ISO is `ISO` (the other files placeholders), in `d`.
+fn netboot_pins(d: &Path, iso: &[u8]) -> String {
+    let other = "a".repeat(64);
+    let set = |platform: &str, arch: &str, url: &str, bytes: usize, sha: &str| {
+        format!(
+            "[{platform}.iso]\nurl = \"{url}\"\nsums = \"https://cd.example/SHA256SUMS\"\nbytes = {bytes}\nsha256 = \"{sha}\"\n\
+             [{platform}.shim]\niso_path = \"pool/s/shim_1_{arch}.deb\"\ndeb_path = \"usr/s\"\nbytes = 1\nsha256 = \"{other}\"\n\
+             [{platform}.grub]\niso_path = \"pool/g/grub_1_{arch}.deb\"\ndeb_path = \"usr/g\"\nbytes = 1\nsha256 = \"{other}\"\n\
+             [{platform}.kernel]\niso_path = \"casper/vmlinuz\"\nbytes = 1\nsha256 = \"{other}\"\n\
+             [{platform}.initrd]\niso_path = \"casper/initrd\"\nbytes = 1\nsha256 = \"{other}\"\n"
+        )
+    };
+    let text = format!(
+        "ubuntu = \"24.04.5\"\n{}{}",
+        set(
+            "linux-arm64",
+            "arm64",
+            "https://cd.example/r/u-arm64.iso",
+            iso.len(),
+            &sha256(iso)
+        ),
+        set(
+            "linux-x86_64",
+            "amd64",
+            "https://cd.example/r/u-amd64.iso",
+            1,
+            &other
+        ),
+    );
+    let path = d.join("pins.toml");
+    std::fs::write(&path, text).expect("pins");
+    path.to_str().expect("utf8").to_owned()
+}
+
+#[test]
+fn netboot_iso_keeps_a_fetched_iso_with_status_0_and_refuses_a_bad_mirror_with_status_1() {
+    // Proves: `netboot-iso` reaches its verb with `--pins`, `--platform`, `--dir`, each `--mirror`
+    // and `--ca-bundle`; an ISO already there with the pinned size and digest is kept with one
+    // line and no download; a mirror that is not an https:// base fails with status 1 naming it,
+    // before any download; a missing `--platform` is a usage error (2); a bundle that cannot be
+    // read fails with status 1 naming it.
+    let d = dir("netboot-iso");
+    let iso = b"an ISO's bytes";
+    let pins = netboot_pins(&d, iso);
+    let bundle = ca_bundle(&d);
+    let into = d.join("iso");
+    std::fs::create_dir(&into).expect("iso dir");
+    std::fs::write(into.join("u-arm64.iso"), iso).expect("the ISO");
+    let into_arg = into.to_str().expect("utf8");
+    let base = [
+        "netboot-iso",
+        "--pins",
+        &pins,
+        "--platform",
+        "linux-arm64",
+        "--dir",
+        into_arg,
+        "--ca-bundle",
+        &bundle,
+        "--mirror",
+        "https://mirror.example/cdimage",
+    ];
+    let o = run(&d, &base);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert_eq!(
+        stdout(&o),
+        format!(
+            "ok: the kept u-arm64.iso has {} bytes and SHA-256 {}\n",
+            iso.len(),
+            sha256(iso)
+        )
+    );
+
+    let o = run(
+        &d,
+        &[&base[..], &["--mirror", "http://mirror.example/x"]].concat(),
+    );
+    assert_eq!(o.status.code(), Some(1));
+    assert_eq!(
+        stderr(&o),
+        "xtask: the mirror \"http://mirror.example/x\" is not an https:// URL with no trailing '/', query, fragment or user\n"
+    );
+
+    let o = run(&d, &["netboot-iso", "--pins", &pins, "--dir", into_arg]);
+    assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
+
+    let missing = d.join("missing.pem");
+    let mut no_bundle = base.to_vec();
+    no_bundle[8] = missing.to_str().expect("utf8");
+    let o = run(&d, &no_bundle);
+    assert_eq!(o.status.code(), Some(1));
+    assert!(
+        stderr(&o).starts_with(&format!("xtask: --ca-bundle {}: ", missing.display())),
+        "{}",
+        stderr(&o)
+    );
+}
