@@ -324,6 +324,8 @@ mod group_decision_support;
 #[cfg(test)]
 mod group_decision_tests;
 #[cfg(test)]
+mod group_first_install_tests;
+#[cfg(test)]
 mod group_force_tests;
 #[cfg(test)]
 mod group_incident_tests;

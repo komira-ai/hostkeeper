@@ -28,7 +28,7 @@ use crate::host_groups::GroupName;
 use crate::membership::{HostCounts, Member, Membership};
 use crate::operator::{entry_proto, hold_proto};
 use crate::ops::{FailureAck, Halt, HaltAck, OpsState, ServiceOps};
-use crate::status::{ServiceHostStatus, ServiceStatus, Status};
+use crate::status::{ServiceHostStatus, ServiceStatus, Status, UnheardHost};
 
 /// A count as the proto's `uint32`: the number itself, or the largest `uint32` when it does not
 /// fit.
@@ -112,11 +112,7 @@ fn service_status(
         service: name.to_owned(),
         desired: one.desired.as_ref().map(desired_state),
         convergence: Some(converged),
-        hosts: one
-            .hosts
-            .iter()
-            .map(|host| service_host(name, host, one, ops))
-            .collect(),
+        hosts: hosts(name, one, ops),
         up: count(one.up),
         slots_held: count(one.slots_held),
         marks: marks.map(service_marks),
@@ -265,6 +261,56 @@ fn failure_ack(ack: &FailureAck) -> proto::FailureAck {
     proto::FailureAck {
         node_id: ack.node_id.clone(),
         report: Some(update_result(&ack.report)),
+    }
+}
+
+/// The hosts of `service`, whose status is `one`, by node id: each host it heard, and each node it
+/// places and has no heartbeat of ([`unheard_host`]), so that a package no host of its group runs
+/// yet shows every host of the group and why it is not ordered.
+fn hosts(service: &str, one: &ServiceStatus, ops: &OpsState) -> Vec<proto::ServiceHost> {
+    let mut hosts: Vec<proto::ServiceHost> = one
+        .hosts
+        .iter()
+        .map(|host| service_host(service, host, one, ops))
+        .chain(
+            one.unheard
+                .iter()
+                .map(|host| unheard_host(service, host, one, ops)),
+        )
+        .collect();
+    hosts.sort_by(|a, b| a.node_id.cmp(&b.node_id));
+    hosts
+}
+
+/// A node `service` places and has no heartbeat of, as the service sees it: where it stands
+/// (`missing` while it is to install the service, `excluded`, `down`, `unmanaged`) and the gate's
+/// reason, such as `no_build_for_host` for a host the desired version's release has no entry it can
+/// install for. Nothing the host did not say of the service is said: no beat, version, health or
+/// update, it is not up and holds no slot, and it has a stage only when the plan counts it.
+fn unheard_host(
+    service: &str,
+    host: &UnheardHost,
+    one: &ServiceStatus,
+    ops: &OpsState,
+) -> proto::ServiceHost {
+    let node_id = host.node_id.as_str();
+    proto::ServiceHost {
+        node_id: host.node_id.clone(),
+        role: host.role.clone(),
+        live: host.live,
+        excluded_reason: host.excluded_reason.clone(),
+        view: Some(proto::HostService {
+            service: service.to_owned(),
+            gate_reason: gate_reason(host.hold).into(),
+            membership: membership(Some(host.membership)).into(),
+            holds: holding(&ops.holds, service, node_id, &host.role)
+                .map(hold_proto)
+                .collect(),
+            excluded_reason: host.excluded_reason.clone(),
+            stage: one.plan.as_ref().and_then(|plan| stage_of(plan, node_id)),
+            ..proto::HostService::default()
+        }),
+        beat: None,
     }
 }
 
