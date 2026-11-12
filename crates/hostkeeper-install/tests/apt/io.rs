@@ -195,6 +195,26 @@ fn a_download_that_leaves_no_usable_file_fails() {
     }
 }
 
+/// Proves an update that leaves no `lists/partial/`, whose owner and mode the archives directory
+/// takes before the download, fails the stage with `io_error` naming the archives directory, and
+/// nothing is downloaded.
+#[test]
+fn a_download_with_no_lists_partial_to_copy_is_an_io_error() {
+    let env = Env::new("apt-no-partial");
+    let order = env.publish(&deb(V1));
+    env.host.edit(|s| s.faults.no_lists_partial = true);
+    let (result, _) = env.stage(&order);
+    let failure = result.expect_err("fails");
+    assert_io(&failure);
+    assert!(
+        failure
+            .detail()
+            .starts_with("the archives directory could not be given apt's download owner: "),
+        "{failure}"
+    );
+    assert!(env.host.calls_of("apt-get download").is_empty());
+}
+
 /// Proves a records port that fails is `io_error`: the holder at the stage's start (before any
 /// tool), the load at the activate's start, the first save (before the install) and the remove's
 /// load and clear.

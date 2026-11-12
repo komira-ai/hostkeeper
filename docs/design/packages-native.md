@@ -121,7 +121,8 @@ differently:
   `activate` (install, upgrade, downgrade and rollback) and around each `dpkg --purge` try of `remove`. `invoke-rc.d`
   and `deb-systemd-invoke` (what debhelper's generated scripts call) honour it, so through them no script of the
   package, nor of a dependency apt installs in the same run, starts, stops or restarts a service; a script that calls
-  `systemctl` itself is not held back. The file is removed afterwards, on success and on failure, and a stale one (a
+  `systemctl` itself is not held back. Both runs also carry `NEEDRESTART_SUSPEND=1` and `NEEDRESTART_MODE=l`, so
+  needrestart's apt hook restarts nothing either. The file is removed afterwards, on success and on failure, and a stale one (a
   killed run) is removed at daemon start before any package-manager call. A `policy-rc.d` that is not hostkeeper's own
   text, an operator's, is left untouched and not replaced, and then rules. A `postinst` may enable the package's units,
   and they stay enabled; hostkeeper starts them at `cutover`.

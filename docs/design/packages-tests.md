@@ -143,7 +143,9 @@ run only in the device jobs (`privileged`, `macos-device`), whose tests count to
 - **The `apt` installer (A7; `crates/hostkeeper-install/tests/apt.rs` with the command port's fake, device tests in
   `crates/hostkeeper-privileged/tests/install_apt.rs`).** Every apt run's command line carries every option of
   packages-repositories.md section 4.2, its work directory and no host path for lists or caches (the fake records each
-  call). Each row of section 4.5 gives its outcome and changes nothing on the host: `repository_unknown`;
+  call); the install and the purge, and no other run, carry `DEBIAN_FRONTEND=noninteractive`, `NEEDRESTART_SUSPEND=1`
+  and `NEEDRESTART_MODE=l`; the download runs in an archives directory with the owner, group and mode of the lists'
+  `partial/`, and an update that leaves no `partial/` fails the stage with `io_error` before the download. Each row of section 4.5 gives its outcome and changes nothing on the host: `repository_unknown`;
   `fetch_failed`; `signature` for each of apt's signature errors; `not_in_repository`, deferred, for a missing version
   and for a stanza of another architecture only; `package_digest_mismatch` for the index's digest; `store_digest_mismatch` for a downloaded file that is not the pin;
   `package_too_large` at `max_package_bytes` plus one, and a package of exactly `max_package_bytes` accepted;
