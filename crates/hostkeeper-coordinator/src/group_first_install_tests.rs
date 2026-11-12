@@ -322,3 +322,45 @@ async fn the_status_shows_hosts_that_run_the_package_and_hosts_that_do_not_once_
         ]
     );
 }
+
+/// Proves: a host of the group that has been silent past the down limit is shown `down`, not live,
+/// with no beat, while the hosts that went on beating are shown `missing` and live; the down host is
+/// in no stage of the plan.
+///
+/// Catches: a silent host dropped from the rows, or shown live or in a stage.
+#[tokio::test]
+async fn a_silent_host_of_the_group_is_shown_down_and_not_live() {
+    let farm = farm("fi-down", canary_first(), &[]).await;
+    farm.deploy("", "tierstore", "0.3.96", 1).await;
+    farm.world.rig.at(2_000 + 60);
+    for host in ["node-01", "node-02", "node-03", "node-04", "node-05"] {
+        farm.order(host, &RUNS);
+    }
+
+    let status = status(&farm);
+    let silent = status
+        .hosts
+        .iter()
+        .find(|host| host.node_id == "node-06")
+        .expect("the silent host is shown");
+    let view = silent.view.as_ref().expect("a view");
+    assert_eq!(
+        (
+            silent.live,
+            view.membership(),
+            view.stage,
+            silent.beat.is_some()
+        ),
+        (false, proto::Membership::Down, None, false)
+    );
+    for host in status.hosts.iter().filter(|host| host.node_id != "node-06") {
+        let view = host.view.as_ref().expect("a view");
+        assert_eq!(
+            (host.live, view.membership()),
+            (true, MISSING),
+            "{}",
+            host.node_id
+        );
+    }
+    assert_eq!(status.hosts.len(), 6);
+}
