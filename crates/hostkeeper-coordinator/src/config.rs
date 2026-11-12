@@ -487,7 +487,7 @@ pub struct Parts {
 /// # Errors
 /// [`StartError`]: a file is missing, unreadable or refused (the text names the flag or the
 /// file; the ops file must be one this build reads), `--ui-dir` is missing or not a directory,
-/// `--private-listen` (without `--private-listen-wildcard`) or `--lan-listen` is a wildcard
+/// `--private-listen` (without `--private-listen-wildcard`), `--mdm-listen` (without `--mdm-listen-wildcard`) or `--lan-listen` is a wildcard
 /// address, `--health-listen` is not a
 /// loopback address, `--quiet-secs` is below two
 /// heartbeat intervals,

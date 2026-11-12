@@ -101,7 +101,7 @@ pub enum Devices<'a> {
 #[command(group(clap::ArgGroup::new("mdm_gate").args(["mdm_api_url", "mdm_listen"]).multiple(true)))]
 pub struct MdmFlags {
     /// The MDM listener of the Macs and of a host's apt: the address of one interface of the LAN
-    /// (no wildcard) and its port, as `192.0.2.7:443`. It serves `PUT /checkin` and `PUT /mdm`
+    /// (no wildcard unless --mdm-listen-wildcard is given) and its port, as `192.0.2.7:443`. It serves `PUT /checkin` and `PUT /mdm`
     /// over TLS with the certificate of the MDM name that the setup holds
     /// (`docs/design/coordinator-mdm.md` section 4.1), and answers nothing until that certificate
     /// is stored. With it the commands of the gate are queued in the coordinator and the Macs'
@@ -110,6 +110,16 @@ pub struct MdmFlags {
     /// Requires the enrollment store, as the gate does.
     #[arg(long, requires_all = ["ca_key_file", "records_store"])]
     pub mdm_listen: Option<SocketAddr>,
+    /// Take a wildcard --mdm-listen (`0.0.0.0` or `[::]`): the Macs' listener then listens on
+    /// every interface of the coordinator's network namespace. Give it where the address of the
+    /// LAN interface is not the coordinator's own, such as a Swarm task on an overlay network
+    /// whose port is published on the host in `mode=host`; the Macs reach the server by the
+    /// MDM name, whose A record is the host's LAN address, and the certificate is the MDM name's,
+    /// so no address is named in it. No address is trusted: the listener answers what it answers
+    /// without the flag. An address of one interface is taken with it as without it. Requires
+    /// --mdm-listen.
+    #[arg(long, requires = "mdm_listen")]
+    pub mdm_listen_wildcard: bool,
     /// How long, in seconds, a command sent to a Mac that has not answered waits before it is
     /// queued again and pushed (`docs/design/coordinator-mdm.md` section 5.2). Delivery is at
     /// least once: a Mac that answers later sees the command twice.

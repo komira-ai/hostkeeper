@@ -3,7 +3,7 @@
 use super::{Serve, StartError};
 
 /// Refuses the listen addresses `flags` name that the start does not take: a wildcard
-/// `--private-listen` unless `--private-listen-wildcard` is given, a wildcard `--lan-listen` or `--mdm-listen`,
+/// `--private-listen` unless `--private-listen-wildcard` is given, a wildcard `--lan-listen`, a wildcard `--mdm-listen` unless `--mdm-listen-wildcard` is given,
 /// and a `--health-listen` that is not a loopback address. An IPv4 address written as IPv6 is
 /// judged as the IPv4 address it is.
 pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
@@ -19,7 +19,7 @@ pub(super) fn check_listen(flags: &Serve) -> Result<(), StartError> {
     if let Some(mdm) = flags
         .mdm
         .mdm_listen
-        .filter(|mdm| mdm.ip().to_canonical().is_unspecified())
+        .filter(|mdm| !flags.mdm.mdm_listen_wildcard && mdm.ip().to_canonical().is_unspecified())
     {
         return Err(StartError::MdmListen(mdm));
     }
