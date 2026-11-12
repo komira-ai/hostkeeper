@@ -120,14 +120,14 @@ fn a_resumed_uninstall_whose_target_json_does_not_read_is_interrupted() {
 }
 
 /// Proves an uninstall resumed with the `target.json` of `current` gone still purges the
-/// package, by the installer the record names and the bound the installer falls back to
-/// (120 seconds: 60 tries when the lock is held), and removes the service.
+/// package, by the installer the record names, waiting for a held lock as long as
+/// `--package-lock-wait-secs` says (10 seconds: 6 tries), and removes the service.
 ///
 /// Catches: a resumed uninstall that cannot finish because the entry it was staged for is gone.
 #[test]
 fn a_resumed_uninstall_without_target_json_purges_by_the_recorded_installer() {
     let apt = AptRig::new("apt-resume-no-target");
-    let daemon = apt.daemon();
+    let daemon = apt.daemon_waiting(10);
     let one = apt.publish(package("1.0.0-1"));
     assert_eq!(
         daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1)),
@@ -150,7 +150,7 @@ fn a_resumed_uninstall_without_target_json_purges_by_the_recorded_installer() {
         matches!(&reply, Reply::Finished { reason: Some(r), .. } if r == "package_manager_busy"),
         "{reply:?}"
     );
-    assert_eq!(apt.host.calls_of("dpkg --purge").len() - before, 60);
+    assert_eq!(apt.host.calls_of("dpkg --purge").len() - before, 6);
     apt.host.edit(|state| state.faults.busy.clear());
     assert_eq!(daemon.order(&uninstall(SERVICE, 4)), succeeded());
     assert_eq!(apt.host.installed(SERVICE), None);

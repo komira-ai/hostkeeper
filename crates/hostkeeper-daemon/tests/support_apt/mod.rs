@@ -134,6 +134,18 @@ impl AptRig {
         Daemon::new(config(), self.rig.dirs(), self.ports(), OWN)
     }
 
+    /// The daemon of [`AptRig::daemon`], whose steps wait `secs` at most for the package
+    /// manager's lock (`--package-lock-wait-secs`).
+    pub fn daemon_waiting(&self, secs: u64) -> Daemon {
+        let ports = self.ports();
+        let repository = (*ports.repository).clone().with_lock_wait_secs(secs);
+        let ports = Ports {
+            repository: Arc::new(repository),
+            ..ports
+        };
+        Daemon::new(config(), self.rig.dirs(), ports, OWN)
+    }
+
     /// Publishes `deb` in the repository, answers its pin.
     pub fn publish(&self, deb: Deb) -> String {
         self.host.publish(URI, deb)

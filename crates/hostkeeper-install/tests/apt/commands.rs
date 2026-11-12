@@ -14,9 +14,12 @@ fn full_install() -> Env {
 }
 
 /// Proves every apt run of a stage and an activate starts with exactly the options of section
-/// 4.2 for the service's work directory, whose dpkg lock timeout is the step's bound, and that
-/// no argument names a host path for the lists, the caches or the sources.
-/// Catches: a run that falls back to the host's `/etc/apt` or `/var/lib/apt`.
+/// 4.2 for the service's work directory, whose dpkg lock timeout is the step's bound, but for
+/// the install, whose timeout is the installer's `lock_wait_secs` and whose run is bounded by the
+/// step's bound and that wait together; and that no argument names a host path for the lists,
+/// the caches or the sources.
+/// Catches: a run that falls back to the host's `/etc/apt` or `/var/lib/apt`, or an install that
+/// waits for the lock for the step's bound rather than the daemon's setting.
 #[test]
 fn every_apt_run_carries_every_option_of_the_work_directory() {
     let env = full_install();
@@ -27,7 +30,14 @@ fn every_apt_run_carries_every_option_of_the_work_directory() {
             continue;
         }
         seen += 1;
-        let expected = options(&work, call.run.bound_secs);
+        let lock_secs = match call.label.as_str() {
+            "apt-get install" => {
+                assert_eq!(call.run.bound_secs, ACTIVATE_SECS + LOCK_WAIT_SECS);
+                LOCK_WAIT_SECS
+            }
+            _ => call.run.bound_secs,
+        };
+        let expected = options(&work, lock_secs);
         assert_eq!(
             call.run.args[..expected.len()],
             expected[..],
@@ -227,7 +237,50 @@ fn the_last_line_of_an_output_is_the_one_a_failure_quotes() {
 /// Proves the host's pause returns (it sleeps for the seconds it is given, here none).
 #[test]
 fn the_hosts_pause_returns() {
-    hostkeeper_install::repository::Pause::pause(&hostkeeper_install::repository::tools::Sleep, 0);
+    use hostkeeper_install::repository::{Pause, tools::Sleep};
+    Sleep.pause(0);
+}
+
+/// The child half of [`the_hosts_lock_wait_report_prints_nothing`]: the host's pause told of a
+/// wait, between two markers on standard output. Run alone it only returns.
+#[test]
+fn the_hosts_lock_wait_report_child() {
+    use hostkeeper_install::repository::{LockWait, Pause, tools::Sleep};
+    use std::io::Write;
+    print!("<<");
+    Sleep.lock_wait(&LockWait {
+        tool: Tool::Dpkg,
+        waited_secs: 0,
+        bound_secs: 1,
+        holder: "dpkg: error: dpkg frontend lock was locked by another process with pid 4321"
+            .to_owned(),
+    });
+    print!(">>");
+    std::io::stdout().flush().expect("stdout flushes");
+}
+
+/// Proves the host's pause reports a wait nowhere: the child test, run in a process of its own
+/// (this test binary, given that one test), exits 0, writes nothing to standard error, and
+/// writes nothing to standard output between its two markers.
+/// Catches: a host pause that prints the wait, which would land in the output of the tool runs a
+/// privileged test reads.
+#[test]
+fn the_hosts_lock_wait_report_prints_nothing() {
+    let exe = std::env::current_exe().expect("the test binary");
+    let run = std::process::Command::new(exe)
+        .args([
+            "--exact",
+            "commands::the_hosts_lock_wait_report_child",
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .output()
+        .expect("the test binary runs");
+    let stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(run.status.success(), "{stdout}");
+    assert_eq!(String::from_utf8_lossy(&run.stderr), "");
+    assert!(stdout.contains("<<>>"), "{stdout}");
+    assert!(stdout.contains("1 passed"), "the child ran: {stdout}");
 }
 
 /// Proves the record's JSON form leaves out an empty link set and a false `pending`, and reads an

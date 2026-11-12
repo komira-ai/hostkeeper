@@ -24,8 +24,12 @@ use hostkeeper_install::repository::tools::ToolError;
 use hostkeeper_install::repository::{Run, Tool, ToolOutput, Tools};
 use sha2::{Digest, Sha256};
 
+#[path = "apt_fake_lock.rs"]
+mod lock;
 #[path = "apt_fake_units.rs"]
 mod units;
+
+use lock::{busy, busy_or_interrupted};
 
 /// The events the fake and the records port both log, in order.
 pub type Events = Arc<Mutex<Vec<String>>>;
@@ -264,7 +268,8 @@ pub enum Download {
 /// The faults a test injects.
 #[derive(Clone, Debug, Default)]
 pub struct Faults {
-    /// Per verb (`simulate`, `install`, `purge`): the tries the package manager's lock is held.
+    /// Per verb (`simulate`, `install`, `purge`, `hold` for both of apt-mark's): the tries the
+    /// package manager's lock is held.
     pub busy: BTreeMap<&'static str, u32>,
     /// dpkg was interrupted before the run.
     pub interrupted: bool,
@@ -681,35 +686,6 @@ fn show(run: &Run) -> ToolOutput {
     }
 }
 
-fn busy_or_interrupted(s: &mut State, verb: &'static str) -> Option<ToolOutput> {
-    let apt = verb != "purge";
-    if let Some(left) = s.faults.busy.get_mut(verb).filter(|left| **left > 0) {
-        *left -= 1;
-        return Some(match apt {
-            true => out(
-                100,
-                "",
-                "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 \
-                 (unattended-upgr)\nE: Unable to acquire the dpkg frontend lock \
-                 (/var/lib/dpkg/lock-frontend), is another process using it?\n",
-            ),
-            false => out(
-                2,
-                "",
-                "dpkg: error: dpkg frontend lock was locked by another process with pid 4321\n",
-            ),
-        });
-    }
-    s.faults.interrupted.then(|| {
-        let text = "dpkg was interrupted, you must manually run 'dpkg --configure -a' to \
-                    correct the problem.";
-        match apt {
-            true => out(100, "", &format!("E: {text}\n")),
-            false => out(2, "", &format!("dpkg: error: {text}\n")),
-        }
-    })
-}
-
 fn simulate(s: &mut State, run: &Run) -> ToolOutput {
     if let Some(output) = busy_or_interrupted(s, "simulate") {
         return output;
@@ -931,6 +907,9 @@ fn query(s: &State, run: &Run) -> ToolOutput {
 }
 
 fn mark(s: &mut State, run: &Run) -> ToolOutput {
+    if let Some(output) = busy(s, "hold") {
+        return output;
+    }
     let package = run.args.last().cloned().unwrap_or_default();
     let hold = run.args.first().is_some_and(|a| a == "hold");
     match s.installed.get_mut(&package) {

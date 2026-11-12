@@ -93,6 +93,12 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/updater/state";
 pub const DEFAULT_PACKAGES_DIR: &str = "/var/lib/hostkeeper/packages";
 /// The default of `--facts-file`, on Linux and on a Mac.
 pub const DEFAULT_FACTS_FILE: &str = "/var/lib/hostkeeper/facts.json";
+/// The default of `--package-lock-wait-secs`: five minutes, the length of a usual unattended
+/// upgrade.
+pub const DEFAULT_PACKAGE_LOCK_WAIT_SECS: u64 = 300;
+/// The largest `--package-lock-wait-secs`: an hour, the longest wait a step may ask for
+/// (`hostkeeper_steps::runner::MAX_RETRY_SECS`).
+pub const MAX_PACKAGE_LOCK_WAIT_SECS: u64 = 3600;
 /// The variable systemd sets for a `Type=notify` unit: the address of its notify socket.
 pub const NOTIFY_SOCKET: &str = "NOTIFY_SOCKET";
 /// The variable systemd sets for a unit with `WatchdogSec=`: the watchdog's timeout in
@@ -158,6 +164,16 @@ pub struct DaemonFlags {
     /// for it after.
     #[arg(long)]
     pub ready_file: Option<PathBuf>,
+    /// The seconds a step of the repository installer waits at most for the host's package
+    /// manager's lock, from 1 to 3600: apt's own wait (`DPkg::Lock::Timeout`) for an install,
+    /// and a try every 2 seconds for `dpkg --purge` and `apt-mark`. A lock still held then defers
+    /// the order (`package_manager_busy`), which halts nothing.
+    #[arg(
+        long,
+        default_value_t = DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        value_parser = clap::value_parser!(u64).range(1..=MAX_PACKAGE_LOCK_WAIT_SECS),
+    )]
+    pub package_lock_wait_secs: u64,
     /// The heartbeat loop's flag: `--heartbeat-secs`.
     #[command(flatten)]
     pub link: LoopFlags,
@@ -174,6 +190,7 @@ impl DaemonFlags {
             facts_file: self.facts_file.clone(),
             run_dir: Platform::host().run_dir,
             trusted_uid: 0,
+            package_lock_wait_secs: self.package_lock_wait_secs,
         }
     }
 }
@@ -645,7 +662,8 @@ pub fn host_ports(
         repositories,
         Owner::ROOT,
     )
-    .with_macos_pkg(macos_pkg);
+    .with_macos_pkg(macos_pkg)
+    .with_lock_wait_secs(settings.package_lock_wait_secs);
     if let Some(dir) = &files.repositories {
         repository = repository.with_managed(Managed {
             dir: dir.clone(),

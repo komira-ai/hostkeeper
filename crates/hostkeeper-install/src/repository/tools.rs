@@ -203,13 +203,30 @@ pub trait Tools: Send + Sync {
     fn run(&self, run: &Run) -> Result<ToolOutput, ToolError>;
 }
 
-/// Waits between two tries of a purge whose lock is held (dpkg has no lock timeout of its own).
+/// A wait for the package manager's lock, as it is reported while it lasts (`lock_wait`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LockWait {
+    /// The tool that found the lock held: `dpkg` (the purge) or `apt-mark` (the hold).
+    pub tool: Tool,
+    /// The seconds waited so far.
+    pub waited_secs: u64,
+    /// The seconds the step waits at most (`--package-lock-wait-secs`).
+    pub bound_secs: u64,
+    /// The tool's last line, which names the process holding the lock.
+    pub holder: String,
+}
+
+/// Waits between two tries of a tool whose lock is held (dpkg and apt-mark have no lock timeout
+/// of their own), and says that it waits.
 pub trait Pause: Send + Sync {
     /// Waits `secs` seconds.
     fn pause(&self, secs: u64);
+
+    /// Reports a wait for the package manager's lock that is going on.
+    fn lock_wait(&self, wait: &LockWait);
 }
 
-/// The host's pause: the thread sleeps.
+/// The host's pause: the thread sleeps; a wait is reported nowhere.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Sleep;
 
@@ -217,4 +234,6 @@ impl Pause for Sleep {
     fn pause(&self, secs: u64) {
         std::thread::sleep(std::time::Duration::from_secs(secs));
     }
+
+    fn lock_wait(&self, _wait: &LockWait) {}
 }

@@ -53,7 +53,7 @@ impl RepositoryInstaller<'_> {
             // is let go.
             let _policy = policy::Guard::hold(&self.dirs.root)
                 .map_err(|e| io_failure("the policy-rc.d file", e))?;
-            backend.install(tools, &work, package, version, bound)?;
+            backend.install(tools, &work, package, version, bound, self.lock_wait_secs)?;
         }
         match backend.installed(tools, package, bound)? {
             Some(found) if found.complete & (found.version == version) => {}
@@ -77,7 +77,7 @@ impl RepositoryInstaller<'_> {
                 ));
             }
         }
-        backend.hold(tools, package, true, bound)?;
+        self.hold_waiting(package, true, bound)?;
         next.links = enable::apply(&self.dirs.root, &wanted, &next.links)
             .map_err(|e| io_failure("the units' enablement links", e))?;
         self.reload(bound)?;

@@ -82,6 +82,9 @@ pub struct Settings {
     pub run_dir: PathBuf,
     /// The account the daemon config must be owned by: root (0) on a host.
     pub trusted_uid: u32,
+    /// The seconds a step of the repository installer waits for the package manager's lock
+    /// (`--package-lock-wait-secs`).
+    pub package_lock_wait_secs: u64,
 }
 
 impl Settings {

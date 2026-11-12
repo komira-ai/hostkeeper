@@ -6,7 +6,9 @@
 //! directory's copy of the one entry as the only source, no trusted key but the entry's
 //! `Signed-By` keyring, no preference, the lists and the archives in the work directory and no
 //! package cache, no unauthenticated or insecure repository, no recommends or suggests, and the
-//! dpkg lock's timeout within the step's bound. Only `apt-get update` and `apt-get download`
+//! dpkg lock's timeout: the step's bound, but for the install, which waits for the lock up to
+//! the installer's `lock_wait_secs` and is bounded by the step's bound and that wait together.
+//! Only `apt-get update` and `apt-get download`
 //! reach the network, confined to the work directory; every other run is offline.
 //!
 //! | Work directory              | Version directory's `apt/` |
@@ -44,8 +46,9 @@ pub const NOT_KEPT: [&str; 3] = ["lock", "partial", "auxfiles"];
 #[derive(Clone, Copy, Debug, Default)]
 pub struct Apt;
 
-/// The options of section 4.2 every apt run in `work` passes, the dpkg lock's timeout `bound`.
-pub fn options(work: &Path, bound: u64) -> Vec<String> {
+/// The options of section 4.2 every apt run in `work` passes, the dpkg lock's timeout
+/// `lock_secs`.
+pub fn options(work: &Path, lock_secs: u64) -> Vec<String> {
     let w = work.display();
     [
         "Dir::Etc::SourceList=/dev/null".to_owned(),
@@ -63,7 +66,7 @@ pub fn options(work: &Path, bound: u64) -> Vec<String> {
         "Acquire::AllowDowngradeToInsecureRepositories=false".to_owned(),
         "APT::Install-Recommends=false".to_owned(),
         "APT::Install-Suggests=false".to_owned(),
-        format!("DPkg::Lock::Timeout={bound}"),
+        format!("DPkg::Lock::Timeout={lock_secs}"),
     ]
     .into_iter()
     .flat_map(|option| ["-o".to_owned(), option])
@@ -75,9 +78,19 @@ fn pinned(package: &str, version: &str) -> String {
     format!("{package}={version}")
 }
 
-/// An apt run in `work`: the options, then `rest`.
+/// An apt run in `work`: the options, then `rest`, the lock waited for within its `bound`.
 fn apt(tool: Tool, work: &Path, bound: u64, rest: &[&str]) -> Run {
-    let mut args = options(work, bound);
+    with_options(tool, work, bound, bound, rest)
+}
+
+/// An apt run in `work` that waits up to `lock_secs` for the dpkg lock on top of its `bound`.
+fn locking(tool: Tool, work: &Path, bound: u64, lock_secs: u64, rest: &[&str]) -> Run {
+    with_options(tool, work, lock_secs, bound.saturating_add(lock_secs), rest)
+}
+
+/// An apt run in `work` bounded by `bound`, whose options wait `lock_secs` for the lock.
+fn with_options(tool: Tool, work: &Path, lock_secs: u64, bound: u64, rest: &[&str]) -> Run {
+    let mut args = options(work, lock_secs);
     args.extend(rest.iter().map(|s| (*s).to_owned()));
     Run::offline(tool, args, bound)
 }
@@ -314,6 +327,7 @@ impl Backend for Apt {
         package: &str,
         version: &str,
         bound: u64,
+        lock_wait_secs: u64,
     ) -> Result<(), Failure> {
         let one = pinned(package, version);
         let rest = [
@@ -330,8 +344,8 @@ impl Backend for Apt {
             "--allow-change-held-packages",
             &one,
         ];
-        let call =
-            apt(Tool::AptGet, work, bound, &rest).with_env("DEBIAN_FRONTEND", "noninteractive");
+        let call = locking(Tool::AptGet, work, bound, lock_wait_secs, &rest)
+            .with_env("DEBIAN_FRONTEND", "noninteractive");
         parse::install(&run(tools, &call)?)
     }
 

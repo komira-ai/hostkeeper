@@ -1,7 +1,7 @@
 //! The repository installer's ports in the daemon that need no daemon: the ports' directories,
-//! the purge's pause on the daemon's clock, the `installed` records kept in `placed.json`, the
-//! backend of an entry, and how a failure of the installer becomes a verdict, a step exit or a
-//! switch error.
+//! the lock wait's pause on the daemon's clock and its log line, the `installed` records kept in
+//! `placed.json`, the backend of an entry, and how a failure of the installer becomes a verdict,
+//! a step exit or a switch error.
 
 use std::collections::BTreeSet;
 use std::fs;
@@ -129,14 +129,38 @@ fn a_packages_directory_without_a_parent_keeps_its_work_inside_itself() {
     assert_eq!(ports.lock, PathBuf::from("/installer.lock"));
 }
 
-/// Proves the purge's pause is a sleep on the daemon's clock, of the seconds asked.
+/// Proves the wait for the package manager's lock pauses on the daemon's clock, of the seconds
+/// asked, and says each report in the daemon's log as a `lock_wait` warning naming the service,
+/// the tool, the seconds waited and the bound, and the tool's last line, whole.
 #[test]
-fn the_purge_pauses_on_the_daemons_clock() {
+fn the_lock_wait_pauses_on_the_daemons_clock_and_is_said_in_the_log() {
     let clock = FakeClock::new();
-    let pause = ClockPause(clock.clone());
+    let said = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = Arc::clone(&said);
+    let pause = ClockPause {
+        clock: clock.clone(),
+        log: Arc::new(move |line: &str| sink.lock().expect("the log").push(line.to_owned())),
+        service: "tierstore".to_owned(),
+    };
     pause.pause(7);
     pause.pause(5);
     assert_eq!(clock.mono_secs(), 1012);
+    pause.lock_wait(&LockWait {
+        tool: hostkeeper_install::repository::Tool::Dpkg,
+        waited_secs: 30,
+        bound_secs: 300,
+        holder: "dpkg: error: dpkg frontend lock was locked by another process with pid 2058171"
+            .to_owned(),
+    });
+    assert_eq!(
+        *said.lock().expect("the log"),
+        [
+            "hostkeeper daemon: level=warn alert=lock_wait service=tierstore tool=dpkg \
+          waited_secs=30 bound_secs=300: dpkg: error: dpkg frontend lock was locked by another \
+          process with pid 2058171"
+        ]
+    );
+    assert_eq!(clock.mono_secs(), 1012, "a report waits for nothing");
 }
 
 /// Proves an unwritten host has no record of a service, and a saved record reads back whole.

@@ -11,8 +11,8 @@ use hostkeeper_config::names::{ServiceName, Version};
 use hostkeeper_install::repository::apt::Apt;
 use hostkeeper_install::repository::config::parse;
 use hostkeeper_install::repository::{
-    Bounds, Class, Failure, HostDirs, InstallerLock, Mirror, Order, Outcome, PackageRecord, Pause,
-    Reason, RecordError, Records, Repositories, RepositoryInstaller, Staged,
+    Bounds, Class, Failure, HostDirs, InstallerLock, LockWait, Mirror, Order, Outcome,
+    PackageRecord, Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller, Staged,
 };
 
 use crate::apt_fake::{Deb, Events, FakeHost, Inst};
@@ -26,6 +26,9 @@ pub const MAX: u64 = 1_048_576;
 pub const STAGE_SECS: u64 = 60;
 pub const ACTIVATE_SECS: u64 = 120;
 pub const REMOVE_SECS: u64 = 10;
+/// The seconds a step of the tests' installer waits for the package manager's lock: five tries
+/// of two seconds and a sixth that gives up.
+pub const LOCK_WAIT_SECS: u64 = 10;
 pub const V1: &str = "1.4.0-1";
 pub const V2: &str = "1.5.0-1";
 pub const V3: &str = "1.6.0-1";
@@ -134,19 +137,32 @@ impl Records for MemRecords {
     }
 }
 
-/// A pause that records the seconds it was asked to wait and waits for none.
+/// A pause that records the seconds it was asked to wait, and the waits for the lock it was
+/// told of, and waits for none: the tests' clock.
 #[derive(Default)]
-pub struct RecPause(pub Mutex<Vec<u64>>);
+pub struct RecPause {
+    paused: Mutex<Vec<u64>>,
+    waits: Mutex<Vec<LockWait>>,
+}
 
 impl Pause for RecPause {
     fn pause(&self, secs: u64) {
-        self.0.lock().expect("pauses").push(secs);
+        self.paused.lock().expect("pauses").push(secs);
+    }
+
+    fn lock_wait(&self, wait: &LockWait) {
+        self.waits.lock().expect("waits").push(wait.clone());
     }
 }
 
 impl RecPause {
     pub fn calls(&self) -> Vec<u64> {
-        self.0.lock().expect("pauses").clone()
+        self.paused.lock().expect("pauses").clone()
+    }
+
+    /// The waits for the lock reported, in order.
+    pub fn waits(&self) -> Vec<LockWait> {
+        self.waits.lock().expect("waits").clone()
     }
 }
 
@@ -164,6 +180,8 @@ pub struct Env {
     pub host: FakeHost,
     pub records: MemRecords,
     pub pause: RecPause,
+    /// The installer's `lock_wait_secs`: [`LOCK_WAIT_SECS`] unless a test sets another.
+    pub lock_wait_secs: u64,
     pub lock: InstallerLock,
     pub repositories: Repositories,
     pub dirs: HostDirs,
@@ -198,6 +216,7 @@ impl Env {
                 ..MemRecords::default()
             },
             pause: RecPause::default(),
+            lock_wait_secs: LOCK_WAIT_SECS,
             lock: InstallerLock::new(&lock_path),
             repositories: Repositories::new(vec![entry]),
             dirs: HostDirs { root, work, mirror },
@@ -217,6 +236,7 @@ impl Env {
             repositories: &self.repositories,
             dirs: &self.dirs,
             pause: &self.pause,
+            lock_wait_secs: self.lock_wait_secs,
             mirror: self.mirror.as_deref(),
         }
     }
