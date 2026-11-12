@@ -26,10 +26,10 @@ pub(super) enum Try<T> {
 
 impl RepositoryInstaller<'_> {
     /// Runs `once`, a try of `tool`, until it is not [`Try::Busy`], waiting
-    /// [`LOCK_POLL_SECS`] between two tries for at most `lock_wait_secs` in all; a wait is
-    /// reported at its first second and every [`LOCK_REPORT_SECS`] after. A lock still held when
-    /// one more pause would pass the bound is `package_manager_busy`; any other failure of a try
-    /// ends the wait as it is.
+    /// [`LOCK_POLL_SECS`] between two tries (less for the last pause, so the wait is the whole
+    /// bound and never more) for `lock_wait_secs` in all; a wait is reported at its first second
+    /// and every [`LOCK_REPORT_SECS`] after. A lock still held once the bound is waited is
+    /// `package_manager_busy`; any other failure of a try ends the wait as it is.
     pub(super) fn waiting<T>(
         &self,
         tool: Tool,
@@ -41,7 +41,8 @@ impl RepositoryInstaller<'_> {
                 Try::Done(value) => return Ok(value),
                 Try::Busy(holder) => holder,
             };
-            if waited + LOCK_POLL_SECS > self.lock_wait_secs {
+            let left = self.lock_wait_secs.saturating_sub(waited);
+            if left == 0 {
                 return Err(Failure::new(
                     Reason::PackageManagerBusy,
                     format!(
@@ -59,8 +60,9 @@ impl RepositoryInstaller<'_> {
                     holder,
                 });
             }
-            self.pause.pause(LOCK_POLL_SECS);
-            waited += LOCK_POLL_SECS;
+            let pause = left.min(LOCK_POLL_SECS);
+            self.pause.pause(pause);
+            waited += pause;
         }
     }
 

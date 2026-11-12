@@ -131,8 +131,8 @@ fn a_purge_is_tried_again_while_busy() {
 
 /// Proves a purge that stays busy for all of `lock_wait_secs` is `package_manager_busy`,
 /// deferred, environment, after a try at every two seconds of the wait (six tries, five pauses
-/// for ten seconds), with the record and the links still there; a wait of one second is a
-/// single try and no pause.
+/// for ten seconds), with the record and the links still there; a wait of one second is two
+/// tries one second apart, the wait reported once.
 /// Catches: a wait that runs past its bound, or a lock held to the end that is a failure of the
 /// release.
 #[test]
@@ -170,10 +170,14 @@ fn a_purge_busy_past_its_tries_defers() {
         .expect_err("busy");
     assert_eq!(failure.reason(), Reason::PackageManagerBusy);
     assert!(
-        short.pause.calls().is_empty(),
-        "a bound of one second is one try"
+        failure
+            .detail()
+            .starts_with("the package manager's lock was held for 1s of 1s (dpkg): "),
+        "{failure}"
     );
-    assert!(short.pause.waits().is_empty(), "and no wait to report");
+    assert_eq!(short.pause.calls(), [1], "the whole second is waited");
+    assert_eq!(short.host.calls_of("dpkg --purge").len(), 2);
+    assert_eq!(short.pause.waits().len(), 1, "and the wait is reported");
 }
 
 /// Proves a purge refused by a dependent package is `dependency_changes`, failed, environment,
