@@ -70,6 +70,7 @@ fn svc(hosts: Vec<ServiceHostStatus>) -> ServiceStatus {
         slots_held: 0,
         convergence: conv(State::Converged),
         plan: None,
+        unheard: Vec::new(),
     }
 }
 

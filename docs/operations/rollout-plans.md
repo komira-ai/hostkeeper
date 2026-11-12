@@ -92,6 +92,17 @@ Each host's gate reason names its stage. `paused`, `advance_wait`, `stage_failed
 group's `max_updating` is reached, and `baking` that the current
 stage is baking.
 
+The hosts of a service in `Releases.Status` are the hosts that report it and also every host its
+group (or its role) places it on that does not run it yet, with no beat: `missing` while it is
+to be installed there, or `excluded`, `down` or `unmanaged`, each with its gate reason. So a
+package that no host runs yet still shows each host of its group and why it is not ordered. A
+plan with no eligible host has no stage, and waits for nothing (`waiting` none, `eligible` 0):
+the hosts' gate reasons say why. `no_build_for_host` there means that the desired version's
+release has no entry the host can install; for example, a release whose only entry per platform
+is `hostkeeper-archive`, which no host is ever picked
+([packages-native.md](../design/packages-native.md)). Set a version whose release lists a native
+entry (`apt`, `macos-pkg`) for the host's platform.
+
 ## Advance
 
 ```

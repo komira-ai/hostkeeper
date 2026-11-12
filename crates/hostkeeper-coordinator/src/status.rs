@@ -3,7 +3,7 @@
 //! and, with enrollment, the server certificate; and the convergence `GET /v1/convergence`
 //! answers ([`convergence_of`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use hostkeeper_wire::HostId;
@@ -19,7 +19,7 @@ use crate::fleet::{Fleet, Host};
 use crate::halt;
 use crate::holds::on_bad_version;
 use crate::host_groups::GroupName;
-use crate::membership::{Member, account, deferred_count, members};
+use crate::membership::{Member, Membership, account, deferred_count, members, membership};
 use crate::ops::OpsState;
 use crate::service::Coordinator;
 use crate::services::{ServiceDef, Services};
@@ -92,6 +92,27 @@ pub struct ServiceHostStatus {
     pub held_on_bad_version: bool,
 }
 
+/// A node the service places that it has no heartbeat of: a host its group or role should run it
+/// on and that does not run it yet (to be installed, or excluded, down or unmanaged), and why it
+/// is not ordered. `Releases.Status` shows it among the hosts of the service, so that a service no
+/// host runs yet says why no host is ordered; the JSON status, whose bytes are frozen, does not.
+#[derive(Debug)]
+pub(crate) struct UnheardHost {
+    /// The node id from its certificate.
+    pub(crate) node_id: String,
+    /// The host role from its certificate: its group's name, in group mode.
+    pub(crate) role: String,
+    /// Heartbeated within the down limit.
+    pub(crate) live: bool,
+    /// Where it stands for the service.
+    pub(crate) membership: Membership,
+    /// The operator's reason, when the host is excluded from the service.
+    pub(crate) excluded_reason: Option<String>,
+    /// The rule that holds an order of the service back at this moment, as
+    /// [`ServiceHostStatus::hold`].
+    pub(crate) hold: Option<Why>,
+}
+
 /// One service in the status.
 #[derive(Debug, Serialize)]
 pub struct ServiceStatus {
@@ -116,6 +137,10 @@ pub struct ServiceStatus {
     /// it out.
     #[serde(skip)]
     pub plan: Option<hostkeeper_proto::hostkeeper::operator::v1::RolloutPlan>,
+    /// The nodes the service places and has no heartbeat of ([`unheard`]), by node id, which
+    /// `Releases.Status` shows among `hosts`, in node-id order. The JSON status leaves them out.
+    #[serde(skip)]
+    pub(crate) unheard: Vec<UnheardHost>,
 }
 
 impl Coordinator {
@@ -150,8 +175,23 @@ impl Coordinator {
         let members = members(def, fleet, ops, desired.as_ref(), now);
         let convergence = self.pair_convergence(def, desired.as_ref(), fleet, ops, now);
         let plan = self.plan_in(def, services, desired.as_ref(), all, ops, fleet, now);
+        let unheard = unheard(def, fleet, ops, now)
+            .map(|(id, membership, live)| UnheardHost {
+                node_id: id.to_string(),
+                role: fleet.role_in(&def.name, id).to_owned(),
+                live,
+                membership,
+                excluded_reason: ops
+                    .excluded
+                    .iter()
+                    .find(|e| e.service == def.name && e.node_id == id.as_str())
+                    .map(|e| e.reason.clone()),
+                hold: halt::decide(&self.ops, services, all, &def.name, fleet, id, now).why(),
+            })
+            .collect();
         ServiceStatus {
             plan,
+            unheard,
             desired,
             roles,
             hosts,
@@ -161,6 +201,26 @@ impl Coordinator {
             convergence,
         }
     }
+}
+
+/// The nodes `def` places that it has no heartbeat of at `now`, by node id, each with where it
+/// stands for `def` ([`membership`]) and whether it is live: every node the coordinator heard that
+/// `def` is assigned to (for a service made for a host group, the nodes of the group), that is
+/// not among the hosts of `def` ([`Fleet::hosts_in`]), and that `def` does not leave out as not
+/// selected (a node a service without a selector has no word of and could not be told to
+/// install it).
+fn unheard<'a>(
+    def: &'a ServiceDef,
+    fleet: &'a Fleet,
+    ops: &'a OpsState,
+    now: Duration,
+) -> impl Iterator<Item = (&'a HostId, Membership, bool)> + 'a {
+    let heard: BTreeSet<&HostId> = fleet.hosts_in(def).map(|(id, _)| id).collect();
+    fleet
+        .nodes()
+        .filter(move |(id, _)| !heard.contains(id) && fleet.is_assigned(def, id))
+        .map(move |(id, node)| (id, membership(def, id, node, ops, now), node.is_live(now)))
+        .filter(|(_, membership, _)| *membership != Membership::NotSelected)
 }
 
 /// What an operator reads.

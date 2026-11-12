@@ -425,7 +425,9 @@ async fn a_misspelt_installer_no_host_is_picked_for_leaves_the_version_not_conve
 /// coordinator has read its installers over gRPC: its first heartbeat, over JSON, is answered no
 /// order and it is held `not_a_member`; its next one over gRPC is ordered the tarball; and after the coordinator restarts, which
 /// keeps no list, the same holds again, `Hosts.Get` showing no installers until the gRPC beat;
-/// a host of a platform with no list is `no_target` before its list is read.
+/// a host that does not run `web` is shown `not_a_member` too, and no reason of the release,
+/// before its list is read; a host of a platform with no list is `no_target` before its list is
+/// read.
 /// Catches: a host picked from an empty list (`no_build_for_host`) or as an old daemon (the
 /// archive) before its list is read.
 #[tokio::test]
@@ -462,7 +464,7 @@ async fn a_target_v1_host_is_picked_nothing_until_its_installers_are_read() {
     json_beat(&rig, &fresh).await;
     assert_eq!(
         reason(&rig, "web", "d9").await,
-        proto::GateReason::Unspecified,
+        proto::GateReason::NotAMember,
         "no word of what it can install: no reason of the release is shown"
     );
     let arm =
