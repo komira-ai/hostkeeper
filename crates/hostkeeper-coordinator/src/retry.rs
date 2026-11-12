@@ -31,7 +31,8 @@ impl Coordinator {
     /// answers it again and writes nothing.
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_request` (the node id), `unknown_service`,
+    /// `unauthorized`, `forbidden`, `invalid_request` (the node id), `unknown_service` (the
+    /// rollout file defines no such service and no host group lists it),
     /// `unknown_host` (not heard from since the coordinator started), `nothing_to_retry` (the
     /// host's last report of the service is not a failure, or it has none, or it is a failure of
     /// the version the host runs), `store_failed` and
@@ -48,8 +49,7 @@ impl Coordinator {
             .parse::<HostId>()
             .map_err(|_| proto::HostsRefusal::InvalidRequest)?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::HostsRefusal::UnknownService)?;
         // Under the fleet's lock: no heartbeat replaces the report between its check and its
         // setting aside.
