@@ -264,7 +264,8 @@ pub enum Download {
 /// The faults a test injects.
 #[derive(Clone, Debug, Default)]
 pub struct Faults {
-    /// Per verb (`simulate`, `install`, `purge`): the tries the package manager's lock is held.
+    /// Per verb (`simulate`, `install`, `purge`, `hold` for both of apt-mark's): the tries the
+    /// package manager's lock is held.
     pub busy: BTreeMap<&'static str, u32>,
     /// dpkg was interrupted before the run.
     pub interrupted: bool,
@@ -681,24 +682,32 @@ fn show(run: &Run) -> ToolOutput {
     }
 }
 
+/// What a tool prints when the lock is held for one more of the tries of `verb`; `None` once
+/// those are spent. dpkg says it its own way, apt and apt-mark theirs.
+fn busy(s: &mut State, verb: &'static str) -> Option<ToolOutput> {
+    let apt = verb != "purge";
+    let left = s.faults.busy.get_mut(verb).filter(|left| **left > 0)?;
+    *left -= 1;
+    Some(match apt {
+        true => out(
+            100,
+            "",
+            "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 \
+             (unattended-upgr)\nE: Unable to acquire the dpkg frontend lock \
+             (/var/lib/dpkg/lock-frontend), is another process using it?\n",
+        ),
+        false => out(
+            2,
+            "",
+            "dpkg: error: dpkg frontend lock was locked by another process with pid 4321\n",
+        ),
+    })
+}
+
 fn busy_or_interrupted(s: &mut State, verb: &'static str) -> Option<ToolOutput> {
     let apt = verb != "purge";
-    if let Some(left) = s.faults.busy.get_mut(verb).filter(|left| **left > 0) {
-        *left -= 1;
-        return Some(match apt {
-            true => out(
-                100,
-                "",
-                "E: Could not get lock /var/lib/dpkg/lock-frontend. It is held by process 4321 \
-                 (unattended-upgr)\nE: Unable to acquire the dpkg frontend lock \
-                 (/var/lib/dpkg/lock-frontend), is another process using it?\n",
-            ),
-            false => out(
-                2,
-                "",
-                "dpkg: error: dpkg frontend lock was locked by another process with pid 4321\n",
-            ),
-        });
+    if let Some(output) = busy(s, verb) {
+        return Some(output);
     }
     s.faults.interrupted.then(|| {
         let text = "dpkg was interrupted, you must manually run 'dpkg --configure -a' to \
@@ -931,6 +940,9 @@ fn query(s: &State, run: &Run) -> ToolOutput {
 }
 
 fn mark(s: &mut State, run: &Run) -> ToolOutput {
+    if let Some(output) = busy(s, "hold") {
+        return output;
+    }
     let package = run.args.last().cloned().unwrap_or_default();
     let hold = run.args.first().is_some_and(|a| a == "hold");
     match s.installed.get_mut(&package) {

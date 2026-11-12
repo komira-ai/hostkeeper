@@ -13,8 +13,9 @@ use std::sync::Arc;
 
 use clap::Parser;
 use hostkeeper_daemon::cli::{
-    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGES_DIR,
-    DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED, UNWIRED, Unwired,
+    self, Cli, Command, DEFAULT_CONFIG, DEFAULT_FACTS_FILE, DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+    DEFAULT_PACKAGES_DIR, DEFAULT_STATE_DIR, DaemonFlags, EXIT_CONFIG, EXIT_FAILED, EXIT_LOCKED,
+    MAX_PACKAGE_LOCK_WAIT_SECS, UNWIRED, Unwired,
 };
 use hostkeeper_daemon::start::{self, LOCK_FILE, StartError, Started};
 use hostkeeper_link::{DEFAULT_HEARTBEAT_SECS, LoopFlags};
@@ -165,7 +166,7 @@ fn the_command_line_exits_with_the_config_errors_status() {
 }
 
 /// Catches a default that drifts from the documented one, or a flag read from somewhere else:
-/// `hostkeeper daemon` alone has the four defaults and no readiness notice, the daemon config is
+/// `hostkeeper daemon` alone has the five defaults and no readiness notice, the daemon config is
 /// trusted when root owns it, and the README states each default and each exit status.
 #[test]
 fn daemon_flag_defaults_are_the_documented_ones() {
@@ -179,12 +180,17 @@ fn daemon_flag_defaults_are_the_documented_ones() {
             facts_file: DEFAULT_FACTS_FILE.into(),
             notify_systemd: false,
             ready_file: None,
+            package_lock_wait_secs: DEFAULT_PACKAGE_LOCK_WAIT_SECS,
             link: LoopFlags {
                 heartbeat_secs: DEFAULT_HEARTBEAT_SECS,
             },
         }
     );
     assert_eq!(flags.settings().trusted_uid, 0);
+    assert_eq!(
+        flags.settings().package_lock_wait_secs,
+        DEFAULT_PACKAGE_LOCK_WAIT_SECS
+    );
     let readme = fs::read_to_string(concat!(env!("CARGO_MANIFEST_DIR"), "/../../README.md"))
         .expect("the README");
     let documented = [
@@ -193,6 +199,7 @@ fn daemon_flag_defaults_are_the_documented_ones() {
         format!("`--packages-dir` | `{DEFAULT_PACKAGES_DIR}`"),
         format!("`--facts-file` | `{DEFAULT_FACTS_FILE}`"),
         "`--notify-systemd` | off".to_owned(),
+        format!("`--package-lock-wait-secs` | `{DEFAULT_PACKAGE_LOCK_WAIT_SECS}`"),
         format!("`--heartbeat-secs` | `{DEFAULT_HEARTBEAT_SECS}`"),
         format!("| {EXIT_FAILED} |"),
         "| 2 |".to_owned(),
@@ -218,6 +225,33 @@ fn the_facts_file_flag_reaches_the_settings() {
         flags.settings().facts_file,
         std::path::PathBuf::from("/srv/facts.json")
     );
+}
+
+/// Proves `--package-lock-wait-secs` reaches the settings as given, from 1 to 3600 seconds, and
+/// that 0, 3601 or a word is a usage error (exit 2, as clap reports it).
+/// Catches: a wait of none (every lock an unattended upgrade holds would defer the order at
+/// once), or a wait past the longest a step may ask for.
+#[test]
+fn the_package_lock_wait_flag_reaches_the_settings_within_its_range() {
+    for secs in [1, 42, MAX_PACKAGE_LOCK_WAIT_SECS] {
+        let given = secs.to_string();
+        let parsed =
+            Cli::try_parse_from(["hostkeeper", "daemon", "--package-lock-wait-secs", &given]);
+        let Ok(Cli {
+            command: Command::Daemon(flags),
+        }) = parsed
+        else {
+            panic!("{secs} parses: {parsed:?}");
+        };
+        assert_eq!(flags.settings().package_lock_wait_secs, secs);
+    }
+    let over = (MAX_PACKAGE_LOCK_WAIT_SECS + 1).to_string();
+    for refused in ["0", over.as_str(), "five"] {
+        let error =
+            Cli::try_parse_from(["hostkeeper", "daemon", "--package-lock-wait-secs", refused])
+                .expect_err(refused);
+        assert_eq!(error.exit_code(), 2, "{refused}");
+    }
 }
 
 /// Catches the config and lock errors sharing an exit status with each other or with a usage

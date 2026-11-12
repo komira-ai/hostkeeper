@@ -61,17 +61,18 @@ fn a_purge_refused_by_a_dependent_package_keeps_the_tombstone_until_a_later_unin
     assert!(!apt.rig.packages.join(SERVICE).exists());
 }
 
-/// Proves a purge whose package manager lock stays held is tried within the version's own
-/// `remove_secs` (a 10 second bound: five tries, waiting on the daemon's clock between them) and
-/// then ends the uninstall `Deferred`, `package_manager_busy`, with the tombstone and the package
-/// kept; once the lock is free a later `uninstall` order completes it.
+/// Proves a purge whose package manager lock stays held is tried for as long as
+/// `--package-lock-wait-secs` says, not the version's `remove_secs`, which bounds each run (a
+/// 20 second wait with a 10 second `remove_secs`: 11 tries, waiting on the daemon's clock between
+/// them), and then ends the uninstall `Deferred`, `package_manager_busy`, with the tombstone and
+/// the package kept; once the lock is free a later `uninstall` order completes it.
 ///
-/// Catches: an uninstall that waits a bound other than the manifest's, gives up as a failure, or
+/// Catches: an uninstall that waits a bound other than the daemon's, gives up as a failure, or
 /// forgets the half-done uninstall.
 #[test]
-fn a_purge_whose_lock_stays_held_is_deferred_after_the_versions_remove_secs() {
+fn a_purge_whose_lock_stays_held_is_deferred_after_the_daemons_lock_wait() {
     let apt = AptRig::new("apt-uninstall-busy");
-    let daemon = apt.daemon();
+    let daemon = apt.daemon_waiting(20);
     let one = apt.publish(package("1.0.0-1"));
     let mut bounded = entry("1.0.0-1", &one);
     bounded
@@ -96,7 +97,7 @@ fn a_purge_whose_lock_stays_held_is_deferred_after_the_versions_remove_secs() {
         panic!("not deferred: {reply:?}");
     };
     assert_eq!(reason.as_deref(), Some("package_manager_busy"));
-    assert_eq!(apt.host.calls_of("dpkg --purge").len(), 5);
+    assert_eq!(apt.host.calls_of("dpkg --purge").len(), 11);
     assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
     assert!(tombstoned(&daemon));
 

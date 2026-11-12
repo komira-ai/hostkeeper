@@ -6,7 +6,7 @@
 //! | `prepare` | `cutover` | `rollback`, then `Failed` (`before_commit`, or `after_commit` if a step reported `reversible: false`) | `rollback`, then `Deferred` | stop, `halt` |
 //! | `cutover` | `verify` | `rollback`, then `Failed` | `rollback`, then `Deferred`; only valid if nothing irreversible happened | stop, `halt` |
 //! | `verify` | `cleanup` | `rollback`, then `Failed` with the hook's class | `verify` again with the backoff until the deadline, then `rollback` | stop, `halt` |
-//! | `rollback` | report the original `Failed` or `Deferred` | before the commit: `halt`; after it: `Failed(after_commit)` if the hook says `reversible: false`, else `halt` | `rollback` again up to its bound, then as for failure | stop, `halt` |
+//! | `rollback` | report the original `Failed` or `Deferred` | before the commit: `halt`; after it: `Failed(after_commit)` if the hook says `reversible: false`, else `halt` | `rollback` again up to its bound, then as for failure; but before the commit, with the reason `package_manager_busy`, `Deferred` | stop, `halt` |
 //! | `cleanup` | `Succeeded` (with `promotion_pending` of the last `verify`) | if its line states `reversible: true` (and nothing committed): `rollback`, and the host's result is the rollback's; otherwise (`false`, or the field left out) `cleanup` again, up to `cleanup_retries`, then `Failed(after_commit)` | `cleanup` again later, within the same retries | stop, `halt` |
 //! | `uninstall` | `Succeeded` | `Failed(before_commit)` with the hook's class | `Deferred` | stop, `halt` |
 //!
@@ -18,7 +18,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::{Class, Outcome, Report, Step};
+use crate::{Class, Outcome, REASON_PACKAGE_MANAGER_BUSY, Report, Step};
 
 /// Where in the life of a failure it happened, assigned by the updater and never by the hook.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -148,6 +148,15 @@ pub fn next(step: Step, outcome: Outcome, report: &Report, ctx: &Context) -> Nex
         // to page for; one that says nothing, or says it can, leaves a host nothing repairs.
         (Step::Rollback, Outcome::Failure | Outcome::Deferred) if !report.reversible => {
             Next::Report(failed(Phase::AfterCommit))
+        }
+        // A rollback that waited out its retries for the host's package manager, nothing
+        // committed, leaves a host a later order repairs: deferred, never a halt of the service.
+        (Step::Rollback, Outcome::Deferred)
+            if !committed && report.reason.as_deref() == Some(REASON_PACKAGE_MANAGER_BUSY) =>
+        {
+            Next::Report(Verdict::Deferred {
+                retry_after_secs: after_secs,
+            })
         }
         (Step::Rollback, Outcome::Failure | Outcome::Deferred) => Next::Report(Verdict::Halt),
         // A cleanup that fails and states `reversible: true` committed nothing: roll back, and

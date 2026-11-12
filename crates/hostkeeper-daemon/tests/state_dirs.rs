@@ -23,6 +23,7 @@ fn settings(root: &Path) -> Settings {
         facts_file: root.join("var/lib/hostkeeper/facts.json"),
         run_dir: root.join("run"),
         trusted_uid: 0,
+        package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     }
 }
 

@@ -286,7 +286,8 @@ fn the_registration_socket_directory_is_updater_under_the_run_directory() {
 /// that is not there by its path before it spawns anything, and their unit control runs
 /// `systemctl` through the adapters' launcher. Catches a package store that fetches by a path of
 /// its own: a stores file that is not sound stops the ports as `Stores` naming it, and one that
-/// is not there gives the ports no store.
+/// is not there gives the ports no store. Catches a `--package-lock-wait-secs` that does not
+/// reach the repository installer's ports.
 #[test]
 fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     let rig = Rig::new("assemble-host-ports");
@@ -303,15 +304,14 @@ fn the_host_ports_are_built_from_flags_and_files_without_the_network() {
     };
     make_dir(&rig.packages, 0o755);
     let systemctl = FakeCommandRunner::default();
-    let ports = host_ports(
-        &config(),
-        &rig.settings(),
-        &files,
-        OWN,
-        linux_over(&systemctl),
-    )
-    .expect("the ports");
+    let settings = Settings {
+        package_lock_wait_secs: 42,
+        ..rig.settings()
+    };
+    let ports =
+        host_ports(&config(), &settings, &files, OWN, linux_over(&systemctl)).expect("the ports");
     assert_eq!(ports.deadman_poll_secs, Some(DEADMAN_POLL_SECS));
+    assert_eq!(ports.repository.lock_wait_secs, 42);
     assert_eq!(ports.placement.roots.packages().dir(), rig.packages);
 
     // The launcher is the host's: a hook that is not there does not start, named by its path

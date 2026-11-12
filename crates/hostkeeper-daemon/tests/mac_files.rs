@@ -148,6 +148,7 @@ impl Mac {
             packages_dir: packages,
             run_dir: self.root().join("run"),
             trusted_uid: me(),
+            package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
         };
         let files = HostFiles {
             repositories: None,

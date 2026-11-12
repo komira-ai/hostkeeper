@@ -14,9 +14,12 @@ fn full_install() -> Env {
 }
 
 /// Proves every apt run of a stage and an activate starts with exactly the options of section
-/// 4.2 for the service's work directory, whose dpkg lock timeout is the step's bound, and that
-/// no argument names a host path for the lists, the caches or the sources.
-/// Catches: a run that falls back to the host's `/etc/apt` or `/var/lib/apt`.
+/// 4.2 for the service's work directory, whose dpkg lock timeout is the step's bound, but for
+/// the install, whose timeout is the installer's `lock_wait_secs` and whose run is bounded by the
+/// step's bound and that wait together; and that no argument names a host path for the lists,
+/// the caches or the sources.
+/// Catches: a run that falls back to the host's `/etc/apt` or `/var/lib/apt`, or an install that
+/// waits for the lock for the step's bound rather than the daemon's setting.
 #[test]
 fn every_apt_run_carries_every_option_of_the_work_directory() {
     let env = full_install();
@@ -27,7 +30,14 @@ fn every_apt_run_carries_every_option_of_the_work_directory() {
             continue;
         }
         seen += 1;
-        let expected = options(&work, call.run.bound_secs);
+        let lock_secs = match call.label.as_str() {
+            "apt-get install" => {
+                assert_eq!(call.run.bound_secs, ACTIVATE_SECS + LOCK_WAIT_SECS);
+                LOCK_WAIT_SECS
+            }
+            _ => call.run.bound_secs,
+        };
+        let expected = options(&work, lock_secs);
         assert_eq!(
             call.run.args[..expected.len()],
             expected[..],
@@ -224,10 +234,18 @@ fn the_last_line_of_an_output_is_the_one_a_failure_quotes() {
     assert!(out.text().contains("plain") & out.text().contains("W: later"));
 }
 
-/// Proves the host's pause returns (it sleeps for the seconds it is given, here none).
+/// Proves the host's pause returns (it sleeps for the seconds it is given, here none), and that
+/// a wait reported to it returns at once: the host's pause reports nowhere.
 #[test]
 fn the_hosts_pause_returns() {
-    hostkeeper_install::repository::Pause::pause(&hostkeeper_install::repository::tools::Sleep, 0);
+    use hostkeeper_install::repository::{LockWait, Pause, tools::Sleep};
+    Sleep.pause(0);
+    Sleep.lock_wait(&LockWait {
+        tool: Tool::Dpkg,
+        waited_secs: 0,
+        bound_secs: 1,
+        holder: String::new(),
+    });
 }
 
 /// Proves the record's JSON form leaves out an empty link set and a false `pending`, and reads an

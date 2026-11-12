@@ -128,7 +128,8 @@ pub trait Backend: Send + Sync {
     fn restore(&self, meta: &Path, work: &Path) -> io::Result<()>;
 
     /// Installs `package` at `version` from `work`, with no download: an upgrade, a downgrade
-    /// or the same version again.
+    /// or the same version again. The package manager waits up to `lock_wait_secs` for its lock,
+    /// on top of `bound`; a lock still held then is `package_manager_busy`.
     fn install(
         &self,
         tools: &dyn Tools,
@@ -136,6 +137,7 @@ pub trait Backend: Send + Sync {
         package: &str,
         version: &str,
         bound: u64,
+        lock_wait_secs: u64,
     ) -> Result<(), Failure>;
 
     /// `package` as the host's database shows it; `None` when it is not installed.
@@ -146,10 +148,12 @@ pub trait Backend: Send + Sync {
         bound: u64,
     ) -> Result<Option<Installed>, Failure>;
 
-    /// Holds (`true`) or releases (`false`) `package`, so nothing else upgrades it.
+    /// Holds (`true`) or releases (`false`) `package`, so nothing else upgrades it: one try, a
+    /// lock held being `package_manager_busy` (the installer waits, [`super::wait`]).
     fn hold(&self, tools: &dyn Tools, package: &str, hold: bool, bound: u64)
     -> Result<(), Failure>;
 
-    /// Purges `package`, its configuration files with it, whatever version is installed.
+    /// Purges `package`, its configuration files with it, whatever version is installed: one
+    /// try, a lock held being [`Purged::Busy`] (the installer waits, [`super::wait`]).
     fn purge(&self, tools: &dyn Tools, package: &str, bound: u64) -> Result<Purged, Failure>;
 }

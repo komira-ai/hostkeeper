@@ -20,6 +20,8 @@ mod harness;
 mod io;
 #[path = "apt/loaded.rs"]
 mod loaded;
+#[path = "apt/lock_wait.rs"]
+mod lock_wait;
 #[path = "apt/mirror.rs"]
 mod mirror;
 #[path = "apt/order.rs"]

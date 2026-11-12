@@ -89,6 +89,7 @@ fn rerooted(rig: &Rig) -> Settings {
         run_dir: rig.run_dir.clone(),
         // The scratch config is owned by the user running the tests, not by root.
         trusted_uid: support::my_uid(),
+        package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
     }
 }
 

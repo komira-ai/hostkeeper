@@ -57,6 +57,12 @@ pub const MAX_REASON_LEN: usize = 64;
 /// `prepare`, after undoing what it placed; the updater never decides it.
 pub const REASON_LEASES_LIVE: &str = "leases_live";
 
+/// The `reason` of a step that found the host's package manager locked for as long as it waits
+/// (exit `75`, class `environment`): the host's condition, which a later order passes. A
+/// `rollback` still deferred with it once its retries are spent, nothing committed, ends the
+/// update `Deferred` rather than in a `halt` ([`crate::next`]).
+pub const REASON_PACKAGE_MANAGER_BUSY: &str = "package_manager_busy";
+
 /// Whether `reason` is a machine-readable token: lowercase letters, digits and `_`, at most
 /// [`MAX_REASON_LEN`] bytes, not empty (`state_invalid`, `drain_bound`, `leases_live`).
 pub fn is_reason_token(reason: &str) -> bool {

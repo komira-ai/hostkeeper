@@ -1,22 +1,23 @@
 //! `remove` and the observer's drift check (packages-repositories.md section 4.4): the package
 //! is released and purged whatever version is installed, and a version hostkeeper did not set
-//! is reported, never refused.
+//! is reported, never refused. The release and the purge wait for the package manager's lock
+//! ([`super::wait`]).
 
 use hostkeeper_config::names::ServiceName;
 
 use super::activate::{drift_of, links_of};
 use super::backend::Purged;
 use super::enable;
-use super::outcome::{Failure, Reason};
+use super::outcome::Failure;
 use super::policy;
+use super::tools::Tool;
+use super::wait::Try;
 use super::{Drift, Removed, RepositoryInstaller, io_failure, record_failure};
 
-/// The seconds between two tries of a purge whose lock is held.
-pub const PURGE_RETRY_SECS: u64 = 2;
-
 impl RepositoryInstaller<'_> {
-    /// Takes `service`'s package off the host, as its record names it, within `remove_secs`.
-    /// Nothing to do without a record: nothing was installed.
+    /// Takes `service`'s package off the host, as its record names it, each tool run within
+    /// `remove_secs` and each wait for the lock within `lock_wait_secs`. Nothing to do without a
+    /// record: nothing was installed.
     pub fn remove(&self, service: &ServiceName, remove_secs: u64) -> Result<Removed, Failure> {
         let (backend, tools) = (self.backend, self.tools);
         let _held = self
@@ -30,7 +31,7 @@ impl RepositoryInstaller<'_> {
         let installed = backend.installed(tools, package, remove_secs)?;
         let drift = drift_of(Some(&record), installed.as_ref().map(|i| &i.version));
         if installed.is_some() {
-            backend.hold(tools, package, false, remove_secs)?;
+            self.hold_waiting(package, false, remove_secs)?;
         }
         self.purge_or_hold(package, remove_secs, installed.is_some())?;
         for link in &links_of(Some(&record)) {
@@ -42,9 +43,10 @@ impl RepositoryInstaller<'_> {
         Ok(Removed { drift })
     }
 
-    /// Purges `package`, tried again while the lock is held, within `remove_secs`. A purge that
-    /// fails leaves the package installed, so a package that was held is held again: nothing
-    /// but hostkeeper may move it while its removal waits.
+    /// Purges `package`, tried again while the lock is held. A purge that fails leaves the
+    /// package installed, so a package that was held is held again, in one try (a lock still held
+    /// is not waited for a second time): nothing but hostkeeper may move it while its removal
+    /// waits.
     fn purge_or_hold(&self, package: &str, remove_secs: u64, held: bool) -> Result<(), Failure> {
         let failure = match self.purge(package, remove_secs) {
             Ok(()) => return Ok(()),
@@ -61,34 +63,18 @@ impl RepositoryInstaller<'_> {
         Err(failure)
     }
 
-    /// The purge and its tries.
+    /// The purge and its tries (dpkg has no lock timeout of its own).
     fn purge(&self, package: &str, remove_secs: u64) -> Result<(), Failure> {
         let (backend, tools) = (self.backend, self.tools);
         // Held across every try, the pauses between them included.
         let _policy = policy::Guard::hold(&self.dirs.root)
             .map_err(|e| io_failure("the policy-rc.d file", e))?;
-        let tries = (remove_secs / PURGE_RETRY_SECS).max(1);
-        let mut last = String::new();
-        let mut done = false;
-        for attempt in 0..tries {
-            if attempt > 0 {
-                self.pause.pause(PURGE_RETRY_SECS);
-            }
-            match backend.purge(tools, package, remove_secs)? {
-                Purged::Done => {
-                    done = true;
-                    break;
-                }
-                Purged::Busy(line) => last = line,
-            }
-        }
-        match done {
-            true => Ok(()),
-            false => Err(Failure::new(
-                Reason::PackageManagerBusy,
-                format!("the package manager's lock was held for {remove_secs}s: {last}"),
-            )),
-        }
+        self.waiting(Tool::Dpkg, || {
+            Ok(match backend.purge(tools, package, remove_secs)? {
+                Purged::Done => Try::Done(()),
+                Purged::Busy(line) => Try::Busy(line),
+            })
+        })
     }
 
     /// The drift of `service`, whose manifest names `package`, at this heartbeat: what the
