@@ -1,0 +1,67 @@
+// hostkeeper.operator.v1: the messages of `Hosts.Retry`, the call that lets a host be ordered
+// again a version it failed, and the order a host is told now (`CurrentOrder`), which
+// `HostService` carries. The `Hosts` service, its refusals (`HostsRefusal`) and the rest of the
+// package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal`
+// among it, are operator.proto; this file is the same package and API, kept apart so that each
+// file stays short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Hosts` takes the operator token only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: as operator.proto says for `HostsRefusal`: a gRPC status whose message is exactly one
+// token of it, in lower case. A refused request changes nothing.
+//
+// Units: as operator.proto says.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/agent/v1/agent.proto";
+import "hostkeeper/operator/v1/entry.proto";
+
+// A host whose last report of a service is a failure is not ordered the version it failed
+// again (`GATE_REASON_FAILED_HERE`): not after a new heartbeat, not after an operator clears the
+// halt the failure raised or includes the host again. `Hosts.Retry` sets that report aside, so
+// the host is ordered the service's desired version at its next heartbeat, as the update plan and
+// the other rules let it, at the try after the failed one (`UpdateResult.order_try`). The report
+// set aside is not read by any rule: not as the host failing the version, not as holding a slot,
+// and not as the host's last update, which `Releases.Status` and `Hosts.Get` show absent until
+// the host reports again. It still counts for the halt it raised, which stays cleared only by
+// `Releases.ClearHalt`. It is set aside until the host reports anything else, or reports the
+// same report again after it was seen updating (or, for a report that names no try, after a
+// second order was given). The coordinator keeps it in memory only: after a restart of the
+// coordinator, the operator asks again.
+message RetryRequest {
+  // The host, heard from since the coordinator started.
+  string node_id = 1;
+  // The service whose failed report is set aside; one the coordinator manages.
+  string service = 2;
+}
+
+message RetryResponse {
+  // The failed report set aside: the target, the try and the order id of the failure.
+  hostkeeper.agent.v1.UpdateResult set_aside = 1;
+  // The audit entry the call wrote (`retry`); absent when the report was set aside already, by an
+  // earlier call, and nothing was written.
+  AuditEntry entry = 2;
+}
+
+// An order the coordinator gave a host for a service, that the host has not yet answered: until
+// the host says it is updating, reports a verdict, declines it, or 120 seconds pass with no word
+// of it.
+message CurrentOrder {
+  // The order's id (`update-...`, `install-...`, or the uninstall's id); absent when the
+  // coordinator did not name it.
+  optional string order_id = 1;
+  // The order's try (`UpdateResult.order_try` of its verdict).
+  uint64 order_try = 2;
+  // The version ordered; for an uninstall, the version the host ran when it was ordered.
+  string version = 3;
+  // Whether the order is an uninstall.
+  bool uninstall = 4;
+}

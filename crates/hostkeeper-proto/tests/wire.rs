@@ -377,6 +377,7 @@ const RPCS: [(&str, &[&str]); 7] = [
             "Abort(AbortRequest) AbortResponse",
             "Retire(RetireRequest) RetireResponse",
             "ClearRecord(ClearRecordRequest) ClearRecordResponse",
+            "Retry(RetryRequest) RetryResponse",
         ],
     ),
     (
@@ -428,7 +429,7 @@ const RPCS: [(&str, &[&str]); 7] = [
 
 /// The fields of the heartbeat, enrollment, abort, retire, clear-record, audit and force-report
 /// messages, pinned by name and number.
-const FIELDS: [(&str, &[(&str, u32)]); 37] = [
+const FIELDS: [(&str, &[(&str, u32)]); 39] = [
     (
         "hostkeeper.agent.v1.HeartbeatRequest",
         &[
@@ -662,6 +663,14 @@ const FIELDS: [(&str, &[(&str, u32)]); 37] = [
     ),
     ("hostkeeper.agent.v1.ClearRecord", &[("service", 1)]),
     (
+        "hostkeeper.operator.v1.RetryRequest",
+        &[("node_id", 1), ("service", 2)],
+    ),
+    (
+        "hostkeeper.operator.v1.RetryResponse",
+        &[("set_aside", 1), ("entry", 2)],
+    ),
+    (
         "hostkeeper.operator.v1.ApproveRequest",
         &[
             ("request_id", 1),
@@ -809,6 +818,7 @@ fn wire_names_are_pinned() {
                 "store_failed",
                 "audit_unavailable",
                 "daemon_too_old",
+                "nothing_to_retry",
             ],
         ),
         (

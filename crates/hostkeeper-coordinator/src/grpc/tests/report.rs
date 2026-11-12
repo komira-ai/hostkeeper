@@ -57,6 +57,7 @@ fn svc_host(node: &str, role: &str, b: Heartbeat) -> ServiceHostStatus {
         },
         hold: None,
         held_on_bad_version: false,
+        order: None,
     }
 }
 

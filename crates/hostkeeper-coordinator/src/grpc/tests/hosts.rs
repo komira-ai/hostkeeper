@@ -448,3 +448,66 @@ async fn clear_record_answers_by_grpc_and_the_gateway_and_reaches_the_heartbeat(
     let (code, said, _) = operator_call::<proto::ClearRecordResponse>(&world, path, ghost).await;
     assert_eq!((code, said.as_str()), (Code::NotFound, "unknown_host"));
 }
+
+/// Proves: `Hosts.Retry` of a host whose last report of kbf is no failure is
+/// `FAILED_PRECONDITION` `nothing_to_retry` by gRPC and 400 at the gateway; once the host reports
+/// a failure, the gateway's call answers the report set aside and the `retry` audit entry, and a
+/// second call by gRPC answers the same report with no entry. A host id nobody heard from is
+/// `NOT_FOUND` `unknown_host`.
+///
+/// Catches: a method the router does not serve, a refusal with another code or token, a body the
+/// gateway does not read, and a repeat that is audited again.
+#[tokio::test]
+async fn retry_answers_by_grpc_and_the_gateway() {
+    use super::heartbeat::Report;
+
+    let enrollment = EnrollmentRig::new("grpc-hosts-retry");
+    let certificate = enrolled(&enrollment.enrollment, &HostKey::new(), "machine-1", "s1");
+    let world = world_over("grpc-hosts-retry-coordinator", &enrollment);
+    let c = &world.coordinator;
+    let peer = peer_of(&certificate);
+    beat(c, &peer, &proto_message(&[svc("kbf", "1.0")])).await;
+
+    let path = "/hostkeeper.operator.v1.Hosts/Retry";
+    let request = || proto::RetryRequest {
+        node_id: "s1".to_owned(),
+        service: "kbf".to_owned(),
+    };
+    let (code, said, answer) = operator_call::<proto::RetryResponse>(&world, path, request()).await;
+    assert_eq!(
+        (code, said.as_str(), answer),
+        (Code::FailedPrecondition, "nothing_to_retry", None)
+    );
+    let body = r#"{"nodeId":"s1","service":"kbf"}"#;
+    assert_eq!(
+        gateway(&world, path, body).await,
+        (
+            StatusCode::BAD_REQUEST,
+            serde_json::json!({"code": "FAILED_PRECONDITION", "reason": "nothing_to_retry"})
+        )
+    );
+
+    let failing = proto_message(&[svc("kbf", "1.0").reporting(Report::Halt)]);
+    beat(c, &peer, &failing).await;
+    let (status, json) = gateway(&world, path, body).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["setAside"]["target"], "2.0");
+    assert_eq!(json["setAside"]["reason"], "disk_tainted");
+    assert_eq!(json["entry"]["action"], "retry");
+    assert_eq!(json["entry"]["nodeId"], "s1");
+    let (code, _, answer) = operator_call::<proto::RetryResponse>(&world, path, request()).await;
+    assert_eq!(code, Code::Ok);
+    let answer = answer.expect("an answer");
+    assert_eq!(answer.entry, None);
+    assert_eq!(
+        answer.set_aside.map(|report| report.target),
+        Some("2.0".to_owned())
+    );
+
+    let ghost = proto::RetryRequest {
+        node_id: "ghost".to_owned(),
+        service: "kbf".to_owned(),
+    };
+    let (code, said, _) = operator_call::<proto::RetryResponse>(&world, path, ghost).await;
+    assert_eq!((code, said.as_str()), (Code::NotFound, "unknown_host"));
+}

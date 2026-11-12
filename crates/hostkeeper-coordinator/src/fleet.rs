@@ -164,6 +164,8 @@ impl Node {
 #[path = "fleet_groups.rs"]
 mod groups;
 pub use groups::Marks;
+#[path = "fleet_retry.rs"]
+pub mod retry;
 
 /// Every host the coordinator has heard from since it started.
 #[derive(Clone, Debug)]
@@ -196,6 +198,7 @@ pub struct Fleet {
     aborts: BTreeMap<(HostId, String), String>,
     /// The `clear_record` orders an operator queued ([`crate::clear_record`]).
     pub(crate) clear_records: crate::clear_record::Queue,
+    retries: retry::Retries,
     /// The canaries that failed a release, per service and version, by node id
     /// ([`crate::reconcile::Change::CanaryFailed`]): kept in memory only, like the orders.
     canaries: BTreeMap<(String, String), String>,
@@ -242,6 +245,7 @@ impl Fleet {
             marks: Marks::default(),
             aborts: BTreeMap::new(),
             clear_records: crate::clear_record::Queue::default(),
+            retries: retry::Retries::default(),
             canaries: BTreeMap::new(),
             tries: BTreeMap::new(),
             sent: BTreeMap::new(),
@@ -475,6 +479,7 @@ impl Fleet {
             hosts.remove(id);
         }
         self.orders.retain(|(o, _), _| o != id);
+        self.forget_retries(id);
         self.bake.retain(|(_, o), _| o != id);
         self.found.forget_host(id);
         self.nodes.remove(id);
@@ -548,6 +553,7 @@ impl Fleet {
         // `failed_here`, the plan's failed host, a force's verdict), and it only moves the try.
         let mut beat = beat;
         let refusal = beat.last_update.take_if(|r| r.is_try_refusal());
+        let aside = self.retries.observe(&key, &mut beat);
         let had_order = self.orders.contains_key(&key);
         let mut deferred_order = false;
         if let Some(order) = self.orders.get(&key) {
@@ -606,11 +612,11 @@ impl Fleet {
         self.defers.observe(&key, &beat, deferred_order, now);
         self.verdicts.observe(&key.1, &key.0, &beat);
         // The try of the verdict, of the refusal (whose order the step record holds a try at
-        // or past), and the one the step record holds, which the host sends whether or not a
-        // verdict reached the coordinator.
+        // or past) or of the report set aside, and the one the step record holds, which the host
+        // sends whether or not a verdict reached the coordinator.
         let heard = [
             beat.last_update.as_ref().and_then(|r| r.order_try),
-            refusal.as_ref().and_then(|r| r.order_try),
+            refusal.as_ref().and_then(|r| r.order_try).max(aside),
             beat.record_try,
         ];
         if let Some(heard) = heard.into_iter().flatten().max() {

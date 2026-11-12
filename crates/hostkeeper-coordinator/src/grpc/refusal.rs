@@ -35,7 +35,7 @@ pub(crate) fn hosts(refusal: HostsRefusal) -> Status {
         HostsRefusal::UnknownService | HostsRefusal::UnknownHost => Code::NotFound,
         HostsRefusal::Capacity => Code::ResourceExhausted,
         HostsRefusal::AuditUnavailable => Code::Unavailable,
-        HostsRefusal::DaemonTooOld => Code::FailedPrecondition,
+        HostsRefusal::DaemonTooOld | HostsRefusal::NothingToRetry => Code::FailedPrecondition,
     };
     refused(code, refusal.as_str_name(), "HOSTS_REFUSAL_")
 }

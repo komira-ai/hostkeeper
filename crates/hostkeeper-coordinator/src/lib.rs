@@ -45,7 +45,8 @@
 //!   carries no order);
 //! - [`force`]: the fleet-wide fix, a hookless `force` ordered at once past the update plan,
 //!   and [`orders`], the typed orders a heartbeat answer carries (`force`, `abort`,
-//!   `clear_record`, `install`, `uninstall`), with [`clear_record`], `Hosts.ClearRecord`;
+//!   `clear_record`, `install`, `uninstall`), with [`clear_record`], `Hosts.ClearRecord`, and
+//!   [`retry`], `Hosts.Retry`, which sets a host's failed report aside so it is ordered again;
 //! - [`operator`]: the operator's calls over the messages of `hostkeeper.operator.v1` (marks,
 //!   halts, aborts, exclusions, holds, the audit log), and [`assign`], its assignment calls
 //!   (`Services.Assign`, `Unassign`, `SetMinVersion`, `List`), [`service_repository`], its
@@ -218,6 +219,7 @@ pub(crate) mod repository_credential;
 pub mod repository_origin;
 pub(crate) mod repository_push;
 pub(crate) mod repository_serve;
+pub mod retry;
 pub mod rollouts;
 mod running;
 pub mod service;
@@ -309,6 +311,8 @@ mod facts_tests;
 mod first_heartbeat_tests;
 #[cfg(test)]
 mod first_serving_tests;
+#[cfg(test)]
+mod fleet_retry_tests;
 #[cfg(test)]
 mod force_targets_tests;
 #[cfg(test)]
@@ -472,6 +476,8 @@ mod repository_push_group_tests;
 mod repository_push_private_tests;
 #[cfg(test)]
 mod repository_push_tests;
+#[cfg(test)]
+mod retry_tests;
 #[cfg(test)]
 mod rollback_definition_tests;
 #[cfg(test)]

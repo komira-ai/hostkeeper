@@ -411,6 +411,18 @@ verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
 | `--node-id` | STRING | The host, heard from since the coordinator started. |
 | `--service` | STRING | The service whose step record the host sets aside; one the coordinator manages. |
 
+#### `hkctl hosts retry`
+
+`/hostkeeper.operator.v1.Hosts/Retry`
+
+Set aside the host's failed report of the service, so it is ordered the desired version again
+at its next heartbeat, at the next try (see `RetryRequest`). Audited `retry`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--node-id` | STRING | The host, heard from since the coordinator started. |
+| `--service` | STRING | The service whose failed report is set aside; one the coordinator manages. |
+
 ### `mdm`
 
 The service `Mdm` of the package `hostkeeper.operator.v1`. The devices of the MDM policy gate.

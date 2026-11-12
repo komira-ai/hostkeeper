@@ -360,6 +360,12 @@ fn host_service(
         last_update: beat.last_update.as_ref().map(update_result),
         excluded_reason: member.and_then(|m| m.reason.clone()),
         stage: one.plan.as_ref().and_then(|plan| stage_of(plan, node_id)),
+        order: host.order.as_ref().map(|order| proto::CurrentOrder {
+            order_id: order.order_id.clone(),
+            order_try: order.order_try,
+            version: order.target.as_str().to_owned(),
+            uninstall: order.uninstall,
+        }),
     }
 }
 
