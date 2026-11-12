@@ -1,9 +1,10 @@
-//! The download of the previous release in the two jobs of `privileged.yml` that run the
-//! cross-release rig (`crates/hostkeeper-privileged/tests/self_update_across_releases.rs`), held to
+//! The download of the previous release in the two jobs that run the cross-release rig
+//! (`crates/hostkeeper-privileged/tests/self_update_across_releases.rs`; the Linux job `privileged`
+//! of `privileged.yml`, and the Mac's job `macos-device` of `release.yml`), held to
 //! its pin, `crates/hostkeeper-privileged/previous-release.toml`: each job's `PREVIOUS_RELEASE_URL`
 //! and `PREVIOUS_RELEASE_SHA256` are the `url` and `sha256` of its platform's table there, and the
-//! job runs [`DOWNLOAD`] and then [`CHECK`], both before its build step. pr-device.yml's copies of
-//! the two jobs are held to these by the mirror rule (`pr_device.rs`). `previous_release_tests.rs`
+//! job runs [`DOWNLOAD`] and then [`CHECK`], both before its build step. pr-device.yml's copy of
+//! the Linux job is held to it by the mirror rule (`pr_device.rs`). `previous_release_tests.rs`
 //! shows each defect refused.
 
 use super::lint::entry;
@@ -16,15 +17,17 @@ pub const DOWNLOAD: &str = "curl --proto =https --proto-redir =https --tlsv1.2 -
 /// The step that checks it against the pinned SHA-256 and puts it where the test reads it.
 pub const CHECK: &str = "cargo xtask install-tool --download \"$RUNNER_TEMP/previous-release.tar.gz\" --sha256 \"$PREVIOUS_RELEASE_SHA256\" --out target/previous-release/hostkeeper.tar.gz";
 
-/// The jobs that run the cross-release rig, each with the platform table of the pin it
-/// downloads.
-pub const JOBS: [(&str, &str); 2] = [
-    ("privileged", "linux-x86_64"),
-    ("macos-device", "macos-arm64"),
-];
+/// The job of `privileged.yml` (and its copy in `pr-device.yml`) that runs the cross-release rig,
+/// with the platform table of the pin it downloads.
+pub const LINUX_JOBS: [(&str, &str); 1] = [("privileged", "linux-x86_64")];
 
-/// The problems of the workflow `text` against the pin text `pin` (the module says what holds).
-pub fn previous_release_problems(text: &str, pin: &str) -> Vec<String> {
+/// The job of `release.yml` that runs the cross-release rig, with the platform table of the pin it
+/// downloads.
+pub const MACOS_JOBS: [(&str, &str); 1] = [("macos-device", "macos-arm64")];
+
+/// The problems of the workflow `text` against the pin text `pin`, for the jobs `jobs` (the module
+/// says what holds).
+pub fn previous_release_problems(text: &str, pin: &str, jobs: &[(&str, &str)]) -> Vec<String> {
     let doc = match yaml::load(text) {
         Ok(doc) => doc,
         Err(e) => return vec![e],
@@ -34,7 +37,7 @@ pub fn previous_release_problems(text: &str, pin: &str) -> Vec<String> {
         Err(e) => return vec![format!("previous-release.toml does not parse: {e}")],
     };
     let mut problems = Vec::new();
-    for (name, platform) in JOBS {
+    for &(name, platform) in jobs {
         let Some(job) = entry(&doc, "jobs").and_then(|jobs| entry(jobs, name)) else {
             problems.push(format!("no job {name}"));
             continue;

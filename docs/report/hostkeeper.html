@@ -1147,7 +1147,7 @@ starts of it that do not settle the update, settles the update failed and runs.<
 <li>The installer is an unsigned distribution <code>.pkg</code> (<code>productbuild</code> around one component pkg) holding the binary, the daemon&rsquo;s plist, its log directory and
 newsyslog file, the pinned <code>gh</code> and the Sigstore trusted root. Its <code>postinstall</code> loads the daemon&rsquo;s job, whose program is the installed binary: each start seeds the binary directory, writes <code>hostkeeper.toml</code> from the MDM&rsquo;s managed preferences when it is absent, and execs <code>current</code>.</li>
 </ul>
-<p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/privileged.yml">.github/workflows/privileged.yml</a>
+<p>The <code>macos-device</code> job of <a href="https://github.com/komira-ai/hostkeeper/blob/main/.github/workflows/release.yml">.github/workflows/release.yml</a>
 runs as root on a hosted Mac after each merge to <code>main</code>. It shows real <code>codesign</code> and quarantine
 verdicts, the process identity check, launchd job states, a fixture hook stopped at its bound, and
 the daemon started under launchd answering <code>Status</code>, and, end to end, hello&rsquo;s package installed,

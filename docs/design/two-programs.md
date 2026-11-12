@@ -559,7 +559,7 @@ the release `daemon_too_old`.
 
 ### 4.5 How each step is proven
 
-The pull requests of the path run the self-update device tests that exist today, unchanged in stage 1 (the `privileged` job on every pull request, `macos-device` when the pull request changes a path the macOS jobs build or read):
+The pull requests of the path run the self-update device tests that exist today, unchanged in stage 1 (the `privileged` job on every pull request; `macos-device` in the beta stage of `release.yml`, no pull request running a macOS job):
 
 - **Linux, as root under systemd**, in `pr-device.yml`'s `privileged` job and `privileged.yml`
   (`crates/hostkeeper-privileged/tests/self_update.rs`): `a_next_binary_that_starts_settles_the_update_succeeded_and_is_what_the_unit_runs`,
@@ -585,7 +585,7 @@ runs a released binary. The path needs that, so item X1 comes first:
   attestation verifier against a trust root the test makes) with the daemon binary of a **pinned published release**
   and this build's hostkeeper package. The pin is a checked-in file, `crates/hostkeeper-privileged/previous-release.toml`:
   the tag, the tarball's URL and its SHA-256, for each platform. A workflow step before the test (in `privileged.yml`'s
-  `privileged` and `macos-device` jobs, and the same step in their copies in `pr-device.yml`) downloads that URL with
+  `privileged` job and `release.yml`'s `macos-device` job, and the same step in the copy of the first in `pr-device.yml`) downloads that URL with
   `curl` into `target/previous-release/` and checks the SHA-256 against the file: no token, no API call, one pinned
   URL, as rule B10 asks of an external tool. The test reads the binary from that path under the workspace, checks it
   against the pin again, and fails by name when it is missing or differs; the test itself fetches nothing. The pin
@@ -621,7 +621,7 @@ runs a released binary. The path needs that, so item X1 comes first:
   never leaves a daemon failed. On a Mac, `an_install_of_the_running_version_is_succeeded_without_a_probe_or_a_restart`
   is `an_install_of_the_running_version_is_succeeded_without_a_restart`, and
   `the_self_update_protocol_of_a_binary_is_probed_as_a_launchd_job` and its bound test are deleted with the probe. X1 is
-  pinned to R1 (`previous-release.toml`, v0.1.163, with the URLs and digests of `privileged.yml` and `pr-device.yml`);
+  pinned to R1 (`previous-release.toml`, v0.1.163, with the URLs and digests of `privileged.yml`, `pr-device.yml` and `release.yml`);
   it holds that R1 updates to this build the old way, that this build removes R1's fallback files at its start
   (`fallback_files_present` of the rig's hosts), that R1's fallback unit and job fall back from a build that cannot
   start, and that this build hands over to itself.
@@ -903,7 +903,7 @@ switches to the generated client in one pull request, with its tests.
 | G3 | Runbooks, README, CONTRIBUTING and diagrams name `hkctl`; `crates/xtask/tests/enrollment_doc.rs` checks the commands against `hkctl`'s table | G1 released | `enrollment_doc` and the hygiene lint pass on every changed doc |
 | CI1 | `set-desired.yml` on `hkctl` (section 5), its outputs program, the workflow lint, `docs/deploy/ci-client.md` | P1, G1 released; the farm's coordinator runs P1 | the workflow lint's tests, each new rule with a workflow text that breaks it; the outputs program on one fixture per row of section 5's table; actionlint |
 | CI2 | `release.yml` and `hello-desired.yml` call CI1's revision; `docs/deploy/github-actions.md` | CI1 released | `callers.rs` and `desired.rs` of the workflow lint |
-| X1 | The cross-release rig, target `self_update_across_releases`, `previous-release.toml`, its download step in `privileged.yml` and its copy in `pr-device.yml` | none | its tests (4.5) against the pinned release on Linux and macOS; the workflow lint's `pr_device.rs` holds the copy; a binary that differs from the pin fails the test by name |
+| X1 | The cross-release rig, target `self_update_across_releases`, `previous-release.toml`, its download step in `privileged.yml` (and its copy in `pr-device.yml`) and in `release.yml`'s `macos-device` | none | its tests (4.5) against the pinned release on Linux and macOS; the workflow lint's `pr_device.rs` holds the copy; a binary that differs from the pin fails the test by name |
 | S1a | Stage 1, the hand-over reader: the start's steps 1 to 3 (4.3), the settlement's new case, the record's two optional fields | X1 | the start's unit tests (4.5); a stage-1 reader settling a stage-2 record and an old-way record; every device test of 4.5; X1 |
 | S1b | Stage 1, the rest: `OLDEST_READER` at 0.1.53, `LEGACY_FLOOR` and the floor rule, the built-in steps for hostkeeper's package, the start from the packaged binary (seed and exec), the Mac config at start | X1 | the floor rule's tests; the built-in steps' record byte-equal to the no-op command's; the seed's tests (`tests/seed.rs`) and `tests/mac_config.rs` re-pointed at the start, each case kept (in place, locked, a dangling `current`, a config already there, a link refused, no managed file); every device test of 4.5; X1 |
 | K1 | Delete `hostkeeper ctl` and `crates/hostkeeper-ctl`; Rust callers use the tonic client through a `hostkeeper-testkit` helper | G1, G3 | `tests/cli_ctl.rs` replaced by `ctl` a usage error; the privileged e2e tests on the tonic helper; the layering test; `pr_device.rs` with the shorter crate list |

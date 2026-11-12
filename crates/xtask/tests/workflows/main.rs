@@ -4,10 +4,10 @@
 //! workflow that runs the privileged tests as root after a merge, are tested in
 //! `privileged_tests.rs`; those of `net-install.yml`, the other workflow with jobs as root, the
 //! network-install jobs on main, in `net_install_tests.rs`; those of its job `openrc-device`, in
-//! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with macOS jobs and jobs as root on a pull request, and of
-//! no secret on a pull request, in `pr_device_tests.rs`, its path rule (the job `changes` and its
-//! skip list) in `pr_paths_tests.rs`, and the conditions of its macOS jobs and of their gates,
-//! evaluated against every outcome, in `pr_device_gate_tests.rs`; those of `advisories.yml`, the advisory
+//! `openrc_tests.rs`; those of `pr-device.yml`, the one workflow with jobs as root on a pull request, and of
+//! no secret and no macOS job on a pull request, in `pr_device_tests.rs`; those of the Mac's
+//! tests, the macOS stage of `release.yml` (no macOS job runs for a pull request), in
+//! `release_macos_tests.rs`; those of `advisories.yml`, the advisory
 //! monitor, in `advisories.rs`.
 
 mod advisories;
@@ -54,10 +54,7 @@ mod pinned_cache_tests;
 mod pkg_signing;
 mod pkg_signing_tests;
 mod pr_device;
-mod pr_device_gate_tests;
 mod pr_device_tests;
-mod pr_paths;
-mod pr_paths_tests;
 mod previous_release;
 mod previous_release_tests;
 mod privileged_tests;
@@ -65,13 +62,13 @@ mod release;
 mod release_assets;
 mod release_assets_tests;
 mod release_files;
+mod release_macos;
+mod release_macos_tests;
 mod release_native_tests;
 mod release_pxe_tests;
 mod release_ref;
 mod release_ref_tests;
 mod release_tests;
-#[path = "../hygiene/rust_text.rs"]
-mod rust_text;
 mod services_tests;
 mod set_desired;
 mod set_desired_calls;
@@ -693,7 +690,10 @@ fn a_matrix_include_the_lint_cannot_read_is_refused_and_a_static_one_passes() {
                 "        include:\n          - os: ubuntu-24.04-arm\n            arch: arm64\n",
             ),
         ),
-        &[],
+        // A static include is read, and its arm64 runner is refused for a pull request.
+        &[
+            "job test: runner `ubuntu-24.04-arm` on pull_request is not Linux x86_64 (ubuntu-*, not *-arm)",
+        ],
     );
 }
 

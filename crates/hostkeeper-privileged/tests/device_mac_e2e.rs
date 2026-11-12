@@ -1,7 +1,7 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! hello's macOS package installed, updated, rolled back and uninstalled end to end on a Mac, as
 //! root, under the real launchd of a GitHub-hosted macOS runner, in `.github/workflows/
-//! privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). The real coordinator
+//! release.yml`'s job `macos-device` (its beta stage). The real coordinator
 //! (in process) orders each version by its entry, the one `macos-pkg` entry `release targets`
 //! writes for a Mac; the daemon (the shipped daemon on the Mac's adapters, a launchd job of the
 //! system domain, `e2e::mac_host` says what its program replaces) enrolls with it, beats over

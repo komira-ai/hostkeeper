@@ -76,12 +76,11 @@ cargo +nightly-2026-10-01 llvm-cov --workspace --locked --branch --lcov --output
 cargo run -p coverage-gate --locked -- --lcov target/lcov.info --root .
 ```
 
-Nothing privileged and nothing for macOS runs on a pull request, but in `pr-device.yml` (below):
-its privileged job on every pull request, its macOS jobs on every pull request that changes a path
-they build or read. The workflow lint refuses such a
-job in any other workflow that runs on `pull_request`, refuses a job as root (`sudo`, a privileged
-container) in any workflow but `privileged.yml`, `net-install.yml` and the three copies of
-`privileged.yml`'s jobs in `pr-device.yml`,
+Nothing for macOS or linux-arm64 runs on a pull request, and nothing privileged but in `pr-device.yml`
+(below): its two privileged jobs on every pull request, on Linux x86_64. The workflow lint refuses
+a job on any other platform in any workflow that runs on `pull_request`, refuses a job as root
+(`sudo`, a privileged container) in any workflow but `privileged.yml`, `net-install.yml`, the two
+copies of `privileged.yml`'s jobs in `pr-device.yml` and the job `macos-device` of `release.yml`,
 refuses a write scope, a secret or the token in every workflow that runs on `pull_request`, and it
 also refuses an action that is not pinned
 by commit SHA, a runner that is not GitHub-hosted, a workflow without a top-level
@@ -110,47 +109,50 @@ branch (`gh workflow run net-install.yml --ref <branch>`); never on a pull reque
 the same branch cancels the older, so on `main` only the newest commit's run is kept. A red run on
 `main` is a defect, as above.
 
-## The macOS and privileged jobs of a pull request
+## The platforms a pull request is checked on
 
-`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its four checks are
+A pull request is checked on Linux x86_64 alone (`ubuntu-*` runners, not `*-arm`): we have many of
+those machines. Every other platform, macOS and linux-arm64 included, is tested in the beta stage
+of the release pipeline, after a merge to `main` and before that platform's artifact is promoted
+(below). A burst of pushes to pull requests once used up the hosted macOS runners for a day and
+starved a release's `macos-arm64` build, so no release shipped. The workflow lint refuses a
+pull-request workflow with a job on a macOS runner, on `ubuntu-*-arm` or on any other runner that
+is not Linux x86_64.
+
+`.github/workflows/pr-device.yml` runs on every pull request, beside `ci.yml`. Its two checks are
 required of every pull request:
 
-- `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
-  code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
-  check, the observer, the enrollment claims and what they use) on a GitHub-hosted `macos-15`
-  runner, as the runner's user. The rest of the workspace (the coordinator's MDM and
-  network-install servers, the release tooling) runs on Linux only and does not build for macOS;
-  the workflow lint holds the list to those binaries' path dependencies, so a crate added to
-  either joins it.
-- `macos-device`: the device tests as root under launchd.
 - `privileged`: the privileged tests as root against systemd.
 - `openrc-device`: the daemon under OpenRC in an Alpine Linux container, as root. The job builds
   the Alpine image (`crates/hostkeeper-privileged/openrc`), the programs the container runs for
   `x86_64-unknown-linux-musl`, and the test `openrc_device.rs`, and downloads the nfpm that
   `artifacts.yml` pins (the workflow lint holds the version and the SHA-256 equal to its).
 
-`macos-device`, `privileged` and `openrc-device` are copies of `privileged.yml`'s jobs of those
-names, key for key (the workflow lint compares them; `macos-device` but its name, needs and
-condition), so a pull request runs what will run after its merge. `privileged` and `openrc-device`
-run on every pull request.
+Both are copies of `privileged.yml`'s jobs of those names, key for key (the workflow lint compares
+them), so a pull request runs what will run after its merge. These jobs hold no write scope and
+name no secret or token, and save no cache. A newer push to the same pull request cancels the older
+run.
 
-GitHub-hosted macOS runners are few, so the two macOS jobs run only when the pull request changes
-a path they build, test or read. A Linux job, `changes`, runs `git diff` from the merge base of the
-pull request's base and its head with the exclude pathspecs of its step, the skip list: the docs
-but `docs/macos.md` and `docs/conformance.md`, the top-level guides but `README.md` and
-`MIGRATION.md` (tests of the Mac's crates read those four), the workflows with no macOS job that
-no macOS job copies, and the test targets of `crates/hostkeeper-privileged` that `macos-device`
-does not build. When every changed path is on the list, the macOS jobs are skipped; any other path,
-a new one included, and a diff that cannot be computed run them. The checks `macos-test` and
-`macos-device` are Linux jobs of those names that run after the macOS jobs whatever they did: each
-passes when its macOS job (whose own check is `macos-test on macos-15` or
-`macos-device on macos-15`) passed, or was skipped by the path rule, which it then says, and fails
-otherwise. The workflow lint (`crates/xtask/tests/workflows`, `pr_paths.rs`) refuses an entry no
-reason covers: one that matches no file, a workflow with a macOS job, a test target the device job
-builds or another file includes, or a path a source the Mac compiles, or a file of a crate whose
-tests run on macOS, names. A push to `main` runs every macOS job, with no path rule. A newer
-push to the same pull request cancels the older run. These jobs hold no write scope and name no
-secret or token, and save no cache.
+### The Mac's beta stage
+
+`release.yml` runs the Mac's tests for the newest release of a run, after its build, publish and
+image and before the macOS installer is promoted to stable (the jobs `macos-test` and
+`macos-device`, both on `macos-15`, holding `contents: read` alone):
+
+- `macos-test`: the tests of the crates the `hostkeeper` and `hello` binaries are built from (the
+  code a Mac runs: the daemon, the launchd adapters, the step launcher, placement, the package
+  check, the observer, the enrollment claims and what they use), as the runner's user. The rest of
+  the workspace (the coordinator's MDM and network-install servers, the release tooling) runs on
+  Linux only and does not build for macOS; the workflow lint holds the list to those binaries'
+  path dependencies, so a crate added to either joins it.
+- `macos-device`: the device tests as root under launchd (`privileged.yml` no longer has this job).
+
+A failure holds back the macOS installer alone: `promote-pkg` needs both jobs and runs only when
+both succeeded, and no other job waits for them, so the Linux packages, the coordinator and the
+fleet's desired version are never held by a Mac that is red or a macOS runner that never comes.
+Re-run the failed jobs of the release run once the cause is fixed; the installer is promoted then.
+linux-arm64 is tested in the same way by the jobs it already has in `release.yml` (`check-apt` and
+`check-rpm` on `ubuntu-24.04-arm`), which no pull request runs.
 
 The tests, in `crates/hostkeeper-privileged/tests/`, drive the production code:
 
@@ -281,7 +283,7 @@ with the others. Nothing binary is committed.
 ### The cross-release rig
 
 `self_update_across_releases.rs` runs hostkeeper's update of itself from a **published release** to
-this build, on Linux in the job `privileged` and on a Mac in the job `macos-device` (one target in
+this build, on Linux in the job `privileged` and on a Mac in the job `macos-device` of `release.yml` (one target in
 both: its first line names both platforms). The release is the one
 `crates/hostkeeper-privileged/previous-release.toml` pins: its tag and version, and for each
 release platform the URL of its binary tarball (`hostkeeper-<version>-<platform>.tar.gz`) and that
@@ -321,8 +323,8 @@ The tests, each from the released daemon converged on its own version's package:
 
 To move the pin, in the pull request that needs it: set `tag` and `version`, and each platform's
 `url` and `sha256` from the release's `SHA256SUMS`, in `previous-release.toml`, and the same URL
-and SHA-256 in the `env` of the jobs `privileged` and `macos-device` of both `privileged.yml` and
-`pr-device.yml`. `cargo test -p hostkeeper-privileged --lib across` checks the pin's shape and
+and SHA-256 in the `env` of the job `privileged` of both `privileged.yml` and `pr-device.yml`, and of
+`macos-device` of `release.yml`. `cargo test -p hostkeeper-privileged --lib across` checks the pin's shape and
 `cargo test -p xtask --test workflows` checks the workflows against it.
 
 ## Tests

@@ -1,6 +1,6 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! hostkeeper's update of itself under the real launchd of a GitHub-hosted macOS runner, as root,
-//! in `.github/workflows/privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it): the Mac twin of
+//! in `.github/workflows/release.yml`'s job `macos-device` (its beta stage): the Mac twin of
 //! `tests/self_update.rs`. The daemon runs as a launchd job of the daemon's own plist, its program
 //! `current` of its binary directory or, for a Mac as the pkg leaves it, the packaged binary that
 //! seeds the binary directory and execs `current`, on the host's macOS adapters (its steps as

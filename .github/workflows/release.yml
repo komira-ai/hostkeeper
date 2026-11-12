@@ -96,6 +96,16 @@
 #          holds `id-token: write` for that alone, and no other scope); the job coordinator
 #          waits for it. See the comment above the two jobs.
 #
+# macos-test, macos-device
+#          the beta stage of the Mac, for the newest release of the run, after its publish and
+#          image: the tests of the Mac's crates and the device tests under launchd, on macos-15.
+#          No pull request runs a Mac (or an arm64) job: a pull request is checked on Linux x86_64
+#          alone, and the other platforms are tested here. A failure holds back the macOS
+#          installer alone: promote-pkg needs both and runs only when both succeeded, and no other
+#          job waits for them. linux-arm64 is tested by check-apt and check-rpm on the
+#          arm runner, likewise after the release and never for a pull request. See the comment
+#          above the jobs, and crates/xtask/tests/workflows/release_macos.rs.
+#
 # newest, testing-apt-*, testing-fail-apt-*, testing-rpm-*, testing-pkg-upload, check-apt,
 # check-rpm, check-pkg, promote-check, stable-apt-*, stable-rpm-*, promote-pkg
 #          the package channels, docs/deploy/package-repositories.md: after every publish and
@@ -2198,6 +2208,168 @@ jobs:
           APT_BUCKET: ${{ vars.APT_BUCKET }}
         run: cargo xtask channels pkg upload --dir dist --tag "$TAG" --commit "$COMMIT" --bucket "$APT_BUCKET" --work "$RUNNER_TEMP/pkg-upload"
 
+  # TESTING, the Mac (the macOS stage, run for the newest release of the run, after its build,
+  # publish and image and beside the uploads above; never for a pull request). The tests of the
+  # Mac used to run on every pull request, and a burst of pushes used up the hosted macOS runners
+  # for a day, so no macos-arm64 build could start. They are this stage instead, as the beta stage
+  # of the macOS installer. Two jobs, each on macos-15, reading the repository (`contents: read`)
+  # at the commit of the release and nothing else:
+  #
+  # macos-test    the tests of the crates the `hostkeeper` and `hello` binaries are built from
+  #               (the code a Mac runs), as the runner's user, with no fail-fast so that a run
+  #               reports every failure. The rest of the workspace (the coordinator's MDM and
+  #               network-install servers, the release tooling) runs on Linux only and does not
+  #               build for macOS; the workflow lint holds the crate list to the binaries' path
+  #               dependencies.
+  # macos-device  the device tests under launchd as root (crates/hostkeeper-privileged: the
+  #               launchd adapters, hello's update end to end, hostkeeper's update of itself, the
+  #               macos-pkg installer with the Mac's real installer and pkgutil).
+  #
+  # What a failure holds: only the macOS installer. promote-pkg, which moves the pointer
+  # pkg/hostkeeper/stable.json, needs both jobs to have succeeded; the apt and rpm promotions
+  # (promote-check and the stable-* jobs), the coordinator and the fleet's desired version wait
+  # for neither, so a Mac that is red or a macOS runner that never comes holds back the Mac's
+  # stable installer and nothing else. The jobs are idempotent: re-running a failed one resumes the
+  # run and promotes the installer once both have passed. privileged.yml has no macOS job, so no
+  # merge to main waits for a macOS runner before its Linux release; artifacts.yml's macos-arm64
+  # build and its signing remain the one macOS work of every merge.
+
+  # macos-test: the stage above. The build restores the cache macos-device saves, whose
+  # dependencies it shares (this job saves none).
+  macos-test:
+    needs: [plan, newest]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.newest.outputs.commit }}
+          persist-credentials: false
+      # The system the tests run on, for the log (evidence, not a gate).
+      - name: sw_vers
+        run: sw_vers
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-macos-device-
+      - name: Build the tests of the Mac's crates
+        run: cargo test --locked --no-run -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
+      - name: Run the tests of the Mac's crates
+        run: cargo test --locked --no-fail-fast -p hello -p hostkeeper -p hostkeeper-config -p hostkeeper-daemon -p hostkeeper-enroll -p hostkeeper-hook -p hostkeeper-install -p hostkeeper-launchd -p hostkeeper-link -p hostkeeper-observe -p hostkeeper-openrc -p hostkeeper-package -p hostkeeper-placed -p hostkeeper-proto -p hostkeeper-release -p hostkeeper-steps -p hostkeeper-wire
+
+  # macos-device: the stage above, privileged.yml's job of that name as it ran after a merge to
+  # main until this stage took it over. It saves the cargo cache (its key holds the hashes of
+  # Cargo.lock and rust-toolchain.toml) when the restore missed; macos-test restores it.
+  # The launchd adapters, the process probe, the boot id, the enrollment claims and the package
+  # check run against a GitHub-hosted arm64 macOS runner (passwordless sudo, launchd): in
+  # device_mac.rs the real daemon under launchd and a hook step as a launchd job, in
+  # install_macos_pkg.rs the macos-pkg installer against the real pkgutil, installer, lsbom and
+  # launchctl, in device_mac_e2e.rs hello's .pkg installed, updated, rolled back and
+  # uninstalled, and in device_mac_selfupdate.rs hostkeeper's update of itself under launchd
+  # through its .pkg. The tests print what they find to the log.
+  macos-device:
+    needs: [plan, newest]
+    if: ${{ needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: macos-15
+    permissions:
+      contents: read
+    # A bound on the whole job, against a test that hangs; no test depends on it.
+    timeout-minutes: 45
+    env:
+      # The gh of artifacts.yml's macOS build, the same version and SHA-256. No test of this job
+      # reads it; the workflow lint (pinned_cache_tests.rs) still lists its download here.
+      GH_VERSION: 2.103.3
+      GH_SHA256: d700207eae9ae98fe2b89535c2c087c07823d4628c56364695a5a07ef311c062
+      PREVIOUS_RELEASE_URL: https://github.com/komira-ai/hostkeeper/releases/download/v0.1.218/hostkeeper-0.1.218-macos-arm64.tar.gz
+      PREVIOUS_RELEASE_SHA256: 5f2a333b3c180f94538ed3fee80e7941f6c33c0e2d42684cf3d367554cebcce7
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.newest.outputs.commit }}
+          persist-credentials: false
+      # The system the tests run against, for the log (evidence, not a gate).
+      - name: sw_vers
+        run: sw_vers
+      - run: rustup toolchain install
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: cargo-cache
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
+          restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      - name: Restore the pinned gh.zip from the cache
+        id: gh-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: pinned-gh-${{ env.GH_VERSION }}-${{ env.GH_SHA256 }}
+      - name: Download gh on a cache miss (HTTPS only, redirects included)
+        id: gh-download
+        if: ${{ steps.gh-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/gh.zip" "https://github.com/cli/cli/releases/download/v$GH_VERSION/gh_${GH_VERSION}_macOS_arm64.zip"
+      - name: Say why the job stops when gh.zip is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.gh-download.outcome == 'failure' }}
+        run: echo "::error::gh.zip is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
+      - name: Check gh (pinned checksum)
+        id: gh-check
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/gh.zip" --sha256 "$GH_SHA256" --out "$RUNNER_TEMP/gh-checked.zip"
+      - name: Save the checked gh.zip to the cache
+        if: ${{ !cancelled() && steps.gh-check.outcome == 'success' && steps.gh-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/gh.zip
+          key: ${{ steps.gh-cache.outputs.cache-primary-key }}
+      # The binary tarball of the release crates/hostkeeper-privileged/previous-release.toml pins
+      # for this platform (the workflow lint holds PREVIOUS_RELEASE_URL and PREVIOUS_RELEASE_SHA256
+      # equal to it). No test of this job reads it: self_update_across_releases.rs runs on Linux
+      # only.
+      - name: Restore the pinned previous-release.tar.gz from the cache
+        id: previous-release-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: pinned-previous-release-${{ env.PREVIOUS_RELEASE_URL }}-${{ env.PREVIOUS_RELEASE_SHA256 }}
+      - name: Download the previous release on a cache miss (HTTPS only, redirects included)
+        id: previous-release-download
+        if: ${{ steps.previous-release-cache.outputs.cache-hit != 'true' }}
+        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output "$RUNNER_TEMP/previous-release.tar.gz" "$PREVIOUS_RELEASE_URL"
+      - name: Say why the job stops when previous-release.tar.gz is neither cached nor downloadable
+        if: ${{ !cancelled() && steps.previous-release-download.outcome == 'failure' }}
+        run: echo "::error::previous-release.tar.gz is not in the actions cache and its download from GitHub failed, so this job cannot go on until GitHub serves it again"
+      - name: Check the previous release (pinned checksum)
+        id: previous-release-check
+        run: cargo xtask install-tool --download "$RUNNER_TEMP/previous-release.tar.gz" --sha256 "$PREVIOUS_RELEASE_SHA256" --out target/previous-release/hostkeeper.tar.gz
+      - name: Save the checked previous-release.tar.gz to the cache
+        if: ${{ !cancelled() && steps.previous-release-check.outcome == 'success' && steps.previous-release-cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/previous-release.tar.gz
+          key: ${{ steps.previous-release-cache.outputs.cache-primary-key }}
+      - name: Build the macOS device tests as the runner's user
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg
+      - name: Run the macOS device tests as root
+        run: cargo test -p hostkeeper-privileged --features privileged --locked --config "target.'cfg(unix)'.runner = 'sudo'" --test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg -- --test-threads=1 --nocapture
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ steps.cargo-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ steps.cargo-cache.outputs.cache-primary-key }}
+
   # INSTALL CHECKS (release time only; a failure stops the promotion to `stable`, which
   # promote-check refuses, while the packages stay in `testing`). check-apt: a clean Ubuntu container, pinned by digest, on a hosted runner of each
   # architecture, adds packages.komira.ai with the published keyring (deb822, Signed-By) and the
@@ -3464,10 +3636,12 @@ jobs:
   # promote-pkg: pkg/hostkeeper/stable.json, the pointer the installers' users follow, moved to this
   # release after the testing directory is read back and held to SHA256SUMS (cargo xtask channels
   # pkg promote): nothing is uploaded again, the bytes that were downloaded and checked are the
-  # bytes that become the stable installers. Same environment and role as testing-pkg-upload.
+  # bytes that become the stable installers. Same environment and role as testing-pkg-upload. It
+  # waits for the macOS stage (macos-test and macos-device) and runs only when both succeeded; no
+  # other promotion waits for it.
   promote-pkg:
-    needs: [plan, newest, promote-check, testing-pkg-upload]
-    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && needs.promote-check.outputs.promote == 'true' }}
+    needs: [plan, newest, promote-check, testing-pkg-upload, macos-test, macos-device]
+    if: ${{ !cancelled() && !failure() && needs.plan.outputs.release == 'true' && github.ref == 'refs/heads/main' && needs.promote-check.outputs.promote == 'true' && needs.macos-test.result == 'success' && needs.macos-device.result == 'success' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     environment: apt-publish

@@ -24,12 +24,16 @@
 //! - any key `secrets` has the value `inherit`;
 //! - the workflow runs for a pull request (`pull_request`, its review events, or
 //!   `merge_group`) and a job of it holds a `write` scope, or is root or macOS, whatever its
-//!   `if:` says, and is not a job of [`pr_device::JOBS`] that may be (`root`, `macos`); or what
+//!   `if:` says, and is not a job of [`pr_device::JOBS`] that may be root; or what
 //!   sits beside `jobs` (`env`, `defaults`, ...) is root or macOS, which no job may take from
-//!   there. Root: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
+//!   there. No job of a pull-request workflow is macOS, with no exception: the Mac's tests are the
+//!   stage of release.yml ([`release_macos`]). Root: a value of the job names `sudo` as a word (so `cargo xtask sudo-test` and a
 //!   cargo runner of `sudo` too), `--privileged` or `--cap-add` (a container's options). macOS:
 //!   a value of the job names `macos` or `darwin`, in any case (a runner, a matrix value, a
 //!   `--target aarch64-apple-darwin`). The job names a job's `needs` lists are not its values;
+//! - the workflow runs for a pull request and a job of it runs on a runner that is not Linux
+//!   x86_64 (`ubuntu-*`, not `*-arm`): macOS and linux-arm64 are tested in release.yml's beta
+//!   stage ([`release_macos`]), never for a pull request;
 //! - the workflow runs for a pull request and a job of it, or what sits beside `jobs`, names a
 //!   secret or the token: a key or value `secrets`, or an expression (`${{ ... }}`) that names
 //!   `secrets` or `github.token` as a word (or the token as `github['token']`, or the whole
@@ -41,9 +45,9 @@
 //! - it is [`pr_device::FILE`] and breaks a rule of its own ([`pr_device::problems`]);
 //! - it is neither [`PRIVILEGED_WORKFLOW`] nor [`net_install::FILE`], it does not run for a pull
 //!   request, and a job of it, or what sits beside `jobs`, names root as above (`sudo` as a word,
-//!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, and on
-//!   a pull request in the copies of the privileged workflow's jobs in [`pr_device::FILE`], or
-//!   nowhere. (A pull-request workflow is refused for the same values by the rule above, with its
+//!   `--privileged`, `--cap-add`), whatever its trigger: root runs in those two workflows, on
+//!   a pull request in the copies of the privileged workflow's jobs in [`pr_device::FILE`], and in
+//!   the job [`release_macos::DEVICE_JOB`] of release.yml, or nowhere. (A pull-request workflow is refused for the same values by the rule above, with its
 //!   own message. A write scope is not root; outside a pull request it is held to
 //!   [`WRITE_ALLOWED`].)
 //! - it is [`PRIVILEGED_WORKFLOW`] and its `on` is not exactly `push` with `branches: [main]` and
@@ -97,6 +101,7 @@ use super::packages;
 use super::pinned_cache;
 use super::pr_device;
 use super::release::{self, PLAN_IF, RELEASE_IF, SIGN_IF};
+use super::release_macos;
 use super::release_ref;
 use super::set_desired;
 use super::xtask_calls;
@@ -198,7 +203,9 @@ pub const PRIVILEGED_WORKFLOW: &str = "privileged.yml";
 /// `-latest` label that moves under us.
 pub const PRIVILEGED_RUNNERS: &[&str] = &["ubuntu-24.04"];
 
-/// The one job of [`PRIVILEGED_WORKFLOW`] that runs on macOS: the device run of the launchd
+/// The device job on macOS (it ran in [`PRIVILEGED_WORKFLOW`] and, as a copy, in
+/// [`pr_device::FILE`]; it is the job [`release_macos::DEVICE_JOB`] of release.yml now, and the
+/// privileged workflow's runner list still names it): the device run of the launchd
 /// adapters, the process probe and the package check (`crates/hostkeeper-privileged/tests/
 /// device_mac.rs`), hello's update end to end under launchd (`device_mac_e2e.rs`), hostkeeper's
 /// update of itself under launchd (`device_mac_selfupdate.rs`), and the macos-pkg installer with
@@ -400,7 +407,7 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         scalars(v, &mut beside_jobs);
     }
     if on_pull_request {
-        problems.extend(word_problems("workflow", &beside_jobs, false, false));
+        problems.extend(word_problems("workflow", &beside_jobs, false));
         problems.extend(secret_problems("workflow", &beside_jobs));
     }
     if root_refused {
@@ -422,8 +429,9 @@ pub fn lint(file: &str, text: &str) -> Vec<String> {
         }
         if on_pull_request {
             problems.extend(pull_request_problems(file, name, job));
+            problems.extend(pull_request_runner_problems(name, job));
         }
-        if root_refused {
+        if root_refused && !release_macos::root_allowed(file, name) {
             let mut values = Vec::new();
             scalars(job, &mut values);
             problems.extend(root_problems(&format!("job {name}"), &values));
@@ -672,7 +680,7 @@ pub fn runs_on_pull_requests(name: &str) -> bool {
 }
 
 /// What the job `name` of `file`, a workflow that runs on pull requests, may not be: holding a
-/// write scope, naming a secret or the token, and, unless [`pr_device`] lets it, root or macOS.
+/// write scope, naming a secret or the token, and, root unless [`pr_device`] lets it, and macOS.
 fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
     let mut values = Vec::new();
     for (k, v) in entries(job)
@@ -683,12 +691,7 @@ fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
         scalars(v, &mut values);
     }
     let who = format!("job {name}");
-    let mut problems = word_problems(
-        &who,
-        &values,
-        pr_device::root_allowed(file, name),
-        pr_device::macos_allowed(file, name),
-    );
+    let mut problems = word_problems(&who, &values, pr_device::root_allowed(file, name));
     problems.extend(secret_problems(&who, &values));
     let writes = entry(job, "permissions")
         .map_or(&[][..], entries)
@@ -701,6 +704,35 @@ fn pull_request_problems(file: &str, name: &str, job: &Node) -> Vec<String> {
         ));
     }
     problems
+}
+
+/// Whether the runner label `label` is Linux x86_64: an `ubuntu-` image that is not an `-arm` one.
+pub fn is_linux_x86_64(label: &str) -> bool {
+    label.starts_with("ubuntu-") && !label.ends_with("-arm")
+}
+
+/// The runners of the job `name` of a workflow that runs for a pull request that are not Linux
+/// x86_64 (`ubuntu-*`, not `*-arm`): a pull request is checked on Linux x86_64 alone, and every
+/// other platform (linux-arm64, macOS, any other) is tested in the beta stage of release.yml.
+/// A macOS label is refused by the macOS rule already ([`word_problems`]), and a label that is no
+/// hosted runner or cannot be read by [`runner_problems`]; neither is repeated here.
+fn pull_request_runner_problems(name: &str, job: &Node) -> Vec<String> {
+    let Ok(labels) = runner_labels(name, job) else {
+        return Vec::new();
+    };
+    labels
+        .into_iter()
+        .filter(|l| {
+            HOSTED_RUNNERS.contains(l)
+                && !is_linux_x86_64(l)
+                && !l.to_ascii_lowercase().contains("macos")
+        })
+        .map(|l| {
+            format!(
+                "job {name}: runner `{l}` on pull_request is not Linux x86_64 (ubuntu-*, not *-arm)"
+            )
+        })
+        .collect()
 }
 
 /// The first line of `values` that runs something as root: `sudo` as a word, a privileged
@@ -776,9 +808,9 @@ fn privileged_runner_problems(name: &str, job: &Node) -> Vec<String> {
     }
 }
 
-/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow),
-/// but root when `root_ok` and macOS when `macos_ok`.
-fn word_problems(who: &str, values: &[&str], root_ok: bool, macos_ok: bool) -> Vec<String> {
+/// The privileged and macOS words among `values`, the values of `who` (a job or the workflow) of
+/// a workflow that runs for a pull request, but root when `root_ok`. macOS is never allowed.
+fn word_problems(who: &str, values: &[&str], root_ok: bool) -> Vec<String> {
     let mut problems = Vec::new();
     if let Some(line) = root_line(values).filter(|_| !root_ok) {
         problems.push(format!("{who}: privileged on pull_request (`{line}`)"));
@@ -787,7 +819,7 @@ fn word_problems(who: &str, values: &[&str], root_ok: bool, macos_ok: bool) -> V
         let lower = line.to_ascii_lowercase();
         lower.contains("macos") || lower.contains("darwin")
     });
-    if let Some(line) = macos.filter(|_| !macos_ok) {
+    if let Some(line) = macos {
         problems.push(format!("{who}: macOS on pull_request (`{line}`)"));
     }
     problems

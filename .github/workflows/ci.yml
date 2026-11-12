@@ -3,12 +3,13 @@
 # pinned actions with a version comment, to a top-level `permissions: {}`, to no
 # `pull_request_target`, to GitHub-hosted runners, to write scopes that only the jobs named
 # there may hold, to no write scope and no secret in a workflow that runs on pull requests, to no
-# privileged or macOS job in one but the jobs of pr-device.yml it lists, and to no job as root
-# (`sudo`, a privileged container) outside privileged.yml, which runs the tests of
-# crates/hostkeeper-privileged as root after a merge to main and by hand, net-install.yml, which
-# runs the network-install tests as root on main, and the copies of privileged.yml's jobs in
-# pr-device.yml, which run them on a pull request (macos-device when the pull request changes a
-# path the macOS jobs build or read). A service or job container image must be pinned by digest
+# privileged job in one but the jobs of pr-device.yml it lists, to no runner in one but Linux
+# x86_64 (no macOS and no linux-arm64: those platforms are tested in the beta stage of
+# release.yml), and to no job as root (`sudo`, a privileged container) outside privileged.yml,
+# which runs the tests of crates/hostkeeper-privileged as root after a merge to main and by hand,
+# net-install.yml, which runs the network-install tests as root on main, the copies of
+# privileged.yml's jobs in pr-device.yml, which run them on a pull request, and release.yml's job
+# macos-device. A service or job container image must be pinned by digest
 # (`name:tag@sha256:<64 hex>`).
 #
 # `lint` is the format, cargo-deny (licences, bans and sources), clippy, the build of the hook
