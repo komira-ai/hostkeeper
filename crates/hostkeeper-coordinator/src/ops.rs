@@ -306,7 +306,7 @@ pub struct AuditEntry {
     /// approval by its nonce, `mdm-gate` for the MDM gate's.
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`, `halt`,
-    /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `hold`, `unhold`, `assign`, `unassign`,
+    /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `retry`, `hold`, `unhold`, `assign`, `unassign`,
     /// `set_min_version`, `set_repository`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
     /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
     /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan

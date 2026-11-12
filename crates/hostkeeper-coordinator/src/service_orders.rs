@@ -89,6 +89,12 @@ impl Coordinator {
                         continue;
                     }
                     fleet.order(name, id.clone(), version.clone(), now);
+                    fleet.name_order(
+                        name,
+                        id,
+                        &version,
+                        order_terms::order_id_text(name, &version),
+                    );
                     let service = (Some(name) != asked.legacy).then(|| name.to_owned());
                     let reply = ServiceReply::Update { service, version };
                     let typed = order_terms::typed(&reply, terms.as_ref(), Some(picked.target));
@@ -106,6 +112,7 @@ impl Coordinator {
                     let order_try = fleet.order_try(name, id, &version, false, now);
                     let target = picks::order_of(fleet, name, &version, id).map(|p| p.target);
                     fleet.order(name, id.clone(), version.clone(), now);
+                    fleet.name_order(name, id, &version, order_id.clone());
                     Order::Install {
                         service: name.to_owned(),
                         version,

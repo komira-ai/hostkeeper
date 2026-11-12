@@ -42,8 +42,13 @@
 //! (`Skip::FailedHere`, `decide.rs`) and one that is updating (`Gate::Updating`). The
 //! acknowledgement stands only while the host's beat carries the acknowledged report, a failed
 //! update of its target, and any other beat ends it in [`note`], before [`decide`] and
-//! durably, with no order for the service if the write fails. No operator verb lifts
-//! `FailedHere`, and a change of the desired state does not change what the host reports.
+//! durably, with no order for the service if the write fails. A change of the desired state
+//! does not change what the host reports. One operator verb lifts `FailedHere`: `Hosts.Retry`
+//! ([`crate::retry`]) sets the failed report aside in the fleet, so the gate no longer reads
+//! it and the host is ordered the acknowledged target with the acknowledgement standing. This
+//! module reads the heartbeat before the fleet takes the report out, so the acknowledged report
+//! is still ignored while the host resends it, and the new try's verdict, which differs from it
+//! (its try), ends the acknowledgement here as any other report does.
 //! A service the host is updating is not read: its `last_update` is the one before.
 //!
 //! Each clear raises the service's generation by one. A reply to an agent that announced

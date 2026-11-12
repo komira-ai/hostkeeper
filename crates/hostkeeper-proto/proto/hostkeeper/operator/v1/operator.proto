@@ -86,8 +86,10 @@ import public "hostkeeper/operator/v1/entry.proto";
 import public "hostkeeper/operator/v1/rollouts.proto";
 // `HostRepositories`, which `Host` carries.
 import "hostkeeper/operator/v1/repositories.proto";
-// `SetRepositoryRequest` and `SetRepositoryResponse`.
+// `SetRepositoryRequest` and `SetRepositoryResponse`; then the messages of `Hosts.ClearRecord`
+// and `Hosts.Retry`, and `CurrentOrder`.
 import "hostkeeper/operator/v1/services_repository.proto";
+import "hostkeeper/operator/v1/hosts_orders.proto";
 
 // The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 service Hosts {
@@ -125,6 +127,9 @@ service Hosts {
   // heartbeat; to any other it is refused `daemon_too_old` and nothing is ordered. The daemon's
   // verdict comes back in a heartbeat like any order's. Audited `record_cleared`.
   rpc ClearRecord(ClearRecordRequest) returns (ClearRecordResponse);
+  // Set aside the host's failed report of the service, so it is ordered the desired version again
+  // at its next heartbeat, at the next try (see `RetryRequest`). Audited `retry`.
+  rpc Retry(RetryRequest) returns (RetryResponse);
 }
 
 // The desired version of each service, how far the hosts are, and the operator's overrides.
@@ -237,6 +242,9 @@ enum HostsRefusal {
   // FAILED_PRECONDITION: the host's daemon did not announce, in its last heartbeat, the feature
   // the order needs (`ClearRecord`: `clear-record-v1`); nothing is ordered.
   HOSTS_REFUSAL_DAEMON_TOO_OLD = 9;
+  // FAILED_PRECONDITION: `Retry` of a service whose last report from the host is not a failure, or
+  // is a failure of the version the host runs (a halt after its switch, which a force repairs).
+  HOSTS_REFUSAL_NOTHING_TO_RETRY = 10;
 }
 
 // Why `Releases` refused a request. The token is the value's name without the prefix, in lower
@@ -554,6 +562,8 @@ message HostService {
   // The stage of the service's update plan the host is in or waits for, from 1; absent when the
   // plan does not count the host (it is not eligible).
   optional uint32 stage = 11;
+  // The order the host was given for the service and has not answered yet; absent when none.
+  CurrentOrder order = 12;
 }
 
 // Why the rollout gate does not order a host now (not to be confused with an operator's hold,
@@ -584,7 +594,7 @@ enum GateReason {
   GATE_REASON_BUSY_ELSEWHERE = 10;
   // The host runs the desired version.
   GATE_REASON_UP_TO_DATE = 11;
-  // The host failed the desired version, and is not told it again.
+  // The host failed the desired version, and is not told it again until `Hosts.Retry`.
   GATE_REASON_FAILED_HERE = 12;
   // The host declined the desired version for now.
   GATE_REASON_DEFERRED = 13;
@@ -715,19 +725,6 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
-}
-
-message ClearRecordRequest {
-  // The host, heard from since the coordinator started.
-  string node_id = 1;
-  // The service whose step record the host sets aside; one the coordinator manages.
-  string service = 2;
-}
-
-message ClearRecordResponse {
-  // The id of the `clear_record` order (`clear-record-<n>`, the number of its `record_cleared`
-  // audit entry), which the host's verdict names (`UpdateResult.order_id`).
-  string order_id = 1;
 }
 
 message RetireRequest {

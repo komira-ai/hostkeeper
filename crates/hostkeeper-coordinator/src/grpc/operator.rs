@@ -3,7 +3,8 @@
 //!
 //! An adapter has no rule of its own. A method that has a handler in the coordinator
 //! ([`crate::operator`], [`crate::hosts`], [`crate::force`], [`crate::assign`],
-//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`]) calls it with
+//! [`crate::alerts`], [`crate::rollouts`], [`crate::operator_mdm`], [`crate::wait`],
+//! [`crate::retry`]) calls it with
 //! the caller the router admitted. A method the frozen JSON routes have (`Hosts.Include`,
 //! `Hosts.SetLabels`, `Releases.ClearHalt`, `Releases.SetDesired`, `Releases.Converge`,
 //! `Releases.Status`) builds the request that route reads and calls what that route calls. Every
@@ -345,6 +346,17 @@ impl HostsApi for HostsService {
         let caller = caller_of(&request);
         self.coordinator
             .clear_record(&caller, request.get_ref())
+            .map(Response::new)
+            .map_err(refusal::hosts)
+    }
+
+    async fn retry(
+        &self,
+        request: Request<proto::RetryRequest>,
+    ) -> Result<Response<proto::RetryResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .retry(&caller, request.get_ref())
             .map(Response::new)
             .map_err(refusal::hosts)
     }

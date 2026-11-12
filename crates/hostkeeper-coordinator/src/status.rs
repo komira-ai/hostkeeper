@@ -15,6 +15,7 @@ use crate::converge::{Convergence, RoleCounts, converge_service, role_counts};
 use crate::decide::Why;
 use crate::desired::Desired;
 use crate::enrollment::ServerCertificate;
+use crate::fleet::retry::Outstanding;
 use crate::fleet::{Fleet, Host};
 use crate::halt;
 use crate::holds::on_bad_version;
@@ -90,6 +91,11 @@ pub struct ServiceHostStatus {
     /// ([`crate::alerts`], `held_on_bad_version`). Left out when it does not.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub held_on_bad_version: bool,
+    /// The order the host was given for the service and has not answered
+    /// ([`crate::fleet::retry::Outstanding`]). `Releases.Status` and `Hosts.Get` show it; the JSON
+    /// status, whose bytes are frozen, does not.
+    #[serde(skip)]
+    pub order: Option<Outstanding>,
 }
 
 /// A node the service places that it has no heartbeat of: a host its group or role should run it
@@ -168,6 +174,7 @@ impl Coordinator {
                 host: host_status(fleet, &def.name, id, host, now),
                 hold: halt::decide(&self.ops, services, all, &def.name, fleet, id, now).why(),
                 held_on_bad_version: on_bad_version(fleet, ops, &def.name, id),
+                order: fleet.outstanding(&def.name, id, now),
             })
             .collect();
         let up = hosts.iter().filter(|h| h.host.up).count();

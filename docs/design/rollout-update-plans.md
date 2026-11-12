@@ -63,7 +63,7 @@ When hosts already run the desired version (a rollback to a version most hosts s
 
 The rollback threshold is unchanged: release-class failures (phase `after_commit` or `gate_release`, class not `environment`) of the desired version on live, unheld hosts, at least the larger of `rollback_after_failed.percent` of the live hosts of the service and its `min_hosts`. It is checked at every heartbeat that brings a verdict, so it is reached within a stage, as the failures arrive, not at the stage's end. Reaching it marks the version bad, which halts the plan (every host is told `bad`), and with `rollback = "automatic"` sets the desired version back to `last_good`, as before.
 
-A failure below the threshold does not stop the stage: the stage's other hosts go on. But a stage with an eligible host that failed is not done, so the next stage does not start until an operator resolves the host: holds it or excludes it, clears the halt its failure raised, or sets a version by hand (which acknowledges the failures standing). A resolved host is no longer eligible, and the stage takes another host in its place. Setting another version starts the plan over.
+A failure below the threshold does not stop the stage: the stage's other hosts go on. But a stage with an eligible host that failed is not done, so the next stage does not start until an operator resolves the host: holds it or excludes it, clears the halt its failure raised, or sets a version by hand (which acknowledges the failures standing). A resolved host is no longer eligible, and the stage takes another host in its place. Setting another version starts the plan over. A host whose failure was resolved is not ordered the version again by the plan, not even once included again after an exclusion; the operator's `Hosts.Retry` of the host and service sets its failed report aside, so it is eligible again and is ordered the next try when the stage has a place for it.
 
 ### 1.6 Across services
 
@@ -158,7 +158,7 @@ Audit entries: `rollout_advance` (by `coordinator` or the operator; the reason s
 | A deferring host | Takes no place, and is not counted as left to order for liveness. | It may decline for its whole backoff; it must not hold the plan or the fleet. |
 | Entering an `auto` stage | Read at once by the decision; written by the coordinator at the same heartbeat. | The decision stays a pure function of what the hosts reported and the operator's marks; the write is the audit record and the restart checkpoint. |
 | A plan that went on while hosts were silent | Stays where it went. | The position is a stage, not a host count; going back would re-hold hosts that already rolled. |
-| A failure an operator acknowledged | Resolved: the host leaves the plan. | Clearing a host's halt, or setting a version by hand over its failure, is the operator saying the rollout may go on. |
+| A failure an operator acknowledged | Resolved: the host leaves the plan, until `Hosts.Retry` sets its report aside. | Clearing a host's halt, or setting a version by hand over its failure, is the operator saying the rollout may go on; trying the version on that host again is a separate decision, so it is its own call. |
 | Canary failure rollback | Kept for services with `canary`. | It is behaviour farms rely on; `stages` without `canary` follow the threshold. |
 
 ## 6. Tests

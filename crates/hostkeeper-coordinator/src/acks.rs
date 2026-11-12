@@ -19,14 +19,20 @@ use crate::ops::{OpsError, OpsStore, ServiceOps, Write};
 use crate::reconcile::{COORDINATOR, Change, entry};
 
 /// The acks in `marks` whose host, as `service` last heard it, no longer makes the report the
-/// ack is for. A host the coordinator has not heard from keeps its ack.
+/// ack is for; a report an operator set aside to order the host again ([`crate::retry`]) is
+/// still the one the host makes. A host the coordinator has not heard from keeps its ack.
 pub(crate) fn stale_acks(service: &str, marks: &ServiceOps, fleet: &Fleet) -> Vec<Change> {
     marks
         .failure_acked
         .iter()
         .filter(|ack| {
             fleet.hosts_of(service).any(|(id, host)| {
-                id.to_string() == ack.node_id && host.beat.last_update.as_ref() != Some(&ack.report)
+                let made = host
+                    .beat
+                    .last_update
+                    .as_ref()
+                    .or_else(|| fleet.set_aside_of(service, id));
+                id.to_string() == ack.node_id && made != Some(&ack.report)
             })
         })
         .map(|ack| Change::DropAck(ack.node_id.clone()))

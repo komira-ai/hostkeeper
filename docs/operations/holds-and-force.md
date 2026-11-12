@@ -129,6 +129,25 @@ the JSON heartbeat route; any other waits for the next heartbeat over gRPC.
   until the host reports a verdict of another order, but it is no word on a release: it never
   replaces the host's standing verdict, so a failure the host fell back from still keeps that
   version from being ordered to it, and a failed clear holds no update slot.
+- `Hosts.Retry` (`hkctl hosts retry --node-id N --service S`) lets a host be ordered again a
+  version it failed. A host whose last report of a service is a failure of the desired version is
+  not ordered that version again (gate reason `failed_here`), and neither clearing the halt the
+  failure raised nor excluding and including the host changes that: the report stands until the
+  host reports another. The call sets the report aside, so the host is ordered the desired
+  version at its next heartbeat, as the plan and the other rules let it, at the try after the
+  failed one; the report's try still counts, so the daemon never sees the failed try again. A
+  halt the failure raised is not lifted by it: clear the halt first (`Releases.ClearHalt`).
+  Until the host answers, `Releases.Status` and `Hosts.Get` show the new order as the host's
+  `order` (its id, try and version) and no last update; the report set aside is shown by no
+  call but the answer. It is set aside until the host reports another, or the same one again
+  after it was seen updating, so a failure of the new try is read, raises a halt and holds the
+  host back as any failure does. It answers the report, with the `retry` audit entry; asked
+  again while the report is set aside, it answers the report and audits nothing. It is refused
+  `nothing_to_retry` when the host's last report of the service is not a failure, when it has
+  none, and when it failed the version it runs (a halt after its switch, which a force repairs),
+  and `store_failed` or `audit_unavailable`, with nothing set aside, when its audit line cannot be
+  written. What is set aside is kept in memory only: after a restart of the coordinator, the
+  operator asks again.
 - `Hosts.Exclude` takes a host out of a service. Its update slot stays held while the host runs
   an update (it reports one `updating` or its promotion pending) or has an order outstanding,
   until the host's own heartbeats or its order's age free it; an excluded host whose last update

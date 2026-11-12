@@ -39,7 +39,7 @@ fn fields_of(pool: &DescriptorPool, message: &str) -> Vec<(String, u32)> {
 
 /// The fields of the plan's messages and of the two views that carry it, pinned by name and
 /// number.
-const FIELDS: [(&str, &[(&str, u32)]); 12] = [
+const FIELDS: [(&str, &[(&str, u32)]); 13] = [
     (
         "hostkeeper.operator.v1.AdvanceRequest",
         &[("service", 1), ("reason", 2), ("host_group", 3)],
@@ -113,6 +113,16 @@ const FIELDS: [(&str, &[(&str, u32)]); 12] = [
             ("last_update", 9),
             ("excluded_reason", 10),
             ("stage", 11),
+            ("order", 12),
+        ],
+    ),
+    (
+        "hostkeeper.operator.v1.CurrentOrder",
+        &[
+            ("order_id", 1),
+            ("order_try", 2),
+            ("version", 3),
+            ("uninstall", 4),
         ],
     ),
     (

@@ -44,6 +44,7 @@ export interface Client {
     abort(request: hostkeeper_operator_v1.AbortRequest): Promise<hostkeeper_operator_v1.AbortResponse>;
     retire(request: hostkeeper_operator_v1.RetireRequest): Promise<hostkeeper_operator_v1.RetireResponse>;
     clearRecord(request: hostkeeper_operator_v1.ClearRecordRequest): Promise<hostkeeper_operator_v1.ClearRecordResponse>;
+    retry(request: hostkeeper_operator_v1.RetryRequest): Promise<hostkeeper_operator_v1.RetryResponse>;
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
@@ -295,6 +296,7 @@ export namespace hostkeeper_operator_v1 {
   export interface CreatePushRequestResponse { csrPem?: string; encryptionCertificatePem?: string; submitted?: boolean; }
   export interface CreateUserRequest { name?: string; }
   export interface CreateUserResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
+  export interface CurrentOrder { orderId?: string; orderTry?: string; version?: string; uninstall?: boolean; }
   export interface DeferBackoff { initialSecs?: string; factor?: number; maxSecs?: string; }
   export interface DeleteUserRequest { name?: string; }
   export interface DeleteUserResponse {
@@ -462,6 +464,7 @@ export namespace hostkeeper_operator_v1 {
     lastUpdate?: hostkeeper_agent_v1.UpdateResult;
     excludedReason?: string;
     stage?: number;
+    order?: hostkeeper_operator_v1.CurrentOrder;
   }
   export interface IncludeRequest { service?: string; nodeId?: string; }
   export interface IncludeResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
@@ -754,6 +757,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ResumeResponse { entry?: hostkeeper_operator_v1.AuditEntry; plan?: hostkeeper_operator_v1.RolloutPlan; }
   export interface RetireRequest { nodeId?: string; reason?: string; }
   export interface RetireResponse { entry?: hostkeeper_operator_v1.AuditEntry; updateInFlight?: boolean; }
+  export interface RetryRequest { nodeId?: string; service?: string; }
+  export interface RetryResponse { setAside?: hostkeeper_agent_v1.UpdateResult; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RevokeApiTokenRequest { name?: string; }
   export interface RevokeApiTokenResponse {
   }

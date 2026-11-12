@@ -177,6 +177,10 @@ host, by one of:
   stage takes another host in its place;
 - `Releases.ClearHalt`, when its failure raised a halt: the failure is acknowledged and the host
   leaves the plan's count of failures;
+- `Hosts.Retry` of the host and the service, to try the version on it again: its failed report is
+  set aside, and it is ordered the next try when the stage has a place for it (see
+  holds-and-force.md); a host whose failure was acknowledged is not ordered again without it,
+  not even once it is included again;
 - setting another desired version, by hand or by CI, which starts the plan over (a version set by an
   operator over a failure acknowledges the failures standing).
 
