@@ -172,7 +172,9 @@ fn only_the_install_and_the_purge_suspend_needrestart() {
 
 /// Proves the download runs in an archives directory that has the mode apt gave the lists'
 /// `partial/` (0700 in the fake, as apt run as root makes it) and the same owner and group, so
-/// that apt's sandbox user, which owns `partial/`, can write the package file there.
+/// that apt's sandbox user, which owns `partial/`, can write the package file there. Run by one
+/// user, the owner is that user's either way; the device test `install_apt` runs real apt as
+/// root and proves the owner (`_apt`) is copied.
 /// Catches: a download into a root-owned archives directory, where apt downloads as root and
 /// warns "Download is performed unsandboxed as root".
 #[test]

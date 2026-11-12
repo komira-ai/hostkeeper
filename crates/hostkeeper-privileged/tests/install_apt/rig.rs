@@ -352,6 +352,11 @@ impl Rig {
     }
 
     /// A new, empty staging directory named `name`, as the core makes one.
+    /// The service's work directory, where its stage runs apt.
+    pub fn work(&self) -> PathBuf {
+        self.dirs.work.join(self.service.as_str())
+    }
+
     pub fn staging(&self, name: &str) -> PathBuf {
         let dir = self.scratch_path.join("staged").join(name);
         fs::create_dir(&dir).expect("make a staging directory");

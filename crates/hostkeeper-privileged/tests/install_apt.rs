@@ -34,6 +34,7 @@ mod rig;
 
 use std::collections::BTreeSet;
 use std::fs;
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::Command;
 
@@ -84,7 +85,8 @@ fn assert_installed(version: &str) {
     );
 }
 
-/// Proves: a service's package installs from a signed repository, updates to a newer version
+/// Proves: a service's package stages from a signed repository with its download directory owned
+/// like apt's own `lists/partial/` (apt's sandbox user, not root), installs, updates to a newer version
 /// keeping its link and its hold, rolls back to the kept previous version with the repository
 /// removed from the disk (nothing is fetched), and is taken off the host entirely: dpkg knows no
 /// package, no file of it remains, the link and the hold are gone and the record is dropped.
@@ -108,6 +110,15 @@ fn a_two_version_package_installs_updates_rolls_back_offline_and_uninstalls() {
         "the version keeps its copy of the index"
     );
     assert_eq!(dpkg_version(), None, "stage installs nothing");
+    // apt run as root gives the lists' partial/ to its sandbox user (_apt, not root); the
+    // download's directory has that owner, so apt downloads as that user and not as root.
+    let partial = fs::metadata(rig.work().join("lists/partial")).expect("lists/partial");
+    let archives = fs::metadata(rig.work().join("archives")).expect("archives");
+    assert_ne!(partial.uid(), 0, "apt made partial/ its sandbox user's");
+    assert_eq!(
+        (archives.uid(), archives.gid(), archives.mode() & 0o7777),
+        (partial.uid(), partial.gid(), partial.mode() & 0o7777)
+    );
 
     let activated = installer.activate(&v1, &dir1).expect("activate 1.0-1");
     assert_eq!(activated.drift, None);
