@@ -8,6 +8,7 @@
 //! - `answers`: `--response-file`, the exit code of every gateway code, `refused:` lines, an
 //!   answer that is not the gateway's, and calls through the real gateway;
 //! - `host_groups`: the `HostGroups` calls, `--host-group`, and an `UNIMPLEMENTED` answer;
+//! - `hosts_retry`: `hosts retry`, its request and its refusal;
 //! - `secrets`: the token never in an argument list, a child's environment or stderr, and a
 //!   token file others can read refused;
 //! - `mdm`: the `Mdm` setup and push-certificate calls, against the fake curl and the real gateway, and the `session_required` refusal;
@@ -21,6 +22,7 @@ mod answers;
 mod flags;
 mod gateway;
 mod host_groups;
+mod hosts_retry;
 mod mdm;
 mod oidc;
 mod older;

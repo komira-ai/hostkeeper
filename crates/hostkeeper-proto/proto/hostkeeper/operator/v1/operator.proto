@@ -86,9 +86,10 @@ import public "hostkeeper/operator/v1/entry.proto";
 import public "hostkeeper/operator/v1/rollouts.proto";
 // `HostRepositories`, which `Host` carries.
 import "hostkeeper/operator/v1/repositories.proto";
-// `SetRepositoryRequest` and `SetRepositoryResponse`; then `RetryRequest`, `RetryResponse` and `CurrentOrder`.
+// `SetRepositoryRequest` and `SetRepositoryResponse`; then the messages of `Hosts.ClearRecord`
+// and `Hosts.Retry`, and `CurrentOrder`.
 import "hostkeeper/operator/v1/services_repository.proto";
-import "hostkeeper/operator/v1/hosts_retry.proto";
+import "hostkeeper/operator/v1/hosts_orders.proto";
 
 // The hosts the coordinator has heard from or enrolled, and what an operator decides about them.
 service Hosts {
@@ -724,19 +725,6 @@ message AbortResponse {
   // The `abort` order waits for the host's next heartbeat.
   bool queued = 1;
   AuditEntry entry = 2;
-}
-
-message ClearRecordRequest {
-  // The host, heard from since the coordinator started.
-  string node_id = 1;
-  // The service whose step record the host sets aside; one the coordinator manages.
-  string service = 2;
-}
-
-message ClearRecordResponse {
-  // The id of the `clear_record` order (`clear-record-<n>`, the number of its `record_cleared`
-  // audit entry), which the host's verdict names (`UpdateResult.order_id`).
-  string order_id = 1;
 }
 
 message RetireRequest {

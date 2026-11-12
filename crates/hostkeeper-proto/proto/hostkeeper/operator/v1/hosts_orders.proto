@@ -1,9 +1,11 @@
-// hostkeeper.operator.v1: the messages of `Hosts.Retry`, the call that lets a host be ordered
-// again a version it failed, and the order a host is told now (`CurrentOrder`), which
-// `HostService` carries. The `Hosts` service, its refusals (`HostsRefusal`) and the rest of the
-// package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal`
-// among it, are operator.proto; this file is the same package and API, kept apart so that each
-// file stays short.
+// hostkeeper.operator.v1: the messages of the `Hosts` calls that act on a host's step record
+// and its failed report: `Hosts.ClearRecord`, which orders the host to set aside a step record
+// that does not read, and `Hosts.Retry`, which lets a host be ordered again a version it failed;
+// and the order a host is told now (`CurrentOrder`), which `HostService` carries. The `Hosts`
+// service, its refusals (`HostsRefusal`) and the rest of the package, `Enrollment` and
+// `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it, are
+// operator.proto; this file is the same package and API, kept apart so that each file stays
+// short.
 //
 // Served by: the coordinator, on its control listener, as operator.proto says.
 //
@@ -23,6 +25,19 @@ package hostkeeper.operator.v1;
 
 import "hostkeeper/agent/v1/agent.proto";
 import "hostkeeper/operator/v1/entry.proto";
+
+message ClearRecordRequest {
+  // The host, heard from since the coordinator started.
+  string node_id = 1;
+  // The service whose step record the host sets aside; one the coordinator manages.
+  string service = 2;
+}
+
+message ClearRecordResponse {
+  // The id of the `clear_record` order (`clear-record-<n>`, the number of its `record_cleared`
+  // audit entry), which the host's verdict names (`UpdateResult.order_id`).
+  string order_id = 1;
+}
 
 // A host whose last report of a service is a failure is not ordered the version it failed
 // again (`GATE_REASON_FAILED_HERE`): not after a new heartbeat, not after an operator clears the
