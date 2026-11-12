@@ -190,6 +190,19 @@ impl Netboot {
         }
     }
 
+    /// The ISO of the boot set of `platform`: its `url`, and its served name, SHA-256 and size
+    /// as a pin to fetch it by; none for a platform with no boot set.
+    pub(crate) fn iso(&self, platform: &str) -> Option<(String, crate::mirrored::Pin)> {
+        let iso = self.platforms.get(platform)?.get(BootFile::Iso.key())?;
+        let text = |key: &str| iso.get(key).and_then(Value::as_str);
+        let pin = crate::mirrored::Pin {
+            name: text("name")?.to_owned(),
+            sha256: text("sha256")?.parse().ok()?,
+            bytes: Some(iso.get("bytes").and_then(Value::as_u64)?),
+        };
+        Some((text("url")?.to_owned(), pin))
+    }
+
     /// The canonical text of the asset of the release `version`: compact JSON with every
     /// object's keys sorted (the `serde_json` map is ordered by key).
     pub(crate) fn to_json(&self, version: &Version) -> String {

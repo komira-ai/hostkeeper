@@ -12,7 +12,9 @@
 # - on a push to main that changes the network-install code: the boot server's crates
 #   (crates/hostkeeper-pxe*), the boot sets' pins (packaging/netboot), the deb's packaging
 #   (packaging/linux), the pxe package's unit (packaging/pxe), the network-install tests and their rig, the generators the jobs run
-#   (cargo xtask release netboot and netinstall-report), and this file;
+#   (cargo xtask release netboot and netinstall-report), the pinned packages of QEMU and the
+#   firmware (.github/debs) and the verbs that fetch them and the ISO (cargo xtask debs and
+#   netboot-iso), and this file;
 # - nightly, on main, whatever changed, for the code these tests use that the paths above leave
 #   out (the coordinator, the daemon);
 # - by hand (workflow_dispatch), on main or on the branch of a pull request.
@@ -21,12 +23,17 @@
 # copies of privileged.yml's jobs, and a run of hours is no check of a pull request. The workflow
 # lint (crates/xtask/tests/workflows) holds its triggers and its paths to exactly these, its
 # concurrency to the group below, each job to its runner (ubuntu-24.04) and its test targets,
-# each job's ISO to the pins of packaging/netboot/pins.toml, and gives it no write scope.
+# each job's ISO to its platform's pin of packaging/netboot/pins.toml and a mirror outside
+# Canonical's, and gives it no write scope.
 #
 # In each job the test binaries are built as the runner's own user; only their run is as root,
-# through the cargo runner `sudo`, and QEMU and its firmware are installed from the runner's Ubuntu
-# archive, by `sudo apt-get update` and `sudo apt-get install` of the packages the workflow lint
-# lists for each: the job's only uses of sudo. So no file of the Cargo registry or of target/ is
+# through the cargo runner `sudo`, and QEMU and its firmware are installed by
+# `sudo dpkg --install` of the job's pinned packages (.github/debs/<set>.toml, which the workflow
+# lint names for each job): the job's only uses of sudo. No job runs apt-get: the packages come
+# from the actions cache, or from the pinned mirrors in turn on a cache miss, each checked against
+# its SHA-256 (cargo xtask debs), and the ISO from its pinned URL or a mirror run by another than
+# Canonical (cargo xtask netboot-iso), so an outage of Canonical's names does not redden a run
+# whose cache hit. So no file of the Cargo registry or of target/ is
 # owned by root, and a test writes only its scratch directory under target/ and what it keeps for
 # the job's artifact under target/privileged-artifacts/, and on the host the network namespaces,
 # the bridge, the veth pairs and the tap of the test's LAN, named by its pid and deleted when it
@@ -57,6 +64,13 @@ on:
       - crates/xtask/src/release/netboot/**
       - crates/xtask/src/netinstall_report.rs
       - crates/xtask/src/netinstall_report/**
+      - .github/debs/**
+      - crates/xtask/src/debs.rs
+      - crates/xtask/src/debs/**
+      - crates/xtask/src/mirrored.rs
+      - crates/xtask/src/mirrored/**
+      - crates/xtask/src/netboot_iso.rs
+      - crates/xtask/src/netboot_iso/**
   schedule:
     - cron: '41 2 * * *'
   workflow_dispatch:
@@ -83,9 +97,9 @@ jobs:
   # its size and SHA-256 against the pins), with this commit's deb; it enrolls with the real
   # coordinator on its LAN listener, is approved, gets the fixture service, boots its disk in
   # router mode, is reinstalled, and once retired and the coordinator restarted is not installed
-  # again in either mode. QEMU and the firmware are Ubuntu's packages, from the runner's own signed
-  # archive: the two apt steps are the job's only other use of sudo, which the workflow lint
-  # allows in the two network-install jobs only, for the packages it lists for each.
+  # again in either mode. QEMU and the firmware are Ubuntu's packages, pinned by version and
+  # SHA-256 in .github/debs/qemu-x86.toml: the dpkg step is the job's only other use of sudo,
+  # which the workflow lint allows in the two network-install jobs only, for each job's own set.
   net-install:
     runs-on: ubuntu-24.04
     permissions:
@@ -99,9 +113,6 @@ jobs:
       NFPM_SHA256: 6d7f9a28b2f397934403950fcbba83f598b08d02edbe79a0815b3b4897341750
       # The version the job's deb and netboot.json carry: a name of this run's own build.
       NET_INSTALL_VERSION: 1.0.0
-      # The ISO of packaging/netboot/pins.toml's linux-x86_64 boot set (the workflow lint holds
-      # it to the pin).
-      ISO_URL: https://releases.ubuntu.com/24.04/ubuntu-24.04.5-live-server-amd64.iso
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -111,11 +122,6 @@ jobs:
         run: test -c /dev/kvm
       - name: The free disk space, for the log
         run: df -h
-      - name: Refresh the package lists of the runner's Ubuntu archive
-        run: sudo apt-get update
-      - name: Install QEMU and the OVMF firmware
-        run: sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf
-      - run: qemu-system-x86_64 --version
       - run: rustup toolchain install
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cargo-cache
@@ -126,6 +132,24 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      # The pinned packages of qemu-x86 (.github/debs/qemu-x86.toml): restored from the actions
+      # cache, or fetched from the pinned mirrors in turn when the cache missed, checked against
+      # their SHA-256 either way (cargo xtask debs), saved on a miss, and installed with dpkg.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: qemu-debs
+        with:
+          path: ${{ runner.temp }}/debs/qemu-x86
+          key: debs-qemu-x86-${{ runner.arch }}-${{ hashFiles('.github/debs/qemu-x86.toml') }}
+      - name: Check the pinned packages of qemu-x86, fetching them from the mirrors on a cache miss
+        run: cargo xtask debs --pins .github/debs/qemu-x86.toml --dir "$RUNNER_TEMP/debs/qemu-x86"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ steps.qemu-debs.outputs.cache-hit != 'true' }}
+        with:
+          path: ${{ runner.temp }}/debs/qemu-x86
+          key: ${{ steps.qemu-debs.outputs.cache-primary-key }}
+      - name: Install QEMU and the OVMF firmware
+        run: sudo dpkg --install "$RUNNER_TEMP"/debs/qemu-x86/*.deb
+      - run: qemu-system-x86_64 --version
       # The deb of this commit, built as artifacts.yml builds it: the static (musl) release
       # programs, the pinned gh and the Sigstore trusted root staged, then nfpm.
       - name: Restore the pinned nfpm.tar.gz from the cache
@@ -189,9 +213,13 @@ jobs:
         run: nfpm package --config packaging/linux/nfpm.yaml --packager deb --target target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      # Checked by pxe update-hook prepare, against the pinned size and SHA-256, in the test.
-      - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-amd64.iso "$ISO_URL"
+      # The ISO of the linux-x86_64 boot set, by its pin: from releases.ubuntu.com, or one of
+      # two mirrors of it run by others, checked against the pinned size and SHA-256 here and
+      # again by pxe update-hook prepare in the test. It has no cache entry of its own (the two
+      # ISOs are about 8 GB); target/, which main's cargo cache saves, may hold it from an earlier
+      # run, and a file there of the pinned size and SHA-256 is kept.
+      - name: Fetch the pinned ISO from its URL or a mirror, and check it
+        run: cargo xtask netboot-iso --pins packaging/netboot/pins.toml --platform linux-x86_64 --dir target/net-install --mirror https://mirrors.edge.kernel.org/ubuntu-releases --mirror https://mirrors.mit.edu/ubuntu-releases
       - name: Build the network-install test as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install
       - name: Run the network-install test as root
@@ -241,20 +269,12 @@ jobs:
       GH_VERSION: 2.102.1
       GH_SHA256: 77b9e297e94c50336823d0f84de7ef1be60cba704601fa0d98f129f47a94987b
       NET_INSTALL_VERSION: 1.0.0
-      # The ISO of packaging/netboot/pins.toml's linux-arm64 boot set (the workflow lint holds
-      # it to the pin).
-      ISO_URL: https://cdimage.ubuntu.com/ubuntu/releases/24.04/release/ubuntu-24.04.5-live-server-arm64.iso
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: The free disk space, for the log
         run: df -h
-      - name: Refresh the package lists of the runner's Ubuntu archive
-        run: sudo apt-get update
-      - name: Install QEMU for arm64 and the AAVMF firmware
-        run: sudo apt-get install --yes --no-install-recommends qemu-system-arm qemu-efi-aarch64
-      - run: qemu-system-aarch64 --version
       - run: rustup toolchain install
       - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         id: cargo-cache
@@ -265,6 +285,24 @@ jobs:
             target
           key: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-${{ hashFiles('Cargo.lock', 'rust-toolchain.toml') }}
           restore-keys: cargo-${{ runner.os }}-${{ runner.arch }}-${{ github.job }}-
+      # The pinned packages of qemu-arm (.github/debs/qemu-arm.toml): restored from the actions
+      # cache, or fetched from the pinned mirrors in turn when the cache missed, checked against
+      # their SHA-256 either way (cargo xtask debs), saved on a miss, and installed with dpkg.
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: qemu-debs
+        with:
+          path: ${{ runner.temp }}/debs/qemu-arm
+          key: debs-qemu-arm-${{ runner.arch }}-${{ hashFiles('.github/debs/qemu-arm.toml') }}
+      - name: Check the pinned packages of qemu-arm, fetching them from the mirrors on a cache miss
+        run: cargo xtask debs --pins .github/debs/qemu-arm.toml --dir "$RUNNER_TEMP/debs/qemu-arm"
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: ${{ steps.qemu-debs.outputs.cache-hit != 'true' }}
+        with:
+          path: ${{ runner.temp }}/debs/qemu-arm
+          key: ${{ steps.qemu-debs.outputs.cache-primary-key }}
+      - name: Install QEMU for arm64 and the AAVMF firmware
+        run: sudo dpkg --install "$RUNNER_TEMP"/debs/qemu-arm/*.deb
+      - run: qemu-system-aarch64 --version
       - name: Restore the pinned gh.tar.gz from the cache
         id: gh-cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -290,8 +328,10 @@ jobs:
       - run: mkdir -p target/net-install
       - name: The boot sets of network install (netboot.json)
         run: cargo xtask release netboot --pins packaging/netboot/pins.toml --version "$NET_INSTALL_VERSION" --dir target/net-install
-      - name: Download the pinned ISO (HTTPS only, redirects included)
-        run: curl --proto =https --proto-redir =https --tlsv1.2 --fail --retry 60 --retry-delay 10 --retry-max-time 600 --retry-all-errors --silent --show-error --location --output target/net-install/ubuntu-24.04.5-live-server-arm64.iso "$ISO_URL"
+      # The ISO of the linux-arm64 boot set, by its pin: from cdimage.ubuntu.com, or one of two
+      # mirrors of it run by others, checked against the pinned size and SHA-256.
+      - name: Fetch the pinned ISO from its URL or a mirror, and check it
+        run: cargo xtask netboot-iso --pins packaging/netboot/pins.toml --platform linux-arm64 --dir target/net-install --mirror https://mirror.us.leaseweb.net/ubuntu-cdimage --mirror https://mirror.leaseweb.com/ubuntu-cdimage
       - name: Build the arm64 network-install test as the runner's user
         run: cargo test -p hostkeeper-privileged --features privileged --locked --no-run --test net_install_arm64
       - name: Run the arm64 network-install test as root

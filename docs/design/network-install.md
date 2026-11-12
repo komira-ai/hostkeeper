@@ -799,14 +799,18 @@ The workflow lint knows the jobs and their runners.
     guest's REQUEST is learned, `hostkeeper/boot.efi` is served as `hostkeeper/shimx64.efi`, and the install menu and
     seed follow; the reboot after the install gets the local-disk menu, its MAC having left the answer set (reason:
     its seed was fetched in this run).
-  - **The boot set** is fetched by the job: the ISO by its pinned URL, `netboot.json` rendered from the committed
+  - **The boot set** is fetched by the job: the ISO by its pin (`cargo xtask netboot-iso`: the pinned URL first, then
+    mirrors of it run by others than Canonical, its size and SHA-256 checked), `netboot.json` rendered from the committed
     pins (`cargo xtask release netboot`), and the deb of the commit under test built as the artifacts workflow
     builds it. The test serves them as a release from a channel on its LAN, each attested by the end-to-end rig's
     signer, with the ISO's URL moved to that channel, and the real `pxe prepare` checks every file against
     the pins and the attestations with the job's pinned `gh` and seals the directory that `serve` then checks.
-  - **QEMU and the firmware** are Ubuntu's packages (`qemu-system-x86` and `ovmf`), from the runner's own signed
-    archive: two apt steps, the job's only other use of `sudo`, which the workflow lint allows in the two
-    network-install jobs only, for the packages it lists for each.
+  - **QEMU and the firmware** are Ubuntu's packages (`qemu-system-x86` and `ovmf`, and the libraries the runner image
+    lacks), each pinned by version and SHA-256 from the release pocket's signed index in `.github/debs/qemu-x86.toml`
+    (`qemu-arm.toml` for the arm64 job): restored from the actions cache, or fetched from Canonical's archive or two
+    mirrors run by others on a miss, checked either way (`cargo xtask debs`), and installed with `dpkg --install`, the
+    job's only other use of `sudo`, which the workflow lint allows in the two network-install jobs only, each for its
+    own set. No job runs apt, so an outage of Canonical's names does not stop a run whose cache hit.
   - **The LAN**: the bridge is in a network namespace of its own, so that no firewall of the runner sees its frames;
     the router (whose DHCP is a thread of the test, moved into the router's namespace) and `pxe` are in
     theirs; the host's own namespace holds the coordinator's private and LAN listeners and the release channel, at

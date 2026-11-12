@@ -531,7 +531,8 @@ struct Site {
 }
 
 /// Every pinned download of the repository's workflows: each restore of the cache action whose
-/// id is `<stem>-cache` and whose path is a file of `${{ runner.temp }}`.
+/// id is `<stem>-cache` and whose path is a file of `${{ runner.temp }}`, but a set of pinned
+/// Debian packages (`debs/<set>`), which the rule of `debs.rs` holds.
 fn sites() -> Vec<Site> {
     let mut found = Vec::new();
     for (file, text) in workflows() {
@@ -547,7 +548,8 @@ fn sites() -> Vec<Site> {
                 let archive = entry(step, "with")
                     .and_then(|w| entry(w, "path"))
                     .and_then(Node::as_str)
-                    .and_then(|p| p.strip_prefix("${{ runner.temp }}/"));
+                    .and_then(|p| p.strip_prefix("${{ runner.temp }}/"))
+                    .filter(|p| !p.starts_with("debs/"));
                 if let (true, Some(archive)) = (restores, archive) {
                     found.push(Site {
                         file: file.clone(),

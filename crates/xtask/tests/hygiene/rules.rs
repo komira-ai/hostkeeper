@@ -90,13 +90,37 @@ pub const TRUSTED_ROOT_FILE: &str = "packaging/sigstore/trusted_root.json";
 /// The files whose dates are third-party data, kept verbatim.
 const DATED_BY_OTHERS: [&str; 2] = [LICENCE_FILE, TRUSTED_ROOT_FILE];
 
-/// Every rule, over one file. The date rule skips the licence text and the trusted root, and
-/// nothing else does.
+/// The directory of the pinned Debian packages (`.github/debs/<set>.toml`): each line that starts
+/// with [`PIN_LINE`] is one package's version, pool path and SHA-256 as Canonical's signed index
+/// spells them, and a version may hold its upstream snapshot's date (`1.21.1+git-<date>.<hash>`).
+pub const DEBS_DIR: &str = ".github/debs/";
+
+/// How a pin line of a file of [`DEBS_DIR`] starts.
+pub const PIN_LINE: &str = "  { package = \"";
+
+/// `text` with each pin line blanked when `path` is a pins file of [`DEBS_DIR`], so that the date
+/// rule reads every other line of it (comments included) and keeps the line numbers.
+fn without_pin_lines(path: &str, text: &str) -> String {
+    let pins = path.starts_with(DEBS_DIR) && path.ends_with(".toml");
+    text.split('\n')
+        .map(|line| {
+            if pins && line.starts_with(PIN_LINE) {
+                ""
+            } else {
+                line
+            }
+        })
+        .collect::<Vec<&str>>()
+        .join("\n")
+}
+
+/// Every rule, over one file. The date rule skips the licence text, the trusted root and the pin
+/// lines of the pinned Debian packages, and nothing else does.
 pub fn lint(path: &str, text: &str, lists: &Lists) -> Vec<Finding> {
     let mut out = if DATED_BY_OTHERS.contains(&path) {
         Vec::new()
     } else {
-        dates(path, text)
+        dates(path, &without_pin_lines(path, text))
     };
     out.extend(ipv4s(path, text));
     out.extend(home_paths(path, text));

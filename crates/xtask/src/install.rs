@@ -38,6 +38,11 @@ impl Sha256 {
     pub(crate) fn of(bytes: &[u8]) -> Sha256 {
         Sha256(sha2::Sha256::digest(bytes).into())
     }
+
+    /// The digest a hasher finished with: `digest`.
+    pub(crate) fn from_digest(digest: [u8; 32]) -> Sha256 {
+        Sha256(digest)
+    }
 }
 
 impl fmt::Display for Sha256 {

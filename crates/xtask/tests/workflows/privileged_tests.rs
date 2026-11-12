@@ -17,7 +17,7 @@ use super::lint::{
 };
 use super::net_install::{
     self, NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_ARM64_JOB, NET_INSTALL_FIRST_LINE,
-    NET_INSTALL_JOB, NET_JOBS, apt_steps,
+    NET_INSTALL_JOB, NET_JOBS, install_steps,
 };
 use super::openrc::OPENRC_FIRST_LINE;
 use super::pr_device;
@@ -376,8 +376,9 @@ fn sudo_count(node: &Node) -> usize {
 /// other than one build step and one step as root; the build as root or after the run; a step
 /// that builds or runs another set of test targets than the job's; a step that runs more than
 /// one command (`;`, `&&`, `||`, a pipe or more than one line), whose logic belongs in a Rust
-/// tool; an apt step outside the network-install jobs of net-install.yml. Each problem of a job
-/// names it.
+/// tool; a dpkg step outside the network-install jobs of net-install.yml, and in each of them
+/// other than one install of its own pinned set before the build (`net_install::install_steps`,
+/// whose `sudo` the counts leave out). Each problem of a job names it.
 pub fn shape_problems(
     file: &str,
     text: &str,
@@ -404,7 +405,7 @@ pub fn shape_problems(
             problems.push(format!("job {name} is not a job of {file}"));
             continue;
         };
-        // The apt steps are allowed in the network-install jobs of their own workflow only.
+        // A dpkg step is allowed in the network-install jobs of their own workflow only.
         let net = NET_JOBS
             .iter()
             .find(|net| file == net_install::FILE && net.name == name);
@@ -429,9 +430,9 @@ fn job_shape_problems(
     let builds: Vec<usize> = (0..runs.len())
         .filter(|&i| runs[i].starts_with(BUILD))
         .collect();
-    let (apt_problems, apt_allowed) = apt_steps(&runs, builds.first().copied(), net);
-    problems.extend(apt_problems);
-    let sudo = sudo_count(job) - apt_allowed.len();
+    let (install_problems, installs) = install_steps(&runs, builds.first().copied(), net);
+    problems.extend(install_problems);
+    let sudo = sudo_count(job) - installs.len();
     if sudo != 1 {
         problems.push(format!("sudo is named {sudo} times, not once"));
     }
@@ -444,7 +445,7 @@ fn job_shape_problems(
         }
     }
     let rooted: Vec<usize> = (0..runs.len())
-        .filter(|&i| !apt_allowed.contains(&i) && root_line(&[runs[i]]).is_some())
+        .filter(|&i| !installs.contains(&i) && root_line(&[runs[i]]).is_some())
         .collect();
     for (what, found, start) in [("build", &builds, BUILD), ("run as root", &rooted, RUN)] {
         match found[..] {

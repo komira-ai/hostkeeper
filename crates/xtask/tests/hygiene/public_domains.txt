@@ -30,6 +30,19 @@ apple.com
 # (packaging/netboot/pins.toml: releases.ubuntu.com, cdimage.ubuntu.com), and the Ubuntu archive
 # its README checks the pinned packages against (archive.ubuntu.com, ports.ubuntu.com).
 ubuntu.com
+# Canonical's other domains, which the workflow lint refuses in any value of a workflow
+# (crates/xtask/tests/workflows/debs.rs): Launchpad, its PPA host, and Canonical's own site.
+launchpad.net
+launchpadcontent.net
+canonical.com
+
+# Mirrors of Canonical's archive and release sites run by others, which the network-install jobs
+# fetch the pinned packages (.github/debs) and the pinned ISOs from when Canonical's names do not
+# answer (net-install.yml).
+=mirrors.edge.kernel.org
+=mirrors.mit.edu
+=mirror.us.leaseweb.net
+=mirror.leaseweb.com
 
 # The ACME directory of Let's Encrypt (acme-v02.api.letsencrypt.org), which the MDM kit's example
 # settings name for its TLS certificate (crates/hostkeeper-mdm-core/config.example).

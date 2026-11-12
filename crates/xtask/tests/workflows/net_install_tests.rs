@@ -1,7 +1,8 @@
 //! The rules of `net-install.yml` ([`super::net_install`]), the workflow of the two
 //! network-install jobs: its triggers, paths and concurrency, its two jobs and their runner, the
-//! test targets of each, the apt steps that install QEMU and the firmware, and the ISO held to the
-//! pin of `packaging/netboot/pins.toml`; and that `privileged.yml`, which a release waits for, has
+//! test targets of each, the dpkg step that installs QEMU and the firmware from the job's own
+//! pinned set, and the step that fetches the ISO by the pin of `packaging/netboot/pins.toml`;
+//! and that `privileged.yml`, which a release waits for, has
 //! none of these jobs. Each rule is shown to refuse its defect by putting it into the committed
 //! workflow and reading the exact problems it reports.
 
@@ -11,7 +12,7 @@ use std::path::PathBuf;
 use super::lint::{PRIVILEGED_WORKFLOW, entry, lint};
 use super::net_install::{
     CONCURRENCY_PROBLEM, FILE, GROUP, NET_INSTALL_ARM64_JOB, NET_INSTALL_JOB, NET_JOBS, ON_PROBLEM,
-    PATHS, apt_steps, iso_problems,
+    PATHS, install_steps, iso_problems, iso_run,
 };
 use super::net_install::{NET_INSTALL_ARM64_FIRST_LINE, NET_INSTALL_FIRST_LINE};
 use super::privileged_tests::{
@@ -21,10 +22,8 @@ use super::release::REQUIRED_WORKFLOWS;
 use super::workflows;
 use super::yaml::{self, Node};
 
-const UPDATE: &str = "sudo apt-get update";
-const INSTALL_X86: &str = "sudo apt-get install --yes --no-install-recommends qemu-system-x86 ovmf";
-const INSTALL_ARM: &str =
-    "sudo apt-get install --yes --no-install-recommends qemu-system-arm qemu-efi-aarch64";
+const INSTALL_X86: &str = "sudo dpkg --install \"$RUNNER_TEMP\"/debs/qemu-x86/*.deb";
+const INSTALL_ARM: &str = "sudo dpkg --install \"$RUNNER_TEMP\"/debs/qemu-arm/*.deb";
 
 /// The committed workflow `name`.
 fn committed_file(name: &str) -> String {
@@ -97,44 +96,42 @@ fn privileged_problems(text: &str) -> Vec<String> {
 
 fn not_allowed_here(run: &str) -> String {
     format!(
-        "the apt step `{run}` is not allowed outside the jobs net-install and net-install-arm64"
+        "the dpkg step `{run}` is not allowed outside the jobs net-install and net-install-arm64"
     )
 }
 
-fn refused_x86(run: &str) -> String {
-    format!(
-        "job net-install: the apt step `{run}` is not `sudo apt-get update` or `sudo apt-get install --yes --no-install-recommends ...` of only [\"qemu-system-x86\", \"ovmf\"]"
-    )
-}
-
-fn refused_arm(run: &str) -> String {
-    format!(
-        "job net-install-arm64: the apt step `{run}` is not `sudo apt-get update` or `sudo apt-get install --yes --no-install-recommends ...` of only [\"qemu-system-arm\", \"qemu-efi-aarch64\"]"
-    )
+/// The refusal of the dpkg step `run` in the job `job`, whose own set's install is `own`.
+fn not_its_own(job: &str, run: &str, own: &str) -> String {
+    format!("job {job}: the dpkg step `{run}` is not `{own}`, the install of its own set")
 }
 
 #[test]
-fn the_committed_network_install_jobs_pass_the_shape_apt_and_iso_rules() {
-    // Catches: a rule set that refuses the committed net-install.yml, which names one `sudo apt-get
-    // update` and one install of its listed packages in each network-install job before the build,
-    // the ISO of each job at the pin, and the test file of each job under its own first line.
+fn the_committed_network_install_jobs_pass_the_shape_install_and_iso_rules() {
+    // Catches: a rule set that refuses the committed net-install.yml, which installs its own
+    // pinned set once in each network-install job before the build, fetches the ISO of each
+    // job's platform with mirrors, and keeps the test file of each job under its own first line;
+    // and a job left without the install of its set.
     let text = committed();
     assert_eq!(lint(FILE, &text), Vec::<String>::new());
     assert_eq!(problems(&text), Vec::<String>::new());
     assert_eq!(iso_problems(&text, &pins()), Vec::<String>::new());
-    for (job, install) in [
-        (NET_INSTALL_JOB, INSTALL_X86),
-        (NET_INSTALL_ARM64_JOB, INSTALL_ARM),
+    for (job, install, set) in [
+        (NET_INSTALL_JOB, INSTALL_X86, "qemu-x86"),
+        (NET_INSTALL_ARM64_JOB, INSTALL_ARM, "qemu-arm"),
     ] {
-        let mut seen = (false, false);
+        let mut seen = false;
         edit_job(&text, job, |section| {
-            seen = (
-                section.contains(&step_value(UPDATE)),
-                section.contains(&step_value(install)),
-            );
+            seen = section.contains(&step_value(install));
             section.to_owned()
         });
-        assert_eq!(seen, (true, true), "{job} updates and installs");
+        assert!(seen, "{job} installs its set");
+        let without = replace_in_job(&text, job, &step_value(install), "run: true");
+        assert_eq!(
+            problems(&without),
+            [format!(
+                "job {job}: 0 installs of the pinned set {set}, not one"
+            )]
+        );
     }
     let targets = net_install_targets();
     assert_eq!(
@@ -145,26 +142,13 @@ fn the_committed_network_install_jobs_pass_the_shape_apt_and_iso_rules() {
         targets[NET_INSTALL_ARM64_JOB],
         BTreeSet::from(["net_install_arm64".to_owned()])
     );
-    // No apt step at all is also allowed: at most one of each.
-    let bare = [NET_INSTALL_JOB, NET_INSTALL_ARM64_JOB]
-        .iter()
-        .fold(text, |text, job| {
-            let text = replace_in_job(&text, job, &step_value(UPDATE), "run: true");
-            let install = NET_JOBS
-                .iter()
-                .find(|n| n.name == *job)
-                .map(|n| n.packages.join(" "));
-            replace_in_job(
-                &text,
-                job,
-                &step_value(&format!(
-                    "sudo apt-get install --yes --no-install-recommends {}",
-                    install.expect("a network-install job")
-                )),
-                "run: true",
-            )
-        });
-    assert_eq!(problems(&bare), Vec::<String>::new());
+    assert_eq!(
+        NET_JOBS.map(|n| (n.name, n.set, n.platform)),
+        [
+            (NET_INSTALL_JOB, "qemu-x86", "linux-x86_64"),
+            (NET_INSTALL_ARM64_JOB, "qemu-arm", "linux-arm64")
+        ]
+    );
 }
 
 /// The `run: ...` of a step that runs `run`, as the committed file writes it.
@@ -246,15 +230,14 @@ fn the_shape_check_holds_each_network_install_job_to_its_own_targets() {
 }
 
 #[test]
-fn an_apt_step_outside_the_network_install_jobs_is_refused() {
-    // Catches: the apt allowance let into a job of privileged.yml (the `privileged` job, or any
-    // job that is not one of the two network-install jobs), where an apt install is refused as an
-    // apt step and as a second `sudo`; and an apt step that does not use `sudo`.
+fn a_dpkg_step_outside_the_network_install_jobs_is_refused() {
+    // Catches: the install allowance let into a job of privileged.yml (the `privileged` job, or
+    // any job that is not one of the two network-install jobs), where it is refused as a dpkg
+    // step and as a second `sudo`; and a dpkg step that does not use `sudo`.
     let text = committed_file(PRIVILEGED_WORKFLOW);
     for (job, run) in [
         ("privileged", INSTALL_X86),
-        ("privileged", UPDATE),
-        ("first-boot", UPDATE),
+        ("first-boot", INSTALL_ARM),
         ("macos-device", INSTALL_X86),
         ("openrc-device", INSTALL_X86),
     ] {
@@ -269,13 +252,13 @@ fn an_apt_step_outside_the_network_install_jobs_is_refused() {
             "{job}: {run}"
         );
     }
-    let plain = "apt-get install --yes ovmf";
+    let plain = "dpkg --install ovmf_2024.02-2_all.deb";
     assert_eq!(
         privileged_problems(&with_first_step(&text, "privileged", plain)),
         [format!("job privileged: {}", not_allowed_here(plain))]
     );
     // The allowance is the job's in net-install.yml, not its name's: the committed jobs, judged
-    // as jobs of another workflow that has them, have their apt steps refused.
+    // as jobs of another workflow that has them, have their dpkg steps refused.
     let net = committed();
     let found = shape_problems(PRIVILEGED_WORKFLOW, &net, &net_install_targets());
     let want: Vec<String> = [
@@ -285,10 +268,9 @@ fn an_apt_step_outside_the_network_install_jobs_is_refused() {
     .iter()
     .flat_map(|(job, install)| {
         [
-            format!("job {job}: {}", not_allowed_here(UPDATE)),
             format!("job {job}: {}", not_allowed_here(install)),
-            format!("job {job}: sudo is named 3 times, not once"),
-            format!("job {job}: 3 run as root steps, not one"),
+            format!("job {job}: sudo is named 2 times, not once"),
+            format!("job {job}: 2 run as root steps, not one"),
         ]
     })
     .collect();
@@ -329,96 +311,70 @@ fn a_network_install_job_back_in_privileged_yml_is_refused() {
 }
 
 #[test]
-fn an_apt_install_naming_a_package_outside_the_jobs_list_is_refused() {
-    // Catches: an install of a package the job does not list: an extra one, the other job's, none
-    // at all, a pinned version, or an option (`--allow-unauthenticated`, or one before the list).
+fn an_install_of_another_set_or_another_dpkg_command_is_refused() {
+    // Catches: a network-install job installing the other job's set, a set by another spelling
+    // (`-i`, an option, a file beside the set, another directory), a dpkg command other than the
+    // install (`--purge`), and a chained one; each is no install of its own set, and a `sudo`
+    // the one-sudo rule counts.
     let text = committed();
     let cases = [
-        (NET_INSTALL_JOB, INSTALL_X86, format!("{INSTALL_X86} curl")),
         (NET_INSTALL_JOB, INSTALL_X86, INSTALL_ARM.to_owned()),
+        (NET_INSTALL_ARM64_JOB, INSTALL_ARM, INSTALL_X86.to_owned()),
         (
             NET_INSTALL_JOB,
             INSTALL_X86,
-            "sudo apt-get install --yes --no-install-recommends ".to_owned(),
+            INSTALL_X86.replace("--install", "-i"),
         ),
         (
             NET_INSTALL_JOB,
             INSTALL_X86,
-            "sudo apt-get install --yes --no-install-recommends ovmf=2024.02".to_owned(),
+            INSTALL_X86.replace("--install", "--install --force-all"),
         ),
         (
             NET_INSTALL_JOB,
             INSTALL_X86,
-            INSTALL_X86.replace(
-                "--no-install-recommends ",
-                "--no-install-recommends --allow-unauthenticated ",
-            ),
+            format!("{INSTALL_X86} extra.deb"),
         ),
         (
             NET_INSTALL_JOB,
             INSTALL_X86,
-            "sudo apt-get install --yes qemu-system-x86 ovmf".to_owned(),
-        ),
-        (
-            NET_INSTALL_JOB,
-            INSTALL_X86,
-            "sudo apt-get install --yes --no-install-recommends -t noble-proposed ovmf".to_owned(),
+            "sudo dpkg --install target/qemu-x86/*.deb".to_owned(),
         ),
         (
             NET_INSTALL_ARM64_JOB,
             INSTALL_ARM,
-            format!("{INSTALL_ARM} ovmf"),
+            "sudo dpkg --purge qemu-system-arm".to_owned(),
         ),
-        (NET_INSTALL_ARM64_JOB, INSTALL_ARM, INSTALL_X86.to_owned()),
     ];
     for (job, from, to) in cases {
-        let refused = if job == NET_INSTALL_JOB {
-            refused_x86(to.trim_end())
+        let (set, own) = if job == NET_INSTALL_JOB {
+            ("qemu-x86", INSTALL_X86)
         } else {
-            refused_arm(&to)
+            ("qemu-arm", INSTALL_ARM)
         };
         let found = problems(&replace_in_job(&text, job, from, &to));
         assert_eq!(
             found,
             [
-                refused,
+                not_its_own(job, &to, own),
+                format!("job {job}: 0 installs of the pinned set {set}, not one"),
                 format!("job {job}: sudo is named 2 times, not once"),
                 format!("job {job}: 2 run as root steps, not one"),
             ],
             "{to}"
         );
     }
-}
-
-#[test]
-fn another_apt_command_or_a_chained_one_is_refused() {
-    // Catches: `sudo apt-get upgrade` or `remove` taken for the update, an update with a flag or
-    // chained to another command, and a `sudo` step of any other kind in a network-install job,
-    // which the one-sudo rule still counts.
-    let text = committed();
-    for run in [
-        "sudo apt-get upgrade",
-        "sudo apt-get remove --yes snapd",
-        "sudo apt-get update --allow-insecure-repositories",
-        "sudo apt-get dist-upgrade --yes",
-        "sudo apt install --yes ovmf",
-    ] {
-        let found = problems(&replace_in_job(&text, NET_INSTALL_JOB, UPDATE, run));
-        assert_eq!(
-            found,
-            [
-                refused_x86(run),
-                "job net-install: sudo is named 2 times, not once".to_owned(),
-                "job net-install: 2 run as root steps, not one".to_owned(),
-            ],
-            "{run}"
-        );
-    }
-    let chained = "sudo apt-get update && sudo apt-get install --yes --no-install-recommends ovmf";
+    let chained = format!("{INSTALL_X86} && sudo dpkg --purge ovmf");
     assert_eq!(
-        problems(&replace_in_job(&text, NET_INSTALL_JOB, UPDATE, chained)),
+        problems(&replace_in_job(
+            &text,
+            NET_INSTALL_JOB,
+            INSTALL_X86,
+            &chained
+        )),
         [
-            refused_x86(chained),
+            not_its_own(NET_INSTALL_JOB, &chained, INSTALL_X86),
+            "job net-install: 0 installs of the pinned set qemu-x86, not one".to_owned(),
             "job net-install: sudo is named 3 times, not once".to_owned(),
             format!("job net-install: the step `{chained}` runs more than one command"),
             "job net-install: 2 run as root steps, not one".to_owned(),
@@ -435,30 +391,22 @@ fn another_apt_command_or_a_chained_one_is_refused() {
 }
 
 #[test]
-fn a_second_apt_step_or_one_after_the_build_is_refused() {
-    // Catches: a second `sudo apt-get update` or install step (at most one of each is allowed,
-    // and each is a `sudo` the one-sudo rule leaves out), and an apt step placed after the build
-    // step of the privileged tests instead of before it.
+fn a_second_install_or_one_after_the_build_is_refused() {
+    // Catches: a second install of the set (one is allowed, and its `sudo` is the one the
+    // one-sudo rule leaves out), and the install placed after the build step of the privileged
+    // tests instead of before it.
     let text = committed();
-    for (job, run, what) in [
-        (NET_INSTALL_JOB, UPDATE, "update"),
-        (NET_INSTALL_JOB, INSTALL_X86, "install"),
-        (NET_INSTALL_ARM64_JOB, INSTALL_ARM, "install"),
+    for (job, run, set) in [
+        (NET_INSTALL_JOB, INSTALL_X86, "qemu-x86"),
+        (NET_INSTALL_ARM64_JOB, INSTALL_ARM, "qemu-arm"),
     ] {
         assert_eq!(
             problems(&with_first_step(&text, job, run)),
             [format!(
-                "job {job}: 2 apt-get {what} steps, not at most one"
+                "job {job}: 2 installs of the pinned set {set}, not one"
             )]
         );
-    }
-    for (job, run) in [
-        (NET_INSTALL_JOB, UPDATE),
-        (NET_INSTALL_JOB, INSTALL_X86),
-        (NET_INSTALL_ARM64_JOB, UPDATE),
-        (NET_INSTALL_ARM64_JOB, INSTALL_ARM),
-    ] {
-        let without = replace_in_job(&text, job, &format!("{}\n", step_value(run)), "\n");
+        let without = replace_in_job(&text, job, &format!("        {}\n", step_value(run)), "");
         let build = without
             .lines()
             .find(|line| {
@@ -471,7 +419,7 @@ fn a_second_apt_step_or_one_after_the_build_is_refused() {
         assert_eq!(
             problems(&after),
             [format!(
-                "job {job}: the apt step `{run}` comes after the build step"
+                "job {job}: the dpkg step `{run}` comes after the build step"
             )],
             "{job}: {run}"
         );
@@ -485,45 +433,45 @@ fn with_after(text: &str, line: &str, add: &str) -> String {
 }
 
 #[test]
-fn the_apt_steps_are_judged_against_the_job_they_are_in() {
-    // Catches: an apt rule that is wrong about order or counts when called on its own: no build
-    // step makes no order problem, only the allowed steps are left out of the `sudo` count.
+fn the_install_steps_are_judged_against_the_job_they_are_in() {
+    // Catches: an install rule that is wrong about order or counts when called on its own: no
+    // build step makes no order problem, only the allowed step is left out of the `sudo` count,
+    // and a job that is not a network-install job may have none and needs none.
     let net = &NET_JOBS[0];
     assert_eq!(
-        apt_steps(&[UPDATE, INSTALL_X86], None, Some(net)),
-        (vec![], vec![0, 1])
+        install_steps(&[INSTALL_X86], None, Some(net)),
+        (vec![], vec![0])
     );
     assert_eq!(
-        apt_steps(&["cargo build"], Some(0), Some(net)),
+        install_steps(&["cargo build", INSTALL_X86], Some(0), Some(net)).0,
+        [format!(
+            "the dpkg step `{INSTALL_X86}` comes after the build step"
+        )]
+    );
+    assert_eq!(
+        install_steps(&[INSTALL_X86, "build"], Some(1), Some(net)),
+        (vec![], vec![0])
+    );
+    assert_eq!(
+        install_steps(&["cargo build"], Some(0), None),
         (vec![], vec![])
     );
     assert_eq!(
-        apt_steps(&[INSTALL_ARM], None, Some(net)),
-        (
-            vec![refused_x86(INSTALL_ARM)["job net-install: ".len()..].to_owned()],
-            vec![]
-        )
-    );
-    assert_eq!(
-        apt_steps(&[UPDATE, "build"], Some(1), Some(net)).0,
-        Vec::<String>::new()
-    );
-    assert_eq!(
-        apt_steps(&["build", UPDATE], Some(0), Some(net)).0,
-        [format!(
-            "the apt step `{UPDATE}` comes after the build step"
-        )]
+        install_steps(&["dpkg-query --show ovmf"], None, None),
+        (vec![], vec![])
     );
 }
 
-/// The `ISO_URL` line of `job` in `text`.
-fn iso_line(text: &str, job: &str) -> String {
+/// The ISO step's `run:` value of `job` in `text`.
+fn iso_step(text: &str, job: &str) -> String {
     let mut found = String::new();
     edit_job(text, job, |section| {
         found = section
             .lines()
-            .find(|line| line.trim_start().starts_with("ISO_URL:"))
-            .expect("an ISO_URL line")
+            .find(|line| line.contains("netboot-iso"))
+            .expect("an ISO step")
+            .trim_start()
+            .trim_start_matches("run: ")
             .to_owned();
         section.to_owned()
     });
@@ -531,55 +479,50 @@ fn iso_line(text: &str, job: &str) -> String {
 }
 
 #[test]
-fn the_iso_of_each_network_install_job_is_held_to_the_pin() {
-    // Catches: an ISO_URL that differs from the `url` of the job's platform in pins.toml (the
-    // other platform's, a changed pin, or a plain typo), no ISO_URL, a step that does not use
-    // "$ISO_URL", a missing job, a pins file without the table, and one that does not parse.
+fn the_iso_of_each_network_install_job_is_fetched_by_its_platforms_pin_with_mirrors() {
+    // Catches: an ISO step of the other platform, of another pins file or directory, with no
+    // mirror, with a mirror that is not a plain https:// base, or a second or missing ISO step;
+    // a missing job, a pins file without the platform's ISO, and one that does not parse.
     let text = committed();
     let pins = pins();
-    let x86 = iso_line(&text, NET_INSTALL_JOB);
-    let arm = iso_line(&text, NET_INSTALL_ARM64_JOB);
-    let x86_url = x86.trim_start().trim_start_matches("ISO_URL: ");
-    let arm_url = arm.trim_start().trim_start_matches("ISO_URL: ");
-    assert_ne!(x86_url, arm_url);
-
-    let swapped = replace_in_job(&text, NET_INSTALL_JOB, x86_url, arm_url);
+    let x86 = iso_step(&text, NET_INSTALL_JOB);
+    let arm = iso_step(&text, NET_INSTALL_ARM64_JOB);
+    assert!(x86.starts_with(&format!("{} --mirror https://", iso_run("linux-x86_64"))));
+    assert!(arm.starts_with(&format!("{} --mirror https://", iso_run("linux-arm64"))));
+    let refused = |job: &str, run: &str, platform: &str| {
+        format!(
+            "job {job}: the ISO step `{run}` is not `{}` and one or more `--mirror https://<base>`",
+            iso_run(platform)
+        )
+    };
+    let mirrors = x86.split_once(" --mirror ").expect("a mirror").1;
+    for wrong in [
+        x86.replace("linux-x86_64", "linux-arm64"),
+        x86.replace("packaging/netboot/pins.toml", "pins.toml"),
+        x86.replace("--dir target/net-install", "--dir target"),
+        iso_run("linux-x86_64"),
+        x86.replace(" --mirror https://", " --mirror http://"),
+        format!("{x86} --mirror https://mirror.example/u/"),
+        format!("{x86} --mirror https://"),
+        format!("{x86} --mirror https://me@mirror.example/u"),
+        x86.replace(mirrors, &format!("{mirrors} && true")),
+    ] {
+        let edited = replace_in_job(&text, NET_INSTALL_JOB, &x86, &wrong);
+        assert_eq!(
+            iso_problems(&edited, &pins),
+            [refused(NET_INSTALL_JOB, &wrong, "linux-x86_64")],
+            "{wrong}"
+        );
+    }
+    let second = with_first_step(&text, NET_INSTALL_ARM64_JOB, &arm);
     assert_eq!(
-        iso_problems(&swapped, &pins),
-        [format!(
-            "job net-install: ISO_URL is `{arm_url}`, not the url `{x86_url}` of [linux-x86_64.iso] in pins.toml"
-        )]
+        iso_problems(&second, &pins),
+        ["job net-install-arm64: 2 steps fetch the ISO, not one"]
     );
-    // A URL that is not the pin's, by one character.
-    let typo = replace_in_job(&text, NET_INSTALL_ARM64_JOB, "24.04.5", "24.04.4");
-    let typo_url = arm_url.replace("24.04.5", "24.04.4");
+    let none = replace_in_job(&text, NET_INSTALL_ARM64_JOB, &arm, "true");
     assert_eq!(
-        iso_problems(&typo, &pins),
-        [format!(
-            "job net-install-arm64: ISO_URL is `{typo_url}`, not the url `{arm_url}` of [linux-arm64.iso] in pins.toml"
-        )]
-    );
-    let moved = pins.replace(x86_url, &format!("{x86_url}.new"));
-    assert_eq!(
-        iso_problems(&text, &moved),
-        [format!(
-            "job net-install: ISO_URL is `{x86_url}`, not the url `{x86_url}.new` of [linux-x86_64.iso] in pins.toml"
-        )]
-    );
-    let no_env = replace_in_job(&text, NET_INSTALL_ARM64_JOB, &format!("{arm}\n"), "");
-    assert_eq!(
-        iso_problems(&no_env, &pins),
-        ["job net-install-arm64: no env ISO_URL"]
-    );
-    let unused = replace_in_job(&text, NET_INSTALL_JOB, "\"$ISO_URL\"", "\"$OTHER_URL\"");
-    assert_eq!(
-        iso_problems(&unused, &pins),
-        ["job net-install: no step uses \"$ISO_URL\""]
-    );
-    let unquoted = replace_in_job(&text, NET_INSTALL_JOB, "\"$ISO_URL\"", "$ISO_URL");
-    assert_eq!(
-        iso_problems(&unquoted, &pins),
-        ["job net-install: no step uses \"$ISO_URL\""]
+        iso_problems(&none, &pins),
+        ["job net-install-arm64: 0 steps fetch the ISO, not one"]
     );
     let gone = text.replace("\n  net-install:\n", "\n  net-install-gone:\n");
     assert_eq!(iso_problems(&gone, &pins), ["no job net-install"]);
