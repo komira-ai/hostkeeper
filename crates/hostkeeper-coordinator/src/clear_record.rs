@@ -138,7 +138,8 @@ impl Coordinator {
     /// A second call while the first order waits answers that order's id and changes nothing.
     ///
     /// # Errors
-    /// `unauthorized`, `forbidden`, `invalid_request` (the node id), `unknown_service`,
+    /// `unauthorized`, `forbidden`, `invalid_request` (the node id), `unknown_service` (the
+    /// rollout file defines no such service and no host group lists it),
     /// `unknown_host` (not heard from since the coordinator started), `daemon_too_old` (its
     /// daemon did not announce [`FEATURE`] in its last heartbeat), `store_failed` and
     /// `audit_unavailable` (the audit line was not written). A refused call orders nothing and
@@ -154,8 +155,7 @@ impl Coordinator {
             .parse::<HostId>()
             .map_err(|_| proto::HostsRefusal::InvalidRequest)?;
         let def = self
-            .services
-            .get(&request.service)
+            .package_def(&request.service)
             .ok_or(proto::HostsRefusal::UnknownService)?;
         // Under the fleet's lock, as an abort is queued: no heartbeat takes the queue between
         // the check of what the host announced and the order.

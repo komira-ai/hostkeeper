@@ -338,6 +338,8 @@ mod group_install_order_tests;
 #[cfg(test)]
 mod group_marks_tests;
 #[cfg(test)]
+mod group_retry_tests;
+#[cfg(test)]
 mod group_set_desired_tests;
 #[cfg(test)]
 mod group_uninstall_tests;
