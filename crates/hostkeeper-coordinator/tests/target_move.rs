@@ -38,6 +38,8 @@ stages = [100]
 const X86: agent::Platform = agent::Platform::LinuxX8664;
 const MAC: agent::Platform = agent::Platform::DarwinArm64;
 const ARCHIVE: &str = "hostkeeper-archive";
+/// The gRPC status of a refusal for the coordinator's state, `release_exists` among them.
+const FAILED_PRECONDITION: i32 = 9;
 
 /// A time past the coordinator's quiet start.
 const LATER: u64 = 2_000;
@@ -407,6 +409,60 @@ async fn a_host_running_apt_is_never_picked_the_archive_entry_of_a_newer_version
     );
     let convergence = converge(&rig, "web").await;
     assert_eq!(convergence.installer_dropped, vec!["v1".to_owned()]);
+}
+
+/// Proves: the way out of a CI set whose lists hold archive entries alone, for a host running
+/// `web` from `apt`. CI's `2.0+a1b2c3` with `[hostkeeper-archive]` holds the host
+/// `installer_dropped`; the operator's set of `2.0` without targets holds it `no_build_for_host`;
+/// `2.0+a1b2c3` set again with an `apt` entry is `release_exists` and changes nothing; and `2.0`,
+/// set without targets before, set again with its `apt` entry is accepted, and the host's next
+/// heartbeat is ordered that entry.
+/// Catches: a release attached to a version first set without targets that the pick never
+/// reads, so that the version stays `no_build_for_host` on every host; a release changed in
+/// place by a second set with other targets.
+#[tokio::test]
+async fn a_version_first_set_without_targets_takes_its_apt_entry_and_orders_the_apt_host() {
+    let rig = rig("move-archive-only-way-out");
+    put_komira(&rig).await;
+    rig.at(LATER);
+    let host = Daemon::new("t1", X86, &["apt"]).running(runs("web", "1.0", Some("apt")));
+    set(&rig, "2.0+a1b2c3", x86(vec![web(ARCHIVE, 'f')])).await;
+    assert_eq!(said(&grpc_beat(&rig, &host).await), None, "archive alone");
+    assert_eq!(
+        reason(&rig, "web", "t1").await,
+        proto::GateReason::InstallerDropped
+    );
+
+    back_to(&rig, "2.0", BTreeMap::new()).await;
+    assert_eq!(said(&grpc_beat(&rig, &host).await), None, "no targets");
+    assert_eq!(
+        reason(&rig, "web", "t1").await,
+        proto::GateReason::NoBuildForHost
+    );
+
+    let with_apt = x86(vec![apt("2.0", 'a'), web(ARCHIVE, 'f')]);
+    let answered = grpc(
+        &rig,
+        SET_DESIRED,
+        Some(OPERATOR),
+        &request("2.0+a1b2c3", with_apt),
+    )
+    .await;
+    assert_eq!(
+        (answered.code, answered.message.as_str()),
+        (FAILED_PRECONDITION, "release_exists")
+    );
+    assert_eq!(
+        said(&grpc_beat(&rig, &host).await),
+        None,
+        "still no targets"
+    );
+
+    back_to(&rig, "2.0", x86(vec![apt("2.0", 'a')])).await;
+    assert_eq!(
+        ordered(&rig, &host).await,
+        Some(("update", "2.0".to_owned(), "apt".to_owned(), digest('a')))
+    );
 }
 
 /// Proves: a host running `web` 2.0 from `apt`, when `web` goes back to 1.0 whose list has no
