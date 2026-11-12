@@ -495,6 +495,23 @@ host must find ([package-repositories.md](package-repositories.md), "The native 
 their entries"). The manifest holds what the host needs to run the release: the units, the hook's
 bounds, the readiness URL, the params and the oldest hostkeeper that takes it.
 
+**Every list needs an entry its hosts can install.** No host is picked a `hostkeeper-archive`
+entry: the archive installer is withdrawn ([packages-native.md](../design/packages-native.md),
+section 10.1), and a host that runs the service from `apt` is picked its list's `apt` entry and no
+other ([packages.md](../design/packages.md), section 3.3). A list of `hostkeeper-archive` entries
+alone orders no host, but the coordinator still stores the set, and with `wait` false the job
+still ends `not_waited`: each host shows `installer_dropped` (it runs the service from an
+installer the list has no entry of) or `no_build_for_host` in `hkctl releases status --service
+<service>`, and the version does not converge. A service whose hosts install it from a package
+repository lists, for each Linux platform, the `apt` entry of its `.deb` as that repository
+publishes it: `repository` the hosts' entry (the stem of the file
+`/etc/hostkeeper/repositories/<entry>.sources`, such as `komira-testing`), `packageVersion` the
+version the repository lists the package at (what `apt-get install <package>=<version>` takes, and
+the `.deb`'s control `Version`, which the daemon checks), and `digest` the `.deb`'s SHA-256. A
+version keeps the targets it was first set with (`release_exists`), so a set whose lists left
+hosts out is put right by setting a new version with the right targets, or a version that was set
+with no targets, no package digest and no release index.
+
 This repository builds the targets of its own releases with `cargo xtask release targets
 --service <hostkeeper|hello|mdm> [--fail-ready] --version <X.Y.Z> --dir <assets> --repo
 komira-ai/hostkeeper`,
@@ -516,9 +533,8 @@ whose bundle does not list it. `hello-desired.yml` passes it for its `fail-ready
 
 **What the coordinator checks.** It refuses targets that break the rules of a release
 (`target_invalid`: an unknown platform, a list of no entry or more than 8, an installer twice, a
-digest, size, location or manifest out of its bounds, or for the service `hostkeeper` a list but
-one native entry with at most one `hostkeeper-archive` entry after it, or one `hostkeeper-archive`
-entry alone), and the same version set before with other targets
+digest, size, location or manifest out of its bounds, or for the service `hostkeeper` a list that
+is not one native entry), and the same version set before with other targets
 (`release_exists`, do not retry: a release never changes; set a new version). A set with targets
 is at most 256 KiB. `hkctl releases get-release --service <service>
 --version <version>` reads back what was set. A coordinator before targets refuses the set for
