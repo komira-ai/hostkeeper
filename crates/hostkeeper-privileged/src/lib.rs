@@ -12,7 +12,7 @@
 //! `SystemdManager` and `ProcProbe`, the Linux unit control, and the daemon's own update under
 //! hostkeeper's unit file), never a copy of them. The macOS device tests
 //! (`tests/device_mac.rs`, first line `#![cfg(all(target_os = "macos", feature = "privileged"))]`)
-//! do the same on a Mac, in privileged.yml's job `macos-device`, against launchd: the daemon
+//! do the same on a Mac, in release.yml's job `macos-device`, against launchd: the daemon
 //! (the program `hostkeeper-device-daemon`, which forwards to `hostkeeper_daemon::cli::main`),
 //! `hostkeeper_launchd`'s launcher, service manager and process probe, and the daemon's package
 //! check. The first-boot tests (`tests/first_boot.rs`, `tests/install_uninstall.rs`, first line

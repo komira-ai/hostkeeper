@@ -22,6 +22,7 @@ use super::net_install::{
 use super::openrc::OPENRC_FIRST_LINE;
 use super::pr_device;
 use super::release::{REQUIRED_WORKFLOWS, publish_problems};
+use super::release_macos;
 use super::yaml::{self, Node, Value};
 use super::{push_only, with_in, workflows};
 
@@ -420,7 +421,7 @@ pub fn shape_problems(
 
 /// [`shape_problems`] of one job, whose privileged test targets are `targets`; `net` is its entry
 /// of [`NET_JOBS`] when it is a network-install job of net-install.yml.
-fn job_shape_problems(
+pub fn job_shape_problems(
     job: &Node,
     targets: &BTreeSet<String>,
     net: Option<&net_install::NetJob>,
@@ -510,15 +511,21 @@ pub fn privileged_targets(first: &str) -> BTreeSet<String> {
     found
 }
 
-/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's, the
-/// macOS job's and the OpenRC job's.
+/// The jobs of privileged.yml and the targets of each: the Linux job's, the first-boot job's and
+/// the OpenRC job's. (The macOS job's, [`MACOS_DEVICE_JOB`], run in release.yml: see
+/// [`macos_device_targets`].)
 pub fn committed_targets() -> BTreeMap<&'static str, BTreeSet<String>> {
     BTreeMap::from([
         ("privileged", privileged_targets(LINUX_FIRST_LINE)),
         (FIRST_BOOT_JOB, privileged_targets(FIRST_BOOT_FIRST_LINE)),
-        (MACOS_DEVICE_JOB, privileged_targets(MACOS_FIRST_LINE)),
         (OPENRC_DEVICE_JOB, privileged_targets(OPENRC_FIRST_LINE)),
     ])
+}
+
+/// The privileged test targets of the job [`MACOS_DEVICE_JOB`] of release.yml: the files of the
+/// crate's `tests/` that start with the attribute for launchd.
+pub fn macos_device_targets() -> BTreeSet<String> {
+    privileged_targets(MACOS_FIRST_LINE)
 }
 
 /// The jobs of net-install.yml and the targets of each: the two network-install jobs'.
@@ -577,45 +584,24 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         BTreeSet::from(["first_boot".to_owned(), "install_uninstall".to_owned()])
     );
     assert_eq!(
-        targets[MACOS_DEVICE_JOB],
-        BTreeSet::from([
-            "device_mac".to_owned(),
-            "device_mac_e2e".to_owned(),
-            "device_mac_selfupdate".to_owned(),
-            "install_macos_pkg".to_owned()
-        ])
-    );
-    assert_eq!(
         targets.keys().copied().collect::<Vec<_>>(),
-        [
-            FIRST_BOOT_JOB,
-            MACOS_DEVICE_JOB,
-            OPENRC_DEVICE_JOB,
-            "privileged"
-        ]
+        [FIRST_BOOT_JOB, OPENRC_DEVICE_JOB, "privileged"]
     );
     assert_eq!(
         shape_problems(PRIVILEGED_WORKFLOW, text, &targets),
         Vec::<String>::new()
     );
-    // The jobs a release waits for are this file's four: no network-install job is among them.
+    // The jobs a release waits for are this file's three: no network-install job is among them.
     let jobs: Vec<&str> = entry(&doc, "jobs")
         .map_or(&[][..], entries)
         .iter()
         .filter_map(|(name, _)| name.as_str())
         .collect();
-    assert_eq!(
-        jobs,
-        [
-            "privileged",
-            FIRST_BOOT_JOB,
-            MACOS_DEVICE_JOB,
-            OPENRC_DEVICE_JOB
-        ]
-    );
+    assert_eq!(jobs, ["privileged", FIRST_BOOT_JOB, OPENRC_DEVICE_JOB]);
     // Root in no other workflow, but in net-install.yml (net_install_tests.rs holds its jobs to
-    // their shape) and in the jobs of pr-device.yml that are copies of this file's
-    // (pr_device_tests.rs holds them to that).
+    // their shape), in the jobs of pr-device.yml that are copies of this file's
+    // (pr_device_tests.rs holds them to that) and in the device job of the macOS stage of
+    // release.yml (release_macos_tests.rs).
     for (file, other) in all
         .iter()
         .filter(|(file, _)| file != PRIVILEGED_WORKFLOW && file != net_install::FILE)
@@ -625,9 +611,12 @@ fn the_committed_privileged_yml_passes_and_holds_the_one_sudo() {
         for (key, value) in entries(&doc) {
             let jobs = entry(&doc, "jobs").map_or(&[][..], entries);
             match key.as_str() {
-                Some("jobs") if file == pr_device::FILE => {
+                Some("jobs") if file == pr_device::FILE || file == release_macos::FILE => {
                     for (name, job) in jobs {
-                        if !pr_device::root_allowed(file, name.as_str().unwrap_or_default()) {
+                        let name = name.as_str().unwrap_or_default();
+                        if !pr_device::root_allowed(file, name)
+                            && !release_macos::root_allowed(file, name)
+                        {
                             scalars(job, &mut values);
                         }
                     }

@@ -1,7 +1,7 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! The device run on a Mac (design section 5.9): the launchd adapters, the process probe, the
 //! boot id, the enrollment claims read from `ioreg` and the package check against the real launchd, kernel and tools of a GitHub-hosted macOS runner, as
-//! root, in `.github/workflows/privileged.yml`'s job `macos-device` (and pr-device.yml's copy of it). Like the Linux
+//! root, in `.github/workflows/release.yml`'s job `macos-device` (its beta stage). Like the Linux
 //! privileged tests these are not counted by the coverage gate; what they drive is measured
 //! against fakes in the pull-request set.
 //!

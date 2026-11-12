@@ -1,14 +1,15 @@
 //! The rules of `pr-device.yml` ([`super::pr_device`]) and the pull-request rules of
-//! [`super::lint`] that it is the one exception to. Each rule is shown to refuse its defect by
-//! putting it into the committed file, which passes, and reading the exact problems it reports.
+//! [`super::lint`] that it is the one exception to (root, for the copies of privileged.yml's
+//! jobs). No pull-request workflow has a macOS job: that rule is shown here, against the committed
+//! workflows and against a macOS job added to each of them. Each rule is shown to refuse its
+//! defect by putting it into the committed file, which passes, and reading the exact problems it
+//! reports.
 
-use std::collections::BTreeSet;
-use std::path::{Path, PathBuf};
-
-use super::lint::{PRIVILEGED_WORKFLOW, entries, entry, lint};
+use super::lint::{
+    PRIVILEGED_WORKFLOW, entries, entry, lint, runs_on_pull_requests, scalars, triggers,
+};
 use super::pr_device::{
-    CONCURRENCY_PROBLEM, FILE, GATED_IF, GROUP, JOBS, ON_PROBLEM, TOP_LEVEL, crate_problems,
-    mirror_problems, same,
+    CONCURRENCY_PROBLEM, FILE, GROUP, JOBS, ON_PROBLEM, REQUIRED, TOP_LEVEL, mirror_problems, same,
 };
 use super::yaml::{self, Node};
 use super::{CLEAN, with, with_in, workflows};
@@ -35,111 +36,23 @@ fn device_with(from: &str, to: &str) -> String {
     with_in(&device(), from, to)
 }
 
-/// The start of the job `macos-test`, once in the file.
-const MACOS_TEST: &str = "  macos-test:\n    name: macos-test on macos-15\n    needs: changes\n    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}\n    runs-on: macos-15\n";
-
-/// The start of the job `macos-device`, once in the file.
-const MACOS_DEVICE: &str = "  macos-device:\n    name: macos-device on macos-15\n    needs: changes\n    if: ${{ !cancelled() && !(needs.changes.result == 'success' && needs.changes.outputs.needed == 'false') }}\n    runs-on: macos-15\n";
-
 /// The start of the job `privileged`, once in the file.
 const PRIVILEGED: &str = "  privileged:\n    runs-on: ubuntu-24.04\n";
 
-/// The directories of the workspace crates the manifest `manifest` of the crate in `dir` depends on,
-/// through `[dependencies]` and `[build-dependencies]`, on any target (`[target.<cfg>.…]`): a
-/// `path` of its own, from `dir`, or `workspace = true` with a `path` in the root's
-/// `[workspace.dependencies]` (`workspace`), from `root`. A renamed dependency (`package = ...`)
-/// is found by its path all the same.
-fn path_dependencies(
-    manifest: &toml::Table,
-    dir: &Path,
-    workspace: &toml::Table,
-    root: &Path,
-) -> Vec<PathBuf> {
-    let kinds = ["dependencies", "build-dependencies"];
-    let mut tables: Vec<&toml::Table> = kinds
-        .iter()
-        .filter_map(|k| manifest.get(*k).and_then(toml::Value::as_table))
-        .collect();
-    if let Some(targets) = manifest.get("target").and_then(toml::Value::as_table) {
-        for target in targets.values() {
-            tables.extend(
-                kinds
-                    .iter()
-                    .filter_map(|k| target.get(*k).and_then(toml::Value::as_table)),
-            );
-        }
-    }
-    let mut found = Vec::new();
-    for (name, dependency) in tables.into_iter().flatten() {
-        if let Some(path) = dependency.get("path").and_then(toml::Value::as_str) {
-            found.push(dir.join(path));
-        } else if dependency.get("workspace").and_then(toml::Value::as_bool) == Some(true) {
-            let declared = workspace.get(name);
-            if let Some(path) = declared
-                .and_then(|d| d.get("path"))
-                .and_then(toml::Value::as_str)
-            {
-                found.push(root.join(path));
-            }
-        }
-    }
-    found
-}
-
-/// The manifest of the crate (or workspace root) in `dir`.
-fn manifest(dir: &Path) -> toml::Table {
-    let text = std::fs::read_to_string(dir.join("Cargo.toml")).expect("read a manifest");
-    text.parse().expect("a manifest parses")
-}
-
-/// The package name of the crate in `dir`.
-fn package_name(dir: &Path) -> String {
-    manifest(dir)["package"]["name"]
-        .as_str()
-        .expect("a package name")
-        .to_owned()
-}
-
-/// The crates the `hostkeeper` and `hello` binaries are built from: the two crates and every
-/// workspace crate they depend on, through normal and build dependencies, on any target.
-fn mac_crates() -> BTreeSet<String> {
-    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
-    let workspace = manifest(&root)["workspace"]["dependencies"]
-        .as_table()
-        .expect("the root's [workspace.dependencies]")
-        .clone();
-    let mut pending = vec![root.join("crates/hostkeeper"), root.join("examples/hello")];
-    let mut seen = BTreeSet::new();
-    while let Some(dir) = pending.pop() {
-        if seen.insert(package_name(&dir)) {
-            pending.extend(path_dependencies(&manifest(&dir), &dir, &workspace, &root));
-        }
-    }
-    seen
-}
+/// A job on a macOS runner, as one would be added to a workflow that runs for a pull request.
+const MACOS_JOB: &str = "  macos-test:\n    runs-on: macos-15\n    permissions:\n      contents: read\n    steps:\n      - run: cargo test\n";
 
 #[test]
 fn the_committed_pr_device_yml_passes_and_its_jobs_are_the_listed_ones() {
     // Catches: the workflow failing a rule; a job of it that is not in the lint's list (or one of
-    // the list missing); a copy that drifted from privileged.yml; and macos-test leaving out a
-    // crate the Mac's binaries are built from (a crate added to `hostkeeper` or `hello` later).
+    // the list missing); a copy that drifted from privileged.yml; and a required check that is
+    // not the check of one of its jobs.
     let text = device();
     assert_eq!(problems(&text), Vec::<String>::new());
     assert_eq!(
         mirror_problems(&text, &committed(PRIVILEGED_WORKFLOW)),
         Vec::<String>::new()
     );
-    let crates = mac_crates();
-    assert!(crates.contains("hostkeeper-launchd") && crates.contains("hostkeeper-daemon"));
-    assert!(
-        !crates.contains("hostkeeper-mdm-step"),
-        "the MDM server is not the Mac's"
-    );
-    assert!(
-        !crates.contains("hostkeeper-ci"),
-        "the binary has no `ci` verb: CI runs hkctl"
-    );
-    assert_eq!(crate_problems(&text, &crates), Vec::<String>::new());
     let doc = yaml::load(&text).expect("pr-device.yml parses");
     assert_eq!(
         entry(&doc, "name").and_then(Node::as_str),
@@ -149,63 +62,215 @@ fn the_committed_pr_device_yml_passes_and_its_jobs_are_the_listed_ones() {
     let names: Vec<&str> = jobs.iter().filter_map(|(n, _)| n.as_str()).collect();
     let listed: Vec<&str> = JOBS.iter().map(|j| j.name).collect();
     assert_eq!(names, listed);
+    assert_eq!(names, REQUIRED);
+}
+
+#[test]
+fn no_workflow_that_runs_for_a_pull_request_runs_a_macos_job() {
+    // Catches: a macOS runner, a darwin target or a macOS matrix value in any committed workflow
+    // that a pull request starts (the shortage of macOS runners that starved a release): none
+    // names macOS anywhere, and the release stage of the Mac's tests (release.yml) is not one.
+    let mut pull_request_workflows = Vec::new();
+    for (file, text) in workflows() {
+        let doc = yaml::load(&text).expect("a workflow parses");
+        let on = entry(&doc, "on").map(triggers).unwrap_or_default();
+        if !on.iter().any(|t| runs_on_pull_requests(t)) {
+            continue;
+        }
+        pull_request_workflows.push(file.clone());
+        let mut values = Vec::new();
+        scalars(&doc, &mut values);
+        let mac = values
+            .iter()
+            .flat_map(|v| v.lines())
+            .find(|l| {
+                let l = l.to_ascii_lowercase();
+                l.contains("macos") || l.contains("darwin")
+            })
+            // The comments above the jobs are no value of the document.
+            .map(str::to_owned);
+        assert_eq!(mac, None, "{file} runs for a pull request and names macOS");
+    }
+    assert_eq!(pull_request_workflows, ["ci.yml", "pr-device.yml"]);
+}
+
+#[test]
+fn a_macos_job_added_to_a_workflow_that_runs_for_a_pull_request_is_refused() {
+    // Catches: a macOS job put back into pr-device.yml (where one used to run on every pull
+    // request) or into ci.yml, as a job of its own, as the runner of an existing job or as a matrix
+    // value: each is refused as macOS on pull_request, and the new job in pr-device.yml also as
+    // a job the workflow does not list.
+    let added = device_with(PRIVILEGED, &format!("{MACOS_JOB}\n{PRIVILEGED}"));
+    let found = problems(&added);
+    for want in [
+        "job macos-test: macOS on pull_request (`macos-15`)",
+        "job macos-test is not a job of pr-device.yml",
+    ] {
+        assert!(found.contains(&want.to_owned()), "{want}: {found:?}");
+    }
+    // The runner of a listed job.
+    let swapped = device_with(PRIVILEGED, "  privileged:\n    runs-on: macos-15\n");
+    assert_eq!(
+        problems(&swapped),
+        [
+            "job privileged: macOS on pull_request (`macos-15`)",
+            "job privileged: runs on a runner outside [\"ubuntu-24.04\"]",
+        ]
+    );
+    // A matrix value and a darwin target, in pr-device.yml.
+    let matrix = device_with(
+        PRIVILEGED,
+        "  privileged:\n    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-24.04, macos-15]\n",
+    );
+    assert!(
+        problems(&matrix)
+            .contains(&"job privileged: macOS on pull_request (`macos-15`)".to_owned()),
+        "{:?}",
+        problems(&matrix)
+    );
+    // ci.yml, the pull-request gate: the same.
+    let in_ci = with(
+        "  test:\n    runs-on: ubuntu-latest\n",
+        "  test:\n    runs-on: macos-15\n",
+    );
+    assert_eq!(
+        lint("ci.yml", &in_ci),
+        ["job test: macOS on pull_request (`macos-15`)"]
+    );
+    let darwin = with_in(
+        &in_ci,
+        "    runs-on: macos-15\n",
+        "    runs-on: ubuntu-latest\n",
+    );
+    let darwin = with_in(
+        &darwin,
+        "      - run: cargo test --workspace --locked\n",
+        "      - run: cargo build --target aarch64-apple-darwin\n",
+    );
+    assert_eq!(
+        lint("ci.yml", &darwin),
+        ["job test: macOS on pull_request (`cargo build --target aarch64-apple-darwin`)"]
+    );
+}
+
+#[test]
+fn a_pull_request_job_on_linux_arm64_or_any_other_runner_is_refused() {
+    // Catches: a job of a pull-request workflow on linux-arm64 (`ubuntu-24.04-arm`, 22.04-arm), in a
+    // matrix, or on any label that is not Linux x86_64, which would hold the few arm and Mac
+    // runners as macOS jobs once did; Linux x86_64 images pass. Every committed pull-request
+    // workflow runs on Linux x86_64 alone.
+    for (file, text) in workflows() {
+        let doc = yaml::load(&text).expect("a workflow parses");
+        let on = entry(&doc, "on").map(triggers).unwrap_or_default();
+        if !on.iter().any(|t| runs_on_pull_requests(t)) {
+            continue;
+        }
+        let mut values = Vec::new();
+        scalars(&doc, &mut values);
+        assert!(
+            !values
+                .iter()
+                .any(|v| v.ends_with("-arm") || v.contains("arm64")),
+            "{file} runs on arm64 for a pull request"
+        );
+    }
+    let hosted = "  test:\n    runs-on: ubuntu-latest\n";
+    for label in ["ubuntu-24.04-arm", "ubuntu-22.04-arm"] {
+        assert_eq!(
+            lint(
+                "ci.yml",
+                &with(hosted, &format!("  test:\n    runs-on: {label}\n"))
+            ),
+            [format!(
+                "job test: runner `{label}` on pull_request is not Linux x86_64 (ubuntu-*, not *-arm)"
+            )]
+        );
+    }
+    let matrix = "  test:\n    runs-on: ${{ matrix.os }}\n    strategy:\n      matrix:\n        os: [ubuntu-24.04, ubuntu-24.04-arm]\n";
+    assert_eq!(
+        lint("ci.yml", &with(hosted, matrix)),
+        [
+            "job test: runner `ubuntu-24.04-arm` on pull_request is not Linux x86_64 (ubuntu-*, not *-arm)"
+        ]
+    );
+    for ok in ["ubuntu-24.04", "ubuntu-22.04", "ubuntu-latest"] {
+        assert_eq!(
+            lint(
+                "ci.yml",
+                &with(hosted, &format!("  test:\n    runs-on: {ok}\n"))
+            ),
+            Vec::<String>::new()
+        );
+    }
+    // The same arm job is fine where no pull request runs (release.yml's check jobs).
+    assert_eq!(
+        lint(
+            "ci.yml",
+            &with_in(
+                &super::push_only(),
+                hosted,
+                "  test:\n    runs-on: ubuntu-24.04-arm\n"
+            )
+        ),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
 fn a_macos_job_with_a_secret_on_a_pull_request_is_refused() {
-    // Catches: a secret or the token handed to a macOS job of a pull request, as an expression in
+    // Catches: a secret or the token handed to a job of a pull request, as an expression in
     // its env, a step's `with:` or a run line, in any case, through `toJSON(secrets)`, or passed
     // with a `secrets:` key; and a secret set once for every job beside `jobs`.
     let cases: [(&str, &str); 9] = [
         (
             "    env:\n      TOKEN: ${{ secrets.DEPLOY_KEY }}\n",
-            "job macos-test: a secret on pull_request (`${{ secrets.DEPLOY_KEY }}`)",
+            "job privileged: a secret on pull_request (`${{ secrets.DEPLOY_KEY }}`)",
         ),
         (
             "    env:\n      TOKEN: ${{ github.token }}\n",
-            "job macos-test: a secret on pull_request (`${{ github.token }}`)",
+            "job privileged: a secret on pull_request (`${{ github.token }}`)",
         ),
         (
             "    env:\n      TOKEN: ${{ SECRETS['DEPLOY_KEY'] }}\n",
-            "job macos-test: a secret on pull_request (`${{ SECRETS['DEPLOY_KEY'] }}`)",
+            "job privileged: a secret on pull_request (`${{ SECRETS['DEPLOY_KEY'] }}`)",
         ),
         (
             "    env:\n      ALL: ${{ toJSON(secrets) }}\n",
-            "job macos-test: a secret on pull_request (`${{ toJSON(secrets) }}`)",
+            "job privileged: a secret on pull_request (`${{ toJSON(secrets) }}`)",
         ),
         (
             "    env:\n      TOKEN: a-${{ GitHub.Token }}-b\n",
-            "job macos-test: a secret on pull_request (`a-${{ GitHub.Token }}-b`)",
+            "job privileged: a secret on pull_request (`a-${{ GitHub.Token }}-b`)",
         ),
         (
             "    env:\n      TOKEN: ${{ github['token'] }}\n",
-            "job macos-test: a secret on pull_request (`${{ github['token'] }}`)",
+            "job privileged: a secret on pull_request (`${{ github['token'] }}`)",
         ),
         (
             "    env:\n      TOKEN: ${{ github [ \"token\" ] }}\n",
-            "job macos-test: a secret on pull_request (`${{ github [ \"token\" ] }}`)",
+            "job privileged: a secret on pull_request (`${{ github [ \"token\" ] }}`)",
         ),
         (
             "    env:\n      ALL: ${{ toJSON( github ) }}\n",
-            "job macos-test: a secret on pull_request (`${{ toJSON( github ) }}`)",
+            "job privileged: a secret on pull_request (`${{ toJSON( github ) }}`)",
         ),
         (
             "    secrets:\n      key: x\n",
-            "job macos-test: a secret on pull_request (`secrets`)",
+            "job privileged: a secret on pull_request (`secrets`)",
         ),
     ];
     for (added, want) in cases {
-        let text = device_with(MACOS_TEST, &format!("{MACOS_TEST}{added}"));
+        let text = device_with(PRIVILEGED, &format!("{PRIVILEGED}{added}"));
         assert_eq!(problems(&text), [want], "{added}");
     }
-    // In the device job, in a step's `with:`.
+    // In a step's `with:`.
     let text = device_with(
-        "          persist-credentials: false\n      # The system the tests run against",
-        "          persist-credentials: false\n          token: ${{ secrets.GITHUB_TOKEN }}\n      # The system the tests run against",
+        "          persist-credentials: false\n      # The service manager the tests run against",
+        "          persist-credentials: false\n          token: ${{ secrets.GITHUB_TOKEN }}\n      # The service manager the tests run against",
     );
     assert_eq!(
         problems(&text),
-        ["job macos-device: a secret on pull_request (`${{ secrets.GITHUB_TOKEN }}`)"]
+        ["job privileged: a secret on pull_request (`${{ secrets.GITHUB_TOKEN }}`)"]
     );
     // Beside `jobs`, for every job.
     let text = device_with(
@@ -219,53 +284,18 @@ fn a_macos_job_with_a_secret_on_a_pull_request_is_refused() {
 }
 
 #[test]
-fn the_secret_rule_holds_in_every_pull_request_workflow_and_reads_only_expressions() {
-    // Catches: the rule held to pr-device.yml alone, so ci.yml could hand its jobs a secret; a
-    // step name or text that says "secrets" outside an expression refused; and the rule holding
-    // where no pull request runs (a push-only workflow may use the token).
-    let step = "      - run: cargo test --workspace --locked\n";
-    let secret = "      - run: echo ${{ secrets.X }}\n";
-    assert_eq!(
-        lint("ci.yml", &with(step, secret)),
-        ["job test: a secret on pull_request (`echo ${{ secrets.X }}`)"]
-    );
-    assert_eq!(
-        lint("ci.yml", &with_in(&super::push_only(), step, secret)),
-        Vec::<String>::new()
-    );
-    for innocent in [
-        "      - name: Hold no secrets here\n        run: cargo test\n",
-        "      - run: cargo test secrets_are_redacted\n",
-        "      - run: echo ${{ github.sha }} ${{ github.token_kind }}x\n",
-        "      - run: echo ${{ inputs.secretsless }}\n",
-        "      - run: echo ${{ github['sha'] }} ${{ toJSON(github.event.pull_request.labels) }}\n",
-    ] {
-        assert_eq!(
-            lint("ci.yml", &with(step, innocent)),
-            Vec::<String>::new(),
-            "{innocent}"
-        );
-    }
-    // An expression left open runs to the end of the value, and still counts.
-    assert_eq!(
-        lint("ci.yml", &with(step, "      - run: echo ${{ secrets.X\n")),
-        ["job test: a secret on pull_request (`echo ${{ secrets.X`)"]
-    );
-}
-
-#[test]
 fn a_write_scope_or_id_token_on_a_pr_device_job_is_refused() {
     // Catches: an OIDC token or a write scope granted to a job that runs pull-request code as
-    // root on a macOS runner, which the exception for root and macOS must not let through.
-    let read = "    runs-on: macos-15\n    permissions:\n      contents: read\n    # A bound on the whole job, against a test that hangs; no test depends on it.\n    timeout-minutes: 45\n";
+    // root, which the exception for root must not let through.
+    let read = "    runs-on: ubuntu-24.04\n    permissions:\n      contents: read\n    # A bound on the whole job, against a test that hangs; no test depends on it.\n    timeout-minutes: 60\n";
     for (scope, wants) in [
         (
             "id-token",
-            "job macos-device: `id-token: write` is not allowed in pr-device.yml",
+            "job privileged: `id-token: write` is not allowed in pr-device.yml",
         ),
         (
             "contents",
-            "job macos-device: `contents: write` is not allowed in pr-device.yml",
+            "job privileged: `contents: write` is not allowed in pr-device.yml",
         ),
     ] {
         let text = device_with(
@@ -276,36 +306,19 @@ fn a_write_scope_or_id_token_on_a_pr_device_job_is_refused() {
             problems(&text),
             [
                 wants.to_owned(),
-                format!("job macos-device: privileged on pull_request (`{scope}: write`)"),
+                format!("job privileged: privileged on pull_request (`{scope}: write`)"),
             ]
         );
     }
 }
 
 #[test]
-fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them() {
-    // Catches: the exception reaching a job it does not name: root in the macOS test job, a macOS
-    // runner for the Linux copy, and a job named like a listed one in another workflow (ci.yml),
-    // which is held to the rule in full.
-    let run = "        run: cargo test --locked --no-fail-fast -p hello";
-    let text = device_with(run, &run.replace("run: cargo", "run: sudo cargo"));
-    let found = problems(&text);
-    assert_eq!(found.len(), 1, "{found:?}");
-    assert!(
-        found[0].starts_with("job macos-test: privileged on pull_request (`sudo cargo test"),
-        "{found:?}"
-    );
-    let text = device_with(PRIVILEGED, "  privileged:\n    runs-on: macos-15\n");
-    assert_eq!(
-        problems(&text),
-        [
-            "job privileged: macOS on pull_request (`macos-15`)",
-            "job privileged: runs on a runner outside [\"ubuntu-24.04\"]",
-        ]
-    );
+fn root_on_a_pull_request_is_allowed_only_in_the_jobs_listed_for_it() {
+    // Catches: the exception reaching a job it does not name: root in a job of ci.yml named like a
+    // listed one, which is held to the rule in full.
     let in_ci = with(
         "  test:\n    runs-on: ubuntu-latest\n",
-        "  macos-device:\n    runs-on: macos-15\n",
+        "  privileged:\n    runs-on: ubuntu-latest\n",
     );
     let in_ci = with_in(
         &in_ci,
@@ -314,98 +327,15 @@ fn root_and_macos_on_a_pull_request_are_allowed_only_in_the_jobs_listed_for_them
     );
     assert_eq!(
         lint("ci.yml", &in_ci),
-        [
-            "job macos-device: privileged on pull_request (`sudo cargo test`)",
-            "job macos-device: macOS on pull_request (`macos-15`)",
-        ]
+        ["job privileged: privileged on pull_request (`sudo cargo test`)"]
     );
 }
 
 #[test]
-fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
-    // Catches: a paths or branches filter on `on`, which leaves the required checks unreported on
-    // a pull request it filters out (a check that never starts), a push trigger that would run the copies again after the merge,
-    // and a `types` list that skips the pushes to an open pull request.
-    let on = "on:\n  pull_request:\n\npermissions";
-    for changed in [
-        "on:\n  pull_request:\n    paths: ['crates/hostkeeper-launchd/**']\n\npermissions",
-        "on:\n  pull_request:\n    branches: [main]\n\npermissions",
-        "on:\n  pull_request:\n    types: [opened]\n\npermissions",
-        "on:\n  pull_request:\n  push:\n    branches: [main]\n\npermissions",
-        "on:\n  workflow_dispatch:\n\npermissions",
-        "on:\n  pull_request: x\n\npermissions",
-        "on:\n  pull_request: [x]\n\npermissions",
-        "on: [pull_request, push]\n\npermissions",
-    ] {
-        let found = problems(&device_with(on, changed));
-        assert!(
-            found.contains(&ON_PROBLEM.to_owned()),
-            "{changed}: {found:?}"
-        );
-    }
-    for same in [
-        "on: pull_request\n\npermissions",
-        "on: [pull_request]\n\npermissions",
-        "on:\n  pull_request: {}\n\npermissions",
-    ] {
-        assert_eq!(
-            problems(&device_with(on, same)),
-            Vec::<String>::new(),
-            "{same}"
-        );
-    }
-    let doc = yaml::load(&device()).expect("parses");
-    assert!(entry(&doc, "on").is_some());
-    // With no `on` it runs for no pull request, and its copies' root is refused as outside
-    // privileged.yml.
-    let none = problems(&device_with("on:\n  pull_request:\n\n", ""));
-    assert_eq!(none.len(), 4, "{none:?}");
-    assert!(
-        none[0]
-            .starts_with("job macos-device: privileged outside privileged.yml and net-install.yml")
-    );
-    assert!(
-        none[1]
-            .starts_with("job privileged: privileged outside privileged.yml and net-install.yml")
-    );
-    assert!(
-        none[2].starts_with(
-            "job openrc-device: privileged outside privileged.yml and net-install.yml"
-        )
-    );
-    assert_eq!(none[3], ON_PROBLEM);
-}
-
-#[test]
-fn the_concurrency_of_pr_device_yml_is_one_group_per_pull_request_that_cancels() {
-    // Catches: superseded runs left running (and holding macOS runners) after a newer push, a
-    // group shared by every pull request (which cancels another pull request's run), and a
-    // workflow with no concurrency at all.
-    let block = format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n");
-    assert!(device().contains(&block));
-    for changed in [
-        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: false\n"),
-        "concurrency:\n  group: pr-device\n  cancel-in-progress: true\n".to_owned(),
-        format!("concurrency:\n  group: {GROUP}\n"),
-        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n  x: y\n"),
-        "concurrency: pr-device\n".to_owned(),
-        String::new(),
-    ] {
-        assert_eq!(
-            problems(&device_with(&block, &changed)),
-            [CONCURRENCY_PROBLEM],
-            "{changed}"
-        );
-    }
-}
-
-#[test]
-fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
-    // Catches: the privileged job or the changes job under a condition or after another job (a
-    // required check that then passes, or never reports, without its tests having run); a macOS
-    // job with another condition (one that skips it on a failed or unanswered changes job), with
-    // another name (which would take its gate's required name) or without needing changes; a job
-    // the list does not name, one of the list missing, and a job on another runner.
+fn each_job_of_pr_device_yml_runs_on_every_pull_request_on_its_runner() {
+    // Catches: a job under a condition, a name or after another job (a required check that then
+    // passes, or never reports, without its tests having run); a job the list does not name, one
+    // of the list missing, and a job on another runner.
     let cases: Vec<(&str, String, Vec<String>)> = vec![
         (
             PRIVILEGED,
@@ -414,7 +344,7 @@ fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
         ),
         (
             PRIVILEGED,
-            "  privileged:\n    needs: changes\n    runs-on: ubuntu-24.04\n".to_owned(),
+            "  privileged:\n    needs: openrc-device\n    runs-on: ubuntu-24.04\n".to_owned(),
             vec!["job privileged: has `needs`, and must run and report on every pull request".to_owned()],
         ),
         (
@@ -423,42 +353,9 @@ fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
             vec!["job privileged: has `name`, and must run and report on every pull request".to_owned()],
         ),
         (
-            "  changes:\n    runs-on: ubuntu-24.04\n",
-            "  changes:\n    if: ${{ github.event.pull_request.draft == false }}\n    runs-on: ubuntu-24.04\n".to_owned(),
-            vec![
-                "job changes: has `if`, and must run and report on every pull request".to_owned(),
-                "job changes: not pr_paths::CHANGES_TEMPLATE, key for key".to_owned(),
-            ],
-        ),
-        (
-            MACOS_TEST,
-            MACOS_TEST.replace("!cancelled() && ", ""),
-            vec![format!("job macos-test: must run under `if: {GATED_IF}`")],
-        ),
-        (
-            MACOS_TEST,
-            MACOS_TEST.replace("== 'false'", "!= 'true'"),
-            vec![format!("job macos-test: must run under `if: {GATED_IF}`")],
-        ),
-        (
-            "    name: macos-test on macos-15\n",
-            "    name: macos-test\n".to_owned(),
-            vec!["job macos-test: must be named `macos-test on macos-15`".to_owned()],
-        ),
-        (
-            "    name: macos-test on macos-15\n    needs: changes\n",
-            "    name: macos-test on macos-15\n    needs: [changes, privileged]\n".to_owned(),
-            vec!["job macos-test: must need exactly changes".to_owned()],
-        ),
-        (
-            MACOS_TEST,
-            MACOS_TEST.replace("    runs-on: macos-15\n", "    runs-on: macos-14\n"),
-            vec!["job macos-test: runs on a runner outside [\"macos-15\"]".to_owned()],
-        ),
-        (
-            MACOS_TEST,
-            MACOS_TEST.replace("    runs-on: macos-15\n", "    runs-on: [macos-15]\n"),
-            vec!["job macos-test: runs on a runner outside [\"macos-15\"]".to_owned()],
+            PRIVILEGED,
+            "  privileged:\n    runs-on: ubuntu-22.04\n".to_owned(),
+            vec!["job privileged: runs on a runner outside [\"ubuntu-24.04\"]".to_owned()],
         ),
         (
             "\njobs:\n",
@@ -469,25 +366,8 @@ fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
     for (from, to, want) in cases {
         assert_eq!(problems(&device_with(from, &to)), want, "{to}");
     }
-    // The device copy is held as macos-test is: its condition and its name.
-    let text = device_with(
-        MACOS_DEVICE,
-        &MACOS_DEVICE.replace("!cancelled() && ", "always() && "),
-    );
-    assert_eq!(
-        problems(&text),
-        [format!("job macos-device: must run under `if: {GATED_IF}`")]
-    );
-    let text = device_with(
-        MACOS_DEVICE,
-        &MACOS_DEVICE.replace("    needs: changes\n", ""),
-    );
-    assert_eq!(
-        problems(&text),
-        ["job macos-device: must need exactly changes"]
-    );
-    // Jobs of the list missing: privileged and openrc-device, the last two, removed with every
-    // line after the start of the first; and openrc-device alone.
+    // Jobs of the list missing: privileged and openrc-device, removed with every line after the
+    // start of the first; and openrc-device alone.
     let text = device();
     let at = text
         .find("  # privileged.yml's job privileged;")
@@ -503,86 +383,12 @@ fn each_job_of_pr_device_yml_runs_or_is_gated_as_its_kind_on_its_runner() {
 }
 
 #[test]
-fn macos_test_must_test_exactly_the_macs_crates() {
-    // Catches: a crate of the Mac left out of the build or the run, a crate added that does not
-    // build for macOS (the MDM server), `--workspace` or `--exclude` in place of the list, a run
-    // that stops at the first failure, and a build or run step missing or doubled.
-    let crates = mac_crates();
-    let want = |start: &str| {
-        format!(
-            "job macos-test: `{start}` must name exactly the crates {crates:?} with -p, and nothing else"
-        )
-    };
-    let build = "cargo test --locked --no-run";
-    let run = "cargo test --locked --no-fail-fast";
-    let cases: [(&str, &str, Vec<String>); 4] = [
-        ("--no-run -p hello ", "--no-run ", vec![want(build)]),
-        (
-            "--no-fail-fast -p hello ",
-            "--no-fail-fast -p hostkeeper-mdm-step -p hello ",
-            vec![want(run)],
-        ),
-        (
-            "--no-fail-fast -p hello ",
-            "--no-fail-fast --workspace -p hello ",
-            vec![want(run)],
-        ),
-        (
-            "--no-fail-fast -p hello ",
-            "--no-fail-fast --exclude hostkeeper-mdm-step -p hello ",
-            vec![want(run)],
-        ),
-    ];
-    for (from, to, wants) in cases {
-        assert_eq!(
-            crate_problems(&device_with(from, to), &crates),
-            wants,
-            "{to}"
-        );
-    }
-    // The run without `--no-fail-fast` is no run step; a second build step is one too many.
-    assert_eq!(
-        crate_problems(
-            &device_with("--locked --no-fail-fast -p hello ", "--locked -p hello "),
-            &crates
-        ),
-        [format!("job macos-test: 0 steps `{run} ...`, not one")]
-    );
-    let step = "      - name: Run the tests of the Mac's crates\n";
-    let doubled = device_with(step, &format!("      - run: {build} -p hello\n{step}"));
-    assert_eq!(
-        crate_problems(&doubled, &crates),
-        [
-            format!("job macos-test: 2 steps `{build} ...`, not one"),
-            "job macos-test: 3 `cargo test` steps, not two".to_owned(),
-        ]
-    );
-    // Without the job, or with a file that does not parse.
-    let at = device().find(MACOS_TEST).expect("the job");
-    let end = device()
-        .find("  # privileged.yml's job macos-device;")
-        .expect("the copy");
-    let without = format!("{}{}", &device()[..at], &device()[end..]);
-    assert_eq!(crate_problems(&without, &crates).len(), 3);
-    assert_eq!(crate_problems("on: [unclosed\n", &crates).len(), 1);
-}
-
-#[test]
 fn a_copy_that_drifted_from_privileged_yml_is_refused() {
     // Catches: a pull request running other device tests than run after the merge: a step, a
     // runner, an env or a test target changed in the copy or in privileged.yml alone, a copy
     // missing, and a top-level env (RUSTFLAGS) that differs.
     let privileged = committed(PRIVILEGED_WORKFLOW);
     let drift = |job: &str| format!("job {job}: not privileged.yml's job {job}, key for key");
-    let device_mac = "--test device_mac --test device_mac_e2e --test device_mac_selfupdate --test install_macos_pkg -- --test-threads=1 --nocapture";
-    let changed = device_with(
-        device_mac,
-        "--test device_mac -- --test-threads=1 --nocapture",
-    );
-    assert_eq!(
-        mirror_problems(&changed, &privileged),
-        [drift("macos-device")]
-    );
     let linux = "    timeout-minutes: 60\n    env:\n      GH_VERSION: 2.102.1\n";
     let mut copy = device_with(linux, &linux.replace("2.102.1", "2.102.2"));
     assert_eq!(mirror_problems(&copy, &privileged), [drift("privileged")]);
@@ -626,15 +432,115 @@ fn a_copy_that_drifted_from_privileged_yml_is_refused() {
         "  privileged:\n    if: ${{ always() }}\n    runs-on: ubuntu-24.04\n",
     );
     assert_eq!(mirror_problems(&copy, &privileged), [drift("privileged")]);
-    // The gated copy is compared without its name, needs and `if:` (which `problems` holds), and
-    // with every other key: one added, or one of those three missing, is still compared.
-    let copy = device_with(
-        MACOS_DEVICE,
-        &format!("{MACOS_DEVICE}    continue-on-error: true\n"),
+}
+
+#[test]
+fn the_secret_rule_holds_in_every_pull_request_workflow_and_reads_only_expressions() {
+    // Catches: the rule held to pr-device.yml alone, so ci.yml could hand its jobs a secret; a
+    // step name or text that says "secrets" outside an expression refused; and the rule holding
+    // where no pull request runs (a push-only workflow may use the token).
+    let step = "      - run: cargo test --workspace --locked\n";
+    let secret = "      - run: echo ${{ secrets.X }}\n";
+    assert_eq!(
+        lint("ci.yml", &with(step, secret)),
+        ["job test: a secret on pull_request (`echo ${{ secrets.X }}`)"]
     );
-    assert_eq!(mirror_problems(&copy, &privileged), [drift("macos-device")]);
-    let copy = device_with(MACOS_DEVICE, "  macos-device:\n    runs-on: macos-15\n");
-    assert_eq!(mirror_problems(&copy, &privileged), Vec::<String>::new());
+    assert_eq!(
+        lint("ci.yml", &with_in(&super::push_only(), step, secret)),
+        Vec::<String>::new()
+    );
+    for innocent in [
+        "      - name: Hold no secrets here\n        run: cargo test\n",
+        "      - run: cargo test secrets_are_redacted\n",
+        "      - run: echo ${{ github.sha }} ${{ github.token_kind }}x\n",
+        "      - run: echo ${{ inputs.secretsless }}\n",
+        "      - run: echo ${{ github['sha'] }} ${{ toJSON(github.event.pull_request.labels) }}\n",
+    ] {
+        assert_eq!(
+            lint("ci.yml", &with(step, innocent)),
+            Vec::<String>::new(),
+            "{innocent}"
+        );
+    }
+    // An expression left open runs to the end of the value, and still counts.
+    assert_eq!(
+        lint("ci.yml", &with(step, "      - run: echo ${{ secrets.X\n")),
+        ["job test: a secret on pull_request (`echo ${{ secrets.X`)"]
+    );
+}
+
+#[test]
+fn the_trigger_of_pr_device_yml_is_pull_request_alone_with_no_filter() {
+    // Catches: a paths or branches filter on `on`, which leaves the required checks unreported on
+    // a pull request it filters out (a check that never starts), a push trigger that would run the copies again after the merge,
+    // and a `types` list that skips the pushes to an open pull request.
+    let on = "on:\n  pull_request:\n\npermissions";
+    for changed in [
+        "on:\n  pull_request:\n    paths: ['crates/hostkeeper-launchd/**']\n\npermissions",
+        "on:\n  pull_request:\n    branches: [main]\n\npermissions",
+        "on:\n  pull_request:\n    types: [opened]\n\npermissions",
+        "on:\n  pull_request:\n  push:\n    branches: [main]\n\npermissions",
+        "on:\n  workflow_dispatch:\n\npermissions",
+        "on:\n  pull_request: x\n\npermissions",
+        "on:\n  pull_request: [x]\n\npermissions",
+        "on: [pull_request, push]\n\npermissions",
+    ] {
+        let found = problems(&device_with(on, changed));
+        assert!(
+            found.contains(&ON_PROBLEM.to_owned()),
+            "{changed}: {found:?}"
+        );
+    }
+    for same in [
+        "on: pull_request\n\npermissions",
+        "on: [pull_request]\n\npermissions",
+        "on:\n  pull_request: {}\n\npermissions",
+    ] {
+        assert_eq!(
+            problems(&device_with(on, same)),
+            Vec::<String>::new(),
+            "{same}"
+        );
+    }
+    let doc = yaml::load(&device()).expect("parses");
+    assert!(entry(&doc, "on").is_some());
+    // With no `on` it runs for no pull request, and its copies' root is refused as outside
+    // privileged.yml.
+    let none = problems(&device_with("on:\n  pull_request:\n\n", ""));
+    assert_eq!(none.len(), 3, "{none:?}");
+    assert!(
+        none[0]
+            .starts_with("job privileged: privileged outside privileged.yml and net-install.yml")
+    );
+    assert!(
+        none[1].starts_with(
+            "job openrc-device: privileged outside privileged.yml and net-install.yml"
+        )
+    );
+    assert_eq!(none[2], ON_PROBLEM);
+}
+
+#[test]
+fn the_concurrency_of_pr_device_yml_is_one_group_per_pull_request_that_cancels() {
+    // Catches: superseded runs left running (and holding runners) after a newer push, a
+    // group shared by every pull request (which cancels another pull request's run), and a
+    // workflow with no concurrency at all.
+    let block = format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n");
+    assert!(device().contains(&block));
+    for changed in [
+        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: false\n"),
+        "concurrency:\n  group: pr-device\n  cancel-in-progress: true\n".to_owned(),
+        format!("concurrency:\n  group: {GROUP}\n"),
+        format!("concurrency:\n  group: {GROUP}\n  cancel-in-progress: true\n  x: y\n"),
+        "concurrency: pr-device\n".to_owned(),
+        String::new(),
+    ] {
+        assert_eq!(
+            problems(&device_with(&block, &changed)),
+            [CONCURRENCY_PROBLEM],
+            "{changed}"
+        );
+    }
 }
 
 #[test]
@@ -676,58 +582,4 @@ fn a_top_level_key_that_would_change_the_copies_is_refused() {
             "{added}"
         );
     }
-}
-
-#[test]
-fn the_macs_crates_are_found_through_every_shape_of_path_dependency() {
-    // Catches: a crate of the Mac's binaries missed by the list's own check, so macos-test stops
-    // testing it with the check still green, when it is a build dependency, a dependency of one
-    // target only, a renamed one, or one declared through the root's workspace dependencies; and
-    // a dev-dependency, or an external crate, counted as one of the Mac's crates.
-    let manifest: toml::Table = r#"
-[dependencies]
-a = { path = "../a" }
-external = "1"
-[build-dependencies]
-b = { path = "../b" }
-[target.'cfg(target_os = "macos")'.dependencies]
-c = { path = "../c" }
-[target.'cfg(unix)'.build-dependencies]
-d = { path = "../d" }
-renamed = { package = "e", path = "../e" }
-[dependencies.f]
-workspace = true
-[dependencies.g]
-workspace = true
-[dev-dependencies]
-h = { path = "../h" }
-"#
-    .parse()
-    .expect("parses");
-    let workspace: toml::Table = r#"
-f = { path = "crates/f" }
-g = "2"
-"#
-    .parse()
-    .expect("parses");
-    let found: BTreeSet<PathBuf> = path_dependencies(
-        &manifest,
-        Path::new("crates/x"),
-        &workspace,
-        Path::new("root"),
-    )
-    .into_iter()
-    .collect();
-    let want: BTreeSet<PathBuf> = [
-        "crates/x/../a",
-        "crates/x/../b",
-        "crates/x/../c",
-        "crates/x/../d",
-        "crates/x/../e",
-        "root/crates/f",
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .collect();
-    assert_eq!(found, want);
 }

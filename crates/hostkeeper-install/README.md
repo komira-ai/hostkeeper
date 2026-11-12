@@ -5,7 +5,7 @@ that is the `macos-pkg` installer of a signed flat `.pkg`
 ([design](../../docs/design/packages-repositories.md) section 4.7): it checks the package's signature
 against the host's signers file, stages and activates it, keeps a record of what it placed, and removes or
 repairs it. This page states what the code holds. It is tested against fakes on Linux, and on a Mac in
-`.github/workflows/privileged.yml`'s job `macos-device` through
+`.github/workflows/release.yml`'s job `macos-device` through
 `crates/hostkeeper-privileged/tests/install_macos_pkg.rs`.
 
 | module | what it holds |

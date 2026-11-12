@@ -524,11 +524,12 @@ older releases wrote on a Mac, so the on-disk format is unchanged.
 
 ### The device run
 
-The job `macos-device` of `.github/workflows/privileged.yml` runs on a GitHub-hosted arm64 macOS
-runner (`macos-15`) after every merge to `main` and by hand, as root, and in
-`.github/workflows/pr-device.yml`, a copy of it key for key, on every pull request that changes a
-path the macOS jobs build or read (CONTRIBUTING.md has the path rule), beside the job `macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md
-says which).
+The job `macos-device` of `.github/workflows/release.yml` runs on a GitHub-hosted arm64 macOS
+runner (`macos-15`) as root, in the beta stage of the release pipeline: for the newest release of a
+run, after its build and before the Mac's installer is promoted to stable, beside the job
+`macos-test`, which runs the tests of the Mac's crates on the same runner (CONTRIBUTING.md says
+which). No pull request runs a macOS job, and a failure of either job holds back the macOS
+installer's promotion alone.
 Its tests (`crates/hostkeeper-privileged/tests/device_mac.rs`, `device_mac_e2e.rs`,
 `device_mac_selfupdate.rs` and `self_update_across_releases.rs`) are not
 counted by the coverage gate; what they drive is measured against fakes on Linux. They:

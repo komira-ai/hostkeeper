@@ -388,9 +388,16 @@ pub fn rows() -> Vec<Row> {
     }
     let mut promote = plain(
         "promote-pkg",
-        &["newest", "plan", "promote-check", "testing-pkg-upload"],
+        &[
+            "macos-device",
+            "macos-test",
+            "newest",
+            "plan",
+            "promote-check",
+            "testing-pkg-upload",
+        ],
         format!(
-            "${{{{ !cancelled() && !failure() && {P} && needs.promote-check.outputs.promote == 'true' }}}}"
+            "${{{{ !cancelled() && !failure() && {P} && needs.promote-check.outputs.promote == 'true' && needs.macos-test.result == 'success' && needs.macos-device.result == 'success' }}}}"
         ),
         &["assume", "gate", "pkg promote"],
     );

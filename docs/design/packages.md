@@ -833,7 +833,7 @@ archive through the channel, judges it by its floor, and hands over to it. If th
 fails to start, the old one settles the update `Failed` and runs, and it reads `hostkeeper.toml` (unchanged, since the stores are in
 `stores.toml`), the step record (unchanged) and `placed.json` (whose unknown keys it keeps).
 
-The device tests of a pull request (`pr-device.yml`, jobs `privileged` and `macos-device`, the latter when the pull request changes a path the macOS jobs build or read) prove each stage:
+The device tests of a pull request (`pr-device.yml`, job `privileged`; the Mac's `macos-device` runs in `release.yml`'s beta stage, before the macOS installer is promoted) prove each stage:
 `a_daemon_the_deb_installed_is_installed_its_next_release_and_restarts_into_it` (`self_update.rs`),
 `a_daemon_the_pkg_installed_is_installed_its_next_release_and_restarts_into_it` (`device_mac_selfupdate.rs`), and
 `a_next_binary_that_cannot_start_three_times_is_fallen_back_from_by_the_old_one` (`self_update.rs`), run

@@ -574,7 +574,7 @@ fn release_workflow_keeps_its_jobs_and_checks_the_binary() {
     assert_refused(
         "release.yml",
         &text,
-        "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"cp-deploy\", \"cp-deploy-digest\", \"image\", \"newest\", \"no-downgrade\", \"notify\", \"plan\"",
+        "release.yml: jobs are [\"check-apt\", \"check-pkg\", \"check-rpm\", \"coordinator\", \"cp-deploy\", \"cp-deploy-digest\", \"image\", \"macos-device\", \"macos-test\", \"newest\", \"no-downgrade\", \"notify\", \"plan\"",
     );
     for program in super::release::SHIPPED_BINARIES {
         let text = workflow("release.yml"); // The step's name, `if:` (`release_assets.rs`), run:

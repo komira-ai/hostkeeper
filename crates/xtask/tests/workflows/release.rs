@@ -38,6 +38,7 @@ use super::desired;
 use super::lint::{entries, entry, pinned_by_digest, runs_on_pull_requests, triggers};
 use super::packages;
 use super::pkg_signing;
+use super::release_macos;
 use super::yaml::{self, Node, Value};
 
 /// The `if:` of the attest job: a push to main. The only condition under which a token can sign.
@@ -78,12 +79,15 @@ pub const RELEASE_EXEMPT: &[(&str, &str)] = &[(
 /// The jobs of release.yml, sorted, but the package channels ([`packages::job_names`]): the release
 /// (`plan`, `verify`, `publish`, `image`), hostkeeper's own deploy ([`desired::TARGETS_JOB`],
 /// [`desired::COORDINATOR_JOB`], [`super::no_downgrade::JOB`], [`desired::JOB`]) and the
-/// coordinator's deploy to the control plane ([`cp_deploy::JOB`], [`cp_deploy::DIGEST_JOB`]).
-pub const RELEASE_JOBS: [&str; 10] = [
+/// coordinator's deploy to the control plane ([`cp_deploy::JOB`], [`cp_deploy::DIGEST_JOB`]), and
+/// the Mac's tests ([`super::release_macos::JOBS`]).
+pub const RELEASE_JOBS: [&str; 12] = [
     "coordinator",
     "cp-deploy",
     "cp-deploy-digest",
     "image",
+    "macos-device",
+    "macos-test",
     "no-downgrade",
     "plan",
     "publish",
@@ -411,7 +415,7 @@ fn release_problems(doc: &Node) -> Vec<String> {
     want.sort();
     if jobs != want {
         problems.push(format!(
-            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired, cp-deploy-digest, cp-deploy and the jobs of the package channels ({want:?})"
+            "release.yml: jobs are {jobs:?}, not plan, verify, publish, image, targets, coordinator, no-downgrade, set-desired, cp-deploy-digest, cp-deploy, macos-test, macos-device and the jobs of the package channels ({want:?})"
         ));
     }
     for (name, condition, needs) in [
@@ -456,8 +460,13 @@ fn release_problems(doc: &Node) -> Vec<String> {
     }
     for (name, j) in entry(doc, "jobs").map_or(&[][..], entries) {
         let name = name.as_str().unwrap_or_default();
-        problems.extend(build_problems(name, Some(j)));
+        // The Mac's tests build the repository to test it, not to release it
+        // ([`super::release_macos`] holds them to their own shape).
+        if !release_macos::is_stage_job(name) {
+            problems.extend(build_problems(name, Some(j)));
+        }
     }
+    problems.extend(release_macos::problems(doc));
     problems.extend(desired::problems(doc));
     problems.extend(cp_deploy::problems(doc));
     problems.extend(packages::problems(doc));

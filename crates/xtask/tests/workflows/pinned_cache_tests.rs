@@ -592,8 +592,6 @@ fn every_pinned_download_of_the_repository_is_held_to_the_rule() {
         "net-install.yml net-install nfpm.tar.gz",
         "net-install.yml net-install gh.tar.gz",
         "net-install.yml net-install-arm64 gh.tar.gz",
-        "pr-device.yml macos-device gh.zip",
-        "pr-device.yml macos-device previous-release.tar.gz",
         "pr-device.yml privileged gh.tar.gz",
         "pr-device.yml privileged previous-release.tar.gz",
         "pr-device.yml privileged nfpm.tar.gz",
@@ -601,8 +599,8 @@ fn every_pinned_download_of_the_repository_is_held_to_the_rule() {
         "privileged.yml privileged gh.tar.gz",
         "privileged.yml privileged previous-release.tar.gz",
         "privileged.yml privileged nfpm.tar.gz",
-        "privileged.yml macos-device gh.zip",
-        "privileged.yml macos-device previous-release.tar.gz",
+        "release.yml macos-device gh.zip",
+        "release.yml macos-device previous-release.tar.gz",
         "privileged.yml openrc-device nfpm.tar.gz",
     ];
     want.sort_unstable();

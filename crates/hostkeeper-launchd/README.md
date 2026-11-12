@@ -3,7 +3,7 @@
 The macOS side of the host daemon: the same daemon, flow, config and package paths as on Linux, with
 the ports that differ implemented over launchd. How it is meant to run:
 [docs/macos.md](../../docs/macos.md). This page states what the code holds. It is tested against
-fakes on Linux, and on a Mac in `.github/workflows/privileged.yml`'s job `macos-device`.
+fakes on Linux, and on a Mac in `.github/workflows/release.yml`'s job `macos-device`.
 
 | module | what it holds |
 |---|---|

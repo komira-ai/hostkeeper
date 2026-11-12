@@ -1,7 +1,7 @@
 #![cfg(all(target_os = "macos", feature = "privileged"))]
 //! The `macos-pkg` installer (`hostkeeper_install::macos_pkg::MacosPkg`) against the Mac's real
 //! `pkgutil`, `installer`, `lsbom` and `launchctl`, as root, in privileged.yml's job
-//! `macos-device` (and pr-device.yml's copy of it). The daemon's fetch is not part of it; the test
+//! `macos-device` of release.yml (its beta stage). The daemon's fetch is not part of it; the test
 //! drives the installer's steps directly, with the version directories a core would keep (a
 //! staging directory per version, renamed to the version once `stage` has filled it).
 //!

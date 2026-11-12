@@ -238,7 +238,6 @@ fn a_dpkg_step_outside_the_network_install_jobs_is_refused() {
     for (job, run) in [
         ("privileged", INSTALL_X86),
         ("first-boot", INSTALL_ARM),
-        ("macos-device", INSTALL_X86),
         ("openrc-device", INSTALL_X86),
     ] {
         let found = privileged_problems(&with_first_step(&text, job, run));
