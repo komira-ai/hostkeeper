@@ -117,12 +117,12 @@ wildcard is refused at start, as before). The Macs' listener is then given as
 
 - published ports in `mode=host`, not the routing mesh: 443 for the Macs' listener
   (`target=8443,published=443`, below), and 8446 for the LAN listener when the farm has one
-  (`target=8446,published=8446`, with `--lan-listen` naming an address the task has). `mode=host` keeps the Macs'
+  (`target=8447,published=8446`, with `--lan-listen-wildcard` and `--lan-address`, below). `mode=host` keeps the Macs'
   source addresses and binds the port on the host's own addresses; the service must be pinned to
   the host (a placement constraint), and port 443 must be free on it (the old MDM stack's units
   stopped);
 - the MDM name's A record is the host's LAN address, the address a Mac dials; the certificate is
-  the MDM name's, so the wildcard bind changes nothing in it;
+  the MDM name's, so the wildcard bind changes nothing in it (the LAN listener's is the one that does: below);
 - no macvlan network is needed. The coordinator's user cannot bind a port below 1024, so give
   the flag a high target port and publish it as 443: `--mdm-listen 0.0.0.0:8443
   --mdm-listen-wildcard` with `mode=host,target=8443,published=443`; the Macs still dial 443 on
@@ -131,8 +131,17 @@ wildcard is refused at start, as before). The Macs' listener is then given as
   interface. When the control plane moves to another host (the NUC), the same service definition
   is deployed there and the A record is changed to that host's LAN address.
 
-`--lan-listen` has no wildcard opt-in: its certificate names the listener's address, which a
-daemon dials, so it still takes the address of one interface.
+The LAN listener takes the same shape with two flags. Its server certificate names the address a
+daemon dials, which a wildcard bind does not know, so `--lan-listen-wildcard` (it requires
+`--lan-listen` and `--lan-address`; without it a wildcard is refused at start, as before) comes
+with `--lan-address <ip>`, the host's LAN address: the coordinator binds the wildcard, and the server
+certificate it makes names `--lan-address` in place of the address of `--lan-listen`. On the dev
+box: `--lan-listen 0.0.0.0:8447 --lan-listen-wildcard --lan-address 192.168.1.250`, published
+`mode=host,target=8447,published=8446` (the task's health listener holds `127.0.0.1:8446` inside
+the task, so the LAN listener's target is another port); the daemons dial `https://192.168.1.250:8446`.
+`--lan-address` is not a wildcard (the start stops), and the certificate is made again at the start
+that changes the address. Without the two flags nothing changes: `--lan-listen` takes the address
+of one interface and the certificate names it.
 
 How the coordinator is deployed matters for later deploys. The dev box's coordinator is a plain
 docker container made by `coordinator_docker.sh`. The script writes the new flags to a new file next

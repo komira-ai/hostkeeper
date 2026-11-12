@@ -172,7 +172,8 @@ fn lan_listen_needs_enrollment_and_the_address_of_one_interface() {
     assert_eq!(
         StartError::LanListen("0.0.0.0:3".parse().expect("an address")).to_string(),
         "--lan-listen: 0.0.0.0:3 is a wildcard address; the LAN listener's address is named in \
-         the server certificate, so name the address of one interface"
+         the server certificate, so name the address of one interface, or give --lan-listen-wildcard \
+         and --lan-address where the port is published on the host"
     );
     assert!(
         !files.path("server.pem").exists(),
@@ -252,6 +253,105 @@ fn the_server_certificate_names_the_lan_address_and_follows_the_flags() {
     assert_eq!(
         names,
         ["dns:localhost", "dns:coordinator", "ip:[192, 0, 2, 8]"]
+    );
+}
+
+/// Proves: `--lan-listen-wildcard` and `--lan-address` are in the usage and off unless given;
+/// each is a usage error (exit 2) without the other or without `--lan-listen`; with both, each
+/// spelling of a wildcard `--lan-listen` is taken as given and the server certificate names the
+/// address of `--lan-address` (an IPv4 address written as IPv6 named as IPv4) and not the
+/// wildcard; a wildcard `--lan-address` is refused (`LanAddress`, exact text); the wildcard
+/// `--lan-listen` without the opt-in is still refused; and an interface address with the opt-in
+/// is taken as given while the certificate names `--lan-address`.
+///
+/// Catches: a wildcard bind whose certificate names no address a daemon dials (or `0.0.0.0`), an
+/// opt-in that is on by default or works without the address, and a certificate that is not
+/// made again when the address moves.
+#[test]
+fn a_wildcard_lan_listener_needs_the_address_the_certificate_and_daemons_use() {
+    let files = Files::new("lan-wildcard");
+    let help = Cli::try_parse_from(["hostkeeper-coordinator", "serve", "--help"])
+        .expect_err("help")
+        .to_string();
+    assert!(help.contains("--lan-listen-wildcard"), "{help}");
+    assert!(help.contains("--lan-address <LAN_ADDRESS>"), "{help}");
+
+    for flags in [
+        with_enrollment(&["--lan-listen", "0.0.0.0:3", "--lan-listen-wildcard"]),
+        with_enrollment(&["--lan-listen", LAN, "--lan-address", LAN_IP]),
+        with_enrollment(&["--lan-listen-wildcard", "--lan-address", LAN_IP]),
+        with_enrollment(&["--lan-address", LAN_IP]),
+        with_enrollment(&["--lan-listen-wildcard"]),
+    ] {
+        assert_eq!(
+            hostkeeper_coordinator::config::main(files.args(&flags)),
+            ExitCode::from(2),
+            "{flags:?}"
+        );
+    }
+
+    let refused = start(&files, &with_enrollment(&["--lan-listen", "0.0.0.0:3"]));
+    assert!(matches!(refused, Err(StartError::LanListen(_))));
+
+    for (wildcard, address, named) in [
+        ("0.0.0.0:3", LAN_IP, "ip:[192, 0, 2, 7]"),
+        ("[::]:3", LAN_IP, "ip:[192, 0, 2, 7]"),
+        (
+            "[::ffff:0.0.0.0]:3",
+            "::ffff:192.0.2.8",
+            "ip:[192, 0, 2, 8]",
+        ),
+    ] {
+        let flags = with_enrollment(&[
+            "--lan-listen",
+            wildcard,
+            "--lan-listen-wildcard",
+            "--lan-address",
+            address,
+        ]);
+        let parts = start(&files, &flags).expect("the opt-in takes it");
+        assert_eq!(
+            parts.lan_listen,
+            Some(wildcard.parse().expect("an address"))
+        );
+        drop(parts);
+        let (names, _) = names_and_serial(&files);
+        assert_eq!(names, ["dns:localhost", named], "{wildcard}");
+    }
+
+    let flags = with_enrollment(&[
+        "--lan-listen",
+        LAN,
+        "--lan-listen-wildcard",
+        "--lan-address",
+        "192.0.2.9",
+    ]);
+    let parts = start(&files, &flags).expect("an interface address with the opt-in");
+    assert_eq!(parts.lan_listen, Some(LAN.parse().expect("an address")));
+    drop(parts);
+    let (names, _) = names_and_serial(&files);
+    assert_eq!(names, ["dns:localhost", "ip:[192, 0, 2, 9]"]);
+
+    for address in ["0.0.0.0", "::", "::ffff:0.0.0.0"] {
+        let flags = with_enrollment(&[
+            "--lan-listen",
+            "0.0.0.0:3",
+            "--lan-listen-wildcard",
+            "--lan-address",
+            address,
+        ]);
+        match start(&files, &flags) {
+            Err(StartError::LanAddress(got)) => {
+                assert_eq!(got, address.parse::<std::net::IpAddr>().expect("an IP"))
+            }
+            Err(other) => panic!("refused otherwise: {other}"),
+            Ok(_) => panic!("started with {address}"),
+        }
+    }
+    assert_eq!(
+        StartError::LanAddress("0.0.0.0".parse().expect("an IP")).to_string(),
+        "--lan-address: 0.0.0.0 is a wildcard address; it is the address daemons dial and the \
+         server certificate names, so name the address of one interface of the LAN"
     );
 }
 

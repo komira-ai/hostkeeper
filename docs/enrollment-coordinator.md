@@ -31,7 +31,9 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 | `--ca-init` | Make the CA when `--ca-key-file` does not exist. Without it a missing CA stops the start. |
 | `--server-cert-file <file>` | The coordinator's server certificate, the CA certificate and the server key, one PEM file (mode 0600) the coordinator writes. The heartbeat listener serves it. |
 | `--server-name <name>` | A DNS name the server certificate names, as daemons dial the coordinator; repeat it for each. |
-| `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start. Requires `--ca-key-file`. |
+| `--lan-listen <address:port>` | A third listener, on the farm LAN, for network-installed hosts: it serves what the heartbeat listener serves, with its TLS and its checks (below), and the server certificate names its IP address. The address of one interface: a wildcard address stops the start unless `--lan-listen-wildcard` is given with `--lan-address`. Requires `--ca-key-file`. |
+| `--lan-listen-wildcard` | Take a wildcard `--lan-listen` (`0.0.0.0` or `[::]`): the LAN listener listens on every interface of the coordinator's network namespace, as a Swarm task's does with its port published on the host in `mode=host` (`docs/operations/mdm-cutover.md` section 3.1). Off unless given; an address of one interface is taken as without it. Requires `--lan-listen` and `--lan-address`. |
+| `--lan-address <ip>` | The address daemons dial the LAN listener at, the host's LAN address: the server certificate names it in place of the address of `--lan-listen`, which with a wildcard is none a daemon dials. Not a wildcard address (the start stops). Requires `--lan-listen-wildcard`; without the wildcard the certificate names the address of `--lan-listen` as before. |
 | `--max-pending-enrollments <n>` | How many requests may wait for an operator at once, 1 or more; 256 when not given. A new request over it is refused `pending_full`; no waiting request is dropped for it, and a host posting its waiting request again is still answered. Requires `--ca-key-file`. |
 | `--host-cert-validity-secs <n>` | How long each host certificate the CA issues or renews is valid, in seconds: 60 to 604800 (7 days, the CA's cap), 604800 when not given. The daemon renews at half life. A certificate already issued keeps its validity; the next issuance or renewal takes the new one. Requires `--ca-key-file`. |
 | `--enrollment-request-ttl <time>` | How long a request waits for an operator before it expires: digits and one unit, `s`, `m`, `h` or `d` (`90m`, `72h`), at least one second; `72h` when not given. Requires `--ca-key-file`. |
@@ -54,7 +56,7 @@ the farm LAN serves the same, to network-installed hosts, which have no tailnet
 
 The CA is made once. Every daemon config pins the SHA-256 of its certificate (`ca_sha256`); the
 start logs it at info as `ca_sha256`. The server certificate names the DNS names of
-`--server-name` and then, with `--lan-listen`, its IP address (an IPv4 address written as IPv6 is
+`--server-name` and then, with `--lan-listen`, its IP address (`--lan-address` when the listener is a wildcard; an IPv4 address written as IPv6 is
 named as IPv4), so a daemon may dial the LAN listener by address. It is made again when its file is
 missing, does not start with a certificate, has less than a third of its 90 days left (60 days
 after it was made), or names other names than these (a name or the address added, removed or
