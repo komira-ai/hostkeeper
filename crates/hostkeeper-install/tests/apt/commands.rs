@@ -136,6 +136,64 @@ fn only_the_update_and_the_download_fetch_and_both_are_confined() {
     );
 }
 
+/// Proves the two runs that run package scripts, the install of an activate and the purge of a
+/// remove, run with exactly `LC_ALL=C`, `DEBIAN_FRONTEND=noninteractive`, `NEEDRESTART_SUSPEND=1`
+/// and `NEEDRESTART_MODE=l` (needrestart's apt hook does not run, and a needrestart that runs all
+/// the same restarts nothing), and that every other run has `LC_ALL=C` alone, so none of them
+/// carries the package-script environment it has no use for.
+/// Catches: an install that lets needrestart restart the service's units on its own while the
+/// update drains one and starts another (Ubuntu's default after an `apt-get install`).
+#[test]
+fn only_the_install_and_the_purge_suspend_needrestart() {
+    let env = full_install();
+    env.installer()
+        .remove(&service(SERVICE), REMOVE_SECS)
+        .expect("removed");
+    let pair = |name: &str, value: &str| (name.to_owned(), value.to_owned());
+    let scripts = vec![
+        pair("LC_ALL", "C"),
+        pair("DEBIAN_FRONTEND", "noninteractive"),
+        pair("NEEDRESTART_SUSPEND", "1"),
+        pair("NEEDRESTART_MODE", "l"),
+    ];
+    let mut seen = Vec::new();
+    for call in env.host.calls() {
+        let expected = match call.label.as_str() {
+            "apt-get install" | "dpkg --purge" => {
+                seen.push(call.label.clone());
+                scripts.clone()
+            }
+            _ => vec![pair("LC_ALL", "C")],
+        };
+        assert_eq!(call.run.env, expected, "{}", call.label);
+    }
+    assert_eq!(seen, ["apt-get install", "dpkg --purge"]);
+}
+
+/// Proves the download runs in an archives directory that has the mode apt gave the lists'
+/// `partial/` (0700 in the fake, as apt run as root makes it) and the same owner and group, so
+/// that apt's sandbox user, which owns `partial/`, can write the package file there. Run by one
+/// user, the owner is that user's either way; the device test `install_apt` runs real apt as
+/// root and proves the owner (`_apt`) is copied.
+/// Catches: a download into a root-owned archives directory, where apt downloads as root and
+/// warns "Download is performed unsandboxed as root".
+#[test]
+fn the_archives_directory_takes_the_owner_and_mode_of_the_lists_partial() {
+    use std::os::unix::fs::MetadataExt;
+    let env = Env::new("apt-archives-owner");
+    env.staged(&deb(V1), &["mdm.service"]);
+    let work = env.work();
+    let partial = std::fs::metadata(work.join("lists/partial")).expect("lists/partial");
+    let archives = std::fs::metadata(work.join("archives")).expect("archives");
+    assert_eq!(partial.mode() & 0o7777, 0o700);
+    assert_eq!(archives.mode() & 0o7777, 0o700);
+    assert_eq!(
+        (archives.uid(), archives.gid()),
+        (partial.uid(), partial.gid())
+    );
+    assert_eq!(env.host.calls_of("apt-get download").len(), 1);
+}
+
 /// Proves the dpkg-deb runs are confined: reading the fields writes nothing and the extraction
 /// writes the tree only, each run's bound is the stage's, and no run reads the control members.
 #[test]

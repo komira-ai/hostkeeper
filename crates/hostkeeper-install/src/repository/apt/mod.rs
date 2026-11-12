@@ -11,6 +11,14 @@
 //! Only `apt-get update` and `apt-get download`
 //! reach the network, confined to the work directory; every other run is offline.
 //!
+//! The two runs that run package scripts, the install and the purge, are given the environment
+//! of `scripts`: no question asked, and needrestart's apt hook suspended, so that no hook of
+//! the package manager restarts a service while the update moves it (the update starts and stops
+//! the service's units itself, in its own order). The download writes into the archives
+//! directory, which is first given the owner, group and mode apt gave its own download directory,
+//! the lists' `partial/` (`sandbox_archives`): apt run as root downloads as its sandbox user
+//! (`_apt`) only into a directory that user can write, and otherwise downloads as root.
+//!
 //! | Work directory              | Version directory's `apt/` |
 //! |-----------------------------|----------------------------|
 //! | `sources/<repository>.sources` | `<repository>.sources` |
@@ -23,6 +31,7 @@ pub mod version;
 
 use std::fs;
 use std::io;
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use hostkeeper_release::Installer;
@@ -93,6 +102,34 @@ fn with_options(tool: Tool, work: &Path, lock_secs: u64, bound: u64, rest: &[&st
     let mut args = options(work, lock_secs);
     args.extend(rest.iter().map(|s| (*s).to_owned()));
     Run::offline(tool, args, bound)
+}
+
+/// `run`, a run that runs package scripts (the install, the purge), with their environment:
+/// `DEBIAN_FRONTEND=noninteractive`, so that no script asks a question; `NEEDRESTART_SUSPEND=1`,
+/// which needrestart's apt hook (`DPkg::Post-Invoke`, `/usr/lib/needrestart/apt-pinvoke`) reads
+/// as "do not run", so it does not restart the services whose binaries the install replaced while
+/// the update drains one of them and starts another; and `NEEDRESTART_MODE=l`, so that a
+/// needrestart that runs all the same (one that does not read the first) lists what it would
+/// restart and restarts nothing.
+fn scripts(run: Run) -> Run {
+    run.with_env("DEBIAN_FRONTEND", "noninteractive")
+        .with_env("NEEDRESTART_SUSPEND", "1")
+        .with_env("NEEDRESTART_MODE", "l")
+}
+
+/// Gives the archives directory of `work` the owner, group and mode of the lists' `partial/`,
+/// which `apt-get update` made its own download directory (as root: its sandbox user `_apt`,
+/// group root, mode 0700). `apt-get download` writes into the archives directory, its working
+/// directory, and apt downloads as its sandbox user only when that user can write there; else it
+/// downloads as root and warns that it does.
+fn sandbox_archives(work: &Path) -> io::Result<()> {
+    let partial = fs::metadata(work.join(LISTS).join(PARTIAL))?;
+    let archives = work.join(ARCHIVES);
+    std::os::unix::fs::chown(&archives, Some(partial.uid()), Some(partial.gid()))?;
+    fs::set_permissions(
+        &archives,
+        fs::Permissions::from_mode(partial.mode() & 0o7777),
+    )
 }
 
 /// Runs `run`, a tool that could not run being the host's failure.
@@ -233,6 +270,12 @@ impl Backend for Apt {
     ) -> Result<PathBuf, Failure> {
         let one = pinned(package, version);
         let archives = work.join(ARCHIVES);
+        sandbox_archives(work).map_err(|e| {
+            Failure::new(
+                Reason::IoError,
+                format!("the archives directory could not be given apt's download owner: {e}"),
+            )
+        })?;
         let call = apt(Tool::AptGet, work, bound, &["download", &one])
             .fetching()
             .writing(vec![work.to_path_buf()])
@@ -344,8 +387,7 @@ impl Backend for Apt {
             "--allow-change-held-packages",
             &one,
         ];
-        let call = locking(Tool::AptGet, work, bound, lock_wait_secs, &rest)
-            .with_env("DEBIAN_FRONTEND", "noninteractive");
+        let call = scripts(locking(Tool::AptGet, work, bound, lock_wait_secs, &rest));
         parse::install(&run(tools, &call)?)
     }
 
@@ -381,12 +423,11 @@ impl Backend for Apt {
     }
 
     fn purge(&self, tools: &dyn Tools, package: &str, bound: u64) -> Result<Purged, Failure> {
-        let call = Run::offline(
+        let call = scripts(Run::offline(
             Tool::Dpkg,
             vec!["--purge".to_owned(), package.to_owned()],
             bound,
-        )
-        .with_env("DEBIAN_FRONTEND", "noninteractive");
+        ));
         let output = run(tools, &call)?;
         match parse::purge(&output)? {
             true => Ok(Purged::Done),
