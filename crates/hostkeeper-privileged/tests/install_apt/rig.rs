@@ -312,6 +312,7 @@ impl Rig {
             repositories: &self.repositories,
             dirs: &self.dirs,
             pause: &Sleep,
+            lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
             mirror: None,
         }
     }

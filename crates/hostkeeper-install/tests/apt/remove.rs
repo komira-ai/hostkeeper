@@ -1,7 +1,7 @@
 //! `remove` and `retire`: the package released and purged whatever version is installed, the
 //! purge tried again while the lock is held, the links taken away and the record dropped.
 
-use hostkeeper_install::repository::{Class, Drift, Outcome, Reason};
+use hostkeeper_install::repository::{Class, Drift, LockWait, Outcome, Reason, Tool};
 
 use crate::harness::*;
 
@@ -100,9 +100,11 @@ fn a_remove_of_a_package_already_gone_skips_the_unhold() {
     assert_eq!(env.host.calls_of("dpkg --purge").len(), 1);
 }
 
-/// Proves the purge is tried again while the lock is held, within `remove_secs`: three busy
-/// answers are three tries and three pauses of two seconds, then it succeeds; a `remove_secs`
-/// of one is a single try.
+/// Proves the purge is tried again while the lock is held: dpkg holding the lock for three
+/// tries is three pauses of two seconds on the installer's clock, then the purge that gets it,
+/// and the package is gone; the wait is reported once, at its start, naming dpkg, the bound and
+/// the holder dpkg printed.
+/// Catches: a purge that gives up at the first lock it finds, or a wait that is never reported.
 #[test]
 fn a_purge_is_tried_again_while_busy() {
     let env = installed_env("apt-remove-busy");
@@ -115,10 +117,24 @@ fn a_purge_is_tried_again_while_busy() {
     assert_eq!(env.pause.calls(), [2, 2, 2]);
     assert_eq!(env.host.calls_of("dpkg --purge").len(), 4);
     assert!(env.host.installed(PACKAGE).is_none());
+    assert_eq!(
+        env.pause.waits(),
+        [LockWait {
+            tool: Tool::Dpkg,
+            waited_secs: 0,
+            bound_secs: LOCK_WAIT_SECS,
+            holder: "dpkg: error: dpkg frontend lock was locked by another process with pid 4321"
+                .to_owned(),
+        }]
+    );
 }
 
-/// Proves a purge that stays busy past the tries `remove_secs` allows is `package_manager_busy`,
-/// deferred, environment, with the record and the links still there.
+/// Proves a purge that stays busy for all of `lock_wait_secs` is `package_manager_busy`,
+/// deferred, environment, after a try at every two seconds of the wait (six tries, five pauses
+/// for ten seconds), with the record and the links still there; a wait of one second is two
+/// tries one second apart, the wait reported once.
+/// Catches: a wait that runs past its bound, or a lock held to the end that is a failure of the
+/// release.
 #[test]
 fn a_purge_busy_past_its_tries_defers() {
     let env = installed_env("apt-remove-busy-long");
@@ -130,28 +146,38 @@ fn a_purge_busy_past_its_tries_defers() {
         .remove(&service(SERVICE), REMOVE_SECS)
         .expect_err("busy");
     assert_failure(&failure, Reason::PackageManagerBusy, Environment, Deferred);
-    assert!(failure.detail().contains("10s"));
-    assert_eq!(env.pause.calls(), [2, 2, 2, 2], "five tries, four pauses");
-    assert_eq!(env.host.calls_of("dpkg --purge").len(), 5);
+    assert_eq!(
+        failure.detail(),
+        "the package manager's lock was held for 10s of 10s (dpkg): dpkg: error: dpkg frontend \
+         lock was locked by another process with pid 4321"
+    );
+    assert_eq!(env.pause.calls(), [2, 2, 2, 2, 2], "six tries, five pauses");
+    assert_eq!(env.host.calls_of("dpkg --purge").len(), 6);
     assert!(env.records.get(SERVICE).is_some());
     assert!(env.host.installed(PACKAGE).is_some());
     for link in run3_links() {
         assert!(at_root(&env, &link).is_symlink());
     }
 
-    let short = installed_env("apt-remove-busy-short");
+    let mut short = installed_env("apt-remove-busy-short");
+    short.lock_wait_secs = 1;
     short.host.edit(|s| {
         s.faults.busy.insert("purge", 99);
     });
     let failure = short
         .installer()
-        .remove(&service(SERVICE), 1)
+        .remove(&service(SERVICE), REMOVE_SECS)
         .expect_err("busy");
     assert_eq!(failure.reason(), Reason::PackageManagerBusy);
     assert!(
-        short.pause.calls().is_empty(),
-        "a bound of one second is one try"
+        failure
+            .detail()
+            .starts_with("the package manager's lock was held for 1s of 1s (dpkg): "),
+        "{failure}"
     );
+    assert_eq!(short.pause.calls(), [1], "the whole second is waited");
+    assert_eq!(short.host.calls_of("dpkg --purge").len(), 2);
+    assert_eq!(short.pause.waits().len(), 1, "and the wait is reported");
 }
 
 /// Proves a purge refused by a dependent package is `dependency_changes`, failed, environment,

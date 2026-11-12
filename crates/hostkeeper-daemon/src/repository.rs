@@ -23,7 +23,9 @@
 //! tried again ([`crate::place::retried`]).
 //!
 //! Each tool runs through the daemon's step launcher as a transient unit of the service
-//! ([`LauncherTools`]); a purge whose lock is held waits on the daemon's clock ([`ClockPause`]).
+//! ([`LauncherTools`]); a purge or a hold whose lock is held waits on the daemon's clock, up to
+//! `--package-lock-wait-secs` ([`RepositoryPorts::lock_wait_secs`]), and the wait is said in the
+//! log ([`ClockPause`], [`WARN_LOCK_WAIT`]).
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -37,8 +39,8 @@ use hostkeeper_install::backend_of;
 use hostkeeper_install::repository::launcher::LauncherTools;
 use hostkeeper_install::repository::loaded;
 use hostkeeper_install::repository::{
-    Backend, Class, Drift, Failure, HostDirs, InstallerLock, Mirror, Order, Outcome, PackageRecord,
-    Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller, TREE,
+    Backend, Class, Drift, Failure, HostDirs, InstallerLock, LockWait, Mirror, Order, Outcome,
+    PackageRecord, Pause, Reason, RecordError, Records, Repositories, RepositoryInstaller, TREE,
 };
 use hostkeeper_install::version::{
     FillError, FillOrder, HostFs, Owner, REASON_ARTIFACT_CHANGED, REASON_DAEMON_TOO_OLD,
@@ -109,13 +111,16 @@ pub struct RepositoryPorts {
     /// The mirror of the private repositories ([`crate::mirror`]); none on a host that reads
     /// none (a Mac), where a private repository's stage defers.
     pub mirror: Option<Arc<CoordinatorMirror>>,
+    /// The seconds a step waits at most for the package manager's lock
+    /// (`--package-lock-wait-secs`).
+    pub lock_wait_secs: u64,
 }
 
 impl RepositoryPorts {
     /// The ports of the host whose root is `root` and whose packages directory is
     /// `packages_dir`, everything staged given to `owner`: the work directories in
     /// `<packages_dir>/../apt`, the lock `<packages_dir>/../installer.lock`, the mirrors
-    /// `<packages_dir>/../mirror`.
+    /// `<packages_dir>/../mirror`; the lock waited for the default of `--package-lock-wait-secs`.
     pub fn new(
         packages_dir: &Path,
         root: &Path,
@@ -136,6 +141,15 @@ impl RepositoryPorts {
             lock: state.join(LOCK_FILE),
             macos_pkg: None,
             mirror: None,
+            lock_wait_secs: crate::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
+        }
+    }
+
+    /// These ports, a step waiting `secs` at most for the package manager's lock.
+    pub fn with_lock_wait_secs(self, secs: u64) -> RepositoryPorts {
+        RepositoryPorts {
+            lock_wait_secs: secs,
+            ..self
         }
     }
 
@@ -165,12 +179,37 @@ impl RepositoryPorts {
     }
 }
 
-/// The purge's wait, on the daemon's clock.
-pub struct ClockPause(pub Arc<dyn Clock>);
+/// The warning of a step of `service` whose `dpkg --purge` or `apt-mark` waits for the package
+/// manager's lock (apt-get's own wait is apt's, and not reported), said when the wait begins and
+/// every 30 seconds while it lasts
+/// ([`hostkeeper_install::repository::wait::LOCK_REPORT_SECS`]):
+/// `hostkeeper daemon: level=warn alert=lock_wait service=<service> tool=<tool>
+/// waited_secs=<n> bound_secs=<n>: <the tool's last line>`.
+pub const WARN_LOCK_WAIT: &str = "lock_wait";
+
+/// The wait for the package manager's lock of a step of `service`: a pause is a sleep on the
+/// daemon's clock, and a wait is said in `log` ([`WARN_LOCK_WAIT`]).
+pub struct ClockPause {
+    pub clock: Arc<dyn Clock>,
+    pub log: Arc<dyn Fn(&str) + Send + Sync>,
+    pub service: String,
+}
 
 impl Pause for ClockPause {
     fn pause(&self, secs: u64) {
-        self.0.sleep_secs(secs);
+        self.clock.sleep_secs(secs);
+    }
+
+    fn lock_wait(&self, wait: &LockWait) {
+        let detail = format!(
+            "service={} tool={} waited_secs={} bound_secs={}: {}",
+            self.service,
+            wait.tool.name(),
+            wait.waited_secs,
+            wait.bound_secs,
+            wait.holder
+        );
+        (self.log)(&crate::boot::warn_line(WARN_LOCK_WAIT, &detail));
     }
 }
 
@@ -443,7 +482,11 @@ impl Repository {
         let tools = LauncherTools::sharing(&*self.launcher, service.as_str(), &self.tool_runs);
         let records = self.records();
         let lock = InstallerLock::new(&self.ports.lock);
-        let pause = ClockPause(Arc::clone(&self.clock));
+        let pause = ClockPause {
+            clock: Arc::clone(&self.clock),
+            log: Arc::clone(&self.log),
+            service: service.to_string(),
+        };
         let repositories = self.ports.repositories.snapshot();
         step(&RepositoryInstaller {
             backend,
@@ -453,6 +496,7 @@ impl Repository {
             repositories: &repositories,
             dirs: &self.ports.dirs,
             pause: &pause,
+            lock_wait_secs: self.ports.lock_wait_secs,
             mirror: self
                 .ports
                 .mirror

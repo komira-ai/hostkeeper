@@ -552,6 +552,7 @@ Reconcile on every heartbeat: advance `last_good`, mark bad, plan automatic roll
 | Old hook never states `reversible` | a failed cleanup is retried forward, never rolled back | `reversible_stated` |
 | `prepare` returns 75 | everything it placed is undone first; if undo fails it must exit 1 | contract |
 | Rollback itself defers | run again up to three times, then treated as failure | `ROLLBACK_ATTEMPTS` |
+| Rollback still defers with `package_manager_busy`, before commit | Deferred, not Halt: the host's package manager stayed locked | `next.rs` |
 | Rollback fails before commit | Halt | `next.rs` |
 | Rollback fails after commit | Failed after commit if the hook says `reversible:false`, else Halt | `next.rs` |
 | Hook-requested wait too long | clamped to 3600 seconds | `MAX_RETRY_SECS` |

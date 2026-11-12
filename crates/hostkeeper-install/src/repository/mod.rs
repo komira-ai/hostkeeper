@@ -7,9 +7,9 @@
 //! | Step       | Does | Network |
 //! |------------|------|---------|
 //! | `stage`    | Refuses a package another service records; finds the order's repository in the host's configuration; makes the work directory see it alone; fetches and verifies the index; reads the version's stanza and checks its digest against the pin and its size against `max_package_bytes`; the dependency check (under the installer lock); downloads the package and hashes it against the pin; checks its control fields, extracts it with no script run, and checks that the manifest's hook program, if any, is an executable file of the tree; keeps the index and the package in the version directory | The update and the download only |
-//! | `activate` | Under the installer lock: fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback) while the policy file [`policy`] keeps its scripts from starting units, checks the database shows it, holds it, enables the `run` units that ask for it, reloads the service manager, records it done | None |
+//! | `activate` | Under the installer lock: fills the work directory from the version directory, reads what is installed (a version hostkeeper did not set is drift), records the version pending, installs it with no download (a downgrade for a rollback, apt waiting up to `lock_wait_secs` for the package manager's lock) while the policy file [`policy`] keeps its scripts from starting units, checks the database shows it, holds it (tried again while the lock is held, [`wait`]), enables the `run` units that ask for it, reloads the service manager, records it done | None |
 //! | `retire`   | Deletes a version directory that is neither `current` nor `previous`; runs no tool | None |
-//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (tried again while the lock is held, within `remove_secs`, under the policy file), takes away the recorded links, reloads, drops the record | None |
+//! | `remove`   | Under the installer lock: releases the hold, purges the package whatever version is installed (each tried again while the lock is held, for up to `lock_wait_secs`, [`wait`]; the purge under the policy file), takes away the recorded links, reloads, drops the record | None |
 //!
 //! The version directory is the core's (packages-lifecycle.md section 6.1): `stage` writes
 //! `tree/` and the backend's directory (`apt/`) into the empty staging directory it is given,
@@ -26,6 +26,7 @@
 //! - [`loaded`]: the check that systemd loads the package's own unit, not one an earlier release
 //!   left in its place.
 //! - [`policy`]: the `policy-rc.d` file held while the package manager runs.
+//! - [`wait`]: the wait for the package manager's lock, and its reports.
 //! - [`announce`]: when a daemon announces a repository installer (section 4.1).
 //! - [`launcher`]: the [`Tools`] port over the step launcher's transient units.
 
@@ -47,6 +48,7 @@ pub mod tree;
 mod activate;
 mod remove;
 mod stage;
+pub mod wait;
 
 use std::path::{Path, PathBuf};
 
@@ -61,7 +63,7 @@ pub use mirror::{Mirror, MirrorError, mirrored_name};
 pub use outcome::{Class, DRIFT_REPAIRED, Failure, Outcome, Reason};
 pub use record::{PackageRecord, RecordError, Records};
 pub use stage::TREE;
-pub use tools::{Network, Pause, Run, Tool, ToolOutput, Tools};
+pub use tools::{LockWait, Network, Pause, Run, Tool, ToolOutput, Tools};
 
 /// The bounds of the installer's own steps, in seconds (the manifest's `installer_bounds`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -70,7 +72,7 @@ pub struct Bounds {
     pub stage: u64,
     /// Each tool run of `activate`.
     pub activate: u64,
-    /// The purge, its tries included.
+    /// Each tool run of `remove`.
     pub remove: u64,
 }
 
@@ -270,7 +272,11 @@ pub struct RepositoryInstaller<'a> {
     pub lock: &'a InstallerLock,
     pub repositories: &'a Repositories,
     pub dirs: &'a HostDirs,
+    /// The clock a wait for the package manager's lock pauses on, and where it is reported.
     pub pause: &'a dyn Pause,
+    /// The seconds a step waits at most for the package manager's lock, on top of the bound of
+    /// the tool run that waits (the daemon's `--package-lock-wait-secs`).
+    pub lock_wait_secs: u64,
     /// Fills the mirror of a private repository; `None` on a host that has none.
     pub mirror: Option<&'a dyn Mirror>,
 }

@@ -21,7 +21,8 @@ use hostkeeper_observe::ExpectedExe;
 use sha2::{Digest, Sha256};
 use support::{OWN, alerting, force_rollback, lines, update};
 use support_apt::seen::{
-    failed, held, install_of, labels_since, linked, recorded, shared, succeeded, update_of, web,
+    deferred, failed, held, install_of, labels_since, linked, recorded, shared, succeeded,
+    update_of, web,
 };
 use support_apt::{AptRig, PROGRAM, SERVICE, entry, package, with_entry};
 
@@ -74,6 +75,63 @@ fn an_install_that_finds_the_package_manager_busy_is_deferred_and_leaves_nothing
     assert_eq!(apt.host.installed(SERVICE), None);
     assert_eq!(linked(&apt, "current"), None);
     assert_eq!(recorded(&daemon), None);
+}
+
+/// Proves an install whose hold finds the host's package manager locked (an unattended upgrade)
+/// for five tries waits for it on the daemon's clock and succeeds: the package is installed and
+/// held, and the wait is said in the log once, at its start, as a `lock_wait` warning naming the
+/// service, apt-mark, the seconds waited and the bound the ports carry, and the holder.
+///
+/// Catches: an install that fails at a lock another process holds for seconds, or a wait the
+/// operator cannot see.
+#[test]
+fn an_install_whose_hold_finds_the_lock_held_for_a_while_waits_and_succeeds() {
+    let apt = AptRig::new("apt-install-lock-released");
+    let (daemon, log) = alerting(apt.daemon_waiting(20));
+    let one = apt.publish(package("1.0.0-1"));
+    apt.host.edit(|state| state.faults.busy.insert("hold", 5));
+    assert_eq!(
+        daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1)),
+        succeeded()
+    );
+    assert_eq!(apt.host.installed(SERVICE), held("1.0.0-1"));
+    let waits: Vec<String> = lines(&log)
+        .into_iter()
+        .filter(|line| line.contains("alert=lock_wait"))
+        .collect();
+    assert_eq!(
+        waits,
+        [format!(
+            "hostkeeper daemon: level=warn alert=lock_wait service={SERVICE} tool=apt-mark \
+             waited_secs=0 bound_secs=20: apt-mark: E: Unable to acquire the dpkg frontend lock \
+             (/var/lib/dpkg/lock-frontend), is another process using it?"
+        )]
+    );
+    assert_eq!(apt.host.calls_of("apt-mark hold").len(), 6);
+}
+
+/// Proves a first install that never gets the package manager's lock, neither for its install
+/// nor for the purge of its rollback (an unattended upgrade that outlasts every wait), ends
+/// `Deferred` with the reason `package_manager_busy`, to be ordered again on this host, and not
+/// in a `halt`, which would stop the service on every host: the rollback is run again three
+/// times, each purge waiting the whole bound, and then the update is over.
+///
+/// Catches: a host's busy package manager halting a service farm-wide.
+#[test]
+fn a_first_install_whose_rollback_never_gets_the_lock_is_deferred_not_halted() {
+    let apt = AptRig::new("apt-install-lock-held");
+    let daemon = apt.daemon_waiting(10);
+    let one = apt.publish(package("1.0.0-1"));
+    apt.host.edit(|state| {
+        state.faults.busy.insert("install", u32::MAX);
+        state.faults.busy.insert("purge", u32::MAX);
+    });
+    let reply = daemon.order(&install_of("1.0.0", "1.0.0-1", &one, 1));
+    assert_eq!(reply, deferred("package_manager_busy"));
+    assert_eq!(apt.host.installed(SERVICE), None);
+    assert_eq!(linked(&apt, "current"), None);
+    // Four rollbacks (the first and three more), each purge tried every two seconds for ten.
+    assert_eq!(apt.host.calls_of("dpkg --purge").len(), 4 * 6);
 }
 
 /// Proves a service keeps the installer it was installed with: a service whose running version

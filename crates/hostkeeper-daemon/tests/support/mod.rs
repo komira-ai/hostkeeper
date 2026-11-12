@@ -437,6 +437,7 @@ impl Rig {
             facts_file: self.facts_file(),
             run_dir: self.run_dir.clone(),
             trusted_uid: my_uid(),
+            package_lock_wait_secs: hostkeeper_daemon::cli::DEFAULT_PACKAGE_LOCK_WAIT_SECS,
         }
     }
 
