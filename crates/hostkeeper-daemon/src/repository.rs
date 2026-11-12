@@ -179,8 +179,9 @@ impl RepositoryPorts {
     }
 }
 
-/// The warning of a step of `service` that waits for the package manager's lock, said when the
-/// wait begins and every 30 seconds while it lasts
+/// The warning of a step of `service` whose `dpkg --purge` or `apt-mark` waits for the package
+/// manager's lock (apt-get's own wait is apt's, and not reported), said when the wait begins and
+/// every 30 seconds while it lasts
 /// ([`hostkeeper_install::repository::wait::LOCK_REPORT_SECS`]):
 /// `hostkeeper daemon: level=warn alert=lock_wait service=<service> tool=<tool>
 /// waited_secs=<n> bound_secs=<n>: <the tool's last line>`.
