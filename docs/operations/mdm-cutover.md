@@ -136,9 +136,9 @@ daemon dials, which a wildcard bind does not know, so `--lan-listen-wildcard` (i
 `--lan-listen` and `--lan-address`; without it a wildcard is refused at start, as before) comes
 with `--lan-address <ip>`, the host's LAN address: the coordinator binds the wildcard, and the server
 certificate it makes names `--lan-address` in place of the address of `--lan-listen`. On the dev
-box: `--lan-listen 0.0.0.0:8447 --lan-listen-wildcard --lan-address 192.168.1.250`, published
+box: `--lan-listen 0.0.0.0:8447 --lan-listen-wildcard --lan-address <lan-ip>`, published
 `mode=host,target=8447,published=8446` (the task's health listener holds `127.0.0.1:8446` inside
-the task, so the LAN listener's target is another port); the daemons dial `https://192.168.1.250:8446`.
+the task, so the LAN listener's target is another port); the daemons dial `https://<lan-ip>:8446`.
 `--lan-address` is not a wildcard (the start stops), and the certificate is made again at the start
 that changes the address. Without the two flags nothing changes: `--lan-listen` takes the address
 of one interface and the certificate names it.
