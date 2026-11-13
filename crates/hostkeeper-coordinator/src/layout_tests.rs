@@ -53,6 +53,7 @@ fn the_cluster_name_is_the_short_plain_kind() {
     let named = Layout::default().with_name("Lab 1.a_b-c").expect("named");
     assert_eq!(named.name(), "Lab 1.a_b-c");
     assert!(!named.is_empty());
+    assert!(Layout::default().is_empty());
     assert!(
         Layout::default()
             .with_name(&"x".repeat(MAX_NAME_CHARS))
@@ -427,6 +428,8 @@ fn the_file_reads_back_the_layout_and_a_bad_file_is_refused_by_name() {
         r#"{"name":"A<"}"#,
         r#"{"rows":{"row-1":{"number":0}}}"#,
         r#"{"rows":{"row-1":{"number":1},"row-2":{"number":1}}}"#,
+        r#"{"rows":{"row-x":{"number":1}}}"#,
+        r#"{"rows":{"row-1234567890":{"number":1}}}"#,
         r#"{"racks":{"rack-1":{"row":"row-1","number":1,"height_u":5}}}"#,
         r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-1":{"row":"row-1","number":1,"height_u":61}}}"#,
         r#"{"rows":{"row-1":{"number":1}},"racks":{"rack-x":{"row":"row-1","number":1,"height_u":5}}}"#,
@@ -561,6 +564,13 @@ fn a_store_over_a_file_survives_a_restart_and_refuses_a_bad_file() {
     assert_eq!(mode, 0o600);
     let again = LayoutStore::open(&path).expect("reads");
     assert_eq!(again.snapshot(), store.snapshot());
+    let mut temp = path.clone().into_os_string();
+    temp.push(".new");
+    fs::create_dir(&temp).expect("a directory where the temporary file goes");
+    let failed = store.change(Layout::with_next_row);
+    assert!(matches!(failed, Err(LayoutError::Io(_))), "{failed:?}");
+    assert_eq!(store.snapshot().rows().len(), 1, "memory is as it was");
+    fs::remove_dir(&temp).expect("removed");
     fs::write(&path, "{").expect("a bad file");
     let refused = LayoutStore::open(&path).expect_err("refused");
     assert!(matches!(refused, LayoutError::Stored { .. }));

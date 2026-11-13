@@ -327,8 +327,9 @@ impl Layout {
             }
             id.clone_into(&mut rack.id);
         }
-        let mut by_rack: BTreeMap<&str, Vec<(u32, u32, &str)>> = BTreeMap::new();
-        for (key, placement) in &placements {
+        let mut placements = placements;
+        let mut by_rack: BTreeMap<String, Vec<(u32, u32, String)>> = BTreeMap::new();
+        for (key, placement) in &mut placements {
             let subject = Subject::of_key(key)?;
             let visible = (1..=MAX_SUBJECT_BYTES).contains(&subject.id.len())
                 && subject.id.bytes().all(|b| (0x21..=0x7e).contains(&b));
@@ -352,26 +353,24 @@ impl Layout {
                     height: rack.height_u,
                 });
             }
-            by_rack
-                .entry(&placement.rack)
-                .or_default()
-                .push((placement.u, placement.top(), key));
+            by_rack.entry(placement.rack.clone()).or_default().push((
+                placement.u,
+                placement.top(),
+                key.clone(),
+            ));
+            placement.subject = subject;
         }
         for (rack, mut spans) in by_rack {
             spans.sort_unstable();
             for pair in spans.windows(2) {
                 if pair[1].0 <= pair[0].1 {
                     return Err(LayoutError::Overlap {
-                        rack: rack.to_owned(),
-                        first: pair[0].2.to_owned(),
-                        second: pair[1].2.to_owned(),
+                        rack: rack.clone(),
+                        first: pair[0].2.clone(),
+                        second: pair[1].2.clone(),
                     });
                 }
             }
-        }
-        let mut placements = placements;
-        for (key, placement) in &mut placements {
-            placement.subject = Subject::of_key(key)?;
         }
         Ok(Self {
             name,
@@ -390,10 +389,7 @@ impl Layout {
     /// Whether the layout holds nothing.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.name.is_empty()
-            && self.rows.is_empty()
-            && self.racks.is_empty()
-            && self.placements.is_empty()
+        *self == Self::default()
     }
 
     /// Every row, by number.

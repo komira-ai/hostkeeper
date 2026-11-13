@@ -6,9 +6,12 @@
 use hostkeeper_enrollment::enroll::RequestState;
 use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 
+use super::approve_groups::{approve, ask, post as post_in};
 use super::support::{HostKey, Rig, audit_after, audit_of, closed_windows, enroll_request};
+use crate::host_groups_support::{SELF, World, coordinator_on};
 use crate::layout::{Kind, Layout, Subject};
 use crate::marks_support::operator;
+use crate::store::{audit_failure, store_failure};
 use crate::testutil::Rig as CoordinatorRig;
 
 use proto::EnrollmentRefusal as Refusal;
@@ -218,4 +221,113 @@ fn a_refused_approval_places_nothing_and_an_approval_without_a_rack_places_nothi
         },
     );
     assert_eq!(loose.err(), Some(Refusal::PlacementInvalid));
+}
+
+/// A world whose coordinator keeps its layout in the world's store (rack 1 of 10 U in row 1), so a
+/// store that refuses commits refuses the layout's too, and a group `web` to approve into.
+fn world(name: &str) -> World {
+    let mut world = World::new(name);
+    world.rig.coordinator = coordinator_on(
+        &world.fake,
+        &world.rig.clock,
+        Some(std::sync::Arc::clone(&world.enrollment.enrollment)),
+    )
+    .with_layout(crate::layout::LayoutStore::over(
+        std::sync::Arc::new(world.fake.clone()),
+        Layout::default(),
+    ));
+    world
+        .coordinator()
+        .layout()
+        .change(|held| {
+            let (held, row) = held.with_next_row()?;
+            held.with_rack("", &row.id, 10)
+        })
+        .expect("a layout");
+    world.put("web", &[SELF, "web"], None).expect("put");
+    world
+}
+
+fn placed_request(key: &HostKey) -> proto::ApproveRequest {
+    proto::ApproveRequest {
+        rack: "rack-1".to_owned(),
+        placement_u: 2,
+        placement_height_u: 2,
+        ..ask(key, "w1", "", "web", &[])
+    }
+}
+
+/// Proves: a placement the store cannot write after the approval and the placement were judged
+/// leaves the approval standing and the host unplaced, and an audit line of the placement that
+/// cannot be kept leaves both the approval and the placement.
+///
+/// Catches: an approval undone, or a host lost, because the lab's store failed.
+#[test]
+fn a_store_that_fails_after_the_judgement_leaves_the_approval_standing() {
+    let world = world("approve-placement-store");
+    let key = post_in(&world, "m-1");
+    world
+        .fake
+        .refuse(|commit| commit.layout.map(|_| store_failure()));
+    let approved = approve(&world, placed_request(&key));
+    assert_eq!(approved, Ok("w1".to_owned()));
+    assert!(
+        world
+            .coordinator()
+            .layout()
+            .snapshot()
+            .placements()
+            .is_empty()
+    );
+    assert_eq!(world.membership("w1").host_group, "web");
+
+    world.fake.heal();
+    let second = post_in(&world, "m-2");
+    world.fake.refuse(|commit| {
+        commit
+            .audit
+            .iter()
+            .any(|line| line.action == "layout_place")
+            .then(audit_failure)
+    });
+    let approved = approve(
+        &world,
+        proto::ApproveRequest {
+            host_id: "w2".to_owned(),
+            ..placed_request(&second)
+        },
+    );
+    assert_eq!(approved, Ok("w2".to_owned()));
+    let layout = world.coordinator().layout().snapshot();
+    assert!(layout.placement(&subject(Kind::Host, "w2")).is_some());
+}
+
+/// Proves: each refusal of the layout reads as the refusal of the approval it is: an unknown rack,
+/// an overlap and a rack too short as their own tokens, anything else as an invalid placement.
+///
+/// Catches: a placement refusal told as a store failure.
+#[test]
+fn a_refusal_of_the_layout_is_the_approvals_own_token() {
+    use crate::layout::LayoutError as E;
+    use crate::operator_enrollment::placement_refusal as of;
+    let rack = || "rack-1".to_owned();
+    assert_eq!(of(&E::UnknownRack(rack())), Refusal::UnknownRack);
+    assert_eq!(
+        of(&E::Overlap {
+            rack: rack(),
+            first: "a".into(),
+            second: "b".into()
+        }),
+        Refusal::PlacementOverlap
+    );
+    assert_eq!(
+        of(&E::OutOfRack {
+            rack: rack(),
+            subject: "a".into(),
+            height: 4
+        }),
+        Refusal::PlacementOutOfRack
+    );
+    assert_eq!(of(&E::Capacity("x".into())), Refusal::PlacementInvalid);
+    assert_eq!(of(&E::Invalid("x".into())), Refusal::PlacementInvalid);
 }

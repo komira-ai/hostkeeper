@@ -150,6 +150,20 @@ fn the_calls_build_the_layout_and_each_write_is_audited() {
         .expect("placed");
     let p = placed.placement.expect("placement");
     assert_eq!((p.u, p.height_u, p.rack.as_str()), (41, 2, "rack-1"));
+    let entry = Some(proto::LayoutSubject {
+        kind: proto::LayoutSubjectKind::Inventory.into(),
+        id: "db-1".to_owned(),
+    });
+    let inventory = c
+        .layout_place(&op, &place(entry, "rack-1", 10, 1))
+        .expect("an inventory entry placed");
+    assert_eq!(
+        inventory.placement.expect("placement").subject,
+        Some(proto::LayoutSubject {
+            kind: proto::LayoutSubjectKind::Inventory.into(),
+            id: "db-1".to_owned(),
+        })
+    );
     let moved = c
         .layout_place(&op, &place(host("n1"), "rack-2", 1, 1))
         .expect("moved");
@@ -162,7 +176,7 @@ fn the_calls_build_the_layout_and_each_write_is_audited() {
             read.racks.len(),
             read.placements.len()
         ),
-        ("Lab 1", 2, 2, 1)
+        ("Lab 1", 2, 2, 2)
     );
     c.layout_unplace(&op, &unplace("n1")).expect("unplaced");
     c.layout_remove_rack(&op, &remove_rack("rack-2"))
@@ -184,6 +198,7 @@ fn the_calls_build_the_layout_and_each_write_is_audited() {
             ("layout_rack_put", "rack"),
             ("layout_rack_put", "rack-2"),
             ("layout_place", "host:n1"),
+            ("layout_place", "inventory:db-1"),
             ("layout_place", "host:n1"),
             ("layout_unplace", "host:n1"),
             ("layout_rack_remove", "rack-2"),
@@ -405,5 +420,36 @@ fn each_refusal_is_a_status_with_its_code_and_token() {
         if refusal != Refusal::Unspecified {
             assert_eq!(status.message(), token);
         }
+    }
+}
+
+/// Proves: each error of the layout is the refusal of the call it is: a name or number taken, a
+/// store that cannot write and a stored layout that cannot be read are `name_taken` and
+/// `store_failed`, each other error its own token.
+///
+/// Catches: an error that reaches the operator as another token.
+#[test]
+fn each_error_of_the_layout_is_a_refusal() {
+    use crate::layout::LayoutError as E;
+    let io = || {
+        E::Io(crate::desired::StoreError::Io {
+            path: "fake".into(),
+            source: std::io::Error::other("no"),
+        })
+    };
+    let stored = E::Stored {
+        path: "p".into(),
+        why: "w".into(),
+    };
+    for (error, wanted) in [
+        (E::NameTaken("row 1".into()), Refusal::NameTaken),
+        (io(), Refusal::StoreFailed),
+        (stored, Refusal::StoreFailed),
+        (
+            E::UnknownPlacement("host:a".into()),
+            Refusal::UnknownPlacement,
+        ),
+    ] {
+        assert_eq!(Refusal::from(error), wanted);
     }
 }

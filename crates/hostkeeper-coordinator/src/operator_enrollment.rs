@@ -172,34 +172,28 @@ impl Coordinator {
         if u == 0 || height_u == 0 {
             return Err(EnrollmentRefusal::PlacementInvalid);
         }
-        let probe_id = if request.host_id.is_empty() {
-            "probe"
-        } else {
-            &request.host_id
-        };
+        // Only the place is judged ahead of the approval; the subject's own rules are the approval's.
         let probe = placement_of(
             Subject {
                 kind: Kind::Host,
-                id: probe_id.to_owned(),
+                id: "probe".to_owned(),
             },
             &rack,
             u,
             height_u,
         );
-        let mut done: Option<Result<crate::enrollment::Approved, EnrollmentRefusal>> = None;
+        let mut refused = None;
+        let mut done = None;
         let placed = self.layout().change(|held| {
             held.with_placement(probe.clone())?;
             let approved = {
                 let _fleet = self.lock_fleet();
                 enrollment.approve(by, request.clone(), known, records)
             };
-            let approved = match approved {
-                Ok(approved) => approved,
-                Err(refusal) => {
-                    done = Some(Err(refusal));
-                    return Err(LayoutError::Invalid(String::new()));
-                }
-            };
+            let approved = approved.map_err(|refusal| {
+                refused = Some(refusal);
+                LayoutError::Invalid(String::new())
+            })?;
             let id = approved.host_id.to_string();
             let kind = if records.iter().any(|record| record.host_id == id) {
                 Kind::Inventory
@@ -208,23 +202,29 @@ impl Coordinator {
             };
             let subject = Subject { kind, id };
             let entry = Self::place_entry(by, &subject.key());
-            if let Err(why) = self.ops.change(Write::BeforeMemory, entry, |_| {}) {
-                tracing::error!(%why, "the audit line of an approval's placement was not written");
-            }
+            let audited = self.ops.change(Write::BeforeMemory, entry, |_| {});
             let placement = placement_of(subject, &rack, u, height_u);
-            done = Some(Ok(approved));
+            done = Some(approved);
             let made = held.with_placement(placement)?;
-            Ok((made.0, ()))
+            Ok((made.0, audited))
         });
+        if let Some(refusal) = refused {
+            return Err(refusal);
+        }
         match (done, placed) {
-            (Some(Ok(approved)), Ok(())) => Ok(approved),
-            (Some(Ok(approved)), Err(why)) => {
+            (Some(approved), Ok(audited)) => {
+                if let Err(why) = audited {
+                    tracing::error!(%why, "the audit line of an approval's placement was not written");
+                }
+                Ok(approved)
+            }
+            (Some(approved), Err(why)) => {
                 tracing::error!(%why, "an approval's placement was not written: place the host from the lab view");
                 Ok(approved)
             }
-            (Some(Err(refusal)), _) => Err(refusal),
-            (None, Err(why)) => Err(placement_refusal(&why)),
-            (None, Ok(())) => Err(EnrollmentRefusal::StoreFailed),
+            (None, placed) => Err(placed.err().map_or(EnrollmentRefusal::StoreFailed, |why| {
+                placement_refusal(&why)
+            })),
         }
     }
 
@@ -322,12 +322,11 @@ impl Coordinator {
 }
 
 /// The refusal of an approval whose placement `why` was refused.
-fn placement_refusal(why: &LayoutError) -> EnrollmentRefusal {
+pub(crate) fn placement_refusal(why: &LayoutError) -> EnrollmentRefusal {
     match why {
         LayoutError::UnknownRack(_) => EnrollmentRefusal::UnknownRack,
         LayoutError::Overlap { .. } => EnrollmentRefusal::PlacementOverlap,
         LayoutError::OutOfRack { .. } => EnrollmentRefusal::PlacementOutOfRack,
-        LayoutError::Invalid(_) => EnrollmentRefusal::PlacementInvalid,
-        _ => EnrollmentRefusal::StoreFailed,
+        _ => EnrollmentRefusal::PlacementInvalid,
     }
 }
