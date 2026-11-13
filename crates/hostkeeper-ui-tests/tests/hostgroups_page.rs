@@ -1,6 +1,6 @@
 //! The Host groups page, run in the JavaScript engine against the fake gateway of `support`: the
-//! list, a group's detail and its hosts, the refusals, the removal of a host from its group, the
-//! absence of any form that moves a host (that is the Host page's), and the form that creates or
+//! list, a group's detail and its hosts, the refusals, the
+//! absence of any control that moves a host (that is the Host page's), and the form that creates or
 //! changes a group's ordered package list.
 
 mod support;
@@ -415,108 +415,36 @@ return null;
 }
 
 #[test]
-fn remove_from_group_asks_first_and_moves_the_host_to_an_empty_group() {
-    // Proves: each host of a specific group's detail has a Remove from group button that asks
-    // first, sends HostGroups.Move with an empty hostGroup and a reason, refreshes once, and
-    // reports; a refused call is reported and refreshes nothing; the detail of `all` has no such
-    // button, as every host stays in it.
-    // Catches: a removal sent without the yes, a body that names a group, a refresh after a refusal,
-    // or a button on the group every host is in.
-    let mut ui = Ui::start();
-    ui.reply(
-        &m("HostGroups/List"),
-        json!({"hostGroups": [
-            {"group": {"name": "storage", "packages": ["kbf"]}, "generation": "4", "hosts": 2},
-            {"group": {"name": "all", "packages": ["hostkeeper"]}, "generation": "1", "hosts": 2},
-        ]}),
-    );
-    ui.reply(&m("HostGroups/Get"), detail_reply(None));
-    ui.reply(&m("HostGroups/Move"), json!({"fromHostGroup": "storage"}));
-    ui.reply(&m("HostGroups/Move"), json!({}));
-    ui.refuse(
-        &m("HostGroups/Move"),
-        412,
-        "FAILED_PRECONDITION",
-        "same_host_group",
-    );
-    ui.reply(
-        &m("HostGroups/Get"),
-        json!({"hostGroup": {"group": {"name": "all"}}, "nodeIds": ["store-1"]}),
-    );
-    let out = ui.run(&page_driver(
-        "hostgroups",
-        "{}",
-        "[false, true, true, true]",
-        r#"
-await click(tree, "open-group", 0);
-const detail = seen.shown[seen.shown.length - 1];
-await click(detail, "remove-from-group", 0);
-const declined = seen.refreshes;
-await click(detail, "remove-from-group", 0);
-const once = seen.refreshes;
-await click(detail, "remove-from-group", 1);
-await click(detail, "remove-from-group", 1);
-await click(tree, "open-group", 1);
-const all = seen.shown[seen.shown.length - 1];
-return { declined, once, allButtons: nodes(all).filter((node) => (node.attrs || {})["name"] === "remove-from-group").length };
-"#,
-    ));
-    let moves: Vec<Value> = bodies(&ui)
-        .into_iter()
-        .filter(|(method, _)| method == &m("HostGroups/Move"))
-        .map(|(_, body)| body)
-        .collect();
-    let reason = "removed from the group in the console";
-    assert_eq!(
-        moves,
-        [
-            json!({"nodeId": "store-1", "hostGroup": "", "reason": reason}),
-            json!({"nodeId": "store-2", "hostGroup": "", "reason": reason}),
-            json!({"nodeId": "store-2", "hostGroup": "", "reason": reason}),
-        ]
-    );
-    assert_eq!(out["out"]["declined"], json!(0));
-    assert_eq!(out["out"]["once"], json!(1));
-    assert_eq!(out["out"]["allButtons"], json!(0));
-    assert_eq!(out["seen"]["refreshes"], json!(2));
-    assert_eq!(
-        out["seen"]["reports"],
-        json!([
-            "Not removed.",
-            "Removed store-1 from host group storage: it runs the packages of all alone.",
-            "Removed store-2 from host group storage: it runs the packages of all alone.",
-            "FAILED_PRECONDITION same_host_group",
-        ])
-    );
-}
-
-#[test]
 fn the_page_has_no_control_that_moves_a_host_and_asks_for_no_host_list() {
-    // Proves: the Host groups page shows no "Move a host" form, no host or group picker and no
-    // Move button, and calls HostGroups.List alone (Hosts.List is not called).
-    // Catches: a move form left on the page the owner moved it from, or a host list fetched only
-    // to feed it.
+    // Proves: neither the page nor a group's detail has a Move form, a host or group picker, a
+    // Move button or a Remove from group button; a member is still a link to its Host page; and
+    // the page calls HostGroups.List and HostGroups.Get alone (Hosts.List is not called).
+    // Catches: a move control left on the page the owner moved it from, or a host list fetched
+    // only to feed one.
     let mut ui = Ui::start();
     ui.reply(&m("HostGroups/List"), storage_list_single());
+    ui.reply(&m("HostGroups/Get"), detail_reply(None));
     let out = ui.run(&page_driver(
         "hostgroups",
         "{}",
         "[]",
         r#"
-const names = nodes(tree).map((n) => (n.attrs || {})["name"]).filter((n) => n !== undefined);
-return { move: names.filter((n) => ["move", "pick-host", "move-host", "move-group", "move-reason"].includes(n)),
-         opened: names.includes("open-group") };
+const controls = (t) => nodes(t).map((n) => (n.attrs || {})["name"]).filter((n) => ["move", "pick-host", "move-host", "move-group", "move-reason", "remove-from-group"].includes(n));
+const before = controls(tree);
+await click(tree, "open-group");
+const detail = seen.shown[seen.shown.length - 1];
+return { before, after: controls(detail), links: nodes(detail).filter((n) => (n.attrs || {})["name"] === "open-host").length };
 "#,
     ));
-    assert_eq!(out["out"], json!({"move": [], "opened": true}));
+    assert_eq!(out["out"], json!({"before": [], "after": [], "links": 2}));
     let text = out["text"].as_str().expect("text");
     assert!(!text.contains("Move a host"), "{text}");
-    assert!(!text.contains("Choose a group"), "{text}");
+    assert!(!text.contains("Remove from group"), "{text}");
     assert_eq!(
         bodies(&ui)
             .iter()
             .map(|(method, _)| method.clone())
             .collect::<Vec<_>>(),
-        [m("HostGroups/List")]
+        [m("HostGroups/List"), m("HostGroups/Get")]
     );
 }

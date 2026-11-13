@@ -14,7 +14,7 @@
     { "function": "enrollment.removeRecord", "method": "hostkeeper.operator.v1.Enrollment/RemoveRecord", "pages": ["inventory"] },
     { "function": "hostGroups.get", "method": "hostkeeper.operator.v1.HostGroups/Get", "pages": ["hostgroups"] },
     { "function": "hostGroups.list", "method": "hostkeeper.operator.v1.HostGroups/List", "pages": ["enrollment", "host", "hostgroups"] },
-    { "function": "hostGroups.move", "method": "hostkeeper.operator.v1.HostGroups/Move", "pages": ["host", "hostgroups"] },
+    { "function": "hostGroups.move", "method": "hostkeeper.operator.v1.HostGroups/Move", "pages": ["host"] },
     { "function": "hostGroups.put", "method": "hostkeeper.operator.v1.HostGroups/Put", "pages": ["hostgroups"] },
     { "function": "hosts.abort", "method": "hostkeeper.operator.v1.Hosts/Abort", "pages": ["host"] },
     { "function": "hosts.exclude", "method": "hostkeeper.operator.v1.Hosts/Exclude", "pages": ["host"] },

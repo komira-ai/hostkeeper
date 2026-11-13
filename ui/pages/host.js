@@ -52,11 +52,11 @@ export function parseLabels(text) {
 // The built-in group every host is in: a host is moved into no group instead of into it.
 const ALL = "all";
 
-// The reason sent with a move when the operator types none.
+// The reason sent with every move: the form asks for none.
 const DEFAULT_MOVE_REASON = "moved in the console";
 
 // The Host group form: a dropdown of the groups held but `all`, the host's own selected (the
-// blank for a host in no group, or only in `all`), a reason (optional), and Move. `groups` is the
+// blank for a host in no group, or only in `all`), and Move. `groups` is the
 // names the coordinator holds, or null with `groupsFailure` when it could not be listed.
 function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
   const current = typeof host.hostGroup === "string" && host.hostGroup !== ALL ? host.hostGroup : "";
@@ -64,7 +64,7 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
   if (current !== "" && !names.includes(current)) {
     names.push(current);
   }
-  const form = { hostGroup: current, reason: "" };
+  const form = { hostGroup: current };
   return h("fieldset", {},
     h("legend", {}, "Host group"),
     h("p", { class: "note" },
@@ -72,16 +72,10 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
     groupsFailure === null ? null : h("p", { class: "error", role: "alert" }, `Host groups: ${describeError(groupsFailure)}`),
     select("Host group", "host-group", form, "hostGroup",
       [["", "No group (all alone)"], ...names.map((name) => [name, name])]),
-    field("Reason (optional)", "move-reason", form, "reason", { maxlength: 256 }),
     action(ctx, "Move", "move-host", async () => {
       const target = trimmed(form.hostGroup);
       if (target === current) {
         return current === "" ? `${nodeId} is in no host group.` : `${nodeId} is already in host group ${current}.`;
-      }
-      const reason = trimmed(form.reason);
-      const problem = reason === "" ? null : reasonProblem(reason);
-      if (problem) {
-        return problem;
       }
       const question = target === ""
         ? `Remove ${nodeId} from host group ${current}? It then runs the packages of all alone, and what ${current} lists and all does not is uninstalled.`
@@ -89,7 +83,7 @@ function hostGroupSection(ctx, nodeId, host, groups, groupsFailure) {
       if (!ctx.confirm(question)) {
         return "Not moved.";
       }
-      const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup: target, reason: reason === "" ? DEFAULT_MOVE_REASON : reason });
+      const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup: target, reason: DEFAULT_MOVE_REASON });
       ctx.refresh();
       return `Moved ${nodeId} from ${reply.fromHostGroup || "no group"} to ${target === "" ? "no group" : target}.`;
     }));

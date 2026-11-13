@@ -233,8 +233,7 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
 coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
 `Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, the blank choice of the
-**Host group** dropdown on the host's own page in the console, or **Remove from group** beside the
-host in a group's detail on the Host groups page): it then runs the
+**Host group** dropdown on the host's own page in the console): it then runs the
 packages of `all` alone, what its old group listed and `all` does not is uninstalled, and nothing
 is installed, so the host does not move; a host already in none is refused `same_host_group`. A
 host cannot be moved into `all` (`reserved_host_group`), which it is in already: the console's

@@ -71,9 +71,8 @@ Sign out ends the session on the coordinator.
   holds (`HostGroups.List`, every page), with its packages, the policy keys that are set ("default"
   when none is), its generation, its host count and its desired versions. Opening a group
   (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,
-  and the group's hosts 50 at a time, each a link to its Host page. A host is not moved into a group
-  here but on its Host page (below); the one move this page makes is **Remove from group** beside a
-  host of a specific group (`HostGroups.Move` with no group), after a confirmation. Groups are created, changed and removed with
+  and the group's hosts 50 at a time, each a link to its Host page. A host is not moved here but on its Host page (below).
+  Groups are created, changed and removed with
   `hkctl host-groups put` and `remove`, not on this page. A refused List or Get is shown inline
   with its code and reason, and the rest of the page still renders.
 - **Host**: the services that host runs because its group lists them (its Source column reads
@@ -81,9 +80,8 @@ Sign out ends the session on the coordinator.
   and the minimum version. A **Host group** form moves the host: a dropdown of the groups the
   coordinator holds (`HostGroups.List`, every page) but the built-in `all`, with the host's own
   group selected and, for a host in none, the blank "No group (all alone)". Choosing another group
-  and pressing **Move** calls `HostGroups.Move` after a confirmation, with an optional reason (1 to
-  256 characters, no control character; "moved in the console" when none is typed); choosing the
-  blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
+  and pressing **Move** calls `HostGroups.Move` after a confirmation, with the reason "moved in the
+  console" (the form has no reason field); choosing the blank moves the host to no group. A refused List is shown inline and the rest of the page renders.
 - **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).
   One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
   in a line: `MDM: configured`, or `MDM: missing push certificate, ABM token` (a part that is there and wrong, such as an expired

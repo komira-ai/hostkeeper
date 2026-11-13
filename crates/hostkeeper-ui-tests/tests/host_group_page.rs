@@ -76,51 +76,39 @@ fn the_host_page_offers_every_group_but_all_with_the_hosts_own_selected() {
 #[test]
 fn choosing_another_group_calls_move_after_a_confirm_and_refreshes() {
     // Proves: choosing `storage` and pressing Move asks first, sends HostGroups.Move with the
-    // node id, the group and the trimmed reason (a default when none is typed), reports the group
+    // node id, the group and the default reason (the form has no reason field), reports the group
     // the host left, and refreshes once; a declined confirm sends nothing.
     // Catches: a move sent without the yes, a body with a wrong field, or no refresh.
     let mut ui = start("web");
     ui.reply(&m("HostGroups/Move"), json!({"fromHostGroup": "web"}));
-    ui.reply(&m("HostGroups/Move"), json!({"fromHostGroup": "web"}));
     let out = ui.run(&page_driver(
         "host",
         NODE,
-        "[false, true, true]",
+        "[false, true]",
         r#"
 choose(tree, "host-group", "storage");
 await click(tree, "move-host");
 const declined = seen.refreshes;
-type(tree, "move-reason", " rebalancing ");
 await click(tree, "move-host");
 const once = seen.refreshes;
-type(tree, "move-reason", "");
-await click(tree, "move-host");
-return { declined, once };
+return { declined, once, fields: nodes(tree).filter((n) => ["move-reason", "reason"].includes((n.attrs || {})["name"])).length };
 "#,
     ));
     assert_eq!(
         moves(&ui),
-        [
-            json!({"nodeId": "web-2", "hostGroup": "storage", "reason": "rebalancing"}),
-            json!({"nodeId": "web-2", "hostGroup": "storage", "reason": "moved in the console"}),
-        ]
+        [json!({"nodeId": "web-2", "hostGroup": "storage", "reason": "moved in the console"}),]
     );
-    assert_eq!(out["out"], json!({"declined": 0, "once": 1}));
+    assert_eq!(out["out"], json!({"declined": 0, "once": 1, "fields": 0}));
     assert_eq!(
         out["seen"]["questions"],
         json!([
-            "Move web-2 to host group storage? It is ordered that group's packages at its next heartbeat.",
             "Move web-2 to host group storage? It is ordered that group's packages at its next heartbeat.",
             "Move web-2 to host group storage? It is ordered that group's packages at its next heartbeat."
         ])
     );
     assert_eq!(
         out["seen"]["reports"],
-        json!([
-            "Not moved.",
-            "Moved web-2 from web to storage.",
-            "Moved web-2 from web to storage."
-        ])
+        json!(["Not moved.", "Moved web-2 from web to storage."])
     );
 }
 
@@ -158,10 +146,10 @@ return null;
 }
 
 #[test]
-fn a_move_to_where_the_host_is_or_with_a_bad_reason_sends_nothing() {
-    // Proves: pressing Move with the host's own group selected says so (in a group, and in none),
-    // and a reason with a control character is reported; none of them sends a Move.
-    // Catches: a move that the coordinator would refuse `same_host_group`, or a bad reason sent.
+fn a_move_to_where_the_host_already_is_sends_nothing() {
+    // Proves: pressing Move with the host's own group selected says so (in a group, and in none)
+    // and sends no Move.
+    // Catches: a move that the coordinator would refuse `same_host_group`.
     let mut ui = start("web");
     let out = ui.run(&page_driver(
         "host",
@@ -169,19 +157,10 @@ fn a_move_to_where_the_host_is_or_with_a_bad_reason_sends_nothing() {
         "[]",
         r#"
 await click(tree, "move-host");
-choose(tree, "host-group", "storage");
-type(tree, "move-reason", "tab\there");
-await click(tree, "move-host");
 return seen.reports;
 "#,
     ));
-    assert_eq!(
-        out["out"],
-        json!([
-            "web-2 is already in host group web.",
-            "A reason has no control character (a tab or a line break, for example)."
-        ])
-    );
+    assert_eq!(out["out"], json!(["web-2 is already in host group web."]));
     assert_eq!(moves(&ui), Vec::<Value>::new());
     let mut ui = start("");
     let out = ui.run(&page_driver(
