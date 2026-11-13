@@ -106,7 +106,7 @@ fn refused(tables: &Tables) -> String {
 }
 
 /// Proves: rows the state file's reader would refuse are refused at load naming
-/// `database:host_groups` and the group: a group with no package row, packages or a desired
+/// `database:host_groups` and the group: `all` with no package row, packages or a desired
 /// version of a group with no row, a policy key out of range, a name that is no group name, and a
 /// generation of 0.
 ///
@@ -114,7 +114,7 @@ fn refused(tables: &Tables) -> String {
 /// start on the files refuses.
 #[test]
 fn group_rows_the_reader_refuses_are_refused_at_load() {
-    let good = rows_of(&groups());
+    let good = rows_of(&groups().with_all());
     let edit = |f: &dyn Fn(&mut Tables)| {
         let mut tables = good.clone();
         f(&mut tables);
@@ -126,7 +126,7 @@ fn group_rows_the_reader_refuses_are_refused_at_load() {
             edit(&|t| {
                 t.insert("host_group_packages", Rows::new());
             }),
-            at("host group canary: lists 0 packages, not 1 to 64"),
+            at("host group all: lists 0 packages, not 1 to 64"),
         ),
         (
             edit(&|t| {

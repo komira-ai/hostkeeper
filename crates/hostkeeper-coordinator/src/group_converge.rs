@@ -262,7 +262,7 @@ impl Coordinator {
                 Scope::All | Scope::Service => true,
             })
             .filter_map(|(name, group)| {
-                let def = package_def(name, group, &self.services, &ops, package)?;
+                let def = package_def(name, group, &groups, &self.services, &ops, package)?;
                 let want = self.desired.group_desired(name, package)?;
                 Some(self.pair_convergence(&def, Some(&want), &fleet, &ops, now))
             })
@@ -304,7 +304,9 @@ impl Coordinator {
     /// Whether the group `group` has a host: the fleet has heard of one in it, or the enrollment
     /// store holds one. A store that cannot be read says it has.
     fn group_has_hosts(&self, group: &GroupName, fleet: &Fleet) -> bool {
-        fleet.nodes().any(|(_, node)| node.role == group.as_str())
+        fleet
+            .nodes()
+            .any(|(_, node)| group.is_all() || node.role == group.as_str())
             || !self.hosts_in(group).is_ok_and(|hosts| hosts.is_empty())
     }
 
@@ -319,7 +321,7 @@ impl Coordinator {
         let groups = self.desired.host_groups();
         let mut statuses = std::collections::BTreeMap::new();
         for (name, group) in &groups.0 {
-            let services = group_services(name, group, &self.services, ops, &[]);
+            let services = group_services(name, group, &groups, &self.services, ops, &[]);
             let all = self.desired.group_desireds(name);
             for def in group
                 .packages

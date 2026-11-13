@@ -33,7 +33,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use crate::group_uninstall::{cancel_uninstalls, listed_by, order_uninstalls};
+use crate::group_uninstall::{cancel_uninstalls, lost_by, order_uninstalls, runs};
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::inventory::unreadable;
@@ -84,23 +84,23 @@ impl Coordinator {
             .membership(&enrolled)
             .map_err(unreadable(Refusal::StoreFailed))?
             .ok_or(Refusal::UnknownHost)?;
-        let into = self
-            .desired
-            .host_group(&to)
-            .ok_or(Refusal::UnknownHostGroup)?;
+        if to.is_all() {
+            return Err(Refusal::ReservedHostGroup);
+        }
+        let groups = self.desired.host_groups();
+        if !groups.0.contains_key(&to) {
+            return Err(Refusal::UnknownHostGroup);
+        }
         if before.host_group == to.as_str() {
             return Err(Refusal::SameHostGroup);
         }
-        let from = before
-            .host_group
-            .parse::<GroupName>()
-            .ok()
-            .and_then(|name| self.desired.host_group(&name));
-        let leaving = from
-            .iter()
-            .flat_map(|group| group.packages.iter().rev())
-            .filter(|package| !into.packages.contains(package));
-        let wanted = listed_by(&fleet, leaving, std::slice::from_ref(&host));
+        let from = before.host_group.parse::<GroupName>().ok();
+        let wanted = lost_by(
+            &fleet,
+            &groups,
+            &groups,
+            &[(host.clone(), from, Some(to.clone()))],
+        );
         let nodes = [host.to_string()];
         let mut audit = AuditEntry::new(by, ACTION_MOVE);
         audit.node_id = Some(host.to_string());
@@ -123,7 +123,7 @@ impl Coordinator {
             .ops
             .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
                 let mut entries = vec![audit];
-                entries.extend(cancel_uninstalls(state, &to, &into.packages, &nodes));
+                entries.extend(cancel_uninstalls(state, &to, &runs(&groups, Some(&to)), &nodes));
                 order_uninstalls(state, &wanted);
                 Ok(entries)
             })

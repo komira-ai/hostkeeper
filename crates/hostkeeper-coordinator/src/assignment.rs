@@ -130,7 +130,7 @@ pub struct Placement<'a> {
 pub fn by_rollout(def: &ServiceDef, host: &Placement<'_>) -> bool {
     match &def.selector {
         Some(selector) => selector.selects(host.role, host.labels),
-        None => def.roles.contains(host.role),
+        None => def.has_role(host.role),
     }
 }
 

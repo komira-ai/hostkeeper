@@ -41,6 +41,11 @@ use crate::rollouts::Rollout;
 use crate::stages::{Advance, Plan, RawStage};
 use crate::write_record::WriteId;
 
+/// The name of the built-in group every enrolled host is in (`docs/design/hostgroups.md`,
+/// section 15): reserved, always held, never removed, and not the name of a group an operator
+/// makes.
+pub(crate) const ALL: &str = "all";
+
 /// The most packages a group lists.
 pub(crate) const MAX_PACKAGES: usize = 64;
 
@@ -69,6 +74,16 @@ impl GroupName {
     /// The name as text.
     pub(crate) fn as_str(&self) -> &str {
         &self.0
+    }
+
+    /// Whether this is [`ALL`], the built-in group of every host.
+    pub(crate) fn is_all(&self) -> bool {
+        self.0 == ALL
+    }
+
+    /// The name of the built-in group [`ALL`].
+    pub(crate) fn all() -> Self {
+        Self(ALL.to_owned())
     }
 }
 
@@ -402,6 +417,31 @@ pub(crate) fn check_packages(packages: &[String]) -> Result<(), ListError> {
     Ok(())
 }
 
+/// [`check_packages`] for the group named `name`: `all` lists `hostkeeper`, so that every host
+/// keeps its daemon; a specific group lists 0 to [`MAX_PACKAGES`] packages, `hostkeeper` or not,
+/// for it adds to what `all` lists.
+///
+/// # Errors
+/// [`ListError`]: the first rule it breaks, in that order.
+pub(crate) fn check_packages_for(name: &GroupName, packages: &[String]) -> Result<(), ListError> {
+    if name.is_all() {
+        return check_packages(packages);
+    }
+    if packages.len() > MAX_PACKAGES {
+        return Err(ListError::Count(packages.len()));
+    }
+    let mut seen = BTreeSet::new();
+    for package in packages {
+        if !is_package_name(package) {
+            return Err(ListError::Package(package.clone()));
+        }
+        if !seen.insert(package.as_str()) {
+            return Err(ListError::Twice(package.clone()));
+        }
+    }
+    Ok(())
+}
+
 /// Why a group is refused.
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub(crate) enum GroupError {
@@ -436,8 +476,23 @@ impl HostGroup {
     ///
     /// # Errors
     /// [`GroupError`]: the first rule it breaks.
+    #[cfg(test)]
     pub(crate) fn check(&self) -> Result<(), GroupError> {
         check_packages(&self.packages)?;
+        self.check_rest()
+    }
+
+    /// [`Self::check`] for the group named `name`, whose list [`check_packages_for`] judges.
+    ///
+    /// # Errors
+    /// [`GroupError`]: the first rule it breaks.
+    pub(crate) fn check_for(&self, name: &GroupName) -> Result<(), GroupError> {
+        check_packages_for(name, &self.packages)?;
+        self.check_rest()
+    }
+
+    /// The rules of a group but those of its list.
+    fn check_rest(&self) -> Result<(), GroupError> {
         self.policy.check()?;
         if self.generation == 0 {
             return Err(GroupError::Generation("the group"));
@@ -476,6 +531,29 @@ impl HostGroups {
         self.0.is_empty()
     }
 
+    /// Whether the groups are none, or only [`ALL`] as the migration makes it ([`Self::with_all`]):
+    /// a state file written so holds no `host_groups` key, so that the release before reads it, and
+    /// a read of a file without the key gives the same ([`Self::with_all`] at the start).
+    pub(crate) fn is_bare(&self) -> bool {
+        self.is_empty() || *self == Self::default().with_all()
+    }
+
+    /// These groups with the built-in group [`ALL`] held: as it is when it is, else a new one
+    /// that lists `hostkeeper` alone (generation 1, by `migration`), so that an existing
+    /// coordinator's hosts get no package they did not have.
+    #[must_use]
+    pub(crate) fn with_all(mut self) -> Self {
+        self.0.entry(GroupName::all()).or_insert_with(|| HostGroup {
+            packages: vec![SELF_SERVICE.to_owned()],
+            policy: Policy::default(),
+            generation: 1,
+            by: "migration".to_owned(),
+            at_unix: 0,
+            desired: BTreeMap::new(),
+        });
+        self
+    }
+
     /// The groups the JSON `value` holds, each checked.
     ///
     /// # Errors
@@ -485,7 +563,7 @@ impl HostGroups {
             serde_json::from_value(value).map_err(|e| format!("host_groups: {e}"))?;
         for (name, group) in &groups.0 {
             group
-                .check()
+                .check_for(name)
                 .map_err(|e| format!("host group {name}: {e}"))?;
         }
         Ok(groups)

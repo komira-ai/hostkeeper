@@ -93,7 +93,7 @@ return {
         &out,
         &[
             "Matches several records: db-1, db-2. None is chosen.",
-            "Matches the record of mac-1 (no role).",
+            "Matches the record of mac-1 (no host group).",
         ],
     );
 }
@@ -125,6 +125,10 @@ fn a_contested_request_names_the_others_and_is_not_approved_from_the_page() {
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), contested_reply());
     ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [{"group": {"name": "storage"}}]}),
+    );
+    ui.reply(
         &m("Enrollment/Approve"),
         json!({"hostId": "db-4", "certificateIssuedAtPoll": true}),
     );
@@ -133,15 +137,12 @@ fn a_contested_request_names_the_others_and_is_not_approved_from_the_page() {
         "{}",
         "[true]",
         r#"
-for (const i of [0, 1, 2, 3]) {
-  type(tree, "reason", "built today", i);
-}
 await click(tree, "approve", 0);
 type(tree, "host-id", "db-9", 1);
 tick(tree, "replace", true, 1);
 await click(tree, "approve", 1);
 type(tree, "host-id", "db-2", 2);
-type(tree, "role", "storage", 2);
+choose(tree, "host-group", "storage", 2);
 await click(tree, "approve", 2);
 await click(tree, "approve", 3);
 "#,
@@ -151,10 +152,11 @@ await click(tree, "approve", 3);
         bodies(&ui),
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Enrollment/Approve"),
-                json!({"requestId": d, "keySha256": d, "hostId": "db-4", "role": "storage",
-                       "services": [], "replace": false, "reason": "built today"})
+                json!({"requestId": d, "keySha256": d, "hostId": "db-4", "hostGroup": "storage",
+                       "replace": false})
             ),
         ]
     );
@@ -166,7 +168,7 @@ await click(tree, "approve", 3);
             refused,
             refused,
             refused,
-            "Approved db-4: the host gets its certificate at its next poll."
+            "Approved db-4 into host group storage: the host gets its certificate at its next poll."
         ])
     );
     let after = "Approval is refused until all but one are rejected. Find this machine's key hash \

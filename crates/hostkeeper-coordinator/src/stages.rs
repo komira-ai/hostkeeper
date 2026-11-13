@@ -409,7 +409,7 @@ impl View {
                 let deferring =
                     state == HostState::Waiting && is_deferring(def, want, fleet, &id, now);
                 Member {
-                    role: fleet.role_in(&def.name, &id).to_owned(),
+                    role: def.role_key(fleet.role_in(&def.name, &id)).to_owned(),
                     id,
                     state,
                     stage: 0,
@@ -695,7 +695,7 @@ fn below_min_up(
     now: Duration,
 ) -> bool {
     let service = def.name.as_str();
-    let role = fleet.role_in(service, id);
+    let role = def.role_key(fleet.role_in(service, id));
     let min = want.min_up.min_up_of(role) as usize;
     let up_now = fleet
         .get_in(service, id)
@@ -708,7 +708,7 @@ fn below_min_up(
         .hosts_of(service)
         .filter(|(o, h)| {
             *o != id
-                && h.role_name() == role
+                && def.role_key(h.role_name()) == role
                 && h.beat.health != Health::Absent
                 && !fleet.is_excluded(service, o)
                 && fleet.is_up(service, o, h, now)
@@ -723,16 +723,17 @@ fn below_min_up(
 fn no_slot(def: &ServiceDef, want: &Desired, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let cap = want
         .max_updating
-        .max_updating_of(fleet.role_in(&def.name, id));
+        .max_updating_of(def.role_key(fleet.role_in(&def.name, id)));
     slots_full(def, cap, fleet, id, now)
 }
 
 /// Whether `cap` hosts of the role of `id` hold a slot of `def`, the host `id` not counted.
 fn slots_full(def: &ServiceDef, cap: u32, fleet: &Fleet, id: &HostId, now: Duration) -> bool {
     let service = def.name.as_str();
-    let role = fleet.role_in(service, id);
-    let others =
-        |o: &HostId| o != id && !fleet.is_forced_in(def, o) && fleet.role_in(service, o) == role;
+    let role = def.role_key(fleet.role_in(service, id));
+    let others = |o: &HostId| {
+        o != id && !fleet.is_forced_in(def, o) && def.role_key(fleet.role_in(service, o)) == role
+    };
     let occupying = fleet
         .occupants_in(def)
         .filter(|(o, _)| others(o))

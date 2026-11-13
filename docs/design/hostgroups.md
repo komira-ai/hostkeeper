@@ -354,3 +354,44 @@ The tests drive the coordinator over injected heartbeats and a clock the test se
 | Migration | One offline verb, a dry run first, `--apply` in one commit; `serve` refuses `--rollout-file`. | A stale rollout file is found at start, not half-applied; the dry run proves no host's placement changes before the window. |
 | The certificate | Identity only; the issuer writes the fixed host-role `host`. | Shipped readers require one host-role URI; a role in it would go stale at the first move. |
 | Operational documents | Unchanged until the build item that changes the code. | They describe what the code does (P10); this design names, per build item, what each changes. |
+
+## 15. The built-in group `all`
+
+Status: built. The owner's ruling of 2026-11-13, from using the console's approval for the first time: a host has no role to choose, and a host group may be blank; "there should also be a default host group named all that all hosts are part of", which is not much shown but lets an operator target every host.
+
+### 15.1 What changes for the operator
+
+Before, a host was in exactly one group and a host in none ran nothing. Now every enrolled host is in the group `all`, and may be in one specific group besides. A package `all` lists runs on every host; a specific group lists what only its hosts run. An approval names a specific group or none; none means `all` alone.
+
+### 15.2 The group
+
+- `all` is held by every coordinator from its first start. The database's migration `0013` inserts it, listing `hostkeeper` alone, only if no group of that name is there already; a state file that lacks it gets it in memory when `serve` starts, and is written without its `host_groups` key while `all` is as the migration makes it (generation 1, author `migration`, default policy, no desired version), so the release before reads that file. A coordinator built without `serve` (a test, the migration verb) holds it only when it is put there, and is in group mode only while it holds a group besides `all` as made.
+- Reserved: it cannot be removed (`Remove` is `reserved_host_group`), cannot be created by a `Put` that finds none (the same), is not a group a host is moved into (`Move`: the same) or an approval or inventory record names (`unknown_host_group`), and it must list `hostkeeper` (`hostkeeper_not_listed`). A `Put` that replaces it is an ordinary `Put`. A specific group lists 0 to 64 packages, `hostkeeper` or not.
+- There is no stored membership of `all`: a host is in it by being enrolled. `HostGroups.List` counts every enrolled host in it, `Get` pages them all.
+
+### 15.3 What a host runs
+
+The packages of `all` in `all`'s order, then the packages of the host's specific group that `all` does not list, in that group's order. A package both list runs once, at `all`'s place. Its desired version, its rollout policy, its marks (minimum version, last good version, halt, force, plan position) and its slots come from the specific group when it lists the package, else from `all`. A host in a group that lists a package `all` has a version for but the group has none is not ordered it (the group's list wins whole; an operator sets the group's version, or takes the package out of the group's list).
+
+The decision is the engine of section 2 given, per package, the scope it runs under: the host's group for a package it lists, `all` for the others. A package of `all` is counted over the hosts that run it under `all`, that is every host whose group does not list it, as one group named `all` (its `max_updating` and `min_up` are `all`'s policy's); a host whose group lists the package is counted in that group.
+
+### 15.4 Targeting
+
+Wherever a call names a group (`Releases.SetDesired`, `Force`, the rollout calls, `Services.SetMinVersion`, halts, alerts), `all` is a valid name, and reaches the hosts that run the package under `all`. A call that names none and a package both `all` and a specific group list reaches each group that lists it, as before: `all` is one of them, so the package may be `ambiguous_host_group` for the calls that need one.
+
+### 15.5 Changes of a list
+
+An uninstall is ordered for a package a host runs before a change and does not after it. `Put` of a specific group that drops a package `all` lists uninstalls nothing; `Put` of `all` that drops a package uninstalls it from every host whose own group does not list it; `Move` keeps what `all` lists. A package put back cancels the intents of the hosts that run it again.
+
+### 15.6 Compatibility and failure modes (B8)
+
+- Wire: one new refusal value, `HOST_GROUPS_REFUSAL_RESERVED_HOST_GROUP = 16`, and the optional group and reason of `Enrollment.Approve` (a field that is empty means none). No field is renumbered, renamed or re-meant; `role` stays an alias of `host_group`.
+- Database: migration `0013` only inserts rows and says an older release may run on it: the older release reads `all` as a group like any other that no host is in, so places every host as before; if it removes the group, the next start of this release holds it again.
+- Files: the state file's `host_groups` key is left out while `all` is as made.
+- An existing coordinator's groups keep working. Hosts in a group keep it and now also run what `all` lists, which at the migration is `hostkeeper` alone, so no host gets a package it did not have. An operator who wants a package on every host puts it in `all`'s list and sets `all`'s desired version.
+- An existing group named `all` (a name the grammar always allowed) is kept as it is, becomes the built-in one, and loses the hosts that were in it as members of a specific group: they are in `all` still, and run what it lists.
+- A host is moved into no group (back to `all` alone) by nothing yet: `Move` takes a group name.
+
+### 15.7 Tests
+
+`host_group_all_tests` (the union and its order, a package both list, uninstalls, the reserved name, counts), the migration's pinned hash and its rows, the file's round trip without the key, the approval tests of `approve_ungrouped`, and the console's pages.

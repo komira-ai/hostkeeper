@@ -354,6 +354,8 @@ mod holds_tests;
 #[cfg(test)]
 mod host_cert_state_tests;
 #[cfg(test)]
+mod host_group_all_tests;
+#[cfg(test)]
 mod host_group_list_tests;
 #[cfg(test)]
 mod host_group_move_tests;

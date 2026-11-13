@@ -36,7 +36,7 @@ use hostkeeper_wire::version::Version;
 
 use crate::canary::Canary;
 use crate::desired::Desired;
-use crate::host_groups::{GroupName, HostGroup};
+use crate::host_groups::{GroupName, HostGroup, HostGroups};
 use crate::identity::Identity;
 use crate::ops::OpsState;
 use crate::service::Coordinator;
@@ -55,12 +55,52 @@ pub(crate) struct GroupScope {
     /// How many hosts of the group may hold a slot of one package at once: the policy's
     /// `max_updating`, which an uninstall of a package the group no longer lists takes a slot of.
     pub(crate) max_updating: u32,
+    /// For a package of the built-in group `all`: the groups that list the package themselves,
+    /// whose hosts run it as that group says (section 15 of the design). Empty for any other
+    /// group.
+    pub(crate) overridden: BTreeSet<String>,
+}
+
+impl GroupScope {
+    /// Whether the scope is the built-in group `all`.
+    pub(crate) fn is_all(&self) -> bool {
+        self.group.is_all()
+    }
+
+    /// Whether a host whose role (the name of its group, empty for none) is `role` is in the
+    /// scope: one in the group; for `all`, any host whose own group does not list the package.
+    pub(crate) fn covers(&self, role: &str) -> bool {
+        if self.is_all() {
+            !self.overridden.contains(role)
+        } else {
+            self.group.as_str() == role
+        }
+    }
 }
 
 impl ServiceDef {
     /// The group the definition was made for, if it was made for one.
     pub(crate) fn group(&self) -> Option<&GroupName> {
         self.scope.as_ref().map(|scope| &scope.group)
+    }
+
+    /// Whether a host whose role is `role` runs the package under this definition: its roles
+    /// list it, or the definition is of the group `all` and the host's own group does not list
+    /// the package.
+    pub(crate) fn has_role(&self, role: &str) -> bool {
+        match &self.scope {
+            Some(scope) if scope.is_all() => scope.covers(role),
+            _ => self.roles.contains(role),
+        }
+    }
+
+    /// The role under which the counts and limits of this definition group the host whose role
+    /// is `role`: the group's name for a package of `all`, the host's role otherwise.
+    pub(crate) fn role_key<'a>(&'a self, role: &'a str) -> &'a str {
+        match &self.scope {
+            Some(scope) if scope.is_all() => scope.group.as_str(),
+            _ => role,
+        }
     }
 }
 
@@ -73,15 +113,17 @@ pub(crate) fn higher(a: Option<Version>, b: Option<Version>) -> Option<Version> 
     }
 }
 
-/// The definition of `package` in `group`, listed at `place` in the group's list: the earlier in
-/// the list, the higher its priority.
+/// The definition of `package` in `group`, listed at `place` of `of` packages the host is
+/// offered: the earlier in that list, the higher its priority. `overridden` is, for the group
+/// `all`, the groups that list the package themselves ([`GroupScope::overridden`]).
 fn def_of(
     group: &GroupName,
     listed: &HostGroup,
     file: &Services,
     state: &OpsState,
     package: &str,
-    place: usize,
+    (place, of): (usize, usize),
+    overridden: BTreeSet<String>,
 ) -> ServiceDef {
     let base = file.get(package);
     let policy = &listed.policy;
@@ -89,7 +131,7 @@ fn def_of(
         name: package.to_owned(),
         version_scheme: base.map_or(VersionScheme::default(), |def| def.version_scheme),
         roles: BTreeSet::from([group.to_string()]),
-        priority: i32::try_from(listed.packages.len() - place).unwrap_or(i32::MAX),
+        priority: i32::try_from(of - place).unwrap_or(i32::MAX),
         selector: None,
         bake_beats: policy.bake_beats,
         canary: policy.canary.map(|canary| Canary {
@@ -108,15 +150,28 @@ fn def_of(
             group: group.clone(),
             live_rollouts: policy.live_rollouts.map(|n| n as usize),
             max_updating: policy.max_updating,
+            overridden,
         }),
     }
 }
 
+/// The groups of `groups` that list `package` and are not `all`: those whose hosts run it as they
+/// say, not as `all` does.
+fn overriding(groups: &HostGroups, package: &str) -> BTreeSet<String> {
+    groups
+        .0
+        .iter()
+        .filter(|(name, group)| !name.is_all() && group.packages.iter().any(|p| p == package))
+        .map(|(name, _)| name.to_string())
+        .collect()
+}
+
 /// The definition of `package` in `group`, as `listed` holds it: none when `listed` does not list
-/// the package.
+/// the package. `groups` are all the groups held, which say who overrides `all`.
 pub(crate) fn package_def(
     group: &GroupName,
     listed: &HostGroup,
+    groups: &HostGroups,
     file: &Services,
     state: &OpsState,
     package: &str,
@@ -125,7 +180,20 @@ pub(crate) fn package_def(
         .packages
         .iter()
         .position(|listed| listed == package)?;
-    Some(def_of(group, listed, file, state, package, place))
+    let overridden = if group.is_all() {
+        overriding(groups, package)
+    } else {
+        BTreeSet::new()
+    };
+    Some(def_of(
+        group,
+        listed,
+        file,
+        state,
+        package,
+        (place, listed.packages.len()),
+        overridden,
+    ))
 }
 
 /// The definition of `package`, which the group lists no longer and a host has the uninstall intent
@@ -158,30 +226,119 @@ fn leaving_def(
             group: group.clone(),
             live_rollouts: listed.policy.live_rollouts.map(|n| n as usize),
             max_updating: listed.policy.max_updating,
+            overridden: BTreeSet::new(),
         }),
     }
 }
 
 /// The services of the group `group`, as `listed` holds it, over the rollout file `file` and the
 /// operations state `state`: its packages in the order of its list, then the packages in
-/// `leaving`, each with the generation of its uninstall intent.
+/// `leaving`, each with the generation of its uninstall intent. `groups` are all the groups held.
 pub(crate) fn group_services(
     group: &GroupName,
     listed: &HostGroup,
+    groups: &HostGroups,
     file: &Services,
     state: &OpsState,
     leaving: &[(String, u64)],
 ) -> Services {
-    let packages = listed
-        .packages
-        .iter()
-        .enumerate()
-        .map(|(place, package)| def_of(group, listed, file, state, package, place));
+    let overridden = |package: &str| {
+        if group.is_all() {
+            overriding(groups, package)
+        } else {
+            BTreeSet::new()
+        }
+    };
+    let of = listed.packages.len();
+    let packages = listed.packages.iter().enumerate().map(|(place, package)| {
+        def_of(
+            group,
+            listed,
+            file,
+            state,
+            package,
+            (place, of),
+            overridden(package),
+        )
+    });
     let leaving = leaving
         .iter()
         .filter(|(package, _)| !listed.packages.contains(package))
         .map(|(package, generation)| leaving_def(group, listed, file, state, package, *generation));
     Services::from_defs(packages.chain(leaving).collect())
+}
+
+/// The packages a host runs (section 15 of the design), in the order it is offered them: those
+/// of `all`, in its order, then those of the host's own group that `all` does not list. Each
+/// with the group whose definition it runs under: the host's own group when it lists the
+/// package, else `all`. `all` alone for a host in no group (`own` none); the groups of a
+/// coordinator that holds no `all` count as if it listed nothing.
+pub(crate) fn effective<'a>(
+    groups: &'a HostGroups,
+    own: Option<&GroupName>,
+) -> Vec<(GroupName, &'a HostGroup, &'a str)> {
+    let all = groups.0.get_key_value(&GroupName::all());
+    let own = own
+        .filter(|name| !name.is_all())
+        .and_then(|name| groups.0.get_key_value(name));
+    let from_all = all.into_iter().flat_map(|(name, group)| {
+        group.packages.iter().map(move |package| {
+            let owner = own
+                .filter(|(_, own)| own.packages.contains(package))
+                .unwrap_or((name, group));
+            (owner.0.clone(), owner.1, package.as_str())
+        })
+    });
+    let only_own = own.into_iter().flat_map(|(name, group)| {
+        group
+            .packages
+            .iter()
+            .filter(move |package| !all.is_some_and(|(_, all)| all.packages.contains(package)))
+            .map(move |package| (name.clone(), group, package.as_str()))
+    });
+    from_all.chain(only_own).collect()
+}
+
+/// The services a host runs: [`effective`] of the groups, then the packages in `leaving`, each
+/// with the generation of its uninstall intent. None for a host in no group of a coordinator
+/// that holds no `all`.
+pub(crate) fn host_services(
+    groups: &HostGroups,
+    own: Option<&GroupName>,
+    file: &Services,
+    state: &OpsState,
+    leaving: &[(String, u64)],
+) -> Services {
+    let listed = effective(groups, own);
+    let of = listed.len();
+    let packages: Vec<ServiceDef> = listed
+        .iter()
+        .enumerate()
+        .map(|(place, (name, group, package))| {
+            let overridden = if name.is_all() {
+                overriding(groups, package)
+            } else {
+                BTreeSet::new()
+            };
+            def_of(name, group, file, state, package, (place, of), overridden)
+        })
+        .collect();
+    let home = own
+        .filter(|name| !name.is_all())
+        .and_then(|name| Some((name.clone(), groups.0.get(name)?)))
+        .or_else(|| Some((GroupName::all(), groups.0.get(&GroupName::all())?)));
+    let leaving: Vec<ServiceDef> = home
+        .iter()
+        .flat_map(|(name, group)| {
+            leaving
+                .iter()
+                .filter(|(package, _)| !listed.iter().any(|(_, _, listed)| listed == package))
+                .map(|(package, generation)| {
+                    leaving_def(name, group, file, state, package, *generation)
+                })
+        })
+        .collect();
+    Services::from_defs(packages.into_iter().chain(leaving).collect())
 }
 
 /// What a heartbeat of one host is decided over: the services it is decided for and, in group
@@ -257,15 +414,19 @@ impl Coordinator {
         if !basis.in_group_mode {
             return self.desired.get(service);
         }
-        self.desired.group_desired(basis.group()?, service)
+        let group = basis.services.get(service)?.group()?;
+        self.desired.group_desired(group, service)
     }
 
     /// The desired state of every package of `services`, by package: the coordinator's, or, for
-    /// the services of a host group, the group's.
+    /// the services of a host, the desired state of the group each package runs under.
     pub(crate) fn desired_for(&self, services: &Services) -> BTreeMap<String, Desired> {
         match services.group() {
             None => self.desired.all(),
-            Some(group) => self.desired.group_desireds(group),
+            Some(_) => services
+                .defs()
+                .filter_map(|def| Some((def.name.clone(), self.desired.of_def(def)?)))
+                .collect(),
         }
     }
 
@@ -279,29 +440,30 @@ impl Coordinator {
                 moving: false,
             };
         }
-        let listed = self
-            .membership_of(host)
-            .and_then(|(name, moving)| Some((self.desired.host_group(&name)?, name, moving)));
-        let services = listed
+        let membership = self.membership_of(host);
+        let groups = self.desired.host_groups();
+        let own = membership
             .as_ref()
-            .map_or_else(Services::default, |(listed, name, _)| {
-                self.ops.read(|state| {
-                    let leaving: Vec<(String, u64)> = state
-                        .assignments
-                        .iter()
-                        .filter_map(|(package, entries)| {
-                            let generation = entries.uninstall.get(host.as_str())?;
-                            Some((package.clone(), *generation))
-                        })
-                        .collect();
-                    group_services(name, listed, &self.services, state, &leaving)
+            .map(|(name, _)| name)
+            .filter(|name| groups.0.contains_key(*name));
+        let services = self.ops.read(|state| {
+            let leaving: Vec<(String, u64)> = state
+                .assignments
+                .iter()
+                .filter_map(|(package, entries)| {
+                    let generation = entries.uninstall.get(host.as_str())?;
+                    Some((package.clone(), *generation))
                 })
-            });
+                .collect();
+            host_services(&groups, own, &self.services, state, &leaving)
+        });
+        let moving = membership.as_ref().is_some_and(|(_, moving)| *moving);
+        let group = own.cloned();
         Basis {
             services: Cow::Owned(services),
             in_group_mode: true,
-            moving: listed.as_ref().is_some_and(|(_, _, moving)| *moving),
-            group: listed.map(|(_, name, _)| name),
+            moving,
+            group,
         }
     }
 }

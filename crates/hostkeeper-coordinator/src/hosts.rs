@@ -39,7 +39,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_wire::HostId;
 
 use crate::audit_file::{Filter, Query};
-use crate::enrollment::{ACTION_APPROVE, ACTION_REPLACE};
+use crate::enrollment::{ACTION_APPROVE, ACTION_REPLACE, UNGROUPED_ROLE};
 use crate::grpc::report;
 use crate::holds::marks_of;
 use crate::inventory::{RecordIndex, show_inventory, unreadable};
@@ -191,7 +191,7 @@ impl Coordinator {
 
     /// Names the host group of each of `hosts` as the enrollment store records it, in
     /// `host_group` and, for readers that predate groups, in `role`; a host in none is left as it
-    /// is. Nothing, in a coordinator that holds no group.
+    /// is, but for the placeholder role of one approved in none, which is shown as none. Nothing, in a coordinator that holds no group.
     fn show_groups(&self, hosts: &mut [proto::Host]) {
         if !self.desired.in_group_mode() {
             return;
@@ -205,6 +205,9 @@ impl Coordinator {
             if let Some((group, _)) = group {
                 host.role = group.to_string();
                 host.host_group = group.to_string();
+            } else if host.role == UNGROUPED_ROLE {
+                // Approved in no group: the placeholder role is no role.
+                host.role.clear();
             }
         }
     }

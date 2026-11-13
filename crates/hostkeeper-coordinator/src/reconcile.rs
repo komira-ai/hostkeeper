@@ -175,7 +175,7 @@ fn decide(
     let live = || {
         fleet
             .hosts_of(service)
-            .filter(|(_, h)| def.roles.contains(h.role_name()))
+            .filter(|(_, h)| def.has_role(h.role_name()))
             .filter(|(_, h)| h.is_live(now))
             // The hosts the service counts: not an excluded one, nor one its selector leaves out,
             // nor a pair an operator holds, which is never counted towards a rollback.
@@ -257,7 +257,7 @@ fn canary_open(def: &ServiceDef, want: &Desired, fleet: &Fleet, now: Duration) -
     };
     let baked = fleet
         .hosts_of(&def.name)
-        .filter(|(_, h)| def.roles.contains(h.role_name()))
+        .filter(|(_, h)| def.has_role(h.role_name()))
         .filter(|(id, _)| !fleet.is_held(&def.name, id))
         .filter(|(id, h)| {
             h.beat.version == want.version

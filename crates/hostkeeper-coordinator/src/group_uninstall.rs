@@ -12,7 +12,8 @@
 use hostkeeper_wire::HostId;
 
 use crate::fleet::Fleet;
-use crate::host_groups::GroupName;
+use crate::group_scope::effective;
+use crate::host_groups::{GroupName, HostGroups};
 use crate::intents::CANCELLED;
 use crate::ops::{AuditEntry, OpsState};
 use crate::reconcile::COORDINATOR;
@@ -20,23 +21,41 @@ use crate::reconcile::COORDINATOR;
 /// A package, and the hosts to uninstall it from, by node id.
 pub(crate) type Wanted = (String, Vec<String>);
 
-/// For each of `packages`, in the order given, the hosts among `hosts` whose last heartbeat
-/// lists it; a package no host lists is left out.
-pub(crate) fn listed_by<'a>(
-    fleet: &Fleet,
-    packages: impl Iterator<Item = &'a String>,
-    hosts: &[HostId],
-) -> Vec<Wanted> {
-    packages
-        .filter_map(|package| {
-            let listing: Vec<String> = hosts
-                .iter()
-                .filter(|host| fleet.lists(host, package))
-                .map(ToString::to_string)
-                .collect();
-            (!listing.is_empty()).then(|| (package.clone(), listing))
-        })
+/// The packages a host in the group `own` (none: in no specific group) runs, by name, in the
+/// order it is offered them ([`crate::group_scope::effective`]).
+pub(crate) fn runs(groups: &HostGroups, own: Option<&GroupName>) -> Vec<String> {
+    effective(groups, own)
+        .into_iter()
+        .map(|(_, _, package)| package.to_owned())
         .collect()
+}
+
+/// A host, the specific group it is in before a change, and the one it is in after.
+pub(crate) type Placed = (HostId, Option<GroupName>, Option<GroupName>);
+
+/// For each of `members`, the packages it runs in its group before, under `before`, and not in its
+/// group after, under `after`, the hosts among them whose last heartbeat lists it: each package
+/// once, in the order it first goes, which is the reverse of the order it was offered in.
+pub(crate) fn lost_by(
+    fleet: &Fleet,
+    before: &HostGroups,
+    after: &HostGroups,
+    members: &[Placed],
+) -> Vec<Wanted> {
+    let mut wanted: Vec<Wanted> = Vec::new();
+    for (host, from, to) in members {
+        let kept = runs(after, to.as_ref());
+        for package in runs(before, from.as_ref()).iter().rev() {
+            if kept.contains(package) || !fleet.lists(host, package) {
+                continue;
+            }
+            match wanted.iter_mut().find(|(name, _)| name == package) {
+                Some((_, hosts)) => hosts.push(host.to_string()),
+                None => wanted.push((package.clone(), vec![host.to_string()])),
+            }
+        }
+    }
+    wanted
 }
 
 /// Records an uninstall intent of each package of `wanted` for each of its hosts, the packages'

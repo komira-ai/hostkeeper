@@ -29,8 +29,9 @@ package hostkeeper.operator.v1;
 import "hostkeeper/operator/v1/operator.proto";
 
 // The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host
-// is in exactly one group, and runs exactly the packages its group lists. Each mutating call
-// takes a reason and answers the audit entry it wrote.
+// is in the built-in group `all`, which always exists, and may be in one specific group besides;
+// it runs the packages `all` lists, then those its specific group lists that `all` does not. Each
+// mutating call takes a reason and answers the audit entry it wrote.
 service HostGroups {
   // Every group, by name, a page at a time, each with its packages, policy, generation, host
   // count and, per package, its desired version. Changes nothing.
@@ -79,8 +80,8 @@ enum HostGroupsRefusal {
   // INVALID_ARGUMENT: `Put` of a policy with a key out of its range; the audit and the log name
   // the key.
   HOST_GROUPS_REFUSAL_INVALID_POLICY = 9;
-  // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper` (an empty list
-  // included).
+  // FAILED_PRECONDITION: `Put` of the group `all` whose list does not include `hostkeeper` (an
+  // empty list included). A specific group may list none.
   HOST_GROUPS_REFUSAL_HOSTKEEPER_NOT_LISTED = 10;
   // INVALID_ARGUMENT: `Put` of a group that lists more than 64 packages.
   HOST_GROUPS_REFUSAL_TOO_MANY_PACKAGES = 11;
@@ -95,13 +96,19 @@ enum HostGroupsRefusal {
   HOST_GROUPS_REFUSAL_UNKNOWN_HOST = 14;
   // FAILED_PRECONDITION: `Move` of a host into the group it is in.
   HOST_GROUPS_REFUSAL_SAME_HOST_GROUP = 15;
+  // FAILED_PRECONDITION: the call would remove or create the built-in group `all`, or put a host
+  // in it: it always exists, and every host is in it without being put there. `Put` of `all`
+  // that replaces it is allowed.
+  HOST_GROUPS_REFUSAL_RESERVED_HOST_GROUP = 16;
 }
 
 // A group's body, as `Put` takes it and the answers carry it.
 message HostGroup {
   // The group's name.
   string name = 1;
-  // The packages its hosts run, 1 to 64, none twice, `hostkeeper` among them. The order is the
+  // The packages its hosts run, 0 to 64, none twice; the group `all` lists 1 to 64, `hostkeeper`
+  // among them. A host runs the packages of `all`, then those of its own group that `all` does not
+  // list. The order is the
   // order in which a host is offered its packages and the order of installs: a host is offered
   // the install of a package only once every package before it is installed or cannot be.
   // Uninstalls run in the reverse order.

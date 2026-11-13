@@ -32,7 +32,14 @@ impl Coordinator {
     /// the group has no desired version of it.
     fn group_plan(&self, one: &Reached, fleet: &Fleet) -> Option<proto::RolloutPlan> {
         let ops = self.ops.state();
-        let services = group_services(&one.name, &one.listed, &self.services, &ops, &[]);
+        let services = group_services(
+            &one.name,
+            &one.listed,
+            &self.desired.host_groups(),
+            &self.services,
+            &ops,
+            &[],
+        );
         let want = self.desired.group_desired(&one.name, &one.def.name);
         let all = self.desired.group_desireds(&one.name);
         self.plan_in(

@@ -5,7 +5,8 @@
 //! group: the migration names groups after roles, so a client that names a role keeps placing
 //! its host. A `role` beside a `host_group` must be the same name (`invalid_role`): a request is
 //! never placed by one of two names it gives. The name must be a group the coordinator holds
-//! (`unknown_host_group`); one that breaks the grammar of a group's name names none.
+//! (`unknown_host_group`); one that breaks the grammar of a group's name names none, and so does
+//! `all`, the built-in group every host is in: a host is in it without being put there.
 //!
 //! A coordinator that holds no group places nothing by group: every approval and record is read
 //! as before groups, by its role, and one that names a `host_group` is refused
@@ -47,7 +48,8 @@ pub(crate) fn group_in(
             .parse::<GroupName>()
             .map_err(|_| EnrollmentRefusal::UnknownHostGroup)?,
     };
-    if held.0.contains_key(&named) {
+    // `all` holds every host already: it is no group a host is put in (`unknown_host_group`).
+    if !named.is_all() && held.0.contains_key(&named) {
         Ok(Some(named))
     } else {
         Err(EnrollmentRefusal::UnknownHostGroup)

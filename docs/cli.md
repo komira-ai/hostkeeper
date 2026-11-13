@@ -129,18 +129,20 @@ expired instead.
 `/hostkeeper.operator.v1.Enrollment/Approve`
 
 Approve a pending request: the host gets its certificate at its next `Poll`, with the host
-id, role and services the approval names.
+id and host group the approval names. The group is optional: a host approved with none is
+enrolled in no specific group: it is in the built-in group `all` alone, and runs the packages
+`all` lists until `HostGroups.Move` puts it in one. The reason is optional too.
 
 | flag | value | meaning |
 |---|---|---|
 | `--request-id` | STRING |  |
 | `--key-sha256` | STRING | The SHA-256 of the pending request's key, as `PendingEnrollment.key_sha256` lists it. |
 | `--host-id` | STRING | The host id the certificate names. For a request (not a renewal) that matches exactly one inventory record, empty means that record's host id, and another host id needs `replace`; otherwise it is required. |
-| `--role` | STRING | The host's role; from a coordinator that holds host groups, read as the group's name when `host_group` is empty. |
+| `--role` | STRING | The host's role. From a coordinator that holds host groups, an alias of `host_group` kept for clients that predate it: read as the group's name when `host_group` is empty, and when both are empty the host is enrolled in no group. A coordinator that holds no host groups requires it. |
 | `--services` | STRING | Services to assign to the host; may be empty. Deprecated: a coordinator that holds host groups refuses any (`services_retired`). Repeat the flag for more. |
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. It never approves a contested request (`record_contested`). |
-| `--reason` | STRING |  |
-| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any). With a renewal or `replace`, the group of that host (`host_group_differs`). |
+| `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
+| `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none (with `role` empty too, from a coordinator that holds host groups): the host is enrolled in no specific group (in `all` alone) until `HostGroups.Move`. `all`, which every host is in, is no group a request names (`unknown_host_group`). With a renewal or `replace`, the group of that host (`host_group_differs`); empty keeps it. |
 
 #### `hkctl enrollment reject`
 
@@ -230,7 +232,7 @@ matches the record is approved then, as at `AddRecord`.
 
 ### `host-groups`
 
-The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host is in exactly one group, and runs exactly the packages its group lists. Each mutating call takes a reason and answers the audit entry it wrote.
+The service `HostGroups` of the package `hostkeeper.operator.v1`. The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host is in the built-in group `all`, which always exists, and may be in one specific group besides; it runs the packages `all` lists, then those its specific group lists that `all` does not. Each mutating call takes a reason and answers the audit entry it wrote.
 
 #### `hkctl host-groups list`
 

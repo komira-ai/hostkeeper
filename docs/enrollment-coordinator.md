@@ -162,8 +162,8 @@ the coordinator itself, in that group, while the record's window is open (`--rec
 `Approve` names the request, the SHA-256 of its key as listed (compared whole, in constant time;
 another request's key hash is `key_mismatch`), the host id, the host group (by `host_group`, or by
 `role` read as the group's name; it must be a group the coordinator holds, `unknown_host_group`;
-naming neither, or a `role` beside `host_group` that is another name, is `invalid_role`) and a
-reason. It names no services (`services_retired`): the host's group decides what it runs. A request (not a renewal) that matches exactly one record of
+naming neither enrolls the host in no specific group, which leaves it with the packages of the built-in group `all` until `HostGroups.Move`; a `role` beside `host_group` that is another name is `invalid_role`) and, optionally, a
+reason (1 to 256 bytes; the audit entry names the approver and the group either way). It names no services (`services_retired`): the host's group decides what it runs. A request (not a renewal) that matches exactly one record of
 the host inventory is approved as that record's host id: an empty host id is it, and the answer's
 `host_id` names it; another host id is `record_mismatch` unless `replace` is set. Any other request
 names its host id. Before that, a request that another pending request contests (they match one
@@ -227,7 +227,7 @@ again, as it did before it expired.
 | `unauthorized` | no bearer, or not an operator token |
 | `forbidden` | a CI token |
 | `invalid_request` | a request id, key hash, reason or page token that breaks its rule |
-| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record; no host group nor role named; a role beside `host_group` that is another name |
+| `invalid_host_id`, `invalid_role`, `invalid_service` | that field breaks its rule; a service the coordinator does not manage; a renewal named under another host id; no host id for a request that matches no single record; a role beside `host_group` that is another name; no role, from a coordinator that holds no host groups |
 | `services_retired` | `services` named on a coordinator that holds host groups |
 | `unknown_host_group` | a host group, or a role read as one, that the coordinator does not hold; any `host_group` on a coordinator that holds none |
 | `host_group_differs` | a renewal, or a `replace`, naming another group than the host it renews or replaces is in |

@@ -12,7 +12,7 @@ use crate::lock::FileLock;
 use crate::store::conformance_tests::{desired_at, rich_ops};
 use crate::store::postgres::tests::TestDatabase;
 
-/// A file store holding two groups, `web` with a desired version, the marks of `tierstore` in
+/// A file store holding three groups, the built-in `all` and two others, `web` with a desired version, the marks of `tierstore` in
 /// `web` (and of `hostkeeper`, at their default), and an inventory record of `web`.
 fn store_with_groups(name: &str) -> Store {
     let store = Store::new(name);
@@ -26,7 +26,8 @@ fn store_with_groups(name: &str) -> Store {
     held.host_groups = HostGroups(BTreeMap::from([
         ("web".parse().expect("a name"), web()),
         ("web-canary".parse().expect("a name"), canary),
-    ]));
+    ]))
+    .with_all();
     let text = crate::desired::encode(&held, None).expect("encodes");
     store.put("desired.json", &text);
     let mut ops = rich_ops();
@@ -62,7 +63,7 @@ fn export_gives_back_the_files_of_the_groups_byte_for_byte() {
     let report = export(&export_flags(&database, &into), &FileLock, &clock())
         .expect("exported")
         .to_string();
-    assert!(report.contains("  host_groups: 2 rows\n"), "{report}");
+    assert!(report.contains("  host_groups: 3 rows\n"), "{report}");
     let read = |store: &Store, file: &str| std::fs::read(store.dir.path().join(file)).expect(file);
     assert_eq!(read(&into, "desired.json"), read(&from, "desired.json"));
     // The ops file is written without the entries at their default the store's file holds; its

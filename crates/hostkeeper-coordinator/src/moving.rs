@@ -43,7 +43,7 @@ use hostkeeper_wire::version::Version;
 use crate::decide::{consider, heard};
 use crate::desired::Desired;
 use crate::fleet::Fleet;
-use crate::group_scope::Basis;
+use crate::group_scope::{Basis, GroupScope};
 use crate::host_groups::GroupName;
 use crate::service::Coordinator;
 use crate::services::{ServiceDef, Services};
@@ -135,11 +135,9 @@ impl Fleet {
     /// The version of `def` the host `id` was admitted to, if its move into the group of `def`
     /// admitted it to the package.
     pub(crate) fn admitted_at(&self, def: &ServiceDef, id: &HostId) -> Option<&Version> {
-        let move_ = self
-            .moves
-            .0
-            .get(id)
-            .filter(|move_| def.group() == Some(&move_.to))?;
+        let move_ = self.moves.0.get(id).filter(|move_| {
+            def.group() == Some(&move_.to) || def.scope.as_ref().is_some_and(GroupScope::is_all)
+        })?;
         move_.admitted.as_ref()?.get(&def.name)
     }
 

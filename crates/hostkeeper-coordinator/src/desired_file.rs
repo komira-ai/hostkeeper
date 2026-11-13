@@ -1,6 +1,6 @@
 //! The desired-state file's text: the single state of earlier builds, or the map of services,
 //! each entry its state's keys and its registry (`digests`), with the host groups beside it
-//! (`host_groups`, only while one is held), and back. A key the state does not have is refused,
+//! (`host_groups`, only while one is held besides the built-in `all` as the migration makes it), and back. A key the state does not have is refused,
 //! so an earlier build refuses what it cannot read rather than lose it.
 
 use std::collections::BTreeMap;
@@ -25,7 +25,7 @@ struct EntryOut<'a> {
 #[derive(Serialize)]
 struct MapFileOut<'a> {
     services: BTreeMap<&'a str, EntryOut<'a>>,
-    #[serde(skip_serializing_if = "HostGroups::is_empty")]
+    #[serde(skip_serializing_if = "HostGroups::is_bare")]
     host_groups: &'a HostGroups,
 }
 
@@ -82,7 +82,7 @@ pub(crate) fn parse_file(bytes: &[u8], legacy: Option<&str>) -> Result<Held, Des
 /// The state could not be serialised.
 pub(crate) fn encode(held: &Held, legacy: Option<&str>) -> serde_json::Result<Vec<u8>> {
     let encoded = match held.desired.iter().collect::<Vec<_>>().as_slice() {
-        [(name, only)] if Some(name.as_str()) == legacy && held.host_groups.is_empty() => {
+        [(name, only)] if Some(name.as_str()) == legacy && held.host_groups.is_bare() => {
             serde_json::to_vec_pretty(&held.entry(name, only))
         }
         _ => serde_json::to_vec_pretty(&MapFileOut {

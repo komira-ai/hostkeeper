@@ -9,6 +9,7 @@
 mod approve;
 mod approve_groups;
 mod approve_refusals;
+mod approve_ungrouped;
 mod audit;
 mod by_record;
 mod by_record_repair;

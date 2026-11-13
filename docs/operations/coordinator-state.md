@@ -87,7 +87,8 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   `moving_from` and `facts_generation`), `enrollment_requests` (`approved_host_group`), `inventory`
   and `audit`; a row written before has `NULL` there and is read as naming no group. While the
   database holds a group the coordinator places hosts by groups ([hostgroups.md](hostgroups.md)),
-  and one that holds none orders every host nothing: there is no placement by roles. `0008` says older releases must not run on it:
+  and one that holds none holds the built-in group `all` (migration `0013`, below), whose hosts are
+  every host: there is no placement by roles. `0008` says older releases must not run on it:
   a coordinator of the release before is refused on a database that has it (`the database's
   schema is newer than this coordinator (migration 8, host_groups)`), so going back below this
   release is restoring the dump taken before it. The tables of placement by roles stay as they
@@ -123,6 +124,17 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   (the release before never reads these tables). The file store keeps the same rows in the directory
   `<state-file>.mdm-setup/` (`secrets.json`, `settings.json`), made by the first change and not by a
   start; a file store's setup does not reach a database by any verb.
+- **The built-in host group `all`.** Migration `0013` inserts the group `all` (generation 1, author
+  `migration`, default policy) listing `hostkeeper` alone, unless a group of that name is there
+  already, in which case that one is kept as it is. Every enrolled host is in `all`
+  ([hostgroups.md](hostgroups.md#the-built-in-group-all)): a host that was in a group keeps it
+  and now also runs what `all` lists, which is `hostkeeper` alone until an operator adds to it, so
+  an upgrade installs no package a host did not run. `0013` says older releases may run on it: an
+  older release reads `all` as a group like any other that no host is in, and places every host as
+  it did; if it removes the group, this release holds it again at its next start. The file store holds
+  `all` in memory from the start of `serve`, and writes the `host_groups` key of the state file only
+  once `all` is changed or another group is held, so a state file of a coordinator that holds no
+  other group stays readable by the release before.
 - **The push certificate.** Its records are in `mdm_secrets`: `push_pending_key` (the key of the request
   being made and its CSR, two PEM blocks), `push_encryption_key` (the key the reply of mdmcert.download is
   encrypted to), and `push_key` and `push_cert` (the pair in use, the newest version of each; the key is

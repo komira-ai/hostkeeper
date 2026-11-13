@@ -138,6 +138,20 @@ impl World {
         enroll_host(&self.enrollment.enrollment, host);
     }
 
+    /// Makes the coordinator hold the built-in group `all` ([`HostGroups::with_all`]), listing
+    /// `hostkeeper` alone, as `serve` and the migration do.
+    pub(crate) fn hold_all(&self) {
+        let (staged, ()) = self
+            .coordinator()
+            .desired
+            .stage_host_groups(|held| Ok::<_, Infallible>((held.clone().with_all(), ())))
+            .expect("staged");
+        self.coordinator()
+            .ops()
+            .decide_changes_with(staged, |_| vec![AuditEntry::new("test", "seed")])
+            .expect("held");
+    }
+
     /// A heartbeat of `host` that lists `services`, each at 1.0.
     pub(crate) fn beat(&self, host: &str, services: &[&str]) {
         let listed = services.iter().map(|name| runs(name, "1.0")).collect();

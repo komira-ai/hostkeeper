@@ -674,6 +674,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 FailedPrecondition,
                 "same_host_group",
             ),
+            (
+                HostGroupsRefusal::ReservedHostGroup,
+                FailedPrecondition,
+                "reserved_host_group",
+            ),
         ],
         refusal::host_groups,
     );

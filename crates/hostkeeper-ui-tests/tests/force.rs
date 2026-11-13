@@ -57,7 +57,6 @@ await Promise.all([send.on.click(), send.on.click()]);
         [
             (m("Releases/Status"), json!({})),
             (m("Services/List"), json!({})),
-            (m("HostGroups/List"), json!({})),
             (m("Hosts/List"), json!({})),
             (
                 m("Releases/Force"),
@@ -104,12 +103,7 @@ steps.push(text(latest()), button.attrs.disabled === true, Object.keys(button.on
     ));
     assert_eq!(
         ui.methods(),
-        [
-            m("Releases/Status"),
-            m("Services/List"),
-            m("HostGroups/List"),
-            m("Hosts/List")
-        ]
+        [m("Releases/Status"), m("Services/List"), m("Hosts/List")]
     );
     let dialog = out["out"][0].as_str().expect("the dialog's text");
     assert!(
@@ -145,12 +139,7 @@ steps.push(nodes(latest()).some((n) => n.attrs["name"] === "force-send"));
     assert_eq!(out["out"][1], false);
     assert_eq!(
         ui.methods(),
-        [
-            m("Releases/Status"),
-            m("Services/List"),
-            m("HostGroups/List"),
-            m("Hosts/List")
-        ]
+        [m("Releases/Status"), m("Services/List"), m("Hosts/List")]
     );
 }
 

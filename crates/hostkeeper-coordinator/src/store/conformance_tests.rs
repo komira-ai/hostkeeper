@@ -33,6 +33,7 @@ use super::{Backend, BackendError, Commit, Fake, Files, Loaded, Shared};
 use crate::accounts::{Accounts, accounts_path};
 use crate::audit_file::{Actor, AuditLine, DEFAULT_ROTATION, Filter, Logged, Query};
 use crate::desired::{self, Desired, StoreError};
+use crate::host_groups::{GroupName, HostGroups};
 use crate::jti_file::jti_path;
 use crate::ops::{AuditEntry, OpsError, OpsState};
 use crate::registry::{Digest, Release};
@@ -273,10 +274,19 @@ fn ring(lines: &[AuditLine]) -> Vec<AuditEntry> {
         .collect()
 }
 
+/// What `backend` holds, with the built-in group `all` left out while it is as the migration makes
+/// it: a database holds it from `0013`, a file store only once it is changed, and the two read
+/// alike ([`HostGroups::is_bare`]).
 fn loaded(backend: &Shared) -> Result<Loaded, String> {
-    backend
+    let mut loaded = backend
         .load()
-        .map_err(|why| format!("the load failed: {why}"))
+        .map_err(|why| format!("the load failed: {why}"))?;
+    if loaded.desired.host_groups.0.get(&GroupName::all())
+        == HostGroups::default().with_all().0.get(&GroupName::all())
+    {
+        loaded.desired.host_groups.0.remove(&GroupName::all());
+    }
+    Ok(loaded)
 }
 
 fn every_line(backend: &Shared) -> Result<Vec<u64>, String> {

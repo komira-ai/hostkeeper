@@ -46,13 +46,13 @@ fn approval_of(dir: &Path, id: &[u8]) -> pb::Approval {
 /// Proves: the host file of a host in the group `web`, moving from `db`, with facts of
 /// generation 3 (as a move writes it), keeps all three through a renewal's approval, and the
 /// renewal's approval records the group; an approval of a new key for the host id (`replace`)
-/// writes the host without them, and its approval names no group; a host file of a host approved
+/// that names no group keeps the group, and writes the host without its move and facts; a host file of a host approved
 /// before groups reads with none.
 ///
 /// Catches: a renewal, which is no move, taking a host out of its group or ending its move (its
 /// next heartbeat would then place it by nothing), or a new key inheriting a move under way.
 #[test]
-fn a_renewal_keeps_the_hosts_group_and_a_new_key_starts_without_it() {
+fn a_renewal_keeps_the_hosts_group_and_a_replace_naming_none_keeps_it_without_the_move() {
     let ca = TestCa::new("host-group-ca");
     let dir = scratch("host-group-renewal");
     let store = open(dir.path());
@@ -124,9 +124,9 @@ fn a_renewal_keeps_the_hosts_group_and_a_new_key_starts_without_it() {
             anew.moving_from.as_deref(),
             anew.facts_generation
         ),
-        ("", None, None)
+        ("web", None, None)
     );
-    assert_eq!(approval_of(dir.path(), taken.as_bytes()).host_group, "");
+    assert_eq!(approval_of(dir.path(), taken.as_bytes()).host_group, "web");
     let reopened = open(dir.path());
     assert!(
         reopened

@@ -18,8 +18,10 @@
 //! From a coordinator that holds host groups ([`Enrollment::held_groups`]) an approval places
 //! its host in a group (`docs/design/hostgroups.md` section 1.2): the one its `host_group` names,
 //! or else its `role`, read as a group's name ([`group_in`]), which must be held
-//! (`unknown_host_group`); one of the two is required (`invalid_role`), and the role the store
-//! writes is the group's name. It names no services (`services_retired`): the group decides what
+//! (`unknown_host_group`); the role the store writes is the group's name. With neither named
+//! the host is enrolled in no specific group, under the placeholder role [`UNGROUPED_ROLE`], and
+//! runs the packages of the built-in group `all` alone until `HostGroups.Move`; the reason is
+//! optional. It names no services (`services_retired`): the group decides what
 //! the host runs. A renewal, or a `replace` of a host in a group, keeps that group: naming
 //! another is `host_group_differs`, checked by the store under its lock. A coordinator that
 //! holds none approves by role and services, as before groups, and refuses a `host_group`
@@ -54,8 +56,13 @@ use super::expiry::ExpiriesAudited;
 use super::groups::group_in;
 use crate::host_groups::HostGroups;
 use crate::inventory::{InventoryMatch, InventoryRecord, match_claims};
-use crate::operator::valid_reason;
+use crate::operator::optional_reason;
 use crate::ops::{AuditEntry, OpsStore, Write};
+
+/// The role the store records for a host approved in no group: a host in a group has the group's
+/// name, and one in none has this, which only fills the field the host record requires. Listings
+/// show it as no role and no group.
+pub(crate) const UNGROUPED_ROLE: &str = "ungrouped";
 
 /// The audit action of an approval.
 pub const ACTION_APPROVE: &str = "enroll_approve";
@@ -173,14 +180,24 @@ fn check(
             return Err(EnrollmentRefusal::ServicesRetired);
         }
         Some(held) => {
-            let group = group_in(&request.host_group, &request.role, held)?
-                .ok_or(EnrollmentRefusal::InvalidRole)?;
-            // A group's name follows the operator API's rule of a role, which is the stricter.
-            let role = role_of(group.as_str()).ok_or(EnrollmentRefusal::InvalidRole)?;
-            (role, Vec::new(), Some(group.to_string()))
+            // Neither a group nor a role named: the host is enrolled in no group, as the
+            // placeholder role says, and is ordered nothing until `HostGroups.Move` puts it in one.
+            match group_in(&request.host_group, &request.role, held)? {
+                Some(group) => {
+                    // A group's name follows the operator API's rule of a role, which is the
+                    // stricter.
+                    let role = role_of(group.as_str()).ok_or(EnrollmentRefusal::InvalidRole)?;
+                    (role, Vec::new(), Some(group.to_string()))
+                }
+                None => (
+                    role_of(UNGROUPED_ROLE).ok_or(EnrollmentRefusal::InvalidRole)?,
+                    Vec::new(),
+                    None,
+                ),
+            }
         }
     };
-    let reason = valid_reason(&request.reason).ok_or(invalid)?;
+    let reason = optional_reason(&request.reason, invalid)?.unwrap_or_default();
     Ok(Asked {
         request_id,
         key_sha256,
@@ -296,7 +313,9 @@ pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
     } else {
         approval.services.join(",")
     };
-    let placed = if approval.host_group.is_empty() {
+    let placed = if approval.host_group.is_empty() && approval.role == UNGROUPED_ROLE {
+        "no group".to_owned()
+    } else if approval.host_group.is_empty() {
         format!("role {}; services {services}", approval.role)
     } else {
         format!("group {}", approval.host_group)
@@ -304,12 +323,16 @@ pub(super) fn approval_entry(approval: &RecordedApproval) -> AuditEntry {
     let mut entry = AuditEntry::new(&approval.approver, action);
     entry.node_id = Some(approval.host_id.clone());
     entry.host_group = Some(approval.host_group.clone()).filter(|group| !group.is_empty());
-    entry.reason = Some(format!(
-        "request {}; {record}{placed}; claims {}; {}",
-        approval.request_id,
-        claims_summary(&approval.claims),
-        approval.reason
-    ));
+    let claims = claims_summary(&approval.claims);
+    let mut reason = format!(
+        "request {}; {record}{placed}; claims {claims}",
+        approval.request_id
+    );
+    if !approval.reason.is_empty() {
+        reason.push_str("; ");
+        reason.push_str(&approval.reason);
+    }
+    entry.reason = Some(reason);
     entry
 }
 
@@ -418,7 +441,7 @@ impl Enrollment {
     ///
     /// # Errors
     /// `invalid_request` (the request id, the key hash or the reason), `invalid_host_id`,
-    /// `invalid_role`, `invalid_service`, `services_retired`, `unknown_host_group`,
+    /// `invalid_role` (a role beside another group name, or, with no group held, none), `invalid_service`, `services_retired`, `unknown_host_group`,
     /// `unknown_request`, `key_mismatch`, `record_contested`, `record_mismatch`, `not_pending`,
     /// `duplicate_claim`, `host_id_taken`, `denied`, `host_group_differs`, `store_failed`. Each is
     /// audited `enroll_approve_refused`, and nothing else changes.

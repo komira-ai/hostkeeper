@@ -610,9 +610,14 @@ impl EnrollmentStore {
             .as_ref()
             .filter(|_| renewal.is_some())
             .map(|h| &h.pb);
+        // A group named is the host's; none named leaves a host that keeps its group (a renewal
+        // or a replace of a host in one) in it, and any other host in none.
         let host_group = match &decision.host_group {
             Some(named) => named.clone(),
-            None => renewed.map(|h| h.host_group.clone()).unwrap_or_default(),
+            None => kept
+                .map(str::to_owned)
+                .or_else(|| renewed.map(|h| h.host_group.clone()))
+                .unwrap_or_default(),
         };
         records.push(Record::Host(pb::Host {
             schema: SCHEMA,

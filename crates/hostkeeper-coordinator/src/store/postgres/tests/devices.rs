@@ -152,7 +152,10 @@ fn the_release_before_starts_on_a_database_with_0005_and_this_one_on_its() {
     });
     assert_eq!(ran, vec![1, 2, 3, 4]);
     let (store, loaded) = older.open("this release").expect("this release starts");
-    assert_eq!(loaded, crate::store::Loaded::default());
+    // `0013` made the built-in host group `all`; nothing else is held.
+    let mut empty = crate::store::Loaded::default();
+    empty.desired.host_groups = crate::host_groups::HostGroups::default().with_all();
+    assert_eq!(loaded, empty);
     assert_eq!(
         PgDevices::over(&store).load().expect("the table reads"),
         Vec::<DeviceRecord>::new()
@@ -160,7 +163,7 @@ fn the_release_before_starts_on_a_database_with_0005_and_this_one_on_its() {
     store.stop();
     assert_eq!(
         older.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=12)
+        (1..=13)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

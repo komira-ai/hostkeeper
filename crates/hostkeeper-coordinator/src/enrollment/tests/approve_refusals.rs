@@ -61,7 +61,7 @@ async fn invalid_host_id_role_and_service_are_refused_with_their_own_tokens() {
         (services(&["kbf", ""]), EnrollmentRefusal::InvalidService),
         (
             ApproveRequest {
-                reason: String::new(),
+                reason: "bad\nreason".to_owned(),
                 ..base.clone()
             },
             EnrollmentRefusal::InvalidRequest,

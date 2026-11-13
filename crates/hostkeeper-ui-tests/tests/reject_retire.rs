@@ -24,6 +24,7 @@ fn enrollment_reject_asks_first_and_sends_the_listed_request_id() {
     // reason refused (it is optional), a reason not trimmed, and a refusal taken as success.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), two_pending());
+    ui.reply(&m("HostGroups/List"), json!({}));
     ui.reply(
         &m("Enrollment/Reject"),
         json!({"entry": {"action": "enroll_reject"}}),
@@ -48,6 +49,7 @@ await click(tree, "reject", 1);
         bodies(&ui),
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Enrollment/Reject"),
                 json!({"requestId": one, "reason": ""})
