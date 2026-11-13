@@ -29,7 +29,7 @@ operator:
 1. Records the machine as an inventory record: its data MACs, its BMC MAC and serial from the chassis label, and its
    platform, `linux-x86_64` or `linux-arm64` (section 3). A Linux request is matched by its data MACs and BMC MAC; the
    serial is shown beside the claim for the person to compare, and takes no part in the match. The record is built
-   (`hkctl enrollment add-record`, or the UI's Inventory page), its platform an additive field
+   (`hkctl enrollment add-record`; the UI's Inventory page adds a server with its MACs and notes only), its platform an additive field
    (item N14, **Built**).
 
 The machine is then racked and powered on, as every machine is. Its firmware tries network boot, it installs Ubuntu
@@ -177,8 +177,7 @@ fetched (section 5): `linux-x86_64`, `linux-arm64`, or both.
 - **The record's platform.** The record carries an optional platform (item N14): `linux-x86_64` or `linux-arm64`. It
   chooses the boot set of the install entry, and the deb the seed installs. It is additive everywhere it appears: a new
   optional field of `InventoryRecord` and `AddRecordRequest`, typed as the existing `hostkeeper.agent.v1.Platform` with
-  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hkctl enrollment add-record` and a
-  field of the UI's Inventory page; and a value the coordinator's store keeps for the record, behind the store's
+  `PLATFORM_UNSPECIFIED` meaning "not recorded"; a `--platform` flag of `hkctl enrollment add-record` (the UI's Inventory page shows four fields and not the platform, and an edit there keeps it); and a value the coordinator's store keeps for the record, behind the store's
   interface with the rest of the inventory (`crates/hostkeeper-coordinator/src/inventory.rs`, **Built**; item N14), so the move of
   that state to Postgres takes it as a column with a default. In today's file store the inventory is in the ops file,
   whose reader refuses unknown keys, so a platform there would make the release before refuse the whole file. The
@@ -914,7 +913,7 @@ One pull request each, in this order. "After" lists prerequisites. Sizes are tho
 | N11 | `cargo xtask netinstall-report`, and the report artifact of N10. **Built**: `crates/xtask/src/netinstall_report.rs`, the artifact `net-install-report` | N10 | S |
 | N12 | Operator runbook `docs/operations/network-install.md`: choosing the mode; the UniFi "Network Boot" setting for router mode and DHCP guarding for proxy mode (both **[V]**); the router check of Question 4; the boot-order, local-disk and option 93 check of each board model (a capture of its DISCOVER and REQUEST); the per-machine steps; reinstall. **Built**: [docs/operations/network-install.md](../operations/network-install.md), whose `hkctl` lines and settings files a test parses with each program's parser | N9 | S |
 | N13 | First real machine of each platform on the farm, by the runbook, recording the measurement. Done by hand by the operator, not in CI | N10, N12 | S |
-| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built"). **Built**: `platform` on `InventoryRecord` and `AddRecordRequest` (`crates/hostkeeper-proto/proto/hostkeeper/operator/v1/enrollment.proto`), `crates/hostkeeper-coordinator/src/inventory.rs` and the `platforms` key of the halts file in `ops_file.rs`, the ctl's `--platform` (generated from the descriptor), `ui/pages/inventory.js`, the record platforms read by `crates/hostkeeper-pxe/src/serve/` | N1b | S |
+| N14 | The record's optional platform: the field of `InventoryRecord` and `AddRecordRequest`, the platform kept behind the coordinator's store interface (in the halts file today), `add-record --platform`, the UI's Inventory page, `docs/operations/enrollment.md`, the runbook's note that router mode installs nothing yet (`docs/operations/network-install.md`), hostkeeper-design.md section 5.7 (the record's fields) and its table of stored files (the platforms in the halts file), and the tests of section 11; and the move of the end-to-end's reinstall and of `arm64_boots_to_seed_fetch` from proxy mode to router mode (section 11, "Built"). **Built**: `platform` on `InventoryRecord` and `AddRecordRequest` (`crates/hostkeeper-proto/proto/hostkeeper/operator/v1/enrollment.proto`), `crates/hostkeeper-coordinator/src/inventory.rs` and the `platforms` key of the halts file in `ops_file.rs`, the ctl's `--platform` (generated from the descriptor), the record platforms read by `crates/hostkeeper-pxe/src/serve/` | N1b | S |
 
 N2, N3, N4, N5, N6, N7 and N14 are independent and can be built in parallel. N10 checks a first install
 (`an_assigned_package_installs_once_across_restarts_and_the_boot_pass_keeps_it`, privileged). The

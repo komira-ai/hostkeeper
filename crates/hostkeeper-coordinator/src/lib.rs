@@ -393,6 +393,8 @@ mod inventory_platform_tests;
 #[cfg(test)]
 mod inventory_tests;
 #[cfg(test)]
+mod inventory_update_tests;
+#[cfg(test)]
 mod inventory_window_tests;
 #[cfg(test)]
 mod live_converged_tests;

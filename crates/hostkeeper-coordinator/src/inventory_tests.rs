@@ -236,7 +236,7 @@ fn an_add_outside_the_grammar_is_refused_and_changes_nothing() {
         ),
         (
             proto::AddRecordRequest {
-                notes: "line\nbreak".to_owned(),
+                notes: "tab\there".to_owned(),
                 ..good()
             },
             Refusal::InvalidRequest,

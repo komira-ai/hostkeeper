@@ -163,6 +163,13 @@ impl Enrollment for Fake {
         unimplemented()
     }
 
+    async fn update_record(
+        &self,
+        _: Request<proto::UpdateRecordRequest>,
+    ) -> Result<Response<proto::UpdateRecordResponse>, Status> {
+        unimplemented()
+    }
+
     async fn open_record(
         &self,
         _: Request<proto::OpenRecordRequest>,

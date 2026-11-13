@@ -26,6 +26,7 @@ export interface Client {
     addRecord(request: hostkeeper_operator_v1.AddRecordRequest): Promise<hostkeeper_operator_v1.AddRecordResponse>;
     listRecords(request: hostkeeper_operator_v1.ListRecordsRequest): Promise<hostkeeper_operator_v1.ListRecordsResponse>;
     removeRecord(request: hostkeeper_operator_v1.RemoveRecordRequest): Promise<hostkeeper_operator_v1.RemoveRecordResponse>;
+    updateRecord(request: hostkeeper_operator_v1.UpdateRecordRequest): Promise<hostkeeper_operator_v1.UpdateRecordResponse>;
     openRecord(request: hostkeeper_operator_v1.OpenRecordRequest): Promise<hostkeeper_operator_v1.OpenRecordResponse>;
   };
   readonly hostGroups: {
@@ -882,6 +883,8 @@ export namespace hostkeeper_operator_v1 {
   export interface UnholdResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnmarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface UpdateRecordRequest { hostId?: string; dataMacs?: string[]; bmcMac?: string; notes?: string; }
+  export interface UpdateRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UserInfo {
     name?: string;
     enabled?: boolean;

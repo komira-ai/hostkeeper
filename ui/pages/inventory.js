@@ -1,235 +1,229 @@
-// Inventory: the servers the operator recorded when building them (host id, role, data MACs, BMC
-// MAC, serial, platform, notes), so that a pending enrollment request can be matched to its record, and
-// whether a host is enrolled against each. Calls: Enrollment.ListRecords, all records or, with
-// the filter, only the enrolled or only the not enrolled ones; on a button, Enrollment.AddRecord
-// or Enrollment.RemoveRecord; on a closed record that names a role, Enrollment.OpenRecord. A
-// record that names a role is the approval of its host: the coordinator approves a request that
-// matches it exactly while its window is open, once (the State column: open, closed or used, and
-// for a used record the request and the time). The page's `record` parameter (the Host page's link) marks that record's row.
+// Inventory: the servers the operator built, one table of four fields each: Server name, BMC MAC,
+// Data MAC and Notes. Nothing else of a record is shown or sent (its role, host group, serial,
+// platform, window and the rest stay as the coordinator keeps them). The table has a row per
+// record, with Edit and Remove, and a last row to add a server. Calls: Enrollment.ListRecords;
+// on Add, Enrollment.AddRecord; on Save, Enrollment.UpdateRecord, which changes the record's
+// MACs and notes and nothing else of it; on Remove, Enrollment.RemoveRecord, after a confirm.
+// The page's `edit` parameter names the record whose row is open for editing, `pageToken` the
+// page, and `record` (the Host page's link) marks that record's row.
 
-import {
-  h, action, enumLabel, errorView, field, fmtUnix, reasonProblem, select, table, trimmed, words,
-} from "../view.js";
+import { h, action, errorView, reasonProblem, table, trimmed } from "../view.js";
 
 const PAGE_SIZE = 50;
-// The grammars of operator.proto: a host id is a node id (1 to 63 of `[a-z0-9-]`, not starting
-// or ending with `-`), a role 1 to 32 of `[a-z0-9-]` with a letter first, not ending with `-` and
-// with no `--`, a MAC six pairs of hex
-// digits separated all by `:` or all by `-`, or twelve hex digits, and a serial 1 to 64 of
-// `A-Za-z0-9._-`.
-const HOST_ID = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
-const ROLE = /^(?!.*--)[a-z]([a-z0-9-]{0,30}[a-z0-9])?$/;
-const MAC = /^([0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{2}(-[0-9A-Fa-f]{2}){5}|[0-9A-Fa-f]{12})$/;
-const SERIAL = /^[A-Za-z0-9._-]{1,64}$/;
+// A server name is a host id of operator.proto: 1 to 63 of `[a-z0-9-]`, not starting or ending with `-`.
+const SERVER_NAME = /^(?=.{1,63}$)[a-z0-9]([a-z0-9-]*[a-z0-9])?$/;
 const MAX_DATA_MACS = 16;
-// The platforms a record may name for a network install, as the gateway's JSON spells the enum
-// (the form's choice, then the name sent), and the short names the records list shows.
-const PLATFORMS = [["", "none"], ["linux-x86_64", "linux-x86_64"], ["linux-arm64", "linux-arm64"]];
-const PLATFORM_NAMES = { PLATFORM_LINUX_X86_64: "linux-x86_64", PLATFORM_LINUX_ARM64: "linux-arm64" };
-const PLATFORM_ENUMS = { "linux-x86_64": "PLATFORM_LINUX_X86_64", "linux-arm64": "PLATFORM_LINUX_ARM64" };
+const MAC_PROBLEM = "is not a MAC: twelve hex digits, with or without : - . between them.";
+const NOTES_PROBLEM = "Notes are at most 256 bytes, with no control character but the line break.";
 
-const WINDOW_TIME = /^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?(?:Z| ?UTC)?$/;
-const WINDOW_PROBLEM = "A window is a number of hours (2 or 1.5), or an end time in UTC (2027-01-15 08:00 or 2027-01-15T08:00:00Z).";
-
-// The window a form input names, as the fields of an AddRecordRequest or OpenRecordRequest: none
-// for an empty input, `approveForSecs` for a number of hours, `approveUntilUnix` for an end time
-// in UTC (both as the strings canonical JSON writes a uint64 in), or a sentence saying the input is neither.
-export function windowFields(input) {
-  const text = trimmed(input);
-  if (text === "") {
-    return {};
+// A MAC in any common spelling (aa:bb:cc:dd:ee:ff, AA-BB-CC-DD-EE-FF, aabb.ccdd.eeff,
+// aabbccddeeff, with spaces around) as the one the coordinator keeps: lower case, colon-separated;
+// null when it is not twelve hex digits.
+export function normalizeMac(text) {
+  const digits = trimmed(text).replace(/[:.\-\s]/g, "");
+  if (!/^[0-9A-Fa-f]{12}$/.test(digits)) {
+    return null;
   }
-  if (/^\d+(\.\d+)?$/.test(text)) {
-    const secs = Math.round(Number(text) * 3600);
-    return secs > 0 ? { approveForSecs: String(secs) } : WINDOW_PROBLEM;
-  }
-  const parts = WINDOW_TIME.exec(text);
-  if (parts === null) {
-    return WINDOW_PROBLEM;
-  }
-  const [year, month, day, hour, minute, second] = parts.slice(1).map((n) => Number(n || 0));
-  const at = new Date(Date.UTC(year, month - 1, day, hour, minute, second));
-  const same = at.getUTCMonth() === month - 1 && at.getUTCDate() === day && at.getUTCHours() === hour &&
-    at.getUTCMinutes() === minute && at.getUTCSeconds() === second;
-  return same ? { approveUntilUnix: String(Math.floor(at.getTime() / 1000)) } : WINDOW_PROBLEM;
+  return digits.toLowerCase().replace(/(..)(?=.)/g, "$1:");
 }
 
-// The AddRecordRequest the form names, or a sentence saying what is missing or wrong, each input
-// checked on its own against its grammar. The coordinator writes each MAC in one spelling.
-export function recordRequest(form) {
-  const hostId = trimmed(form.hostId);
-  const role = trimmed(form.role);
-  const dataMacs = words(form.dataMacs);
-  const bmcMac = trimmed(form.bmcMac);
-  const serial = trimmed(form.serial);
-  const notes = trimmed(form.notes);
-  if (hostId === "") {
-    return "Name the host id.";
+// The data MACs a field holds: MACs separated by commas, semicolons or line breaks, each
+// normalised. A list of the normalised MACs, or `{ bad }` for the first entry that is none.
+export function dataMacs(text) {
+  const macs = [];
+  for (const entry of trimmed(text).split(/[,;\n]+/)) {
+    if (trimmed(entry) !== "") {
+      const mac = normalizeMac(entry);
+      if (mac === null) {
+        return { bad: trimmed(entry) };
+      }
+      macs.push(mac);
+    }
   }
-  if (!HOST_ID.test(hostId)) {
-    return "A host id is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.";
-  }
-  if (role !== "" && !ROLE.test(role)) {
-    return "A role is 1 to 32 of a-z, 0-9 and -, a letter first, not ending with - and with no --.";
-  }
-  const badMac = dataMacs.concat(bmcMac === "" ? [] : [bmcMac]).find((m) => !MAC.test(m));
-  if (badMac !== undefined) {
-    return `${badMac} is not a MAC: six pairs of hex digits separated by : or by -.`;
-  }
-  if (dataMacs.length > MAX_DATA_MACS) {
-    return `A record holds at most ${MAX_DATA_MACS} data MACs.`;
-  }
-  if (serial !== "" && !SERIAL.test(serial)) {
-    return "A serial is 1 to 64 of A-Z, a-z, 0-9, ., _ and -.";
-  }
-  if (dataMacs.length === 0 && serial === "") {
-    return "Give a data MAC, or a serial for a Mac.";
-  }
-  if (notes !== "" && reasonProblem(notes) !== null) {
-    return reasonProblem(notes).replace("A reason", "A note");
-  }
-  const window = windowFields(form.window);
-  if (typeof window === "string") {
-    return window;
-  }
-  if (role === "" && Object.keys(window).length > 0) {
-    return "A window needs a role: a record with no role approves nothing.";
-  }
-  const body = Object.assign({ hostId, role, dataMacs, bmcMac, serial, notes }, window);
-  if (form.platform) {
-    body.platform = PLATFORM_ENUMS[form.platform];
-  }
-  return body;
+  return macs;
 }
 
-// The `enrolled` of a ListRecordsRequest for the page's `enrolled` parameter: true for "true",
-// false for "false", and absent (every record) for anything else.
-export function enrolledFilter(param) {
-  if (param === "true") {
-    return { enrolled: true };
-  }
-  if (param === "false") {
-    return { enrolled: false };
-  }
-  return {};
+// Notes with their line breaks written as `\n`, trimmed.
+function notesOf(text) {
+  return trimmed(String(text || "").replace(/\r\n?/g, "\n"));
 }
 
-function recordRow(ctx, record, removal, opening, chosen) {
+// What the inputs of `form` hold, checked each on its own: `{ errors, body }`. `errors` has a
+// sentence per field that is wrong (keys server, bmcMac, dataMac, notes); `body` holds the fields
+// of the request. A record that keeps a serial (a Mac) may have no data MAC. `named` is false
+// when the server name is fixed (an edit).
+export function checkForm(form, named, keepsSerial) {
+  const errors = {};
+  const body = {};
+  if (named) {
+    const name = trimmed(form.server);
+    if (name === "") {
+      errors.server = "Name the server.";
+    } else if (!SERVER_NAME.test(name)) {
+      errors.server = "A server name is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.";
+    }
+    body.hostId = name;
+  }
+  const bmc = trimmed(form.bmcMac);
+  body.bmcMac = "";
+  if (bmc !== "") {
+    const mac = normalizeMac(bmc);
+    if (mac === null) {
+      errors.bmcMac = `${bmc} ${MAC_PROBLEM}`;
+    } else {
+      body.bmcMac = mac;
+    }
+  }
+  const data = dataMacs(form.dataMac);
+  body.dataMacs = [];
+  if (!Array.isArray(data)) {
+    errors.dataMac = `${data.bad} ${MAC_PROBLEM}`;
+  } else if (data.length === 0 && !keepsSerial) {
+    errors.dataMac = "Give the data MAC.";
+  } else if (data.length > MAX_DATA_MACS) {
+    errors.dataMac = `At most ${MAX_DATA_MACS} data MACs.`;
+  } else {
+    body.dataMacs = Array.from(new Set(data));
+  }
+  if (errors.bmcMac === undefined && bmc !== "" && body.dataMacs.includes(body.bmcMac)) {
+    errors.bmcMac = "The BMC MAC is also a data MAC.";
+  }
+  const notes = notesOf(form.notes);
+  body.notes = notes;
+  if (notes !== "" && reasonProblem(notes.replace(/\n/g, " ")) !== null) {
+    errors.notes = NOTES_PROBLEM;
+  }
+  return { errors, body };
+}
+
+// The inputs of a row bound to `form`: `cell(key, label, tag)` is a text input (or a text area)
+// for `form[key]` with the place for its error under it, and `show(errors)` writes each field's
+// sentence there (the page shows it when the status line next changes the view).
+function inputs(prefix, form) {
+  const marks = {};
+  return {
+    cell(key, label, tag) {
+      const common = { name: `${prefix}-${key}`, "aria-label": label, spellcheck: "false", value: form[key] || "" };
+      const input = h(tag, tag === "textarea"
+        ? Object.assign({ rows: 2, maxlength: 300 }, common)
+        : Object.assign({ type: "text", autocomplete: "off" }, common));
+      input.on = {
+        input: (e) => {
+          form[key] = e.target.value;
+          input.attrs.value = form[key];
+        },
+      };
+      marks[key] = h("span", { class: "error", role: "alert", name: `${prefix}-${key}-error` });
+      return [input, marks[key]];
+    },
+    show(errors) {
+      for (const [key, mark] of Object.entries(marks)) {
+        mark.children = errors[key] === undefined ? [] : [{ text: errors[key] }];
+      }
+    },
+  };
+}
+
+function recordRow(ctx, record, chosen) {
   return h("tr", chosen ? { "aria-current": "true" } : {},
     h("td", {}, record.hostId),
-    h("td", {}, record.role || "-"),
-    h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.bmcMac || "-"),
-    h("td", {}, record.serial || "-"),
-    h("td", {}, PLATFORM_NAMES[record.platform] || "-"),
-    h("td", {}, record.notes || "-"),
-    h("td", {}, record.addedBy || "-"),
-    h("td", {}, fmtUnix(record.addedUnix)),
-    h("td", {}, record.enrolled === true ? "yes" : "no"),
-    h("td", {}, fmtUnix(record.approveUntilUnix)),
-    h("td", {}, enumLabel(record.state, "RECORD_STATE_")),
-    h("td", {}, record.usedByRequestId || "-"),
-    h("td", {}, fmtUnix(record.usedUnix)),
-    h("td", {}, record.state === "RECORD_STATE_CLOSED" && record.role
-      ? action(ctx, "Open window", "open-record", async () => {
-        const window = windowFields(opening.window);
-        if (typeof window === "string") {
-          return window;
+    h("td", {}, (record.dataMacs || []).join(", ") || "-"),
+    h("td", {}, record.notes ? h("pre", {}, record.notes) : "-"),
+    h("td", {},
+      action(ctx, "Edit", "edit-record", async () => {
+        ctx.navigate("inventory", Object.assign({}, ctx.params, { edit: record.hostId }));
+        return undefined;
+      }),
+      action(ctx, "Remove", "remove-record", async () => {
+        if (!ctx.confirm(`Remove ${record.hostId} from the inventory? A host enrolled as it keeps its certificate.`)) {
+          return undefined;
         }
-        const reason = trimmed(opening.reason);
-        if (reason !== "" && reasonProblem(reason) !== null) {
-          return reasonProblem(reason);
-        }
-        const reply = await ctx.api.enrollment.openRecord(
-          Object.assign({ hostId: record.hostId, reason }, window));
+        await ctx.api.enrollment.removeRecord({ hostId: record.hostId, reason: "removed on the Inventory page" });
         ctx.refresh();
-        const until = reply.record ? reply.record.approveUntilUnix : undefined;
-        return `Opened the record of ${record.hostId} until ${fmtUnix(until)}.`;
-      })
-      : null),
-    h("td", {}, action(ctx, "Remove", "remove-record", async () => {
-      const reason = trimmed(removal.reason);
-      if (reason === "") {
-        return "Give a reason for the removal first.";
+        return `Removed ${record.hostId}.`;
+      })));
+}
+
+function editRow(ctx, record) {
+  const form = {
+    bmcMac: record.bmcMac || "",
+    dataMac: (record.dataMacs || []).join(", "),
+    notes: record.notes || "",
+  };
+  const fields = inputs("edit", form);
+  const leave = () => {
+    const params = Object.assign({}, ctx.params);
+    delete params.edit;
+    ctx.navigate("inventory", params);
+  };
+  return h("tr", { "aria-current": "true" },
+    h("td", {}, record.hostId),
+    h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
+    h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
+    h("td", {}, fields.cell("notes", "Notes", "textarea")),
+    h("td", {},
+      action(ctx, "Save", "save-record", async () => {
+        const { errors, body } = checkForm(form, false, Boolean(record.serial));
+        fields.show(errors);
+        if (Object.keys(errors).length > 0) {
+          return "Correct the marked fields.";
+        }
+        await ctx.api.enrollment.updateRecord({
+          hostId: record.hostId, dataMacs: body.dataMacs, bmcMac: body.bmcMac, notes: body.notes,
+        });
+        leave();
+        return `Saved ${record.hostId}.`;
+      }),
+      action(ctx, "Cancel", "cancel-edit", async () => {
+        leave();
+        return undefined;
+      })));
+}
+
+function addRow(ctx) {
+  const form = { server: "", bmcMac: "", dataMac: "", notes: "" };
+  const fields = inputs("add", form);
+  return h("tr", {},
+    h("td", {}, fields.cell("server", "Server name", "input")),
+    h("td", {}, fields.cell("bmcMac", "BMC MAC", "input")),
+    h("td", {}, fields.cell("dataMac", "Data MAC", "input")),
+    h("td", {}, fields.cell("notes", "Notes", "textarea")),
+    h("td", {}, action(ctx, "Add", "add-record", async () => {
+      const { errors, body } = checkForm(form, true, false);
+      fields.show(errors);
+      if (Object.keys(errors).length > 0) {
+        return "Correct the marked fields.";
       }
-      if (reasonProblem(reason) !== null) {
-        return reasonProblem(reason);
-      }
-      await ctx.api.enrollment.removeRecord({ hostId: record.hostId, reason });
+      await ctx.api.enrollment.addRecord(body);
       ctx.refresh();
-      return `Removed the record of ${record.hostId}.`;
+      return `Added ${body.hostId}.`;
     })));
 }
 
 export async function render(ctx) {
   const param = (name) => (ctx.params && typeof ctx.params[name] === "string" ? ctx.params[name] : "");
   const pageToken = param("pageToken");
-  const filter = enrolledFilter(param("enrolled"));
-  const shown = filter.enrolled === undefined ? "" : String(filter.enrolled);
-  // The parameters that keep the filter across pages.
-  const kept = shown === "" ? {} : { enrolled: shown };
   let listed;
   try {
-    listed = await ctx.api.enrollment.listRecords(
-      Object.assign({ limit: PAGE_SIZE, pageToken }, filter));
+    listed = await ctx.api.enrollment.listRecords({ limit: PAGE_SIZE, pageToken });
   } catch (error) {
     return errorView("Inventory", error);
   }
   const records = listed.records || [];
   const next = typeof listed.nextPageToken === "string" ? listed.nextPageToken : "";
-  const form = { hostId: "", role: "", dataMacs: "", bmcMac: "", serial: "", platform: "", notes: "", window: "" };
-  const opening = { window: "", reason: "" };
-  const removal = { reason: "" };
-  const filterForm = { enrolled: shown };
-  const nothing = shown === "" ? "No server is recorded." : `No ${shown === "true" ? "" : "not "}enrolled server is recorded.`;
+  const rows = records.map((record) => (record.hostId === param("edit")
+    ? editRow(ctx, record)
+    : recordRow(ctx, record, record.hostId === param("record"))));
   return h("section", { class: "page" },
     h("h2", {}, "Inventory"),
-    h("p", { class: "note" },
-      "Record each server's data MAC and BMC MAC when you build it. A record that names a role approves "
-      + "the one request that matches it exactly while its window is open, once; any other match shows its host id and "
-      + "role on the Enrollment page and waits for an operator. "
-      + "A record is enrolled when an enrolled host's claims match it and no other record."),
-    h("fieldset", {},
-      h("legend", {}, "Filter"),
-      select("Enrolled", "enrolled-filter", filterForm, "enrolled",
-        [["", "every record"], ["true", "enrolled"], ["false", "not enrolled"]]),
-      action(ctx, "Show", "show", async () => {
-        ctx.navigate("inventory", filterForm.enrolled === "" ? {} : { enrolled: filterForm.enrolled });
-        return undefined;
-      })),
-    records.length === 0
-      ? h("p", {}, nothing)
-      : table(["Host id", "Role", "Data MACs", "BMC MAC", "Serial", "Platform", "Notes", "Added by", "Added at", "Enrolled", "Window ends", "State", "Used by", "Used at", "", ""],
-        records.map((record) => recordRow(ctx, record, removal, opening, record.hostId === param("record")))),
-    records.length === 0 ? null : field("Reason for a removal", "remove-reason", removal, "reason", { maxlength: 256 }),
-    records.length === 0 ? null : field("Window to open (hours or an end time; empty for the coordinator's default)",
-      "open-window", opening, "window"),
-    records.length === 0 ? null : field("Reason for opening (may be empty)", "open-reason", opening, "reason", { maxlength: 256 }),
+    table(["Server name", "BMC MAC", "Data MAC", "Notes", ""], rows.concat([addRow(ctx)])),
     h("div", { class: "buttons" },
       pageToken === "" ? null : h("button", {
-        type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", kept) },
+        type: "button", name: "first-page", on: { click: () => ctx.navigate("inventory", {}) },
       }, "First page"),
       next === "" ? null : h("button", {
         type: "button", name: "next-page",
-        on: { click: () => ctx.navigate("inventory", Object.assign({ pageToken: next }, kept)) },
-      }, "Next page")),
-    h("fieldset", {},
-      h("legend", {}, "Record a server"),
-      field("Host id", "record-host-id", form, "hostId"),
-      field("Role (may be empty)", "record-role", form, "role"),
-      field("Data MACs (separated by commas)", "record-data-macs", form, "dataMacs"),
-      field("BMC MAC (may be empty)", "record-bmc-mac", form, "bmcMac"),
-      field("Serial (a Mac's is what it is matched by)", "record-serial", form, "serial"),
-      select("Platform (for a network install)", "record-platform", form, "platform", PLATFORMS),
-      field("Notes", "record-notes", form, "notes", { maxlength: 256 }),
-      field("Window (hours or an end time in UTC; empty for the coordinator's default; needs a role)", "record-window", form, "window"),
-      action(ctx, "Record", "add-record", async () => {
-        const body = recordRequest(form);
-        if (typeof body === "string") {
-          return body;
-        }
-        const reply = await ctx.api.enrollment.addRecord(body);
-        ctx.refresh();
-        return `Recorded ${reply.record ? reply.record.hostId : body.hostId}.`;
-      })));
+        on: { click: () => ctx.navigate("inventory", { pageToken: next }) },
+      }, "Next page")));
 }

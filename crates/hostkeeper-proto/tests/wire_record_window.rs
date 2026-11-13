@@ -48,6 +48,7 @@ const RPCS: [(&str, &[&str]); 1] = [(
         "AddRecord(AddRecordRequest) AddRecordResponse",
         "ListRecords(ListRecordsRequest) ListRecordsResponse",
         "RemoveRecord(RemoveRecordRequest) RemoveRecordResponse",
+        "UpdateRecord(UpdateRecordRequest) UpdateRecordResponse",
         "OpenRecord(OpenRecordRequest) OpenRecordResponse",
     ],
 )];
