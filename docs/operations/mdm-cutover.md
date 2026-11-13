@@ -65,7 +65,7 @@ Removed from the argv (shipped flags, still accepted by a coordinator that has n
 
 Kept as they are (shipped): `--mac-serial-allowlist`, `--mdm-profile-identifier`,
 `--mdm-daemon-config`, `--mdm-pkg-allowlist` (read once into the setting `installs`, #325, when that
-setting was never set), `--mdm-host`, `--lan-listen`, `--tokens-file`, `--oidc-config`, the TLS and
+setting was never set), `--mdm-host` (which is also the MDM name: the coordinator stores it as the name at start when none is stored, so the setup form does not ask for it; set it to the name the Macs enroll at, since a different one is refused at start once a Mac has enrolled), `--lan-listen`, `--tokens-file`, `--oidc-config`, the TLS and
 client CA flags and the store flags.
 
 New flags, with the pull request that adds each and its default:

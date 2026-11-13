@@ -538,6 +538,44 @@ fn the_pkg_flags_go_together_and_the_allowlist_must_be_roots() {
     );
 }
 
+/// Catches: `--mdm-host` not stored as the MDM name at start (so the setup form still asks for
+/// it), a different `--mdm-host` at a later start not replacing the stored name while no Mac has
+/// enrolled, and a start with no `--mdm-host` writing a name.
+#[test]
+fn the_host_flag_is_stored_as_the_mdm_name_at_start() {
+    let files = Files::new("mdm-name-from-host");
+    files.put("hostkeeper.toml", DAEMON_CONFIG, 0o644);
+    let side = [
+        "--mdm-profile-identifier",
+        IDENTIFIER,
+        "--mdm-daemon-config",
+        "=hostkeeper.toml",
+    ];
+    let name_after = |host: Option<&str>| {
+        let mut args: Vec<&str> = good().into_iter().chain(side).collect();
+        if let Some(host) = host {
+            args.extend(["--mdm-host", host]);
+        }
+        let parts = start(&files, &args).expect("started");
+        parts
+            .coordinator
+            .mdm_setup()
+            .settings()
+            .expect("settings")
+            .remove("mdm_name")
+    };
+    assert_eq!(name_after(None), None);
+    assert_eq!(
+        name_after(Some("mdm.example.com")).as_deref(),
+        Some("mdm.example.com")
+    );
+    assert_eq!(
+        name_after(Some("mdm2.example.com")).as_deref(),
+        Some("mdm2.example.com")
+    );
+    assert_eq!(name_after(None).as_deref(), Some("mdm2.example.com"));
+}
+
 /// NanoHUB's API on loopback, port 0: it queues every command and keeps each body.
 struct Hub {
     url: String,

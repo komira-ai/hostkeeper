@@ -439,6 +439,12 @@ is started with `-webhook-url http://<--mdm-webhook-listen>/webhook`.
 
   Without `--mdm-host` the gate sends no pkg, and the pkg is installed by hand.
 
+  **The MDM name.** `--mdm-host` is also the MDM name the Macs enroll at. At start the coordinator
+  stores it as the name when none is stored, and replaces a different stored name with it while no
+  Mac has enrolled; each is audited as `mdm_name_set` by `server config`. Once a Mac has enrolled, a
+  different `--mdm-host` is refused at start (as `Mdm.PutName` refuses another name, `name_locked`).
+  The setup form asks for the name only when none is stored.
+
   **The installs setting.** `installs` is a setting of the MDM setup (`Mdm.PutSetting`, a
   signed-in user; default `[]`), a JSON array of named installs: `name` (1 to 32 lower-case
   letters, digits and `-`, listed once), `bundle_id`, `sha256`, `version`, `path` (absolute, named

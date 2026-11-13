@@ -6,8 +6,10 @@ whatever fields are filled; an empty file field keeps what the coordinator alrea
 own description is in `docs/ui-serving.md`; the cutover from the old stack, which has the paths of the
 files on the old box, is `docs/operations/mdm-cutover.md`.
 
-What the form does not ask for: the MDM name (shown read-only in the status line; the form asks for it only
-while none is set), the DNS zone (worked out from the MDM name: `mdm.internal.example.net` is ordered in
+What the form does not ask for: the MDM name (shown read-only in the status line; it is the coordinator's `--mdm-host`,
+which the coordinator stores as the name at start, so the form asks for it only when the coordinator was started
+without `--mdm-host` and none is stored. A different `--mdm-host` replaces the stored name at the next start while
+no Mac has enrolled, and is refused at start once one has: the name cannot change after enrollment), the DNS zone (worked out from the MDM name: `mdm.internal.example.net` is ordered in
 `example.net`; a zone already set through the API is kept), the ACME directory (production Let's Encrypt
 unless the setting `acme_directory` says another, which is an API change) and the DNS provider (GoDaddy).
 

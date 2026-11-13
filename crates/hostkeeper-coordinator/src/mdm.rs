@@ -207,7 +207,11 @@ pub struct MdmFlags {
     /// The MDM host's DNS name, as its proxy's certificate names it, as `mdm.example.com`:
     /// the Mac fetches a pkg from `https://<this name>/pkg/<sha256>.pkg`. With it the gate
     /// sends the installs of the setting `installs`: the install named `hostkeeper` as above,
-    /// and each other one to the Macs of a host group that has a baseline. Requires
+    /// and each other one to the Macs of a host group that has a baseline. It is also the MDM
+    /// name the Macs enroll at: at start it is stored as the name when none is stored, and it
+    /// replaces a different stored name while no Mac has enrolled (both are audited as set by
+    /// the server config, and the setup form then has no name field); once a Mac has enrolled
+    /// at another name, a different --mdm-host is refused at start. Requires
     /// --mdm-profile-identifier.
     #[arg(long, requires = "mdm_profile_identifier")]
     pub mdm_host: Option<String>,
@@ -286,6 +290,22 @@ pub enum MdmError {
     /// The MDM setup's settings cannot be read, or the installs cannot be stored.
     #[error(transparent)]
     Setup(#[from] SetupFailure),
+    /// `--mdm-host` is not a name the Macs can enroll at (`Mdm.PutName` takes the same names).
+    #[error("--mdm-host {0} is not a DNS name of two or more labels, which the MDM name must be")]
+    HostNotAName(String),
+    /// `--mdm-host` differs from the MDM name, which a Mac enrolled at and so cannot change.
+    #[error(
+        "--mdm-host {host} differs from the MDM name {name}, which a Mac has enrolled at: the name cannot change after enrollment, so start with --mdm-host {name}"
+    )]
+    HostLocked {
+        /// The name the flag gives.
+        host: String,
+        /// The name stored.
+        name: String,
+    },
+    /// The entry that records `--mdm-host` as the MDM name could not be written, so the name is not set.
+    #[error("the audit entry of the MDM name from --mdm-host could not be written: {0}")]
+    HostAudit(&'static str),
     /// `--mdm-baseline-file` is refused.
     #[error(transparent)]
     Baseline(#[from] BaselineError),
