@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use hostkeeper_oidc::{Dial, Roots};
-use http_body_util::Empty;
+use http_body_util::{BodyExt as _, Empty};
 use hyper::body::{Body, Frame, Incoming, SizeHint};
 use hyper::header::{AUTHORIZATION, CONNECTION, CONTENT_LENGTH, HOST, HeaderValue, USER_AGENT};
 use hyper::{Request, StatusCode};
@@ -152,6 +152,26 @@ impl Body for Forwarded {
     }
 }
 
+/// Why a bounded read of a small file failed ([`RepositoryOrigin::read_file`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, thiserror::Error)]
+pub(crate) enum FileError {
+    /// The read of the origin failed.
+    #[error("{0}")]
+    Origin(#[from] OriginError),
+    /// The origin answered 404.
+    #[error("the origin has no such file")]
+    NotFound,
+    /// The file is longer than allowed.
+    #[error("the file is longer than {0} bytes")]
+    TooLarge(usize),
+    /// The body broke off.
+    #[error("{0}")]
+    Body(#[from] BodyError),
+    /// The whole read took longer than allowed.
+    #[error("the read took longer than allowed")]
+    TimedOut,
+}
+
 /// Reads private repositories' origins over HTTPS.
 pub struct RepositoryOrigin {
     connector: TlsConnector,
@@ -195,6 +215,20 @@ impl RepositoryOrigin {
         path: &str,
         authorization: &str,
     ) -> Result<Origin, OriginError> {
+        self.get_with(uri, path, Some(authorization)).await
+    }
+
+    /// The GET of `path` under the repository at `uri`, with `authorization` as the header of
+    /// that name when there is one (a public repository needs none).
+    ///
+    /// # Errors
+    /// [`OriginError`].
+    pub(crate) async fn get_with(
+        &self,
+        uri: &str,
+        path: &str,
+        authorization: Option<&str>,
+    ) -> Result<Origin, OriginError> {
         let url = OriginUrl::parse(uri).map_err(|_| OriginError::Uri)?;
         let (response, driver) =
             tokio::time::timeout(CONNECT, self.answer(&url, path, authorization))
@@ -217,12 +251,43 @@ impl RepositoryOrigin {
         })
     }
 
+    /// The whole of the file at `path` under the repository at `uri`, at most `max` bytes, read
+    /// within `within` (the connection, the answer and the body), with `authorization` when there
+    /// is one. The length the origin gives is judged before a byte of the body is read.
+    ///
+    /// # Errors
+    /// [`FileError`].
+    pub(crate) async fn read_file(
+        &self,
+        uri: &str,
+        path: &str,
+        authorization: Option<&str>,
+        max: usize,
+        within: Duration,
+    ) -> Result<Vec<u8>, FileError> {
+        let read = async {
+            match self.get_with(uri, path, authorization).await? {
+                Origin::NotFound => Err(FileError::NotFound),
+                Origin::Found { length, body } => {
+                    if usize::try_from(length).map_or(true, |length| length > max) {
+                        return Err(FileError::TooLarge(max));
+                    }
+                    let bytes = body.collect().await?.to_bytes();
+                    Ok(bytes.to_vec())
+                }
+            }
+        };
+        tokio::time::timeout(within, read)
+            .await
+            .map_err(|_| FileError::TimedOut)?
+    }
+
     /// The connection, the handshake, the request and the answer's headers.
     async fn answer(
         &self,
         url: &OriginUrl,
         path: &str,
-        authorization: &str,
+        authorization: Option<&str>,
     ) -> Result<(hyper::Response<Incoming>, Driver), OriginError> {
         let tcp = (self.dial)(url.host().to_owned(), url.port())
             .await
@@ -237,14 +302,17 @@ impl RepositoryOrigin {
         let driver = Driver(tokio::spawn(async move {
             let _ = connection.await;
         }));
-        let mut credential = HeaderValue::from_str(authorization).map_err(|_| OriginError::Http)?;
-        credential.set_sensitive(true);
-        let request = Request::get(url.target(path))
+        let mut request = Request::get(url.target(path))
             .header(HOST, url.authority())
             .header(USER_AGENT, "hostkeeper-coordinator")
-            .header(CONNECTION, "close")
-            .header(AUTHORIZATION, credential)
-            .body(Empty::<Bytes>::new())?;
+            .header(CONNECTION, "close");
+        if let Some(authorization) = authorization {
+            let mut credential =
+                HeaderValue::from_str(authorization).map_err(|_| OriginError::Http)?;
+            credential.set_sensitive(true);
+            request = request.header(AUTHORIZATION, credential);
+        }
+        let request = request.body(Empty::<Bytes>::new())?;
         let response = sender.send_request(request).await?;
         Ok((response, driver))
     }

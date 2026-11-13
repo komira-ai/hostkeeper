@@ -7,7 +7,7 @@
 //! others, and sends a host each entry as [`for_host`] makes it; the daemon runs [`check_set`] on
 //! a pushed set and recomputes [`digest`], so a set the coordinator sends is judged by the same
 //! rules on the host. Nothing here reads a file, a clock or a socket, and no collection is
-//! hashed.
+//! hashed (the one exception to "pure" is JSON: a stored descriptor is parsed by [`crate::descriptor`]).
 //!
 //! A private repository (`access` [`ACCESS_HOSTS`], docs/design/hostgroups.md section 6.6) is
 //! read by the coordinator alone, from its `uri` with the credential of its `credential_file`.
@@ -20,6 +20,7 @@ use sha1::Sha1;
 use sha2::{Digest, Sha256};
 use std::collections::BTreeSet;
 
+use crate::descriptor::{self, DescriptorError};
 use crate::grammar::is_repository_name;
 
 /// The one kind of repository: an apt repository.
@@ -162,6 +163,23 @@ pub enum EntryError {
          with no control character and no empty, . or .. component"
     )]
     CredentialPath(String),
+    /// The entry's descriptor is not a valid descriptor.
+    #[error("the descriptor is not valid: {0}")]
+    Descriptor(#[from] DescriptorError),
+    /// The base URI is longer than [`MAX_URI`] bytes, not `https://`, or ends in `/`.
+    #[error(
+        "the base_uri {0:?} is not https://, a host, an optional :port and an optional path, with no trailing /"
+    )]
+    BaseUri(String),
+    /// A base URI without a descriptor (the two are set together).
+    #[error("the entry names a base_uri and no descriptor")]
+    BaseWithoutDescriptor,
+    /// A descriptor without a base URI.
+    #[error("the entry holds a descriptor and names no base_uri")]
+    DescriptorWithoutBase,
+    /// The entry disagrees with its descriptor: the field it names.
+    #[error("the {0} of the entry is not the descriptor's")]
+    DescriptorDisagrees(&'static str),
     /// An entry a host was sent names a credential file: the coordinator never sends one.
     #[error("an entry a host is sent names a credential_file")]
     CredentialSent,
@@ -275,6 +293,22 @@ pub fn keys(keyring: &[u8]) -> Result<Vec<Key>, KeyringError> {
     }
     if found.is_empty() {
         return Err(KeyringError::NotKey);
+    }
+    Ok(found)
+}
+
+/// The user ids of `keyring` (the text of each user id packet, tag 13, a lossy UTF-8 reading), in
+/// the keyring's order. The keyring is read as [`keys`] reads it, and is refused as it is.
+pub fn user_ids(keyring: &[u8]) -> Result<Vec<String>, KeyringError> {
+    keys(keyring)?;
+    let mut found = Vec::new();
+    let mut at = 0;
+    while at < keyring.len() {
+        let (tag, body, next) = packet(keyring, at)?;
+        if tag == 13 {
+            found.push(String::from_utf8_lossy(body).into_owned());
+        }
+        at = next;
     }
     Ok(found)
 }
@@ -395,6 +429,12 @@ fn is_uri(uri: &str) -> bool {
     host_ok & port_ok & path_ok
 }
 
+/// Whether `uri` is a repository's base URL: a valid `uri` ([`MAX_URI`] bytes at most) with no
+/// trailing `/`.
+pub fn is_base_uri(uri: &str) -> bool {
+    uri.len() <= MAX_URI && is_uri(uri) && !uri.ends_with('/')
+}
+
 /// Which rules an entry is judged by: the registry's, or those of an entry a host is sent.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Form {
@@ -460,7 +500,42 @@ fn check_form(entry: &Repository, form: Form) -> Result<(), EntryError> {
     check_components(&entry.components)?;
     check_fingerprints(&entry.fingerprints)?;
     check_keyring(entry)?;
+    check_descriptor(entry)?;
     check_access(entry, form)
+}
+
+/// Whether `entry`'s descriptor and base URI, set together or not at all, agree with its other
+/// fields: the apt root is the base and the descriptor's apt path, the suites are its channels,
+/// the components are its components, and each fingerprint it claims is one of the entry's.
+fn check_descriptor(entry: &Repository) -> Result<(), EntryError> {
+    match (entry.descriptor.is_empty(), entry.base_uri.is_empty()) {
+        (true, true) => return Ok(()),
+        (true, false) => return Err(EntryError::BaseWithoutDescriptor),
+        (false, true) => return Err(EntryError::DescriptorWithoutBase),
+        (false, false) => {}
+    }
+    let base = &entry.base_uri;
+    if !is_base_uri(base) {
+        return Err(EntryError::BaseUri(base.clone()));
+    }
+    let parsed = descriptor::check(&entry.descriptor)?;
+    if parsed.apt_uri(base) != entry.uri {
+        return Err(EntryError::DescriptorDisagrees("uri"));
+    }
+    if parsed.channels != entry.suites && !is_private(entry) {
+        return Err(EntryError::DescriptorDisagrees("suites"));
+    }
+    if parsed.apt.components != entry.components {
+        return Err(EntryError::DescriptorDisagrees("components"));
+    }
+    if parsed
+        .fingerprints
+        .iter()
+        .any(|print| !entry.fingerprints.contains(print))
+    {
+        return Err(EntryError::DescriptorDisagrees("fingerprints"));
+    }
+    Ok(())
 }
 
 fn check_suites(entry: &Repository) -> Result<(), EntryError> {
@@ -597,6 +672,8 @@ pub fn conflict(entry: &Repository, others: &[Repository]) -> Option<String> {
 pub fn for_host(entry: &Repository, group: &str) -> Option<Repository> {
     let mut sent = entry.clone();
     sent.credential_file.clear();
+    sent.descriptor.clear();
+    sent.base_uri.clear();
     if is_private(entry) {
         if !entry.suites.iter().any(|suite| suite == group) {
             return None;

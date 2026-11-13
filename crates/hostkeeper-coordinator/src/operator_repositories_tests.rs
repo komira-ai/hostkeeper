@@ -70,13 +70,17 @@ fn last_entry(rig: &Rig) -> (String, String, Option<String>) {
 #[test]
 fn put_get_list_and_remove_round_trip_and_are_audited() {
     let rig = rig_on("repositories-round-trip", &Fake::new(), "");
+    // A fresh registry answers the built-in `komira` at generation 0, and lacks nothing.
+    let fresh = list(&rig);
+    assert_eq!((fresh.generation, fresh.unregistered.len()), (0, 0));
+    let [builtin] = fresh.repositories.as_slice() else {
+        panic!("one repository");
+    };
+    assert!(builtin.builtin && builtin.generation == 0);
+    assert_eq!(builtin.services, ["db", "web"]);
     assert_eq!(
-        list(&rig),
-        proto::ListRepositoriesResponse {
-            repositories: Vec::new(),
-            generation: 0,
-            unregistered: vec!["komira".to_owned()],
-        }
+        builtin.platforms,
+        ["linux-x86_64", "linux-arm64", "macos-arm64"]
     );
 
     let done = put(&rig, komira(1)).expect("put");
@@ -180,9 +184,14 @@ fn list_names_the_repositories_services_name_that_the_registry_lacks() {
         &Fake::new(),
         "repository = \"other\"",
     );
-    assert_eq!(list(&rig).unregistered, ["komira", "other"]);
-    put(&rig, komira(1)).expect("put");
+    // `komira` is built in, so only the repository the registry does not hold is lacking.
     assert_eq!(list(&rig).unregistered, ["other"]);
+    put(
+        &rig,
+        repository("other", "https://o.example.com/", &["x"], 2),
+    )
+    .expect("put");
+    assert!(list(&rig).unregistered.is_empty());
 }
 
 /// A way to break a repository.
@@ -199,6 +208,7 @@ fn state_of(fake: &Fake) -> (crate::repositories::Registry, usize) {
 /// is no repository name; `keyring_invalid` for bytes that are no keyring, a fingerprint the
 /// keyring lacks, and a key none of whose fingerprints is listed; `unknown_repository` for `Get`
 /// and `Remove` of a name not held; `in_use` for `Remove` of the repository a service names;
+/// `builtin` for `Remove` of the built-in `komira`;
 /// `conflict` for a channel that is another repository's; `capacity` for a seventeenth.
 ///
 /// Catches: a refusal that changes the registry or writes an audit entry, a keyring fault
@@ -206,8 +216,7 @@ fn state_of(fake: &Fake) -> (crate::repositories::Registry, usize) {
 #[test]
 fn every_refusal_changes_nothing_and_says_its_cause() {
     let fake = Fake::new();
-    let rig = rig_on("repositories-refusals", &fake, "");
-    put(&rig, komira(1)).expect("put");
+    let rig = rig_on("repositories-refusals", &fake, "repository = \"spare\"");
     put(
         &rig,
         repository("spare", "https://spare.example.com/", &["x"], 2),
@@ -360,10 +369,18 @@ fn every_refusal_changes_nothing_and_says_its_cause() {
     assert_eq!(
         outcome(
             rig.coordinator
-                .repositories_remove(&me, remove_of("komira"))
+                .repositories_remove(&me, remove_of("spare"))
                 .map(drop)
         ),
         Refusal::InUse
+    );
+    assert_eq!(
+        outcome(
+            rig.coordinator
+                .repositories_remove(&me, remove_of("komira"))
+                .map(drop)
+        ),
+        Refusal::Builtin
     );
     // `a-b` + `c` and `a` + `b-c` are one channel, `a-b-c`.
     let clashing = repository("a-b", "https://c.example.com/", &["c"], 6);

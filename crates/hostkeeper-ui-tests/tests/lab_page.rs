@@ -754,3 +754,139 @@ export async function main() {
     assert_eq!(out["first"], json!({"--r": "1", "--s": "2"}));
     assert_eq!(out["refused"], json!([true, true, true, true]));
 }
+
+#[test]
+fn the_state_pills_and_chips_tell_offline_from_failed_and_pending() {
+    // Proves: failed is the `bad` (red) pill, offline the `muted` (grey) one and pending the `warn`
+    // (amber) one, in the count strip of the floor plan and in the tray chips' own state class.
+    // Catches: an offline server drawn in the failed red, which reads as a fault when the server is
+    // only silent.
+    let mut ui = start();
+    let out = home(
+        &mut ui,
+        "{}",
+        r#"
+const tone = (n) => (n.attrs.class || "").split(" ").filter((c) => c !== "pill")[0];
+return {
+  pills: cls(tree, "pill").map((n) => [words(n).split(" ")[0], tone(n)]),
+  chips: cls(tree, "chip").map((n) => n.attrs.class.split(" ")[1]),
+};"#,
+    );
+    assert_eq!(
+        out["pills"],
+        json!([
+            ["healthy", "ok"],
+            ["updating", "info"],
+            ["failed", "bad"],
+            ["offline", "muted"],
+            ["pending", "warn"]
+        ])
+    );
+    assert_eq!(out["chips"], json!(["s-healthy", "s-offline", "s-pending"]));
+}
+
+#[test]
+fn the_strip_arrows_follow_the_width_on_load_on_resize_and_on_scroll() {
+    // Proves: the strip brings its two arrows and its position up to date when it is mounted and
+    // when the window is resized, not only when it is scrolled: next is disabled when every rack
+    // fits (or the strip is at its right end), previous when it is at the left end, and both are
+    // enabled in between; the number says which rack is first in view.
+    // Catches: a next arrow that stays enabled on a row whose racks all fit until the first scroll,
+    // and one that stays disabled after a narrower window makes a rack run off the right edge.
+    let mut ui = start();
+    let out = home(
+        &mut ui,
+        r#"{ row: "row-1" }"#,
+        r#"
+const strip = cls(tree, "rack-strip")[0];
+const prev = { disabled: false };
+const next = { disabled: false };
+const pos = { textContent: "" };
+const classes = new Set();
+const frame = {
+  querySelector: (q) => ({ ".strip-pos": pos, "[name=strip-prev]": prev, "[name=strip-next]": next })[q],
+  classList: { toggle: (c, on) => (on ? classes.add(c) : classes.delete(c)) },
+};
+const element = { parentNode: frame, scrollLeft: 0, scrollWidth: 700, clientWidth: 800, firstElementChild: { offsetWidth: 300 } };
+const state = () => ({ prev: prev.disabled, next: next.disabled, pos: pos.textContent, classes: [...classes].sort() });
+const steps = {};
+strip.on.mounted({ currentTarget: element });
+steps.mounted = state();
+element.clientWidth = 400;
+strip.on.resize({ currentTarget: element });
+steps.narrow = state();
+element.scrollLeft = 310;
+strip.on.scroll({ currentTarget: element });
+steps.scrolled = state();
+element.clientWidth = 1000;
+element.scrollLeft = 0;
+strip.on.resize({ currentTarget: element });
+steps.wide = state();
+return steps;"#,
+    );
+    assert_eq!(
+        out["mounted"],
+        json!({"prev": true, "next": true, "pos": "Rack 1 of 2", "classes": ["at-end", "at-start"]}),
+        "every rack fits: no arrow can move"
+    );
+    assert_eq!(
+        out["narrow"],
+        json!({"prev": true, "next": false, "pos": "Rack 1 of 2", "classes": ["at-start"]}),
+        "a narrower window: a rack runs off the right edge"
+    );
+    assert_eq!(
+        out["scrolled"],
+        json!({"prev": false, "next": true, "pos": "Rack 2 of 2", "classes": ["at-end"]}),
+        "at the right end: next is disabled, previous enabled"
+    );
+    assert_eq!(
+        out["wide"],
+        json!({"prev": true, "next": true, "pos": "Rack 1 of 2", "classes": ["at-end", "at-start"]})
+    );
+}
+
+#[test]
+fn a_mounted_tree_runs_its_mounted_hook_and_keeps_one_resize_listener_per_view() {
+    // Proves: `mount` calls a `mounted` handler once the elements are in the document, with the
+    // element as `currentTarget`; a `resize` handler is attached to the window (not the element)
+    // and calls its handler with the element; a second mount takes the first one's listener off.
+    // Catches: a resize listener left on the window for every redraw, or a hook run before its
+    // element is in the page (where the layout is unknown).
+    let mut ui = start();
+    let out = ui.run(
+        r#"
+import { fakeDocument, fire } from "../test/kit.js";
+import { h, mount } from "./view.js";
+export async function main() {
+  const doc = fakeDocument();
+  const calls = [];
+  const tree = (name) => h("div", { class: name, on: {
+    mounted: (e) => calls.push(["mounted", name, doc.root.children.includes(e.currentTarget)]),
+    resize: (e) => calls.push(["resize", name, e.currentTarget.attributes.class]),
+  } });
+  mount(doc, doc.root, tree("one"));
+  const after_first = doc.defaultView.listeners.resize.length;
+  for (const listener of doc.defaultView.listeners.resize) { listener({}); }
+  mount(doc, doc.root, tree("two"));
+  const after_second = doc.defaultView.listeners.resize.length;
+  for (const listener of doc.defaultView.listeners.resize) { listener({}); }
+  return { calls, after_first, after_second, own: doc.created.map((e) => Object.keys(e.listeners)) };
+}"#,
+    );
+    assert_eq!(
+        out["calls"],
+        json!([
+            ["mounted", "one", true],
+            ["resize", "one", "one"],
+            ["mounted", "two", true],
+            ["resize", "two", "two"]
+        ])
+    );
+    assert_eq!(out["after_first"], 1);
+    assert_eq!(out["after_second"], 1);
+    assert_eq!(
+        out["own"],
+        json!([[], [], []]),
+        "the hooks are no element events"
+    );
+}

@@ -350,6 +350,8 @@ fn the_fake_programs_exit_2_for_a_call_they_do_not_know() {
 
 #[path = "channels_publish_cli/apt.rs"]
 mod apt_verbs;
+#[path = "channels_publish_cli/descriptor.rs"]
+mod descriptor_verbs;
 #[path = "channels_publish_cli/pkg.rs"]
 mod pkg_verbs;
 #[path = "channels_publish_cli/programs.rs"]

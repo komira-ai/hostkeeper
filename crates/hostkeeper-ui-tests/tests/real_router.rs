@@ -264,18 +264,22 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Releases/UnmarkBad",
         r#"{"service": "kbf", "version": "1.2.3", "reason": "was the disk"}"#,
     ),
+    // The two reads of a repository name a credential file that is not there: the coordinator
+    // answers `credential_unusable` before it opens a connection, so no request leaves the test.
     (
-        "hostkeeper.operator.v1.Repositories/Get",
-        r#"{"name": "komira"}"#,
+        "hostkeeper.operator.v1.Repositories/Add",
+        r#"{"name": "spare", "baseUri": "https://spare.example.com", "access": "hosts",
+            "credentialFile": "/nonexistent/spare.credential",
+            "descriptorSha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            "fingerprints": ["0123456789ABCDEF0123456789ABCDEF01234567"],
+            "reason": "set in the console"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Repositories/Discover",
+        r#"{"baseUri": "https://spare.example.com", "access": "hosts",
+            "credentialFile": "/nonexistent/spare.credential"}"#,
     ),
     ("hostkeeper.operator.v1.Repositories/List", "{}"),
-    (
-        "hostkeeper.operator.v1.Repositories/Put",
-        r#"{"repository": {"name": "spare", "kind": "apt", "uri": "https://spare.example.com/apt",
-            "suites": ["testing"], "components": ["main"],
-            "fingerprints": ["0123456789ABCDEF0123456789ABCDEF01234567"], "keyring": "xg4EAAAAARYHBwcHBwcHBw==",
-            "access": "public"}, "reason": "set in the console"}"#,
-    ),
     (
         "hostkeeper.operator.v1.Repositories/Remove",
         r#"{"name": "spare", "reason": "removed in the console"}"#,

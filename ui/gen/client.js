@@ -95,6 +95,8 @@ export function createClient(call) {
       get: (request) => call("hostkeeper.operator.v1.Repositories/Get", request),
       put: (request) => call("hostkeeper.operator.v1.Repositories/Put", request),
       remove: (request) => call("hostkeeper.operator.v1.Repositories/Remove", request),
+      discover: (request) => call("hostkeeper.operator.v1.Repositories/Discover", request),
+      add: (request) => call("hostkeeper.operator.v1.Repositories/Add", request),
     }),
     rollouts: Object.freeze({
       advance: (request) => call("hostkeeper.operator.v1.Rollouts/Advance", request),

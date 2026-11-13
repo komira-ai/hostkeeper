@@ -182,7 +182,12 @@ fn list_and_get_answer_a_private_entry_as_held() {
         .expect("listed");
     let mut bare = entry;
     bare.keyring.clear();
-    assert_eq!(listed.repositories[0].repository, Some(bare));
+    let found = listed
+        .repositories
+        .iter()
+        .find(|held| held.repository.as_ref().is_some_and(|r| r.name == "priv"))
+        .expect("listed");
+    assert_eq!(found.repository, Some(bare));
 }
 
 /// Proves: a private entry survives a restart on the fake store and on the files, and the file of

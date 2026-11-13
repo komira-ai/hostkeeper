@@ -211,3 +211,49 @@ fn a_client_needs_a_root() {
         "RepositoryOrigin { .. }"
     );
 }
+
+/// Proves: a read of a small file with no credential sends no `Authorization` header and answers
+/// the exact bytes; a file longer than the bound is `TooLarge` before its body is read, a 404 is
+/// `NotFound`, any other status is the origin's error, and a path that is no request target is the
+/// HTTP error.
+///
+/// Catches: a credential sent to a public read, a body read past its bound, or a bad path that
+/// reaches the wire.
+#[tokio::test]
+async fn a_small_file_is_read_whole_with_no_credential_and_within_its_bound() {
+    use crate::repository_origin::FileError;
+    use std::time::Duration;
+
+    let within = Duration::from_secs(5);
+    let fake = FakeOrigin::new();
+    let origin = origin_over(&fake, Then::Write(response("200 OK", b"twelve bytes")));
+    let bytes = origin
+        .read_file(URI, PATH, None, 12, within)
+        .await
+        .expect("read");
+    assert_eq!(bytes, b"twelve bytes");
+    assert!(!fake.heard()[0].to_lowercase().contains("authorization"));
+    assert_eq!(
+        origin.read_file(URI, PATH, None, 11, within).await,
+        Err(FileError::TooLarge(11))
+    );
+    assert_eq!(
+        FileError::TooLarge(11).to_string(),
+        "the file is longer than 11 bytes"
+    );
+    let missing = origin_over(&fake, Then::Write(response("404 Not Found", b"")));
+    assert_eq!(
+        missing.read_file(URI, PATH, None, 12, within).await,
+        Err(FileError::NotFound)
+    );
+    let failed = origin_over(&fake, Then::Write(response("500 Oops", b"")));
+    assert_eq!(
+        failed.read_file(URI, PATH, None, 12, within).await,
+        Err(FileError::Origin(OriginError::Status(500)))
+    );
+    let bad = origin_over(&fake, Then::Write(response("200 OK", b"x")));
+    assert_eq!(
+        bad.read_file(URI, "a b", None, 12, within).await,
+        Err(FileError::Origin(OriginError::Http))
+    );
+}

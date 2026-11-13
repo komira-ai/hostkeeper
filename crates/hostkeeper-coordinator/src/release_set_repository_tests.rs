@@ -50,17 +50,18 @@ fn files(rig: &Rig) -> Vec<Option<Vec<u8>>> {
 
 /// Proves: a set with a repository entry is refused `repository_unknown`, with the state, the
 /// releases and the ops file as they were, when the registry lacks the repository the service
-/// names; once `komira` is put, entries naming `komira-testing` and `komira-stable` are taken.
+/// names; once `other` is put, entries naming `other-testing` and `other-stable` are taken. (The
+/// built-in `komira` is never lacking: its channels are taken with no repository put.)
 ///
 /// Catches: a release kept for a repository no host can be sent.
 #[tokio::test]
 async fn a_set_with_a_repository_entry_needs_the_repository_in_the_registry() {
-    let rig = rig("release-set-repository-absent", "");
+    let rig = rig("release-set-repository-absent", "repository = \"other\"");
     let before = files(&rig);
     let refused = set(
         &rig,
         "2.0",
-        Some(targets_of(vec![repository_entry(WEB, "komira-testing")])),
+        Some(targets_of(vec![repository_entry(WEB, "other-testing")])),
     )
     .await
     .expect_err("refused");
@@ -68,13 +69,38 @@ async fn a_set_with_a_repository_entry_needs_the_repository_in_the_registry() {
     assert_eq!(refused.reason(), Some("repository_unknown"));
     assert_eq!(files(&rig), before);
 
-    put(&rig, komira(1));
+    put(
+        &rig,
+        repository("other", "https://o.example.com/", &["testing", "stable"], 2),
+    );
     for suite in ["testing", "stable"] {
-        let name = format!("komira-{suite}");
+        let name = format!("other-{suite}");
         let targets = Some(targets_of(vec![repository_entry(WEB, &name)]));
         let version = if suite == "testing" { "2.0" } else { "2.1" };
         set(&rig, version, targets).await.expect("taken");
     }
+}
+
+/// Proves: the built-in `komira` is the repository of a service that names none: a set naming its
+/// channels is taken with no repository put, and one naming a channel it does not have is refused.
+///
+/// Catches: a built-in repository the sets do not see, which would make every package's first
+/// release wait for an operator's `Put`.
+#[tokio::test]
+async fn the_builtin_komira_takes_entries_with_no_repository_put() {
+    let rig = rig("release-set-repository-builtin", "");
+    for (version, channel) in [("2.0", "komira-testing"), ("2.1", "komira-stable")] {
+        let targets = Some(targets_of(vec![repository_entry(WEB, channel)]));
+        set(&rig, version, targets).await.expect("taken");
+    }
+    let refused = set(
+        &rig,
+        "2.2",
+        Some(targets_of(vec![repository_entry(WEB, "komira-edge")])),
+    )
+    .await
+    .expect_err("refused");
+    assert!(matches!(refused, SetError::RepositoryUnknown), "{refused}");
 }
 
 /// Proves: an entry whose `repository` is not a channel of the repository the service names is

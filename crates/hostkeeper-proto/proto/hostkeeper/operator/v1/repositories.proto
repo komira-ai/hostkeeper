@@ -46,8 +46,20 @@ service Repositories {
   // registry's generation grows by one. Writes the audit entry `repository_put`.
   rpc Put(PutRepositoryRequest) returns (PutRepositoryResponse);
   // Removes a repository no package comes from. The registry's generation grows
-  // by one. Writes the audit entry `repository_remove`.
+  // by one. Writes the audit entry `repository_remove`. The built-in repository `komira` is
+  // removed by no `Remove`, unless an entry of its name was put over it: then the built-in is
+  // back.
   rpc Remove(RemoveRepositoryRequest) returns (RemoveRepositoryResponse);
+  // Reads what the repository at a URL serves: its descriptor (`<base_uri>/hostkeeper-repository.json`)
+  // and the signing key it names, over HTTPS, and answers the platforms, the channels, the packages
+  // and the key's fingerprints, computed from the keyring, for the operator to confirm. Changes
+  // nothing (docs/deploy/package-repositories.md, "Structure of a repository").
+  rpc Discover(DiscoverRepositoryRequest) returns (DiscoverRepositoryResponse);
+  // Adds the repository at a URL, as `Discover` showed it: reads the descriptor and the key again,
+  // refuses when either differs from what the operator confirmed, and then does what `Put` does
+  // with the entry it builds (same refusals, one audit entry `repository_put`, the registry's
+  // generation up by one).
+  rpc Add(AddRepositoryRequest) returns (AddRepositoryResponse);
 }
 
 // Why `Repositories` refused a request. The token is the value's name without the prefix, in
@@ -83,6 +95,18 @@ enum RepositoriesRefusal {
   // coordinator user's, of a mode other than 0600 or 0400, empty, more than 4 KiB, or not one
   // line of printable ASCII.
   REPOSITORIES_REFUSAL_CREDENTIAL_UNUSABLE = 11;
+  // UNAVAILABLE: `Discover` or `Add` could not read the repository's descriptor or keyring: the
+  // URL is not one the coordinator can read, the connection or the answer failed, the answer was
+  // not 200 or had no length or was longer than allowed, or was a redirect.
+  REPOSITORIES_REFUSAL_DISCOVERY_FAILED = 12;
+  // INVALID_ARGUMENT: the descriptor or the keyring it names breaks a rule, or the descriptor's
+  // fingerprints are not the keyring's. The coordinator's log names the rule.
+  REPOSITORIES_REFUSAL_DESCRIPTOR_INVALID = 13;
+  // FAILED_PRECONDITION: `Add` reads a descriptor or a key other than the operator confirmed.
+  REPOSITORIES_REFUSAL_DESCRIPTOR_CHANGED = 14;
+  // FAILED_PRECONDITION: `Remove` of the built-in repository `komira`; or `Add` of the name
+  // `komira` with a key other than the pinned one (a key rotation goes through `Put`).
+  REPOSITORIES_REFUSAL_BUILTIN = 15;
 }
 
 // A repository of the registry, and what the coordinator knows of it.
@@ -95,6 +119,11 @@ message RegisteredRepository {
   uint64 generation = 3;
   // The packages that come from it, by name.
   repeated string services = 4;
+  // Whether the entry is the built-in one (`komira`, in the coordinator's code), not one put.
+  bool builtin = 5;
+  // The platforms it serves, derived: `linux-x86_64` and `linux-arm64` for an apt entry (put
+  // without a descriptor, or with one), and the platforms of its descriptor's `macos-pkg` format.
+  repeated string platforms = 6;
 }
 
 message ListRepositoriesRequest {}
@@ -160,4 +189,65 @@ message HostRepositories {
   // Why the daemon refused the set it was last sent, when it refused it and it is still `digest`;
   // empty otherwise.
   string refused = 6;
+}
+
+message DiscoverRepositoryRequest {
+  // The repository's base URL: `https://`, a host, an optional port and path, with no trailing `/`.
+  string base_uri = 1;
+  // `public` (or empty), or `hosts` for a private repository.
+  string access = 2;
+  // `hosts` only: the credential file on the coordinator's machine, as `Repository.credential_file`.
+  string credential_file = 3;
+}
+
+// What a repository at a URL serves, as the coordinator read it. The fingerprints are computed
+// from the keyring the descriptor names, never taken from the descriptor.
+message Discovery {
+  // The name the descriptor suggests; may be empty.
+  string name = 1;
+  // The descriptor's description; may be empty.
+  string description = 2;
+  // The channels: the apt suites, the rpm directories, the macOS pointer names.
+  repeated string channels = 3;
+  // The platforms it serves: `linux-x86_64`, `linux-arm64`, `macos-arm64`.
+  repeated string platforms = 4;
+  // The packages the descriptor maps to a macOS installer directory of another name, by package.
+  repeated string macos_packages = 5;
+  // The fingerprints of the keys of the keyring: each primary key and its subkeys, upper-case hex.
+  repeated string fingerprints = 6;
+  // The user ids of the keyring's keys, as text.
+  repeated string user_ids = 7;
+  // The SHA-256 of the descriptor read, 64 lower-case hex characters; `Add` carries it back.
+  string descriptor_sha256 = 8;
+  // The SHA-256 of the keyring read, 64 lower-case hex characters.
+  string keyring_sha256 = 9;
+  // Whether the fingerprints are the pinned ones of the built-in repository `komira`.
+  bool pinned = 10;
+}
+
+message DiscoverRepositoryResponse {
+  Discovery discovery = 1;
+}
+
+message AddRepositoryRequest {
+  // The name the repository is registered under: 1 to 32 bytes of `[a-z0-9-]`.
+  string name = 1;
+  // As `DiscoverRepositoryRequest.base_uri`.
+  string base_uri = 2;
+  // As `DiscoverRepositoryRequest.access`.
+  string access = 3;
+  // As `DiscoverRepositoryRequest.credential_file`.
+  string credential_file = 4;
+  // The `descriptor_sha256` the operator confirmed.
+  string descriptor_sha256 = 5;
+  // The `fingerprints` the operator confirmed: exactly the keyring's.
+  repeated string fingerprints = 6;
+  // Why, for the audit entry.
+  string reason = 7;
+}
+
+message AddRepositoryResponse {
+  // The repository as the registry now holds it, with its keyring.
+  RegisteredRepository repository = 1;
+  AuditEntry entry = 2;
 }
