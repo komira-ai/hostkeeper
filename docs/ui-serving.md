@@ -102,7 +102,11 @@ Sign out ends the session on the coordinator.
   that creates or changes a group takes a name and the packages as a list of checkboxes, one for each registered package
   (`Services.List`, the Packages page's): nothing is typed, the packages are installed in the order ticked, and with none
   registered the form links to the Packages page. A package the group lists that is not registered stays in the list, ticked.
-  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. A refused List or Get is shown inline with its code and reason,
+  Saving a group (`HostGroups.Put`) keeps its policy and asks first when a package would be uninstalled. Each group but `all` has
+  a *Delete* button (danger style) that asks first and sends `HostGroups.Remove`, which drops the group with its desired versions and
+  marks. A group that still has hosts is refused (`not_empty`): the page names its hosts (`HostGroups.Get`, the first 50) and says to
+  move them on their Host page first; for a group with no host that an inventory record, a pending approval or the Mac allowlist
+  names, it says so. A refused List or Get is shown inline with its code and reason,
   and the rest of the page still renders.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,

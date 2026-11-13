@@ -142,6 +142,10 @@ const REQUESTS: &[(&str, &str)] = &[
             "reason": "set in the console"}"#,
     ),
     (
+        "hostkeeper.operator.v1.HostGroups/Remove",
+        r#"{"hostGroup": "storage", "reason": "removed in the console"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.HostGroups/Move",
         r#"{"nodeId": "storage-1", "hostGroup": "storage", "reason": "rebuilt"}"#,
     ),
