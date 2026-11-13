@@ -112,7 +112,7 @@ export function matchLine(request) {
     case "INVENTORY_MATCH_AMBIGUOUS":
       return `Matches several records: ${(request.candidateHostIds || []).join(", ")}. None is chosen.`;
     case "INVENTORY_MATCH_UNMATCHED":
-      return "Matches no inventory record.";
+      return "Not in inventory.";
     default:
       return "Not matched against the inventory.";
   }

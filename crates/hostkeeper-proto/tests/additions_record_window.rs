@@ -113,6 +113,7 @@ fn add_before() -> AddBefore {
 /// An `InventoryRecord` with every field set, the window's too.
 fn record_now() -> op::InventoryRecord {
     op::InventoryRecord {
+        enrolled_host_id: String::new(),
         host_id: "db-1".to_owned(),
         role: "storage".to_owned(),
         data_macs: vec!["0c:c4:7a:00:00:02".to_owned()],

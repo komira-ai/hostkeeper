@@ -301,6 +301,11 @@ message InventoryRecord {
   // The host group the host is to be in; empty when the record names none, and from a coordinator
   // that does not hold host groups.
   string host_group = 16;
+  // The host id of the host enrolled against the record (see `enrolled`); empty when none is, and
+  // from a coordinator of a release before this field, and in the answers of `AddRecord`,
+  // `UpdateRecord` and `OpenRecord`, which leave it out: only `ListRecords` fills it in. When
+  // several enrolled hosts match the record, the first by host id.
+  string enrolled_host_id = 17;
 }
 
 // Where an inventory record's approval window stands.

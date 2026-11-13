@@ -101,6 +101,7 @@ const FIELDS: [(&str, &[(&str, u32)]); 5] = [
             ("used_unix", 14),
             ("platform", 15),
             ("host_group", 16),
+            ("enrolled_host_id", 17),
         ],
     ),
     (

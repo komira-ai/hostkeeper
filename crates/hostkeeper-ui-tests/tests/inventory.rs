@@ -130,7 +130,7 @@ return filled;
         &[
             "Matches the record of db-1 (host group storage).",
             "Matches several records: db-1, db-2. None is chosen.",
-            "Matches no inventory record.",
+            "Not in inventory.",
             "Not matched against the inventory.",
             "Matches the record of mac-1 (no host group).",
             "BMC MAC",
