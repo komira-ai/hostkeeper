@@ -349,7 +349,7 @@
   box-shadow: 0 0 5px var(--tone);
 }
 
-.mini {
+span.mini {
   position: relative;
   height: 120px;
   border: 1px solid #3a4f64;

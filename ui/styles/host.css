@@ -129,7 +129,7 @@
 
 /* The mini elevation of the rack the host stands in. */
 
-.mini {
+.hostpage .mini {
   display: flex;
   align-items: flex-end;
   gap: 12px;

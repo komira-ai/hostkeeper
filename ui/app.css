@@ -593,6 +593,24 @@ button:disabled {
   opacity: 0.6;
 }
 
+/* A name that opens its page is a button that reads as a link: the Packages page's names. */
+button.linklike {
+  min-height: 0;
+  height: auto;
+  padding: 0;
+  border: 0;
+  background: none;
+  box-shadow: none;
+  color: var(--accent-text);
+  font-weight: 600;
+  text-align: left;
+}
+
+button.linklike:hover {
+  background: none;
+  text-decoration: underline;
+}
+
 button.linkishlike,
 button.linkish {
   min-height: 0;
