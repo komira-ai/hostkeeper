@@ -316,7 +316,15 @@ async fn the_calls_refuse_by_name_and_a_put_of_a_held_entry_changes_nothing() {
         );
         assert_eq!(list(c, service).expect_err("name"), Refusal::InvalidRequest);
     }
-    let bad: [[&str; 4]; 14] = [
+    let bad: [[&str; 4]; 22] = [
+        ["./x", FILE, "main", ""],
+        [REPO, ".github/workflows/.yaml", "main", ""],
+        [REPO, FILE, "a~b", ""],
+        [REPO, FILE, "a:b", ""],
+        [REPO, FILE, "a@b", ""],
+        [REPO, FILE, "main.", ""],
+        [REPO, FILE, "main/", ""],
+        [REPO, FILE, "main", "padded "],
         ["", FILE, "main", ""],
         ["example-org", FILE, "main", ""],
         ["example-org/", FILE, "main", ""],
@@ -370,6 +378,13 @@ async fn the_calls_refuse_by_name_and_a_put_of_a_held_entry_changes_nothing() {
         Refusal::PublisherUnknown
     );
 
+    for fine in [
+        [REPO, ".github/workflows/a.yaml", "main", "Production Env"],
+        ["a.b/c_d-e", FILE, "feature/x", ""],
+    ] {
+        put(c, "kbf", fine).expect("a name GitHub allows");
+        remove(c, "kbf", fine).expect("and its removal");
+    }
     let first = put(c, "kbf", ok).expect("put");
     let again = put(c, "kbf", [REPO, FILE, "refs/heads/main", ""]).expect("the same entry");
     assert_eq!(first.publishers, again.publishers);
@@ -460,6 +475,10 @@ fn a_remove_names_an_entry_as_listed_with_empty_fields_left_empty() {
     );
     let repository_alone = listed([REPO, "", "", ""]).expect("a repository alone");
     assert_eq!(repository_alone.workflow, "");
+    let only_workflow = listed(["", FILE, "", ""]).expect("a workflow alone");
+    assert_eq!(only_workflow.workflow, FILE);
+    let only_environment = listed(["", "", "", "canary"]).expect("an environment alone");
+    assert_eq!(only_environment.environment, "canary");
     assert_eq!(listed(["", "", "", ""]), None);
     assert_eq!(listed(["a b/c", "", "", ""]), None);
     assert_eq!(listed(["", "x.yml", "", ""]), None);
@@ -561,4 +580,62 @@ fn the_control_planes_allow_list_imports_as_the_ci_deploys_it_runs_today() {
         held["hello"],
         want("komira-ai/hostkeeper", "1443364626", &[a])
     );
+}
+
+/// Proves: when no entry admits a run, the refusal is the rule broken by the entry that got
+/// furthest (a later entry that broke an earlier rule does not replace it), an entry that names a
+/// claim the token lacks does not admit it, and one entry of several is enough.
+#[tokio::test]
+async fn the_refusal_is_the_rule_the_closest_entry_broke() {
+    let rig = rig("tp-closest");
+    let c = &rig.coordinator;
+    // The imported entry breaks the ref first for a token on another branch; these two break the
+    // repository, then the workflow, which are earlier rules and must not replace it.
+    put(c, "kbf", ["example-org/else", FILE, "main", ""]).expect("put");
+    put(c, "kbf", [REPO, ".github/workflows/else.yml", "main", ""]).expect("put");
+    assert_eq!(
+        refused_with(c, STATE, |claims| claims["ref"] = json!("refs/heads/dev")).await,
+        "ref"
+    );
+    // A token with no environment claim is refused by the imported entry's environment.
+    assert_eq!(
+        refused_with(c, STATE, |claims| {
+            claims
+                .as_object_mut()
+                .expect("object")
+                .remove("environment");
+        })
+        .await,
+        "environment"
+    );
+    // Another entry admits it: no environment named, the workflow file as the token says.
+    put(c, "kbf", [REPO, FILE, "main", ""]).expect("put");
+    assert_eq!(
+        refused_with(c, STATE, |claims| {
+            claims
+                .as_object_mut()
+                .expect("object")
+                .remove("environment");
+        })
+        .await,
+        "set"
+    );
+}
+
+/// Proves: a package only the allow-list file names (no rollout file, host group or repository
+/// mentions it) is one the calls know, so its imported entries can be listed and removed.
+#[test]
+fn a_package_only_the_allow_list_names_is_known_to_the_calls() {
+    let rig = Rig::new("tp-ghost");
+    let text = format!(
+        "{}services = [\"ghost\"]\n",
+        hostkeeper_oidc::testkit::config_text(STATIC_ISSUER)
+    );
+    let c = Rig::start_with_allow_list(&rig.dir, &rig.clock, &text);
+    assert_eq!(list(&c, "ghost").expect("known").len(), 1);
+    assert_eq!(
+        list(&c, "ghost2").expect_err("not named anywhere"),
+        Refusal::UnknownService
+    );
+    remove(&c, "ghost", [REPO, "", "refs/heads/main", "canary"]).expect("removed");
 }

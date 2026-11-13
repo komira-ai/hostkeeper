@@ -736,5 +736,5 @@ async fn an_order_for_a_new_version_replaces_the_old_one() {
     );
 }
 
-mod publishers;
+mod publishers_tests;
 mod services;

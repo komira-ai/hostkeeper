@@ -197,13 +197,9 @@ pub(crate) fn import(
                     .iter_mut()
                     .find(|p| p.same_run(&made) && p.repository_id == made.repository_id)
                 {
-                    Some(have) => {
-                        for workflow in made.called_workflows {
-                            if !have.called_workflows.contains(&workflow) {
-                                have.called_workflows.push(workflow);
-                            }
-                        }
-                    }
+                    // The file refuses two entries of one repository that share a pin, so the pins
+                    // of a merged entry are new ones.
+                    Some(have) => have.called_workflows.extend(made.called_workflows),
                     None => publishers.push(made),
                 }
             }
@@ -287,8 +283,10 @@ fn publisher_of(
         && (file.ends_with(".yml") || file.ends_with(".yaml"))
         && file != ".yml"
         && file != ".yaml";
-    let environment_ok =
-        environment.is_empty() || (printable(environment, "") && environment.trim() == environment);
+    let environment_ok = environment.is_empty()
+        || (environment.len() <= MAX_FIELD
+            && environment.bytes().all(|b| (b' '..=b'~').contains(&b))
+            && environment.trim() == environment);
     (name(slash.0) && name(slash.1) && file_ok && environment_ok)
         .then(|| TrustedPublisher {
             repository: repository.to_owned(),

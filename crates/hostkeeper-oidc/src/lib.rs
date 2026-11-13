@@ -470,12 +470,12 @@ fn audience_is(claims: &Map<String, Value>, want: &str) -> Result<bool, Refusal>
 pub mod testkit;
 
 #[cfg(test)]
+mod open_tests;
+#[cfg(test)]
 mod tests;
 #[cfg(test)]
 mod tests_edges;
 #[cfg(test)]
 mod tests_entries;
-#[cfg(test)]
-mod tests_open;
 #[cfg(test)]
 mod tests_spent;
