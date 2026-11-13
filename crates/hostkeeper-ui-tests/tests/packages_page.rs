@@ -215,6 +215,44 @@ fn the_repositories_are_listed_above_the_packages() {
 }
 
 #[test]
+fn each_list_has_one_description_and_marks_add_primary_and_remove_danger() {
+    // Proves: each list's header holds its title, one description and its Add button in a
+    // `list-head`; every Add is `primary` and every Remove, of a package and of a repository, is
+    // `danger`; each row's Edit and Remove sit in one `row-actions` cell; Edit is not danger.
+    // Catches: an Add button outside its header, a Remove that looks like Edit, or a second
+    // description repeated under the page title.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        r#"
+const classes = (name) => named(tree, name).map((n) => n.attrs.class || "");
+const heads = nodes(tree).filter((n) => n.attrs && n.attrs.class === "list-head");
+return {
+  add: [...classes("add-repository"), ...classes("add-package")],
+  remove: [...classes("remove-package"), ...classes("remove-repository")],
+  edit: [...classes("edit-package"), ...classes("edit-repository")],
+  heads: heads.length,
+  notes: heads.map((n) => nodes(n).filter((m) => m.attrs && m.attrs.class === "note").length),
+  cells: nodes(tree).filter((n) => n.attrs && n.attrs.class === "row-actions").length,
+};
+"#,
+    ));
+    let got = &out["out"];
+    assert_eq!(got["add"], json!(["primary", "primary"]));
+    assert_eq!(
+        got["remove"],
+        json!(["danger", "danger", "danger", "danger", "danger"])
+    );
+    assert_eq!(got["edit"], json!(["", "", "", "", ""]));
+    assert_eq!(got["heads"], json!(2));
+    assert_eq!(got["notes"], json!([1, 1]));
+    assert_eq!(got["cells"], json!(5));
+}
+
+#[test]
 fn a_refused_list_shows_an_alert_and_the_rest_of_the_page() {
     // Proves: a refused Services.List and a refused Repositories.List are each shown with their
     // code and reason, and the forms still render.

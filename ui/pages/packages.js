@@ -5,7 +5,9 @@
 // button in its header and Edit and Remove on each row. No form is shown until a button asks for
 // one: Add opens an empty form under its table, a row's Edit opens that row's, each with Save and
 // Cancel (one form at a time; a save draws the page again with every form closed). "Add package"
-// is disabled, with a hint, while no repository is registered.
+// is disabled, with a hint, while no repository is registered. A header is the list's title with
+// one line saying what it is, and its button right-aligned; Remove is the danger button of the row,
+// asking before it removes. Styles of the page are in `packages.css`.
 //
 // A package is registered when a host group lists it or the operator added it here; the Host
 // groups page offers these and no other. The minimum version of a package belongs to a host
@@ -219,14 +221,14 @@ export async function render(ctx) {
     }
     ctx.refresh();
     return `Removed package ${name}.`;
-  });
+  }, { class: "danger" });
 
   const packageRows = () => packages.map((entry) => h("tr", {},
     // The detail page of a package is not routed yet (the address never changes), so the name is text.
     h("td", {}, entry.service),
     h("td", {}, entry.repository || DEFAULT_REPOSITORY),
     h("td", {}, list(entry, "hostGroups").join(", ") || "-"),
-    h("td", {}, action(ctx, "Edit", "edit-package", () => editPackage(entry.service)),
+    h("td", { class: "row-actions" }, action(ctx, "Edit", "edit-package", () => editPackage(entry.service)),
       removePackage(entry.service))));
 
   // Loads the repository `one` of Repositories.List into the form.
@@ -372,7 +374,7 @@ export async function render(ctx) {
     }
     ctx.refresh();
     return `Removed repository ${name}.`;
-  });
+  }, { class: "danger" });
 
   const repositoryRows = () => repositories.map((one) => {
     const body = one.repository || {};
@@ -380,17 +382,19 @@ export async function render(ctx) {
       h("td", {}, body["name"]),
       h("td", {}, body.uri || "-"),
       h("td", {}, `used by ${packagesCount(list(one, "services").length)}`),
-      h("td", {}, action(ctx, "Edit", "edit-repository", () => editRepository(one)), removeRepository(one)));
+      h("td", { class: "row-actions" }, action(ctx, "Edit", "edit-repository", () => editRepository(one)), removeRepository(one)));
   });
 
   // A list's header: its title and the button that opens its add form.
-  const header = (title, button) => h("div", { class: "buttons" }, h("h3", {}, title), button);
+  // The title and its one-line description on the left, the button right-aligned and centred on them.
+  const header = (title, description, button) => h("div", { class: "list-head" },
+    h("div", { class: "list-title" }, h("h3", {}, title), h("p", { class: "note" }, description)),
+    button);
 
   const page = () => h("section", { class: "page packages" },
     h("h2", {}, "Packages"),
-    h("p", { class: "note" }, "Where packages are installed from, and the packages the coordinator can deploy. A host group is given packages from the second list on the Host groups page."),
-    header("Repositories", action(ctx, "Add repository", "add-repository", addRepository)),
-    h("p", { class: "note" }, "Where packages are installed from. Each package comes from one of these."),
+    header("Repositories", "Where packages are installed from. Each package comes from one of these.",
+      action(ctx, "Add repository", "add-repository", addRepository, { class: "primary" })),
     repositoriesFailure !== null ? h("p", { class: "error", role: "alert" }, `Repositories: ${describeError(repositoriesFailure)}`) : null,
     repositoriesFailure === null && repositories.length === 0 ? h("p", { class: "note" }, "No repository is registered yet.") : null,
     unregistered.length > 0
@@ -400,7 +404,8 @@ export async function render(ctx) {
       ? table(["Repository", "URL", "Used by", ""], repositoryRows())
       : null,
     repositoryForm(),
-    header("Packages", action(ctx, "Add package", "add-package", addPackage, names.length === 0 ? { disabled: true } : {})),
+    header("Packages", "What the coordinator can deploy; a host group is given packages from this list.",
+      action(ctx, "Add package", "add-package", addPackage, names.length === 0 ? { class: "primary", disabled: true } : { class: "primary" })),
     names.length === 0 ? h("p", { class: "note" }, "Add a repository first") : null,
     packagesFailure !== null ? h("p", { class: "error", role: "alert" }, `Packages: ${describeError(packagesFailure)}`) : null,
     packagesFailure === null && packages.length === 0 ? h("p", { class: "note" }, "No package is registered yet.") : null,
