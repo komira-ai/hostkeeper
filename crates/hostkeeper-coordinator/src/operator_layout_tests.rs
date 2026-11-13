@@ -96,7 +96,7 @@ fn remove_rack(id: &str) -> proto::RemoveLayoutRackRequest {
 }
 
 /// Proves: the calls build a layout and read it back in order: the cluster is named, rows are added
-/// as 1 and 2, racks are added to a row with the next number and 42 U unless a height is named, a
+/// as 0 and 1, racks are added to a row with the next number and 42 U unless a height is named, a
 /// rack is resized, a server is placed, moved and unplaced, and each write answers its item and an
 /// audit entry named for it, with the reason "layout edit" or the operator's own.
 ///
@@ -123,16 +123,16 @@ fn the_calls_build_the_layout_and_each_write_is_audited() {
     let add = || c.layout_add_row(&op, &proto::AddLayoutRowRequest::default());
     let one = add().expect("row").row.expect("row");
     let two = add().expect("row").row.expect("row");
-    assert_eq!((one.id.as_str(), one.number, two.number), ("row-1", 1, 2));
+    assert_eq!((one.id.as_str(), one.number, two.number), ("row-1", 0, 1));
 
     let default = c.layout_put_rack(&op, &rack_of("row-1", 0)).expect("rack");
     let default = default.rack.expect("rack");
     assert_eq!(
         (default.id.as_str(), default.number, default.height_u),
-        ("rack-1", 1, 42)
+        ("rack-1", 0, 42)
     );
     let second = c.layout_put_rack(&op, &rack_of("row-1", 24)).expect("rack");
-    assert_eq!(second.rack.expect("rack").number, 2);
+    assert_eq!(second.rack.expect("rack").number, 1);
     let resized = c
         .layout_put_rack(
             &op,
