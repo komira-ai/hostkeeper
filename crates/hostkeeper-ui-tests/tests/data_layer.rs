@@ -596,7 +596,7 @@ export async function main() {
 }"#,
     );
     assert!(
-        before["text"].as_str().expect("text").contains("Hosts (0)"),
+        before["text"].as_str().expect("text").contains("No alerts"),
         "{before}"
     );
     assert_eq!(before["held"], true);

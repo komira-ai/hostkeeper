@@ -38,7 +38,7 @@ export function docLink(name, text, page, anchor) {
 
 const EVENTS = new Set([
   "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
-  "drop", "dragend",
+  "drop", "dragend", "scroll",
 ]);
 
 function flatten(children, out) {

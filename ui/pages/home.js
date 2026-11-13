@@ -1,8 +1,10 @@
 // Home: the lab. The first view is the floor plan, an overhead grid of the lab's rows, each a band
 // of rack footprints with their U in use and the state of the servers in them. A click on a row
 // opens its racks as front elevations side by side in a strip that scrolls (wheel, drag and arrow
-// keys); a click on a server opens its host page. Below the floor plan, the servers not placed
-// yet, the conditions that need a person, and every host in a table (what the Fleet page showed).
+// keys, arrow buttons and one rack at a time on a phone, with the number of the rack in view and
+// a fade at an end that has more); a click on a server opens its host page. Above the floor plan,
+// the conditions that need a person as one compact strip; below it, the servers not placed yet.
+// `list` (true) shows every server in one compact list instead of the floor plan.
 // Breadcrumbs: Lab > Row > Rack > Host.
 //
 // The layout is the coordinator's own small model (rows 1, 2, 3, racks numbered in their row and
@@ -15,7 +17,7 @@
 // words. A row or a rack that still holds servers is not removed; the refusal names them.
 //
 // Params: `row` (a row id) shows that row's racks, `rack` (a rack id) one rack with its hosts,
-// `edit` (true) the edit mode.
+// `edit` (true) the edit mode, `list` (true) the list of servers in place of the floor plan.
 // Calls: Hosts.List, Releases.Status and Alerts.List as the Fleet page made them, then Layout.Get
 // and Enrollment.ListRecords (the lab is shown without them when they fail, and says so); on a
 // button, Layout.PutName, AddRow, RemoveRow, PutRack, RemoveRack, Place or Unplace.
@@ -25,61 +27,40 @@ import {
 } from "../view.js";
 import {
   DEFAULT_RACK_HEIGHT, RACK_HEIGHTS, SERVER_HEIGHTS, STATES, counts, crumbs, inRack, layoutOf, layoutProblem,
-  rackName, racksOf, rowName, serversOf, subjectOf,
+  rackName, racksOf, rowName, serversOf, stripPosition, subjectOf, worstState,
 } from "../lab.js";
 
-// How far an arrow key scrolls the rack strip: one rack's width, in the browser's pixels.
+// How far an arrow key scrolls the rack strip when the width of a rack is not known: one rack's
+// width, in the browser's pixels; and the gap between two racks of the strip (the stylesheet's).
 const STEP = 280;
+const STRIP_GAP = 24;
 // A pointer that moves less than this many pixels between press and release is a click.
 const DRAG_SLOP = 4;
 
-// The alerts box: each alert of Alerts.List as the coordinator derived it (its kind, what
-// happened, and when the coordinator first saw it), or the refusal when the call failed. The
-// page derives no alert of its own.
-function alertsBox(reply, failure) {
+// The alerts strip: each alert of Alerts.List as the coordinator derived it (its kind, what
+// happened, and when the coordinator first saw it) on one line, or the refusal when the call
+// failed. The page derives no alert of its own.
+function alertsStrip(reply, failure) {
   if (failure !== null) {
-    return h("div", { class: "alerts", role: "status" },
-      h("h3", {}, "Alerts"),
+    return h("div", { class: "alert-strip bad", role: "status" },
       h("p", { class: "error", role: "alert" }, `The alerts could not be read: ${describeError(failure)}`));
   }
   const alerts = list(reply, "alerts");
-  return h("div", { class: "alerts", role: "status" },
-    h("h3", {}, `Alerts (${alerts.length})`),
-    alerts.length === 0
-      ? h("p", {}, "Nothing needs a person.")
-      : h("ul", {}, alerts.map((alert) => h("li", { class: "alert" },
+  if (alerts.length === 0) {
+    return h("div", { class: "alert-strip none", role: "status" }, h("span", { class: "sev ok", "aria-hidden": "true" }), "No alerts: nothing needs a person.");
+  }
+  const critical = alerts.some((alert) => alert.severity === "ALERT_SEVERITY_CRITICAL");
+  return h("div", { class: `alert-strip ${critical ? "bad" : "warn"}`, role: "status" },
+    h("strong", { class: "alert-count" }, `Alerts (${alerts.length})`),
+    h("ul", {}, alerts.map((alert) => {
+      const crit = alert.severity === "ALERT_SEVERITY_CRITICAL";
+      return h("li", { class: "alert" },
+        h("span", { class: `sev ${crit ? "bad" : "warn"}`, "aria-hidden": "true" }),
         h("strong", {}, enumLabel(alert.kind, "ALERT_KIND_").replaceAll("_", " ")),
-        `${alert.severity === "ALERT_SEVERITY_CRITICAL" ? " (critical)" : ""}: ${alert.message || ""}`,
-        h("small", {}, ` (since ${fmtUnix(alert.firstObservedUnix)})`)))));
-}
-
-function marks(view) {
-  const out = [];
-  if ((view.holds || []).length > 0) {
-    out.push("held");
-  }
-  if (view.membership === "MEMBERSHIP_EXCLUDED" || typeof view.excludedReason === "string") {
-    out.push("excluded");
-  }
-  if (view.holdsSlot === true) {
-    out.push("holds the update slot");
-  }
-  const gate = enumLabel(view.gateReason, "GATE_REASON_");
-  const said = (gate === "held" && out.includes("held")) || (gate === "-" || gate === "none" || gate === "up_to_date");
-  if (!said) {
-    out.push(gate);
-  }
-  return out;
-}
-
-function serviceLine(view) {
-  const version = typeof view.installedVersion === "string" ? view.installedVersion : "not installed";
-  const { health: reported } = view;
-  const health = enumLabel(reported, "HEALTH_");
-  const shown = marks(view);
-  return h("li", {},
-    h("strong", {}, view.service), ` ${version}, ${health}`,
-    shown.length > 0 ? h("span", { class: "marks" }, ` [${shown.join(", ")}]`) : null);
+        crit ? h("span", { class: "crit" }, "critical") : null,
+        h("span", { class: "said" }, alert.message || ""),
+        h("small", {}, `since ${fmtUnix(alert.firstObservedUnix)}`));
+    })));
 }
 
 // Every host of Hosts.List, a page (at most 256 hosts) at a time.
@@ -94,22 +75,20 @@ function listRecords(api) {
     pageToken === "" ? { limit: 256 } : { limit: 256, pageToken }), "records");
 }
 
-// The hosts table: what the Fleet page showed, a row for each host.
-function hostsTable(ctx, hosts) {
-  const rows = hosts.map((host) => h("tr", {},
+// The list view: every server in one compact table, with where it stands.
+function serversList(ctx, layout, servers) {
+  const sorted = [...servers].sort((x, y) => x.name.localeCompare(y.name));
+  const rows = sorted.map((s) => h("tr", {},
     h("td", {},
       h("button", {
         type: "button", class: "linklike", name: "open-host",
-        on: { click: () => ctx.navigate("host", { nodeId: host.nodeId }) },
-      }, host.nodeId)),
-    h("td", {}, host.role || "-"),
-    h("td", {}, host["live"] === true ? "live" : "silent"),
-    h("td", {}, fmtUnix(host.lastHeartbeatUnix)),
-    h("td", {}, h("ul", { class: "plain" }, list(host, "services").map(serviceLine)))));
-  return [
-    h("h3", {}, `Hosts (${hosts.length})`),
-    table(["Host", "Role", "Heartbeat", "Last heartbeat", "Services"], rows),
-  ];
+        on: { click: () => (s.host !== null ? ctx.navigate("host", { nodeId: s.host }) : ctx.navigate("inventory", { record: s.id })) },
+      }, s.name)),
+    h("td", {}, pill(s.state, STATES.find(([x]) => x === s.state)[1])),
+    h("td", {}, s.placement === null ? "Unplaced" : `${rackName(layout, s.placement.rack)}, U${s.placement.u}`),
+    h("td", {}, s.group || "-"),
+    h("td", {}, s.version || "-")));
+  return table(["Server", "State", "Where", "Group", "Version"], rows);
 }
 
 // The pills of the states, each with its count.
@@ -291,11 +270,14 @@ function lab(app, data, state) {
         },
       },
     },
+    h("span", { class: "ear left", "aria-hidden": "true" }),
     h("span", { class: "led", "aria-hidden": "true" }),
-    h("span", { class: "bezel", "aria-hidden": "true" }),
-    h("span", { class: "plate-name" }, server.name),
+    h("span", { class: "plate-id" },
+      h("span", { class: "plate-name" }, server.name),
+      p.height >= 2 && server.group !== "" ? h("span", { class: "plate-meta" }, server.group) : null),
     h("span", { class: "plate-state" }, server.state),
-    p.height >= 2 && server.group !== "" ? h("span", { class: "plate-meta" }, server.group) : null);
+    h("span", { class: "bezel", "aria-hidden": "true" }),
+    h("span", { class: "ear right", "aria-hidden": "true" }));
   }
 
   // The head of a rack: its number, U in use and, in the edit mode, resize, move and remove.
@@ -353,51 +335,81 @@ function lab(app, data, state) {
       h("div", { class: "cabinet" }, elevation(rack, big)));
   }
 
-  // The strip of racks: scrolls by wheel, by dragging the background and by the arrow keys.
+  // The racks of a row as a strip: it scrolls by wheel, touch, dragging the background, the arrow
+  // keys and the two arrow buttons, a rack at a time (it snaps to one). Above it the number of the
+  // rack at its left edge; at an end with more beyond, an edge fades. The scroll handler keeps the
+  // number, the buttons and the fades current on the elements themselves, so nothing is drawn again.
   function strip(racks) {
     const drag = { from: null, left: 0, moved: false };
-    return h("div", {
-      class: "rack-strip", tabindex: "0", role: "region", "aria-label": "racks, scroll sideways",
-      on: {
-        keydown: (e) => {
-          const to = e.key === "ArrowRight" ? STEP : (e.key === "ArrowLeft" ? -STEP : 0);
-          if (to !== 0 && e.currentTarget && e.currentTarget.scrollBy) {
-            e.preventDefault();
-            e.currentTarget.scrollBy({ left: to, behavior: "smooth" });
-          }
+    const pitchOf = (el) => (el.firstElementChild ? el.firstElementChild.offsetWidth + STRIP_GAP : STEP);
+    const stripOf = (e) => e.currentTarget.closest(".strip-frame").querySelector(".rack-strip");
+    const move = (by) => (e) => {
+      const el = stripOf(e);
+      el.scrollBy({ left: by * pitchOf(el), behavior: "smooth" });
+    };
+    const sync = (e) => {
+      const el = e.currentTarget;
+      const frame = el.parentNode;
+      const at = stripPosition({
+        scrollLeft: el.scrollLeft, scrollWidth: el.scrollWidth, clientWidth: el.clientWidth,
+        pitch: pitchOf(el), count: racks.length,
+      });
+      frame.querySelector(".strip-pos").textContent = `Rack ${at.first} of ${racks.length}`;
+      frame.querySelector("[name=strip-prev]").disabled = at.atStart;
+      frame.querySelector("[name=strip-next]").disabled = at.atEnd;
+      frame.classList.toggle("at-start", at.atStart);
+      frame.classList.toggle("at-end", at.atEnd);
+    };
+    return h("div", { class: "strip-frame at-start" },
+      h("div", { class: "strip-bar" },
+        h("button", { type: "button", name: "strip-prev", class: "strip-arrow", "aria-label": "previous rack", disabled: true, on: { click: move(-1) } }, "\u2039"),
+        h("span", { class: "strip-pos", role: "status" }, `Rack 1 of ${racks.length}`),
+        h("button", { type: "button", name: "strip-next", class: "strip-arrow", "aria-label": "next rack", on: { click: move(1) } }, "\u203a"),
+        h("span", { class: "strip-hint" }, "scroll, drag or use the arrow keys")),
+      h("div", {
+        class: "rack-strip", tabindex: "0", role: "region", "aria-label": "racks, scroll sideways",
+        on: {
+          scroll: sync,
+          keydown: (e) => {
+            const to = e.key === "ArrowRight" ? 1 : (e.key === "ArrowLeft" ? -1 : 0);
+            if (to !== 0 && e.currentTarget && e.currentTarget.scrollBy) {
+              e.preventDefault();
+              e.currentTarget.scrollBy({ left: to * pitchOf(e.currentTarget), behavior: "smooth" });
+            }
+          },
+          pointerdown: (e) => {
+            if (e.target && e.target.closest && e.target.closest("button")) {
+              return;
+            }
+            drag.from = e.clientX;
+            drag.left = e.currentTarget.scrollLeft;
+            drag.moved = false;
+          },
+          pointermove: (e) => {
+            if (drag.from === null) {
+              return;
+            }
+            const dx = e.clientX - drag.from;
+            if (Math.abs(dx) > DRAG_SLOP) {
+              drag.moved = true;
+            }
+            if (drag.moved) {
+              e.currentTarget.scrollLeft = drag.left - dx;
+            }
+          },
+          pointerup: () => {
+            drag.from = null;
+          },
         },
-        pointerdown: (e) => {
-          if (e.target && e.target.closest && e.target.closest("button")) {
-            return;
-          }
-          drag.from = e.clientX;
-          drag.left = e.currentTarget.scrollLeft;
-          drag.moved = false;
-        },
-        pointermove: (e) => {
-          if (drag.from === null) {
-            return;
-          }
-          const dx = e.clientX - drag.from;
-          if (Math.abs(dx) > DRAG_SLOP) {
-            drag.moved = true;
-          }
-          if (drag.moved) {
-            e.currentTarget.scrollLeft = drag.left - dx;
-          }
-        },
-        pointerup: () => {
-          drag.from = null;
-        },
-      },
-    }, racks.map((rack) => rackColumn(rack, false)));
+      }, racks.map((rack) => rackColumn(rack, false))));
   }
 
-  // The servers not in a rack: each a button to its host (the edit mode: to pick up).
+  // The servers not in a rack, quietly: a muted line with an outlined chip for each, a button to
+  // its host (the edit mode: to pick it up).
   function tray() {
     const unplaced = servers.filter((s) => s.placement === null);
     return h("section", { class: "tray" },
-      h("h3", {}, `Unplaced (${unplaced.length})`),
+      h("h3", {}, "Unplaced ", h("span", { class: "tray-count" }, `(${unplaced.length})`)),
       unplaced.length === 0
         ? h("p", { class: "note" }, "Every server stands in a rack.")
         : h("ul", { class: "chips" }, unplaced.map((s) => h("li", {},
@@ -446,16 +458,26 @@ function lab(app, data, state) {
       }));
   }
 
-  // The head: breadcrumbs, the cluster's name and the edit toggle.
+  // The head: breadcrumbs (below the floor plan only), the title, the Floor / List switch of the
+  // floor plan and the edit toggle.
   function head(title) {
+    const inside = Boolean(app.params.row || app.params.rack);
+    const listed = app.params.list === true && !inside;
+    const view = (name, text, on) => h("button", {
+      type: "button", name, class: on ? "seg-on" : "", "aria-pressed": on ? "true" : "false",
+      on: { click: () => app.navigate("home", Object.assign({}, app.params, { list: name === "view-list" })) },
+    }, text);
     return h("header", { class: "lab-head" },
-      crumbs(layout, { row: app.params.row, rack: app.params.rack }, (view, params) => (view === "home" ? go(params) : app.navigate(view, params))),
+      inside ? crumbs(layout, { row: app.params.row, rack: app.params.rack }, (view2, params) => (view2 === "home" ? go(params) : app.navigate(view2, params))) : null,
       h("div", { class: "lab-title" },
         h("h2", {}, title),
-        h("button", {
-          type: "button", name: "edit-layout", class: edit ? "primary" : "", "aria-pressed": edit ? "true" : "false",
-          on: { click: () => app.navigate("home", Object.assign({}, app.params, { edit: !edit })) },
-        }, edit ? "Done editing" : "Edit layout")));
+        h("div", { class: "lab-tools" },
+          inside ? null : h("div", { class: "segmented", role: "group", "aria-label": "view" },
+            view("view-floor", "Floor", !listed), view("view-list", "List", listed)),
+          h("button", {
+            type: "button", name: "edit-layout", class: edit ? "primary" : "", "aria-pressed": edit ? "true" : "false",
+            on: { click: () => app.navigate("home", Object.assign({}, app.params, { edit: !edit })) },
+          }, edit ? "Done editing" : "Edit layout"))));
   }
 
   // The rename of the cluster, in the edit mode.
@@ -490,17 +512,27 @@ function lab(app, data, state) {
     }
     const bands = layout.rows.map((row) => {
       const racks = racksOf(layout, row.id);
-      const total = racks.reduce((n, r) => n + inRack(servers, r.id).length, 0);
+      const here = servers.filter((sv) => sv.placement !== null && racks.some((r) => r.id === sv.placement.rack));
+      const total = here.length;
+      const by = counts(here, false);
+      const capacity = racks.reduce((n, r) => n + r.height, 0);
+      const used = here.reduce((n, sv) => n + sv.placement.height, 0);
       const open = h("button", {
-        type: "button", class: "row-open", name: "open-row",
+        type: "button", class: `row-open s-${worstState(by)}`, name: "open-row",
         title: `${rowName(layout, row.id)}: ${racks.length} racks, ${total} servers`,
         on: { click: () => go({ row: row.id }) },
       },
-      h("span", { class: "row-no" }, rowName(layout, row.id)),
+      h("span", { class: "row-id" },
+        h("span", { class: "row-no" }, rowName(layout, row.id)),
+        h("span", { class: "row-count" }, `${total} servers`),
+        h("span", { class: "row-sub" }, `${racks.length} racks, ${capacity === 0 ? 0 : Math.round((used * 100) / capacity)}% of U in use`),
+        h("span", { class: "foot-dots" }, STATES
+          .filter(([state]) => by[state] > 0)
+          .map(([state]) => h("span", { class: `dot s-${state}`, title: `${by[state]} ${state}` }, `${by[state]} ${state}`)))),
       h("span", { class: "footprints" }, racks.length === 0
         ? h("span", { class: "note" }, "no racks")
         : racks.map((rack) => footprint(rack))),
-      h("span", { class: "row-count" }, `${total} servers`));
+      h("span", { class: "row-go", "aria-hidden": "true" }, "\u203a"));
       return h("section", { class: "lab-row" }, open,
         edit
           ? action(app, "Remove row", "remove-row", async () => {
@@ -522,19 +554,20 @@ function lab(app, data, state) {
       edit ? change("Add row", "add-row", () => app.api.layout.addRow({ reason: "add row" }), "A row is added.") : null);
   }
 
-  // A rack's footprint in the floor plan: its number, U in use and a dot for each state.
+  // A rack's footprint in the floor plan: a small elevation (a block of its height for each server,
+  // coloured by state, at its U), the rack's number above and its U in use below.
   function footprint(rack) {
     const here = inRack(servers, rack.id);
     const used = here.reduce((n, s) => n + s.placement.height, 0);
     const by = counts(here, false);
-    const worst = by.offline > 0 ? "offline" : (by.pending > 0 ? "pending" : (by.updating > 0 ? "updating" : "healthy"));
-    return h("span", { class: `foot s-${here.length === 0 ? "empty" : worst}`, title: `${rackName(layout, rack.id)}: ${used}/${rack.height} U` },
+    const round = (n) => Math.round(n * 100) / 100;
+    return h("span", { class: `foot s-${worstState(by)}`, title: `${rackName(layout, rack.id)}: ${used}/${rack.height} U` },
       h("span", { class: "foot-no" }, `${rack.number}`),
-      h("span", { class: "foot-fill", "aria-hidden": "true", vars: { "--used": Math.round((used * 100) / rack.height) } }),
-      h("span", { class: "foot-use" }, `${used}/${rack.height}U`),
-      h("span", { class: "foot-dots" }, STATES
-        .filter(([state]) => by[state] > 0)
-        .map(([state]) => h("span", { class: `dot s-${state}`, title: `${by[state]} ${state}` }, `${by[state]}`))));
+      h("span", { class: "mini", "aria-hidden": "true" }, here.map((s) => h("span", {
+        class: `seg s-${s.state}`,
+        vars: { "--b": round(((s.placement.u - 1) * 100) / rack.height), "--h": round((s.placement.height * 100) / rack.height) },
+      }))),
+      h("span", { class: "foot-use" }, `${used}/${rack.height}U`));
   }
 
   // Adds a rack to the row, at a height chosen from the list.
@@ -544,6 +577,13 @@ function lab(app, data, state) {
       change("Add rack", "add-rack", () => app.api.layout.putRack({
         row: rowId, heightU: Number(state.newRackHeight), reason: "add rack",
       }), "A rack is added."));
+  }
+
+  // One line under the title: how many servers, how many stand in racks and how many do not.
+  function summary() {
+    const placed = servers.filter((s) => s.placement !== null).length;
+    return h("p", { class: "lab-sum" },
+      `${servers.length} servers: ${placed} placed in ${layout.racks.length} racks, ${servers.length - placed} unplaced`);
   }
 
   function view() {
@@ -595,9 +635,11 @@ function lab(app, data, state) {
     return h("section", { class: "page lab" },
       head(title),
       renameCluster(),
+      data.alerts,
       data.failure !== null
         ? h("p", { class: "error", role: "alert" }, `The lab could not be read: ${describeError(data.failure)}`)
-        : [stateStrip(servers, false), floorPlan(), moving(), tray()],
+        : [summary(), stateStrip(servers, false),
+          ...(app.params.list === true ? [serversList(app, layout, servers)] : [floorPlan(), moving(), tray()])],
       data.notes);
   }
 
@@ -630,12 +672,9 @@ export async function render(ctx) {
     failure = error;
   }
   const servers = serversOf(layout, hosts, records);
-  const notes = ctx.params.row || ctx.params.rack
+  const inside = Boolean(ctx.params.row || ctx.params.rack);
+  const notes = inside || status.quiet !== true
     ? null
-    : [
-      status.quiet === true ? h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.") : null,
-      alertsBox(alerts, alertFailure),
-      hostsTable(ctx, hosts),
-    ];
-  return lab(ctx, { layout, servers, failure, notes }, makeState());
+    : h("p", { class: "note" }, "The coordinator is in its quiet start: it orders nothing yet.");
+  return lab(ctx, { layout, servers, failure, notes, alerts: inside ? null : alertsStrip(alerts, alertFailure) }, makeState());
 }

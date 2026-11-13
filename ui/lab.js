@@ -24,6 +24,7 @@ export const DEFAULT_RACK_HEIGHT = 42;
 export const STATES = [
   ["healthy", "ok"],
   ["updating", "info"],
+  ["failed", "bad"],
   ["offline", "bad"],
   ["pending", "warn"],
 ];
@@ -65,7 +66,9 @@ export function rackName(layout, rackId) {
 }
 
 // A host's state: `pending` for one the coordinator never heard from, `offline` when it is not
-// live, `updating` while it holds the update slot of any service, else `healthy`.
+// live, `failed` when a service of it reports itself unhealthy or its last update failed, `updating`
+// while it holds the update slot of any service, else `healthy`. Only a live host that reports no
+// fault is ever `healthy`.
 export function hostState(host) {
   if (host.lastHeartbeatUnix === undefined || Number(host.lastHeartbeatUnix) === 0) {
     return "pending";
@@ -73,7 +76,34 @@ export function hostState(host) {
   if (host.live !== true) {
     return "offline";
   }
-  return list(host, "services").some((s) => s.holdsSlot === true) ? "updating" : "healthy";
+  const services = list(host, "services");
+  if (services.some((s) => s.health === "HEALTH_UNHEALTHY" || (s.lastUpdate && s.lastUpdate.outcome === "OUTCOME_FAILED"))) {
+    return "failed";
+  }
+  return services.some((s) => s.holdsSlot === true) ? "updating" : "healthy";
+}
+
+// The worst of the states of some servers, as the one word a rack or a row shows: `failed`, then
+// `offline`, `pending`, `updating`, else `healthy`; `empty` when there is none.
+export function worstState(by) {
+  for (const state of ["failed", "offline", "pending", "updating"]) {
+    if (by[state] > 0) {
+      return state;
+    }
+  }
+  return Object.values(by).some((n) => n > 0) ? "healthy" : "empty";
+}
+
+// The position a strip of racks shows: given the strip's `scrollLeft`, `scrollWidth` and
+// `clientWidth`, the width of one rack with its gap (`pitch`) and the number of racks, the number
+// (from 1) of the first rack in view, and whether the strip is at its left or right end.
+export function stripPosition({ scrollLeft, scrollWidth, clientWidth, pitch, count }) {
+  const first = pitch > 0 ? Math.min(count, Math.round(scrollLeft / pitch) + 1) : 1;
+  return {
+    first: Math.max(1, first),
+    atStart: scrollLeft <= 1,
+    atEnd: scrollLeft + clientWidth >= scrollWidth - 1,
+  };
 }
 
 // The version a host runs of the service named hostkeeper, else of its first service; "" for none.
@@ -169,10 +199,10 @@ export function racksOf(layout, rowId) {
   return layout.racks.filter((r) => r.row === rowId);
 }
 
-// How many servers are in each state, as `{healthy, updating, offline, pending}`, counting the
+// How many servers are in each state, as `{healthy, updating, failed, offline, pending}`, counting the
 // placed ones only when `placedOnly`.
 export function counts(servers, placedOnly) {
-  const out = { healthy: 0, updating: 0, offline: 0, pending: 0 };
+  const out = { healthy: 0, updating: 0, failed: 0, offline: 0, pending: 0 };
   for (const server of servers) {
     if (!placedOnly || server.placement !== null) {
       out[server.state] += 1;

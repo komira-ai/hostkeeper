@@ -18,13 +18,13 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
 | hostkeeper|  Lab / Row 2                         user  Theme  Sign out  |   top bar (breadcrumb of the page)
 | MANAGE    +-------------------------------------------------------------+
 |  Host gr. |  Lab 1                                       [Edit layout]  |
-|  Inventory|  healthy 12  updating 1  offline 0  pending 2               |
+|  Inventory|  healthy 12  updating 1  failed 0  offline 0  pending 2      |
 |  Enrollm. |  +-- floor plan ---------------------------------------+    |
 | ADMIN     |  | ROW 1  [1 12/42U] [2 30/42U] [3 0/42U]   42 servers |    |   a click opens the row
 |  Users    |  | ROW 2  [1 40/42U] [2 18/42U]             19 servers |    |
 |  Tokens   |  +-----------------------------------------------------+    |
 |  MDM      |  Unplaced (2)  [new-1 pending] [web-9 healthy]              |
-|  Audit    |  Alerts (0) ... Hosts (n) table                              |
+|  Audit    |  Alerts: one compact strip above the floor plan              |
 +-----------+-------------------------------------------------------------+
 ```
 
@@ -36,10 +36,14 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
   fill, one counter per state), hover glows, a click opens the row. **Row**: the row's racks as front elevations side by side in a
   horizontally scrolling strip (wheel, drag, arrow keys; scroll-snap per rack; the rack number above each, a button to open that
   rack alone): a dark cabinet with U numbers on the rail, each server a faceplate over its U with bezel detail, a light (green
-  healthy, amber updating with a slow pulse, red offline, grey pending), its name and its state in words, a blank panel over every free
+  healthy, amber updating with a slow pulse, solid red failed, a hollow red ring offline, grey pending), its name and its state in words, a blank panel over every free
   run of U; hover says name, group, version, state; a click opens the host page. **Rack**: one rack larger, and a table of its
-  servers. Breadcrumbs `Lab > Row > Rack > Host`. Below the floor plan: the servers not placed (the Unplaced list), the alerts and
-  the table of every host that the Fleet page had.
+  servers. Breadcrumbs `Lab > Row > Rack > Host` (none on the floor plan itself). Above the floor plan: the alerts as one compact strip
+  (toned by the worst alert; "No alerts" when there are none). Below it: the servers not placed, a quiet line of outlined chips. A
+  Floor / List switch (`list` in the page's params) shows every server in one compact list (server, state, where, group, version) in
+  place of the floor plan; the Fleet page's table of hosts is gone from Home. A rack footprint is a small elevation (a block per
+  server in the colour of its state); the strip of racks shows "Rack n of m" for the rack at its left edge, two arrow buttons, fades
+  at an end with more beyond, snaps to a rack, and fits a rack's height to the viewport; a phone shows one rack at a time.
 - Edit layout (a toggle on Home) shows the controls: rename the cluster, add a row (the next number), add a rack to a row (height
   from a list, 42 U by default), resize, move to another row, remove; move a server by picking it up (or dragging it)
   and putting it on a free U, or taking it out of its rack. A row or rack that still holds servers is not removed: the page names

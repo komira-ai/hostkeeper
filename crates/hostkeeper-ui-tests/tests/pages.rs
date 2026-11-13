@@ -14,7 +14,7 @@ use support::pages::{
 const MARKUP: &str = "<img src=x onerror=alert(1)>";
 
 #[test]
-fn home_page_lists_hosts_and_alerts() {
+fn home_page_lists_alerts() {
     // Catches: a Home page that calls another method, leaves out a host, its role, a service's
     // version, health or marks, or an alert `Alerts.List` answers (its kind, whether it is
     // critical, its message and when it was first observed), a failed canary among them.
@@ -29,9 +29,9 @@ import { render } from "./pages/home.js";
 export async function main() {
   const { ctx } = recorder(api("operator-token"), {}, []);
   const tree = await render(ctx);
-  const box = tree.children.find((child) => child.attrs && child.attrs.class === "alerts");
+  const box = tree.children.find((child) => child.attrs && (child.attrs.class || "").split(" ").includes("alert-strip"));
   // The kit joins text nodes with a space; the page's DOM does not.
-  const one = (li) => text(li).split(/\s+/).join(" ").replace(" :", ":");
+  const one = (li) => text(li).split(/\s+/).join(" ").trim();
   return { text: text(tree), alerts: box.children[1].children.map(one) };
 }"#,
     );
@@ -52,11 +52,11 @@ export async function main() {
     assert_eq!(
         out["alerts"],
         json!([
-            "halt (critical): api is halted at 1.4.0 by web-2, check disk_full (since 2027-01-15 08:00:00 UTC)",
-            "waiting for operator: request ab waits for an operator's approval (since 2027-01-15 08:00:00 UTC)",
-            "failed canary (critical): web-4, a canary of api, failed 1.3.0 (since 2027-01-15 08:00:00 UTC)",
-            "held on bad version: an operator holds web-2 on api 1.3.0 (since 2027-01-15 08:00:00 UTC)",
-            "silent host: new-1 has not heartbeated for 300 s (since 2027-01-15 08:00:00 UTC)",
+            "halt critical api is halted at 1.4.0 by web-2, check disk_full since 2027-01-15 08:00:00 UTC",
+            "waiting for operator request ab waits for an operator's approval since 2027-01-15 08:00:00 UTC",
+            "failed canary critical web-4, a canary of api, failed 1.3.0 since 2027-01-15 08:00:00 UTC",
+            "held on bad version an operator holds web-2 on api 1.3.0 since 2027-01-15 08:00:00 UTC",
+            "silent host new-1 has not heartbeated for 300 s since 2027-01-15 08:00:00 UTC",
         ])
     );
     assert_shows(
@@ -64,21 +64,7 @@ export async function main() {
         &[
             "Alerts (5)",
             "failed canary",
-            "Hosts (4)",
-            "web-1",
-            "web-2",
-            "new-1",
-            "clone-1",
-            "db",
-            "live",
-            "silent",
-            "1.4.0",
-            "healthy",
-            "unhealthy",
-            "not installed",
-            "held",
-            "holds the update slot",
-            "excluded",
+            "critical",
             "2027-01-15 08:00:00 UTC",
         ],
     );
@@ -99,15 +85,7 @@ fn home_alerts_show_nothing_when_nothing_needs_a_person() {
         json!({"quiet": true, "services": [{"service": "api", "convergence": {"state": "CONVERGENCE_STATE_CONVERGED"}}]}),
     );
     let out = render(&mut ui, "home", "{}");
-    assert_shows(
-        &out,
-        &[
-            "Alerts (0)",
-            "Nothing needs a person.",
-            "quiet start",
-            "Hosts (1)",
-        ],
-    );
+    assert_shows(&out, &["No alerts: nothing needs a person.", "quiet start"]);
 }
 
 #[test]

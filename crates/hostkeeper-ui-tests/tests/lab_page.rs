@@ -4,6 +4,9 @@
 
 mod support;
 
+#[path = "lab_page/views.rs"]
+mod views;
+
 use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{bodies, m, page_driver};
@@ -123,17 +126,20 @@ return {
   feet: cls(tree, "foot").map((n) => n.attrs.title),
   pills: cls(tree, "pill").map(words),
   tray: cls(tree, "chip").map((n) => n.attrs.title),
-  crumbs: words(cls(tree, "crumbs")[0]),
+  crumbs: cls(tree, "crumbs").length,
 };"#,
     );
     assert_eq!(out["title"], "Lab 1");
-    assert_eq!(out["crumbs"], "Lab");
+    assert_eq!(
+        out["crumbs"], 0,
+        "the floor plan is the top: no breadcrumbs"
+    );
     let rows = out["rows"].as_array().expect("rows");
     assert_eq!(rows.len(), 2);
     assert!(rows[0].as_str().unwrap().starts_with("Row 1"), "{rows:?}");
-    assert!(rows[0].as_str().unwrap().ends_with("2 servers"), "{rows:?}");
+    assert!(rows[0].as_str().unwrap().contains("2 servers"), "{rows:?}");
     assert!(rows[1].as_str().unwrap().starts_with("Row 2"), "{rows:?}");
-    assert!(rows[1].as_str().unwrap().ends_with("0 servers"), "{rows:?}");
+    assert!(rows[1].as_str().unwrap().contains("0 servers"), "{rows:?}");
     assert_eq!(
         out["feet"],
         json!([
@@ -144,7 +150,13 @@ return {
     );
     assert_eq!(
         out["pills"],
-        json!(["healthy 2", "updating 1", "offline 1", "pending 1"])
+        json!([
+            "healthy 2",
+            "updating 1",
+            "failed 0",
+            "offline 1",
+            "pending 1"
+        ])
     );
     assert_eq!(
         out["tray"],
@@ -403,8 +415,7 @@ return { text: words(tree), navigations: seen.navigations };"#,
         text.contains("The lab could not be read: UNAVAILABLE store_failed"),
         "{text}"
     );
-    assert!(text.contains("Hosts (4)"), "{text}");
-    assert!(text.contains("Alerts (0)"), "{text}");
+    assert!(text.contains("No alerts"), "{text}");
 }
 
 #[test]
