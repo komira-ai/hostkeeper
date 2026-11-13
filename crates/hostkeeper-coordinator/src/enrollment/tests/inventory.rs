@@ -158,6 +158,37 @@ fn the_pending_view_shows_the_one_matching_record_none_or_every_candidate() {
     assert_eq!(shown(&rig, &both).inventory_match(), Match::Matched);
 }
 
+/// Proves: a request from a daemon that claims no address and no BMC MAC (a daemon of a release
+/// before the claims were sent, or a host with no NIC the daemon can read) enrolls as it always
+/// did: it is shown as unmatched against every record, and an operator approves it by hand under
+/// the host id they give, after which it is an enrolled host.
+///
+/// Catches: a request without MACs matching a record, being refused, or being left out of the
+/// pending list because it cannot be matched.
+#[test]
+fn a_request_that_claims_no_mac_is_unmatched_and_still_approved_by_hand() {
+    let enrollment = Rig::new("inventory-no-claims");
+    let rig = coordinator("inventory-no-claims-coordinator", &enrollment);
+    record(&rig, "db-1", &["0c:c4:7a:00:00:02"], "");
+    let key = HostKey::new();
+    post(&enrollment, &key, "m-old", &[], "");
+    let view = shown(&rig, &key);
+    assert_eq!(
+        (view.inventory_match(), view.record_host_id.as_str()),
+        (Match::Unmatched, "")
+    );
+    approve(&enrollment.enrollment, &key, "by-hand-1", false);
+    assert!(
+        enrollment
+            .enrollment
+            .store()
+            .enrolled_hosts()
+            .expect("read")
+            .iter()
+            .any(|host| host.host_id.to_string() == "by-hand-1")
+    );
+}
+
 /// Catches: a match against an operator's record that approves, or lets an approval through for
 /// a key other than the request's: the record filled in the host id, and the approval still
 /// names the key hash (design 5.7, step 3).

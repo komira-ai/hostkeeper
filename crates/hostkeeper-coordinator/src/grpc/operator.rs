@@ -847,6 +847,17 @@ impl EnrollmentApi for EnrollmentService {
             .map_err(refusal::enrollment)
     }
 
+    async fn update_record(
+        &self,
+        request: Request<proto::UpdateRecordRequest>,
+    ) -> Result<Response<proto::UpdateRecordResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .update_record(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::enrollment)
+    }
+
     async fn open_record(
         &self,
         request: Request<proto::OpenRecordRequest>,
