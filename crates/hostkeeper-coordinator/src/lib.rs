@@ -126,7 +126,6 @@ pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
-pub(crate) mod builtin;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
@@ -288,7 +287,6 @@ mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
 #[cfg(test)]
-mod builtin_tests;
 #[cfg(test)]
 mod by_groups_only_tests;
 #[cfg(test)]

@@ -183,12 +183,12 @@ fn no_set_goes_to_a_host_that_did_not_announce_the_feature_or_to_one_offered_non
 
     let empty = crate::marks_support::rig("push-empty", "");
     beats(&empty, Some(None));
-    let builtin = set_for_d1(&empty).expect("the built-in komira, with nothing put");
+    let seeded = set_for_d1(&empty).expect("the komira the rig holds at generation 0");
     assert_eq!(
         (
-            builtin.generation,
-            builtin.entries.len(),
-            builtin.entries[0].name.as_str()
+            seeded.generation,
+            seeded.entries.len(),
+            seeded.entries[0].name.as_str()
         ),
         (0, 1, "komira")
     );

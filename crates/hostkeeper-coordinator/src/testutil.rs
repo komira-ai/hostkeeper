@@ -381,6 +381,15 @@ pub fn clock_of(seconds: &Arc<AtomicU64>) -> Clock {
     Arc::new(move || Duration::from_secs(seconds.load(Ordering::SeqCst)))
 }
 
+/// The repository `komira` the tests' sets name, in the registry of `store` unless it holds
+/// something: what an operator's `Repositories.Add` of it leaves, at generation 0.
+pub(crate) fn seed_komira(store: &DesiredStore) {
+    store.seed_repository(crate::repositories::Kept {
+        repository: crate::repositories_support::komira_added(1),
+        generation: 0,
+    });
+}
+
 impl Rig {
     pub fn new(name: &str) -> Self {
         let dir = scratch(name);
@@ -395,6 +404,7 @@ impl Rig {
         let clock = Arc::new(AtomicU64::new(1_000));
         let store =
             DesiredStore::open(&dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
+        seed_komira(&store);
         let coordinator = Coordinator::new(
             store,
             unreachable_verifier(),
@@ -425,6 +435,7 @@ impl Rig {
     pub fn start(dir: &Scratch, clock: &Arc<AtomicU64>) -> Coordinator {
         let store =
             DesiredStore::open(&dir.path().join("desired.json"), Some(LEGACY)).expect("a store");
+        seed_komira(&store);
         let (verifier, _) = static_verifier();
         Coordinator::new(store, verifier, OPERATOR.to_owned(), clock_of(clock))
             .with_allow_list(&allow_list(&config_text(STATIC_ISSUER)), Some(LEGACY))
@@ -448,6 +459,7 @@ impl Rig {
     /// A coordinator over the desired state of `store`, whose CI tokens are checked against the
     /// allow-list `text`; its ops store and verdicts are the caller's to give.
     pub fn start_over(store: DesiredStore, clock: &Arc<AtomicU64>, text: &str) -> Coordinator {
+        seed_komira(&store);
         let (oidc_now, _) = oidc_clock();
         let verifier = Verifier::new(
             AllowList::parse(text).expect("an allow-list"),

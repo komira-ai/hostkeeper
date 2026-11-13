@@ -572,7 +572,7 @@ entry, and a coordinator takes both: the **explicit** one above (a location in a
 one, `{"installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "<X.Y.Z>",
 "digest": "<SHA-256>", "bytes": "<size>", "manifest": {...}}`, which names the channel, the version
 and the file's size and leaves the location to the coordinator: it finds the `.pkg` in the repository
-that serves the channel ([package-repositories.md](package-repositories.md#structure-of-a-repository)),
+that serves the channel ([package-repositories.md](package-repositories.md#hostkeeper-repository-format-version-1)),
 serves it to the Mac from the implicit `coordinator` store, and a Mac needs no `komira-testing` store.
 `bytes` is required in the named-version form and refused on any other repository entry; a
 coordinator before this form refuses it `target_invalid`, so a release writes it only for a

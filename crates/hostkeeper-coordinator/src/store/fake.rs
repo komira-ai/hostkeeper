@@ -69,6 +69,21 @@ impl Fake {
         fake
     }
 
+    /// Commits the repository `komira` (generation 0) into a registry that holds nothing and
+    /// never changed: what the tests' sets name, as an operator's `Repositories.Add` left it.
+    pub(crate) fn seed_komira(&self) {
+        let mut durable = self.lock();
+        if durable.desired.repositories == crate::repositories::Registry::default() {
+            durable.desired.repositories.entries.insert(
+                "komira".to_owned(),
+                crate::repositories::Kept {
+                    repository: crate::repositories_support::komira_added(1),
+                    generation: 0,
+                },
+            );
+        }
+    }
+
     /// A fake that holds `held` as the committed desired state.
     #[must_use]
     pub(crate) fn holding_desired(held: desired::Held) -> Self {
