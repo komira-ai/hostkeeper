@@ -5,7 +5,8 @@
 // on Add, Enrollment.AddRecord; on Save, Enrollment.UpdateRecord, which changes the record's
 // MACs and notes and nothing else of it; on Remove, Enrollment.RemoveRecord, after a confirm.
 // The page's `edit` parameter names the record whose row is open for editing, `pageToken` the
-// page, and `record` (the Host page's link) marks that record's row.
+// page, and `record` (the Host page's link) marks that record's row. A row whose server has an
+// enrolled host says so beside its name (`enrolled`, from ListRecords).
 
 import { h, action, errorView, reasonProblem, table, trimmed } from "../view.js";
 
@@ -124,9 +125,20 @@ function inputs(prefix, form) {
   };
 }
 
+// What a row says of the host enrolled against its record, beside the server name: nothing when
+// none is, "enrolled" when the host has the server's name (or an older coordinator does not say which
+// host), else "enrolled as <host id>".
+function enrolledNote(record) {
+  if (record.enrolled !== true) {
+    return null;
+  }
+  const host = record.enrolledHostId || "";
+  return h("small", { name: "enrolled-note" }, host === "" || host === record.hostId ? " enrolled" : ` enrolled as ${host}`);
+}
+
 function recordRow(ctx, record, chosen) {
   return h("tr", chosen ? { "aria-current": "true" } : {},
-    h("td", {}, record.hostId),
+    h("td", {}, record.hostId, enrolledNote(record)),
     h("td", {}, record.bmcMac || "-"),
     h("td", {}, (record.dataMacs || []).join(", ") || "-"),
     h("td", {}, record.notes ? h("pre", {}, record.notes) : "-"),

@@ -26,7 +26,7 @@ fn records_reply() -> Value {
 
 #[test]
 fn inventory_page_shows_exactly_four_fields_in_one_table() {
-    // Proves: one table with the headings Server name, BMC MAC, Data MAC and Notes (and an empty
+    // Proves: a record a host is enrolled against says "enrolled" beside its name; one table with the headings Server name, BMC MAC, Data MAC and Notes (and an empty
     // one for the buttons), a row per record with those four fields and Edit and Remove, a last
     // row to add a server with an input for each of the four fields, and nothing of a record's
     // other fields: not its role, host group, serial, platform, window, state, who added it, nor
@@ -52,7 +52,7 @@ return {
         json!([
             ["Server name", "BMC MAC", "Data MAC", "Notes", ""],
             [
-                "db-1",
+                "db-1 enrolled",
                 "0c:c4:7a:00:00:01",
                 "0c:c4:7a:00:00:02, 0c:c4:7a:00:00:03",
                 "rack 4 slot 2",
@@ -454,4 +454,36 @@ return nodes(tree).filter((n) => n.tag === "tr" && n.attrs["aria-current"] === "
     );
     let out = refused.run(&page_driver("inventory", "{}", "[]", ""));
     assert_shows(&out, &["Inventory", "store_failed"]);
+}
+
+#[test]
+fn inventory_page_names_the_host_enrolled_against_a_server() {
+    // Proves: a row says "enrolled" when the host has the server's name or the coordinator does not
+    // say which host, "enrolled as <host id>" when it is another, and nothing for a server no host is
+    // enrolled against.
+    let mut ui = Ui::start();
+    ui.reply(
+        &m("Enrollment/ListRecords"),
+        json!({"records": [
+            {"hostId": "a-1", "dataMacs": ["0c:c4:7a:00:00:02"], "enrolled": true, "enrolledHostId": "a-1"},
+            {"hostId": "b-1", "dataMacs": ["0c:c4:7a:00:00:03"], "enrolled": true, "enrolledHostId": "web-9"},
+            {"hostId": "c-1", "dataMacs": ["0c:c4:7a:00:00:04"], "enrolled": true},
+            {"hostId": "d-1", "dataMacs": ["0c:c4:7a:00:00:05"]},
+        ]}),
+    );
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"return rows(tree).slice(1, 5).map((row) => row[0]);"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!([
+            "a-1 enrolled",
+            "b-1 enrolled as web-9",
+            "c-1 enrolled",
+            "d-1"
+        ])
+    );
 }

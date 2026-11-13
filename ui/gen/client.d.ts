@@ -487,6 +487,7 @@ export namespace hostkeeper_operator_v1 {
     usedUnix?: string;
     platform?: hostkeeper_agent_v1.Platform;
     hostGroup?: string;
+    enrolledHostId?: string;
   }
   export interface ListAlertsRequest {
   }

@@ -3,7 +3,7 @@
 How one server becomes a host the coordinator manages: the operator enters its record in the host
 inventory, and the node boots, asks for a certificate and is enrolled. Entering the record is the
 approval: there is no approve step for a server that matches its record
-([The record is the approval](#the-record-is-the-approval)). A request that does not match, or
+([The record is the approval](#the-record-is-the-approval)). A request that does not match (the Enrollment page says "Not in inventory."), or
 that needs a second look, waits for an operator to [approve](#approve) it by hand. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
@@ -81,7 +81,8 @@ pass it as `--page-token` for the next page. Each record says `enrolled: true` w
 enrolled against it (the claims of the request the host's key was approved from match this record
 and no other, and the host is not denied); `--enrolled true` lists only those records, and
 `--enrolled false` only the others, which is the list of servers still to come online. Each
-record also says `hostHeld`: what the enrollment store holds for the record's host id, read from
+record also says `enrolledHostId`, the host id of the host enrolled against it (the first by host id if several
+match; empty when none is; the Inventory page shows it beside the server's name), and `hostHeld`: what the enrollment store holds for the record's host id, read from
 the store, so the same after a coordinator restart and whether or not the host has sent a
 heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
 `HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or

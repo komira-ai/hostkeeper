@@ -364,11 +364,28 @@ impl<'a> RecordIndex<'a> {
     /// The host ids of the records one of `hosts` is enrolled against.
     #[must_use]
     pub fn enrolled(&self, hosts: &[EnrolledHost]) -> BTreeSet<String> {
-        hosts
-            .iter()
-            .filter_map(|host| self.matched(&host.claims))
-            .map(|record| record.host_id.clone())
-            .collect()
+        self.enrolled_as(hosts).into_keys().collect()
+    }
+
+    /// The records one of `hosts` is enrolled against, each by its host id with the host id of the
+    /// host enrolled against it (the first by host id when several are).
+    #[must_use]
+    pub fn enrolled_as(&self, hosts: &[EnrolledHost]) -> BTreeMap<String, String> {
+        let mut found: BTreeMap<String, String> = BTreeMap::new();
+        for host in hosts {
+            if let Some(record) = self.matched(&host.claims) {
+                let id = host.host_id.to_string();
+                found
+                    .entry(record.host_id.clone())
+                    .and_modify(|first| {
+                        if id < *first {
+                            first.clone_from(&id);
+                        }
+                    })
+                    .or_insert(id);
+            }
+        }
+        found
     }
 }
 
@@ -452,6 +469,7 @@ fn record_proto(
             .map_or(agent::Platform::Unspecified, platform_proto)
             .into(),
         host_group: group.to_owned(),
+        enrolled_host_id: String::new(),
     }
 }
 
@@ -757,7 +775,7 @@ impl Coordinator {
     }
 
     /// `Enrollment.ListRecords`: the records by host id, after the host id `page_token` names,
-    /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` when a host is
+    /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` (and naming the host, `enrolled_host_id`) when a host is
     /// enrolled against it; with `enrolled` set, only the records whose `enrolled` is that.
     /// Each record of the page says what the enrollment store holds for its host id
     /// (`host_held`, [`Coordinator::host_held`]), read after the page is chosen, and where its
@@ -789,19 +807,22 @@ impl Coordinator {
         let now = self.ops.unix_now();
         let by_group = self.desired.in_group_mode();
         let (mut records, more) = self.ops.read(|state| {
-            let enrolled = RecordIndex::new(&state.inventory).enrolled(&hosts);
+            let enrolled = RecordIndex::new(&state.inventory).enrolled_as(&hosts);
             let mut rest = state
                 .inventory
                 .iter()
                 .filter(|r| after.as_ref().is_none_or(|after| r.host_id > *after))
                 .map(|r| {
-                    record_proto(
+                    let host = enrolled.get(&r.host_id);
+                    let mut shown = record_proto(
                         r,
-                        enrolled.contains(&r.host_id),
+                        host.is_some(),
                         proto::HostHeld::Unspecified,
                         now,
                         by_group,
-                    )
+                    );
+                    shown.enrolled_host_id = host.cloned().unwrap_or_default();
+                    shown
                 })
                 .filter(|r| request.enrolled.is_none_or(|want| r.enrolled == want));
             let page: Vec<proto::InventoryRecord> = rest.by_ref().take(size).collect();
