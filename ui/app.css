@@ -892,3 +892,8 @@ form.sign-in button:not(.primary) {
   color: var(--muted);
   background: var(--surface-2);
 }
+
+button.danger {
+  border-color: var(--alert);
+  color: var(--alert);
+}

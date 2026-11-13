@@ -77,10 +77,18 @@ fn the_page_lists_every_page_of_host_groups_with_their_summary() {
             "4",
             "7",
             "hostkeeper 0.9.0, kbf none set",
-            "Edit"
+            "Edit Delete"
         ])
     );
-    assert!(rows.contains(&json!(["web", "-", "default", "1", "0", "-", "Edit"])));
+    assert!(rows.contains(&json!([
+        "web",
+        "-",
+        "default",
+        "1",
+        "0",
+        "-",
+        "Edit Delete"
+    ])));
     assert!(rows.contains(&json!([
         "zeta",
         "hostkeeper",
@@ -88,7 +96,7 @@ fn the_page_lists_every_page_of_host_groups_with_their_summary() {
         "2",
         "1",
         "hostkeeper 1.0.0",
-        "Edit"
+        "Edit Delete"
     ])));
 }
 
@@ -593,6 +601,172 @@ return { before, after: controls(detail), links: nodes(detail).filter((n) => (n.
             m("HostGroups/List"),
             m("Services/List"),
             m("HostGroups/Get")
+        ]
+    );
+}
+
+/// The rows of a page whose list holds `all`, an empty group `spare` and `storage` with hosts, and
+/// the delete buttons of its tree, by the group of their row.
+const DELETES: &str = r#"
+const last = () => seen.shown[seen.shown.length - 1];
+const deletes = (t) => nodes(t).filter((n) => n.tag === "tr").map((row) => [text(row.children[0]).trim().split(" ")[0], nodes(row).filter((n) => (n.attrs || {})["name"] === "delete-group").length]);
+"#;
+
+fn three_groups() -> Value {
+    json!({"hostGroups": [
+        {"group": {"name": "all", "packages": ["hostkeeper"]}, "generation": "1", "hosts": 4},
+        {"group": {"name": "spare"}, "generation": "2"},
+        {"group": {"name": "storage", "packages": ["hostkeeper"]}, "generation": "3", "hosts": 2},
+    ]})
+}
+
+fn remove_bodies(ui: &Ui) -> Vec<Value> {
+    bodies(ui)
+        .into_iter()
+        .filter(|(method, _)| method == &m("HostGroups/Remove"))
+        .map(|(_, body)| body)
+        .collect()
+}
+
+#[test]
+fn every_group_but_all_has_a_danger_delete_button() {
+    // Proves: a Delete button in the danger style is on the row of each group except the
+    // built-in all.
+    // Catches: no way to delete a group (the owner's "I added a group and can't delete it"), or
+    // a button on all, which the API refuses.
+    let mut ui = Ui::start();
+    ui.reply(&m("HostGroups/List"), three_groups());
+    hosts_replies(&mut ui);
+    let out = ui.run(&page_driver(
+        "hostgroups",
+        "{}",
+        "[]",
+        &format!(
+            r#"{DELETES}
+return {{ per_row: deletes(tree).filter((r) => r[0] !== "Group" && r[0] !== ""), classes: named(tree, "delete-group").map((b) => b.attrs.class) }};
+"#
+        ),
+    ));
+    assert_eq!(
+        out["out"],
+        json!({"per_row": [["all", 0], ["spare", 1], ["storage", 1]],
+               "classes": ["danger", "danger"]})
+    );
+}
+
+#[test]
+fn deleting_an_empty_group_asks_removes_it_and_refreshes() {
+    // Proves: Delete asks first (a no sends nothing); a yes sends Remove with the group and the
+    // console's reason, reports the deletion and refreshes the page once.
+    // Catches: a delete without a question, or one that leaves the stale row on the page.
+    let mut ui = Ui::start();
+    ui.reply(&m("HostGroups/List"), three_groups());
+    hosts_replies(&mut ui);
+    ui.reply(&m("HostGroups/Remove"), json!({}));
+    let out = ui.run(&page_driver(
+        "hostgroups",
+        "{}",
+        "[false, true]",
+        r#"
+await click(tree, "delete-group", 0);
+const declined = seen.reports.length;
+await click(tree, "delete-group", 0);
+return { declined };
+"#,
+    ));
+    assert_eq!(out["out"]["declined"], json!(1));
+    assert_eq!(
+        out["seen"]["questions"],
+        json!([
+            "Delete host group spare? Its packages and desired versions are removed with it; no host is in it.",
+            "Delete host group spare? Its packages and desired versions are removed with it; no host is in it."
+        ])
+    );
+    assert_eq!(
+        remove_bodies(&ui),
+        [json!({"hostGroup": "spare", "reason": "removed in the console"})]
+    );
+    assert_eq!(
+        out["seen"]["reports"],
+        json!(["Not deleted.", "Deleted host group spare."])
+    );
+    assert_eq!(out["seen"]["refreshes"], json!(1));
+}
+
+#[test]
+fn a_group_that_still_has_hosts_is_refused_and_the_page_names_them() {
+    // Proves: when Remove is refused not_empty the page reads the group's hosts (HostGroups.Get)
+    // and reports them by name with what to do, does not refresh, and a group the refusal comes
+    // from with no host says a record or the allowlist names it, and a Get that fails is shown.
+    // Catches: a bare "not_empty" the operator cannot act on.
+    let mut ui = Ui::start();
+    ui.reply(&m("HostGroups/List"), three_groups());
+    hosts_replies(&mut ui);
+    ui.refuse(
+        &m("HostGroups/Remove"),
+        412,
+        "FAILED_PRECONDITION",
+        "not_empty",
+    );
+    ui.reply(
+        &m("HostGroups/Get"),
+        json!({"hostGroup": {"group": {"name": "storage"}}, "nodeIds": ["node-1", "node-4"], "nextPageToken": "x"}),
+    );
+    ui.refuse(
+        &m("HostGroups/Remove"),
+        412,
+        "FAILED_PRECONDITION",
+        "not_empty",
+    );
+    ui.reply(
+        &m("HostGroups/Get"),
+        json!({"hostGroup": {"group": {"name": "spare"}}}),
+    );
+    ui.refuse(
+        &m("HostGroups/Remove"),
+        412,
+        "FAILED_PRECONDITION",
+        "not_empty",
+    );
+    ui.refuse(&m("HostGroups/Get"), 500, "INTERNAL", "store_failed");
+    ui.refuse(
+        &m("HostGroups/Remove"),
+        403,
+        "PERMISSION_DENIED",
+        "forbidden",
+    );
+    let out = ui.run(&page_driver(
+        "hostgroups",
+        "{}",
+        "[true, true, true, true]",
+        r#"
+await click(tree, "delete-group", 1);
+await click(tree, "delete-group", 0);
+await click(tree, "delete-group", 0);
+await click(tree, "delete-group", 0);
+return null;
+"#,
+    ));
+    assert_eq!(
+        out["seen"]["reports"],
+        json!([
+            "Host group storage is not deleted: it still has hosts node-1, node-4, and more. Move them to another group on their Host page first.",
+            "Host group spare is not deleted: an inventory record, a pending approval or the Mac allowlist still names it.",
+            "spare: not_empty (INTERNAL store_failed)",
+            "spare: PERMISSION_DENIED forbidden"
+        ])
+    );
+    assert_eq!(out["seen"]["refreshes"], json!(0));
+    assert_eq!(
+        bodies(&ui)
+            .iter()
+            .filter(|(method, _)| method == &m("HostGroups/Get"))
+            .map(|(_, body)| body.clone())
+            .collect::<Vec<_>>(),
+        [
+            json!({"hostGroup": "storage", "limit": 50}),
+            json!({"hostGroup": "spare", "limit": 50}),
+            json!({"hostGroup": "spare", "limit": 50})
         ]
     );
 }
