@@ -464,3 +464,101 @@ fn a_remove_names_an_entry_as_listed_with_empty_fields_left_empty() {
     assert_eq!(listed(["a b/c", "", "", ""]), None);
     assert_eq!(listed(["", "x.yml", "", ""]), None);
 }
+
+/// Proves: the allow-list the control plane's coordinator runs with (the four entries of
+/// komira-internal's `controlplane/hostkeeper-coordinator/oidc.toml`: tierstore's two workflows,
+/// jobscheduler's and hostkeeper's hello) imports as one publisher for each of `tierstore`,
+/// `js-agent` and `hello`, each keeping its repository, its repository id and the pins of
+/// `set-desired.yml` it called, with tierstore's two entries one publisher listing both pins; and
+/// the token of each entry still sets the service the entry named and no other.
+///
+/// Catches: a CI deploy of the live coordinator that stops working at the first start of this
+/// release, or one that gains a service its entry never named.
+#[test]
+fn the_control_planes_allow_list_imports_as_the_ci_deploys_it_runs_today() {
+    let entry = |audience: &str,
+                 id: &str,
+                 repository: &str,
+                 pin: &str,
+                 events: &str,
+                 service: &str| {
+        format!(
+            "[[remote_operator]]\nissuer = \"{STATIC_ISSUER}\"\naudience = \"{audience}\"\n\
+             repository_id = \"{id}\"\nrepository = \"{repository}\"\n\
+             job_workflow_ref = [\"komira-ai/hostkeeper/.github/workflows/set-desired.yml@{pin}\"]\n\
+             refs = [\"refs/heads/main\"]\nevent_names = [{events}]\n\
+             runner_environment = \"github-hosted\"\nservices = [\"{service}\"]\n"
+        )
+    };
+    let (a, b, c) = (
+        "2c767d1842a88edb7120073d2dff3b4bfccc834c",
+        "2c684190fbe5b6cfb11f42573e044edb334f27aa",
+        "318bcc93c9bcd009d40597c45227278742acc622",
+    );
+    let text = [
+        entry(
+            "tierstore-hostkeeper-desired",
+            "1440761269",
+            "komira-ai/tierstore",
+            a,
+            "\"workflow_run\", \"workflow_dispatch\"",
+            "tierstore",
+        ),
+        entry(
+            "tierstore-hostkeeper-release",
+            "1440761269",
+            "komira-ai/tierstore",
+            b,
+            "\"workflow_run\", \"workflow_dispatch\"",
+            "tierstore",
+        ),
+        entry(
+            "jobscheduler-hostkeeper-desired",
+            "1434971668",
+            "komira-ai/jobscheduler",
+            c,
+            "\"workflow_run\", \"workflow_dispatch\"",
+            "js-agent",
+        ),
+        entry(
+            "hostkeeper-coordinator-devbox",
+            "1443364626",
+            "komira-ai/hostkeeper",
+            a,
+            "\"workflow_dispatch\"",
+            "hello",
+        ),
+    ]
+    .concat();
+    let held = import(&AllowList::parse(&text).expect("the file reads"), None);
+    let pins = |pins: &[&str]| -> Vec<String> {
+        pins.iter()
+            .map(|p| format!("komira-ai/hostkeeper/.github/workflows/set-desired.yml@{p}"))
+            .collect()
+    };
+    let want = |repository: &str, id: &str, called: &[&str]| {
+        vec![crate::trusted_publishers::TrustedPublisher {
+            repository: repository.to_owned(),
+            git_ref: "refs/heads/main".to_owned(),
+            repository_id: id.to_owned(),
+            called_workflows: pins(called),
+            ..Default::default()
+        }]
+    };
+    assert_eq!(
+        held.keys().map(String::as_str).collect::<Vec<_>>(),
+        ["hello", "js-agent", "tierstore"]
+    );
+    assert_eq!(
+        held["tierstore"],
+        want("komira-ai/tierstore", "1440761269", &[a, b])
+    );
+    assert_eq!(
+        held["js-agent"],
+        want("komira-ai/jobscheduler", "1434971668", &[c])
+    );
+    assert_eq!(
+        held["hello"],
+        want("komira-ai/hostkeeper", "1443364626", &[a])
+    );
+}
