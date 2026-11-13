@@ -430,14 +430,7 @@ fn rollout_page_shows_desired_against_converged() {
     let mut ui = Ui::start();
     ui.reply(&m("Releases/Status"), status_reply());
     let out = render(&mut ui, "rollout", "{}");
-    assert_eq!(
-        ui.methods(),
-        [
-            m("Releases/Status"),
-            m("Services/List"),
-            m("HostGroups/List")
-        ]
-    );
+    assert_eq!(ui.methods(), [m("Releases/Status"), m("Services/List")]);
     assert_shows(
         &out,
         &[
@@ -509,7 +502,6 @@ await click(tree, "converge");
         [
             (m("Releases/Status"), json!({})),
             (m("Services/List"), json!({})),
-            (m("HostGroups/List"), json!({})),
             (
                 m("Releases/MarkBad"),
                 json!({"service": "api", "version": "1.4.0", "reason": "crash loop"})
@@ -665,14 +657,21 @@ fn pending_reply() -> Value {
      "nextPageToken": "page-2"})
 }
 
+/// The host groups the approval's dropdown lists, but the built-in `all`, which every host is in.
+fn two_groups() -> Value {
+    json!({"hostGroups": [{"group": {"name": "all"}}, {"group": {"name": "storage"}}, {"group": {"name": "web"}}]})
+}
+
 #[test]
-fn enrollment_approve_sends_the_listed_key_hash_and_replace_is_false_by_default() {
+fn enrollment_approve_sends_the_listed_key_hash_the_chosen_group_and_replace_false_by_default() {
     // Catches: a key hash recomputed or taken from elsewhere, replace on by default, a replace
-    // sent without the operator's yes, an approval sent with any one input missing or off its
-    // grammar (host id, role, a service, the reason, each alone), and a refusal taken as success
-    // or losing what the operator typed.
+    // sent without the operator's yes, an approval sent with a host id off its grammar or none, a
+    // group other than the one chosen (or a group sent when none is chosen), a Role, Services or
+    // Reason field on the page, a dropdown that lists anything but the groups and a blank, and a
+    // refusal taken as success or losing what the operator typed and chose.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), pending_reply());
+    ui.reply(&m("HostGroups/List"), two_groups());
     for (status, code, reason) in [
         (412, "FAILED_PRECONDITION", "key_mismatch"),
         (412, "FAILED_PRECONDITION", "not_pending"),
@@ -695,45 +694,33 @@ fn enrollment_approve_sends_the_listed_key_hash_and_replace_is_false_by_default(
         "{}",
         "[false, true]",
         r#"
-const fill = (hostId, role, services, reason) => {
+const absent = ["role", "services", "reason"].map((n) => nodes(tree).filter((x) => (x.attrs || {}).name === n).length);
+const offered = choices(tree, "host-group", 0);
+for (const hostId of ["", "-web-7"]) {
   type(tree, "host-id", hostId, 0);
-  type(tree, "role", role, 0);
-  type(tree, "services", services, 0);
-  type(tree, "reason", reason, 0);
-};
-const attempts = [
-  ["", "web", "api", "new rack"],
-  ["web-7", "", "api", "new rack"],
-  ["-web-7", "web", "api", "new rack"],
-  ["web-7", "7web", "api", "new rack"],
-  ["web-7", "web", "api, API", "new rack"],
-  ["web-7", "web", "api", "   "],
-  ["web-7", "web", "api", "new\nrack"],
-  ["web-7", "web", "api", "x".repeat(257)],
-];
-for (const [hostId, role, services, reason] of attempts) {
-  fill(hostId, role, services, reason);
   await click(tree, "approve", 0);
 }
-fill(" web-7 ", " web ", "api, metrics", " new rack ");
+type(tree, "host-id", " web-7 ", 0);
+choose(tree, "host-group", "web", 0);
 for (let i = 0; i < 6; i++) {
   await click(tree, "approve", 0);
 }
-const kept = ["host-id", "role", "services", "reason"].map((n) => named(tree, n)[0].attrs.value);
-type(tree, "role", "web", 1);
-type(tree, "reason", "re-imaged", 1);
+const kept = [named(tree, "host-id")[0].attrs.value, chosen(tree, "host-group", 0)];
 tick(tree, "replace", true, 1);
 await click(tree, "approve", 1);
 await click(tree, "approve", 1);
 await click(tree, "next-page");
-return kept;
+return { absent, offered, kept, second: chosen(tree, "host-group", 1) };
 "#,
     ));
     let first = json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "hostId": "web-7",
-        "role": "web", "services": ["api", "metrics"], "replace": false, "reason": "new rack"});
+        "hostGroup": "web", "replace": false});
     let second = json!({"requestId": "2e".repeat(32), "keySha256": "cd".repeat(32), "hostId": "web-3",
-        "role": "web", "services": [], "replace": true, "reason": "re-imaged"});
-    let mut expected = vec![(m("Enrollment/List"), json!({"limit": 50, "pageToken": ""}))];
+        "hostGroup": "", "replace": true});
+    let mut expected = vec![
+        (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+        (m("HostGroups/List"), json!({})),
+    ];
     expected.extend((0..6).map(|_| (m("Enrollment/Approve"), first.clone())));
     expected.push((m("Enrollment/Approve"), second));
     assert_eq!(bodies(&ui), expected);
@@ -747,28 +734,23 @@ return kept;
         seen["reports"],
         json!([
             "Name the host id.",
-            "Name the role.",
             "A host id is 1 to 63 of a-z, 0-9 and -, not starting or ending with -.",
-            "A role is 1 to 32 of a-z, 0-9 and -, a letter first.",
-            "API is not a service name: 1 to 64 of a-z, 0-9 and -.",
-            "Give a reason for the approval.",
-            "A reason has no control character (a tab or a line break, for example).",
-            "A reason is at most 256 bytes; this one is 257.",
             "FAILED_PRECONDITION key_mismatch",
             "FAILED_PRECONDITION not_pending",
             "ALREADY_EXISTS host_id_taken",
             "FAILED_PRECONDITION duplicate_claim",
             "FAILED_PRECONDITION denied",
-            "Approved web-7: the host gets its certificate at its next poll.",
+            "Approved web-7 into host group web: the host gets its certificate at its next poll.",
             "Not approved.",
-            "Approved web-3: the host gets its certificate at its next poll.",
+            "Approved web-3 with no host group (it runs the packages of all until it is put in one): the host gets its certificate at its next poll.",
         ])
     );
     assert_eq!(seen["refreshes"], 2, "a refused approval refreshes nothing");
     assert_eq!(
         out["out"],
-        json!([" web-7 ", " web ", "api, metrics", " new rack "]),
-        "a refusal keeps what the operator typed"
+        json!({"absent": [0, 0, 0], "offered": ["", "storage", "web"],
+               "kept": [" web-7 ", "web"], "second": ""}),
+        "a refusal keeps what the operator typed and chose"
     );
     assert_eq!(
         seen["navigations"],
@@ -788,6 +770,7 @@ return kept;
             "C02-X",
             "Mac nonce presented yes",
             "Leave it off unless you mean that.",
+            "Host group",
         ],
     );
 }

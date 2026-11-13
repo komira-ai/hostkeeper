@@ -146,7 +146,8 @@ impl Coordinator {
             {
                 return Err(Refusal::BelowMinVersion);
             }
-            let services = group_services(&one.name, &one.listed, &self.services, &state, &[]);
+            let services =
+                group_services(&one.name, &one.listed, &groups, &self.services, &state, &[]);
             let planned = plan(
                 &one.def,
                 &services,

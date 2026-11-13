@@ -123,8 +123,8 @@ fn host_groups_is_a_service_the_release_before_does_not_have() {
 }
 
 /// Catches: a token or number of `HostGroupsRefusal` renamed, renumbered or reordered, which
-/// the gateway writes into a status message and callers branch on: fifteen values numbered 1 to
-/// 15 in the design's order after `UNSPECIFIED`, the generated type agreeing with each.
+/// the gateway writes into a status message and callers branch on: sixteen values numbered 1 to
+/// 16 in the design's order after `UNSPECIFIED`, the generated type agreeing with each.
 #[test]
 fn the_host_groups_refusal_tokens_and_numbers_are_pinned() {
     let tokens = [
@@ -143,6 +143,7 @@ fn the_host_groups_refusal_tokens_and_numbers_are_pinned() {
         "not_empty",
         "unknown_host",
         "same_host_group",
+        "reserved_host_group",
     ];
     let mut want = vec![("HOST_GROUPS_REFUSAL_UNSPECIFIED".to_owned(), 0)];
     for (i, token) in tokens.iter().enumerate() {
@@ -161,7 +162,7 @@ fn the_host_groups_refusal_tokens_and_numbers_are_pinned() {
         assert_eq!(value.as_str_name(), name);
         assert_eq!(value as i32, number);
     }
-    assert!(op::HostGroupsRefusal::try_from(16).is_err());
+    assert!(op::HostGroupsRefusal::try_from(17).is_err());
 }
 
 /// Catches: a refusal or outcome value added to a shipped enum at a number the release before

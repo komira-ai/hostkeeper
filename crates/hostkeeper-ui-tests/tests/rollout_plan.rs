@@ -292,7 +292,7 @@ await click(tree, "advance");"#,
         "[false, true]",
     );
     assert_eq!(
-        bodies(&ui)[3..],
+        bodies(&ui)[2..],
         [(
             m("Rollouts/Advance"),
             json!({"service": "api", "reason": "canary looks fine"})
@@ -340,7 +340,7 @@ await click(tree, "advance");"#,
         out["seen"]["questions"],
         json!(["Advance s0 into stage 1 of 2? Its hosts are ordered at their next heartbeats."])
     );
-    assert_eq!(bodies(&ui).len(), 3);
+    assert_eq!(bodies(&ui).len(), 2);
 }
 
 #[test]
@@ -360,7 +360,7 @@ await click(tree, "pause");"#,
         "[false, true]",
     );
     assert_eq!(
-        bodies(&ui)[3..],
+        bodies(&ui)[2..],
         [(
             m("Rollouts/Pause"),
             json!({"service": "api", "reason": "freeze"})
@@ -402,7 +402,7 @@ await click(tree, "resume");"#,
         "[false, true]",
     );
     assert_eq!(
-        bodies(&ui)[3..],
+        bodies(&ui)[2..],
         [(
             m("Rollouts/Resume"),
             json!({"service": "web", "reason": "audit done"})

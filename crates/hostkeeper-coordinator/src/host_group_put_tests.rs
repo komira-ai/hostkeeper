@@ -312,7 +312,7 @@ fn a_put_that_lists_a_package_again_cancels_its_intents() {
 /// audit and every host's group are as they were): CI's token `forbidden` and none
 /// `unauthorized`; a reason that is empty, over 256 bytes or holds a control character, and a
 /// body that is absent, `invalid_request`; a name that breaks the grammar `invalid_host_group`; an
-/// empty list or one without `hostkeeper` `hostkeeper_not_listed`; 65 packages `too_many_packages`
+/// empty list or one without `hostkeeper` for `all` `hostkeeper_not_listed`; 65 packages `too_many_packages`
 /// where 64 are taken; a name that is no package's or one listed twice `invalid_package`; and a
 /// replacement without `if_generation`, with a stale one, or a new group with one,
 /// `generation_mismatch`.
@@ -321,6 +321,7 @@ fn a_put_that_lists_a_package_again_cancels_its_intents() {
 #[test]
 fn every_refusal_of_a_put_changes_nothing() {
     let world = World::new("hg-put-refusals");
+    world.hold_all();
     world.put("alpha", &[SELF, "svc"], None).expect("put");
     let before = world.state();
     let coordinator = world.coordinator();
@@ -363,7 +364,7 @@ fn every_refusal_of_a_put_changes_nothing() {
     }
     for packages in [&[][..], &["svc"][..]] {
         assert_eq!(
-            put(&operator(), new("beta", packages)),
+            put(&operator(), new("all", packages)),
             Refusal::HostkeeperNotListed,
             "{packages:?}"
         );

@@ -17,10 +17,10 @@ use crate::store::Fake;
 use crate::testutil::Rig;
 
 /// The reason of the approvals of the tests.
-const WHY: &str = "new rack";
+pub(super) const WHY: &str = "new rack";
 
 /// Posts a request of a new key from `machine`: the key, whose request is pending.
-fn post(world: &World, machine: &str) -> HostKey {
+pub(super) fn post(world: &World, machine: &str) -> HostKey {
     let key = HostKey::new();
     world
         .enrollment
@@ -31,7 +31,7 @@ fn post(world: &World, machine: &str) -> HostKey {
 }
 
 /// The approval of `key`'s request as `host`, naming `role`, `host_group` and `services`.
-fn ask(
+pub(super) fn ask(
     key: &HostKey,
     host: &str,
     role: &str,
@@ -51,7 +51,7 @@ fn ask(
 }
 
 /// `Enrollment.Approve` of `request` as the operator.
-fn approve(world: &World, request: ApproveRequest) -> Result<String, EnrollmentRefusal> {
+pub(super) fn approve(world: &World, request: ApproveRequest) -> Result<String, EnrollmentRefusal> {
     world
         .coordinator()
         .enrollment_approve(&operator(), request)
@@ -211,7 +211,7 @@ fn a_role_is_read_as_the_group_and_an_equal_role_is_accepted() {
 /// is written, and the committed state and ops state are as they were: services named
 /// (`services_retired`), a group not held or a name that breaks the grammar (`unknown_host_group`),
 /// a role that names no held group (`unknown_host_group`), a role that breaks the grammar or
-/// differs from the `host_group` (`invalid_role`), and neither named (`invalid_role`).
+/// differs from the `host_group` (`invalid_role`).
 ///
 /// Catches: a refusal given another field's token, an approval written before the group is
 /// checked, or a refusal that goes unaudited.
@@ -261,7 +261,6 @@ fn each_approval_a_group_coordinator_cannot_place_is_refused_and_audited() {
             ask(&key, "w1", "db", "web", &[]),
             EnrollmentRefusal::InvalidRole,
         ),
-        (ask(&key, "w1", "", "", &[]), EnrollmentRefusal::InvalidRole),
     ];
     let before = unchanged(&world);
     let audited = world.audit().len();

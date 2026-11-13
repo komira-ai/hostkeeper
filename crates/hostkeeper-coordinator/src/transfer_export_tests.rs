@@ -235,8 +235,13 @@ fn an_empty_database_exports_an_empty_file_store() {
     let written: Vec<PathBuf> = into.files().into_keys().collect();
     assert_eq!(written, [into.paths.state_file.clone(), into.ops()]);
     assert_eq!(files_loaded(&into, None), Loaded::default());
+    // The migration made the built-in group `all`, which the files leave out while it is as made.
     for table in STATE_TABLES {
-        assert!(report.contains(&format!("  {table}: 0 rows\n")), "{report}");
+        let rows = usize::from(matches!(table, "host_groups" | "host_group_packages"));
+        assert!(
+            report.contains(&format!("  {table}: {rows} rows\n")),
+            "{report}"
+        );
     }
 }
 

@@ -56,8 +56,8 @@ its server by hand. The group must be one the coordinator holds (`unknown_host_g
 `--role` beside `--host-group` must be the same name (`invalid_role`). The record keeps the
 group's name as its `role` too, and `list-records` shows it as both `role` and `hostGroup`.
 
-A coordinator that holds no host group yet refuses every `--host-group` (`unknown_host_group`)
-and orders every host nothing: put a group first (`hkctl host-groups put`,
+A coordinator that holds no host group yet but the built-in `all` refuses every `--host-group`
+(`unknown_host_group`); every host runs what `all` lists, `hostkeeper` alone at first: put a group first (`hkctl host-groups put`,
 [hostgroups.md](hostgroups.md)), or move a fleet placed by roles to groups through the operator
 API ([hostgroups.md](hostgroups.md#moving-a-fleet-from-roles-to-host-groups)); `add-record` and
 `approve` name the group of each record and approval.
@@ -466,15 +466,27 @@ A server that matches an open record needs no approval ([The record is the
 approval](#the-record-is-the-approval)). Approve by hand a request that waits: one that matches
 no record or several, is outside its record's window, matches a used record, is contested, a
 duplicate claim or a renewal, or whose record names no host group. Approving by hand does not
-mark a record used. An approval names the request, its key hash, the host's group and a reason.
-The group must be one the coordinator holds (`unknown_host_group`), and is required even when
-the record names one: the record's group is shown, not applied. `--role` is read as the group's
-name when `--host-group` is left out; with both, they must be the same name (`invalid_role`); with
-neither, the approval is refused `invalid_role`. An approval names no services
-(`services_retired`): the host's group decides what it runs, and the host is installed its
-group's packages from its first heartbeat. The approval's audit entry names the group (`group
-web`, and `hostGroup`). The certificate is not in the answer: the host takes it at its next poll,
+mark a record used. An approval names the request and its key hash, and may name the host's
+group and a reason. The group, when named, must be one the coordinator holds
+(`unknown_host_group`), and is not taken from the record: the record's group is shown, not
+applied. `--role` is accepted as an alias of `--host-group` for older scripts and is read as the
+group's name when `--host-group` is left out; with both, they must be the same name
+(`invalid_role`). With neither, the host is enrolled in no specific group: every host is in the
+built-in group `all` ([hostgroups.md](hostgroups.md#the-built-in-group-all)), so it runs the
+packages `all` lists, and no others, until `hkctl host-groups move` puts it in a group, and again
+whenever it is moved back to none ([hostgroups.md](hostgroups.md#moving-a-host)). `all` is not a group an approval names
+(`unknown_host_group`). The console's Enrollment page approves this way: a Host group dropdown of
+the specific groups with a blank choice, and nothing else to fill in (no role, no services, no
+reason). The API's reason is optional (1 to 256 bytes when given); the console sends none. An approval names no services
+(`services_retired`): the host's group decides what it runs, and a host in a group is installed
+its group's packages from its first heartbeat. The approval's audit entry names the approver and
+the group (`group web`, and `hostGroup`; `no group` for a host approved in none) and the reason
+when one was given. The certificate is not in the answer: the host takes it at its next poll,
 within seconds.
+
+A host approved with no group (or any host in no group) is shown by `hosts list` with no role and
+no `hostGroup`. A coordinator that holds no host groups (a role-placed one, before groups) still
+requires `--role`.
 
 A request that matches one record, approved as that record's host id (no `--host-id`):
 
@@ -482,6 +494,13 @@ A request that matches one record, approved as that record's host id (no `--host
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment approve --request-id <request-id> --key-sha256 <key-sha256> \
     --host-group web --reason "racked in row 4, key checked on the console"
+```
+
+The same, with no group and no reason (the host is put in a group later):
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment approve --request-id <request-id> --key-sha256 <key-sha256>
 ```
 
 A request that matches no record or several, or a renewal, approved under a host id the operator
@@ -503,8 +522,8 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
   without it);
 - the host id was denied (`denied` without it).
 
-A `--replace` keeps the group of the host it replaces: naming another group is refused
-`host_group_differs`, and changes nothing. A host changes group only by `hkctl host-groups move`
+A `--replace` keeps the group of the host it replaces, and naming no group leaves it there:
+naming another group is refused `host_group_differs`, and changes nothing. A host changes group only by `hkctl host-groups move`
 ([hostgroups.md](hostgroups.md#moving-a-host)). The group of a denied host ended with its
 retirement, so an approval that takes a denied host id puts the new key's host in the group it
 names; so does one that replaces a host approved before the coordinator held groups.
@@ -522,7 +541,8 @@ Without `--replace` none of these is changed. For a renewal, `--replace` lifts o
 ## Reject
 
 A rejection names the request, and a reason if you give one (1 to 256 bytes; it may be left
-out). It asks nothing of the node: the request leaves the queue, which frees its place under the
+out, and the console's Enrollment page asks for none: its Reject button, after a confirmation,
+sends the request alone). It asks nothing of the node: the request leaves the queue, which frees its place under the
 [cap](#the-pending-enrollment-cap), and its key is refused from then on. The node's next `Poll`
 is answered `DENIED`, and a repost of the same key changes nothing. The rejection is audited
 `enroll_reject` with the request id, the claims and the reason; rejecting a request already
@@ -531,6 +551,13 @@ rejected succeeds and audits nothing.
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
     enrollment reject --request-id <request-id> --reason "not one of ours"
+```
+
+The same, with no reason (`--reason` may be left out):
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    enrollment reject --request-id <request-id>
 ```
 
 A request already approved or issued is `not_pending`: that host is retired, not rejected. A
@@ -674,9 +701,9 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `pending_full` | RESOURCE_EXHAUSTED | the pending queue is full; returned to the host's `Enroll`, never by these calls | see [the cap](#the-pending-enrollment-cap) |
 | `duplicate_claim` | FAILED_PRECONDITION | the request is flagged `duplicate_claim` | find which server it is; `--replace true` when it is yours |
 | `invalid_host_id` | INVALID_ARGUMENT | the host id breaks its rule (1 to 63 of `a-z0-9-`, not starting or ending with `-`), none is named for a request that matches no record or several or for a renewal, or a renewal is approved under another host id | name a valid host id; for a renewal, `renewal_of` |
-| `invalid_role` | INVALID_ARGUMENT | the role breaks its rule; or `approve` names neither `--host-group` nor `--role`; or `--role` beside `--host-group` is another name | pass `--host-group` alone (or `--role` as the group's name): 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
+| `invalid_role` | INVALID_ARGUMENT | the role breaks its rule; or `--role` beside `--host-group` is another name; or, from a coordinator that holds no host groups, `approve` names no `--role` (naming neither `--host-group` nor `--role` is allowed from one that holds groups: the host is enrolled in no group) | pass `--host-group` alone (or `--role` as the group's name): 1 to 32 of `a-z0-9-`, starting with a letter, not ending with `-`, with no `--` |
 | `invalid_service` | INVALID_ARGUMENT | a service name breaks its rule (a coordinator started by `serve` refuses any `--services` as `services_retired` first) | leave out `--services` |
-| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a missing or bad reason, a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes |
+| `invalid_request` | INVALID_ARGUMENT | another field breaks its rule: a request id or key hash that is not 64 hex digits, a reason that breaks its rule (1 to 256 bytes, no control character; `approve` may leave it out), a page token, or a record's MAC, serial, notes or platform | correct the field; `--reason` is 1 to 256 bytes when given |
 | `not_pending` | FAILED_PRECONDITION | the request was already approved, issued or denied, or it expired; a `reject` of a request approved or issued | list again; an expired request is approved only after its host posts again (retire an enrolled host with `hosts retire`) |
 | `denied` | FAILED_PRECONDITION | the host id was retired (`hosts retire`) | `--replace true`, or another host id |
 | `store_failed` | INTERNAL | the change could not be written (on the database store, also while its session is lost: the alert `store_unreachable` stands); nothing changed | read the coordinator's log and ask again |

@@ -140,8 +140,8 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 
 `cargo test -p hostkeeper-coordinator --lib hello_group` puts this file through the gateway and
 reads the group back. A coordinator places by group alone
-([hostgroups.md](operations/hostgroups.md#how-the-coordinator-places-hosts)): a host runs the packages its group lists
-and no others, and a host in no group is ordered nothing, until it is moved into one. A
+([hostgroups.md](operations/hostgroups.md#how-the-coordinator-places-hosts)): a host runs the packages the built-in
+group `all` lists and then those its group lists, and no others; a host in no group runs `all`'s alone, until it is moved into one. A
 coordinator that already holds groups gets `farm` beside them.
 
 A host already enrolled gets into the group by `Move`:

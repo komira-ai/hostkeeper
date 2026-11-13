@@ -535,6 +535,10 @@ async fn a_hold_names_its_scope_in_the_audit() {
     assert!(host.covers("d1", "daemon") && !host.covers("d2", "daemon"));
     assert!(storage.covers("d9", "storage") && !storage.covers("d9", "daemon"));
     assert!(HoldScope::Fleet.covers("d9", "anything"));
+    assert!(
+        HoldScope::Role("all".to_owned()).covers("d9", "anything"),
+        "all is every host"
+    );
 
     let state = rig.coordinator.ops().state();
     let found = |service: &str, node: &str, of_role: &str| {

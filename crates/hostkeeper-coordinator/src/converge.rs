@@ -184,7 +184,7 @@ fn counts(
             .hosts_of(&def.name)
             .filter(|(id, _)| counted(def, desired, fleet, id))
             .map(|(_, h)| h)
-            .filter(move |h| h.role_name() == role)
+            .filter(move |h| def.role_key(h.role_name()) == role)
     };
     RoleCounts {
         role: role.to_owned(),
@@ -218,7 +218,7 @@ pub fn role_counts(
     let assigned: BTreeSet<&str> = fleet
         .hosts_of(&def.name)
         .filter(|(id, _)| counted(def, desired, fleet, id))
-        .map(|(_, h)| h.role_name())
+        .map(|(_, h)| def.role_key(h.role_name()))
         .collect();
     let base = def.role_names();
     let added = assigned.iter().copied().filter(|role| !base.contains(role));

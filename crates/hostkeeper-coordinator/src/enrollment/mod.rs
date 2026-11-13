@@ -65,6 +65,7 @@ use hostkeeper_enrollment::names::HostId;
 use hostkeeper_enrollment::validity::UnixClock;
 pub use hostkeeper_proto::hostkeeper::agent::v1::CoordinatorRefusal;
 
+pub(crate) use approve::UNGROUPED_ROLE;
 pub use approve::{ACTION_APPROVE, ACTION_REFUSED, ACTION_REPLACE, Approved, token_of};
 pub use by_record::{ACTION_AUTO_APPROVED, ByRecord, INVENTORY_APPROVER, Waits};
 #[cfg(test)]

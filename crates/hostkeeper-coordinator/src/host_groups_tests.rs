@@ -486,9 +486,14 @@ fn the_groups_are_written_by_name_and_read_back_checked() {
 
     let mut broken = serde_json::to_value(&groups).expect("serialises");
     broken["web"]["packages"] = json!(["tierstore"]);
+    assert!(
+        HostGroups::read(broken.clone()).is_ok(),
+        "a specific group need not list hostkeeper"
+    );
+    broken["all"] = broken["web"].clone();
     assert_eq!(
         HostGroups::read(broken),
-        Err("host group web: does not list hostkeeper".to_owned())
+        Err("host group all: does not list hostkeeper".to_owned())
     );
     let unknown = json!({"web": {"packages": ["hostkeeper"], "generation": 1, "by": "a",
         "at_unix": 0, "members": []}});

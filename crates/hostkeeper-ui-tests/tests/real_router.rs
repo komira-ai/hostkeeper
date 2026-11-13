@@ -107,8 +107,7 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Enrollment/Approve",
         r#"{"requestId": "1111111111111111111111111111111111111111111111111111111111111111",
             "keySha256": "2222222222222222222222222222222222222222222222222222222222222222",
-            "hostId": "storage-1", "role": "storage", "services": ["kbf"], "replace": false,
-            "reason": "racked and checked"}"#,
+            "hostId": "storage-1", "hostGroup": "storage", "replace": false}"#,
     ),
     (
         "hostkeeper.operator.v1.Enrollment/List",
@@ -136,6 +135,11 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"hostGroup": "storage", "limit": 50}"#,
     ),
     ("hostkeeper.operator.v1.HostGroups/List", "{}"),
+    (
+        "hostkeeper.operator.v1.HostGroups/Put",
+        r#"{"hostGroup": {"name": "web", "packages": ["hostkeeper", "tierstore"]},
+            "reason": "set in the console"}"#,
+    ),
     (
         "hostkeeper.operator.v1.HostGroups/Move",
         r#"{"nodeId": "storage-1", "hostGroup": "storage", "reason": "rebuilt"}"#,

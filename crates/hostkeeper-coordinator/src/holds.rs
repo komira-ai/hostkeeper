@@ -38,7 +38,7 @@ pub enum HoldScope {
     /// One host, by node id.
     Host(String),
     /// Every host whose role is this one when the coordinator decides, those that join it later
-    /// included.
+    /// included; the role `all`, the built-in host group, is every host.
     Role(String),
     /// Every host.
     Fleet,
@@ -50,7 +50,8 @@ impl HoldScope {
     pub fn covers(&self, node_id: &str, role: &str) -> bool {
         match self {
             Self::Host(id) => id == node_id,
-            Self::Role(name) => name == role,
+            // The role `all` is the built-in host group of every host.
+            Self::Role(name) => name == role || name == crate::host_groups::ALL,
             Self::Fleet => true,
         }
     }

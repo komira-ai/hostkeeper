@@ -473,6 +473,10 @@ fn enrollment_page_shows_each_match_and_fills_in_only_the_one_record() {
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), matched_reply());
     ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [{"group": {"name": "storage"}}]}),
+    );
+    ui.reply(
         &m("Enrollment/Approve"),
         json!({"hostId": "db-1", "certificateIssuedAtPoll": true}),
     );
@@ -481,10 +485,8 @@ fn enrollment_page_shows_each_match_and_fills_in_only_the_one_record() {
         "{}",
         "[]",
         r#"
-const filled = [0, 1, 2, 3, 4].map((i) => [named(tree, "host-id")[i].attrs.value, named(tree, "role")[i].attrs.value]);
-type(tree, "reason", "built today", 0);
+const filled = [0, 1, 2, 3, 4].map((i) => [named(tree, "host-id")[i].attrs.value, chosen(tree, "host-group", i)]);
 await click(tree, "approve", 0);
-type(tree, "reason", "built today", 1);
 await click(tree, "approve", 1);
 return filled;
 "#,
@@ -503,29 +505,29 @@ return filled;
         bodies(&ui),
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("HostGroups/List"), json!({})),
             (
                 m("Enrollment/Approve"),
                 json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
-                       "hostId": "db-1", "role": "storage", "services": [], "replace": false,
-                       "reason": "built today"})
+                       "hostId": "db-1", "hostGroup": "storage", "replace": false})
             ),
         ]
     );
     assert_eq!(
         out["seen"]["reports"],
         json!([
-            "Approved db-1: the host gets its certificate at its next poll.",
+            "Approved db-1 into host group storage: the host gets its certificate at its next poll.",
             "Name the host id.",
         ])
     );
     assert_shows(
         &out,
         &[
-            "Matches the record of db-1 (role storage).",
+            "Matches the record of db-1 (host group storage).",
             "Matches several records: db-1, db-2. None is chosen.",
             "Matches no inventory record.",
             "Not matched against the inventory.",
-            "Matches the record of mac-1 (no role).",
+            "Matches the record of mac-1 (no host group).",
             "BMC MAC",
             "0c:c4:7a:00:00:01",
         ],
@@ -552,6 +554,10 @@ fn enrollment_page_approves_a_matched_request_as_its_record_unless_replace() {
             "inventoryMatch": "INVENTORY_MATCH_MATCHED", "recordHostId": "db-4"},
         ]}),
     );
+    ui.reply(
+        &m("HostGroups/List"),
+        json!({"hostGroups": [{"group": {"name": "storage"}}]}),
+    );
     for host in ["db-1", "db-9", "s6", "web-1"] {
         ui.reply(
             &m("Enrollment/Approve"),
@@ -570,8 +576,7 @@ fn enrollment_page_approves_a_matched_request_as_its_record_unless_replace() {
         r#"
 const filled = [0, 1, 2, 3].map((i) => named(tree, "host-id")[i].attrs.value);
 for (const i of [0, 1, 2, 3]) {
-  type(tree, "role", "storage", i);
-  type(tree, "reason", "built today", i);
+  choose(tree, "host-group", "storage", i);
 }
 type(tree, "host-id", "", 0);
 await click(tree, "approve", 0);
@@ -592,12 +597,13 @@ return filled;
     assert_eq!(out["out"], json!(["db-1", "s6", "", "db-4"]));
     let body = |id: &str, key: &str, host: &str, replace: bool| {
         json!({"requestId": id.repeat(32), "keySha256": key.repeat(32), "hostId": host,
-               "role": "storage", "services": [], "replace": replace, "reason": "built today"})
+               "hostGroup": "storage", "replace": replace})
     };
     assert_eq!(
         bodies(&ui),
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
+            (m("HostGroups/List"), json!({})),
             (m("Enrollment/Approve"), body("1f", "ab", "", false)),
             (m("Enrollment/Approve"), body("1f", "ab", "db-9", true)),
             (m("Enrollment/Approve"), body("2e", "cd", "s6", false)),
@@ -622,13 +628,13 @@ return filled;
     assert_eq!(
         seen["reports"],
         json!([
-            "Approved db-1: the host gets its certificate at its next poll.",
+            "Approved db-1 into host group storage: the host gets its certificate at its next poll.",
             "This request matches the record of db-1: approve it as db-1, or tick Replace to approve it as db-9.",
-            "Approved db-9: the host gets its certificate at its next poll.",
-            "Approved s6: the host gets its certificate at its next poll.",
+            "Approved db-9 into host group storage: the host gets its certificate at its next poll.",
+            "Approved s6 into host group storage: the host gets its certificate at its next poll.",
             "Name the host id.",
-            "Approved web-1: the host gets its certificate at its next poll.",
-            "Approved db-4: the host gets its certificate at its next poll.",
+            "Approved web-1 into host group storage: the host gets its certificate at its next poll.",
+            "Approved db-4 into host group storage: the host gets its certificate at its next poll.",
         ])
     );
 }

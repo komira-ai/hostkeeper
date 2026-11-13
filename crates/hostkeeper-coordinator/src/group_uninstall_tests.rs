@@ -10,7 +10,8 @@ use hostkeeper_wire::wire::Health;
 
 use crate::assignment::ServiceAssignments;
 use crate::fleet::{Fleet, Node, QUIET_START};
-use crate::group_uninstall::{Wanted, cancel_uninstalls, listed_by, order_uninstalls};
+use crate::group_uninstall::{Placed, Wanted, cancel_uninstalls, lost_by, order_uninstalls};
+use crate::host_groups::{HostGroup, HostGroups, Policy};
 use crate::ops::{AuditEntry, OpsState};
 use crate::testutil::id;
 
@@ -43,26 +44,63 @@ fn fleet_of(hosts: &[(&str, &[&str])]) -> Fleet {
     fleet
 }
 
-/// Proves: of the packages asked about, in the order given, each is paired with the hosts among
-/// those named whose last heartbeat lists it, in the order of the hosts; a package no named host
-/// lists is left out, and a host the fleet never heard from lists nothing.
+/// A group `name` listing `packages`, as the groups of a coordinator hold it.
+fn group_of(packages: &[&str]) -> HostGroup {
+    HostGroup {
+        packages: names(packages),
+        policy: Policy::default(),
+        generation: 1,
+        by: "test".to_owned(),
+        at_unix: 0,
+        desired: BTreeMap::new(),
+    }
+}
+
+/// The groups `held`, each a name and its list.
+fn groups_of(held: &[(&str, &[&str])]) -> HostGroups {
+    HostGroups(
+        held.iter()
+            .map(|(name, packages)| ((*name).parse().expect("a name"), group_of(packages)))
+            .collect(),
+    )
+}
+
+/// Proves: of the packages a host runs before a change and not after, in the reverse of the order
+/// it was offered them, each is paired with the hosts among those named whose last heartbeat lists
+/// it, in the order of the hosts; a package no named host lists is left out, a host the fleet never
+/// heard from lists nothing, and a package that `all` lists is kept by every host.
 ///
 /// Catches: an uninstall ordered of a host that never listed the package (a hand-installed one
-/// is never touched, and a host that has none has nothing to uninstall).
+/// is never touched, and a host that has none has nothing to uninstall), or of a package a host
+/// still runs because `all` lists it.
 #[test]
-fn only_the_packages_a_host_listed_are_paired_with_it() {
+fn only_the_packages_a_host_listed_and_no_longer_runs_are_paired_with_it() {
     let fleet = fleet_of(&[
-        ("d1", &["svc", "cfg"]),
-        ("d2", &["svc"]),
+        ("d1", &["svc", "cfg", "base"]),
+        ("d2", &["svc", "base"]),
         ("d3", &["other"]),
     ]);
-    let hosts = [id("d1"), id("d2"), id("d3"), id("unheard")];
-    let asked = names(&["cfg", "svc", "never"]);
+    let before = groups_of(&[("all", &["base"]), ("web", &["cfg", "svc", "never"])]);
+    let after = groups_of(&[("all", &["base"]), ("web", &[])]);
+    let web = || Some("web".parse().expect("a name"));
+    let members: Vec<Placed> = ["d1", "d2", "d3", "unheard"]
+        .iter()
+        .map(|host| (id(host), web(), web()))
+        .collect();
     assert_eq!(
-        listed_by(&fleet, asked.iter(), &hosts),
+        lost_by(&fleet, &before, &after, &members),
         vec![
-            ("cfg".to_owned(), names(&["d1"])),
             ("svc".to_owned(), names(&["d1", "d2"])),
+            ("cfg".to_owned(), names(&["d1"])),
+        ]
+    );
+    // The host that moves from `web` to no specific group keeps what `all` lists, and loses the rest.
+    let moved = [(id("d1"), web(), None)];
+    assert_eq!(
+        lost_by(&fleet, &before, &before, &moved),
+        vec![
+            ("svc".to_owned(), names(&["d1"])),
+            ("cfg".to_owned(), names(&["d1"])),
         ]
     );
 }

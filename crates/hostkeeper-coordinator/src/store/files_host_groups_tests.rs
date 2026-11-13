@@ -204,14 +204,15 @@ fn a_state_file_with_a_bad_group_is_refused_naming_the_file_and_the_group() {
         "host_groups": {"web": web()},
     }))
     .expect("JSON");
-    value["host_groups"]["web"]["packages"] = serde_json::json!(["tierstore"]);
+    value["host_groups"]["all"] = value["host_groups"]["web"].clone();
+    value["host_groups"]["all"]["packages"] = serde_json::json!(["tierstore"]);
     fs::write(&path, value.to_string()).expect("written");
     let error = files_over(dir.path()).load_desired().expect_err("refused");
     assert!(matches!(error, StoreError::Invalid { .. }), "{error}");
     assert_eq!(
         error.to_string(),
         format!(
-            "{}: the desired state is malformed: host group web: does not list hostkeeper",
+            "{}: the desired state is malformed: host group all: does not list hostkeeper",
             path.display()
         )
     );

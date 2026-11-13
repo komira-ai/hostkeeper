@@ -38,7 +38,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
     );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=12)
+        (1..=13)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -46,7 +46,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
 
 /// Proves: this release starts on a database the release before migrated (`0001` to `0007`) and
 /// wrote a host, an inventory record and an audit line into, as that release writes them (naming
-/// the columns it knows); it runs `0008` alone, and reads the host with no group, no move and no
+/// the columns it knows); it runs `0008` and the migrations after it, and reads the host with no group, no move and no
 /// facts' generation, the record with no group, and the line concerning no group.
 ///
 /// Catches: a row written before the groups read as naming a group (or refused), or a migration
@@ -74,7 +74,8 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(loaded.ops.inventory[0].host_group, "");
     assert_eq!(loaded.ops.audit.len(), 1);
     assert_eq!(loaded.ops.audit[0].host_group, None);
-    assert_eq!(loaded.desired.host_groups, HostGroups::default());
+    // `0013` made the built-in group, which lists `hostkeeper` alone.
+    assert_eq!(loaded.desired.host_groups, HostGroups::default().with_all());
     store.stop();
     let read = with_session(&db, |session| {
         records::read_all(session)
@@ -93,7 +94,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        12
+        13
     );
 }
 

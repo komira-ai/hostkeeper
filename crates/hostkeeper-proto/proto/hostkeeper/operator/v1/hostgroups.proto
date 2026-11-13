@@ -29,8 +29,9 @@ package hostkeeper.operator.v1;
 import "hostkeeper/operator/v1/operator.proto";
 
 // The host groups: what each group's hosts run, and by which rollout policy. Every enrolled host
-// is in exactly one group, and runs exactly the packages its group lists. Each mutating call
-// takes a reason and answers the audit entry it wrote.
+// is in the built-in group `all`, which always exists, and may be in one specific group besides;
+// it runs the packages `all` lists, then those its specific group lists that `all` does not. Each
+// mutating call takes a reason and answers the audit entry it wrote.
 service HostGroups {
   // Every group, by name, a page at a time, each with its packages, policy, generation, host
   // count and, per package, its desired version. Changes nothing.
@@ -48,7 +49,9 @@ service HostGroups {
   // `host_group_remove`.
   rpc Remove(RemoveHostGroupRequest) returns (RemoveHostGroupResponse);
   // Move an enrolled host into another group, in one call: it is in the new group from this
-  // write, and is moving until its packages match the new group's. Audited `host_move`.
+  // write, and is moving until its packages match the new group's. An empty `host_group` moves
+  // it out of its specific group into none: it then runs the packages of `all` alone, and what
+  // its old group listed and `all` does not is uninstalled. Audited `host_move`.
   rpc Move(MoveHostRequest) returns (MoveHostResponse);
 }
 
@@ -79,8 +82,8 @@ enum HostGroupsRefusal {
   // INVALID_ARGUMENT: `Put` of a policy with a key out of its range; the audit and the log name
   // the key.
   HOST_GROUPS_REFUSAL_INVALID_POLICY = 9;
-  // FAILED_PRECONDITION: `Put` of a group whose list does not include `hostkeeper` (an empty list
-  // included).
+  // FAILED_PRECONDITION: `Put` of the group `all` whose list does not include `hostkeeper` (an
+  // empty list included). A specific group may list none.
   HOST_GROUPS_REFUSAL_HOSTKEEPER_NOT_LISTED = 10;
   // INVALID_ARGUMENT: `Put` of a group that lists more than 64 packages.
   HOST_GROUPS_REFUSAL_TOO_MANY_PACKAGES = 11;
@@ -93,15 +96,22 @@ enum HostGroupsRefusal {
   HOST_GROUPS_REFUSAL_NOT_EMPTY = 13;
   // NOT_FOUND: `Move` of a host the coordinator has not enrolled.
   HOST_GROUPS_REFUSAL_UNKNOWN_HOST = 14;
-  // FAILED_PRECONDITION: `Move` of a host into the group it is in.
+  // FAILED_PRECONDITION: `Move` of a host into the group it is in (an empty group, for a host
+  // in none).
   HOST_GROUPS_REFUSAL_SAME_HOST_GROUP = 15;
+  // FAILED_PRECONDITION: the call would remove or create the built-in group `all`, or put a host
+  // in it: it always exists, and every host is in it without being put there. `Put` of `all`
+  // that replaces it is allowed.
+  HOST_GROUPS_REFUSAL_RESERVED_HOST_GROUP = 16;
 }
 
 // A group's body, as `Put` takes it and the answers carry it.
 message HostGroup {
   // The group's name.
   string name = 1;
-  // The packages its hosts run, 1 to 64, none twice, `hostkeeper` among them. The order is the
+  // The packages its hosts run, 0 to 64, none twice; the group `all` lists 1 to 64, `hostkeeper`
+  // among them. A host runs the packages of `all`, then those of its own group that `all` does not
+  // list. The order is the
   // order in which a host is offered its packages and the order of installs: a host is offered
   // the install of a package only once every package before it is installed or cannot be.
   // Uninstalls run in the reverse order.
@@ -268,15 +278,16 @@ message RemoveHostGroupResponse {
 message MoveHostRequest {
   // The host, by the host id it was enrolled as.
   string node_id = 1;
-  // The group it moves into.
+  // The group it moves into; empty for none (the host runs the packages of `all` alone).
   string host_group = 2;
   // Why; 1 to 256 bytes.
   string reason = 3;
 }
 
 message MoveHostResponse {
-  // The `host_move` entry: its `node_id` is the host, its `host_group` the new group, and its
-  // reason "from <old> to <new>: " followed by the request's reason.
+  // The `host_move` entry: its `node_id` is the host, its `host_group` the new group (empty
+  // for none), and its reason "from <old> to <new>: " (or "to no group: ") followed by the
+  // request's reason.
   AuditEntry entry = 1;
   // The group the host was in.
   string from_host_group = 2;

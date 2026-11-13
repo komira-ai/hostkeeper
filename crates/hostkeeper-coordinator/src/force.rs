@@ -182,7 +182,7 @@ pub fn plan(
     let members = || {
         fleet
             .hosts_in(def)
-            .filter(|(_, host)| def.roles.contains(host.role_name()))
+            .filter(|(_, host)| def.has_role(host.role_name()))
     };
     let targeted: Vec<(HostId, Version)> = match targets {
         ForceTargets::Fleet => members()
@@ -193,7 +193,7 @@ pub fn plan(
                 return Err(UnknownTarget);
             }
             members()
-                .filter(|(_, host)| host.role_name() == role.as_str())
+                .filter(|(_, host)| def.role_key(host.role_name()) == role.as_str())
                 .map(|(id, host)| (id.clone(), host.beat.version.clone()))
                 .collect()
         }

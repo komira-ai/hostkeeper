@@ -52,7 +52,7 @@ use hostkeeper_proto::hostkeeper::agent::v1 as agent;
 
 use hostkeeper_wire::HostId;
 
-use crate::enrollment::{ACTION_APPROVE, ACTION_AUTO_APPROVED, ACTION_REPLACE};
+use crate::enrollment::{ACTION_APPROVE, ACTION_AUTO_APPROVED, ACTION_REPLACE, UNGROUPED_ROLE};
 use crate::host_move::ACTION_MOVE;
 use crate::identity::Identity;
 use crate::ops::AuditEntry;
@@ -205,9 +205,13 @@ impl Coordinator {
         let store = enrollment.store();
         let record = store.membership(&host).and_then(|held| match held {
             Some(held) if !held.host_group.is_empty() => Ok(Some(held.host_group)),
-            _ => store
-                .host_role(&host)
-                .map(|role| role.map(|role| role.as_str().to_owned())),
+            // A host approved in no group holds the placeholder role: it is in no group.
+            _ => store.host_role(&host).map(|role| {
+                role.map(|role| match role.as_str() {
+                    UNGROUPED_ROLE => String::new(),
+                    named => named.to_owned(),
+                })
+            }),
         });
         match record {
             Ok(Some(group)) => Some(group),

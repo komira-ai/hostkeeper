@@ -262,7 +262,7 @@ impl Coordinator {
                 Scope::All | Scope::Service => true,
             })
             .filter_map(|(name, group)| {
-                let def = package_def(name, group, &self.services, &ops, package)?;
+                let def = package_def(name, group, &groups, &self.services, &ops, package)?;
                 let want = self.desired.group_desired(name, package)?;
                 Some(self.pair_convergence(&def, Some(&want), &fleet, &ops, now))
             })
@@ -292,7 +292,7 @@ impl Coordinator {
             && desired.is_some()
             && convergence.roles.is_empty()
             && convergence.hosts.is_none();
-        if counted && !self.group_has_hosts(group, fleet) {
+        if counted && !self.group_has_hosts(group, &def.name, fleet) {
             return Convergence {
                 state: State::Converged,
                 ..convergence
@@ -301,11 +301,29 @@ impl Coordinator {
         convergence
     }
 
-    /// Whether the group `group` has a host: the fleet has heard of one in it, or the enrollment
-    /// store holds one. A store that cannot be read says it has.
-    fn group_has_hosts(&self, group: &GroupName, fleet: &Fleet) -> bool {
-        fleet.nodes().any(|(_, node)| node.role == group.as_str())
-            || !self.hosts_in(group).is_ok_and(|hosts| hosts.is_empty())
+    /// Whether the group `group` has a host that runs `package` under it: the fleet has heard of
+    /// one in it, or the enrollment store holds one. A store that cannot be read says it has.
+    ///
+    /// Every host is in `all`, but a host runs a package of `all` as `all` says only when its own
+    /// group does not list the package ([`crate::group_scope::effective`]): a package every host's
+    /// own group lists has no host under `all`, and its convergence under `all` is that of a group
+    /// with no hosts.
+    fn group_has_hosts(&self, group: &GroupName, package: &str, fleet: &Fleet) -> bool {
+        if !group.is_all() {
+            return fleet.nodes().any(|(_, node)| node.role == group.as_str())
+                || !self.hosts_in(group).is_ok_and(|hosts| hosts.is_empty());
+        }
+        let groups = self.desired.host_groups();
+        let under_all = |own: Option<GroupName>| {
+            own.and_then(|own| groups.0.get(&own).cloned())
+                .is_none_or(|own| !own.packages.iter().any(|listed| listed == package))
+        };
+        fleet
+            .nodes()
+            .any(|(_, node)| under_all(node.role.parse().ok()))
+            || self.members_of(group).map_or(true, |hosts| {
+                hosts.into_iter().any(|(_, own)| under_all(own))
+            })
     }
 
     /// The status of every pair of a group and a package it lists, by group and package, at
@@ -319,7 +337,7 @@ impl Coordinator {
         let groups = self.desired.host_groups();
         let mut statuses = std::collections::BTreeMap::new();
         for (name, group) in &groups.0 {
-            let services = group_services(name, group, &self.services, ops, &[]);
+            let services = group_services(name, group, &groups, &self.services, ops, &[]);
             let all = self.desired.group_desireds(name);
             for def in group
                 .packages

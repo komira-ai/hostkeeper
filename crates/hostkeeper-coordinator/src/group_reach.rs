@@ -147,7 +147,7 @@ impl Coordinator {
             .iter()
             .filter(|(name, _)| only.as_ref().is_none_or(|only| only == *name))
             .filter_map(|(name, listed)| {
-                let def = package_def(name, listed, &self.services, state, package)?;
+                let def = package_def(name, listed, groups, &self.services, state, package)?;
                 Some(Reached {
                     name: name.clone(),
                     listed: listed.clone(),

@@ -214,19 +214,26 @@ impl DesiredStore {
         })
     }
 
-    /// This store, placing hosts by host group whether or not it holds a group yet: with none
-    /// held, no host is placed anywhere. `serve` builds its coordinator so.
+    /// This store, placing hosts by host group whether or not it holds a group yet, and holding
+    /// the built-in group `all` ([`HostGroups::with_all`]): the database's migration made it, and
+    /// a state file that lacks it gets it here. `serve` builds its coordinator so.
     #[must_use]
-    pub(crate) const fn by_groups_only(mut self) -> Self {
+    pub(crate) fn by_groups_only(mut self) -> Self {
         self.by_groups = true;
+        {
+            let mut held = self.lock();
+            let groups = std::mem::take(&mut held.host_groups);
+            held.host_groups = groups.with_all();
+        }
         self
     }
 
-    /// Whether hosts are placed by host group: the coordinator holds a host group, or was built
-    /// to place by groups only ([`DesiredStore::by_groups_only`]).
+    /// Whether hosts are placed by host group: the coordinator holds a host group besides the
+    /// built-in `all` as the migration makes it ([`HostGroups::is_bare`]), or was built to place by
+    /// groups only ([`DesiredStore::by_groups_only`]).
     #[must_use]
     pub fn in_group_mode(&self) -> bool {
-        self.by_groups || !self.lock().host_groups.is_empty()
+        self.by_groups || !self.lock().host_groups.is_bare()
     }
 
     /// The desired state with the groups `edit` makes of the groups now, staged under the

@@ -156,9 +156,20 @@ export function tick(tree, name, checked, index) {
   named(tree, name)[index || 0].on.change({ target: { checked } });
 }
 
-// Chooses `value` in the select named `name`.
-export function choose(tree, name, value) {
-  named(tree, name)[0].on.change({ target: { value } });
+// Chooses `value` in the `index`th select named `name`.
+export function choose(tree, name, value, index) {
+  named(tree, name)[index || 0].on.change({ target: { value } });
+}
+
+// The value of the choice the `index`th select named `name` shows as selected; undefined for none.
+export function chosen(tree, name, index) {
+  const choice = named(tree, name)[index || 0].children.find((option) => option.attrs.selected === true);
+  return choice === undefined ? undefined : choice.attrs.value;
+}
+
+// The texts of the choices of the `index`th select named `name`.
+export function choices(tree, name, index) {
+  return named(tree, name)[index || 0].children.map((option) => text(option));
 }
 
 // Clicks the `index`th button named `name` and waits for what it started.

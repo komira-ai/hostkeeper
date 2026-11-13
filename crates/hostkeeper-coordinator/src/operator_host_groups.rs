@@ -38,11 +38,11 @@ use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
 use crate::group_scope::group_services;
-use crate::group_uninstall::{cancel_uninstalls, listed_by, order_uninstalls};
+use crate::group_uninstall::{cancel_uninstalls, lost_by, order_uninstalls, runs};
 use crate::grpc::report;
 use crate::holds::marks_of;
 use crate::host_group_proto::{body_proto, policy_of};
-use crate::host_groups::{GroupName, HostGroup, ListError, check_packages};
+use crate::host_groups::{GroupName, HostGroup, ListError, check_packages_for};
 use crate::inventory::unreadable;
 use crate::operator::{Caller, entry_proto, valid_reason};
 use crate::ops::{AuditEntry, OpsState};
@@ -122,13 +122,28 @@ impl Coordinator {
             .map_err(unreadable(Refusal::StoreFailed))
     }
 
-    /// The enrolled hosts in the group `name` (those moving into it among them), by node id.
-    pub(crate) fn hosts_in(&self, name: &GroupName) -> Result<Vec<HostId>, Refusal> {
+    /// The enrolled hosts in the group `name` (those moving into it among them), each with the
+    /// specific group it is in, if it is in one. Every enrolled host is in `all`.
+    pub(crate) fn members_of(
+        &self,
+        name: &GroupName,
+    ) -> Result<Vec<(HostId, Option<GroupName>)>, Refusal> {
         Ok(self
             .memberships()?
             .into_iter()
-            .filter(|(_, membership)| membership.host_group == name.as_str())
-            .filter_map(|(id, _)| id.parse().ok())
+            .filter(|(_, membership)| name.is_all() || membership.host_group == name.as_str())
+            .filter_map(|(id, membership)| {
+                Some((id.parse().ok()?, membership.host_group.parse().ok()))
+            })
+            .collect())
+    }
+
+    /// The enrolled hosts in the group `name` (those moving into it among them), by node id.
+    pub(crate) fn hosts_in(&self, name: &GroupName) -> Result<Vec<HostId>, Refusal> {
+        Ok(self
+            .members_of(name)?
+            .into_iter()
+            .map(|(host, _)| host)
             .collect())
     }
 
@@ -190,6 +205,9 @@ impl Coordinator {
         let mut counts: BTreeMap<String, u32> = BTreeMap::new();
         for (_, membership) in self.memberships()? {
             *counts.entry(membership.host_group).or_default() += 1;
+            *counts
+                .entry(crate::host_groups::ALL.to_owned())
+                .or_default() += 1;
         }
         let groups = self.desired.host_groups();
         let mut page: Vec<_> = groups
@@ -265,7 +283,14 @@ impl Coordinator {
         let now = (self.clock)();
         let fleet = self.lock_fleet();
         let ops = self.ops.state();
-        let services = group_services(&name, &group, &self.services, &ops, &[]);
+        let services = group_services(
+            &name,
+            &group,
+            &self.desired.host_groups(),
+            &self.services,
+            &ops,
+            &[],
+        );
         let desired = self.desired.group_desireds(&name);
         let converged: BTreeMap<String, proto::Convergence> = services
             .defs()
@@ -302,7 +327,7 @@ impl Coordinator {
         let why = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
         let body = request.host_group.ok_or(Refusal::InvalidRequest)?;
         let name: GroupName = body.name.parse().map_err(|_| Refusal::InvalidHostGroup)?;
-        check_packages(&body.packages).map_err(list_refusal)?;
+        check_packages_for(&name, &body.packages).map_err(list_refusal)?;
         let policy = policy_of(body.policy.as_ref())
             .and_then(|policy| policy.check().map(|()| policy))
             .map_err(|refused| {
@@ -310,10 +335,13 @@ impl Coordinator {
                 Refusal::InvalidPolicy
             })?;
         let mut fleet = self.lock_fleet();
-        let members = self.hosts_in(&name)?;
+        let members = self.members_of(&name)?;
         let now = self.ops.unix_now();
-        let (staged, (old, next)) = self.desired.stage_host_groups(|held| {
+        let (staged, (old, next, before, after)) = self.desired.stage_host_groups(|held| {
             let old = held.0.get(&name).cloned();
+            if old.is_none() && name.is_all() {
+                return Err(Refusal::ReservedHostGroup);
+            }
             if old.as_ref().map(|group| group.generation) != request.if_generation {
                 return Err(Refusal::GenerationMismatch);
             }
@@ -335,14 +363,20 @@ impl Coordinator {
             };
             let mut groups = held.clone();
             groups.0.insert(name.clone(), next.clone());
-            Ok((groups, (old, next)))
+            Ok((groups.clone(), (old, next, held.clone(), groups)))
         })?;
-        let taken = old
+        let placed: Vec<_> = members
             .iter()
-            .flat_map(|group| group.packages.iter().rev())
-            .filter(|package| !next.packages.contains(package));
-        let wanted = listed_by(&fleet, taken, &members);
-        let nodes: Vec<String> = members.iter().map(ToString::to_string).collect();
+            .map(|(host, own)| (host.clone(), own.clone(), own.clone()))
+            .collect();
+        let wanted = lost_by(&fleet, &before, &after, &placed);
+        let mut buckets: BTreeMap<Option<GroupName>, Vec<String>> = BTreeMap::new();
+        for (host, own) in &members {
+            buckets
+                .entry(own.clone())
+                .or_default()
+                .push(host.to_string());
+        }
         let audit = entry(
             by,
             "host_group_put",
@@ -352,7 +386,10 @@ impl Coordinator {
         let done = self.ops.decide_changes_with(staged, |state| {
             state.drop_group_packages(&name, &next.packages);
             let mut entries = vec![audit];
-            entries.extend(cancel_uninstalls(state, &name, &next.packages, &nodes));
+            for (own, nodes) in &buckets {
+                let runs = runs(&after, own.as_ref());
+                entries.extend(cancel_uninstalls(state, &name, &runs, nodes));
+            }
             order_uninstalls(state, &wanted);
             entries
         })?;
@@ -387,6 +424,9 @@ impl Coordinator {
             .parse()
             .map_err(|_| Refusal::InvalidRequest)?;
         let why = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
+        if name.is_all() {
+            return Err(Refusal::ReservedHostGroup);
+        }
         let mut fleet = self.lock_fleet();
         let occupied = self
             .memberships()?

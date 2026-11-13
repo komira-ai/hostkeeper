@@ -130,7 +130,8 @@ impl Coordinator {
                     .0
                     .iter()
                     .filter_map(|(name, listed)| {
-                        let def = package_def(name, listed, &self.services, state, package)?;
+                        let def =
+                            package_def(name, listed, &groups, &self.services, state, package)?;
                         Some((name, def))
                     })
                     .collect();

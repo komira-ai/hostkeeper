@@ -75,8 +75,8 @@ fn approval(
     }
 }
 
-/// Proves: a coordinator built to place by groups only is in group mode while it holds no group,
-/// and one built as a test builds it is not.
+/// Proves: a coordinator built to place by groups only is in group mode while it holds no group
+/// but the built-in `all`, and one built as a test builds it is not.
 ///
 /// Catches: a `serve` whose coordinator falls back to the role-mode paths until a group is put.
 #[test]
@@ -88,7 +88,13 @@ fn the_mode_follows_the_build_and_not_only_the_groups_held() {
     let direct = coordinator_on(&fake, &clock, None);
 
     assert!(only.coordinator().desired.in_group_mode());
-    assert!(only.coordinator().desired.host_groups().is_empty());
+    // It holds the built-in group `all`, and no other.
+    let held = only.coordinator().desired.host_groups();
+    assert_eq!(
+        held.0.keys().map(ToString::to_string).collect::<Vec<_>>(),
+        ["all"]
+    );
+    assert!(plain.coordinator().desired.host_groups().is_empty());
     assert!(!plain.coordinator().desired.in_group_mode());
     assert!(!direct.desired.in_group_mode());
 }

@@ -18,12 +18,13 @@ fn two_pending() -> Value {
 }
 
 #[test]
-fn enrollment_reject_asks_first_and_sends_the_listed_request_id() {
+fn enrollment_reject_asks_first_and_sends_only_the_listed_request_id() {
     // Catches: a rejection sent without the operator's yes, a body that names another request
-    // or a field the proto does not read, a reason with a control character sent, an empty
-    // reason refused (it is optional), a reason not trimmed, and a refusal taken as success.
+    // or a field the proto does not read, a reason field on the page (the page asks for none and
+    // sends none), and a refusal taken as success.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), two_pending());
+    ui.reply(&m("HostGroups/List"), json!({}));
     ui.reply(
         &m("Enrollment/Reject"),
         json!({"entry": {"action": "enroll_reject"}}),
@@ -34,12 +35,8 @@ fn enrollment_reject_asks_first_and_sends_the_listed_request_id() {
         "{}",
         "[false, true, true]",
         r#"
-type(tree, "reject-reason", "bad\treason", 0);
-await click(tree, "reject", 0);
-type(tree, "reject-reason", "", 0);
 await click(tree, "reject", 0);
 await click(tree, "reject", 0);
-type(tree, "reject-reason", "  not ours  ", 1);
 await click(tree, "reject", 1);
 "#,
     ));
@@ -48,14 +45,9 @@ await click(tree, "reject", 1);
         bodies(&ui),
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
-            (
-                m("Enrollment/Reject"),
-                json!({"requestId": one, "reason": ""})
-            ),
-            (
-                m("Enrollment/Reject"),
-                json!({"requestId": two, "reason": "not ours"})
-            ),
+            (m("HostGroups/List"), json!({})),
+            (m("Enrollment/Reject"), json!({"requestId": one})),
+            (m("Enrollment/Reject"), json!({"requestId": two})),
         ]
     );
     let seen = &out["seen"];
@@ -67,7 +59,6 @@ await click(tree, "reject", 1);
     assert_eq!(
         seen["reports"],
         json!([
-            "A reason has no control character (a tab or a line break, for example).",
             "Not rejected.",
             format!("Rejected request {one}."),
             "NOT_FOUND unknown_request",
@@ -77,7 +68,11 @@ await click(tree, "reject", 1);
         seen["refreshes"], 1,
         "a refused rejection refreshes nothing"
     );
-    assert_shows(&out, &["Reject", "Reason (optional)"]);
+    assert_shows(&out, &["Reject"]);
+    assert!(
+        !out["shown"].to_string().contains("Reason"),
+        "no reason is asked: {out}"
+    );
 }
 
 #[test]

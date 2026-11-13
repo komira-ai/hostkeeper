@@ -148,10 +148,9 @@ impl Fleet {
 
     /// Whether the node `id` is in the group of `def`, or `def` is made for none.
     fn in_group_of(&self, def: &ServiceDef, id: &HostId) -> bool {
-        def.group().is_none_or(|group| {
-            self.node(id)
-                .is_some_and(|node| node.role == group.as_str())
-        })
+        def.scope
+            .as_ref()
+            .is_none_or(|scope| self.node(id).is_some_and(|node| scope.covers(&node.role)))
     }
 
     /// [`Self::hosts_of`] for `def`: the hosts of its group alone, for a service made for one.
@@ -160,8 +159,9 @@ impl Fleet {
         def: &'a ServiceDef,
     ) -> impl Iterator<Item = (&'a HostId, &'a Host)> {
         self.hosts_of(&def.name).filter(|(_, host)| {
-            def.group()
-                .is_none_or(|group| host.role_name() == group.as_str())
+            def.scope
+                .as_ref()
+                .is_none_or(|scope| scope.covers(host.role_name()))
         })
     }
 
@@ -206,11 +206,9 @@ impl Fleet {
         let nodes = &self.nodes;
         self.verdicts
             .keep_only_of(&def.name, version, acked, &|id| {
-                def.group().is_none_or(|group| {
-                    nodes
-                        .get(id)
-                        .is_some_and(|node| node.role == group.as_str())
-                })
+                def.scope
+                    .as_ref()
+                    .is_none_or(|scope| nodes.get(id).is_some_and(|node| scope.covers(&node.role)))
             });
     }
 

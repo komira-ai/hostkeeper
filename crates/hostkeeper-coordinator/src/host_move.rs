@@ -24,6 +24,11 @@
 //!
 //! The entry names the host (`node_id`) and the new group (`host_group`); its reason is
 //! `from <old> to <new>: <reason>`, or `into <new>: <reason>` for a host that was in no group.
+//! An empty `host_group` in the request moves the host out of its specific group into none: it
+//! then runs the packages of `all` alone. The record is written with no `moving_from` (there is
+//! nothing to install), the uninstall intents are those of the packages the old group lists and
+//! `all` does not, the audit entry names no group and its reason is `from <old> to no group:
+//! <reason>`; a host already in no group is refused as `same_host_group`.
 //! Each intent cancelled is an `uninstall_cancelled` entry after it, naming the new group. The sequence that follows
 //! the move (admission, the uninstalls, the installs) is [`crate::moving`].
 
@@ -33,7 +38,7 @@ use hostkeeper_proto::hostkeeper::operator::v1 as proto;
 use hostkeeper_proto::hostkeeper::operator::v1::HostGroupsRefusal as Refusal;
 use hostkeeper_wire::HostId;
 
-use crate::group_uninstall::{cancel_uninstalls, listed_by, order_uninstalls};
+use crate::group_uninstall::{cancel_uninstalls, lost_by, order_uninstalls, runs};
 use crate::holds::marks_of;
 use crate::host_groups::GroupName;
 use crate::inventory::unreadable;
@@ -52,7 +57,7 @@ fn unwritten(why: StoreError) -> Refusal {
 }
 
 impl Coordinator {
-    /// `HostGroups.Move`: puts the enrolled host in the group, as the module says. Audited as
+    /// `HostGroups.Move`: puts the enrolled host in the group, or in none when the group is empty, as the module says. Audited as
     /// `host_move`.
     ///
     /// # Errors
@@ -69,10 +74,10 @@ impl Coordinator {
             .node_id
             .parse()
             .map_err(|_| Refusal::InvalidRequest)?;
-        let to: GroupName = request
-            .host_group
-            .parse()
-            .map_err(|_| Refusal::InvalidRequest)?;
+        let to: Option<GroupName> = match request.host_group.as_str() {
+            "" => None,
+            name => Some(name.parse().map_err(|_| Refusal::InvalidRequest)?),
+        };
         let why = valid_reason(&request.reason).ok_or(Refusal::InvalidRequest)?;
         let mut fleet = self.lock_fleet();
         let (enrollment, enrolled) = self
@@ -84,38 +89,42 @@ impl Coordinator {
             .membership(&enrolled)
             .map_err(unreadable(Refusal::StoreFailed))?
             .ok_or(Refusal::UnknownHost)?;
-        let into = self
-            .desired
-            .host_group(&to)
-            .ok_or(Refusal::UnknownHostGroup)?;
-        if before.host_group == to.as_str() {
+        let groups = self.desired.host_groups();
+        if let Some(to) = &to {
+            if to.is_all() {
+                return Err(Refusal::ReservedHostGroup);
+            }
+            if !groups.0.contains_key(to) {
+                return Err(Refusal::UnknownHostGroup);
+            }
+        }
+        let target = to.as_ref().map_or("", GroupName::as_str);
+        if before.host_group == target {
             return Err(Refusal::SameHostGroup);
         }
-        let from = before
-            .host_group
-            .parse::<GroupName>()
-            .ok()
-            .and_then(|name| self.desired.host_group(&name));
-        let leaving = from
-            .iter()
-            .flat_map(|group| group.packages.iter().rev())
-            .filter(|package| !into.packages.contains(package));
-        let wanted = listed_by(&fleet, leaving, std::slice::from_ref(&host));
+        let from = before.host_group.parse::<GroupName>().ok();
+        let wanted = lost_by(
+            &fleet,
+            &groups,
+            &groups,
+            &[(host.clone(), from, to.clone())],
+        );
         let nodes = [host.to_string()];
         let mut audit = AuditEntry::new(by, ACTION_MOVE);
         audit.node_id = Some(host.to_string());
-        audit.host_group = Some(to.to_string());
-        audit.reason = Some(if before.host_group.is_empty() {
-            format!("into {to}: {why}")
-        } else {
-            format!("from {} to {to}: {why}", before.host_group)
+        audit.host_group = to.as_ref().map(ToString::to_string);
+        audit.reason = Some(match (before.host_group.as_str(), &to) {
+            ("", Some(to)) => format!("into {to}: {why}"),
+            (from, Some(to)) => format!("from {from} to {to}: {why}"),
+            (from, None) => format!("from {from} to no group: {why}"),
         });
         let previous = store
             .set_membership(
                 &enrolled,
                 Membership {
-                    host_group: to.to_string(),
-                    moving_from: Some(before.host_group.clone()),
+                    host_group: target.to_owned(),
+                    // A host in no specific group has nothing to install: it does not move.
+                    moving_from: to.as_ref().map(|_| before.host_group.clone()),
                 },
             )
             .map_err(unwritten)?;
@@ -123,7 +132,13 @@ impl Coordinator {
             .ops
             .decide_changes(Write::BeforeMemory, |state| -> Result<_, OpsError> {
                 let mut entries = vec![audit];
-                entries.extend(cancel_uninstalls(state, &to, &into.packages, &nodes));
+                let own = to.clone().unwrap_or_else(GroupName::all);
+                entries.extend(cancel_uninstalls(
+                    state,
+                    &own,
+                    &runs(&groups, to.as_ref()),
+                    &nodes,
+                ));
                 order_uninstalls(state, &wanted);
                 Ok(entries)
             })
@@ -134,8 +149,11 @@ impl Coordinator {
                 Refusal::from(refused)
             })?;
         fleet.set_marks(self.ops.read(marks_of));
-        fleet.regroup(&host, to.as_str());
-        fleet.begin_move(host, to);
+        fleet.regroup(&host, target);
+        match to {
+            Some(to) => fleet.begin_move(host, to),
+            None => fleet.drop_move(&host),
+        }
         Ok(proto::MoveHostResponse {
             entry: done.first().map(entry_proto),
             from_host_group: before.host_group,
