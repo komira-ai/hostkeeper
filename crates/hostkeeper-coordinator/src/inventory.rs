@@ -91,12 +91,19 @@ pub const MAX_DATA_MACS: usize = 16;
 /// The most records one page answers: a `limit` of 0, or one above this, is this.
 pub const MAX_PAGE: usize = 256;
 
+/// The longest notes a record holds, in bytes.
+const MAX_NOTES: usize = 256;
+
 /// The longest serial a record holds.
 const MAX_SERIAL: usize = 64;
 
 /// The approval window of a record, and `Enrollment.OpenRecord`.
 #[path = "inventory_window.rs"]
 mod window;
+
+/// `Enrollment.UpdateRecord`.
+#[path = "inventory_update.rs"]
+mod update;
 
 /// Whether `n` is zero: a window a record does not have is left out of the ops file.
 fn is_zero(n: &u64) -> bool {
@@ -484,6 +491,37 @@ fn is_serial(text: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// The notes `text` trimmed, if they are notes: 1 to 256 bytes, line breaks (`\n`) allowed and no
+/// other control character. A caller passes text that is not empty once trimmed.
+pub(super) fn valid_notes(text: &str) -> Option<String> {
+    let text = text.trim();
+    let sound = text.len() <= MAX_NOTES && text.chars().all(|c| c == '\n' || !c.is_control());
+    sound.then(|| text.to_owned())
+}
+
+/// The data MACs and the BMC MAC a request gives, each in its one spelling, the data MACs sorted
+/// and without repeats; `invalid_request` for a text that is no MAC, more than [`MAX_DATA_MACS`]
+/// data MACs, or a data MAC that is also the BMC MAC.
+fn macs_of(
+    data_macs: &[String],
+    bmc_mac: &str,
+) -> Result<(Vec<String>, String), proto::EnrollmentRefusal> {
+    let mut data = data_macs
+        .iter()
+        .map(|text| mac(text))
+        .collect::<Result<Vec<String>, _>>()?;
+    data.sort();
+    data.dedup();
+    let bmc = match bmc_mac {
+        "" => String::new(),
+        text => mac(text)?,
+    };
+    if data.len() > MAX_DATA_MACS || data.contains(&bmc) {
+        return Err(proto::EnrollmentRefusal::InvalidRequest);
+    }
+    Ok((data, bmc))
+}
+
 /// The record `request` asks for, by `by` at `at_unix`, checked field by field, with the window
 /// `window` gives it. With `held`, the host groups the coordinator holds, the record names one
 /// of them, as the module says, or none; without, a role or none.
@@ -517,26 +555,15 @@ fn record_of(
             None => (String::new(), String::new()),
         },
     };
-    let mut data_macs = request
-        .data_macs
-        .iter()
-        .map(|text| mac(text))
-        .collect::<Result<Vec<String>, _>>()?;
-    data_macs.sort();
-    data_macs.dedup();
-    let bmc_mac = match request.bmc_mac.as_str() {
-        "" => String::new(),
-        text => mac(text)?,
-    };
+    let (data_macs, bmc_mac) = macs_of(&request.data_macs, &request.bmc_mac)?;
     let serial = request.serial.trim().to_owned();
     let platform = record_platform(request.platform)?;
     let notes = match request.notes.trim() {
         "" => String::new(),
-        text => valid_reason(text).ok_or(InvalidRequest)?,
+        text => valid_notes(text).ok_or(InvalidRequest)?,
     };
     let identified = !data_macs.is_empty() || !serial.is_empty();
-    let bounded = data_macs.len() <= MAX_DATA_MACS && data_macs.iter().all(|m| *m != bmc_mac);
-    if !identified || !bounded || !(serial.is_empty() || is_serial(&serial)) {
+    if !identified || !(serial.is_empty() || is_serial(&serial)) {
         return Err(InvalidRequest);
     }
     let approve_until_unix = window.end(

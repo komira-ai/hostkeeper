@@ -118,10 +118,6 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"limit": 100, "pageToken": ""}"#,
     ),
     (
-        "hostkeeper.operator.v1.Enrollment/OpenRecord",
-        r#"{"hostId": "storage-1", "approveForSecs": "3600", "reason": "rebuilt"}"#,
-    ),
-    (
         "hostkeeper.operator.v1.Enrollment/Reject",
         r#"{"requestId": "1111111111111111111111111111111111111111111111111111111111111111",
             "reason": "not one of ours"}"#,
@@ -129,6 +125,11 @@ const REQUESTS: &[(&str, &str)] = &[
     (
         "hostkeeper.operator.v1.Enrollment/RemoveRecord",
         r#"{"hostId": "storage-1", "reason": "decommissioned"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Enrollment/UpdateRecord",
+        r#"{"hostId": "storage-1", "dataMacs": ["0c:c4:7a:00:00:02"], "bmcMac": "",
+            "notes": "rack 4\nslot 2"}"#,
     ),
     (
         "hostkeeper.operator.v1.HostGroups/Get",
