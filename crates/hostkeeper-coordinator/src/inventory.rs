@@ -91,12 +91,19 @@ pub const MAX_DATA_MACS: usize = 16;
 /// The most records one page answers: a `limit` of 0, or one above this, is this.
 pub const MAX_PAGE: usize = 256;
 
+/// The longest notes a record holds, in bytes.
+const MAX_NOTES: usize = 256;
+
 /// The longest serial a record holds.
 const MAX_SERIAL: usize = 64;
 
 /// The approval window of a record, and `Enrollment.OpenRecord`.
 #[path = "inventory_window.rs"]
 mod window;
+
+/// `Enrollment.UpdateRecord`.
+#[path = "inventory_update.rs"]
+mod update;
 
 /// Whether `n` is zero: a window a record does not have is left out of the ops file.
 fn is_zero(n: &u64) -> bool {
@@ -357,11 +364,24 @@ impl<'a> RecordIndex<'a> {
     /// The host ids of the records one of `hosts` is enrolled against.
     #[must_use]
     pub fn enrolled(&self, hosts: &[EnrolledHost]) -> BTreeSet<String> {
-        hosts
-            .iter()
-            .filter_map(|host| self.matched(&host.claims))
-            .map(|record| record.host_id.clone())
-            .collect()
+        self.enrolled_as(hosts).into_keys().collect()
+    }
+
+    /// The records one of `hosts` is enrolled against, each by its host id with the host id of the
+    /// host enrolled against it (the first by host id when several are).
+    #[must_use]
+    pub fn enrolled_as(&self, hosts: &[EnrolledHost]) -> BTreeMap<String, String> {
+        let mut by_host: Vec<&EnrolledHost> = hosts.iter().collect();
+        by_host.sort_by_key(|host| host.host_id.to_string());
+        let mut found: BTreeMap<String, String> = BTreeMap::new();
+        for host in by_host {
+            if let Some(record) = self.matched(&host.claims) {
+                found
+                    .entry(record.host_id.clone())
+                    .or_insert_with(|| host.host_id.to_string());
+            }
+        }
+        found
     }
 }
 
@@ -445,6 +465,7 @@ fn record_proto(
             .map_or(agent::Platform::Unspecified, platform_proto)
             .into(),
         host_group: group.to_owned(),
+        enrolled_host_id: String::new(),
     }
 }
 
@@ -484,6 +505,37 @@ fn is_serial(text: &str) -> bool {
             .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-'))
 }
 
+/// The notes `text` trimmed, if they are notes: 1 to 256 bytes, line breaks (`\n`) allowed and no
+/// other control character. A caller passes text that is not empty once trimmed.
+pub(super) fn valid_notes(text: &str) -> Option<String> {
+    let text = text.trim();
+    let sound = text.len() <= MAX_NOTES && text.chars().all(|c| c == '\n' || !c.is_control());
+    sound.then(|| text.to_owned())
+}
+
+/// The data MACs and the BMC MAC a request gives, each in its one spelling, the data MACs sorted
+/// and without repeats; `invalid_request` for a text that is no MAC, more than [`MAX_DATA_MACS`]
+/// data MACs, or a data MAC that is also the BMC MAC.
+fn macs_of(
+    data_macs: &[String],
+    bmc_mac: &str,
+) -> Result<(Vec<String>, String), proto::EnrollmentRefusal> {
+    let mut data = data_macs
+        .iter()
+        .map(|text| mac(text))
+        .collect::<Result<Vec<String>, _>>()?;
+    data.sort();
+    data.dedup();
+    let bmc = match bmc_mac {
+        "" => String::new(),
+        text => mac(text)?,
+    };
+    if data.len() > MAX_DATA_MACS || data.contains(&bmc) {
+        return Err(proto::EnrollmentRefusal::InvalidRequest);
+    }
+    Ok((data, bmc))
+}
+
 /// The record `request` asks for, by `by` at `at_unix`, checked field by field, with the window
 /// `window` gives it. With `held`, the host groups the coordinator holds, the record names one
 /// of them, as the module says, or none; without, a role or none.
@@ -517,26 +569,15 @@ fn record_of(
             None => (String::new(), String::new()),
         },
     };
-    let mut data_macs = request
-        .data_macs
-        .iter()
-        .map(|text| mac(text))
-        .collect::<Result<Vec<String>, _>>()?;
-    data_macs.sort();
-    data_macs.dedup();
-    let bmc_mac = match request.bmc_mac.as_str() {
-        "" => String::new(),
-        text => mac(text)?,
-    };
+    let (data_macs, bmc_mac) = macs_of(&request.data_macs, &request.bmc_mac)?;
     let serial = request.serial.trim().to_owned();
     let platform = record_platform(request.platform)?;
     let notes = match request.notes.trim() {
         "" => String::new(),
-        text => valid_reason(text).ok_or(InvalidRequest)?,
+        text => valid_notes(text).ok_or(InvalidRequest)?,
     };
     let identified = !data_macs.is_empty() || !serial.is_empty();
-    let bounded = data_macs.len() <= MAX_DATA_MACS && data_macs.iter().all(|m| *m != bmc_mac);
-    if !identified || !bounded || !(serial.is_empty() || is_serial(&serial)) {
+    if !identified || !(serial.is_empty() || is_serial(&serial)) {
         return Err(InvalidRequest);
     }
     let approve_until_unix = window.end(
@@ -730,7 +771,7 @@ impl Coordinator {
     }
 
     /// `Enrollment.ListRecords`: the records by host id, after the host id `page_token` names,
-    /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` when a host is
+    /// at most `limit` ([`MAX_PAGE`] for 0 or above it), each `enrolled` (and naming the host, `enrolled_host_id`) when a host is
     /// enrolled against it; with `enrolled` set, only the records whose `enrolled` is that.
     /// Each record of the page says what the enrollment store holds for its host id
     /// (`host_held`, [`Coordinator::host_held`]), read after the page is chosen, and where its
@@ -762,19 +803,22 @@ impl Coordinator {
         let now = self.ops.unix_now();
         let by_group = self.desired.in_group_mode();
         let (mut records, more) = self.ops.read(|state| {
-            let enrolled = RecordIndex::new(&state.inventory).enrolled(&hosts);
+            let enrolled = RecordIndex::new(&state.inventory).enrolled_as(&hosts);
             let mut rest = state
                 .inventory
                 .iter()
                 .filter(|r| after.as_ref().is_none_or(|after| r.host_id > *after))
                 .map(|r| {
-                    record_proto(
+                    let host = enrolled.get(&r.host_id);
+                    let mut shown = record_proto(
                         r,
-                        enrolled.contains(&r.host_id),
+                        host.is_some(),
                         proto::HostHeld::Unspecified,
                         now,
                         by_group,
-                    )
+                    );
+                    shown.enrolled_host_id = host.cloned().unwrap_or_default();
+                    shown
                 })
                 .filter(|r| request.enrolled.is_none_or(|want| r.enrolled == want));
             let page: Vec<proto::InventoryRecord> = rest.by_ref().take(size).collect();

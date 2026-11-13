@@ -277,6 +277,37 @@ fn list_records_marks_and_filters_the_enrolled_records() {
     assert_eq!(only.next_page_token, "", "no enrolled record after db-1");
 }
 
+/// Proves: `ListRecords` names the host enrolled against a record (`enrolled_host_id`), empty for
+/// a record no host is enrolled against, and an ambiguous host names none; the answer of
+/// `AddRecord` leaves it out.
+///
+/// Catches: the Inventory row saying "enrolled" without saying which host, and a host named on a
+/// record it only half matched.
+#[test]
+fn list_records_names_the_host_enrolled_against_each_record() {
+    let fixture = Fixture::seeded("host-inventory-host-names");
+    let named: Vec<(String, String)> = fixture
+        .records(0, "", None)
+        .expect("listed")
+        .records
+        .into_iter()
+        .map(|r| (r.host_id, r.enrolled_host_id))
+        .collect();
+    let want = [
+        ("db-1", "db-1"),
+        ("db-2", ""),
+        ("db-3", ""),
+        ("db-4", ""),
+        ("db-5", ""),
+    ];
+    assert_eq!(
+        named,
+        want.iter()
+            .map(|(r, h)| ((*r).to_owned(), (*h).to_owned()))
+            .collect::<Vec<_>>()
+    );
+}
+
 /// Proves: a record added after its host enrolled (by that host's data MAC) is answered by
 /// `AddRecord` as enrolled, and from then on the host answers it; a record no host matches is
 /// answered as not enrolled.

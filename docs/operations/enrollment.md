@@ -3,7 +3,7 @@
 How one server becomes a host the coordinator manages: the operator enters its record in the host
 inventory, and the node boots, asks for a certificate and is enrolled. Entering the record is the
 approval: there is no approve step for a server that matches its record
-([The record is the approval](#the-record-is-the-approval)). A request that does not match, or
+([The record is the approval](#the-record-is-the-approval)). A request that does not match (the Enrollment page says "Not in inventory."), or
 that needs a second look, waits for an operator to [approve](#approve) it by hand. The
 coordinator's side (its flags, its CA, its state files) is
 [enrollment-coordinator.md](../enrollment-coordinator.md); every command, flag and exit code of
@@ -41,11 +41,15 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 by network boot ([network-install.md](network-install.md)); `pxe` in router mode needs it, and
 in proxy mode refuses a record whose platform disagrees with the firmware's architecture. It is
 optional and for a Linux server only: `darwin_arm64` is refused `invalid_request`, and a Mac's record
-has none. `list-records` and the Inventory page show it.
+has none. `list-records` shows it; the Inventory page does not (see below).
 
 The answer is the record as kept, with `added_by` (the token's name). A second record of the same
 host id is refused `record_exists`; a record with a MAC or a serial that another record holds is
-refused `record_conflict`. To change a record, remove it and add it again. Removing a record does
+refused `record_conflict`. To change a record's data MACs, BMC MAC or notes, call `update-record`: it sets
+those three and changes nothing else of the record (its host group, serial, platform, window and use stay), checks
+them as `add-record` does, and refuses `no_record` for a host id with no record and `record_conflict` for a MAC
+another record holds; its audit entry is `record_update`. To change anything else, remove the record and add it again. Notes
+are at most 256 bytes and may hold line breaks (no other control character). Removing a record does
 not touch a host already enrolled under it: the host keeps its certificate.
 
 A record that names a host group is the approval of the server's enrollment, for a limited time
@@ -77,7 +81,8 @@ pass it as `--page-token` for the next page. Each record says `enrolled: true` w
 enrolled against it (the claims of the request the host's key was approved from match this record
 and no other, and the host is not denied); `--enrolled true` lists only those records, and
 `--enrolled false` only the others, which is the list of servers still to come online. Each
-record also says `hostHeld`: what the enrollment store holds for the record's host id, read from
+record also says `enrolledHostId`, the host id of the host enrolled against it (the first by host id if several
+match; empty when none is; the Inventory page shows it beside the server's name), and `hostHeld`: what the enrollment store holds for the record's host id, read from
 the store, so the same after a coordinator restart and whether or not the host has sent a
 heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved and not denied),
 `HOST_HELD_DENIED` (retired with `hosts retire`, an update still in flight) or
@@ -86,6 +91,14 @@ heartbeat: `HOST_HELD_NONE` (no host by that id), `HOST_HELD_APPROVED` (approved
 `hostHeld` is `HOST_HELD_NONE` ([network install](../design/network-install.md), section 3), so a
 retired host's record keeps its machine from being reinstalled by accident. There is no call that
 reads one record by host id: list the records and find it. The coordinator keeps at most 10000 records (`capacity` past them).
+
+The console's Inventory page is one table with four fields per server: Server name, BMC MAC, Data MAC and
+Notes. It lists the records, adds a server in its last row, edits a row's MACs and notes (`update-record`) and
+removes a row (`remove-record`, after a confirmation). A MAC is typed in any common spelling (`aa:bb:..`,
+`AA-BB-..`, `aabb.ccdd.eeff`, twelve digits) and sent in the one spelling, and a field that is wrong is marked
+under itself. A host group, role, serial, platform and window are not shown there and an edit never changes them; set them
+with `hkctl enrollment add-record`. A server added on the page names no host group, so it approves no request by itself: its
+name and MACs match a pending request on the Enrollment page, which an operator approves there.
 
 ## The record is the approval
 

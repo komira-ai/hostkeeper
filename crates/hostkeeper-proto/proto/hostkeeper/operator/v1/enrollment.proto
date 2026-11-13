@@ -61,6 +61,14 @@ service Enrollment {
   rpc ListRecords(ListRecordsRequest) returns (ListRecordsResponse);
   // Remove the record of a host id. An enrolled host keeps its certificate.
   rpc RemoveRecord(RemoveRecordRequest) returns (RemoveRecordResponse);
+  // Change the data MACs, the BMC MAC and the notes of the record of a host id, and nothing else
+  // of it: its role, host group, serial, platform, window, use and `added_by` stay as they are,
+  // which removing the record and adding it again would not keep. The three fields are set as
+  // given (empty clears the BMC MAC and the notes), checked as `AddRecord` checks them, and the
+  // record must still hold a data MAC or a serial. A MAC that another record holds is refused
+  // `record_conflict`. A pending request that matches the record is approved then, as at
+  // `AddRecord`.
+  rpc UpdateRecord(UpdateRecordRequest) returns (UpdateRecordResponse);
   // Open the window of a record again, one whose window ended or that a release before windows
   // added, or move the end of one still open: as `AddRecord` opens it, from now. A record an
   // approval used is refused `record_used`: remove it and add it again. A pending request that
@@ -272,7 +280,7 @@ message InventoryRecord {
   // The serial number: a Mac's is what its request is matched by. 1 to 64 of `A-Za-z0-9._-`,
   // or empty.
   string serial = 5;
-  // Free text, 0 to 256 bytes once trimmed, with no control character.
+  // Free text, 0 to 256 bytes once trimmed, with no control character but the line break (`\n`).
   string notes = 6;
   // The name of the operator token that added it.
   string added_by = 7;
@@ -303,6 +311,11 @@ message InventoryRecord {
   // The host group the host is to be in; empty when the record names none, and from a coordinator
   // that does not hold host groups.
   string host_group = 16;
+  // The host id of the host enrolled against the record (see `enrolled`); empty when none is, and
+  // from a coordinator of a release before this field, and in the answers of `AddRecord`,
+  // `UpdateRecord` and `OpenRecord`, which leave it out: only `ListRecords` fills it in. When
+  // several enrolled hosts match the record, the first by host id.
+  string enrolled_host_id = 17;
 }
 
 // Where an inventory record's approval window stands.
@@ -414,7 +427,7 @@ message AddRecordRequest {
   string bmc_mac = 4;
   // Empty for none.
   string serial = 5;
-  // Empty for none.
+  // Empty for none; otherwise as `InventoryRecord.notes`.
   string notes = 6;
   // The end of the record's window, unix seconds: after now, and within the coordinator's
   // `--record-approve-max` of it. 0 for none given.
@@ -465,6 +478,22 @@ message RemoveRecordRequest {
 
 message RemoveRecordResponse {
   AuditEntry entry = 1;
+}
+
+message UpdateRecordRequest {
+  string host_id = 1;
+  // As `AddRecordRequest.data_macs`: the whole list, not additions.
+  repeated string data_macs = 2;
+  // As `AddRecordRequest.bmc_mac`.
+  string bmc_mac = 3;
+  // As `AddRecordRequest.notes`.
+  string notes = 4;
+}
+
+message UpdateRecordResponse {
+  // As kept: MACs in their one spelling, every other field as it was.
+  InventoryRecord record = 1;
+  AuditEntry entry = 2;
 }
 
 message OpenRecordRequest {

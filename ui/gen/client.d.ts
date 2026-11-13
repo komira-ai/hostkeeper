@@ -26,6 +26,7 @@ export interface Client {
     addRecord(request: hostkeeper_operator_v1.AddRecordRequest): Promise<hostkeeper_operator_v1.AddRecordResponse>;
     listRecords(request: hostkeeper_operator_v1.ListRecordsRequest): Promise<hostkeeper_operator_v1.ListRecordsResponse>;
     removeRecord(request: hostkeeper_operator_v1.RemoveRecordRequest): Promise<hostkeeper_operator_v1.RemoveRecordResponse>;
+    updateRecord(request: hostkeeper_operator_v1.UpdateRecordRequest): Promise<hostkeeper_operator_v1.UpdateRecordResponse>;
     openRecord(request: hostkeeper_operator_v1.OpenRecordRequest): Promise<hostkeeper_operator_v1.OpenRecordResponse>;
   };
   readonly hostGroups: {
@@ -472,6 +473,7 @@ export namespace hostkeeper_operator_v1 {
     usedUnix?: string;
     platform?: hostkeeper_agent_v1.Platform;
     hostGroup?: string;
+    enrolledHostId?: string;
   }
   export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; }
   export interface LayoutRack { id?: string; row?: string; heightU?: number; number?: number; }
@@ -829,6 +831,8 @@ export namespace hostkeeper_operator_v1 {
   export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnplaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; reason?: string; }
   export interface UnplaceLayoutResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface UpdateRecordRequest { hostId?: string; dataMacs?: string[]; bmcMac?: string; notes?: string; }
+  export interface UpdateRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UserInfo { name?: string; enabled?: boolean; mustChange?: boolean; createdBy?: string; createdUnix?: string; lastLoginUnix?: string; passwordValidUntilUnix?: string; }
   export interface VerifyRequest { enrollmentId?: string; }
   export interface VerifyResponse {

@@ -187,7 +187,7 @@ other request waits for `Approve` as before. A record with no role has no window
 | `--data-macs` | STRING | At least one, or a `serial`. Repeat the flag for more. |
 | `--bmc-mac` | STRING | Empty for none. |
 | `--serial` | STRING | Empty for none. |
-| `--notes` | STRING | Empty for none. |
+| `--notes` | STRING | Empty for none; otherwise as `InventoryRecord.notes`. |
 | `--approve-until-unix` | UINT64 | The end of the record's window, unix seconds: after now, and within the coordinator's `--record-approve-max` of it. 0 for none given. |
 | `--approve-for-secs` | UINT64 | The length of the record's window from now, in seconds: at most the coordinator's `--record-approve-max`. 0 for none given. With neither, the window is the coordinator's `--record-approve-for`; with both, the call is refused `invalid_window`. A record that names no role takes neither, and has no window. |
 | `--platform` | VALUE | The platform to install the server as by network boot: `PLATFORM_LINUX_X86_64` or `PLATFORM_LINUX_ARM64` (`linux_x86_64` or `linux_arm64` as a command-line flag); `PLATFORM_UNSPECIFIED` (the flag left out) for none. Any other value is refused `invalid_request`. One of: linux_x86_64, linux_arm64, darwin_arm64. |
@@ -216,6 +216,25 @@ Remove the record of a host id. An enrolled host keeps its certificate.
 |---|---|---|
 | `--host-id` | STRING |  |
 | `--reason` | STRING |  |
+
+#### `hkctl enrollment update-record`
+
+`/hostkeeper.operator.v1.Enrollment/UpdateRecord`
+
+Change the data MACs, the BMC MAC and the notes of the record of a host id, and nothing else
+of it: its role, host group, serial, platform, window, use and `added_by` stay as they are,
+which removing the record and adding it again would not keep. The three fields are set as
+given (empty clears the BMC MAC and the notes), checked as `AddRecord` checks them, and the
+record must still hold a data MAC or a serial. A MAC that another record holds is refused
+`record_conflict`. A pending request that matches the record is approved then, as at
+`AddRecord`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--host-id` | STRING |  |
+| `--data-macs` | STRING | As `AddRecordRequest.data_macs`: the whole list, not additions. Repeat the flag for more. |
+| `--bmc-mac` | STRING | As `AddRecordRequest.bmc_mac`. |
+| `--notes` | STRING | As `AddRecordRequest.notes`. |
 
 #### `hkctl enrollment open-record`
 
