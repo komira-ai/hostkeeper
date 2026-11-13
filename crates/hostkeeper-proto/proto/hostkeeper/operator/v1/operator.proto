@@ -192,6 +192,16 @@ service Services {
   // default, `komira`. The coordinator sends each host the repositories of its packages, and a
   // release names channels of the package's repository. The registry must hold the repository.
   rpc SetRepository(SetRepositoryRequest) returns (SetRepositoryResponse);
+  // Register a package with the registry of packages before any host group lists it, with the
+  // repository it comes from (empty: the default, `komira`), so the console's Packages page lists
+  // it and a host group can be given it. A package a host group lists is registered already:
+  // `Put` of it sets its repository as `SetRepository` does. Registering one already registered
+  // sets its repository again. Writes the audit entry `service_put`.
+  rpc Put(PutServiceRequest) returns (PutServiceResponse);
+  // Take a registered package out of the registry of packages. Refused `in_use` while a host group
+  // lists it (the groups it is listed by are the ones `List` names), and `unknown_service` when it
+  // is not registered. Writes the audit entry `service_remove`.
+  rpc Remove(RemoveServiceRequest) returns (RemoveServiceResponse);
   // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
   // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
   // released. A hold carries no version, takes no slot, survives a coordinator restart, covers
@@ -378,6 +388,8 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_NOT_IN_HOST_GROUP = 14;
   // NOT_FOUND: `SetRepository` of a repository the registry does not hold.
   SERVICES_REFUSAL_REPOSITORY_UNKNOWN = 15;
+  // FAILED_PRECONDITION: `Remove` of a package a host group (or the rollout file) lists or defines.
+  SERVICES_REFUSAL_IN_USE = 16;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.

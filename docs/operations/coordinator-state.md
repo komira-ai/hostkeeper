@@ -26,7 +26,7 @@ desired state and its registry of digests, the spent CI token ids, the verdicts,
 (each with the Argon2id hash of its password, never the password) and the API tokens made in the UI
 (each with the SHA-256 of the token, never the token), every operator
 change (exclusions, labels, halts and their reports, holds, assignments, minimum versions,
-the repository `Services.SetRepository` set for a service, uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
+the repository `Services.SetRepository` or `Services.Put` set for a service (a service with one is a registered package, [hostgroups.md](hostgroups.md#the-registry-of-packages)), uninstall intents, the inventory, the marks of last good and bad versions, the plan positions),
 the host groups (each group's packages, policy, generation and desired versions, and each (group,
 package)'s minimum version, marks and plan position), the whole audit log, and the enrollment store. The design is
 [coordinator-storage.md](../design/coordinator-storage.md).

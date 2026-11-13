@@ -941,6 +941,35 @@ release names channels of the package's repository. The registry must hold the r
 | `--repository` | STRING | The registry's name of the repository the package comes from. Empty clears the setting: the package goes back to the default repository, `komira`. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
+#### `hkctl services put`
+
+`/hostkeeper.operator.v1.Services/Put`
+
+Register a package with the registry of packages before any host group lists it, with the
+repository it comes from (empty: the default, `komira`), so the console's Packages page lists
+it and a host group can be given it. A package a host group lists is registered already:
+`Put` of it sets its repository as `SetRepository` does. Registering one already registered
+sets its repository again. Writes the audit entry `service_put`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package: 1 to 64 bytes of `[a-z0-9-]`. |
+| `--repository` | STRING | The registry's name of the repository the package comes from. Empty: the default repository, `komira`. It must be held by the registry. |
+| `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
+
+#### `hkctl services remove`
+
+`/hostkeeper.operator.v1.Services/Remove`
+
+Take a registered package out of the registry of packages. Refused `in_use` while a host group
+lists it (the groups it is listed by are the ones `List` names), and `unknown_service` when it
+is not registered. Writes the audit entry `service_remove`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package. |
+| `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
+
 #### `hkctl services hold`
 
 `/hostkeeper.operator.v1.Services/Hold`
