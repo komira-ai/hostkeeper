@@ -25,6 +25,7 @@ use hostkeeper_proto::hostkeeper::operator::v1::MdmRefusal;
 
 use crate::abm::keys;
 use crate::audit_actions;
+use crate::mdm::MdmError;
 use crate::mdm_acme::dns::DnsCredential;
 use crate::mdm_name;
 use crate::mdm_secrets::{AbmToken, MAX_SECRET_BYTES, Secret, SecretKind};
@@ -33,6 +34,9 @@ use crate::mdm_setup::{MdmSetup, SecretInfo, SetupFailure};
 use crate::operator::Caller;
 use crate::ops::{AuditEntry, Write};
 use crate::service::Coordinator;
+
+/// Who the audit names for a change the server's own configuration makes.
+const SERVER_CONFIG: &str = "server config";
 
 impl Coordinator {
     /// The same coordinator keeping the MDM setup in `setup`.
@@ -308,6 +312,39 @@ impl Coordinator {
             enrollment_url: mdm_name::enrollment_url(&name),
             name,
         })
+    }
+
+    /// The MDM name from `--mdm-host`, at start: `host`, when given, is stored as the name when
+    /// none is stored (audited as `mdm_name_set` by `server config`), and replaces a different
+    /// stored name while no Mac has enrolled (audited the same, with the name it replaces). The
+    /// same name changes nothing. Without `host` nothing is read or written.
+    ///
+    /// # Errors
+    /// [`MdmError::HostNotAName`], [`MdmError::HostLocked`] (a Mac has enrolled at another name),
+    /// [`MdmError::HostAudit`] (nothing is stored), [`MdmError::Setup`].
+    pub fn adopt_mdm_name(&self, host: Option<&str>) -> Result<(), MdmError> {
+        let Some(host) = host else {
+            return Ok(());
+        };
+        let name =
+            mdm_name::normalize(host).ok_or_else(|| MdmError::HostNotAName(host.to_owned()))?;
+        let held = self.mdm_setup.settings()?;
+        let stored = held.get(mdm_name::KEY).filter(|set| !set.is_empty());
+        let reason = match stored {
+            Some(set) if *set == name => return Ok(()),
+            Some(set) if self.macs_enrolled() => {
+                return Err(MdmError::HostLocked {
+                    host: name,
+                    name: set.clone(),
+                });
+            }
+            Some(set) => format!("set to {name} by --mdm-host, replacing {set}"),
+            None => format!("set to {name} by --mdm-host"),
+        };
+        self.audit_setup(SERVER_CONFIG, audit_actions::MDM_NAME_SET, None, reason)
+            .map_err(|why| MdmError::HostAudit(why.as_str_name()))?;
+        self.mdm_setup.set_setting(mdm_name::KEY, &name)?;
+        Ok(())
     }
 
     /// The refusal `refusal` of a `PutName`, audited by `by` with its token as the reason, and the

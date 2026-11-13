@@ -552,7 +552,10 @@ Never returns a value of a secret. Changes nothing.
 Sets the MDM name, the host name the Macs enroll at (`https://<name>/enroll`). Session-only,
 as `PutSecret` is. Audited as `mdm_name_set` with the name. The first name is always taken
 (Macs that enrolled before this setup hold theirs); once a name is set and a Mac has enrolled,
-another is refused `name_locked`, and the same name is taken again.
+another is refused `name_locked`, and the same name is taken again. A coordinator started with
+`--mdm-host` stores that host as the name at start (audited as `mdm_name_set` by `server config`), and
+at a later start its `--mdm-host` replaces a different stored name while no Mac has enrolled; once one
+has, a different `--mdm-host` is refused at start.
 
 | flag | value | meaning |
 |---|---|---|

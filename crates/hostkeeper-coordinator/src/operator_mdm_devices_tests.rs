@@ -358,3 +358,172 @@ fn the_list_keeps_its_devices_when_the_setup_cannot_be_read() {
         (true, 1, false, 0)
     );
 }
+
+/// What the start's adoption of `--mdm-host` stored and audited, as `(name, [(by, reason)])`.
+fn adopted(world: &World) -> (String, Vec<(String, String)>) {
+    let name = world
+        .coordinator
+        .mdm_status(&alice())
+        .expect("a status")
+        .name;
+    let audit = world
+        .audit()
+        .into_iter()
+        .map(|entry| {
+            assert_eq!(entry.action, "mdm_name_set");
+            (entry.by, entry.reason.unwrap_or_default())
+        })
+        .collect();
+    (name, audit)
+}
+
+/// Proves: with no `--mdm-host` nothing is stored or audited; with one and no name stored, the host
+/// is stored in lower case as the name and audited as set by the server config, so the status
+/// has the name (and the form no field for it); the same host at the next start changes and audits
+/// nothing.
+#[test]
+fn a_host_flag_is_stored_as_the_name_when_none_is_stored() {
+    let (world, _dir) = gated("mdm-name-flag-first", &[]);
+    world.coordinator.adopt_mdm_name(None).expect("no flag");
+    assert_eq!(adopted(&world), (String::new(), Vec::new()));
+    world
+        .coordinator
+        .adopt_mdm_name(Some("MDM.Corp.example.org"))
+        .expect("stored");
+    let first = (
+        "mdm.corp.example.org".to_owned(),
+        vec![(
+            "server config".to_owned(),
+            "set to mdm.corp.example.org by --mdm-host".to_owned(),
+        )],
+    );
+    assert_eq!(adopted(&world), first);
+    world
+        .coordinator
+        .adopt_mdm_name(Some("mdm.corp.example.org"))
+        .expect("the same");
+    assert_eq!(adopted(&world), first);
+}
+
+/// Proves: a stored name that differs from the host is replaced by the host while no Mac has
+/// enrolled (a device that has only begun to enroll does not count), and the change is audited
+/// with the name it replaces.
+#[test]
+fn a_host_flag_replaces_a_different_name_before_any_mac_enrolled() {
+    let (world, _dir) = gated(
+        "mdm-name-flag-change",
+        &[record("AAAA-1", None, Phase::Authenticated, None)],
+    );
+    rename(&world, "old.example.org").expect("named");
+    world
+        .coordinator
+        .adopt_mdm_name(Some("new.example.org"))
+        .expect("the flag wins");
+    let (name, audit) = adopted(&world);
+    assert_eq!(name, "new.example.org");
+    assert_eq!(
+        audit[1],
+        (
+            "server config".to_owned(),
+            "set to new.example.org by --mdm-host, replacing old.example.org".to_owned()
+        )
+    );
+}
+
+/// Proves: once a Mac has enrolled, a host that differs from the stored name is refused with an
+/// error that names both and leaves the name and the audit as they were; the same host is taken.
+#[test]
+fn a_host_flag_that_differs_from_the_name_of_an_enrolled_mac_is_refused() {
+    let (world, _dir) = gated(
+        "mdm-name-flag-locked",
+        &[record(
+            "AAAA-1",
+            Some("C02XK1ABJG5J"),
+            Phase::Enrolled,
+            Some(true),
+        )],
+    );
+    rename(&world, "mdm.example.org").expect("named");
+    let refused = world
+        .coordinator
+        .adopt_mdm_name(Some("Other.example.org"))
+        .expect_err("locked");
+    assert_eq!(
+        refused.to_string(),
+        "--mdm-host other.example.org differs from the MDM name mdm.example.org, which a Mac has enrolled at: the name cannot change after enrollment, so start with --mdm-host mdm.example.org"
+    );
+    world
+        .coordinator
+        .adopt_mdm_name(Some("mdm.example.org"))
+        .expect("the same name");
+    assert_eq!(adopted(&world).1.len(), 1, "only the PutName is audited");
+}
+
+/// Proves: a host that cannot be the name is refused naming it, and nothing is stored; when the
+/// audit entry cannot be written the name is not stored and the start is refused; a setup that
+/// cannot be read is refused.
+#[test]
+fn a_host_flag_that_cannot_be_adopted_is_refused_and_stores_nothing() {
+    use crate::store::audit_failure;
+    use crate::store::mdm_setup::files::FileSetup;
+    use crate::store::mdm_setup::{SecretRow, SetupError, SetupStore};
+    use std::sync::Arc;
+
+    let (world, _dir) = gated("mdm-name-flag-refused", &[]);
+    assert_eq!(
+        world
+            .coordinator
+            .adopt_mdm_name(Some("localhost"))
+            .expect_err("one label")
+            .to_string(),
+        "--mdm-host localhost is not a DNS name of two or more labels, which the MDM name must be"
+    );
+    world.fake.refuse(|_| Some(audit_failure()));
+    let unaudited = world
+        .coordinator
+        .adopt_mdm_name(Some("mdm.example.org"))
+        .expect_err("no audit");
+    assert_eq!(
+        unaudited.to_string(),
+        "the audit entry of the MDM name from --mdm-host could not be written: MDM_REFUSAL_AUDIT_UNAVAILABLE"
+    );
+    world.fake.refuse(|_| None);
+    assert_eq!(adopted(&world), (String::new(), Vec::new()));
+
+    /// A store that reads no setting.
+    struct Down(FileSetup);
+    impl SetupStore for Down {
+        fn put_secret(&self, row: &SecretRow) -> Result<(), SetupError> {
+            self.0.put_secret(row)
+        }
+        fn secrets(&self) -> Result<Vec<SecretRow>, SetupError> {
+            self.0.secrets()
+        }
+        fn prune_superseded(&self, at: i64) -> Result<u64, SetupError> {
+            self.0.prune_superseded(at)
+        }
+        fn settings(&self) -> Result<std::collections::BTreeMap<String, String>, SetupError> {
+            Err(SetupError::Store("unreadable".to_owned()))
+        }
+        fn set_setting(&self, name: &str, value: &str) -> Result<(), SetupError> {
+            self.0.set_setting(name, value)
+        }
+    }
+    let down = World::build(
+        "mdm-name-flag-down",
+        crate::login_support::settings(),
+        crate::login_support::counting(),
+        |c, _| {
+            c.with_mdm_setup(MdmSetup::new(
+                Arc::new(Down(FileSetup::volatile())),
+                None,
+                crate::enrollment::os_random(),
+            ))
+        },
+    );
+    assert!(
+        down.coordinator
+            .adopt_mdm_name(Some("mdm.example.org"))
+            .is_err()
+    );
+}

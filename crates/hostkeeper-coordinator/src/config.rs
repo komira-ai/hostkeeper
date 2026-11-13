@@ -692,6 +692,8 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         // clap requires --ca-key-file, --server-cert-file and --server-name together.
         _ => TlsSource::files("heartbeat", files(Some(flags.client_ca.clone())), interval)?,
     };
+    // The MDM name is --mdm-host's, once the gate that knows whether a Mac has enrolled is held.
+    coordinator.adopt_mdm_name(flags.mdm.mdm_host.as_deref())?;
     let (coordinator, mdm_listen) = mdm_listener::attach(wiring, coordinator);
     Ok(Parts {
         coordinator: Arc::new(coordinator),
