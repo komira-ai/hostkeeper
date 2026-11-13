@@ -267,11 +267,14 @@ with `--replace` keeps the group of the host it replaces: naming another group i
 
 A host in a group is changed to another by `Move`, and a host approved in none, or before the
 coordinator held groups, is put in one by `Move`. A host in a group is moved back to none by a
-`Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, or **Remove from
-group** beside the host in a group's detail on the console's Host groups page): it then runs the
+`Move` with an empty `host_group` (`hkctl host-groups move --host-group ""`, the blank choice of the
+**Host group** dropdown on the host's own page in the console): it then runs the
 packages of `all` alone, what its old group listed and `all` does not is uninstalled, and nothing
 is installed, so the host does not move; a host already in none is refused `same_host_group`. A
-host cannot be moved into `all` (`reserved_host_group`), which it is in already.
+host cannot be moved into `all` (`reserved_host_group`), which it is in already: the console's
+dropdown does not offer it. In the console a host is moved on its Host page, whose **Host group**
+dropdown lists the groups held but `all`; the Host groups page lists each group's hosts, each a
+link to that page, and has no form that moves one.
 
 ```
 hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
