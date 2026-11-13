@@ -124,7 +124,10 @@ impl Coordinator {
 
     /// The enrolled hosts in the group `name` (those moving into it among them), each with the
     /// specific group it is in, if it is in one. Every enrolled host is in `all`.
-    fn members_of(&self, name: &GroupName) -> Result<Vec<(HostId, Option<GroupName>)>, Refusal> {
+    pub(crate) fn members_of(
+        &self,
+        name: &GroupName,
+    ) -> Result<Vec<(HostId, Option<GroupName>)>, Refusal> {
         Ok(self
             .memberships()?
             .into_iter()

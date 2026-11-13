@@ -233,3 +233,59 @@ async fn a_package_of_all_is_counted_over_the_hosts_that_run_it_under_all() {
     assert_eq!(counts("all"), [("all".to_owned(), 1)]);
     assert_eq!(counts("web"), [("web".to_owned(), 1)]);
 }
+
+/// Proves: a package that `all` lists and every host's own group lists too has no host under
+/// `all`, so its convergence under `all` is that of a group with no hosts (converged), and so is
+/// the convergence of a call that names no group, once the hosts of the groups are at the version;
+/// a host in no group, which runs it under `all`, keeps `all` in progress until it is at the
+/// version.
+///
+/// Catches: a deployment of hostkeeper to `all` and the groups that never converges, for a package
+/// every host runs as its group says.
+#[tokio::test]
+async fn a_package_every_hosts_group_lists_converges_under_all_without_a_host() {
+    let farm = farm("all-converge-none").await;
+    farm.world
+        .put("web", &[SELF, "svc", "base"], Some(1))
+        .expect("web lists base");
+    farm.deploy("", "base", "1.5", 3).await;
+    let coordinator = farm.world.coordinator();
+    let state = |group: &str| {
+        coordinator
+            .convergence_in(group, "base")
+            .expect("converges")
+            .state
+    };
+    farm.tell("n2", &[("base", "1.5"), ("svc", "2.0")]);
+    assert_eq!(state("web"), crate::converge::State::Converged);
+    assert_eq!(
+        state("all"),
+        crate::converge::State::InProgress,
+        "n1, in no group, runs base under all and does not have it"
+    );
+    farm.tell("n1", &[("base", "1.5")]);
+    assert_eq!(state("all"), crate::converge::State::Converged);
+    assert_eq!(state(""), crate::converge::State::Converged);
+
+    let alone = Farm::new("all-converge-grouped");
+    alone.world.hold_all();
+    alone
+        .world
+        .put("all", &[SELF, "base"], Some(1))
+        .expect("all lists base");
+    alone.world.put("web", &[SELF, "base"], None).expect("put");
+    alone.deploy("", "base", "1.5", 3).await;
+    alone.host("n2", "web");
+    alone.tell("n2", &[("base", "1.5")]);
+    let coordinator = alone.world.coordinator();
+    for group in ["all", "web", ""] {
+        assert_eq!(
+            coordinator
+                .convergence_in(group, "base")
+                .expect("converges")
+                .state,
+            crate::converge::State::Converged,
+            "{group:?}"
+        );
+    }
+}

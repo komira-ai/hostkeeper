@@ -292,7 +292,7 @@ impl Coordinator {
             && desired.is_some()
             && convergence.roles.is_empty()
             && convergence.hosts.is_none();
-        if counted && !self.group_has_hosts(group, fleet) {
+        if counted && !self.group_has_hosts(group, &def.name, fleet) {
             return Convergence {
                 state: State::Converged,
                 ..convergence
@@ -301,13 +301,29 @@ impl Coordinator {
         convergence
     }
 
-    /// Whether the group `group` has a host: the fleet has heard of one in it, or the enrollment
-    /// store holds one. A store that cannot be read says it has.
-    fn group_has_hosts(&self, group: &GroupName, fleet: &Fleet) -> bool {
+    /// Whether the group `group` has a host that runs `package` under it: the fleet has heard of
+    /// one in it, or the enrollment store holds one. A store that cannot be read says it has.
+    ///
+    /// Every host is in `all`, but a host runs a package of `all` as `all` says only when its own
+    /// group does not list the package ([`crate::group_scope::effective`]): a package every host's
+    /// own group lists has no host under `all`, and its convergence under `all` is that of a group
+    /// with no hosts.
+    fn group_has_hosts(&self, group: &GroupName, package: &str, fleet: &Fleet) -> bool {
+        if !group.is_all() {
+            return fleet.nodes().any(|(_, node)| node.role == group.as_str())
+                || !self.hosts_in(group).is_ok_and(|hosts| hosts.is_empty());
+        }
+        let groups = self.desired.host_groups();
+        let under_all = |own: Option<GroupName>| {
+            own.and_then(|own| groups.0.get(&own).cloned())
+                .is_none_or(|own| !own.packages.iter().any(|listed| listed == package))
+        };
         fleet
             .nodes()
-            .any(|(_, node)| group.is_all() || node.role == group.as_str())
-            || !self.hosts_in(group).is_ok_and(|hosts| hosts.is_empty())
+            .any(|(_, node)| under_all(node.role.parse().ok()))
+            || self.members_of(group).map_or(true, |hosts| {
+                hosts.into_iter().any(|(_, own)| under_all(own))
+            })
     }
 
     /// The status of every pair of a group and a package it lists, by group and package, at
