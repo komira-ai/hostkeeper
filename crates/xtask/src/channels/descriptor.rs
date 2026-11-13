@@ -418,8 +418,8 @@ pub(crate) fn write(aws: &dyn Aws, r: &Request, product: &Product) -> Result<Vec
     }
     let fingerprints = fingerprints_of(&read(&ring)?, r.keyring_key)?;
     let ours = contribution(product, r.keyring_key, &fingerprints);
-    let current = r.work.join("descriptor.current");
-    let next = r.work.join("descriptor.next");
+    let current = r.work.join("descriptor-current.json");
+    let next = r.work.join("descriptor-next.json");
     for _ in 0..r.attempts {
         let etag = fetch(aws, r, key(), &current)?;
         let existing =
