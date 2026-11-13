@@ -319,3 +319,227 @@ fn the_audit_reasons_name_the_repository_and_what_it_was_put_as() {
     assert_eq!(remove_reason("retired", "komira"), "retired: komira");
     assert_ne!(keyring(1), keyring(2));
 }
+
+/// A repository as `Add` makes it from the descriptor `text`: `komira(1)` with its descriptor and
+/// base URL.
+fn described(text: &Value) -> Repository {
+    let mut entry = komira(1);
+    entry.uri = "https://packages.example.com/apt".to_owned();
+    entry.base_uri = "https://packages.example.com".to_owned();
+    entry.descriptor = serde_json::to_vec(text).expect("json");
+    entry
+}
+
+/// The descriptor of [`described`]: the keyring of `komira(1)` at `apt/key.gpg`.
+fn descriptor_of_komira() -> Value {
+    json!({
+        "version": 1,
+        "channels": ["testing", "stable"],
+        "key": {
+            "keyring": "apt/key.gpg",
+            "fingerprints": [crate::repositories_support::fingerprint(&komira(1).keyring)]
+        },
+        "formats": { "apt": { "path": "apt", "components": ["main"] } }
+    })
+}
+
+/// The release before's reading of a stored record, frozen: the named keys it knows (`name`,
+/// `kind`, `uri`, `suites`, `components`, `fingerprints`, `keyring`, `access`, `credential_file`)
+/// and no other, then the rules of the registry on the entry it made. It is what "an older
+/// coordinator starts on the data" is judged by.
+fn previous_release_reads(record: &Value) -> Result<Repository, String> {
+    let stored = record.get("repository").ok_or("no repository")?;
+    let text = |key: &str| {
+        stored
+            .get(key)
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or_else(|| format!("no {key}"))
+    };
+    let optional = |key: &str| {
+        stored
+            .get(key)
+            .map(|value| value.as_str().map(str::to_owned).ok_or("not text"))
+            .transpose()
+            .map(Option::unwrap_or_default)
+    };
+    let texts = |key: &str| -> Result<Vec<String>, String> {
+        stored
+            .get(key)
+            .and_then(Value::as_array)
+            .ok_or_else(|| format!("no {key}"))?
+            .iter()
+            .map(|item| {
+                item.as_str()
+                    .map(str::to_owned)
+                    .ok_or_else(|| "not text".to_owned())
+            })
+            .collect()
+    };
+    use base64::Engine as _;
+    let repository = Repository {
+        name: text("name")?,
+        kind: text("kind")?,
+        uri: text("uri")?,
+        suites: texts("suites")?,
+        components: texts("components")?,
+        fingerprints: texts("fingerprints")?,
+        keyring: base64::engine::general_purpose::STANDARD
+            .decode(text("keyring")?)
+            .map_err(|_| "not base64".to_owned())?,
+        access: optional("access")?,
+        credential_file: optional("credential_file")?,
+        ..Repository::default()
+    };
+    hostkeeper_release::registry::check(&repository).map_err(|why| why.to_string())?;
+    Ok(repository)
+}
+
+/// Proves: a record `to_json` wrote for an entry added from a descriptor (the descriptor as
+/// standard base64 and the base URL) is read by the release before, which names the keys it knows
+/// only: it starts on the data and gets the apt entry, as it was before the descriptor; this build
+/// reads the record back equal.
+///
+/// Catches: a stored key that would stop the release before from starting (a format change that
+/// is not additive), or a record this build cannot read back.
+#[test]
+fn previous_release_parses_a_record_with_descriptor_fields() {
+    let entry = described(&descriptor_of_komira());
+    let stored = kept(entry.clone(), 4);
+    let record = stored.to_json();
+    assert_eq!(
+        record["repository"]["base_uri"],
+        "https://packages.example.com"
+    );
+    assert_eq!(
+        record["repository"]["descriptor"],
+        base64_of(&entry.descriptor)
+    );
+    let older = previous_release_reads(&record).expect("the release before starts on it");
+    assert_eq!(
+        older,
+        Repository {
+            descriptor: Vec::new(),
+            base_uri: String::new(),
+            ..entry
+        }
+    );
+    assert_eq!(Kept::from_json(&record), Ok(stored));
+    let file = encode_file(
+        &Registry::new(
+            4,
+            BTreeMap::from([("komira".to_owned(), kept(komira(1), 4))]),
+        )
+        .expect("registry"),
+    )
+    .expect("encoded");
+    assert!(
+        String::from_utf8(file)
+            .expect("text")
+            .contains("\"komira\"")
+    );
+}
+
+/// Proves: the record of an entry put without a descriptor is the one the release before wrote,
+/// byte for byte: the generation and the nine fields it knew and no `descriptor` or `base_uri`
+/// key; a private one adds `access` and `credential_file` as before.
+///
+/// Catches: a new key written for every entry, which would make a rollback read a changed file.
+#[test]
+fn a_record_without_descriptor_fields_is_byte_identical_to_the_previous_release() {
+    let record = kept(komira(1), 3).to_json();
+    let expected = json!({
+        "generation": 3,
+        "repository": {
+            "name": "komira",
+            "kind": "apt",
+            "uri": "https://packages.example.com/apt",
+            "suites": ["testing", "stable"],
+            "components": ["main"],
+            "fingerprints": [crate::repositories_support::fingerprint(&komira(1).keyring)],
+            "keyring": base64_of(&komira(1).keyring),
+        },
+    });
+    assert_eq!(record, expected);
+    assert_eq!(
+        serde_json::to_string_pretty(&record).expect("text"),
+        serde_json::to_string_pretty(&expected).expect("text")
+    );
+    let private = kept(
+        crate::repositories_support::private(
+            "priv",
+            "https://p.example.com/",
+            &["web"],
+            2,
+            "/etc/cred",
+        ),
+        1,
+    )
+    .to_json();
+    let keys: Vec<&str> = private["repository"]
+        .as_object()
+        .expect("an object")
+        .keys()
+        .map(String::as_str)
+        .collect();
+    assert!(keys.contains(&"access") && keys.contains(&"credential_file"));
+    assert!(!keys.contains(&"descriptor") && !keys.contains(&"base_uri"));
+}
+
+/// Proves: a record whose descriptor is not base64, is not text, or disagrees with its entry is
+/// refused by its own words, and one holding a base URL and no descriptor too.
+///
+/// Catches: a stored descriptor that is read as empty, which would drop a repository's macOS
+/// source silently.
+#[test]
+fn a_record_with_a_descriptor_that_does_not_read_is_refused() {
+    let good = kept(described(&descriptor_of_komira()), 1).to_json();
+    let mut garbled = good.clone();
+    garbled["repository"]["descriptor"] = json!("not base64!");
+    assert_eq!(refused(garbled), "a descriptor that is not base64");
+    let mut numbers = good.clone();
+    numbers["repository"]["descriptor"] = json!(7);
+    assert_eq!(refused(numbers), "descriptor is not text");
+    let mut other = good.clone();
+    other["repository"]["uri"] = json!("https://packages.example.com/other");
+    assert_eq!(
+        refused(other),
+        "the uri of the entry is not the descriptor's"
+    );
+    let mut orphan = good;
+    orphan["repository"]
+        .as_object_mut()
+        .expect("o")
+        .remove("descriptor");
+    assert_eq!(
+        refused(orphan),
+        "the entry names a base_uri and no descriptor"
+    );
+}
+
+/// Proves: the platforms of an entry are the Linux ones with no descriptor or a descriptor that
+/// does not read, those its descriptor names (macOS included) for a public one, and the Linux ones
+/// only for a private one.
+///
+/// Catches: a legacy entry shown as serving macOS, or a private repository's macOS format shown
+/// as served.
+#[test]
+fn the_platforms_of_an_entry_are_its_descriptors() {
+    use crate::repositories::platforms_of;
+    let both = ["linux-x86_64", "linux-arm64"];
+    assert_eq!(platforms_of(&komira(1)), both);
+    let mut unreadable = komira(1);
+    unreadable.descriptor = b"{".to_vec();
+    assert_eq!(platforms_of(&unreadable), both);
+    let mut mac = descriptor_of_komira();
+    mac["formats"]["macos-pkg"] = json!({"path": "pkg", "platforms": ["macos-arm64"]});
+    let public = described(&mac);
+    assert_eq!(
+        platforms_of(&public),
+        ["linux-x86_64", "linux-arm64", "macos-arm64"]
+    );
+    let mut private = public;
+    private.access = "hosts".to_owned();
+    private.credential_file = "/etc/cred".to_owned();
+    assert_eq!(platforms_of(&private), both);
+}

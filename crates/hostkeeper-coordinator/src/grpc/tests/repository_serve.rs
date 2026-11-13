@@ -628,3 +628,189 @@ async fn in_group_mode_a_host_is_served_the_group_its_record_holds() {
     assert_eq!(status(&d2, "storage").await, StatusCode::NOT_FOUND);
     assert_eq!(fake.heard().len(), 2);
 }
+
+const MAC_PKG: &[u8] = b"flat package bytes";
+
+/// The repository `mac` as `Add` makes it: apt under `https://origin.test/apt`, and a macOS format
+/// whose installers are in `pkg/<dir>/<version>/`, hello's in the directory `tools`.
+fn mac() -> hostkeeper_proto::hostkeeper::release::v1::Repository {
+    let mut entry = repository("mac", "https://origin.test/apt", &["testing"], 3);
+    entry.base_uri = "https://origin.test".to_owned();
+    entry.descriptor = serde_json::to_vec(&serde_json::json!({
+        "version": 1,
+        "channels": ["testing"],
+        "key": {
+            "keyring": "apt/key.gpg",
+            "fingerprints": [crate::repositories_support::fingerprint(&entry.keyring)]
+        },
+        "formats": {
+            "apt": {"path": "apt", "components": ["main"]},
+            "macos-pkg": {
+                "path": "pkg",
+                "platforms": ["macos-arm64"],
+                "packages": {"hello": {"dir": "tools"}}
+            }
+        }
+    }))
+    .expect("json");
+    entry
+}
+
+fn pkg_origin(path: &str) -> Then {
+    match path {
+        "/pkg/tools/1.0/hello-1.0-macos-arm64.pkg" | "/pkg/web/2.0/web-2.0-macos-arm64.pkg" => {
+            Then::Write(response("200 OK", MAC_PKG))
+        }
+        "/pkg/web/3.0/web-3.0-macos-arm64.pkg" => Then::Write(response("404 Not Found", b"")),
+        _ => Then::Write(response("500 Oops", b"")),
+    }
+}
+
+/// Proves: a host is served a `.pkg` of a public repository with a macOS format: 200 with the
+/// origin's exact bytes and `Content-Length`, from `<base>/<path>/<dir>/<version>/<file>` (hello
+/// from the directory the descriptor maps it to, another package from its own), with no
+/// `Authorization` header and no other request.
+///
+/// Catches: a `.pkg` fetched from a directory the descriptor does not give, a credential sent to
+/// a public origin, or a body cut.
+#[tokio::test]
+async fn a_host_is_served_a_pkg_of_a_public_repository() {
+    let set = set_up("serve-pkg", |fake| fake.dial(Arc::new(pkg_origin)));
+    set.put(mac());
+    let m1 = host("m1", "daemon");
+    for (path, origin) in [
+        (
+            "/repositories/mac/pkg/tools/1.0/hello-1.0-macos-arm64.pkg",
+            "GET /pkg/tools/1.0/hello-1.0-macos-arm64.pkg HTTP/1.1",
+        ),
+        (
+            "/repositories/mac/pkg/web/2.0/web-2.0-macos-arm64.pkg",
+            "GET /pkg/web/2.0/web-2.0-macos-arm64.pkg HTTP/1.1",
+        ),
+    ] {
+        let (status, headers, body) = set.get(&m1, path).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(&body[..], MAC_PKG);
+        assert_eq!(headers[CONTENT_LENGTH], MAC_PKG.len().to_string());
+        assert_eq!(headers[CONTENT_TYPE], "application/octet-stream");
+        let heads = set.fake.heard();
+        let head = heads.last().expect("a request");
+        assert!(head.starts_with(&format!("{origin}\r\n")), "{head}");
+        assert!(!head.to_lowercase().contains("authorization"), "{head}");
+    }
+    assert_eq!(set.fake.heard().len(), 2);
+}
+
+/// Proves: what is outside the layout is 404 and the origin is not asked: a file that is not
+/// `<package>-<version>-<platform>.pkg` for the version of the path, a platform the format does not
+/// build, hello in the directory of another package, a package's directory other than the
+/// descriptor's, an extra segment, a `..` segment, a repository that is private, one put without a
+/// descriptor, one that is not held, and a version that is no version.
+///
+/// Catches: the route made a window onto the whole origin, or a repository without a macOS format
+/// answering for one.
+#[tokio::test]
+async fn what_is_outside_the_layout_is_a_404() {
+    let set = set_up("serve-pkg-layout", |fake| fake.dial(Arc::new(pkg_origin)));
+    set.put(mac());
+    let m1 = host("m1", "daemon");
+    for path in [
+        "/repositories/mac/pkg/tools/1.0/hello-2.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/1.0/hello-1.0-linux-arm64.pkg",
+        "/repositories/mac/pkg/tools/1.0/hello-1.0-macos-arm64.deb",
+        "/repositories/mac/pkg/tools/1.0/-1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/web/1.0/hello-1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/1.0/web-1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/1.0/extra/hello-1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/../1.0/hello-1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/x1.0/hello-x1.0-macos-arm64.pkg",
+        "/repositories/mac/pkg/tools/1.0",
+        "/repositories/priv/pkg/tools/1.0/hello-1.0-macos-arm64.pkg",
+        "/repositories/pub/pkg/tools/1.0/hello-1.0-macos-arm64.pkg",
+        "/repositories/nothere/pkg/tools/1.0/hello-1.0-macos-arm64.pkg",
+    ] {
+        let (status, _, body) = set.get(&m1, path).await;
+        assert_eq!(
+            (status, &body[..]),
+            (StatusCode::NOT_FOUND, NOT_FOUND.as_bytes()),
+            "{path}"
+        );
+    }
+    assert_eq!(set.fake.dials(), 0);
+}
+
+/// Proves: the origin's 404 is the host's 404, any other origin status is 502 `origin_failed` with
+/// one warning that names the repository and the path and not the credential, a coordinator with no
+/// origin client answers 502, and a caller with no certificate or one that names no host is 403.
+///
+/// Catches: an origin failure shown as a missing file, or a `.pkg` read by a caller that is no
+/// host.
+#[tokio::test]
+async fn the_origins_failures_and_the_callers_are_judged_as_the_other_routes() {
+    let set = set_up("serve-pkg-failures", |fake| fake.dial(Arc::new(pkg_origin)));
+    set.put(mac());
+    let m1 = host("m1", "daemon");
+    let log = Log::default();
+    let _guard = log.install();
+    let (status, _, body) = set
+        .get(&m1, "/repositories/mac/pkg/web/3.0/web-3.0-macos-arm64.pkg")
+        .await;
+    assert_eq!(
+        (status, &body[..]),
+        (StatusCode::NOT_FOUND, NOT_FOUND.as_bytes())
+    );
+    let (status, _, body) = set
+        .get(&m1, "/repositories/mac/pkg/web/4.0/web-4.0-macos-arm64.pkg")
+        .await;
+    assert_eq!(
+        (status, &body[..]),
+        (StatusCode::BAD_GATEWAY, ORIGIN_FAILED.as_bytes())
+    );
+    let warned = lines(&log);
+    assert_eq!(warned.len(), 1);
+    assert!(
+        warned[0].contains("the origin of a repository failed"),
+        "{warned:?}"
+    );
+    assert!(
+        warned[0].contains("repository=mac") && warned[0].contains("pkg/web/4.0"),
+        "{warned:?}"
+    );
+    assert!(!warned[0].contains("s3cret"));
+
+    let path = "/repositories/mac/pkg/web/2.0/web-2.0-macos-arm64.pkg";
+    let stranger = peer(&["dns:d1"]);
+    for who in [None, stranger] {
+        let (status, _, body) = set.get(&who, path).await;
+        assert_eq!(
+            (status, &body[..]),
+            (
+                StatusCode::FORBIDDEN,
+                br#"{"error":"forbidden"}"#.as_slice()
+            )
+        );
+    }
+
+    // A coordinator with no origin client.
+    let bare = served_built("serve-pkg-no-origin", |scratch, clock| {
+        Rig::start(scratch, clock)
+    });
+    bare.coordinator
+        .repositories_put(
+            &operator(),
+            proto::PutRepositoryRequest {
+                repository: Some(mac()),
+                reason: "for a test".to_owned(),
+            },
+        )
+        .expect("put");
+    let request = Request::builder()
+        .uri(path)
+        .body(Full::new(Bytes::new()))
+        .expect("a request");
+    let (status, _, body) = raw(&bare.coordinator, Surface::Heartbeat, &m1, request).await;
+    assert_eq!(
+        (status, &body[..]),
+        (StatusCode::BAD_GATEWAY, ORIGIN_FAILED.as_bytes())
+    );
+}

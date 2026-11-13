@@ -1,5 +1,5 @@
-//! `Repositories` of `hostkeeper.operator.v1` over [`Coordinator`]: `List`, `Get`, `Put` and
-//! `Remove`.
+//! `Repositories` of `hostkeeper.operator.v1` over [`Coordinator`]: `List`, `Get`, `Put`,
+//! `Remove`, `Discover` and `Add`.
 //!
 //! The adapter has no rule of its own: each method calls its handler in
 //! [`crate::operator_repositories`] with the caller the router admitted, and a refusal is the
@@ -69,6 +69,30 @@ impl Api for RepositoriesService {
         let caller = caller_of(&request);
         self.coordinator
             .repositories_remove(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::repositories)
+    }
+
+    async fn discover(
+        &self,
+        request: Request<proto::DiscoverRepositoryRequest>,
+    ) -> Result<Response<proto::DiscoverRepositoryResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .repositories_discover(&caller, request.into_inner())
+            .await
+            .map(Response::new)
+            .map_err(refusal::repositories)
+    }
+
+    async fn add(
+        &self,
+        request: Request<proto::AddRepositoryRequest>,
+    ) -> Result<Response<proto::AddRepositoryResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .repositories_add(&caller, request.into_inner())
+            .await
             .map(Response::new)
             .map_err(refusal::repositories)
     }

@@ -19,8 +19,11 @@ use super::Coordinator;
 use super::SetProgress;
 use hostkeeper_wire::version::Version;
 
+use std::collections::BTreeMap;
+
 use crate::fleet::Fleet;
 use crate::holds::marks_of;
+use crate::macos_resolve;
 use crate::repositories::Registry;
 use crate::store::Health;
 
@@ -89,7 +92,18 @@ impl Coordinator {
             own.chain(groups).collect()
         });
         other.extend(self.desired.group_versions());
-        fleet.picks.keep(self.desired.releases_of(other));
+        let releases = self.desired.releases_of(other);
+        // The registry's descriptors are read only when a release names a Mac's `.pkg` by version.
+        let sources = if releases
+            .values()
+            .any(|release| macos_resolve::has_named(release))
+        {
+            self.desired.with_repositories(macos_resolve::sources_of)
+        } else {
+            BTreeMap::new()
+        };
+        fleet.picks.keep_macos(sources);
+        fleet.picks.keep(releases);
         fleet
             .picks
             .keep_private(self.desired.with_repositories(Registry::private_channels));

@@ -275,6 +275,9 @@ pub struct Coordinator {
     pub(crate) running: crate::running::Kept,
     /// Reads private repositories' origins ([`crate::repository_serve`]); none: those reads are 502.
     pub(crate) repository_origin: Option<crate::repository_origin::RepositoryOrigin>,
+    /// How long `Repositories.Discover` and `Add` may take to read a descriptor and its keyring,
+    /// and the most bytes of a descriptor ([`crate::repository_discover`]).
+    pub(crate) discovery: crate::repository_discover::Limits,
     /// Held by `Services.SetRepository` from its check that the registry holds the repository to
     /// its write, and by `Repositories.Remove` from its check that no service names the
     /// repository to its commit, so neither decides on what the other is changing.
@@ -344,6 +347,7 @@ impl Coordinator {
             repository_reports: crate::repository_push::Reports::default(),
             running: crate::running::Kept::default(),
             repository_origin: None,
+            discovery: crate::repository_discover::Limits::default(),
             repository_naming: Mutex::new(()),
             abm_pairing: tokio::sync::Mutex::new(()),
             #[cfg(test)]

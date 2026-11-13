@@ -841,11 +841,47 @@ Through `--request` only: `repository` (hostkeeper.release.v1.Repository).
 `/hostkeeper.operator.v1.Repositories/Remove`
 
 Removes a repository no package comes from. The registry's generation grows
-by one. Writes the audit entry `repository_remove`.
+by one. Writes the audit entry `repository_remove`. The built-in repository `komira` is
+removed by no `Remove`, unless an entry of its name was put over it: then the built-in is
+back.
 
 | flag | value | meaning |
 |---|---|---|
 | `--name` | STRING | The repository's name. |
+| `--reason` | STRING | Why, for the audit entry. |
+
+#### `hkctl repositories discover`
+
+`/hostkeeper.operator.v1.Repositories/Discover`
+
+Reads what the repository at a URL serves: its descriptor (`<base_uri>/hostkeeper-repository.json`)
+and the signing key it names, over HTTPS, and answers the platforms, the channels, the packages
+and the key's fingerprints, computed from the keyring, for the operator to confirm. Changes
+nothing (docs/deploy/package-repositories.md, "Structure of a repository").
+
+| flag | value | meaning |
+|---|---|---|
+| `--base-uri` | STRING | The repository's base URL: `https://`, a host, an optional port and path, with no trailing `/`. |
+| `--access` | STRING | `public` (or empty), or `hosts` for a private repository. |
+| `--credential-file` | STRING | `hosts` only: the credential file on the coordinator's machine, as `Repository.credential_file`. |
+
+#### `hkctl repositories add`
+
+`/hostkeeper.operator.v1.Repositories/Add`
+
+Adds the repository at a URL, as `Discover` showed it: reads the descriptor and the key again,
+refuses when either differs from what the operator confirmed, and then does what `Put` does
+with the entry it builds (same refusals, one audit entry `repository_put`, the registry's
+generation up by one).
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | The name the repository is registered under: 1 to 32 bytes of `[a-z0-9-]`. |
+| `--base-uri` | STRING | As `DiscoverRepositoryRequest.base_uri`. |
+| `--access` | STRING | As `DiscoverRepositoryRequest.access`. |
+| `--credential-file` | STRING | As `DiscoverRepositoryRequest.credential_file`. |
+| `--descriptor-sha256` | STRING | The `descriptor_sha256` the operator confirmed. |
+| `--fingerprints` | STRING | The `fingerprints` the operator confirmed: exactly the keyring's. Repeat the flag for more. |
 | `--reason` | STRING | Why, for the audit entry. |
 
 ### `rollouts`

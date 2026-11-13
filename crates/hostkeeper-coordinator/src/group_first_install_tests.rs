@@ -230,7 +230,6 @@ fn archive_only(service: &str) -> Targets {
 async fn the_status_of_a_package_no_host_runs_shows_every_host_and_why_it_waits() {
     let excluded = ["node-01", "node-02", "node-03", "node-04", "node-06"];
     let farm = farm("fi-archive", canary_first(), &excluded).await;
-    farm.world.coordinator().keep_komira();
     let body = json!({"service": "tierstore", "version": "0.3.96"});
     farm.set("", &body, Some(archive_only("tierstore"))).await;
 

@@ -126,6 +126,7 @@ pub mod audit_actions;
 pub(crate) mod audit_file;
 pub mod backup;
 pub mod bake;
+pub(crate) mod builtin;
 pub mod canary;
 pub mod clear_record;
 pub mod config;
@@ -164,6 +165,7 @@ mod live;
 pub mod lock;
 pub mod login;
 pub(crate) mod login_routes;
+pub(crate) mod macos_resolve;
 pub mod mdm;
 pub(crate) mod mdm_acme;
 pub(crate) mod mdm_certs;
@@ -216,6 +218,7 @@ pub mod registry;
 pub(crate) mod releases;
 pub(crate) mod repositories;
 pub(crate) mod repository_credential;
+pub(crate) mod repository_discover;
 pub mod repository_origin;
 pub(crate) mod repository_push;
 pub(crate) mod repository_serve;
@@ -279,6 +282,8 @@ mod backup_tests;
 mod bake_canary_tests;
 #[cfg(test)]
 mod bake_review_tests;
+#[cfg(test)]
+mod builtin_tests;
 #[cfg(test)]
 mod by_groups_only_tests;
 #[cfg(test)]
@@ -403,6 +408,8 @@ mod live_tests;
 #[cfg(test)]
 pub(crate) mod login_support;
 #[cfg(test)]
+mod macos_resolve_tests;
+#[cfg(test)]
 mod marks_support;
 #[cfg(test)]
 mod marks_tests;
@@ -469,6 +476,8 @@ mod releases_tests;
 mod repositories_support;
 #[cfg(test)]
 mod repositories_tests;
+#[cfg(test)]
+mod repository_discover_tests;
 #[cfg(test)]
 mod repository_listen_tests;
 #[cfg(test)]

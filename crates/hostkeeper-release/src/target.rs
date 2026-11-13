@@ -167,6 +167,10 @@ pub enum EntryError {
     /// nobody checks must not look checked.
     #[error("the repository entry sets {0}, a field of an artifact; it names no artifact")]
     ArtifactField(&'static str),
+    /// A `macos-pkg` repository entry with no `bytes`: the file's size, which the coordinator
+    /// cannot read from the repository, is the release's to name.
+    #[error("the macos-pkg repository entry needs bytes, the size of the .pkg")]
+    NoBytes,
     /// A repository entry whose manifest has no `package`.
     #[error("the manifest of a repository entry needs package")]
     NoPackage,
@@ -326,7 +330,8 @@ fn check_manifest(
 
 /// Checks a repository entry (packages-repositories.md section 2.2), past its size and its
 /// installer's name, in this order: its `repository`; its `package_version`, present and of its
-/// grammar; no location, `bytes` 0 and no attestation; the pin, the package file's SHA-256; a manifest whose `package` is
+/// grammar; no location, no attestation and `bytes` 0 (a `macos-pkg` entry names `bytes`
+/// instead: required); the pin, the package file's SHA-256; a manifest whose `package` is
 /// present and of its grammar; and that manifest by [`manifest::check`] and
 /// [`manifest::check_hook_of`].
 fn check_repository_entry(
@@ -345,13 +350,20 @@ fn check_repository_entry(
     if !is_package_version(version) {
         return Err(EntryError::PackageVersion(version.to_owned()));
     }
+    // A `macos-pkg` repository entry names the version of a .pkg the coordinator finds in the
+    // repository, so it names the file's size too (packages-repositories.md section 4.7); no
+    // other repository entry names an artifact field.
+    let sized = installer_of(entry) == Some(Installer::MacosPkg);
     let artifact = [
         ("locations", !entry.locations.is_empty()),
-        ("bytes", entry.bytes != 0),
+        ("bytes", entry.bytes != 0 && !sized),
         ("attestation", entry.attestation.is_some()),
     ];
     if let Some((field, _)) = artifact.into_iter().find(|(_, has)| *has) {
         return Err(EntryError::ArtifactField(field));
+    }
+    if sized && entry.bytes == 0 {
+        return Err(EntryError::NoBytes);
     }
     digest("package", &entry.digest)?;
     let manifest = entry.manifest.as_ref().ok_or(EntryError::NoManifest)?;

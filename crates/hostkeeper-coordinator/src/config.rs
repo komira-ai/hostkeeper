@@ -424,6 +424,22 @@ pub struct Serve {
         value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=16)
     )]
     pub live_rollouts: usize,
+    /// How long `Repositories.Discover` and `Repositories.Add` may take to read a repository's
+    /// descriptor and its keyring, together, in seconds.
+    #[arg(
+        long,
+        default_value_t = crate::repository_discover::DISCOVER_SECS,
+        value_parser = clap::value_parser!(u64).range(1..)
+    )]
+    pub repository_discover_secs: u64,
+    /// The most bytes of a repository's descriptor `Repositories.Discover` and `Add` read, 1 to
+    /// 65536 (the descriptor's own bound).
+    #[arg(
+        long,
+        default_value_t = crate::repository_discover::DESCRIPTOR_MAX_BYTES,
+        value_parser = clap::builder::RangedU64ValueParser::<usize>::new().range(1..=65536)
+    )]
+    pub repository_descriptor_max_bytes: usize,
     /// How long a host the coordinator has heard from may go without a heartbeat before it is an
     /// alert (`silent_host`), in seconds.
     #[arg(
@@ -598,7 +614,11 @@ pub fn build_with(flags: &Serve, roots: Roots, lock: &dyn StateLock) -> Result<P
         .with_alert_thresholds(alert_thresholds(flags))
         .with_repository_origin(crate::repository_origin::RepositoryOrigin::new(
             roots.clone(),
-        )?);
+        )?)
+        .with_discovery(
+            Duration::from_secs(flags.repository_discover_secs),
+            flags.repository_descriptor_max_bytes,
+        );
     coordinator = state::with_initial_admin(coordinator, flags)?;
     coordinator = state::with_login(coordinator, flags)?;
     coordinator = coordinator

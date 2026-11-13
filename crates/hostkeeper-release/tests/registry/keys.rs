@@ -216,3 +216,30 @@ fn keyring_errors_say_where_and_why() {
         assert_eq!(error.to_string(), text);
     }
 }
+
+/// Proves the user ids of a real keyring are read as the text gpg printed, and that a keyring with
+/// two keys lists the ids of both in order, a key without any listing none, and bytes that are no
+/// keyring are refused as `keys` refuses them.
+#[test]
+fn the_user_ids_of_a_keyring_are_read_in_order() {
+    use hostkeeper_release::registry::user_ids;
+    assert_eq!(
+        user_ids(&real::keyring()).expect("a real keyring"),
+        ["Test Key <test@example.com>"]
+    );
+    let mut two = key(&v4_body(1, 3));
+    two.extend(new(13, b"first <a@example.com>"));
+    two.extend(key(&v4_body(2, 3)));
+    two.extend(new(13, b"second <b@example.com>"));
+    two.extend(new(13, &[0xff, b'x']));
+    assert_eq!(
+        user_ids(&two).expect("two keys"),
+        [
+            "first <a@example.com>",
+            "second <b@example.com>",
+            "\u{fffd}x"
+        ]
+    );
+    assert_eq!(user_ids(&key(&v4_body(1, 3))), Ok(Vec::new()));
+    assert_eq!(user_ids(&[0x00]), Err(KeyringError::Header(0)));
+}

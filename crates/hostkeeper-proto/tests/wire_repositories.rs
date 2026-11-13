@@ -47,6 +47,8 @@ const FIELDS: [(&str, &[Field]); 14] = [
             ("keyring", 7, false),
             ("access", 8, false),
             ("credential_file", 9, false),
+            ("descriptor", 10, false),
+            ("base_uri", 11, false),
         ],
     ),
     (
@@ -91,6 +93,8 @@ const FIELDS: [(&str, &[Field]); 14] = [
             ("keyring_sha256", 2, false),
             ("generation", 3, false),
             ("services", 4, false),
+            ("builtin", 5, false),
+            ("platforms", 6, false),
         ],
     ),
     ("hostkeeper.operator.v1.ListRepositoriesRequest", &[]),
@@ -175,6 +179,8 @@ fn wire_names_of_the_repositories_api_are_pinned() {
             "Get(GetRepositoryRequest) GetRepositoryResponse",
             "Put(PutRepositoryRequest) PutRepositoryResponse",
             "Remove(RemoveRepositoryRequest) RemoveRepositoryResponse",
+            "Discover(DiscoverRepositoryRequest) DiscoverRepositoryResponse",
+            "Add(AddRepositoryRequest) AddRepositoryResponse",
         ]
     );
 
@@ -200,6 +206,10 @@ fn wire_names_of_the_repositories_api_are_pinned() {
             ("store_failed", 9),
             ("audit_unavailable", 10),
             ("credential_unusable", 11),
+            ("discovery_failed", 12),
+            ("descriptor_invalid", 13),
+            ("descriptor_changed", 14),
+            ("builtin", 15),
         ])
     );
     let releases = tokens(

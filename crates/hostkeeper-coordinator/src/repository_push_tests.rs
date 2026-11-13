@@ -183,7 +183,15 @@ fn no_set_goes_to_a_host_that_did_not_announce_the_feature_or_to_one_offered_non
 
     let empty = crate::marks_support::rig("push-empty", "");
     beats(&empty, Some(None));
-    assert_eq!(set_for_d1(&empty), None, "nothing registered");
+    let builtin = set_for_d1(&empty).expect("the built-in komira, with nothing put");
+    assert_eq!(
+        (
+            builtin.generation,
+            builtin.entries.len(),
+            builtin.entries[0].name.as_str()
+        ),
+        (0, 1, "komira")
+    );
 
     // A host of a role no service runs on, announcing no service, needs no repository.
     let idle = crate::marks_support::rig("push-idle", "");

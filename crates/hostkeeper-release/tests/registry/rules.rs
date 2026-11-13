@@ -493,3 +493,14 @@ fn a_conflict_is_the_first_channel_another_entry_has() {
     assert_eq!(conflict(&a, std::slice::from_ref(&a)), None);
     assert_eq!(conflict(&a, &[a.clone(), b]), Some(s("a-b-c")));
 }
+
+/// Proves a base URL is a valid URI of at most 512 bytes with no trailing slash, a path allowed.
+#[test]
+fn a_base_uri_is_an_https_uri_without_a_trailing_slash() {
+    use hostkeeper_release::registry::is_base_uri;
+    assert!(is_base_uri("https://packages.example.com"));
+    assert!(is_base_uri("https://packages.example.com:8443/org/repo"));
+    assert!(!is_base_uri("https://packages.example.com/"));
+    assert!(!is_base_uri("http://packages.example.com"));
+    assert!(!is_base_uri(&format!("https://e.com/{}", "a".repeat(512))));
+}

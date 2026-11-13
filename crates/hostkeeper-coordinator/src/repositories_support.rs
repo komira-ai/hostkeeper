@@ -96,6 +96,20 @@ pub(crate) fn repository_entry(service: &str, repository: &str) -> Target {
     }
 }
 
+/// The named-version entry of a Mac's `.pkg` of `service` (docs/design/packages-repositories.md
+/// section 4.7): `macos-pkg` from the channel `channel` at `version`, pinned by the digest all `a`,
+/// `bytes` 1000, a manifest that passes every rule of the release for `macos-arm64`.
+pub(crate) fn macos_entry(service: &str, channel: &str, version: &str) -> Target {
+    let mut entry = repository_entry(service, channel);
+    entry.installer = "macos-pkg".to_owned();
+    entry.package_version = Some(version.to_owned());
+    entry.bytes = 1000;
+    let manifest = entry.manifest.as_mut().expect("a manifest");
+    manifest.package = Some(format!("dev.{service}.server"));
+    manifest.run = vec![service.to_owned()];
+    entry
+}
+
 /// The targets of `service` with the one list `linux-x86_64`, holding `entries`.
 pub(crate) fn targets_of(entries: Vec<Target>) -> BTreeMap<String, TargetList> {
     BTreeMap::from([("linux-x86_64".to_owned(), TargetList { entries })])
