@@ -47,6 +47,16 @@ export interface Client {
     clearRecord(request: hostkeeper_operator_v1.ClearRecordRequest): Promise<hostkeeper_operator_v1.ClearRecordResponse>;
     retry(request: hostkeeper_operator_v1.RetryRequest): Promise<hostkeeper_operator_v1.RetryResponse>;
   };
+  readonly layout: {
+    get(request: hostkeeper_operator_v1.GetLayoutRequest): Promise<hostkeeper_operator_v1.GetLayoutResponse>;
+    putName(request: hostkeeper_operator_v1.PutLayoutNameRequest): Promise<hostkeeper_operator_v1.PutLayoutNameResponse>;
+    addRow(request: hostkeeper_operator_v1.AddLayoutRowRequest): Promise<hostkeeper_operator_v1.AddLayoutRowResponse>;
+    removeRow(request: hostkeeper_operator_v1.RemoveLayoutRowRequest): Promise<hostkeeper_operator_v1.RemoveLayoutRowResponse>;
+    putRack(request: hostkeeper_operator_v1.PutLayoutRackRequest): Promise<hostkeeper_operator_v1.PutLayoutRackResponse>;
+    removeRack(request: hostkeeper_operator_v1.RemoveLayoutRackRequest): Promise<hostkeeper_operator_v1.RemoveLayoutRackResponse>;
+    place(request: hostkeeper_operator_v1.PlaceLayoutRequest): Promise<hostkeeper_operator_v1.PlaceLayoutResponse>;
+    unplace(request: hostkeeper_operator_v1.UnplaceLayoutRequest): Promise<hostkeeper_operator_v1.UnplaceLayoutResponse>;
+  };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
     putSecret(request: hostkeeper_operator_v1.PutSecretRequest): Promise<hostkeeper_operator_v1.PutSecretResponse>;
@@ -186,6 +196,8 @@ export namespace hostkeeper_operator_v1 {
   export interface AbortRequest { nodeId?: string; service?: string; reason?: string; }
   export interface AbortResponse { queued?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
   export type Actor = "ACTOR_UNSPECIFIED" | "ACTOR_OPERATOR" | "ACTOR_CI" | "ACTOR_COORDINATOR";
+  export interface AddLayoutRowRequest { reason?: string; }
+  export interface AddLayoutRowResponse { row?: hostkeeper_operator_v1.LayoutRow; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AddRecordRequest {
     hostId?: string;
     role?: string;
@@ -234,7 +246,19 @@ export namespace hostkeeper_operator_v1 {
   export type AlertSeverity = "ALERT_SEVERITY_UNSPECIFIED" | "ALERT_SEVERITY_CRITICAL" | "ALERT_SEVERITY_WARNING";
   export interface ApiTokenInfo { name?: string; source?: hostkeeper_operator_v1.ApiTokenSource; createdBy?: string; createdUnix?: string; }
   export type ApiTokenSource = "API_TOKEN_SOURCE_UNSPECIFIED" | "API_TOKEN_SOURCE_STORE" | "API_TOKEN_SOURCE_TOKENS_FILE";
-  export interface ApproveRequest { requestId?: string; keySha256?: string; hostId?: string; role?: string; services?: string[]; replace?: boolean; reason?: string; hostGroup?: string; }
+  export interface ApproveRequest {
+    requestId?: string;
+    keySha256?: string;
+    hostId?: string;
+    role?: string;
+    services?: string[];
+    replace?: boolean;
+    reason?: string;
+    hostGroup?: string;
+    rack?: string;
+    placementU?: number;
+    placementHeightU?: number;
+  }
   export interface ApproveResponse { hostId?: string; certificateIssuedAtPoll?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignRequest { nodeId?: string; service?: string; role?: string; }
   export interface AssignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
@@ -378,6 +402,9 @@ export namespace hostkeeper_operator_v1 {
   export interface GetHostGroupResponse { hostGroup?: hostkeeper_operator_v1.HostGroupState; nodeIds?: string[]; nextPageToken?: string; }
   export interface GetHostRequest { nodeId?: string; }
   export interface GetHostResponse { host?: hostkeeper_operator_v1.Host; }
+  export interface GetLayoutRequest {
+  }
+  export interface GetLayoutResponse { rows?: hostkeeper_operator_v1.LayoutRow[]; racks?: hostkeeper_operator_v1.LayoutRack[]; placements?: hostkeeper_operator_v1.LayoutPlacement[]; name?: string; }
   export interface GetReleaseRequest { service?: string; version?: string; hostGroup?: string; }
   export interface GetReleaseResponse { targets?: { [key: string]: hostkeeper_release_v1.TargetList }; releaseIndexDigest?: string; }
   export interface GetRepositoryRequest { name?: string; }
@@ -469,6 +496,11 @@ export namespace hostkeeper_operator_v1 {
     hostGroup?: string;
     enrolledHostId?: string;
   }
+  export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; }
+  export interface LayoutRack { id?: string; row?: string; heightU?: number; number?: number; }
+  export interface LayoutRow { id?: string; number?: number; }
+  export interface LayoutSubject { kind?: hostkeeper_operator_v1.LayoutSubjectKind; id?: string; }
+  export type LayoutSubjectKind = "LAYOUT_SUBJECT_KIND_UNSPECIFIED" | "LAYOUT_SUBJECT_KIND_HOST" | "LAYOUT_SUBJECT_KIND_INVENTORY";
   export interface ListAlertsRequest {
   }
   export interface ListAlertsResponse { alerts?: hostkeeper_operator_v1.Alert[]; }
@@ -651,6 +683,8 @@ export namespace hostkeeper_operator_v1 {
     recordApproveUntilUnix?: string;
     recordHostGroup?: string;
   }
+  export interface PlaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; reason?: string; }
+  export interface PlaceLayoutResponse { placement?: hostkeeper_operator_v1.LayoutPlacement; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PlanHost { nodeId?: string; role?: string; state?: hostkeeper_operator_v1.PlanHostState; deferring?: boolean; }
   export type PlanHostState = "PLAN_HOST_STATE_UNSPECIFIED" | "PLAN_HOST_STATE_WAITING" | "PLAN_HOST_STATE_UPDATING" | "PLAN_HOST_STATE_BAKING" | "PLAN_HOST_STATE_DONE" | "PLAN_HOST_STATE_FAILED";
   export interface PlanStage { number?: number; percent?: number; hosts?: number; advance?: hostkeeper_operator_v1.StageAdvance; members?: hostkeeper_operator_v1.PlanHost[]; }
@@ -672,6 +706,10 @@ export namespace hostkeeper_operator_v1 {
   export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutLayoutNameRequest { name?: string; reason?: string; }
+  export interface PutLayoutNameResponse { name?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface PutLayoutRackRequest { id?: string; row?: string; heightU?: number; reason?: string; }
+  export interface PutLayoutRackResponse { rack?: hostkeeper_operator_v1.LayoutRack; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutNameRequest { name?: string; }
   export interface PutNameResponse { name?: string; enrollmentUrl?: string; }
   export interface PutPushCertificateRequest { certificatePem?: string; keyPem?: string; }
@@ -694,6 +732,10 @@ export namespace hostkeeper_operator_v1 {
   export interface RejectResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveHostGroupRequest { hostGroup?: string; reason?: string; }
   export interface RemoveHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveLayoutRackRequest { id?: string; reason?: string; }
+  export interface RemoveLayoutRackResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveLayoutRowRequest { id?: string; reason?: string; }
+  export interface RemoveLayoutRowResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRecordRequest { hostId?: string; reason?: string; }
   export interface RemoveRecordResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveRepositoryRequest { name?: string; reason?: string; }
@@ -824,6 +866,8 @@ export namespace hostkeeper_operator_v1 {
   export interface UnholdResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnmarkBadRequest { service?: string; version?: string; reason?: string; }
   export interface UnmarkBadResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface UnplaceLayoutRequest { subject?: hostkeeper_operator_v1.LayoutSubject; reason?: string; }
+  export interface UnplaceLayoutResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UpdateRecordRequest { hostId?: string; dataMacs?: string[]; bmcMac?: string; notes?: string; }
   export interface UpdateRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UserInfo { name?: string; enabled?: boolean; mustChange?: boolean; createdBy?: string; createdUnix?: string; lastLoginUnix?: string; passwordValidUntilUnix?: string; }

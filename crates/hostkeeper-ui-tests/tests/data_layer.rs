@@ -24,7 +24,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.theApp = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#;
 
@@ -490,7 +490,7 @@ export async function main() {
   const doc = globalThis.doc;
   const pages = [];
   for (const name of ["host", "packages", "enrollment", "inventory", "audit"]) {
-    fire(domNamed(doc.root, `page-${name}`), "click", {});
+    globalThis.theApp.navigate(name, {});
     await null;
     pages.push(domTexts(doc.root).join(" "));
   }
@@ -523,6 +523,7 @@ export async function main() {
         r#"
 import { domTexts, domNamed, fire } from "../test/kit.js";
 export async function main() {
+  fire(domNamed(globalThis.doc.root, "page-settings"), "click", {});
   fire(domNamed(globalThis.doc.root, "page-audit"), "click", {});
 }"#,
     );
@@ -568,7 +569,7 @@ export async function main() {
 }"#,
     );
     let text = shown.as_str().expect("the frame's text");
-    assert!(text.contains("Fleet the app failed unexpectedly"), "{text}");
+    assert!(text.contains("Lab the app failed unexpectedly"), "{text}");
     assert!(!text.contains("Loading..."), "{text}");
 }
 
@@ -596,7 +597,7 @@ export async function main() {
 }"#,
     );
     assert!(
-        before["text"].as_str().expect("text").contains("Hosts (0)"),
+        before["text"].as_str().expect("text").contains("No alerts"),
         "{before}"
     );
     assert_eq!(before["held"], true);
@@ -614,6 +615,7 @@ export async function main() {
             LIST,
             "hostkeeper.operator.v1.Releases/Status",
             "hostkeeper.operator.v1.Alerts/List",
+            "hostkeeper.operator.v1.Layout/Get",
             "v1/logout"
         ]
     );

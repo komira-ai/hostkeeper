@@ -10,7 +10,7 @@ the same checks; the gateway adds no rule of its own. Every command and request 
 
 One route per unary method of the `hostkeeper.operator.v1` services (`Hosts`, `Releases`,
 `Services`, `Enrollment`, `Audit`, `Alerts`, `Rollouts`, `Mdm`, `Repositories`, `HostGroups`, `Users`,
-`ApiTokens`):
+`ApiTokens`, `Layout`):
 
 ```
 POST /<package>.<Service>/<Method>
@@ -37,7 +37,7 @@ refused it `PERMISSION_DENIED` `session_required`. The writes of the MDM setup a
 `Mdm.PutSetting`, `Mdm.PutName` and the three of the push certificate, `Mdm.CreatePushRequest`, `Mdm.PutPushReply` and
 `Mdm.PutPushCertificate` (`docs/design/coordinator-mdm.md`, sections 4.4 and 4.9), and `Mdm.Verify`, which sends a push and asks
 Apple about the ABM token (section 4.9), which an API token, the tokens file's or one
-made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets`, `Mdm.ListSettings` and `Mdm.Status`. `Users` and `ApiTokens` take an operator only (a token
+made in the UI, never makes, while it may call `Mdm.ListDevices`, `Mdm.ListSecrets`, `Mdm.ListSettings` and `Mdm.Status`. `Users`, `ApiTokens` and `Layout` take an operator only (a token
 of the tokens file, a stored API token, or a session), and a bearer is resolved against the tokens file and the store's tokens
 in one pass (`docs/operations/coordinator-state.md`, "Users and API tokens"). `Releases.SetDesired` takes CI's
 OIDC token or an operator token; `Releases.Converge`, `Releases.WaitConverged` and

@@ -960,3 +960,60 @@ export async function main() {
     );
     assert_eq!(out, json!(vec!["no link outside the documentation"; 3]));
 }
+
+#[test]
+fn the_fields_are_grouped_and_each_stored_part_carries_a_chip_that_warns_near_its_end() {
+    // Catches: the form not split into the push certificate, Apple Business Manager and TLS
+    // groups, a part that is not held shown without its "Not stored" chip, an expiry within 30
+    // days or already past shown as plain "stored", the Save and Verify buttons apart, and the
+    // status header not saying whether the setup is configured.
+    let mut ui = Ui::start();
+    draw(&ui, held(10, -3), settings("", ""), secrets(false));
+    let out = ui.run(&page_driver(
+        "mdm",
+        "{}",
+        "[]",
+        r#"const chip = (k) => { const n = nodes(tree).find((x) => x.attrs["name"] === `${k}-stored` || x.attrs["name"] === `${k}-empty`); return n ? [n.attrs["class"], text(n)] : null; };
+const groups = nodes(tree).filter((n) => n.tag === "section" && String(n.attrs["name"]).startsWith("group-"))
+  .map((g) => [g.attrs["name"], nodes(g).filter((n) => n.tag === "input").map((n) => n.attrs["name"])]);
+const bar = nodes(tree).find((n) => n.attrs["name"] === "mdm-actions");
+const pill = nodes(tree).find((n) => String(n.attrs["class"]).startsWith("pill"));
+return { groups, bar: nodes(bar).filter((n) => n.tag === "button").map((n) => n.attrs["name"]),
+         pill: text(pill), push: chip("pushCert"), abm: chip("abmToken"), abmKey: chip("abmKey"), dns: chip("dnsKey") };"#,
+    ));
+    assert_eq!(
+        out["out"]["groups"],
+        json!([
+            ["group-push", ["push-cert", "push-key"]],
+            ["group-abm", ["abm-token", "abm-key", "abm-cert"]],
+            ["group-tls", ["dns-key", "dns-secret", "contact"]],
+        ])
+    );
+    assert_eq!(out["out"]["bar"], json!(["save", "verify"]));
+    assert_eq!(out["out"]["pill"], json!("Configured"));
+    assert_eq!(
+        out["out"]["push"],
+        json!(["chip warn", "stored \u{2713} (expires 2027-01-25)"])
+    );
+    assert_eq!(
+        out["out"]["abm"],
+        json!(["chip bad", "stored \u{2713} (expires 2027-01-12)"])
+    );
+    assert_eq!(out["out"]["abmKey"], json!(["chip none", "Not stored"]));
+    assert_eq!(out["out"]["dns"], json!(["chip ok", "stored \u{2713}"]));
+}
+
+#[test]
+fn a_setup_that_is_missing_parts_is_headed_needs_attention() {
+    // Catches: an unconfigured setup headed as configured.
+    let mut ui = Ui::start();
+    draw(&ui, empty(), settings("", ""), secrets(false));
+    let out = ui.run(&page_driver(
+        "mdm",
+        "{}",
+        "[]",
+        r#"const pill = nodes(tree).find((n) => String(n.attrs["class"]).startsWith("pill"));
+return text(pill);"#,
+    ));
+    assert_eq!(out["out"], json!("Needs attention"));
+}

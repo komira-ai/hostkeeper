@@ -166,6 +166,10 @@ const CASES: [(&str, &str, &[&str]); 2] = [
             "services_retired",
             "host_group_differs",
             "unknown_host_group",
+            "placement_invalid",
+            "unknown_rack",
+            "placement_overlap",
+            "placement_out_of_rack",
         ],
     ),
     (

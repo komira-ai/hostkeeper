@@ -479,6 +479,7 @@ fn a_backup_copies_the_store_files_alone_and_names_what_it_passed_over() {
             format!("{state}.repositories"),
             format!("{state}.verdicts"),
             format!("{state}.accounts"),
+            format!("{state}.layout"),
             ops.clone(),
             format!("{ops}.audit"),
             format!("{ops}.halts"),

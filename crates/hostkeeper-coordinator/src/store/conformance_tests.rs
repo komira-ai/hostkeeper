@@ -35,6 +35,7 @@ use crate::audit_file::{Actor, AuditLine, DEFAULT_ROTATION, Filter, Logged, Quer
 use crate::desired::{self, Desired, StoreError};
 use crate::host_groups::{GroupName, HostGroups};
 use crate::jti_file::jti_path;
+use crate::layout::{Layout, layout_path};
 use crate::ops::{AuditEntry, OpsError, OpsState};
 use crate::registry::{Digest, Release};
 use crate::repositories::Registry;
@@ -249,6 +250,31 @@ pub(crate) fn rich_accounts() -> Accounts {
         .expect("accounts")
 }
 
+/// A layout named `Lab`, with a row, two racks and two placements, one of them of an inventory entry.
+pub(crate) fn rich_layout() -> Layout {
+    let (next, row) = Layout::default()
+        .with_name("Lab")
+        .and_then(|named| named.with_next_row())
+        .expect("a row");
+    let (next, rack) = next.with_rack("", &row.id, 42).expect("a rack");
+    let (next, _) = next.with_rack("", &row.id, 24).expect("a second rack");
+    let host = crate::layout::Subject {
+        kind: crate::layout::Kind::Host,
+        id: "node-1".into(),
+    };
+    let entry = crate::layout::Subject {
+        kind: crate::layout::Kind::Inventory,
+        id: "rec-7".into(),
+    };
+    let (next, _) = next
+        .with_placement(crate::operator_layout::placement_of(host, &rack.id, 39, 2))
+        .expect("a placement");
+    let (next, _) = next
+        .with_placement(crate::operator_layout::placement_of(entry, &rack.id, 1, 1))
+        .expect("a second placement");
+    next
+}
+
 /// The audit lines numbered `from` to `to`, varied in who, what, service and host.
 pub(crate) fn lines(from: u64, to: u64) -> Vec<AuditLine> {
     (from..=to)
@@ -382,11 +408,12 @@ fn with_host_groups(desired: &mut desired::Held, ops: &mut OpsState) {
 
 fn load_gives_back(subject: &dyn Subject) -> Outcome {
     let live = subject.live();
-    let (mut desired, mut ops, verdicts, accounts) = (
+    let (mut desired, mut ops, verdicts, accounts, layout) = (
         desired_with_release("2.0", 'c'),
         rich_ops(),
         rich_verdicts(),
         rich_accounts(),
+        rich_layout(),
     );
     desired.repositories = Registry::default()
         .put(komira(1))
@@ -413,6 +440,11 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
         ..Commit::default()
     })
     .map_err(|why| format!("the accounts' commit failed: {why}"))?;
+    live.commit(&Commit {
+        layout: Some((&Layout::default(), &layout)),
+        ..Commit::default()
+    })
+    .map_err(|why| format!("the layout's commit failed: {why}"))?;
     let back = loaded(&subject.restarted())?;
     check(back.desired == desired, || {
         format!("the desired state came back as {:?}", back.desired)
@@ -445,6 +477,9 @@ fn load_gives_back(subject: &dyn Subject) -> Outcome {
     })?;
     check(back.accounts == accounts, || {
         format!("the accounts came back as {:?}", back.accounts)
+    })?;
+    check(back.layout == layout, || {
+        format!("the layout came back as {:?}", back.layout)
     })
 }
 
@@ -762,7 +797,8 @@ impl OnFiles {
             .with_ops(&ops, DEFAULT_ROTATION)
             .expect("the ops files")
             .with_verdicts(&verdicts_path(&state))
-            .with_accounts(&accounts_path(&state));
+            .with_accounts(&accounts_path(&state))
+            .with_layout(&layout_path(&state));
         let Some(failing) = failing else {
             return files;
         };

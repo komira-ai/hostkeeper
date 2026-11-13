@@ -85,7 +85,7 @@ update coordinator, `hostkeeper-coordinator serve`. The parts are being moved he
 | `coverage-gate`, `xtask` | the 99% coverage gate, and the CI steps and release verbs |
 
 The operator web app (`ui/`) is static files: HTML, one stylesheet and JavaScript modules, with
-no framework and no build step. Its pages (Fleet, Host, Rollout, Holds, Enrollment, Audit) call
+no framework and no build step. Its pages (Home, which is the lab, Host, Host groups, Inventory, Enrollment, Audit and the others in the side menu) call
 the coordinator's HTTP/JSON gateway with the operator's token, each button one method call,
 through a client generated from the protos: `ui/gen/client.js`, one function per method of
 `hostkeeper.operator.v1` (`api.releases.setDesired(request)`), with its TypeScript declarations

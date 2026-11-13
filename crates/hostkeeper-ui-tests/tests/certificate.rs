@@ -78,7 +78,6 @@ export async function main() {{
 
 fn rows(ends: &str, error: &str, skewed: &str) -> Value {
     json!([
-        ["", ""],
         ["Ends", ends],
         ["Last renewal error", error],
         ["Heartbeats with the clock off", skewed]

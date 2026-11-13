@@ -43,5 +43,9 @@ SELECT format('  %s: %s rows', name, rows) FROM (VALUES
   (36, 'mac_nonces', (SELECT count(*) FROM mac_nonces)),
   (37, 'mdm_devices', (SELECT count(*) FROM mdm_devices)),
   (38, 'users', (SELECT count(*) FROM users)),
-  (39, 'api_tokens', (SELECT count(*) FROM api_tokens))
+  (39, 'api_tokens', (SELECT count(*) FROM api_tokens)),
+  (40, 'lab_rows', (SELECT count(*) FROM lab_rows)),
+  (41, 'lab_racks', (SELECT count(*) FROM lab_racks)),
+  (42, 'lab_placements', (SELECT count(*) FROM lab_placements)),
+  (43, 'lab_cluster', (SELECT count(*) FROM lab_cluster))
 ) AS counted (n, name, rows) ORDER BY n;

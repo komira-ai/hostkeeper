@@ -160,3 +160,37 @@ fleetdm.com
 
 # Where an operator makes the GoDaddy API key the coordinator's DNS credential is (docs/operations/mdm-setup.md).
 =developer.godaddy.com
+
+# Not sites: property names of the web app's JavaScript (ui/lab.js, ui/pages/home.js, ui/pages/host.js,
+# ui/pages/enrollment.js) and the call `layout.place` of the generated client, whose last word is also a
+# top-level domain. Exact names only.
+=at.host
+=e.target
+=form.name
+=form.place
+=host.live
+=layout.name
+=layout.place
+=p.id
+=p.subject.id
+=r.id
+=rack.id
+=rackat.id
+=reply.name
+=row.id
+=rowat.id
+=s.group
+=s.host
+=s.id
+=s.name
+=server.group
+=server.host
+=server.id
+=server.name
+=chosen.tab
+=s.health
+=view.health
+=where.mini
+n.attrs.name
+y.name
+span.mini

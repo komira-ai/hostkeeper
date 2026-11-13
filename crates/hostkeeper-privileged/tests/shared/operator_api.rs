@@ -127,6 +127,7 @@ impl OperatorApi {
                 replace: approval.replace,
                 reason: approval.reason.to_owned(),
                 host_group: String::new(),
+                ..Default::default()
             },
             "ApproveResponse"
         )

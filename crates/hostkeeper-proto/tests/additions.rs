@@ -239,6 +239,7 @@ fn new_messages() -> Vec<(&'static str, Vec<u8>)> {
                 replace: true,
                 reason: "new disk".to_owned(),
                 host_group: String::new(),
+                ..Default::default()
             }),
         ),
         (

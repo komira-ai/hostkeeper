@@ -24,39 +24,28 @@ export async function main() {{
 
 const AT: &str = "2027-01-15 08:00:00 UTC";
 
+/// The lab reads of Home, answered with an empty lab: no placement, no inventory entry.
+fn empty_lab(ui: &Ui) {
+    ui.reply(&m("Layout/Get"), json!({}));
+    ui.reply(&m("Enrollment/ListRecords"), json!({}));
+}
+
 #[test]
-fn the_fleet_table_shows_each_host_in_its_own_row() {
-    // Catches: a field that disappears from one host's row while a neighbour's still matches a
-    // substring (healthy within unhealthy), and a mark shown twice or on the wrong host.
+fn the_servers_list_shows_each_host_in_its_own_row() {
+    // Catches: a field that disappears from one host's row, a state that one neighbour's shows
+    // (healthy for a host that never heartbeated), and a server listed out of name order.
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), hosts_reply());
     ui.reply(&m("Releases/Status"), status_reply());
+    empty_lab(&ui);
     assert_eq!(
-        rows(&mut ui, "fleet", "{}"),
+        rows(&mut ui, "home", "{ list: true }"),
         json!([
-            ["Host", "Role", "Heartbeat", "Last heartbeat", "Services"],
-            [
-                "web-1",
-                "web",
-                "live",
-                AT,
-                "api 1.4.0, healthy [holds the update slot]"
-            ],
-            ["web-2", "web", "live", "-", "api 1.3.0, unhealthy [held]"],
-            [
-                "new-1",
-                "web",
-                "silent",
-                "-",
-                "api not installed, - [waiting_for_operator]"
-            ],
-            [
-                "clone-1",
-                "db",
-                "silent",
-                "-",
-                "api 1.4.0, - [excluded, duplicate]"
-            ],
+            ["Server", "State", "Where", "Group", "Version"],
+            ["clone-1", "pending", "Unplaced", "-", "1.4.0"],
+            ["new-1", "pending", "Unplaced", "-", "-"],
+            ["web-1", "updating", "Unplaced", "-", "1.4.0"],
+            ["web-2", "pending", "Unplaced", "-", "1.3.0"],
         ])
     );
 }
@@ -71,23 +60,18 @@ fn coordinator_hosts() -> Value {
 }
 
 #[test]
-fn the_fleet_table_shows_a_host_of_the_coordinators_own_reply() {
-    // Catches: a Fleet page that renders only the replies written for it and not the one the
+fn the_servers_list_shows_a_host_of_the_coordinators_own_reply() {
+    // Catches: a Home page that renders only the replies written for it and not the one the
     // coordinator gives (a field name, a 64-bit time as a string, an enum's spelling).
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), coordinator_hosts());
     ui.reply(&m("Releases/Status"), json!({}));
+    empty_lab(&ui);
     assert_eq!(
-        rows(&mut ui, "fleet", "{}"),
+        rows(&mut ui, "home", "{ list: true }"),
         json!([
-            ["Host", "Role", "Heartbeat", "Last heartbeat", "Services"],
-            [
-                "s1",
-                "storage",
-                "live",
-                AT,
-                "kbf 1.0, healthy [held, no_desired]"
-            ],
+            ["Server", "State", "Where", "Group", "Version"],
+            ["s1", "healthy", "Unplaced", "-", "1.0"],
         ])
     );
 }
@@ -110,7 +94,6 @@ fn the_host_page_shows_a_host_of_the_coordinators_own_reply() {
     assert_eq!(
         json!(pairs),
         json!([
-            ["", ""],
             ["Role", "storage"],
             ["Heartbeat", "live"],
             ["Last heartbeat", AT],
@@ -123,28 +106,25 @@ fn the_host_page_shows_a_host_of_the_coordinators_own_reply() {
             ["Serial", "-"],
             ["Enrolled", "not enrolled"],
             ["First heartbeat", AT],
-            ["", ""],
-            ["Ends", "not reported"],
-            ["Last renewal error", "-"],
-            ["Heartbeats with the clock off", "0"],
-            ["", ""],
-            ["State", "not reported"],
-            ["Age", "not reported"],
-            ["", ""],
             ["Installed version", "1.0"],
             ["Health", "healthy"],
             ["Up", "yes"],
             ["Update slot", "-"],
-            ["Gate", "no_desired"],
+            ["Gate", "no desired"],
             ["Membership", "present"],
             ["Excluded", "no"],
+            ["Ends", "not reported"],
+            ["Last renewal error", "-"],
+            ["Heartbeats with the clock off", "0"],
+            ["State", "not reported"],
+            ["Age", "not reported"],
         ])
     );
 }
 
 #[test]
-fn the_fleet_table_shows_every_page_of_the_host_list() {
-    // Catches: a Fleet page that shows the first page of a fleet larger than one page (256
+fn the_servers_list_shows_every_page_of_the_host_list() {
+    // Catches: a Home page that shows the first page of a fleet larger than one page (256
     // hosts) and leaves the rest out, or that asks for the next page with another token.
     let mut ui = Ui::start();
     let one = |id: &str| json!({"nodeId": id, "role": "web", "live": true});
@@ -154,7 +134,8 @@ fn the_fleet_table_shows_every_page_of_the_host_list() {
     );
     ui.reply(&m("Hosts/List"), json!({"hosts": [one("web-3")]}));
     ui.reply(&m("Releases/Status"), json!({}));
-    let shown = rows(&mut ui, "fleet", "{}");
+    empty_lab(&ui);
+    let shown = rows(&mut ui, "home", "{ list: true }");
     let hosts: Vec<&Value> = shown
         .as_array()
         .expect("rows")
@@ -189,7 +170,8 @@ fn a_next_page_token_that_does_not_move_on_ends_the_host_list() {
         );
         ui.reply(&m("Hosts/List"), json!({"hosts": [one("web-9")]}));
         ui.reply(&m("Releases/Status"), json!({}));
-        let shown = rows(&mut ui, "fleet", "{}");
+        empty_lab(&ui);
+        let shown = rows(&mut ui, "home", "{ list: true }");
         assert_eq!(shown.as_array().expect("rows").len(), 3, "{token}: {shown}");
         let asked = ui
             .methods()
@@ -240,7 +222,6 @@ fn the_host_page_shows_each_fact_beside_its_label() {
     assert_eq!(
         json!(pairs),
         json!([
-            ["", ""],
             ["Role", "web"],
             ["Heartbeat", "live"],
             ["Last heartbeat", AT],
@@ -253,14 +234,6 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["Serial", "SN-2"],
             ["Enrolled", AT],
             ["First heartbeat", "2027-01-15 08:01:30 UTC"],
-            ["", ""],
-            ["Ends", "2027-01-22 08:00:00 UTC"],
-            ["Last renewal error", "renewal refused: host_excluded"],
-            ["Heartbeats with the clock off", "2"],
-            ["", ""],
-            ["State", "stale"],
-            ["Age", "91 days (7862400 s)"],
-            ["", ""],
             ["Installed version", "1.3.0"],
             ["Health", "unhealthy"],
             ["Up", "no"],
@@ -268,7 +241,6 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["Gate", "held"],
             ["Membership", "present"],
             ["Excluded", "no"],
-            ["Last update", ""],
             ["Target", "1.4.0"],
             ["Verdict", "failed (forced)"],
             ["Phase", "after_commit"],
@@ -278,7 +250,6 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["Try", "2"],
             ["Order", "order-17"],
             ["Started", AT],
-            ["", ""],
             ["Installed version", "2.0.0"],
             ["Health", "healthy"],
             ["Up", "yes"],
@@ -286,6 +257,11 @@ fn the_host_page_shows_each_fact_beside_its_label() {
             ["Gate", "-"],
             ["Membership", "excluded"],
             ["Excluded", "yes: noisy"],
+            ["Ends", "2027-01-22 08:00:00 UTC"],
+            ["Last renewal error", "renewal refused: host_excluded"],
+            ["Heartbeats with the clock off", "2"],
+            ["State", "stale"],
+            ["Age", "91 days (7862400 s)"],
         ])
     );
 }
@@ -293,7 +269,7 @@ fn the_host_page_shows_each_fact_beside_its_label() {
 #[test]
 fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
     // Catches: a claim (the UUIDs included), the image, the first-seen time or the renewal left
-    // out or shown under another label.
+    // out or shown under another label; a renewal or a nonce shown when there is none.
     let mut ui = Ui::start();
     ui.reply(
         &m("Enrollment/List"),
@@ -309,53 +285,50 @@ fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
     assert_eq!(
         rows(&mut ui, "enrollment", "{}"),
         json!([
-            ["", ""],
+            ["Fact", "Value"],
             ["Key SHA-256", "ab".repeat(32)],
             ["Image", "debian-hk"],
             ["First seen", AT],
             ["Renewal of", "web-3"],
             ["Mac nonce presented", "yes"],
-            ["Claim", ""],
             ["Machine id", "m-0001"],
             ["DMI serial", "SN-42"],
             ["Product UUID", "4c4c4544-0042"],
             ["Addresses", "192.0.2.10, 192.0.2.11"],
             ["Mac serial", "C02-X"],
             ["Platform UUID", "a1b2c3d4-0042"],
-            ["", ""],
+            ["Fact", "Value"],
             ["Key SHA-256", "cd".repeat(32)],
             ["Image", "-"],
             ["First seen", "-"],
-            ["Renewal of", "-"],
-            ["Mac nonce presented", "no"],
         ])
     );
 }
 
 #[test]
-fn the_fleet_page_shows_a_failed_status_call_and_a_refused_alerts_call() {
-    // Catches: a Fleet page that hides the failure of its second call; and one that hides a
+fn the_home_page_shows_a_failed_status_call_and_a_refused_alerts_call() {
+    // Catches: a Home page that hides the failure of its second call; and one that hides a
     // refused `Alerts.List` (an empty box would read as "nothing needs a person") or drops the
     // hosts because of it.
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), hosts_reply());
     ui.refuse(&m("Releases/Status"), 500, "INTERNAL", "store_failed");
-    let out = render(&mut ui, "fleet", "{}");
-    assert_eq!(shown(&out), "Fleet INTERNAL store_failed");
+    let out = render(&mut ui, "home", "{}");
+    assert_eq!(shown(&out), "Lab INTERNAL store_failed");
     assert_eq!(ui.methods(), [m("Hosts/List"), m("Releases/Status")]);
 
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/List"), hosts_reply());
     ui.reply(&m("Releases/Status"), status_reply());
     ui.refuse(&m("Alerts/List"), 500, "INTERNAL", "store_failed");
-    let out = render(&mut ui, "fleet", "{}");
+    let out = render(&mut ui, "home", "{}");
     let text = shown(&out);
     assert!(
-        text.contains("Alerts The alerts could not be read: INTERNAL store_failed"),
+        text.contains("The alerts could not be read: INTERNAL store_failed"),
         "{text}"
     );
-    assert!(!text.contains("Nothing needs a person."), "{text}");
-    assert!(text.contains("Hosts (4)"), "{text}");
+    assert!(!text.contains("nothing needs a person"), "{text}");
+    assert!(text.contains("The lab could not be read"), "{text}");
 }
 
 /// The reply to `Alerts.List` the coordinator gives for a canary of kbf that failed 2.0. The
@@ -364,8 +337,8 @@ fn the_fleet_page_shows_a_failed_status_call_and_a_refused_alerts_call() {
 const ALERTS_LIST: &str = include_str!("fixtures/alerts_list.json");
 
 #[test]
-fn the_fleet_page_shows_the_failed_canary_of_the_coordinators_own_reply() {
-    // Catches: a failed canary missing from the Fleet page (it derived its alerts itself and
+fn the_home_page_shows_the_failed_canary_of_the_coordinators_own_reply() {
+    // Catches: a failed canary missing from the Home page (it derived its alerts itself and
     // could not name a canary), and a page that renders only the replies written for it, not
     // the one the coordinator gives.
     let mut ui = Ui::start();
@@ -375,12 +348,12 @@ fn the_fleet_page_shows_the_failed_canary_of_the_coordinators_own_reply() {
         &m("Alerts/List"),
         serde_json::from_str(ALERTS_LIST).expect("the fixture is JSON"),
     );
-    let out = render(&mut ui, "fleet", "{}");
+    let out = render(&mut ui, "home", "{}");
     let text = shown(&out).split_whitespace().collect::<Vec<_>>().join(" ");
     assert!(
         text.contains(
-            "Alerts (1) failed canary (critical): d1, a canary of kbf, failed 2.0: it is marked \
-             bad and rolled back (since 2027-01-15 08:00:00 UTC)"
+            "Alerts (1) failed canary critical d1, a canary of kbf, failed 2.0: it is marked \
+             bad and rolled back since 2027-01-15 08:00:00 UTC"
         ),
         "{text}"
     );
@@ -415,17 +388,24 @@ fn a_reply_from_a_newer_coordinator_still_renders() {
                 "extra": 1})
         .to_string(),
     );
-    let fleet = rows(&mut ui, "fleet", "{}");
+    empty_lab(&ui);
+    let fleet = rows(&mut ui, "home", "{ list: true }");
     assert_eq!(
         fleet,
         json!([
-            ["Host", "Role", "Heartbeat", "Last heartbeat", "Services"],
-            ["web-1", "web", "live", "-", "api 1.4.0, -"],
+            ["Server", "State", "Where", "Group", "Version"],
+            ["web-1", "pending", "Unplaced", "-", "1.4.0"],
         ])
     );
     assert_eq!(
         ui.methods(),
-        [m("Hosts/List"), m("Releases/Status"), m("Alerts/List")]
+        [
+            m("Hosts/List"),
+            m("Releases/Status"),
+            m("Alerts/List"),
+            m("Layout/Get"),
+            m("Enrollment/ListRecords")
+        ]
     );
     let labels = ui.run(
         r#"

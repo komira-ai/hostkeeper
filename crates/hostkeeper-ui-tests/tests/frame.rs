@@ -18,9 +18,9 @@ import {{ startApp }} from "./app.js";
 export async function main() {{
   const doc = fakeDocument();
   globalThis.doc = doc;
-  startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
+  globalThis.theApp = startApp({{ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 }});
   await settle();
-  fire(domNamed(doc.root, "page-{page}"), "click", {{}});
+  globalThis.theApp.navigate("{page}", {{}});
 }}"#
     )
 }
@@ -333,6 +333,7 @@ export async function main() {
   startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
              download: (file) => globalThis.saved.push(file) });
   await settle();
+  fire(domNamed(doc.root, "page-settings"), "click", {});
   fire(domNamed(doc.root, "page-mdm"), "click", {});
   await settle();
   fire(domNamed(doc.root, "download-abm-certificate"), "click", {});

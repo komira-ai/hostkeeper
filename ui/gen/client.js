@@ -49,6 +49,16 @@ export function createClient(call) {
       clearRecord: (request) => call("hostkeeper.operator.v1.Hosts/ClearRecord", request),
       retry: (request) => call("hostkeeper.operator.v1.Hosts/Retry", request),
     }),
+    layout: Object.freeze({
+      get: (request) => call("hostkeeper.operator.v1.Layout/Get", request),
+      putName: (request) => call("hostkeeper.operator.v1.Layout/PutName", request),
+      addRow: (request) => call("hostkeeper.operator.v1.Layout/AddRow", request),
+      removeRow: (request) => call("hostkeeper.operator.v1.Layout/RemoveRow", request),
+      putRack: (request) => call("hostkeeper.operator.v1.Layout/PutRack", request),
+      removeRack: (request) => call("hostkeeper.operator.v1.Layout/RemoveRack", request),
+      place: (request) => call("hostkeeper.operator.v1.Layout/Place", request),
+      unplace: (request) => call("hostkeeper.operator.v1.Layout/Unplace", request),
+    }),
     mdm: Object.freeze({
       listDevices: (request) => call("hostkeeper.operator.v1.Mdm/ListDevices", request),
       putSecret: (request) => call("hostkeeper.operator.v1.Mdm/PutSecret", request),

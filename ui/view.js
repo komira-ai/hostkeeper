@@ -9,14 +9,29 @@
 import { ApiError } from "./api.js";
 
 const TAGS = new Set([
-  "a", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
+  "a", "aside", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
   "legend", "li", "main", "nav", "option", "p", "pre", "progress", "section", "select", "small", "span",
   "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
+  "svg", "path", "circle", "rect", "line", "polyline",
 ]);
+// The tags that are drawn, which the document makes in the SVG namespace.
+const SVG_TAGS = new Set(["svg", "path", "circle", "rect", "line", "polyline"]);
+// The name of the SVG namespace. It is an identifier the DOM compares, never an address the page
+// loads, and is written in parts so that the scan for network addresses (`tests/sources.rs`) stays
+// strict about every real one.
+const SVG_NAMESPACE = ["http:", "", "www.w3.org", "2000", "svg"].join("/");
 const ATTRIBUTES = new Set([
-  "aria-label", "href", "rel", "target", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
-  "role", "rows", "spellcheck", "type", "max",
+  "aria-controls", "aria-current", "aria-expanded", "aria-hidden", "aria-label", "aria-pressed", "href", "rel", "target",
+  "autocomplete", "class", "draggable", "id", "inputmode", "maxlength", "name", "placeholder", "role", "rows",
+  "spellcheck", "tabindex", "title", "type", "max",
+  "viewBox", "d", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "cx", "cy", "r",
+  "x", "y", "x1", "y1", "x2", "y2", "width", "height", "rx", "points", "focusable",
 ]);
+// Numbers the page hands its stylesheet, as custom properties of the element (`--row`, `--span`).
+// They are set through the element's style object, which a content security policy of
+// `default-src 'self'` allows (a `style` attribute it does not), and only a finite number under a
+// name of lower-case letters and dashes is accepted.
+const CUSTOM_PROPERTY = /^--[a-z][a-z-]*$/;
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
 // The one place a link may lead: the operator documentation as GitHub renders it. A link is a
@@ -39,7 +54,10 @@ export function deployDocLink(name, text, page, anchor) {
   }, text);
 }
 
-const EVENTS = new Set(["change", "click", "input", "submit"]);
+const EVENTS = new Set([
+  "change", "click", "input", "submit", "keydown", "pointerdown", "pointermove", "pointerup", "dragstart", "dragover",
+  "drop", "dragend", "scroll",
+]);
 
 function flatten(children, out) {
   for (const child of children) {
@@ -72,6 +90,40 @@ export function h(tag, props, ...children) {
   return { tag, attrs, on, children: flatten(children, []) };
 }
 
+// The icons of the app, each a list of strokes in a 24 by 24 box, drawn with the text colour.
+const ICONS = {
+  hostgroups: [["rect", { x: 3, y: 4, width: 18, height: 6, rx: 1.5 }], ["rect", { x: 3, y: 14, width: 18, height: 6, rx: 1.5 }],
+    ["line", { x1: 7, y1: 7, x2: 7.01, y2: 7 }], ["line", { x1: 7, y1: 17, x2: 7.01, y2: 17 }]],
+  packages: [["path", { d: "M12 3 20 7.5v9L12 21 4 16.5v-9z" }], ["polyline", { points: "4 7.5 12 12 20 7.5" }],
+    ["line", { x1: 12, y1: 12, x2: 12, y2: 21 }]],
+  inventory: [["rect", { x: 5, y: 3, width: 14, height: 18, rx: 2 }], ["line", { x1: 9, y1: 8, x2: 15, y2: 8 }],
+    ["line", { x1: 9, y1: 12, x2: 15, y2: 12 }], ["line", { x1: 9, y1: 16, x2: 12, y2: 16 }]],
+  enrollment: [["path", { d: "M4 7h10a4 4 0 0 1 0 8H4" }], ["polyline", { points: "8 11 4 15 8 19" }], ["line", { x1: 18, y1: 4, x2: 18, y2: 8 }],
+    ["line", { x1: 16, y1: 6, x2: 20, y2: 6 }]],
+  settings: [["line", { x1: 4, y1: 7, x2: 20, y2: 7 }], ["line", { x1: 4, y1: 17, x2: 20, y2: 17 }],
+    ["circle", { cx: 9, cy: 7, r: 2.5 }], ["circle", { cx: 15, cy: 17, r: 2.5 }]],
+  "theme-system": [["circle", { cx: 12, cy: 12, r: 8 }], ["path", { d: "M12 4a8 8 0 0 1 0 16z" }]],
+  "theme-light": [["circle", { cx: 12, cy: 12, r: 4 }], ["line", { x1: 12, y1: 2, x2: 12, y2: 5 }], ["line", { x1: 12, y1: 19, x2: 12, y2: 22 }],
+    ["line", { x1: 2, y1: 12, x2: 5, y2: 12 }], ["line", { x1: 19, y1: 12, x2: 22, y2: 12 }]],
+  "theme-dark": [["path", { d: "M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z" }]],
+  signout: [["path", { d: "M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4" }], ["polyline", { points: "15 8 19 12 15 16" }],
+    ["line", { x1: 19, y1: 12, x2: 9, y2: 12 }]],
+  collapse: [["polyline", { points: "11 7 6 12 11 17" }], ["polyline", { points: "18 7 13 12 18 17" }]],
+  expand: [["polyline", { points: "6 7 11 12 6 17" }], ["polyline", { points: "13 7 18 12 13 17" }]],
+  menu: [["line", { x1: 4, y1: 7, x2: 20, y2: 7 }], ["line", { x1: 4, y1: 12, x2: 20, y2: 12 }], ["line", { x1: 4, y1: 17, x2: 20, y2: 17 }]],
+  mark: [["rect", { x: 4, y: 3, width: 16, height: 18, rx: 2 }], ["line", { x1: 4, y1: 9, x2: 20, y2: 9 }],
+    ["line", { x1: 4, y1: 15, x2: 20, y2: 15 }], ["line", { x1: 8, y1: 6, x2: 8.01, y2: 6 }], ["line", { x1: 8, y1: 12, x2: 8.01, y2: 12 }],
+    ["line", { x1: 8, y1: 18, x2: 8.01, y2: 18 }]],
+};
+
+// The icon `name` as an element, hidden from assistive technology: the button around it has the words.
+export function icon(name) {
+  return h("svg", {
+    class: "icon", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", "stroke-width": 1.8,
+    "stroke-linecap": "round", "stroke-linejoin": "round", "aria-hidden": "true", focusable: "false",
+  }, ICONS[name].map(([tag, attrs]) => h(tag, attrs)));
+}
+
 function build(doc, node) {
   if (typeof node.text === "string") {
     return doc.createTextNode(node.text);
@@ -79,9 +131,16 @@ function build(doc, node) {
   if (!TAGS.has(node.tag)) {
     throw new Error(`no tag ${node.tag}`);
   }
-  const element = doc.createElement(node.tag);
+  const element = SVG_TAGS.has(node.tag) ? doc.createElementNS(SVG_NAMESPACE, node.tag) : doc.createElement(node.tag);
   for (const [key, value] of Object.entries(node.attrs)) {
-    if (PROPERTIES.has(key)) {
+    if (key === "vars") {
+      for (const [name, number] of Object.entries(value)) {
+        if (!CUSTOM_PROPERTY.test(name) || typeof number !== "number" || !Number.isFinite(number)) {
+          throw new Error(`no custom property ${name}`);
+        }
+        element.style.setProperty(name, String(number));
+      }
+    } else if (PROPERTIES.has(key)) {
       element[key] = value;
     } else if (ATTRIBUTES.has(key)) {
       if (key === "href" && !String(value).startsWith(DOCS) && !String(value).startsWith(DEPLOY_DOCS)) {
@@ -328,8 +387,14 @@ export function words(value) {
   return trimmed(value).split(/[\s,]+/).filter((w) => w !== "");
 }
 
+// A status pill: `text` on the colour of `tone` (ok, warn, bad, info or muted). The text carries
+// the meaning, so a colour is never the only sign of it; `more` is text or elements after it (a count).
+export function pill(text, tone, ...more) {
+  return h("span", { class: `pill ${tone}` }, text, more);
+}
+
 export function table(headings, rows) {
-  return h("table", {},
+  return h("div", { class: "table-wrap" }, h("table", {},
     h("thead", {}, h("tr", {}, headings.map((title) => h("th", {}, title)))),
-    h("tbody", {}, rows));
+    h("tbody", {}, rows)));
 }

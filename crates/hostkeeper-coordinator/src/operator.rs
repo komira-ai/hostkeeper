@@ -106,7 +106,8 @@ refusals!(
     RepositoriesRefusal,
     HostGroupsRefusal,
     UsersRefusal,
-    ApiTokensRefusal
+    ApiTokensRefusal,
+    LayoutRefusal
 );
 
 changing!(
@@ -117,7 +118,8 @@ changing!(
     RepositoriesRefusal,
     HostGroupsRefusal,
     UsersRefusal,
-    ApiTokensRefusal
+    ApiTokensRefusal,
+    LayoutRefusal
 );
 
 /// `Audit` only reads: a log that cannot be read is `store_failed`.
