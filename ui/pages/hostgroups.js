@@ -3,18 +3,20 @@
 // group `all` that every host is in first and marked as built in; a group's detail
 // (each package's desired and minimum version and convergence, and its hosts a page at a time,
 // each a link to the Host page); a form that creates a group or changes one's ordered package list
-// (the packages are the services deployed to each of its hosts: one per line, in install order;
-// `all` lists `hostkeeper`, which a specific group need not). A host is moved into a group on its
-// own Host page, not here. A group's rollout policy is not edited here: a change keeps the policy
-// the group holds, and a new group has the default one (`hkctl host-groups put` sets one).
-// Calls: HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next",
+// (the packages are the services deployed to each of its hosts, chosen by ticking them in a list
+// of the registered packages, which the Packages page keeps, and installed in the order ticked;
+// no package is typed, and an empty list links to the Packages page; `all` lists `hostkeeper`,
+// which a specific group need not). A host is moved into a group on its own Host page, not here.
+// A group's rollout policy is not edited here: a change keeps the policy the group holds, and a
+// new group has the default one (`hkctl host-groups put` sets one).
+// Calls: Services.List (the registered packages the form offers), HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next",
 // HostGroups.Put on Save, which replaces the group named over the generation List gave (or
 // creates it). The page never moves a host. The reason of a Put is optional here: it is sent as a
 // default when left empty.
 
 import {
-  h, action, allPages, area, describeError, enumLabel, field, list, reasonProblem, table,
-  trimmed, words,
+  h, action, allPages, describeError, enumLabel, field, list, reasonProblem, table,
+  trimmed,
 } from "../view.js";
 
 const HOSTS_PER_PAGE = 50;
@@ -87,9 +89,18 @@ export async function render(ctx) {
   } catch (error) {
     failure = error;
   }
+  // The packages the Packages page holds, which the form offers; a List that fails offers none.
+  let registered = [];
+  let registeredFailure = null;
+  try {
+    registered = list(await ctx.api.services.list({}), "services")
+      .map((entry) => entry.service).filter((name) => typeof name === "string");
+  } catch (error) {
+    registeredFailure = error;
+  }
   const state = {
     picked: null,
-    edit: { name: "", packages: "", reason: "" },
+    edit: { name: "", packages: [], reason: "" },
   };
   const show = () => ctx.show(page());
   const held = (name) => groups.find((one) => bodyOf(one).name === name);
@@ -147,7 +158,7 @@ export async function render(ctx) {
   // Loads the group `name` into the form that changes a group: its name and its packages, in order.
   const edit = (name) => {
     const one = held(name);
-    state.edit = { name, packages: list(bodyOf(one), "packages").join("\n"), reason: "" };
+    state.edit = { name, packages: list(bodyOf(one), "packages").slice(), reason: "" };
     show();
   };
 
@@ -162,17 +173,53 @@ export async function render(ctx) {
     return problem === null ? { reason } : { problem };
   };
 
+  // The packages to choose from: the registered ones, and any the group being changed lists that
+  // are not, so that saving never drops one by accident.
+  const choices = () => {
+    const names = registered.slice();
+    for (const name of state.edit.packages) {
+      if (!names.includes(name)) {
+        names.push(name);
+      }
+    }
+    return names;
+  };
+
+  // The checkbox of one package: ticking adds it after those ticked, clearing removes it.
+  const pick = (name) => {
+    const box = h("input", { type: "checkbox", name: "pick-package", checked: state.edit.packages.includes(name) });
+    box.on = {
+      change: (e) => {
+        const without = state.edit.packages.filter((one) => one !== name);
+        state.edit.packages = e.target.checked === true ? [...without, name] : without;
+        box.attrs.checked = state.edit.packages.includes(name);
+        show();
+      },
+    };
+    return h("li", {}, h("label", { class: "check" }, box, name));
+  };
+
+  const packagePicker = () => h("div", { class: "package-picker" },
+    h("p", { class: "note" }, "Packages"),
+    choices().length > 0
+      ? h("ul", { class: "plain" }, choices().map(pick))
+      : h("p", { class: "note" }, "No package is registered yet. ",
+        action(ctx, "Add packages on the Packages page", "open-packages", () => ctx.navigate("packages", {}), { class: "linklike" })),
+    registeredFailure === null ? null : h("p", { class: "error", role: "alert" }, `Packages: ${describeError(registeredFailure)}`),
+    h("p", { class: "note", name: "install-order" },
+      state.edit.packages.length > 0 ? `Installed in this order: ${state.edit.packages.join(", ")}.` : "None chosen."));
+
   const editForm = () => h("fieldset", {},
     h("legend", {}, "Create or change a host group"),
-    h("p", { class: "note" }, "The packages are the services deployed to each host of the group, one per line, in install order. A name that is held changes that group and keeps its policy. A group's own packages run after those of all."),
+    h("p", { class: "note" }, "Tick the packages deployed to each host of the group; they are installed in the order ticked. A name that is held changes that group and keeps its policy. A group's own packages run after those of all."),
     field("Name", "group-name", state.edit, "name"),
-    area("Packages", "group-packages", state.edit, "packages"),
+    packagePicker(),
     field("Reason (optional)", "group-reason", state.edit, "reason", { maxlength: 256 }),
     h("div", { class: "buttons" },
       action(ctx, "Save", "put-group", async () => {
         const { name: typed } = state.edit;
         const name = trimmed(typed);
-        const packages = words(state.edit.packages);
+        const packages = state.edit.packages.slice();
         if (name === "") {
           return "Name the host group.";
         }

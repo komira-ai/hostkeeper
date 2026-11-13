@@ -97,7 +97,8 @@ hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <tok
 
 - A package whose repository was never set comes from `komira`, the default. An empty
   `--repository` clears the setting and puts the package back on it.
-- The service must be a package some group lists (`unknown_service`), the name must be a
+- The service must be a package some group lists or one registered with `Services.Put`
+  ([below](#the-registry-of-packages)) (`unknown_service`), the name must be a
   repository name (`invalid_request`) and the registry must hold it (`repository_unknown`). A call
   that sets what is already set still writes its entry. The call takes the operator token only, like
   every call of this page.
@@ -166,6 +167,40 @@ the Mac allowlist names, is `not_empty`; an approved host is in its group from i
 it first polls. The check runs under the lock an approval and `AddRecord` check their group
 under, so neither lands in a group being removed. Once the last group is removed the coordinator holds
 none, and orders no host anything. The entry is `host_group_remove`.
+
+### The registry of packages
+
+A package is **registered** when a host group lists it, or when an operator registered it with
+`Services.Put`, which records the package and the repository it comes from before any group lists
+it. `Services.List` shows every registered package, with the groups that list it, so the console's
+Packages page is that list and the Host groups page offers those packages and no other (it has
+no field to type one into). The packages of a farm that already runs through groups (`hostkeeper`
+from `all`, and each package its groups list) are registered by being listed: nothing is added to
+see them.
+
+```
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    services put --service js-agent --repository komira --reason "the agent the web group will run"
+hkctl --endpoint https://<private-listener> --ca-file <ca.pem> --token-file <token-file> \
+    services remove --service js-agent --reason "not deployed after all"
+```
+
+- `Put` takes a package name (1 to 64 bytes of `[a-z0-9-]`, `invalid_request` otherwise) and a
+  repository the registry holds (`repository_unknown`); an empty `--repository` is the default,
+  `komira`, which the registry must hold too. It writes the audit entry `service_put` with the
+  reason `repository <name>: <yours>`. A package already registered, or already listed by a
+  group, takes it as `SetRepository` does.
+- `Remove` takes a registered package out. It is refused `in_use` while a host group lists the
+  package (the groups that do are the `host_groups` of its `Services.List` entry), and
+  `unknown_service` for one nothing registers. It writes `service_remove`.
+- A registration is the package's `repository` mark, stored where `SetRepository` stores it (the
+  ops file's `repository` key of the service; the column `services.repository` of migration
+  `0009`): no format changes and no migration. `SetRepository` with an
+  empty repository on a package no group lists clears the mark, which unregisters it, as `Remove`
+  does.
+- A minimum version is the package's in one group (`Services.SetMinVersion`), so a package no
+  group lists has none; the console's Packages page sets it from a package's *Edit*, for one of
+  the groups that run it.
 
 **Move.** The entry is `host_move`, about the host (`node_id`) and the new group (`host_group`),
 with the reason `from <old> to <new>: <yours>`, or `into <new>: <yours>` for a host that was in

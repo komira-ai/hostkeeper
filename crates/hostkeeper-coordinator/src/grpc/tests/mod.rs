@@ -34,6 +34,7 @@ mod report;
 mod repositories;
 mod repository_serve;
 mod rollouts;
+mod services_put;
 mod services_repository;
 mod sessions;
 mod support;

@@ -7,7 +7,8 @@
 //!   It writes the group's minimum ([`crate::host_groups::GroupMarks::min_version`]), audits
 //!   `set_min_version` naming the group and does not raise the group's generation. A host scope
 //!   is as it was, except that its ceiling is the desired version of the host's group.
-//! - `List` answers each package the rollout file defines or a group lists, with the groups that
+//! - `List` answers each package the rollout file defines, a group lists or an operator
+//!   registered (`Services.Put`), with the groups that
 //!   list it (`host_groups`), the hosts of those groups, the minimum version of each group as a
 //!   role scope named by the group, and its desired version when every group that has one agrees.
 //!   The roles and assignments, which place nothing, are empty.
@@ -108,23 +109,18 @@ impl Coordinator {
         })
     }
 
-    /// Every package the rollout file defines or a group lists, in name order, as `Services.List`
-    /// answers them in group mode (the module says how).
+    /// Every package the rollout file defines, a group lists or has a repository set (what
+    /// `Services.Put` registers), in name order, as `Services.List` answers them in group mode (the module says how).
     pub(super) fn entries_in_groups(
         &self,
         fleet: &Fleet,
         state: &OpsState,
     ) -> Vec<proto::ServiceEntry> {
         let groups = self.desired.host_groups();
-        let mut packages: BTreeSet<&str> = self.services.names().collect();
-        packages.extend(
-            groups
-                .0
-                .values()
-                .flat_map(|listed| listed.packages.iter().map(String::as_str)),
-        );
+        let packages = self.packages_with_repositories(state);
         packages
-            .into_iter()
+            .iter()
+            .map(String::as_str)
             .map(|package| {
                 let reached: Vec<_> = groups
                     .0

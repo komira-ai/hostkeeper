@@ -689,6 +689,28 @@ impl ServicesApi for ServicesService {
             .map_err(refusal::services)
     }
 
+    async fn put(
+        &self,
+        request: Request<proto::PutServiceRequest>,
+    ) -> Result<Response<proto::PutServiceResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .put_service(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
+    async fn remove(
+        &self,
+        request: Request<proto::RemoveServiceRequest>,
+    ) -> Result<Response<proto::RemoveServiceResponse>, Status> {
+        let caller = caller_of(&request);
+        self.coordinator
+            .remove_service(&caller, request.into_inner())
+            .map(Response::new)
+            .map_err(refusal::services)
+    }
+
     async fn hold(
         &self,
         request: Request<proto::HoldRequest>,
