@@ -24,6 +24,8 @@
 //! - `channels pkg upload|promote|check ...` ([`pkg`]): the macOS installer (signed by the
 //!   release, not notarized) into `pkg/hostkeeper/<version>/` of the same bucket, and the
 //!   pointer `pkg/hostkeeper/stable.json` to the promoted one.
+//! - `channels descriptor write|check ...` ([`descriptor`]): the descriptor `hostkeeper-repository.json`
+//!   of the whole repository, merged with this product's facts, and the served one checked.
 //! - `channels check-apt --package <p> ...` ([`check`]) and `channels check-rpm --package <p>
 //!   ...` ([`check_rpm`]): a package installed from the suite `testing` on a clean machine and
 //!   held to what [`spec::Package`] says it installs.
@@ -40,6 +42,7 @@ pub(crate) mod aws;
 pub(crate) mod check;
 pub(crate) mod check_rpm;
 pub(crate) mod decide;
+pub(crate) mod descriptor;
 pub(crate) mod gate;
 pub(crate) mod host;
 pub(crate) mod pkg;
@@ -182,6 +185,12 @@ pub(crate) enum Verb {
         #[command(subcommand)]
         verb: rpm::Verb,
     },
+    /// The descriptor of the repository (`hostkeeper-repository.json`): this product's facts
+    /// merged into it, and the served one checked.
+    Descriptor {
+        #[command(subcommand)]
+        verb: descriptor::Verb,
+    },
     /// The macOS installer: upload it to `testing`, check it, promote it to `stable`.
     Pkg {
         #[command(subcommand)]
@@ -285,6 +294,7 @@ pub(crate) fn run(verb: Verb, exec: &dyn Exec) -> Result<Vec<String>, Error> {
         ),
         Verb::Apt { verb } => apt::run(verb, exec),
         Verb::Rpm { verb } => rpm::run(verb, exec),
+        Verb::Descriptor { verb } => descriptor::run(verb, exec),
         Verb::Pkg { verb } => pkg::run(verb, exec),
         Verb::CheckApt {
             package,
