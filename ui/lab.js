@@ -25,7 +25,7 @@ export const STATES = [
   ["healthy", "ok"],
   ["updating", "info"],
   ["failed", "bad"],
-  ["offline", "bad"],
+  ["offline", "muted"],
   ["pending", "warn"],
 ];
 
