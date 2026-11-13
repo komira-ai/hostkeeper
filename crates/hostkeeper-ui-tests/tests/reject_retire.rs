@@ -108,6 +108,7 @@ await click(tree, "retire");
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (m("Layout/Get"), json!({})),
             (m("Hosts/Retire"), json!({"nodeId": "web-2", "reason": ""})),
             (

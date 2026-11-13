@@ -143,6 +143,7 @@ fn host_page_shows_services_marks_and_last_update() {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (m("Layout/Get"), json!({})),
         ]
     );
@@ -260,6 +261,7 @@ return {
         [
             (m("Hosts/Get"), json!({"nodeId": "web-2"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (m("Layout/Get"), json!({})),
             (
                 m("Hosts/Exclude"),
@@ -401,6 +403,7 @@ return shown;
         [
             (m("Hosts/Get"), json!({"nodeId": "web-3"})),
             (m("Services/List"), json!({})),
+            (m("HostGroups/List"), json!({})),
             (m("Layout/Get"), json!({})),
             (
                 m("Hosts/SetLabels"),
