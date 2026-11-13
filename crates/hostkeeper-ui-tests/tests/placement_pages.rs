@@ -265,7 +265,7 @@ choose(tree, "place-u", "6", 0);
 const label = text(named(tree, "place")[0]);
 await click(tree, "place");
 return { standing, heights, starts1, starts3, shows, rack2, starts2, label, reports: seen.reports,
-         unplace: nodes(tree).filter((n) => n.attrs.name === "unplace").length };"#,
+         unplace: nodes(tree).filter((n) => n.attrs["name"] === "unplace").length };"#,
     ));
     let out = &out["out"];
     assert_eq!(out["standing"], "Unplaced: it stands in no rack.");

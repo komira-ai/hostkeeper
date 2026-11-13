@@ -24,7 +24,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  globalThis.app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.theApp = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#;
 
@@ -490,7 +490,7 @@ export async function main() {
   const doc = globalThis.doc;
   const pages = [];
   for (const name of ["host", "rollout", "holds", "enrollment", "inventory", "audit"]) {
-    globalThis.app.navigate(name, {});
+    globalThis.theApp.navigate(name, {});
     await null;
     pages.push(domTexts(doc.root).join(" "));
   }

@@ -285,7 +285,7 @@ impl Coordinator {
         Ok(proto::RemoveLayoutRackResponse { entry: Some(entry) })
     }
 
-    /// `Layout.Place`: puts a subject in a rack, or moves it there.
+    /// `Place` of `Layout`: puts a subject in a rack, or moves it there.
     ///
     /// # Errors
     /// `unauthorized`, `forbidden`, `invalid_request`, `unknown_rack`, `out_of_rack`, `overlap`,

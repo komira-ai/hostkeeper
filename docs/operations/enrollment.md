@@ -719,6 +719,10 @@ FAILED_PRECONDITION, 3 on UNAUTHENTICATED and PERMISSION_DENIED, and 1 on the ot
 | `services_retired` | INVALID_ARGUMENT | `approve` with `--services`: the host's group decides what it runs | leave out `--services`; to change what the group runs, `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
 | `host_group_differs` | FAILED_PRECONDITION | `approve` of a renewal, or with `--replace`, that names another group than the one the host it renews or replaces is in | name the host's own group; to change it, approve in that group and then `hkctl host-groups move` ([hostgroups.md](hostgroups.md#moving-a-host)) |
 | `unknown_host_group` | NOT_FOUND | `approve` or `add-record` naming, by `--host-group` or by `--role`, a group the coordinator does not hold, which is any group on a coordinator that holds none | name a group `hkctl host-groups list` shows, or make it with `hkctl host-groups put` ([hostgroups.md](hostgroups.md)) |
+| `placement_invalid` | INVALID_ARGUMENT | `approve` with a `--rack` and no `--placement-u` or `--placement-height-u`, or either without a rack, or a height or U that is not a whole number of U | give the rack, the lowest U and the height together, or none of them |
+| `unknown_rack` | NOT_FOUND | `approve` naming a `--rack` the lab layout does not hold (any, on a coordinator that holds none) | name a rack `hkctl layout get` shows, or make it with `hkctl layout put-rack` |
+| `placement_overlap` | FAILED_PRECONDITION | `approve` whose placement shares a U with a server already in the rack | choose free U (`hkctl layout get` lists the placements) |
+| `placement_out_of_rack` | FAILED_PRECONDITION | `approve` whose placement is not within the rack's U 1 to its height | choose a U and height inside the rack |
 
 ## Refusals of the host's calls
 

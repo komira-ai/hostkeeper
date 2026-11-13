@@ -21,7 +21,7 @@ import { startApp } from "./app.js";
 export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
-  globalThis.app = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
+  globalThis.theApp = startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
   await settle();
 }"#;
 

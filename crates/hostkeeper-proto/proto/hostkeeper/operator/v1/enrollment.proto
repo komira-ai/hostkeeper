@@ -370,7 +370,7 @@ message ApproveRequest {
   // Where the server stands, an optional placement the approval makes in the same step
   // (`docs/design/ui-shell-lab.md`): the lab layout's rack id, which must exist
   // (`unknown_rack`); empty for none, and then `placement_u` and `placement_height_u` are 0
-  // (`placement_invalid`): the host is unplaced until `Layout.Place`. A coordinator that holds no
+  // (`placement_invalid`): the host is unplaced until it is placed (`Place` of `Layout`). A coordinator that holds no
   // layout refuses a rack (`unknown_rack`). The placement is of the inventory entry the host id
   // names when there is one, so the server keeps its place across a wipe, else of the host.
   // A refused placement refuses the approval, and nothing changes (`placement_overlap`,

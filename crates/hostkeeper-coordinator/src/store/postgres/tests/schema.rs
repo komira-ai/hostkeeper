@@ -190,7 +190,7 @@ fn a_migration_marked_refuse_stops_an_older_release_and_may_run_does_not() {
         error.to_string(),
         "the database's schema is newer than this coordinator (migration 15, later)"
     );
-    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 14")
+    db.run("UPDATE schema_version SET older_releases = 'may-run' WHERE version = 15")
         .expect("the rule is changed");
     let (store, _) = db.open("older").expect("an older release may run");
     store.stop();

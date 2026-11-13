@@ -1,7 +1,7 @@
 # The coordinator's web UI: a new frame, and Home as the lab
 
 Status: built on `ui-shell-lab-home` (komira-ai/hostkeeper). Owner direction of 2026-11-13: "this whole ui needs to look better ... a side
-menu is more modern ... use our komira.ai colour palette"; the Fleet, Release, Rollout and Holds entries leave the menu; the
+menu is more modern ... use our komira colour palette"; the Fleet, Release, Rollout and Holds entries leave the menu; the
 "hostkeeper" wordmark goes Home; Home is an overhead view of the lab with rows, a click on a row shows its racks, a click on a host
 opens the host page; and "when enrolling a host, that is where we enter row and rack position and U position".
 
@@ -50,7 +50,7 @@ MDM setup), Fleet a table of hosts. After: a side menu, and Home a picture of th
 - Host: a Placement section says where the server stands and has the same four choices (Place or Move) and Unplace.
 - Not changed: every other page, every existing endpoint, the sign-in. Release, Rollout and Holds open by their route.
 
-Look: the komira.ai palette as CSS tokens (`ui/app.css`: the ink `#0B0B0A`, the accent `#FD4F1D`, a dark slate for the menu and for dark
+Look: the komira palette as CSS tokens (`ui/app.css`: the ink `#0B0B0A`, the accent `#FD4F1D`, a dark slate for the menu and for dark
 mode), system fonts, light and dark by `prefers-color-scheme` and the toggle; the lab hardware (`ui/lab.css`) stays graphite in both
 themes with thin accent lines and a glow on hover. No image, no web font, no runtime CDN, no build step; the layout is HTML and
 CSS grid, a position handed to the stylesheet as a custom property (`--r`, `--s`) set through the element's style object, which the

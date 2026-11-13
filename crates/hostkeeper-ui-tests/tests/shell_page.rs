@@ -12,7 +12,7 @@ use support::pages::m;
 const CSRF: &str = "csrf_5b2e91c7d4a06f38";
 
 /// Starts the app with a live session, a lab with one row, and a theme port that records what it
-/// is told; the document is kept as `globalThis.doc`, the app as `globalThis.app`.
+/// is told; the document is kept as `globalThis.doc`, the app as `globalThis.theApp`.
 fn start() -> Ui {
     let mut ui = Ui::start();
     ui.session(CSRF);
@@ -34,7 +34,7 @@ export async function main() {
   const doc = fakeDocument();
   globalThis.doc = doc;
   globalThis.applied = [];
-  globalThis.app = startApp({
+  globalThis.theApp = startApp({
     doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000,
     prefs: { apply: (theme) => globalThis.applied.push(theme) },
   });
@@ -130,9 +130,9 @@ await click("page-audit");
 const audit = text();
 await click("home");
 const home = text();
-globalThis.app.navigate("audit", {});
+globalThis.theApp.navigate("audit", {});
 await settle();
-globalThis.app.navigate("fleet", { row: "row-1" });
+globalThis.theApp.navigate("fleet", { row: "row-1" });
 await settle();
 const fleet = text();
 const crumb = domTexts(elements(doc.root).find((e) => e.attributes["class"] === "crumb")).join("");
@@ -155,7 +155,7 @@ fn the_old_release_pages_still_open_by_their_route_but_have_no_menu_entry() {
         r#"
 const shown = [];
 for (const route of ["release", "rollout", "holds", "host"]) {
-  globalThis.app.navigate(route, {});
+  globalThis.theApp.navigate(route, {});
   await settle();
   const crumb = domTexts(elements(doc.root).find((e) => e.attributes["class"] === "crumb")).join("");
   shown.push(crumb);

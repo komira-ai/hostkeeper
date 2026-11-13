@@ -725,7 +725,7 @@ export async function main() {
   const all = elements(doc.root);
   const plates = all.filter((e) => (e.attributes["class"] || "").startsWith("server "));
   const styled = all.filter((e) => "style" in e.attributes).length;
-  const first = plates[0].style.properties;
+  const first = plates[0].style.custom;
   const refused = [];
   for (const [name, value] of [["--r", "x"], ["r", 1], ["--r;color", 1], ["--r", Infinity]]) {
     try {

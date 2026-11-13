@@ -1,4 +1,4 @@
-/* The operator app's one stylesheet: komira.ai colours as tokens, system fonts, no image, nothing
+/* The operator app's one stylesheet: the komira palette as tokens, system fonts, no image, nothing
    loaded from elsewhere. Dark follows the browser unless the toggle sets data-theme. */
 
 :root {

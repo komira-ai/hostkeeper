@@ -71,7 +71,10 @@ fn a_failed_write_of_the_layout_is_refused_and_leaves_the_file() {
             ..Commit::default()
         })
         .expect("committed");
-    fs::create_dir(dir.path().join("desired.json.layout.new")).expect("in the way");
+    // A directory where the layout file's temporary file goes.
+    let mut temp = crate::layout::layout_path(&dir.path().join("desired.json")).into_os_string();
+    temp.push(".new");
+    fs::create_dir(std::path::PathBuf::from(temp)).expect("in the way");
     let refused = files.commit(&Commit {
         layout: Some((&held, &Layout::default())),
         ..Commit::default()
