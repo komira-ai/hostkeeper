@@ -293,7 +293,7 @@ fn the_host_page_shows_each_fact_beside_its_label() {
 #[test]
 fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
     // Catches: a claim (the UUIDs included), the image, the first-seen time or the renewal left
-    // out or shown under another label.
+    // out or shown under another label; a renewal or a nonce shown when there is none.
     let mut ui = Ui::start();
     ui.reply(
         &m("Enrollment/List"),
@@ -309,25 +309,22 @@ fn the_enrollment_page_shows_every_claim_and_fact_beside_its_label() {
     assert_eq!(
         rows(&mut ui, "enrollment", "{}"),
         json!([
-            ["", ""],
+            ["Fact", "Value"],
             ["Key SHA-256", "ab".repeat(32)],
             ["Image", "debian-hk"],
             ["First seen", AT],
             ["Renewal of", "web-3"],
             ["Mac nonce presented", "yes"],
-            ["Claim", ""],
             ["Machine id", "m-0001"],
             ["DMI serial", "SN-42"],
             ["Product UUID", "4c4c4544-0042"],
             ["Addresses", "192.0.2.10, 192.0.2.11"],
             ["Mac serial", "C02-X"],
             ["Platform UUID", "a1b2c3d4-0042"],
-            ["", ""],
+            ["Fact", "Value"],
             ["Key SHA-256", "cd".repeat(32)],
             ["Image", "-"],
             ["First seen", "-"],
-            ["Renewal of", "-"],
-            ["Mac nonce presented", "no"],
         ])
     );
 }
