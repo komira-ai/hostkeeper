@@ -12,8 +12,9 @@ use support::Ui;
 use support::pages::{bodies, m, page_driver};
 
 /// The lab of the tests: the cluster `Lab 1`, row 1 with a rack of 42 U and one of 24 U, row 2 with
-/// a rack of 42 U. `web-1` (a host no entry matches) stands at U 41 and 42, `db-1` (an inventory
-/// entry a host is enrolled against) at U 1.
+/// a rack of 42 U. In the first rack `web-1` (a host no entry matches) stands on the one slot of a
+/// 2 U sled at U 41 and 42 (address C0-R0-R0-S1-S0), `db-1` (an inventory entry a host is enrolled
+/// against) on a 1 U sled at U 1 (C0-R0-R0-S0-S0).
 fn layout() -> Value {
     json!({
         "name": "Lab 1",
@@ -23,11 +24,17 @@ fn layout() -> Value {
             {"id": "rack-2", "row": "row-1", "number": 2, "heightU": 24},
             {"id": "rack-3", "row": "row-2", "number": 1, "heightU": 42},
         ],
+        "sleds": [
+            {"id": "sled-1", "rack": "rack-1", "number": 1, "u": 41, "heightU": 2, "slots": 1,
+             "address": "C0-R0-R0-S1"},
+            {"id": "sled-2", "rack": "rack-1", "u": 1, "heightU": 1, "slots": 1,
+             "address": "C0-R0-R0-S0"},
+        ],
         "placements": [
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-1"},
-             "rack": "rack-1", "u": 41, "heightU": 2},
+             "rack": "rack-1", "u": 41, "heightU": 2, "sled": "sled-1", "address": "C0-R0-R0-S1-S0"},
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "db-1"},
-             "rack": "rack-1", "u": 1, "heightU": 1},
+             "rack": "rack-1", "u": 1, "heightU": 1, "sled": "sled-2", "address": "C0-R0-R0-S0-S0"},
         ],
     })
 }
@@ -78,6 +85,8 @@ fn writes(ui: &Ui) {
         "PutRack",
         "RemoveRack",
         "RemoveRow",
+        "PutSled",
+        "RemoveSled",
         "Place",
         "Unplace",
     ] {
@@ -136,16 +145,16 @@ return {
     );
     let rows = out["rows"].as_array().expect("rows");
     assert_eq!(rows.len(), 2);
-    assert!(rows[0].as_str().unwrap().starts_with("Row 1"), "{rows:?}");
+    assert!(rows[0].as_str().unwrap().starts_with("Row 0"), "{rows:?}");
     assert!(rows[0].as_str().unwrap().contains("2 servers"), "{rows:?}");
-    assert!(rows[1].as_str().unwrap().starts_with("Row 2"), "{rows:?}");
+    assert!(rows[1].as_str().unwrap().starts_with("Row 1"), "{rows:?}");
     assert!(rows[1].as_str().unwrap().contains("0 servers"), "{rows:?}");
     assert_eq!(
         out["feet"],
         json!([
-            "Row 1 / Rack 1: 3/42 U",
-            "Row 1 / Rack 2: 0/24 U",
-            "Row 2 / Rack 1: 0/42 U"
+            "Row 0 / Rack 0: 3/42 U",
+            "Row 0 / Rack 1: 0/24 U",
+            "Row 1 / Rack 0: 0/42 U"
         ])
     );
     assert_eq!(
@@ -216,8 +225,8 @@ await click(tree, "crumb-lab");
 await click(tree, "crumb-row");
 return { trail, navigations: seen.navigations, title: words(nodes(tree).find((n) => n.tag === "h2")) };"#,
     );
-    assert_eq!(out["trail"], "Lab Row 1 Rack 2");
-    assert_eq!(out["title"], "Row 1 / Rack 2");
+    assert_eq!(out["trail"], "Lab Row 0 Rack 1");
+    assert_eq!(out["title"], "Row 0 / Rack 1");
     assert_eq!(
         out["navigations"],
         json!([
@@ -252,14 +261,14 @@ return {
   tray: words(cls(tree, "tray")[0]),
 };"#,
     );
-    assert_eq!(out["racks"], json!(["Row 1 / Rack 1", "Row 1 / Rack 2"]));
+    assert_eq!(out["racks"], json!(["Row 0 / Rack 0", "Row 0 / Rack 1"]));
     assert_eq!(out["units"], 66);
     assert_eq!(
         out["servers"],
         json!([
-            {"title": "web-1 | group web | version 1.4.0 | healthy", "r": "1", "s": "2",
+            {"title": "web-1 | group web | version 1.4.0 | healthy | C0-R0-R0-S1-S0", "r": "1", "s": "2",
              "class": "server s-healthy tall"},
-            {"title": "db-1 | group storage | version 1.4.0 | updating", "r": "42", "s": "1",
+            {"title": "db-1 | group storage | version 1.4.0 | updating | C0-R0-R0-S0-S0", "r": "42", "s": "1",
              "class": "server s-updating"},
         ])
     );
@@ -268,7 +277,7 @@ return {
         json!([["3", "39"], ["1", "24"]]),
         "a free run is one panel, over the U it covers"
     );
-    assert_eq!(out["heads"], json!(["Rack 1 3/42 U", "Rack 2 0/24 U"]));
+    assert_eq!(out["heads"], json!(["Rack 0 3/42 U", "Rack 1 0/24 U"]));
     assert_eq!(out["strip"], "0");
     assert_eq!(
         out["navigations"],
@@ -330,9 +339,9 @@ return { rows: rows(tree), big: cls(tree, "rack").map((n) => n.attrs.class) };"#
     assert_eq!(
         out["rows"],
         json!([
-            ["Server", "U", "Height", "State", "Group", "Version"],
-            ["db-1", "U1", "1U", "updating", "storage", "1.4.0"],
-            ["web-1", "U41", "2U", "healthy", "web", "1.4.0"],
+            ["Server", "Address", "U", "State", "Group", "Version"],
+            ["db-1", "C0-R0-R0-S0-S0", "U1", "updating", "storage", "1.4.0"],
+            ["web-1", "C0-R0-R0-S1-S0", "U41", "healthy", "web", "1.4.0"],
         ])
     );
     assert_eq!(out["big"], json!(["rack big"]));
@@ -343,8 +352,11 @@ return { rows: rows(tree), big: cls(tree, "rack").map((n) => n.attrs.class) };"#
         json!({
             "rows": [{"id": "row-1", "number": 1}],
             "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10}],
+            "sleds": [{"id": "sled-1", "rack": "rack-1", "u": 5, "heightU": 1, "slots": 1,
+                       "address": "C0-R0-R0-S0"}],
             "placements": [{"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "new-1"},
-                            "rack": "rack-1", "u": 5, "heightU": 1}],
+                            "rack": "rack-1", "u": 5, "heightU": 1, "sled": "sled-1",
+                            "address": "C0-R0-R0-S0-S0"}],
         }),
     );
     let mut ui = ui;
@@ -383,7 +395,7 @@ return { first, title: words(nodes(tree).find((n) => n.tag === "h2")), reports: 
     );
     assert_eq!(out["title"], "Lab");
     assert_eq!(out["refreshes"], 1);
-    assert_eq!(out["reports"], json!(["Row 1 is added."]));
+    assert_eq!(out["reports"], json!(["A row is added."]));
     assert!(bodies(&ui).contains(&(m("Layout/AddRow"), json!({"reason": "add row"}))));
 }
 
@@ -494,8 +506,8 @@ return seen.reports;"#,
     assert_eq!(
         out,
         json!([
-            "Row 1 still holds 2 racks with web-1, db-1: remove the racks first.",
-            "Row 2 still holds 1 racks: remove the racks first."
+            "Row 0 still holds 2 racks with web-1, db-1: remove the racks first.",
+            "Row 1 still holds 1 racks: remove the racks first."
         ])
     );
     assert!(!ui.methods().contains(&m("Layout/RemoveRow")));
@@ -512,8 +524,8 @@ return { reports: seen.reports, refreshes: seen.refreshes };"#,
     assert_eq!(
         out["reports"],
         json!([
-            "Row 1 / Rack 1 still holds web-1, db-1: move them out first.",
-            "Row 1 / Rack 2 is removed."
+            "Row 0 / Rack 0 still holds 2 sleds with web-1, db-1: remove the sleds first.",
+            "Row 0 / Rack 1 is removed."
         ])
     );
     assert_eq!(out["refreshes"], 1);
@@ -538,7 +550,7 @@ return seen.reports;"#,
     );
     assert_eq!(
         out,
-        json!(["It still holds something: remove what stands in it first."])
+        json!(["It still holds something: take what stands on it away first."])
     );
 }
 
@@ -557,7 +569,7 @@ choose(tree, "rack-row", "row-2", 1);
 await click(tree, "move-rack", 1);
 return seen.reports;"#,
     );
-    assert_eq!(out, json!(["Row 1 / Rack 2 is now 48U.", "Rack moved."]));
+    assert_eq!(out, json!(["Row 0 / Rack 1 is now 48U.", "Rack moved."]));
     let sent = bodies(&ui);
     assert!(sent.contains(&(
         m("Layout/PutRack"),
@@ -567,109 +579,6 @@ return seen.reports;"#,
         m("Layout/PutRack"),
         json!({"id": "rack-2", "row": "row-2", "heightU": 24, "reason": "move"})
     )));
-}
-
-#[test]
-fn an_unplaced_server_is_picked_and_put_on_a_free_u_by_click_and_by_drag() {
-    // Catches: a pick that is lost, a slot that places at another U, a height that is not the one
-    // chosen, a drop that places nothing, and a drag over a slot that is not allowed.
-    let mut ui = start();
-    let out = home(
-        &mut ui,
-        r#"{ row: "row-1", edit: true }"#,
-        r#"
-const slotAt = (t, u) => cls(t, "slot").find((n) => n.attrs.title.endsWith(`, U${u}`));
-await click(tree, "pick-unplaced", 0);
-let now = last();
-const banner = words(cls(now, "moving")[0]);
-choose(now, "tray-height", "2");
-await slotAt(now, 20).on.click();
-let prevented = 0;
-const picked = named(now, "pick-server")[0];
-picked.on.dragstart({});
-slotAt(now, 5).on.dragover({ preventDefault: () => { prevented += 1; } });
-await slotAt(now, 5).on.drop({ preventDefault: () => { prevented += 1; } });
-return { banner, reports: seen.reports, prevented, slots: cls(now, "slot").length };"#,
-    );
-    assert_eq!(
-        out["banner"],
-        "web-2 is not placed: click a free U of a rack. Cancel"
-    );
-    assert_eq!(
-        out["reports"],
-        json!([
-            "web-2 is at Row 1 / Rack 1, U20.",
-            "web-1 is at Row 1 / Rack 1, U5."
-        ])
-    );
-    assert_eq!(out["prevented"], 2);
-    // 42 + 24 U in the two racks, less the 3 U of web-1 and db-1.
-    assert_eq!(out["slots"], 63);
-    let sent = bodies(&ui);
-    assert!(sent.contains(&(
-        m("Layout/Place"),
-        json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-2"},
-               "rack": "rack-1", "heightU": 2, "u": 20, "reason": "placed web-2"})
-    )));
-    assert!(sent.contains(&(
-        m("Layout/Place"),
-        json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-1"},
-               "rack": "rack-1", "heightU": 2, "u": 5, "reason": "placed web-1"})
-    )));
-}
-
-#[test]
-fn a_placed_server_is_taken_out_or_the_move_is_cancelled_and_a_refusal_is_told_in_words() {
-    // Catches: an unplace that names the wrong subject, a cancel that leaves the server picked, a
-    // placement on a taken U that is not told as such, and a click on a slot with nothing picked.
-    let mut ui = base();
-    ui.reply(&m("Layout/Get"), layout());
-    ui.refuse(&m("Layout/Place"), 412, "FAILED_PRECONDITION", "overlap");
-    ui.reply(&m("Layout/Unplace"), json!({}));
-    let out = home(
-        &mut ui,
-        r#"{ rack: "rack-1", edit: true }"#,
-        r#"
-const slotAt = (t, u) => cls(t, "slot").find((n) => n.attrs.title.endsWith(`, U${u}`));
-await slotAt(tree, 10).on.click();
-await click(tree, "pick-server", 1);
-let now = last();
-const banner = words(cls(now, "moving")[0]);
-await click(now, "cancel-move");
-now = last();
-const cancelled = cls(now, "moving").length;
-await click(now, "pick-server", 1);
-now = last();
-await slotAt(now, 10).on.click();
-await click(now, "unplace");
-return { banner, cancelled, reports: seen.reports, refreshes: seen.refreshes };"#,
-    );
-    assert_eq!(
-        out["banner"],
-        "db-1 is at Row 1 / Rack 1, U1: click a free U to move it. Cancel Take out of its rack"
-    );
-    assert_eq!(out["cancelled"], 0);
-    assert_eq!(
-        out["reports"],
-        json!([
-            "Another server already stands in one of those U.",
-            "db-1 is unplaced."
-        ])
-    );
-    assert_eq!(out["refreshes"], 1);
-    let sent = bodies(&ui);
-    assert!(sent.contains(&(
-        m("Layout/Unplace"),
-        json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "db-1"},
-               "reason": "unplaced db-1"})
-    )));
-    assert_eq!(
-        sent.iter()
-            .filter(|(method, _)| *method == m("Layout/Place"))
-            .count(),
-        1,
-        "a click with nothing picked sends nothing"
-    );
 }
 
 #[test]
@@ -695,7 +604,7 @@ return seen.navigations;"#,
 }
 
 #[test]
-fn a_placement_whose_server_is_gone_is_shown_offline_and_can_be_taken_out() {
+fn a_placement_whose_server_is_gone_is_shown_offline_and_opens_nothing() {
     // Catches: a placement left in a rack that nothing in the lab explains, invisible to the page.
     let mut ui = base();
     ui.reply(
@@ -703,8 +612,11 @@ fn a_placement_whose_server_is_gone_is_shown_offline_and_can_be_taken_out() {
         json!({
             "rows": [{"id": "row-1", "number": 1}],
             "racks": [{"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10}],
+            "sleds": [{"id": "sled-1", "rack": "rack-1", "u": 3, "heightU": 1, "slots": 1,
+                       "address": "C0-R0-R0-S0"}],
             "placements": [{"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "ghost"},
-                            "rack": "rack-1", "u": 3, "heightU": 1}],
+                            "rack": "rack-1", "u": 3, "heightU": 1, "sled": "sled-1",
+                            "address": "C0-R0-R0-S0-S0"}],
         }),
     );
     let out = home(
@@ -714,7 +626,7 @@ fn a_placement_whose_server_is_gone_is_shown_offline_and_can_be_taken_out() {
 await click(tree, "open-server", 0);
 return { title: named(tree, "open-server")[0].attrs.title, navigations: seen.navigations };"#,
     );
-    assert_eq!(out["title"], "ghost | offline");
+    assert_eq!(out["title"], "ghost | offline | C0-R0-R0-S0-S0");
     assert_eq!(out["navigations"], json!([]));
 }
 

@@ -1,7 +1,7 @@
-//! Where a server stands, set from the two pages that place it: the approval of an enrollment
-//! request (Row, Rack, Height and U position, all optional, sent with the approval) and the Host
-//! page (Place or Move, and Unplace). Each choice is from the lab's layout, never typed; each
-//! refusal is told in words.
+//! Where a server stands, set from the two pages that place it besides Home: the approval of an
+//! enrollment request (Host group and one optional Sled slot, sent with the approval) and the Host
+//! page (Place or Move, and Unplace). The slot is chosen from the free slots of the lab by address,
+//! never typed, and no page asks for a height, row, rack or U; each refusal is told in words.
 
 mod support;
 
@@ -9,7 +9,9 @@ use serde_json::{Value, json};
 use support::Ui;
 use support::pages::{bodies, m, page_driver};
 
-/// Row 1 with a rack of 10 U (a 2 U server at U 4 and 5), and row 2 with a rack of 4 U.
+/// Row 0 with a rack of 10 U that holds a 2 U one-slot sled at U 4 and 5 (C0-R0-R0-S0, with `db-1`
+/// on its slot) and an empty 1 U sled of two slots at U 7 (C0-R0-R0-S1), and row 1 with a rack of
+/// 4 U that holds an empty one-slot sled at U 1 (C0-R1-R0-S0).
 fn layout() -> Value {
     json!({
         "rows": [{"id": "row-1", "number": 1}, {"id": "row-2", "number": 2}],
@@ -17,9 +19,15 @@ fn layout() -> Value {
             {"id": "rack-1", "row": "row-1", "number": 1, "heightU": 10},
             {"id": "rack-2", "row": "row-2", "number": 1, "heightU": 4},
         ],
+        "sleds": [
+            {"id": "sled-1", "rack": "rack-1", "u": 4, "heightU": 2, "slots": 1, "address": "C0-R0-R0-S0"},
+            {"id": "sled-2", "rack": "rack-1", "number": 1, "u": 7, "heightU": 1, "slots": 2,
+             "address": "C0-R0-R0-S1"},
+            {"id": "sled-3", "rack": "rack-2", "u": 1, "heightU": 1, "slots": 1, "address": "C0-R1-R0-S0"},
+        ],
         "placements": [
             {"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "db-1"},
-             "rack": "rack-1", "u": 4, "heightU": 2},
+             "rack": "rack-1", "u": 4, "heightU": 2, "sled": "sled-1", "address": "C0-R0-R0-S0-S0"},
         ],
     })
 }
@@ -48,110 +56,90 @@ fn enrollment_ui(matched: bool) -> Ui {
     ui
 }
 
-const HELPERS: &str = r#"
-const last = () => seen.shown[seen.shown.length - 1];
-"#;
-
-#[test]
-fn an_approval_without_a_placement_lands_unplaced_and_sends_no_rack() {
-    // Catches: a placement sent for an approval that chose none, a Row control that has no
-    // "Unplaced" and cannot be left alone, and a rack or U choice offered with no row chosen.
-    let ui = enrollment_ui(false);
-    ui.reply(&m("Enrollment/Approve"), json!({"hostId": "web-1"}));
-    let mut ui = ui;
-    let out = ui.run(&page_driver(
-        "enrollment",
-        "{}",
-        "[]",
-        &format!(
-            r#"{HELPERS}
-const rows = choices(tree, "place-row", 0);
-const racks = choices(tree, "place-rack", 0);
-type(tree, "host-id", "web-1", 0);
-await click(tree, "approve", 0);
-return {{ rows, racks, reports: seen.reports }};"#
-        ),
-    ));
-    assert_eq!(out["out"]["rows"], json!(["Unplaced", "Row 1", "Row 2"]));
-    assert_eq!(out["out"]["racks"], json!([]));
-    assert_eq!(
-        out["out"]["reports"],
-        json!([
-            "Approved web-1 with no host group (it runs the packages of all until it is put in one): the host gets its certificate at its next poll."
-        ])
-    );
-    let approve = bodies(&ui)
+fn approval(ui: &Ui) -> Value {
+    bodies(ui)
         .into_iter()
         .find(|(method, _)| *method == m("Enrollment/Approve"))
         .expect("an approval")
-        .1;
-    assert_eq!(
-        approve,
-        json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "hostId": "web-1",
-               "hostGroup": "", "replace": false})
-    );
+        .1
 }
 
+/// Proves: the approval's controls are Host id, Host group, Sled slot and Replace: the Sled slot
+/// is one choice whose first entry is Unplaced and whose others are the free slots of the lab by
+/// address in order (the slot of db-1 is taken, so it is not offered); no Height, Row, Rack or U
+/// control exists; approving with Unplaced left sends no placement at all.
+/// Catches: a placement sent for an approval that chose none, and the old height, row, rack and U
+/// controls left on the form.
 #[test]
-fn an_approval_names_the_row_the_rack_the_height_and_a_free_u() {
-    // Catches: a U position offered that the height chosen would overlap (the free slots are
-    // those that fit), a choice that is lost when the form is drawn again, and an approval that
-    // sends the rack without the U and the height the coordinator needs with it.
+fn an_approval_offers_only_a_host_group_and_a_sled_slot_and_lands_unplaced_by_default() {
     let mut ui = enrollment_ui(false);
     ui.reply(&m("Enrollment/Approve"), json!({"hostId": "web-1"}));
     let out = ui.run(&page_driver(
         "enrollment",
         "{}",
         "[]",
-        &format!(
-            r#"{HELPERS}
+        r#"
+const selects = nodes(tree).filter((n) => n.tag === "select").map((n) => n.attrs.name);
+const slots = choices(tree, "place-slot", 0);
+const first = chosen(tree, "place-slot", 0);
 type(tree, "host-id", "web-1", 0);
-choose(tree, "place-row", "row-1", 0);
-let now = last();
-const racks = choices(now, "place-rack", 0);
-const starts1 = choices(now, "place-u", 0);
-choose(now, "place-height", "3", 0);
-now = last();
-const starts3 = choices(now, "place-u", 0);
-choose(now, "place-u", "7", 0);
-const kept = [named(now, "host-id")[0].attrs.value, chosen(now, "place-height", 0), chosen(now, "place-row", 0)];
-await click(now, "approve", 0);
-return {{ racks, starts1, starts3, kept, reports: seen.reports }};"#
-        ),
+await click(tree, "approve", 0);
+return { selects, slots, first, reports: seen.reports };"#,
     ));
-    let out = &out["out"];
-    assert_eq!(out["racks"], json!(["Rack 1"]));
-    // The 10 U rack holds a server at U 4 and 5: a 1 U server fits at 1, 2, 3 and 6 to 10; a 3 U
-    // server only at 1, and at 6, 7 and 8.
+    assert_eq!(out["out"]["selects"], json!(["host-group", "place-slot"]));
     assert_eq!(
-        out["starts1"],
-        json!(["U1", "U2", "U3", "U6", "U7", "U8", "U9", "U10"])
+        out["out"]["slots"],
+        json!(["Unplaced", "C0-R0-R0-S1-S0", "C0-R0-R0-S1-S1", "C0-R1-R0-S0-S0"])
     );
-    assert_eq!(out["starts3"], json!(["U1", "U6", "U7", "U8"]));
-    assert_eq!(out["kept"], json!(["web-1", "3", "row-1"]));
-    assert!(
-        out["reports"][0]
-            .as_str()
-            .unwrap()
-            .contains("at Row 1 / Rack 1, U7")
-    );
-    let approve = bodies(&ui)
-        .into_iter()
-        .find(|(method, _)| *method == m("Enrollment/Approve"))
-        .expect("an approval")
-        .1;
+    assert_eq!(out["out"]["first"], "");
     assert_eq!(
-        approve,
+        approval(&ui),
         json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "hostId": "web-1",
-               "hostGroup": "", "replace": false,
-               "rack": "rack-1", "placementU": 7, "placementHeightU": 3})
+               "hostGroup": "", "replace": false})
     );
 }
 
+/// Proves: choosing a slot by address sends placementSled and placementSlot (the slot as a number)
+/// beside the approval, and the report says where the host stands by address.
+/// Catches: an approval that sends the old rack, placementU and placementHeightU, or that names the
+/// sled without the slot.
+#[test]
+fn an_approval_names_the_sled_and_the_slot_chosen() {
+    let mut ui = enrollment_ui(false);
+    ui.reply(&m("Enrollment/Approve"), json!({"hostId": "web-1"}));
+    let out = ui.run(&page_driver(
+        "enrollment",
+        "{}",
+        "[]",
+        r#"
+type(tree, "host-id", "web-1", 0);
+choose(tree, "place-slot", "sled-2:1", 0);
+const kept = [named(tree, "host-id")[0].attrs.value, chosen(tree, "place-slot", 0)];
+await click(tree, "approve", 0);
+return { kept, reports: seen.reports };"#,
+    ));
+    assert_eq!(out["out"]["kept"], json!(["web-1", "sled-2:1"]));
+    assert!(
+        out["out"]["reports"][0]
+            .as_str()
+            .unwrap()
+            .contains("at C0-R0-R0-S1-S1"),
+        "{out}"
+    );
+    assert_eq!(
+        approval(&ui),
+        json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32), "hostId": "web-1",
+               "hostGroup": "", "replace": false, "placementSled": "sled-2", "placementSlot": 1})
+    );
+}
+
+/// Proves: a matched request says at which address its server stood before the wipe, and that it
+/// stays there unless another slot is chosen (the slot is among the choices, since it is the
+/// server's own); a refused placement is told in words and any other refusal by its token.
+/// Catches: a matched request that hides where its server stood, a taken slot shown as a bare
+/// token, and a refusal unrelated to the placement that is hidden.
 #[test]
 fn a_matched_server_says_where_it_stands_and_a_refused_placement_is_told_in_words() {
-    // Catches: a matched request that hides where its server stood before the wipe, an overlap
-    // refusal shown as a bare token, and a refusal that unrelated to the placement is hidden.
     let mut ui = enrollment_ui(true);
     ui.refuse(
         &m("Enrollment/Approve"),
@@ -169,37 +157,32 @@ fn a_matched_server_says_where_it_stands_and_a_refused_placement_is_told_in_word
         "enrollment",
         "{}",
         "[]",
-        &format!(
-            r#"{HELPERS}
+        r#"
 const text0 = text(tree);
-choose(tree, "place-row", "row-1", 0);
-let now = last();
-choose(now, "place-u", "1", 0);
-await click(now, "approve", 0);
-await click(now, "approve", 0);
-return {{ text0, reports: seen.reports }};"#
-        ),
+const slots = choices(tree, "place-slot", 0);
+choose(tree, "place-slot", "sled-2:0", 0);
+await click(tree, "approve", 0);
+await click(tree, "approve", 0);
+return { text0, slots, reports: seen.reports };"#,
     ));
     let out = &out["out"];
     assert!(
         out["text0"].as_str().unwrap().contains(
-            "db-1 stands at Row 1 / Rack 1, U4, and stays there unless another place is chosen."
+            "db-1 stands at C0-R0-R0-S0-S0, and stays there unless another slot is chosen."
         ),
         "{out}"
     );
+    assert_eq!(out["slots"][1], "C0-R0-R0-S0-S0");
     assert_eq!(
         out["reports"],
-        json!([
-            "Another server already stands in one of those U.",
-            "FAILED_PRECONDITION not_pending"
-        ])
+        json!(["That slot is taken.", "FAILED_PRECONDITION not_pending"])
     );
 }
 
+/// Catches: an approval form that fails when the layout cannot be read, or one that sends a
+/// placement it never offered.
 #[test]
 fn an_approval_whose_layout_cannot_be_read_still_goes_unplaced() {
-    // Catches: an approval form that fails when the layout cannot be read, or one that sends a
-    // placement it never offered.
     let mut ui = Ui::start();
     ui.reply(&m("Enrollment/List"), pending(false));
     ui.reply(&m("HostGroups/List"), json!({"hostGroups": []}));
@@ -220,12 +203,8 @@ return text(tree);"#,
             .unwrap()
             .contains("The lab layout cannot be read (UNAVAILABLE store_failed): the host can be approved unplaced.")
     );
-    let approve = bodies(&ui)
-        .into_iter()
-        .find(|(method, _)| *method == m("Enrollment/Approve"))
-        .expect("an approval")
-        .1;
-    assert!(approve.get("rack").is_none(), "{approve}");
+    let approve = approval(&ui);
+    assert!(approve.get("placementSled").is_none(), "{approve}");
 }
 
 fn host_ui(node: &str, entry: &str) -> Ui {
@@ -240,10 +219,13 @@ fn host_ui(node: &str, entry: &str) -> Ui {
     ui
 }
 
+/// Proves: an unplaced host's Placement section says so, offers the free slots by address in a
+/// Sled slot choice (no height, row, rack or U), and Place sends one Place with the host subject,
+/// the sled and the slot, then reports the address.
+/// Catches: a host placed under a guessed height or U, a subject of the wrong kind, and a place
+/// that is not reported.
 #[test]
-fn the_host_page_places_an_unplaced_host_from_choices_of_the_layout() {
-    // Catches: a host placed with a U that does not fit, a U choice that is not made again when
-    // the height changes, a subject of the wrong kind, and a place that is not reported.
+fn the_host_page_places_an_unplaced_host_on_a_free_sled_slot() {
     let mut ui = host_ui("web-2", "");
     ui.reply(&m("Layout/Place"), json!({}));
     let out = ui.run(&page_driver(
@@ -252,51 +234,40 @@ fn the_host_page_places_an_unplaced_host_from_choices_of_the_layout() {
         "[]",
         r#"
 const standing = text(named(tree, "standing")[0]);
-const heights = choices(tree, "place-height", 0);
-const starts1 = choices(tree, "place-u", 0);
-choose(tree, "place-height", "3", 0);
-const starts3 = choices(tree, "place-u", 0);
-const shows = seen.shown.length;
-choose(tree, "place-row", "row-2", 0);
-const rack2 = choices(tree, "place-rack", 0);
-const starts2 = choices(tree, "place-u", 0);
-choose(tree, "place-row", "row-1", 0);
-choose(tree, "place-u", "6", 0);
+const slots = choices(tree, "place-slot", 0);
+const old = ["place-height", "place-row", "place-rack", "place-u"].filter((n) => nodes(tree).some((x) => x.attrs.name === n));
+choose(tree, "place-slot", "sled-3:0", 0);
 const label = text(named(tree, "place")[0]);
 await click(tree, "place");
-return { standing, heights, starts1, starts3, shows, rack2, starts2, label, reports: seen.reports,
+return { standing, slots, old, label, reports: seen.reports,
          unplace: nodes(tree).filter((n) => n.attrs["name"] === "unplace").length };"#,
     ));
     let out = &out["out"];
-    assert_eq!(out["standing"], "Unplaced: it stands in no rack.");
-    assert_eq!(out["heights"], json!(["1U", "2U", "3U", "4U"]));
+    assert_eq!(out["standing"], "Unplaced: it stands on no sled.");
     assert_eq!(
-        out["starts1"],
-        json!(["U1", "U2", "U3", "U6", "U7", "U8", "U9", "U10"])
+        out["slots"],
+        json!(["C0-R0-R0-S1-S0", "C0-R0-R0-S1-S1", "C0-R1-R0-S0-S0"])
     );
-    assert_eq!(out["starts3"], json!(["U1", "U6", "U7", "U8"]));
-    assert_eq!(out["shows"], 1, "the page is drawn again after a choice");
-    assert_eq!(out["rack2"], json!(["Rack 1"]));
-    assert_eq!(
-        out["starts2"],
-        json!(["U1", "U2"]),
-        "a 3 U server in a 4 U rack"
-    );
+    assert_eq!(out["old"], json!([]));
     assert_eq!(out["label"], "Place");
     assert_eq!(out["unplace"], 0);
-    assert_eq!(out["reports"], json!(["web-2 is at Row 1 / Rack 1, U6."]));
+    assert_eq!(out["reports"], json!(["web-2 is at C0-R1-R0-S0-S0."]));
     assert!(bodies(&ui).contains(&(
         m("Layout/Place"),
         json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_HOST", "id": "web-2"},
-               "rack": "rack-1", "heightU": 3, "u": 6, "reason": "placed web-2"})
+               "sled": "sled-3", "slot": 0, "reason": "placed web-2"})
     )));
 }
 
+/// Proves: a placed server says its address, rack and U; its Sled slot choice starts at the slot it
+/// stands on (which counts as free for it); Move sends Place under the inventory subject of its
+/// entry (not the host id) with the sled and slot chosen; a refusal is told in words; Unplace sends
+/// Unplace for that subject.
+/// Catches: a server placed by its host id when an inventory entry matches it (which a wipe would
+/// lose), a move that counts the server's own slot as taken, a missing Unplace, and a refusal told
+/// as a token.
 #[test]
 fn the_host_page_moves_a_placed_server_by_its_entry_and_unplaces_it() {
-    // Catches: a server placed by its host id when an inventory entry matches it (which a wipe
-    // would lose), a move that counts the server's own U as taken, a missing Unplace, and a
-    // refusal told as a token.
     let mut ui = host_ui("db-1", "db-1");
     ui.refuse(
         &m("Layout/Place"),
@@ -312,19 +283,24 @@ fn the_host_page_moves_a_placed_server_by_its_entry_and_unplaces_it() {
         "[]",
         r#"
 const standing = text(named(tree, "standing")[0]);
-const own = choices(tree, "place-u", 0);
+const own = choices(tree, "place-slot", 0);
+const start = chosen(tree, "place-slot", 0);
 const label = text(named(tree, "place")[0]);
 const crumbs = text(nodes(tree).find((n) => (n.attrs.class || "") === "crumbs"));
-choose(tree, "place-u", "5", 0);
+choose(tree, "place-slot", "sled-2:1", 0);
 await click(tree, "place");
-choose(tree, "place-u", "4", 0);
 await click(tree, "place");
 await click(tree, "unplace");
-return { standing, own, label, crumbs, reports: seen.reports };"#,
+return { standing, own, start, label, crumbs, reports: seen.reports };"#,
     ));
     let out = &out["out"];
-    assert_eq!(out["standing"], "Stands at Row 1 / Rack 1, U4, 2U.");
+    assert_eq!(
+        out["standing"],
+        "Stands at C0-R0-R0-S0-S0 (Row 0 / Rack 0, U4, a sled 2U high)."
+    );
     assert_eq!(out["label"], "Move");
+    assert_eq!(out["start"], "sled-1:0");
+    assert_eq!(out["own"][0], "C0-R0-R0-S0-S0");
     assert_eq!(
         out["crumbs"]
             .as_str()
@@ -332,18 +308,13 @@ return { standing, own, label, crumbs, reports: seen.reports };"#,
             .split_whitespace()
             .collect::<Vec<_>>()
             .join(" "),
-        "Lab Row 1 Rack 1 db-1"
-    );
-    // Its own U 4 and 5 count as free for a 2 U server, so U 4 stays a choice.
-    assert!(
-        out["own"].as_array().unwrap().contains(&json!("U4")),
-        "{out}"
+        "Lab Row 0 Rack 0 db-1"
     );
     assert_eq!(
         out["reports"],
         json!([
             "That does not fit in the rack: it would reach past U 1 or the top U.",
-            "db-1 is at Row 1 / Rack 1, U4.",
+            "db-1 is at C0-R0-R0-S1-S1.",
             "db-1 is unplaced."
         ])
     );
@@ -351,7 +322,7 @@ return { standing, own, label, crumbs, reports: seen.reports };"#,
     assert!(sent.contains(&(
         m("Layout/Place"),
         json!({"subject": {"kind": "LAYOUT_SUBJECT_KIND_INVENTORY", "id": "db-1"},
-               "rack": "rack-1", "heightU": 2, "u": 4, "reason": "moved db-1"})
+               "sled": "sled-2", "slot": 1, "reason": "moved db-1"})
     )));
     assert!(sent.contains(&(
         m("Layout/Unplace"),
@@ -360,10 +331,12 @@ return { standing, own, label, crumbs, reports: seen.reports };"#,
     )));
 }
 
+/// Proves: with no free slot the section says to add a sled on Home and Place sends nothing,
+/// telling the operator to choose a slot; an unreadable layout is told in the section.
+/// Catches: a Place button that sends nothing and says nothing when there is no slot to choose
+/// from, and a host page that fails when the layout cannot be read.
 #[test]
-fn the_host_page_without_a_rack_or_a_layout_says_why_it_cannot_place() {
-    // Catches: a Place button that sends nothing and says nothing when there is no rack to choose
-    // from, and a host page that fails when the layout cannot be read.
+fn the_host_page_without_a_free_slot_or_a_layout_says_why_it_cannot_place() {
     let mut ui = Ui::start();
     ui.reply(&m("Hosts/Get"), json!({"host": {"nodeId": "web-2"}}));
     ui.reply(&m("Services/List"), json!({}));
@@ -373,13 +346,18 @@ fn the_host_page_without_a_rack_or_a_layout_says_why_it_cannot_place() {
         r#"{ nodeId: "web-2" }"#,
         "[]",
         r#"
+const shown = text(tree);
 await click(tree, "place");
-return seen.reports;"#,
+return { shown, reports: seen.reports };"#,
     ));
-    assert_eq!(
-        out["out"],
-        json!(["There is no rack yet: add rows and racks on Home, in Edit layout."])
+    assert!(
+        out["out"]["shown"]
+            .as_str()
+            .unwrap()
+            .contains("No sled slot is free: add a sled on Home, in Edit layout."),
+        "{out}"
     );
+    assert_eq!(out["out"]["reports"], json!(["Choose a sled slot."]));
     assert!(!ui.methods().contains(&m("Layout/Place")));
 
     let mut ui = Ui::start();

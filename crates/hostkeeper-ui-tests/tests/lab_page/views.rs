@@ -216,7 +216,8 @@ return {
     let rows = out["rows"].as_array().unwrap();
     assert!(
         rows.iter().any(|r| r.as_str().unwrap().contains("web-1")
-            && r.as_str().unwrap().contains("Row 1 / Rack 1, U41")),
+            && r.as_str().unwrap().contains("C0-R0-R0-S1-S0")
+            && r.as_str().unwrap().contains("Row 0 / Rack 0, U41")),
         "{rows:?}"
     );
     assert!(

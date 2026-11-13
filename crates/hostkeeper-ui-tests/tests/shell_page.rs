@@ -150,7 +150,7 @@ globalThis.theApp.navigate("fleet", { row: "row-1" });
 await settle();
 const fleet = text();
 const crumbs = elements(doc.root).filter((e) => e.attributes["class"] === "crumb").length;
-return { audit: audit.includes("Audit"), home: home.includes("Lab 1") && home.includes("Row 1"), fleet: fleet.includes("Lab 1") && fleet.includes("Row 1"), crumbs };"#,
+return { audit: audit.includes("Audit"), home: home.includes("Lab 1") && home.includes("Row 0"), fleet: fleet.includes("Lab 1") && fleet.includes("Row 0"), crumbs };"#,
     );
     assert_eq!(out["audit"], true);
     assert_eq!(out["home"], true);
