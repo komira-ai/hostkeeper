@@ -35,6 +35,9 @@
 .gear:hover,
 .gear:focus-visible {
   z-index: 2;
+  background:
+    linear-gradient(180deg, rgb(255 255 255 / 0.07), transparent 40%),
+    linear-gradient(180deg, #1f2a35, #151d26);
   border-color: var(--accent);
   box-shadow: 0 0 0 1px var(--glow), 0 0 16px rgb(253 79 29 / 0.28);
 }
@@ -194,4 +197,51 @@
   text-align: left;
   font-weight: 500;
   color: var(--muted);
+}
+
+/* On a phone the switch table's cells carry the switch's own labels, not the server table's. */
+@media (max-width: 720px) {
+  .inventory.switches td:nth-child(5)::before,
+  .inventory.switches td:nth-child(6)::before {
+    display: block;
+    color: var(--muted);
+    font-family: var(--font);
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+  }
+
+  .inventory.switches td:nth-child(2)::before {
+    content: "Network";
+  }
+
+  .inventory.switches td:nth-child(3)::before {
+    content: "Console";
+  }
+
+  .inventory.switches td:nth-child(4)::before {
+    content: "Management MAC";
+  }
+
+  .inventory.switches td:nth-child(5)::before {
+    content: "Notes";
+  }
+
+  .inventory.switches td:nth-child(6)::before {
+    content: "Where";
+  }
+
+  .inventory.switches td:nth-child(3) {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+
+  .gearpage .facts th {
+    width: 96px;
+  }
+
+  .gearpage .facts td {
+    overflow-wrap: anywhere;
+  }
 }

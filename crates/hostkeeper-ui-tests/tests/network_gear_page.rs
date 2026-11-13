@@ -652,3 +652,63 @@ export async function main() {{
     assert_eq!(out["words"], json!(["ttyUSB0 on node-1", "none"]));
     assert_eq!(out["none"], json!([]));
 }
+
+/// The body of the first rule of `file` whose selector list is exactly `selector`.
+fn rule_body(file: &str, selector: &str) -> String {
+    let css = hostkeeper_ui_tests::UiFile::named(file)
+        .unwrap_or_else(|| panic!("{file} is held"))
+        .text
+        .to_owned();
+    let at = css
+        .find(&format!("{selector} {{\n    content:"))
+        .or_else(|| css.find(&format!("{selector} {{")))
+        .unwrap_or_else(|| panic!("{selector} is a rule of {file}"));
+    let tail = &css[at..];
+    let open = tail.find('{').expect("a rule opens");
+    tail[open + 1..tail.find('}').expect("a rule closes")].to_owned()
+}
+
+#[test]
+fn a_hovered_server_or_faceplate_keeps_its_own_dark_plate() {
+    // Proves: the hover rules of a server (`lab.css`) and of a faceplate (`gear.css`) set their
+    // own gradient background, so the page-wide `button:hover` fill (a light surface in the light
+    // theme) does not replace the plate under its light text.
+    // Catches: a hovered 1U server or switch drawn white with white text in the light theme.
+    let server = rule_body("lab.css", ".server:hover,\n.server:focus-visible");
+    assert!(server.contains("background: linear-gradient("), "{server}");
+    let gear = rule_body("styles/gear.css", ".gear:hover,\n.gear:focus-visible");
+    assert!(gear.contains("background:"), "{gear}");
+    assert!(
+        gear.contains("linear-gradient(180deg, #1f2a35, #151d26)"),
+        "{gear}"
+    );
+}
+
+#[test]
+fn the_switch_table_on_a_phone_labels_its_cells_with_the_switch_fields() {
+    // Proves: the Inventory page marks the switch table with `switches`, and the stylesheet gives
+    // its second to sixth cells the labels Network, Console, Management MAC, Notes and Where
+    // (the server table's BMC MAC, Data MAC and Notes would mislabel them).
+    // Catches: a switch's network shown under "BMC MAC" and its console under "DATA MAC".
+    let page = hostkeeper_ui_tests::UiFile::named("pages/inventory.js")
+        .expect("inventory.js is held")
+        .text
+        .to_owned();
+    assert!(page.contains(r#"class: "page inventory switches""#));
+    for (n, label) in [
+        (2, "Network"),
+        (3, "Console"),
+        (4, "Management MAC"),
+        (5, "Notes"),
+        (6, "Where"),
+    ] {
+        let body = rule_body(
+            "styles/gear.css",
+            &format!("  .inventory.switches td:nth-child({n})::before"),
+        );
+        assert!(
+            body.contains(&format!("content: \"{label}\"")),
+            "{n}: {body}"
+        );
+    }
+}

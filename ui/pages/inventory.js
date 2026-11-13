@@ -431,7 +431,7 @@ async function renderSwitches(ctx) {
   });
 
   const assemble = () => {
-    return h("section", { class: "page inventory" },
+    return h("section", { class: "page inventory switches" },
       h("h2", {}, "Inventory"),
       h("p", { class: "note" }, "The switches in the racks: each with its network, console, management MAC and place."),
       gear.length === 0
