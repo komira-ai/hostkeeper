@@ -1,10 +1,10 @@
-//! The lab's layout ([`crate::layout`]) as the rows of the tables that migration `0014` adds:
+//! The lab's layout ([`crate::layout`]) as the rows of the tables that migration `0015` adds:
 //! `lab_cluster`, `lab_rows`, `lab_racks` and `lab_placements`, a row for the name and one per row, rack and placement, keyed by id
 //! (a placement by its subject's key), holding the record as the layout file holds it, without
 //! the key.
 //!
 //! A database that holds no row holds an empty layout. An older release never reads any of the
-//! tables (`0014` is `may-run`). A load reads every row through the file's reader, so it is as
+//! tables (`0015` is `may-run`). A load reads every row through the file's reader, so it is as
 //! strict as a start on the files, and refuses a layout that breaks a rule of [`Layout::new`],
 //! naming the tables.
 

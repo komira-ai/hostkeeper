@@ -86,7 +86,7 @@ the host, else the host. Limits: 64 rows, 512 racks, 4096 placements. One functi
 change is made on a copy and judged whole, so a rule is stated once. A stored layout that breaks a rule stops the start, naming the file.
 
 Storage, additive (B8): a store part beside the accounts. File store: `<state-file>.layout` (JSON, mode 0600, written whole when a commit
-changes it). Postgres: migration `0014_lab_layout.sql` (`may-run`): `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements`. Backup and
+changes it). Postgres: migration `0015_lab_layout.sql` (`may-run`): `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements`. Backup and
 restore carry the file, `export` writes the layout file from the tables, `counts.sql` lists the tables. An older release never reads
 them; a coordinator that finds none starts with an empty layout.
 

@@ -102,7 +102,7 @@ fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_a
     store.stop();
 
     let after = db.rows(migrated);
-    assert_eq!(after.len(), 14, "{after:?}");
+    assert_eq!(after.len(), 15, "{after:?}");
     assert_eq!(after[..8], before[..], "0001 to 0008 were not run again");
     assert_eq!(
         after[8][..2],

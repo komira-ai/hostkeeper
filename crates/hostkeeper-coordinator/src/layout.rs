@@ -6,7 +6,7 @@
 //! the verdicts and the accounts, and not part of the inventory: where a server stands is not a
 //! field of its record. It is written whole, when a commit changes it: `<state-file>.layout` on
 //! the file store ([`encode_file`], [`parse_file`]), the tables `lab_rows`, `lab_racks` and
-//! `lab_placements` (migration `0014`, `may-run`) on Postgres. An older coordinator never reads
+//! `lab_placements` (migration `0015`, `may-run`) on Postgres. An older coordinator never reads
 //! either, and a coordinator that finds neither starts with an empty layout, which is the state it
 //! starts in.
 //!

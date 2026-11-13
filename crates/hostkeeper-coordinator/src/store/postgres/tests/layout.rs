@@ -1,4 +1,4 @@
-//! The lab's layout over the Postgres store (migration `0014`): the tables `lab_rows`,
+//! The lab's layout over the Postgres store (migration `0015`): the tables `lab_rows`,
 //! `lab_racks` and `lab_placements`, what a commit writes to them, how a load reads them, and what
 //! a commit of unknown outcome gives back to memory.
 
