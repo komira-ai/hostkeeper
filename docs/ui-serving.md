@@ -67,26 +67,32 @@ Sign out ends the session on the coordinator.
   `unknown: platform not reported`: the coordinator, which knows it, may pick it an entry. Counts of each pick
   cover every host; the table shows the first 200. A refusal (`NOT_FOUND release_unknown` for a
   version never set with targets) is shown as the API says it.
-- **Packages** (`Packages` in the page list; `ui/pages/packages.js`). The registry of what the coordinator can deploy.
-  A table of the registered packages (`Services.List`): its repository, its minimum version in each host group that has
-  one, and the host groups that run it, with *Edit* and *Remove* on each row. *Add package* is a form of a name and the
-  repository the package comes from, chosen from the registered repositories (the default, `komira`, preselected when it is
-  one); it sends `Services.Put`. *Edit* changes the repository (`Services.SetRepository`) and, for one of the host groups that
-  run the package, its minimum version (`Services.SetMinVersion`; empty removes it): a minimum version belongs to a host group,
-  so a package no group runs has none and the add form does not ask for one. *Remove* of a package some host group runs is
-  refused on the page, naming the groups; for one no group runs it asks first and sends `Services.Remove`, and the API's
-  `in_use` refusal (a group listed it since the page loaded) is shown in words. A package is registered when a host group lists
-  it or it was added here, so the packages of the farm's groups (`hostkeeper`, `tierstore`, `js-agent`, whatever the groups
-  list) are in the table without any step. Below, *Repositories* (`Repositories.List`): each repository's URL, suites,
-  components, access (public, or private: read by the coordinator alone), the packages that come from it and its signing keys
-  (the last 16 hex characters of each fingerprint), with *Edit* and *Remove*, and a form that adds or changes one
-  (`Repositories.Put`). The form asks for a name (not on *Edit*), the URL, the suites, the components, the signing key as a
-  file (a binary OpenPGP keyring, `gpg --export`), who reads it, and for a private repository the path of the credential file
-  on the coordinator's machine; each field has a one-line hint. The fingerprints are read from the key file in the page,
-  not typed, and the package manager (`apt`) is not asked for. *Edit* with no new key file keeps the key held
-  (`Repositories.Get`). A repository some package comes from is not removed, and the page names the packages. The reason of each
-  write is a fixed sentence; the audit log names the operator. Repositories that packages name and the registry lacks are shown as
-  an alert. A refused list is shown inline and the rest of the page still renders.
+- **Packages** (`Packages` in the page list; `ui/pages/packages.js`). The repositories packages are installed from and the
+  registry of what the coordinator can deploy, as two plain lists, *Repositories* first (a package comes from one) and then
+  *Packages*. Each list is a table with an *Add repository* or *Add package* button in its header and *Edit* and *Remove* on
+  each row. No form is shown by default: a button, or a row's *Edit*, opens its form under its table with *Save* and *Cancel*
+  (one form at a time; a save draws the page again with every form closed). *Add package* is disabled, with the hint "Add a
+  repository first", while no repository is registered. A refused list is shown inline and the rest of the page still renders.
+  - *Repositories* (`Repositories.List`): each repository's name, its URL and how many packages use it. The form (`Repositories.Put`)
+    asks for a name (not on *Edit*), the URL, the suites, the components, the signing key as a file (a binary OpenPGP keyring,
+    `gpg --export`), who reads it, and for a private repository the path of the credential file on the coordinator's machine;
+    each field has a one-line hint. The fingerprints are read from the key file in the page, not typed, and the package manager
+    (`apt`) is not asked for. *Edit* names the keys held (the last 16 hex characters of each fingerprint) and, with no new key
+    file, keeps the key held (`Repositories.Get`). *Remove* of a repository some package comes from is refused on the page,
+    naming the packages; the API's `in_use` refusal is shown in words. Repositories that packages name and the registry lacks are
+    shown as an alert.
+  - *Packages* (`Services.List`): each package's name, its repository and the host groups that run it. The form is a name and the
+    repository the package comes from, chosen from the registered repositories (the default, `komira`, preselected when it is
+    one); it sends `Services.Put`. *Edit* names the minimum versions set and changes the repository (`Services.SetRepository`)
+    and, for one of the host groups that run the package, its minimum version (`Services.SetMinVersion`; empty removes it): a
+    minimum version belongs to a host group, so a package no group runs has none and the add form does not ask for one.
+    *Remove* of a package some host group runs is refused on the page, naming the groups; for one no group runs it asks first
+    and sends `Services.Remove`, and the API's `in_use` refusal (a group listed it since the page loaded) is shown in words. A
+    package is registered when a host group lists it or it was added here, so the packages of the farm's groups (`hostkeeper`,
+    `tierstore`, `js-agent`, whatever the groups list) are in the table without any step. The name is plain text until the
+    router has a page for a package.
+
+  The reason of each write is a fixed sentence; the audit log names the operator.
 - **Host groups**: every group the coordinator holds (`HostGroups.List`, every page), the built-in `all` marked as built in,
   with its packages, the policy keys that are set ("default" when none is), its generation, its host count and its desired
   versions. Opening a group (`HostGroups.Get`) shows, per package, the desired and minimum version and the convergence counts,

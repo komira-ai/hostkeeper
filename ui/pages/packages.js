@@ -1,9 +1,11 @@
-// Packages: the registry of what the coordinator can deploy, and the package repositories it comes
-// from. A table of the registered packages (its repository, its minimum version in each host group
-// that has one, and the host groups that run it), a form that adds one (its name and the
-// repository it comes from, chosen from the registered repositories), Edit and Remove on each row;
-// and, below, the repositories (their URL, suites, components, access, the packages that come from
-// each and its signing keys) with a form that adds or changes one, and Remove on each row.
+// Packages: the repositories packages are installed from and the registry of what the coordinator
+// can deploy, as two plain lists, the repositories first because a package comes from one. Each
+// list is a table (a repository: its name, its URL and how many packages use it; a package: its
+// name, its repository and the host groups that run it) with an "Add repository" or "Add package"
+// button in its header and Edit and Remove on each row. No form is shown until a button asks for
+// one: Add opens an empty form under its table, a row's Edit opens that row's, each with Save and
+// Cancel (one form at a time; a save draws the page again with every form closed). "Add package"
+// is disabled, with a hint, while no repository is registered.
 //
 // A package is registered when a host group lists it or the operator added it here; the Host
 // groups page offers these and no other. The minimum version of a package belongs to a host
@@ -75,6 +77,21 @@ async function readFile(file, limit) {
   return bytes.length > limit ? `The signing key file is at most ${limit} bytes; this one is ${bytes.length}.` : bytes;
 }
 
+// A package form that is closed, with the repository `names` offers preselected.
+function closedPackage(names) {
+  return { open: false, editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
+}
+
+// A repository form that is closed and empty.
+function closedRepository() {
+  return { open: false, editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null, keys: "" };
+}
+
+// "1 package" or "3 packages".
+function packagesCount(n) {
+  return `${n} ${n === 1 ? "package" : "packages"}`;
+}
+
 // A control with a one-line hint under it.
 function hinted(control, hint) {
   return h("div", { class: "hinted" }, control, h("p", { class: "note" }, hint));
@@ -100,22 +117,33 @@ export async function render(ctx) {
     repositoriesFailure = error;
   }
   const names = repositories.map((one) => (one.repository || {})["name"]).filter((name) => typeof name === "string");
-  const state = {
-    pkg: { editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" },
-    repo: { editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null },
-  };
+  const state = { pkg: closedPackage(names), repo: closedRepository() };
   const show = () => ctx.show(page());
   const packageOf = (name) => packages.find((entry) => entry.service === name);
 
   // Loads the package `name` into the form.
   const editPackage = (name) => {
     const entry = packageOf(name) || {};
-    state.pkg = { editing: true, service: name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
+    state.repo = closedRepository();
+    state.pkg = { open: true, editing: true, service: name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
+    show();
+  };
+
+  // Opens the empty form that adds a package.
+  const addPackage = () => {
+    if (names.length === 0) {
+      return;
+    }
+    state.repo = closedRepository();
+    state.pkg = { ...closedPackage(names), open: true };
     show();
   };
 
   const packageForm = () => {
     const { pkg } = state;
+    if (!pkg.open) {
+      return null;
+    }
     const entry = packageOf(pkg.service) || {};
     const groups = list(entry, "hostGroups");
     return h("fieldset", {},
@@ -126,8 +154,11 @@ export async function render(ctx) {
         select("Repository", "package-repository", pkg, "repository",
           [["", "Choose a repository"], ...names.map((name) => [name, name])]),
         names.length === 0
-          ? "No repository is registered: add one under Repositories below first."
-          : "Where hosts install the package from; the repositories below."),
+          ? "No repository is registered: add one under Repositories first."
+          : "Where hosts install the package from; the repositories above."),
+      pkg.editing && minimums(entry).length > 0
+        ? h("p", { class: "note" }, `Minimum versions set: ${minimums(entry).join(", ")}.`)
+        : null,
       pkg.editing
         ? hinted(
           select("Minimum in host group", "package-min-group", pkg, "minGroup",
@@ -141,7 +172,7 @@ export async function render(ctx) {
           "No host of that group is ordered a version below it; empty removes the group's minimum.")
         : null,
       h("div", { class: "buttons" },
-        action(ctx, pkg.editing ? "Save package" : "Add package", "put-package", async () => {
+        action(ctx, "Save package", "put-package", async () => {
           const name = trimmed(pkg.service);
           if (!PACKAGE_NAME.test(name)) {
             return "Name the package: 1 to 64 lower case letters, digits or -.";
@@ -151,7 +182,6 @@ export async function render(ctx) {
           }
           if (!pkg.editing) {
             await ctx.api.services.put({ service: name, repository: pkg.repository, reason: PUT_REASON });
-            state.pkg.service = "";
             ctx.refresh();
             return `Added package ${name} from ${pkg.repository}.`;
           }
@@ -168,12 +198,10 @@ export async function render(ctx) {
           ctx.refresh();
           return said.length === 0 ? `Nothing to change for ${name}.` : `Changed ${name}: ${said.join(", ")}.`;
         }),
-        pkg.editing
-          ? action(ctx, "Cancel", "cancel-package", () => {
-            state.pkg = { editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
-            show();
-          })
-          : null));
+        action(ctx, "Cancel", "cancel-package", () => {
+          state.pkg = closedPackage(names);
+          show();
+        })));
   };
 
   const removePackage = (name) => action(ctx, "Remove", "remove-package", async () => {
@@ -194,9 +222,9 @@ export async function render(ctx) {
   });
 
   const packageRows = () => packages.map((entry) => h("tr", {},
+    // The detail page of a package is not routed yet (the address never changes), so the name is text.
     h("td", {}, entry.service),
     h("td", {}, entry.repository || DEFAULT_REPOSITORY),
-    h("td", {}, minimums(entry).join(", ") || "-"),
     h("td", {}, list(entry, "hostGroups").join(", ") || "-"),
     h("td", {}, action(ctx, "Edit", "edit-package", () => editPackage(entry.service)),
       removePackage(entry.service))));
@@ -204,7 +232,9 @@ export async function render(ctx) {
   // Loads the repository `one` of Repositories.List into the form.
   const editRepository = (one) => {
     const body = one.repository || {};
+    state.pkg = closedPackage(names);
     state.repo = {
+      open: true,
       editing: true,
       called: body["name"],
       uri: body.uri || "",
@@ -213,6 +243,7 @@ export async function render(ctx) {
       access: body.access === "hosts" ? "hosts" : "public",
       credentialFile: body.credentialFile || "",
       key: null,
+      keys: keysOf(body),
     };
     show();
   };
@@ -276,8 +307,18 @@ export async function render(ctx) {
     return control;
   };
 
+  // Opens the empty form that adds a repository.
+  const addRepository = () => {
+    state.pkg = closedPackage(names);
+    state.repo = { ...closedRepository(), open: true };
+    show();
+  };
+
   const repositoryForm = () => {
     const { repo } = state;
+    if (!repo.open) {
+      return null;
+    }
     return h("fieldset", {},
       h("legend", {}, repo.editing ? `Change repository ${repo.called}` : "Add repository"),
       repo.editing ? null : hinted(field("Name", "repository-name", repo, "called"),
@@ -287,6 +328,7 @@ export async function render(ctx) {
         "The channels it publishes, separated by commas or spaces (testing, stable)."),
       hinted(field("Components", "repository-components", repo, "components"),
         "The components of every suite (main)."),
+      repo.editing ? h("p", { class: "note" }, `Signing keys held: ${repo.keys}.`) : null,
       hinted(filePicker("Signing key", "repository-key", repo, "key"),
         repo.editing
           ? "The binary keyring its suites are signed with (gpg --export); leave it empty to keep the one held."
@@ -299,7 +341,7 @@ export async function render(ctx) {
           "The absolute path, on the coordinator's machine, of the file that holds the Authorization header's value.")
         : null,
       h("div", { class: "buttons" },
-        action(ctx, repo.editing ? "Save repository" : "Add repository", "put-repository", async () => {
+        action(ctx, "Save repository", "put-repository", async () => {
           const built = await repositoryFromForm();
           if (built.problem) {
             return built.problem;
@@ -308,12 +350,10 @@ export async function render(ctx) {
           ctx.refresh();
           return `Saved repository ${built.repository["name"]}.`;
         }),
-        repo.editing
-          ? action(ctx, "Cancel", "cancel-repository", () => {
-            state.repo = { editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null };
-            show();
-          })
-          : null));
+        action(ctx, "Cancel", "cancel-repository", () => {
+          state.repo = closedRepository();
+          show();
+        })));
   };
 
   const removeRepository = (one) => action(ctx, "Remove", "remove-repository", async () => {
@@ -339,24 +379,17 @@ export async function render(ctx) {
     return h("tr", {},
       h("td", {}, body["name"]),
       h("td", {}, body.uri || "-"),
-      h("td", {}, list(body, "suites").join(", ") || "-"),
-      h("td", {}, list(body, "components").join(", ") || "-"),
-      h("td", {}, body.access === "hosts" ? "private" : "public"),
-      h("td", {}, list(one, "services").join(", ") || "-"),
-      h("td", {}, keysOf(body)),
+      h("td", {}, `used by ${packagesCount(list(one, "services").length)}`),
       h("td", {}, action(ctx, "Edit", "edit-repository", () => editRepository(one)), removeRepository(one)));
   });
 
+  // A list's header: its title and the button that opens its add form.
+  const header = (title, button) => h("div", { class: "buttons" }, h("h3", {}, title), button);
+
   const page = () => h("section", { class: "page packages" },
     h("h2", {}, "Packages"),
-    h("p", { class: "note" }, "The packages the coordinator can deploy. A host group is given packages from this list on the Host groups page."),
-    packagesFailure !== null ? h("p", { class: "error", role: "alert" }, `Packages: ${describeError(packagesFailure)}`) : null,
-    packagesFailure === null && packages.length === 0 ? h("p", { class: "note" }, "No package is registered yet.") : null,
-    packages.length > 0
-      ? table(["Package", "Repository", "Minimum version", "Host groups", ""], packageRows())
-      : null,
-    packageForm(),
-    h("h3", {}, "Repositories"),
+    h("p", { class: "note" }, "Where packages are installed from, and the packages the coordinator can deploy. A host group is given packages from the second list on the Host groups page."),
+    header("Repositories", action(ctx, "Add repository", "add-repository", addRepository)),
     h("p", { class: "note" }, "Where packages are installed from. Each package comes from one of these."),
     repositoriesFailure !== null ? h("p", { class: "error", role: "alert" }, `Repositories: ${describeError(repositoriesFailure)}`) : null,
     repositoriesFailure === null && repositories.length === 0 ? h("p", { class: "note" }, "No repository is registered yet.") : null,
@@ -364,8 +397,16 @@ export async function render(ctx) {
       ? h("p", { class: "error", role: "alert" }, `Packages come from repositories that are not registered: ${unregistered.join(", ")}. Hosts of those packages are sent no repository until they are added.`)
       : null,
     repositories.length > 0
-      ? table(["Repository", "URL", "Suites", "Components", "Access", "Packages", "Keys", ""], repositoryRows())
+      ? table(["Repository", "URL", "Used by", ""], repositoryRows())
       : null,
-    repositoryForm());
+    repositoryForm(),
+    header("Packages", action(ctx, "Add package", "add-package", addPackage, names.length === 0 ? { disabled: true } : {})),
+    names.length === 0 ? h("p", { class: "note" }, "Add a repository first") : null,
+    packagesFailure !== null ? h("p", { class: "error", role: "alert" }, `Packages: ${describeError(packagesFailure)}`) : null,
+    packagesFailure === null && packages.length === 0 ? h("p", { class: "note" }, "No package is registered yet.") : null,
+    packages.length > 0
+      ? table(["Package", "Repository", "Host groups", ""], packageRows())
+      : null,
+    packageForm());
   return page();
 }

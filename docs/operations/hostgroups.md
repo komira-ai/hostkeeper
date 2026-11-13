@@ -173,7 +173,7 @@ none, and orders no host anything. The entry is `host_group_remove`.
 A package is **registered** when a host group lists it, or when an operator registered it with
 `Services.Put`, which records the package and the repository it comes from before any group lists
 it. `Services.List` shows every registered package, with the groups that list it, so the console's
-Packages page is that list and the Host groups page offers those packages and no other (it has
+Packages page (its second list, under the repositories) is that list and the Host groups page offers those packages and no other (it has
 no field to type one into). The packages of a farm that already runs through groups (`hostkeeper`
 from `all`, and each package its groups list) are registered by being listed: nothing is added to
 see them.
