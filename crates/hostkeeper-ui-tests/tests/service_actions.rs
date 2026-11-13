@@ -950,7 +950,12 @@ fn host_reads_no_audit_when_nothing_is_assigned_or_the_list_fails() {
         ));
         assert_eq!(
             ui.methods(),
-            [m("Hosts/Get"), m("Services/List"), m("HostGroups/List"), m("Layout/Get")],
+            [
+                m("Hosts/Get"),
+                m("Services/List"),
+                m("HostGroups/List"),
+                m("Layout/Get")
+            ],
             "{node}"
         );
     }
