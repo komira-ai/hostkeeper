@@ -79,12 +79,12 @@ async function readFile(file, limit) {
 
 // A package form that is closed, with the repository `names` offers preselected.
 function closedPackage(names) {
-  return { open: false, editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
+  return { visible: false, editing: false, service: "", repository: names.includes(DEFAULT_REPOSITORY) ? DEFAULT_REPOSITORY : "", minGroup: "", minVersion: "" };
 }
 
 // A repository form that is closed and empty.
 function closedRepository() {
-  return { open: false, editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null, keys: "" };
+  return { visible: false, editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null, keys: "" };
 }
 
 // "1 package" or "3 packages".
@@ -125,7 +125,7 @@ export async function render(ctx) {
   const editPackage = (name) => {
     const entry = packageOf(name) || {};
     state.repo = closedRepository();
-    state.pkg = { open: true, editing: true, service: name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
+    state.pkg = { visible: true, editing: true, service: name, repository: entry.repository || DEFAULT_REPOSITORY, minGroup: "", minVersion: "" };
     show();
   };
 
@@ -135,13 +135,13 @@ export async function render(ctx) {
       return;
     }
     state.repo = closedRepository();
-    state.pkg = { ...closedPackage(names), open: true };
+    state.pkg = { ...closedPackage(names), visible: true };
     show();
   };
 
   const packageForm = () => {
     const { pkg } = state;
-    if (!pkg.open) {
+    if (!pkg.visible) {
       return null;
     }
     const entry = packageOf(pkg.service) || {};
@@ -234,7 +234,7 @@ export async function render(ctx) {
     const body = one.repository || {};
     state.pkg = closedPackage(names);
     state.repo = {
-      open: true,
+      visible: true,
       editing: true,
       called: body["name"],
       uri: body.uri || "",
@@ -310,13 +310,13 @@ export async function render(ctx) {
   // Opens the empty form that adds a repository.
   const addRepository = () => {
     state.pkg = closedPackage(names);
-    state.repo = { ...closedRepository(), open: true };
+    state.repo = { ...closedRepository(), visible: true };
     show();
   };
 
   const repositoryForm = () => {
     const { repo } = state;
-    if (!repo.open) {
+    if (!repo.visible) {
       return null;
     }
     return h("fieldset", {},
