@@ -79,41 +79,33 @@ Sign out ends the session on the coordinator.
 - **Host**: the services that host runs because its group lists them (its Source column reads
   `role <name>`, the name being the host's group), the installed version against the desired one,
   and the minimum version.
-- **MDM setup** (`MDM setup` in the page list; the status panel and the push certificate, ABM, name and TLS steps,
-  `docs/design/coordinator-mdm.md` sections 4.4, 4.5 and 4.9). The status panel draws `Mdm.Status` and `Mdm.ListSettings` on every drawing: *Configured*, or *Not configured,
-  because:* and each missing condition in words; the push certificate and key, the ABM token and the TLS certificate and key with the
-  version and the first 16 hex digits of the fingerprint `Status` gives, when each expires and the days left. The days left are
-  coloured and listed as a reminder once they are inside the largest value of the setting that names them (`push_alert_days`,
-  `abm_alert_days`, `tls_renew_days`), and an expiry is shown `expired`; when `ListSettings` is refused, only an expiry is coloured.
-  A coordinator with no master key says so. The push step has three buttons in order: *Create request* (`Mdm.CreatePushRequest` with
-  the email and whether to send it to mdmcert.download, which **emails** its reply to that address; the CSR and the encryption
-  certificate, both public, are shown and can be downloaded), *Check reply* (`Mdm.PutPushReply` with the emailed attachment, as a file
-  or its hex text pasted; the signed request it answers can be downloaded, to upload to Apple's push portal) and *Store certificate*
-  (`Mdm.PutPushCertificate` with the certificate Apple returned). A separate form takes an existing certificate and its key, PKCS#1
-  or PKCS#8, in one call (the migration). A file is read when the button is pressed, sent and dropped; a key can only be chosen as a
-  file, never typed, and the page shows no value of a secret. A refusal is shown as the API says it (`CODE reason`) in the status
-  line. The writes need a signed-in user's session: a bearer is refused them. *Verify* (`Mdm.Verify`) reads the setup back and proves its
-  parts work: whether the Macs' listener runs and which names the certificate it serves holds, whether Apple accepts the ABM token
-  (while the coordinator has an ABM client; without one the page says it could not ask) and, for the Mac chosen from the enrolled
-  ones (*Load enrolled Macs*, `Mdm.ListDevices`, asked only when that button is pressed), one test push. A failed push is worded by
-  its class, so that a refused topic, a dead token and a certificate of the wrong environment read differently. The push carries no
-  command and records nothing against the Mac.
-  The ABM step takes the token of a takeover (the JSON of its four parts and expiry, `Mdm.PutAbmToken`) or the `.p7m` ABM hands
-  over, each as a file that the coordinator proves to Apple before it keeps it (the answer names the server entry, the
-  organisation and the expiry); the existing key pair of the server entry (`Mdm.PutSecret`, the key and its certificate
-  together as files, stored only when the certificate is the key's); and *Get public key* (`Mdm.GetAbmPublicKey`), for a new server entry only, which shows the
-  certificate of the key pair the coordinator holds, makes one when it holds none, and offers it as a download. A token or a key
-  can only be chosen as a file. The status panel adds the time of the last ABM sync that ended well and, when the last sync
-  failed, Apple's words for it; for the two faults Apple names (`timestamp_refused`, `signature_invalid`) and for the same
-  refusals of an upload (`abm_clock_refused`, `abm_credential_refused`) the page says what to do. The name step sets the host
-  name the Macs enroll at (`Mdm.PutName`) and shows the enrollment URL; the name needs a DNS record that resolves, on the LAN, to
-  the coordinator's MDM listener, and once a Mac has enrolled at it the coordinator locks it and the page shows no form for it.
-  The TLS step (`Mdm.PutSecret` and `Mdm.PutSetting`) stores a certificate chain, chosen as a file or pasted, and its key, a file
-  only, as `tls_key` and then `tls_cert`, which works with no ACME; shows the renewal by ACME as off (naming what it lacks), on, or
-  failing (the last error, when it began, the attempts, the DNS provider's refusal, the next attempt, from `Mdm.Status`'s `tls_renewal`,
-  which the coordinator keeps in memory only); saves the settings `dns_zone`, `acme_directory` and `acme_contact`, sending each that
-  changed; and stores the DNS credential (the provider's API key and secret, or a personal access token) from password fields, which
-  are emptied whatever the answer is. No value of a secret is shown.
+- **MDM setup** (`MDM setup` in the page list; `docs/operations/mdm-setup.md`, `docs/design/coordinator-mdm.md` section 4.9).
+  One plain form and nothing else but a one-line status above it and a *Verify* button below it. The status line is `Mdm.Status`
+  in a line: `MDM: configured`, or `MDM: missing push certificate, ABM token` (a part that is there and wrong, such as an expired
+  certificate, is named after a semicolon), and `Name:` with the MDM name, read-only. Each field is one labelled input with a one-line
+  hint of where its file comes from and a *How do I get this?* link to the section of `docs/operations/mdm-setup.md` (as GitHub renders
+  it: the one address the app may link to, which `docLink` in `view.js` enforces) that says how to get it: the push certificate and
+  its private key (files, PEM); the Apple Business Manager token (a file: the `.p7m` from ABM, or an existing token as JSON, told by its
+  content); the Apple Business Manager private key and certificate (files, PEM, for taking over an existing ABM server); the GoDaddy API
+  key and secret (the secret in a password field); and the contact email for Let's Encrypt (prefilled with the stored `acme_contact`, else
+  with the signed-in user's name when that is an address). Only while no MDM name is set, one more field takes it (`Mdm.PutName`). A part the
+  coordinator holds is shown beside its field as `stored ✓ (expires YYYY-MM-DD)`, never its value (`Mdm.Status`, and `Mdm.ListSecrets` for the
+  ABM key and certificate). Next to the token field, only when no ABM key is stored, a link *Download the public certificate to upload to ABM*
+  (`Mdm.GetAbmPublicKey`, which makes the key pair at its first call) is for a new server entry in ABM.
+  One *Save* sends whatever fields are filled, in this order, and an empty file field keeps what is stored: the name; the push certificate
+  with its key in one `Mdm.PutPushCertificate` (the coordinator checks they are a pair; one without the other is refused on the page);
+  the ABM key with its certificate in one `Mdm.PutSecret` (kind `abm_key` with `with_certificate`; a certificate alone is kind `abm_cert`);
+  the token (`Mdm.PutAbmToken`: `token_json` when the file begins with `{` and is a JSON object, else `token_p7m`, which is not tried when the
+  ABM key just failed); the GoDaddy credential (`Mdm.PutSecret`, kind `dns_credential`, provider `godaddy`, the key and the secret) and, when the
+  setting `dns_zone` is empty, the zone worked out from the MDM name (its registrable domain: the last two labels, three under a suffix of
+  two labels such as `co` and a country code; `Mdm.PutSetting`); and the contact (`acme_contact`) when it was changed or is saved with the credential. A refusal is shown under
+  its own field, in words with the API's code and reason, and the other parts are still stored. The ACME directory (production Let's Encrypt
+  unless the setting says another), the DNS provider (GoDaddy) and the DNS zone are not on the page; they stay settings of the API.
+  A file is read when *Save* is pressed, sent and dropped, never typed, and the GoDaddy secret is emptied whatever the answer is; the page
+  shows no value of a secret. The writes need a signed-in user's session: a bearer is refused them. *Verify* (`Mdm.Verify`, with no Mac) lists what
+  each part found: the setup, whether the Macs' listener runs and serves a certificate that names the MDM name, and, with an ABM token held, whether
+  Apple accepts it. The push certificate request, the reply check, the name step beyond the first name, the TLS upload, the ACME settings and
+  the test push of earlier pages are not on the page; their calls are still served.
 - **Users** (`Users.List`; `Users.Create`, `Disable`, `Enable`, `ResetPassword` and `Delete` on a button): a table
   of the users with whether each is enabled, must change its password, who made it and when, its last sign-in and the
   second its temporary password stops working. Create takes a name; Create and Reset password show the temporary

@@ -9,16 +9,27 @@
 import { ApiError } from "./api.js";
 
 const TAGS = new Set([
-  "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
+  "a", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
   "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
   "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
 ]);
 const ATTRIBUTES = new Set([
-  "aria-label", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
+  "aria-label", "href", "rel", "target", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
   "role", "rows", "spellcheck", "type",
 ]);
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);
+// The one place a link may lead: the operator documentation as GitHub renders it. A link is a
+// navigation the operator chooses, not a load; any other address is refused before mounting.
+const DOCS = "https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/";
+
+// A link that opens `page` (a file of docs/operations) at `anchor` in a new tab, with `text`.
+export function docLink(name, text, page, anchor) {
+  return h("a", {
+    name, href: `${DOCS}${page}#${anchor}`, target: "_blank", rel: "noopener noreferrer",
+  }, text);
+}
+
 const EVENTS = new Set(["change", "click", "input", "submit"]);
 
 function flatten(children, out) {
@@ -64,6 +75,9 @@ function build(doc, node) {
     if (PROPERTIES.has(key)) {
       element[key] = value;
     } else if (ATTRIBUTES.has(key)) {
+      if (key === "href" && !String(value).startsWith(DOCS)) {
+        throw new Error("no link outside the documentation");
+      }
       element.setAttribute(key, String(value));
     } else {
       throw new Error(`no attribute ${key}`);

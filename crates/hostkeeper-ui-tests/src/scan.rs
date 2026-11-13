@@ -107,9 +107,22 @@ pub const NETWORK_AND_CODE: &[&str] = &[
     "sendBeacon",
 ];
 
-/// The places [`NETWORK_AND_CODE`] names, in any file.
+/// The one address the app may name: the operator documentation as GitHub renders it, which a
+/// page links to (`docLink` in `view.js`, which refuses any other `href`). A link is a navigation
+/// the operator chooses, not a load; any other `https://` is still found.
+pub const DOCS_LINK: &str = "https://github.com/komira-ai/hostkeeper/blob/main/docs/operations/";
+
+/// The places [`NETWORK_AND_CODE`] names, in any file, but for [`DOCS_LINK`].
 pub fn network_and_code(path: &str, text: &str) -> Vec<Finding> {
-    needles(path, text, NETWORK_AND_CODE)
+    let mut found = needles(path, text, NETWORK_AND_CODE);
+    found.retain(|f| {
+        !(f.what == "`https://`"
+            && text
+                .lines()
+                .nth(f.line - 1)
+                .is_some_and(|l| l.matches("https://").count() == l.matches(DOCS_LINK).count()))
+    });
+    found
 }
 
 /// Whether `rest`, the text after `on`, is the rest of a handler being set: one or more letters,

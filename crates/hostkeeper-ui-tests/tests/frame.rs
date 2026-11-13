@@ -294,14 +294,17 @@ fn the_mdm_setup_page_is_in_the_frame_and_its_downloads_reach_the_browser() {
     ui.session("tok_a");
     let held = json!({"configured": true, "sealing": true});
     let settings = json!({"settings": []});
+    let secrets = json!({"secrets": [], "sealing": true});
     ui.reply(&m("Mdm/Status"), held.clone());
     ui.reply(&m("Mdm/ListSettings"), settings.clone());
+    ui.reply(&m("Mdm/ListSecrets"), secrets.clone());
     ui.reply(
-        &m("Mdm/CreatePushRequest"),
-        json!({"csrPem": "CSRPEM", "encryptionCertificatePem": "ENCPEM", "submitted": true}),
+        &m("Mdm/GetAbmPublicKey"),
+        json!({"certificatePem": "CERTPEM", "fingerprintSha256": "ab", "created": true}),
     );
     ui.reply(&m("Mdm/Status"), held);
     ui.reply(&m("Mdm/ListSettings"), settings);
+    ui.reply(&m("Mdm/ListSecrets"), secrets);
     ui.run(
         r#"
 import { fakeDocument, domNamed, fire, settle } from "../test/kit.js";
@@ -315,14 +318,12 @@ export async function main() {
   await settle();
   fire(domNamed(doc.root, "page-mdm"), "click", {});
   await settle();
-  fire(domNamed(doc.root, "push-email"), "input", { target: { value: "ops@example.org" } });
-  fire(domNamed(doc.root, "create-request"), "click", {});
+  fire(domNamed(doc.root, "download-abm-certificate"), "click", {});
   await settle();
-  fire(domNamed(doc.root, "download-csr"), "click", {});
 }"#,
     );
     let out = ui.run(&steps(
-        r#"return { text: text(), saved: globalThis.saved, status: status() };"#,
+        r#"return { text: text(), saved: globalThis.saved };"#,
     ));
     assert!(
         out["text"].as_str().expect("text").contains("MDM setup"),
@@ -330,10 +331,6 @@ export async function main() {
     );
     assert_eq!(
         out["saved"],
-        json!([{"name": "push-request.csr", "mime": "text/plain", "text": "CSRPEM"}])
-    );
-    assert_eq!(
-        out["status"],
-        "Request made and sent to mdmcert.download: it emails the signed request to ops@example.org."
+        json!([{"name": "abm-server.crt", "mime": "text/plain", "text": "CERTPEM"}])
     );
 }

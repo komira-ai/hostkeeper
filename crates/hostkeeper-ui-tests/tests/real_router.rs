@@ -70,12 +70,10 @@ const SESSION_REQUIRED: &str = "session_required";
 /// bearer is answered `PERMISSION_DENIED` `session_required` and that answer is the proof that the
 /// coordinator serves the method and keeps it from a token. Any other method answered so fails.
 const SESSION_ONLY_CALLS: &[&str] = &[
-    "hostkeeper.operator.v1.Mdm/CreatePushRequest",
     "hostkeeper.operator.v1.Mdm/GetAbmPublicKey",
     "hostkeeper.operator.v1.Mdm/PutAbmToken",
     "hostkeeper.operator.v1.Mdm/PutName",
     "hostkeeper.operator.v1.Mdm/PutPushCertificate",
-    "hostkeeper.operator.v1.Mdm/PutPushReply",
     "hostkeeper.operator.v1.Mdm/Verify",
     "hostkeeper.operator.v1.Mdm/PutSecret",
     "hostkeeper.operator.v1.Mdm/PutSetting",
@@ -167,12 +165,8 @@ const REQUESTS: &[(&str, &str)] = &[
         "hostkeeper.operator.v1.Hosts/SetLabels",
         r#"{"nodeId": "storage-1", "labels": {"rack": "r1"}}"#,
     ),
-    (
-        "hostkeeper.operator.v1.Mdm/CreatePushRequest",
-        r#"{"email": "ops@example.org", "submit": false}"#,
-    ),
-    ("hostkeeper.operator.v1.Mdm/ListDevices", "{}"),
     ("hostkeeper.operator.v1.Mdm/GetAbmPublicKey", "{}"),
+    ("hostkeeper.operator.v1.Mdm/ListSecrets", "{}"),
     ("hostkeeper.operator.v1.Mdm/ListSettings", "{}"),
     (
         "hostkeeper.operator.v1.Mdm/PutAbmToken",
@@ -187,10 +181,6 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"certificatePem": "MDBmZg=="}"#,
     ),
     (
-        "hostkeeper.operator.v1.Mdm/PutPushReply",
-        r#"{"reply": "MDBmZg=="}"#,
-    ),
-    (
         "hostkeeper.operator.v1.Mdm/PutSecret",
         r#"{"kind": "abm_key", "material": "MDBmZg=="}"#,
     ),
@@ -199,10 +189,7 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"name": "dns_zone", "value": "example.com"}"#,
     ),
     ("hostkeeper.operator.v1.Mdm/Status", "{}"),
-    (
-        "hostkeeper.operator.v1.Mdm/Verify",
-        r#"{"enrollmentId": "mac-1"}"#,
-    ),
+    ("hostkeeper.operator.v1.Mdm/Verify", "{}"),
     (
         "hostkeeper.operator.v1.Releases/ClearHalt",
         r#"{"service": "kbf", "reason": "fixed"}"#,
@@ -719,7 +706,7 @@ fn a_session_required_refusal_passes_only_for_a_session_only_method() {
         code,
         reason: reason.to_owned(),
     };
-    let session_only = "hostkeeper.operator.v1.Mdm/PutPushReply";
+    let session_only = "hostkeeper.operator.v1.Mdm/PutPushCertificate";
     let other = "hostkeeper.operator.v1.Mdm/Status";
     let transport = Transport::Gateway;
     assert_eq!(

@@ -104,6 +104,21 @@ fn a_forbidden_call_is_found_with_blanks_before_its_parenthesis() {
 }
 
 #[test]
+fn only_the_documentation_address_is_allowed_as_a_url() {
+    // Catches: the allowance for the documentation link letting another address through, on its
+    // own line or beside the allowed one, or another repository's pages through.
+    let docs = format!("const D = \"{DOCS_LINK}\";");
+    assert!(network_and_code("view.js", &docs).is_empty());
+    let other = "const D = \"https://github.com/other/repo/blob/main/docs/operations/\";";
+    assert_eq!(whats(&network_and_code("x.js", other)), [(1, "`https://`")]);
+    let beside = format!("const D = \"{DOCS_LINK}\", E = \"https://example.com/\";");
+    assert_eq!(
+        whats(&network_and_code("x.js", &beside)),
+        [(1, "`https://`"), (1, "`https://`")]
+    );
+}
+
+#[test]
 fn a_comment_or_a_relative_path_is_not_a_url() {
     let text = "// a comment\nimport { h } from \"./view.js\";\nimport * as fleet from \"./pages/fleet.js\";";
     assert!(network_and_code("app.js", text).is_empty());
