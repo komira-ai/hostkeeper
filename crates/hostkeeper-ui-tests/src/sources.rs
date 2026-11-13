@@ -35,6 +35,7 @@ ui_files![
     "index.html",
     "app.css",
     "lab.css",
+    "styles/forms.css",
     "calls.json",
     "api.js",
     "app.js",

@@ -107,6 +107,7 @@ approval asks for no placement); `hkctl` gets the verbs from the generated comma
   `ui/pages/enrollment.js` and `ui/pages/host.js`: the placement controls only.
 - `ui/view.js`: `pill`, the `vars` of an element (custom properties), `aria-*`, `draggable`, `tabindex`, and the events the strip and the
   drag use. `ui/app.css` (tokens, frame, components) and `ui/lab.css` (the lab) are two files so that each stays under 1000 lines.
+  `ui/styles/forms.css` holds the page-scoped styles of sign-in, Inventory, Host groups and MDM setup (each rule starts with its page's class).
 
 ## 5. Tests
 
