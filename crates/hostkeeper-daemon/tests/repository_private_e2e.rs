@@ -262,6 +262,7 @@ fn acme(credential: &Path) -> Repository {
         keyring,
         access: "hosts".to_owned(),
         credential_file: credential.to_string_lossy().into_owned(),
+        ..Repository::default()
     }
 }
 

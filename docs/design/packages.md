@@ -116,7 +116,7 @@ already ships a `.deb`, an `.rpm`, a macOS `.pkg` or an OCI image. This design r
 - A host is ordered the version only when its platform has a list and an entry of it is one its daemon can install. A
   host of a platform with none keeps what it runs and shows `no_target`; a host no entry fits keeps what it runs and
   shows `no_build_for_host`. Neither is failed or missing.
-- The artifact is any format with an installer: an OCI image archive, or a plain tarball, as well as today's archive. A service's package from a repository (a `.deb`) is not an artifact: it comes from a repository (packages-repositories.md). A macOS `.pkg` is an artifact (`macos-pkg`).
+- The artifact is any format with an installer: an OCI image archive, or a plain tarball, as well as today's archive. A service's package from a repository (a `.deb`) is not an artifact: it comes from a repository (packages-repositories.md). A macOS `.pkg` is an artifact (`macos-pkg`). A release may name it by repository, channel and version instead of by location (the named-version form, packages-repositories.md section 4.7): the coordinator resolves that entry to an artifact entry in the store `coordinator`, so it is an artifact for the daemon either way.
 - The bytes stay where CI published them (the GitHub release's assets) and may also sit in a mirror the host is
   configured to use. A daemon reads its stores and their credentials from `/etc/hostkeeper/stores.toml`.
 - The manifest, which names the root-run hook, comes from the call and is not attested. Whoever may set a service's

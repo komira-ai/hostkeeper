@@ -1,8 +1,8 @@
 // Packages: the repositories packages are installed from and the registry of what the coordinator
 // can deploy, as two plain lists, the repositories first because a package comes from one. Each
-// list is a table (a repository: its name, its URL and how many packages use it; a package: its
+// list is a table (a repository: its name, its URL, the platforms it serves and how many packages use it; a package: its
 // name, its repository and the host groups that run it) with an "Add repository" or "Add package"
-// button in its header and Edit and Remove on each row. No form is shown until a button asks for
+// button in its header and Edit and Remove on each package row, Check again and Remove on each repository row. No form is shown until a button asks for
 // one: Add opens an empty form under its table, a row's Edit opens that row's, each with Save and
 // Cancel (one form at a time; a save draws the page again with every form closed). "Add package"
 // is disabled, with a hint, while no repository is registered. A header is the list's title with
@@ -14,23 +14,27 @@
 // group (the package's minimum in that group), so it is set from a package's Edit, for one of the
 // groups that run it, and a new package has none until a group runs it.
 //
-// A repository needs a name, a URL, the suites and components it serves and the key it is signed
-// with. The key is a binary OpenPGP keyring chosen as a file; its fingerprints are read from it
-// here (`../openpgp.js`), never typed. The package manager is `apt`, the only one there is, and is not
-// asked for. A private repository (access `hosts`) names the file on the coordinator's machine
-// that holds the credential it is read with.
+// A repository is one entry that serves every platform it publishes for, and adding one asks for a
+// name, a URL and, for a private one, the credential file on the coordinator's machine. "Check
+// repository" has the coordinator read the repository's descriptor (docs/deploy/package-repositories.md,
+// "Structure of a repository") and shows what it found: the platforms, the channels, the packages
+// published for macOS and the signing key's fingerprints, worked out by the coordinator from the key
+// itself. The operator compares the fingerprint with the one the repository's owner publishes and
+// adds it; the coordinator reads the repository again and refuses if anything differs from what was
+// shown. `komira`, the organisation's repository, is built in: it is listed with a "built in" tag and
+// has no Remove. A row's "Check again" opens the same form for a repository already added (its name
+// locked), which is how an entry added before descriptors learns the platforms its repository
+// serves. The suites, components and key file are not asked for: they come from the descriptor, and
+// the API's `Repositories.Put` still takes them by hand.
 //
 // Calls: Services.List (the packages), Services.Put on Add package, Services.SetRepository and
-// Services.SetMinVersion on a package's Save, Services.Remove; Repositories.List, Repositories.Get (the
-// keyring of a repository changed without a new key file), Repositories.Put on Save and
-// Repositories.Remove. The reason of each write is a fixed sentence: the audit log names the operator.
+// Services.SetMinVersion on a package's Save, Services.Remove; Repositories.List, Repositories.Discover
+// on Check repository, Repositories.Add on Add repository and Repositories.Remove. The reason of each write is a fixed sentence: the audit log names the operator.
 // A package a host group lists, or a repository a package comes from, is not removed: the page says
 // which and the API refuses it all the same.
 
-import { toBase64 } from "../bytes.js";
-import { keyringFingerprints } from "../openpgp.js";
 import {
-  h, action, describeError, field, filePicker, list, select, table, trimmed, words,
+  h, action, describeError, deployDocLink, field, list, select, table, trimmed,
 } from "../view.js";
 
 // The reasons sent with a write.
@@ -48,8 +52,12 @@ const REPOSITORY_NAME = /^[a-z0-9-]{1,32}$/;
 // A repository's URL: https and a host (the coordinator checks the rest of the address).
 const HTTPS_ADDRESS = /^https:\/{2}[^/]/;
 
-// A keyring is at most 64 KiB.
-const MAX_KEYRING = 65536;
+// The names of the platforms of a repository, as the operator reads them.
+const PLATFORMS = {
+  "linux-x86_64": "Linux x86-64",
+  "linux-arm64": "Linux arm64",
+  "macos-arm64": "macOS arm64",
+};
 
 // A package's minimum versions of Services.List, by the host group they are set for.
 function minimums(entry) {
@@ -58,9 +66,14 @@ function minimums(entry) {
     .map((min) => `${min["role"]} ${min.version}`);
 }
 
-// The keys of a repository, each by the last 16 hex characters of its fingerprint.
-function keysOf(repository) {
-  return list(repository, "fingerprints").map((print) => print.slice(-16)).join(", ") || "-";
+// A platform in words.
+function platformName(platform) {
+  return PLATFORMS[platform] || platform;
+}
+
+// A fingerprint in groups of four characters, as it is read aloud and compared.
+function grouped(print) {
+  return (print.match(/.{1,4}/g) || []).join(" ");
 }
 
 // The packages page's sentences for a refusal: the API's token read in words where the page can
@@ -69,14 +82,20 @@ function refusalWords(error, inUse) {
   return error && error.reason === "in_use" ? inUse : describeError(error);
 }
 
-// The bytes of a chosen file within `limit`, else a sentence saying it is too long. The size is
-// read before the contents, so a huge file is not loaded.
-async function readFile(file, limit) {
-  if (typeof file.size === "number" && file.size > limit) {
-    return `The signing key file is at most ${limit} bytes; this one is ${file.size}.`;
-  }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  return bytes.length > limit ? `The signing key file is at most ${limit} bytes; this one is ${bytes.length}.` : bytes;
+// The sentences for a refusal of Repositories.Discover and Repositories.Add.
+const REPOSITORY_REFUSALS = {
+  discovery_failed: "The coordinator could not read a repository at that address: check the URL, and the credential file if it is private.",
+  descriptor_invalid: "That address does not serve a valid repository descriptor (hostkeeper-repository.json); see How do I structure a repository?",
+  descriptor_changed: "What the repository serves changed since it was checked: check it again and compare the fingerprint.",
+  builtin: "komira is the organisation's built-in repository and its key is pinned: this key is not the pinned one.",
+  conflict: "A channel of this repository is already a channel of another one.",
+  capacity: "The coordinator holds as many repositories as it can.",
+  credential_unusable: "The coordinator cannot use that credential file (it must be a file of the coordinator's user, mode 0600, one line).",
+};
+
+// A refusal of a repository call in words.
+function repositoryWords(error) {
+  return error && REPOSITORY_REFUSALS[error.reason] ? REPOSITORY_REFUSALS[error.reason] : describeError(error);
 }
 
 // A package form that is closed, with the repository `names` offers preselected.
@@ -86,7 +105,7 @@ function closedPackage(names) {
 
 // A repository form that is closed and empty.
 function closedRepository() {
-  return { visible: false, editing: false, called: "", uri: "", suites: "", components: "main", access: "public", credentialFile: "", key: null, keys: "" };
+  return { visible: false, editing: false, called: "", uri: "", access: "public", credentialFile: "", found: null, checked: null };
 }
 
 // "1 package" or "3 packages".
@@ -233,71 +252,9 @@ export async function render(ctx) {
     h("td", { class: "row-actions" }, action(ctx, "Edit", "edit-package", () => editPackage(entry.service)),
       removePackage(entry.service))));
 
-  // Loads the repository `one` of Repositories.List into the form.
-  const editRepository = (one) => {
-    const body = one.repository || {};
-    state.pkg = closedPackage(names);
-    state.repo = {
-      visible: true,
-      editing: true,
-      called: body["name"],
-      uri: body.uri || "",
-      suites: list(body, "suites").join(", "),
-      components: list(body, "components").join(", "),
-      access: body.access === "hosts" ? "hosts" : "public",
-      credentialFile: body.credentialFile || "",
-      key: null,
-      keys: keysOf(body),
-    };
-    show();
-  };
-
-  // The repository the form describes, with its keyring and fingerprints: from the file chosen, or,
-  // for a repository changed without one, from what the registry holds. A sentence when it cannot.
-  const repositoryFromForm = async () => {
-    const { repo } = state;
-    const name = trimmed(repo.called);
-    const uri = trimmed(repo.uri);
-    const suites = words(repo.suites);
-    const components = words(repo.components);
-    if (!REPOSITORY_NAME.test(name)) {
-      return { problem: "Name the repository: 1 to 32 lower case letters, digits or -." };
-    }
-    if (!HTTPS_ADDRESS.test(uri)) {
-      return { problem: "The URL is an https address with a host." };
-    }
-    if (suites.length === 0 || components.length === 0) {
-      return { problem: "Name at least one suite and one component." };
-    }
-    if (repo.access === "hosts" && trimmed(repo.credentialFile) === "") {
-      return { problem: "A private repository needs the credential file's path on the coordinator." };
-    }
-    let keyring;
-    let fingerprints;
-    if (repo.key !== null) {
-      const bytes = await readFile(repo.key, MAX_KEYRING);
-      if (typeof bytes === "string") {
-        return { problem: bytes };
-      }
-      const read = keyringFingerprints(bytes);
-      if (read.problem) {
-        return { problem: read.problem };
-      }
-      keyring = toBase64(bytes);
-      fingerprints = read.fingerprints;
-    } else if (repo.editing) {
-      const held = ((await ctx.api.repositories.get({ name })).repository || {}).repository || {};
-      keyring = held.keyring;
-      fingerprints = list(held, "fingerprints");
-    } else {
-      return { problem: "Choose the signing key file." };
-    }
-    const repository = { name, kind: "apt", uri, suites, components, fingerprints, keyring, access: repo.access };
-    if (repo.access === "hosts") {
-      repository.credentialFile = trimmed(repo.credentialFile);
-    }
-    return { repository };
-  };
+  // The address a repository is read at: the base URL it was added with, else (an entry added
+  // before descriptors) its apt root without the `/apt` its layout usually ends in.
+  const baseOf = (body) => body.baseUri || (body.uri || "").replace(/\/apt$/, "");
 
   // `control` (a `select` of view.js: a label holding the chooser) that draws the page again after
   // it changes, for a form whose fields depend on its choice.
@@ -311,11 +268,64 @@ export async function render(ctx) {
     return control;
   };
 
+  // Opens the form that checks the repository `one` of Repositories.List again, its name locked.
+  const checkAgain = (one) => {
+    const body = one.repository || {};
+    state.pkg = closedPackage(names);
+    state.repo = {
+      ...closedRepository(),
+      visible: true,
+      editing: true,
+      called: body["name"],
+      uri: baseOf(body),
+      access: body.access === "hosts" ? "hosts" : "public",
+      credentialFile: body.credentialFile || "",
+    };
+    show();
+  };
+
   // Opens the empty form that adds a repository.
   const addRepository = () => {
     state.pkg = closedPackage(names);
     state.repo = { ...closedRepository(), visible: true };
     show();
+  };
+
+  // What the form describes, or a sentence saying why it cannot be sent yet: the address and access
+  // as the calls take them. The name is judged where it is needed.
+  const requestOfForm = () => {
+    const { repo } = state;
+    const baseUri = trimmed(repo.uri);
+    if (!HTTPS_ADDRESS.test(baseUri) || baseUri.endsWith("/")) {
+      return { problem: "The URL is an https address with a host and no trailing /." };
+    }
+    if (repo.access === "hosts" && trimmed(repo.credentialFile) === "") {
+      return { problem: "A private repository needs the credential file's path on the coordinator." };
+    }
+    const request = { baseUri, access: repo.access };
+    if (repo.access === "hosts") {
+      request.credentialFile = trimmed(repo.credentialFile);
+    }
+    return { request };
+  };
+
+  // The card that shows what a check found: the platforms, the channels, the macOS packages and the
+  // key, whose fingerprints are in groups of four to be compared with the owner's.
+  const foundCard = (found) => {
+    const platforms = list(found, "platforms").map(platformName).join(", ") || "-";
+    const packages = list(found, "macosPackages");
+    return h("div", { class: "found", role: "group", "aria-label": "What the repository serves" },
+      found.description ? h("p", {}, found.description) : null,
+      h("p", { name: "found-platforms" }, `Platforms: ${platforms}.`),
+      h("p", { name: "found-channels" }, `Channels: ${list(found, "channels").join(", ") || "-"}.`),
+      packages.length > 0
+        ? h("p", { name: "found-packages" }, `macOS installers kept in a directory of another name: ${packages.join(", ")}.`)
+        : null,
+      list(found, "userIds").map((id) => h("p", { name: "found-key-user" }, `Key: ${id}`)),
+      list(found, "fingerprints").map((print) => h("p", { class: "fingerprint", name: "found-fingerprint" }, h("code", {}, grouped(print)))),
+      found.pinned
+        ? h("p", { class: "note", name: "found-pinned" }, "This is komira's pinned key.")
+        : h("p", { class: "note", name: "found-compare" }, "Compare this fingerprint with the one the repository's owner publishes."));
   };
 
   const repositoryForm = () => {
@@ -324,36 +334,72 @@ export async function render(ctx) {
       return null;
     }
     return h("fieldset", {},
-      h("legend", {}, repo.editing ? `Change repository ${repo.called}` : "Add repository"),
+      h("legend", {}, repo.editing ? `Check repository ${repo.called} again` : "Add repository"),
       repo.editing ? null : hinted(field("Name", "repository-name", repo, "called"),
-        "What packages call it: lower case letters, digits and -."),
-      hinted(field("URL", "repository-uri", repo, "uri"), "The repository's root: an https address with a host."),
-      hinted(field("Suites", "repository-suites", repo, "suites"),
-        "The channels it publishes, separated by commas or spaces (testing, stable)."),
-      hinted(field("Components", "repository-components", repo, "components"),
-        "The components of every suite (main)."),
-      repo.editing ? h("p", { class: "note" }, `Signing keys held: ${repo.keys}.`) : null,
-      hinted(filePicker("Signing key", "repository-key", repo, "key"),
-        repo.editing
-          ? "The binary keyring its suites are signed with (gpg --export); leave it empty to keep the one held."
-          : "The binary keyring its suites are signed with (gpg --export, not --armor); its fingerprints are read from it."),
-      hinted(redrawn(select("Who reads it", "repository-access", repo, "access",
-        [["public", "Hosts read it from the URL"], ["hosts", "Private: hosts read it through the coordinator"]])),
+        "What packages call it: lower case letters, digits and -. Left empty, the repository's own name is used."),
+      hinted(field("URL", "repository-uri", repo, "uri"),
+        "The repository's address: an https address with a host. Everything else is read from the repository."),
+      hinted(redrawn(select("Access", "repository-access", repo, "access",
+        [["public", "Public: hosts read it from the URL"], ["hosts", "Private: hosts read it through the coordinator"]])),
         "A private repository is read by the coordinator alone, with a credential."),
       repo.access === "hosts"
         ? hinted(field("Credential file", "repository-credential", repo, "credentialFile"),
           "The absolute path, on the coordinator's machine, of the file that holds the Authorization header's value.")
         : null,
+      h("p", { class: "note" }, deployDocLink("repository-structure-help", "How do I structure a repository?",
+        "package-repositories.md", "structure-of-a-repository")),
+      repo.found !== null ? foundCard(repo.found) : null,
       h("div", { class: "buttons" },
-        action(ctx, "Save repository", "put-repository", async () => {
-          const built = await repositoryFromForm();
+        action(ctx, repo.found === null ? "Check repository" : "Check again", "check-repository", async () => {
+          const built = requestOfForm();
           if (built.problem) {
             return built.problem;
           }
-          await ctx.api.repositories.put({ repository: built.repository, reason: PUT_REASON });
-          ctx.refresh();
-          return `Saved repository ${built.repository["name"]}.`;
+          let reply;
+          try {
+            reply = await ctx.api.repositories.discover(built.request);
+          } catch (error) {
+            repo.found = null;
+            repo.checked = null;
+            return repositoryWords(error);
+          }
+          repo.found = reply.discovery || {};
+          repo.checked = built.request;
+          const { name: suggested = "" } = repo.found;
+          if (trimmed(repo.called) === "" && REPOSITORY_NAME.test(suggested)) {
+            repo.called = suggested;
+          }
+          show();
+          return null;
         }),
+        repo.found !== null
+          ? action(ctx, "Add repository", "add-repository-confirm", async () => {
+            const name = trimmed(repo.called);
+            if (!REPOSITORY_NAME.test(name)) {
+              return "Name the repository: 1 to 32 lower case letters, digits or -.";
+            }
+            const built = requestOfForm();
+            if (built.problem) {
+              return built.problem;
+            }
+            if (JSON.stringify(built.request) !== JSON.stringify(repo.checked)) {
+              return "The address changed since it was checked: check it again.";
+            }
+            try {
+              await ctx.api.repositories.add({
+                name,
+                ...repo.checked,
+                descriptorSha256: repo.found.descriptorSha256,
+                fingerprints: list(repo.found, "fingerprints"),
+                reason: PUT_REASON,
+              });
+            } catch (error) {
+              return repositoryWords(error);
+            }
+            ctx.refresh();
+            return `Added repository ${name}.`;
+          }, { class: "primary" })
+          : null,
         action(ctx, "Cancel", "cancel-repository", () => {
           state.repo = closedRepository();
           show();
@@ -381,10 +427,13 @@ export async function render(ctx) {
   const repositoryRows = () => repositories.map((one) => {
     const body = one.repository || {};
     return h("tr", {},
-      h("td", {}, body["name"]),
-      h("td", {}, body.uri || "-"),
+      h("td", {}, body["name"], one.builtin === true ? [" ", h("span", { class: "tag" }, "built in")] : null),
+      h("td", {}, body.baseUri || body.uri || "-"),
+      h("td", {}, list(one, "platforms").map(platformName).join(", ") || "-"),
       h("td", {}, `used by ${packagesCount(list(one, "services").length)}`),
-      h("td", { class: "row-actions" }, action(ctx, "Edit", "edit-repository", () => editRepository(one)), removeRepository(one)));
+      h("td", { class: "row-actions" },
+        action(ctx, "Check again", "check-again-repository", () => checkAgain(one)),
+        one.builtin === true ? null : removeRepository(one)));
   });
 
   // A list's header: its title and the button that opens its add form.
@@ -403,7 +452,7 @@ export async function render(ctx) {
       ? h("p", { class: "error", role: "alert" }, `Packages come from repositories that are not registered: ${unregistered.join(", ")}. Hosts of those packages are sent no repository until they are added.`)
       : null,
     repositories.length > 0
-      ? table(["Repository", "URL", "Used by", ""], repositoryRows())
+      ? table(["Repository", "URL", "Platforms", "Used by", ""], repositoryRows())
       : null,
     repositoryForm(),
     header("Packages", "What the coordinator can deploy; a host group is given packages from this list.",

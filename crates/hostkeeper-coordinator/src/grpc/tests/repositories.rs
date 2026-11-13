@@ -83,21 +83,22 @@ async fn put_and_remove_by_the_gateway_and_by_grpc_leave_the_same_files() {
         name: "komira".to_owned(),
         reason: "retired".to_owned(),
     };
-    // The kbf service names komira: it is in use, over both.
+    // The entry put over the built-in `komira` is removed though services name it (they are
+    // served by the built-in one after), over both routes; a second remove finds the built-in
+    // one, which no remove takes.
+    let (code, message, _) = grpc(&by_grpc, REMOVE, Some(OPERATOR), remove.clone()).await;
+    assert_eq!((code, message.as_str()), (Code::Ok, ""));
+    let gone = r#"{"name":"komira","reason":"retired"}"#;
+    let (status, text) = gateway(&by_json, REMOVE, OPERATOR, gone).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
     let (code, message, _) = grpc(&by_grpc, REMOVE, Some(OPERATOR), remove.clone()).await;
     assert_eq!(
         (code, message.as_str()),
-        (Code::FailedPrecondition, "in_use")
+        (Code::FailedPrecondition, "builtin")
     );
-    let (status, text) = gateway(
-        &by_json,
-        REMOVE,
-        OPERATOR,
-        r#"{"name":"komira","reason":"retired"}"#,
-    )
-    .await;
+    let (status, text) = gateway(&by_json, REMOVE, OPERATOR, gone).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    assert_eq!(text, refused("FAILED_PRECONDITION", "in_use"));
+    assert_eq!(text, refused("FAILED_PRECONDITION", "builtin"));
 
     let spare = repository("spare", "https://spare.example.com/", &["x"], 2);
     grpc(&by_grpc, PUT, Some(OPERATOR), put_message(spare.clone())).await;
@@ -118,7 +119,7 @@ async fn put_and_remove_by_the_gateway_and_by_grpc_leave_the_same_files() {
     assert_eq!(status, StatusCode::OK, "{text}");
     assert_eq!(
         serde_json::from_str::<Value>(&text).expect("JSON")["generation"],
-        "3"
+        "4"
     );
 
     assert_eq!(
@@ -264,8 +265,9 @@ async fn a_put_reads_256_kib_and_every_other_method_4_kib() {
 }
 
 /// Proves: a `SetDesired` with a repository entry is refused `repository_unknown` over gRPC
-/// (`FAILED_PRECONDITION`) and the gateway (400), with nothing set, while the registry lacks the
-/// repository the service names; once it is put the same set lands.
+/// (`FAILED_PRECONDITION`) and the gateway (400), with nothing set, while the repository the
+/// service names (the built-in `komira`) lacks the channel the entry names; once an entry of that
+/// name with the channel is put over it, the same set lands.
 ///
 /// Catches: a set accepted for a repository no host can be sent, and a refusal that differs by
 /// route.
@@ -275,7 +277,7 @@ async fn a_set_with_a_repository_entry_is_refused_until_the_repository_is_put() 
     let request = proto::SetDesiredRequest {
         service: LEGACY.to_owned(),
         desired: Some(super::operator::state("2.0", &[])),
-        targets: targets_of(vec![repository_entry(LEGACY, "komira-testing")])
+        targets: targets_of(vec![repository_entry(LEGACY, "komira-edge")])
             .into_iter()
             .collect(),
         ..proto::SetDesiredRequest::default()
@@ -287,7 +289,11 @@ async fn a_set_with_a_repository_entry_is_refused_until_the_repository_is_put() 
     );
     assert!(world.coordinator.desired.get(LEGACY).is_none());
 
-    let (code, _, _) = grpc(&world, PUT, Some(OPERATOR), put_message(komira(1))).await;
+    let edge = Repository {
+        suites: vec!["testing".to_owned(), "stable".to_owned(), "edge".to_owned()],
+        ..komira(1)
+    };
+    let (code, _, _) = grpc(&world, PUT, Some(OPERATOR), put_message(edge)).await;
     assert_eq!(code, Code::Ok);
     let (code, message, _) = grpc(&world, SET_DESIRED, Some(OPERATOR), request.clone()).await;
     assert_eq!((code, message.as_str()), (Code::Ok, ""));
@@ -354,9 +360,9 @@ async fn a_grpc_heartbeat_is_answered_the_set_until_the_daemon_reports_it() {
         .await
         .decode();
     let set = answer.repositories.expect("the set");
-    // The farm's own sets put `komira` at generation 1 (they name its channels); the operator's
-    // put replaces it at generation 2.
-    assert_eq!(set.generation, 2);
+    // The farm's own sets name the channels of the built-in `komira`, which is put at no
+    // generation; the operator's put of it is the registry's first change.
+    assert_eq!(set.generation, 1);
     assert_eq!(set.entries, [komira(1)]);
     assert_eq!(set.digest, registry::digest(&[komira(1)]));
 

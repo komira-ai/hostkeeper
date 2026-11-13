@@ -539,7 +539,6 @@ async fn a_version_set_with_targets_is_installed_from_the_release_kept() {
     let farm = Farm::new("gm-install-targets");
     farm.group("alpha", &["db"], None);
     farm.host("a1", "alpha");
-    farm.world.coordinator().keep_komira();
     let native = crate::marks_support::native_targets("db", 1);
     farm.world
         .coordinator()

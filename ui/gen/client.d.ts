@@ -91,6 +91,8 @@ export interface Client {
     get(request: hostkeeper_operator_v1.GetRepositoryRequest): Promise<hostkeeper_operator_v1.GetRepositoryResponse>;
     put(request: hostkeeper_operator_v1.PutRepositoryRequest): Promise<hostkeeper_operator_v1.PutRepositoryResponse>;
     remove(request: hostkeeper_operator_v1.RemoveRepositoryRequest): Promise<hostkeeper_operator_v1.RemoveRepositoryResponse>;
+    discover(request: hostkeeper_operator_v1.DiscoverRepositoryRequest): Promise<hostkeeper_operator_v1.DiscoverRepositoryResponse>;
+    add(request: hostkeeper_operator_v1.AddRepositoryRequest): Promise<hostkeeper_operator_v1.AddRepositoryResponse>;
   };
   readonly rollouts: {
     advance(request: hostkeeper_operator_v1.AdvanceRequest): Promise<hostkeeper_operator_v1.AdvanceResponse>;
@@ -209,6 +211,8 @@ export namespace hostkeeper_operator_v1 {
     hostGroup?: string;
   }
   export interface AddRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface AddRepositoryRequest { name?: string; baseUri?: string; access?: string; credentialFile?: string; descriptorSha256?: string; fingerprints?: string[]; reason?: string; }
+  export interface AddRepositoryResponse { repository?: hostkeeper_operator_v1.RegisteredRepository; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AdvanceRequest { service?: string; reason?: string; hostGroup?: string; }
   export interface AdvanceResponse { entry?: hostkeeper_operator_v1.AuditEntry; plan?: hostkeeper_operator_v1.RolloutPlan; }
   export interface Alert {
@@ -307,6 +311,20 @@ export namespace hostkeeper_operator_v1 {
   export interface DesiredState { version?: string; maxUpdating?: { [key: string]: number }; minUp?: { [key: string]: number }; packageDigest?: string; releaseIndexDigest?: string; }
   export interface DisableUserRequest { name?: string; }
   export interface DisableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
+  export interface DiscoverRepositoryRequest { baseUri?: string; access?: string; credentialFile?: string; }
+  export interface DiscoverRepositoryResponse { discovery?: hostkeeper_operator_v1.Discovery; }
+  export interface Discovery {
+    name?: string;
+    description?: string;
+    channels?: string[];
+    platforms?: string[];
+    macosPackages?: string[];
+    fingerprints?: string[];
+    userIds?: string[];
+    descriptorSha256?: string;
+    keyringSha256?: string;
+    pinned?: boolean;
+  }
   export interface EnableUserRequest { name?: string; }
   export interface EnableUserResponse { user?: hostkeeper_operator_v1.UserInfo; }
   export interface EnrollmentRequest {
@@ -709,7 +727,7 @@ export namespace hostkeeper_operator_v1 {
   export interface PutTrustedPublisherRequest { service?: string; repository?: string; workflow?: string; ref?: string; environment?: string; reason?: string; }
   export interface PutTrustedPublisherResponse { entry?: hostkeeper_operator_v1.AuditEntry; publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
-  export interface RegisteredRepository { repository?: hostkeeper_release_v1.Repository; keyringSha256?: string; generation?: string; services?: string[]; }
+  export interface RegisteredRepository { repository?: hostkeeper_release_v1.Repository; keyringSha256?: string; generation?: string; services?: string[]; builtin?: boolean; platforms?: string[]; }
   export interface RejectRequest { requestId?: string; reason?: string; }
   export interface RejectResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveHostGroupRequest { hostGroup?: string; reason?: string; }
@@ -901,6 +919,8 @@ export namespace hostkeeper_release_v1 {
     keyring?: string;
     access?: string;
     credentialFile?: string;
+    descriptor?: string;
+    baseUri?: string;
   }
   export interface StepBounds { prepare?: string; cutover?: string; verify?: string; rollback?: string; cleanup?: string; uninstall?: string; }
   export interface Target {

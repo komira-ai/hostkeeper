@@ -154,6 +154,8 @@ const SHAPE: &[(&str, &[&str])] = &[
             "keyring 7 bytes -",
             "access 8 string -",
             "credential_file 9 string -",
+            "descriptor 10 bytes -",
+            "base_uri 11 string -",
         ],
     ),
 ];

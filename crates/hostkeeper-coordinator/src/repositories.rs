@@ -14,6 +14,9 @@
 //! the daemon judges a pushed set by. A registry that is read back is judged by them again, so a
 //! file or a row that breaks one is refused at start, naming the repository.
 //!
+//! - The built-in repository `komira` ([`crate::builtin`]) is answered by [`Registry::get`],
+//!   [`Registry::listed`] and [`Registry::entries_of`] while none of its name was put; it is in no
+//!   file and no row, and [`Registry::remove`] knows only what was put.
 //! - [`Registry::put`] and [`Registry::remove`] make the registry a change would leave, and
 //!   refuse a repository that clashes with another or past [`MAX_REPOSITORIES`].
 //! - [`Registry::private_channels`] is the channels the pick treats as private ([`crate::picks`]).
@@ -27,9 +30,11 @@ use std::path::{Path, PathBuf};
 
 use base64::Engine as _;
 use hostkeeper_proto::hostkeeper::release::v1::Repository;
+use hostkeeper_release::descriptor;
 use hostkeeper_release::registry::{self, MAX_REPOSITORIES};
 use serde_json::{Map, Value, json};
 
+use crate::builtin;
 use crate::desired::DesiredError;
 
 /// A repository as the registry keeps it.
@@ -45,8 +50,10 @@ impl Eq for Kept {}
 
 impl Kept {
     /// The record as it is stored: `{"generation": n, "repository": {...}}`, the keyring as
-    /// standard base64. `access` and `credential_file` are written only when set, so the record of
-    /// a public repository is the one the release before wrote.
+    /// standard base64. `access`, `credential_file`, `base_uri` and `descriptor` (standard base64)
+    /// are written only when set, so the record of a public repository put without a descriptor is
+    /// the one the release before wrote, byte for byte; the release before reads a record that has
+    /// them, naming the keys it knows only.
     #[must_use]
     pub(crate) fn to_json(&self) -> Value {
         let repository = &self.repository;
@@ -65,17 +72,22 @@ impl Kept {
         for (key, value) in [
             ("access", &repository.access),
             ("credential_file", &repository.credential_file),
+            ("base_uri", &repository.base_uri),
         ] {
             if !value.is_empty() {
                 record["repository"][key] = json!(value);
             }
         }
+        if !repository.descriptor.is_empty() {
+            record["repository"]["descriptor"] =
+                json!(base64::engine::general_purpose::STANDARD.encode(&repository.descriptor));
+        }
         record
     }
 
-    /// The record stored as `value`, judged by [`registry::check`]. `access` and
-    /// `credential_file` are optional: absent, they are empty (a public repository, as every
-    /// record the release before wrote).
+    /// The record stored as `value`, judged by [`registry::check`]. `access`, `credential_file`,
+    /// `base_uri` and `descriptor` are optional: absent, they are empty (a public repository put
+    /// without a descriptor, as every record the release before wrote).
     ///
     /// # Errors
     /// Why `value` is no record: a field missing or of the wrong type, a keyring that is not
@@ -125,6 +137,10 @@ impl Kept {
                 .map_err(|_| "a keyring that is not base64".to_owned())?,
             access: optional("access")?,
             credential_file: optional("credential_file")?,
+            descriptor: base64::engine::general_purpose::STANDARD
+                .decode(optional("descriptor")?)
+                .map_err(|_| "a descriptor that is not base64".to_owned())?,
+            base_uri: optional("base_uri")?,
         };
         registry::check(&repository).map_err(|why| why.to_string())?;
         Ok(Self {
@@ -188,10 +204,31 @@ impl Registry {
         })
     }
 
-    /// The repository named `name`, if the registry holds it.
+    /// The repository named `name`: the one put, else the built-in `komira`
+    /// ([`crate::builtin`]) at generation 0.
     #[must_use]
     pub(crate) fn get(&self, name: &str) -> Option<&Kept> {
-        self.entries.get(name)
+        self.entries
+            .get(name)
+            .or_else(|| (name == builtin::NAME).then(builtin::komira))
+    }
+
+    /// Whether `name` is the built-in repository and none was put over it.
+    #[must_use]
+    pub(crate) fn is_builtin(&self, name: &str) -> bool {
+        name == builtin::NAME && !self.entries.contains_key(name)
+    }
+
+    /// Every repository the registry answers for, by name: those put, and the built-in `komira`
+    /// unless one of its name was put.
+    #[must_use]
+    pub(crate) fn listed(&self) -> Vec<&Kept> {
+        let mut all: Vec<&Kept> = self.entries.values().collect();
+        if self.is_builtin(builtin::NAME) {
+            all.push(builtin::komira());
+        }
+        all.sort_by(|a, b| a.repository.name.cmp(&b.repository.name));
+        all
     }
 
     /// The channels (`<name>-<suite>`) of every private repository of the registry.
@@ -211,8 +248,8 @@ impl Registry {
     /// [`PutError::Conflict`], [`PutError::Capacity`] (a new name at [`MAX_REPOSITORIES`]).
     pub(crate) fn put(&self, repository: Repository) -> Result<Self, PutError> {
         let others: Vec<Repository> = self
-            .entries
-            .values()
+            .listed()
+            .into_iter()
             .map(|kept| kept.repository.clone())
             .collect();
         if let Some(channel) = registry::conflict(&repository, &others) {
@@ -252,12 +289,28 @@ impl Registry {
     ) -> Option<Vec<Repository>> {
         let mut out: Vec<Repository> = names
             .into_iter()
-            .map(|name| self.entries.get(name).map(|kept| kept.repository.clone()))
+            .map(|name| self.get(name).map(|kept| kept.repository.clone()))
             .collect::<Option<_>>()?;
         out.sort_by(|a, b| a.name.cmp(&b.name));
         out.dedup_by(|a, b| a.name == b.name);
         Some(out)
     }
+}
+
+/// The platforms `repository` serves: those of its descriptor (the Linux ones its apt format's
+/// architectures name, and its macOS format's, which a private repository does not serve); both
+/// Linux platforms for an entry put without a descriptor, or whose descriptor does not read.
+#[must_use]
+pub(crate) fn platforms_of(repository: &Repository) -> Vec<String> {
+    let linux = || vec!["linux-x86_64".to_owned(), "linux-arm64".to_owned()];
+    let Ok(parsed) = descriptor::check(&repository.descriptor) else {
+        return linux();
+    };
+    let mut platforms = parsed.platforms();
+    if registry::is_private(repository) {
+        platforms.retain(|platform| !platform.starts_with("macos-"));
+    }
+    platforms
 }
 
 /// The file of the registry beside the desired-state file at `state`: `<state>.repositories`.

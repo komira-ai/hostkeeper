@@ -62,7 +62,9 @@ message Target {
   repeated Location locations = 2;
   // Required: the SHA-256 of the artifact, or of a repository entry's package file (its pin).
   string digest = 3;
-  // The artifact's size: 1 up to the host's `max_package_bytes`. 0 for a repository entry.
+  // The artifact's size: 1 up to the host's `max_package_bytes`. 0 for a repository entry, except
+  // a `macos-pkg` repository entry (a `.pkg` the coordinator finds in the named repository from
+  // `package_version`), which names the file's size here: required for it.
   uint64 bytes = 4;
   // A Sigstore bundle that lists this artifact's digest: required for an artifact entry,
   // refused for a repository entry.
@@ -261,4 +263,11 @@ message Repository {
   // itself: the file holds the secret, and neither its bytes nor the header are ever logged,
   // answered or stored.
   string credential_file = 9;
+  // The repository descriptor the entry was added from (`<base_uri>/hostkeeper-repository.json`,
+  // docs/deploy/package-repositories.md, "Structure of a repository"), byte for byte, at most 64
+  // KiB. Empty for an entry put without one. Never sent to a host.
+  bytes descriptor = 10;
+  // The repository's base URL, `https://`: `uri` is `<base_uri>/<apt path>` for an entry added
+  // from a descriptor. Empty for an entry put without one. Never sent to a host.
+  string base_uri = 11;
 }

@@ -287,8 +287,8 @@ fn a_restart_keeps_the_repository() {
 
 /// Proves: `Repositories.Remove` of a repository a service names is refused `in_use` and the
 /// registry lists the service as naming it; once the service is cleared the remove is taken. The
-/// default repository is held in use by a package a host group lists, which the rollout file does
-/// not define.
+/// default repository (the built-in `komira`) is named by a package a host group lists, which the
+/// rollout file does not define; it is refused `builtin`, and an entry put over it is removed.
 ///
 /// Catches: a repository removed from under a package that comes from it, or a package of a host
 /// group that is not counted as coming from the default repository.
@@ -296,7 +296,6 @@ fn a_restart_keeps_the_repository() {
 fn a_repository_a_service_names_is_in_use() {
     let farm = Farm::new("sr-in-use");
     put(&farm, "acme");
-    farm.world.coordinator().keep_komira();
     farm.group("alpha", &["cfg-alpha"], None);
     set(&farm, "web", "acme").expect("set");
     // A service that has other marks but no repository set names no repository by them.
@@ -331,10 +330,16 @@ fn a_repository_a_service_names_is_in_use() {
         remove("acme").map(drop),
         Err(proto::RepositoriesRefusal::InUse)
     );
+    // The built-in `komira` is no entry to remove, whoever names it; one put over it is, and the
+    // built-in is back after.
     assert_eq!(
         remove("komira").map(drop),
-        Err(proto::RepositoriesRefusal::InUse)
+        Err(proto::RepositoriesRefusal::Builtin)
     );
+    put(&farm, "komira");
+    remove("komira")
+        .expect("an entry put over the built-in one is removed though services name it");
+    assert_eq!(naming(&farm, "komira"), ["cfg-alpha", "db", "hostkeeper"]);
 
     set_as(&farm, &operator(), "web", "", "back").expect("cleared");
     remove("acme").expect("taken once no service names it");
@@ -395,21 +400,38 @@ fn a_repository_left_on_a_package_no_group_lists_can_be_cleared() {
 }
 
 /// Proves: `Repositories.List` names a repository the registry lacks when a package a host group
-/// lists comes from it (the default `komira` here), beside those the rollout file's services name.
+/// lists comes from it, and does not name the default `komira`, which is built in.
 ///
-/// Catches: a group's package that comes from a repository no one can see is missing.
+/// Catches: a group's package that comes from a repository no one can see is missing, or the
+/// built-in repository listed as lacking.
 #[test]
 fn a_group_package_from_a_repository_the_registry_lacks_is_listed_unregistered() {
     let farm = Farm::new("sr-unregistered");
     farm.group("alpha", &["cfg-alpha"], None);
-
-    let listed = farm
-        .world
+    let listed = || {
+        farm.world
+            .coordinator()
+            .repositories_list(&operator(), &proto::ListRepositoriesRequest {})
+            .expect("the list")
+            .unregistered
+    };
+    assert!(listed().is_empty(), "komira is built in");
+    farm.world
         .coordinator()
-        .repositories_list(&operator(), &proto::ListRepositoriesRequest {})
-        .expect("the list");
-
-    assert_eq!(listed.unregistered, ["komira"]);
+        .ops()
+        .change(
+            crate::ops::Write::BeforeMemory,
+            AuditEntry::new("test", "seed"),
+            |state| {
+                state
+                    .services
+                    .entry("cfg-alpha".to_owned())
+                    .or_default()
+                    .repository = Some("elsewhere".to_owned());
+            },
+        )
+        .expect("seeded");
+    assert_eq!(listed(), ["elsewhere"]);
 }
 
 /// Proves: a store that cannot write refuses the call `store_failed` and one that cannot append
@@ -471,7 +493,6 @@ async fn a_config_package_set_to_a_private_repository_deploys_to_its_group() {
     });
     farm.group("alpha", &["cfg-alpha"], Some(wide));
     farm.host("a1", "alpha");
-    farm.world.coordinator().keep_komira();
     let credential = credential_in(farm.world.rig.dir.path(), "acme-credential", "Bearer x");
     farm.world
         .coordinator()
@@ -555,7 +576,6 @@ async fn a_set_of_a_role_placed_service_is_judged_by_the_repository_it_was_given
 fn a_host_is_sent_the_repository_its_groups_packages_were_given() {
     let farm = Farm::new("sr-push");
     put(&farm, "acme");
-    farm.world.coordinator().keep_komira();
     farm.group("alpha", &["cfg-alpha"], None);
     farm.host("a1", "alpha");
     crate::marks_support::ask(

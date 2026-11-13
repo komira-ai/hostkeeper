@@ -9,10 +9,149 @@ there on clean machines, and only when all of that passed does the same release 
 jobs are in `.github/workflows/release.yml`; the tool they run, `cargo xtask channels`, is
 `crates/xtask/src/channels`.
 
+A repository is **one entry that serves every platform it publishes for**: an operator adds it to the
+coordinator with a name and a URL (and a credential file, only when it is private), and everything else is read
+from a small descriptor the repository serves at a well-known path; [Structure of a repository](#structure-of-a-repository)
+says how to lay one out, and `komira`, the organisation's own, is built into every coordinator.
+
 The tool is copied from komira-ai/tierstore (`crates/xtask/src/channels`, at commit
 `ff4777831c08fc13aa025b54e6e0531c2f350f4f`), with the package names, the pool directory and the checks
 made data (`crates/xtask/src/channels/spec.rs`). It is meant to be replaced by ucdk's package
 publishers; until then a change to the copy is made here.
+
+## Structure of a repository
+
+Adding a repository to a coordinator takes a **name** and a **URL**, and a credential file only when the
+repository is private (the web app's Add repository form asks for exactly these, with the Access choice
+public or private). The coordinator reads `<URL>/hostkeeper-repository.json`, the **descriptor**, and the signing
+key it names, over HTTPS, and shows the operator what it found: the platforms, the channels, the packages and the
+key's fingerprints. The operator compares the fingerprint with the one the repository's owner publishes and
+confirms once; the coordinator reads the repository again, refuses if anything differs from what was shown, and
+stores it. From then on a package only picks the repository (`komira` by default), and each platform's source is
+derived from it: a Linux host installs from the repository's apt, and a Mac installs the `.pkg` the repository
+holds for the package version the release names, with no URL written by hand.
+
+### The layout
+
+```
+<base>/hostkeeper-repository.json        the descriptor (below)
+<base>/apt/dists/<channel>/InRelease ... a standard apt repository, one suite per channel
+<base>/apt/<key file>                    the binary keyring (what gpg --export writes)
+<base>/rpm/<channel>/<arch>/             an rpm repository (listed, not installed from yet)
+<base>/pkg/<dir>/<version>/<package>-<version>-<platform>.pkg      a macOS installer
+<base>/pkg/<dir>/<channel>.json          optional: names the channel's current version
+```
+
+A **channel** is an apt suite, an rpm directory and a pointer name (`testing`, `stable`). `<dir>` is the
+package's name unless the descriptor maps it elsewhere (komira publishes hello's installer in hostkeeper's
+directory). `<platform>` is `macos-arm64`.
+
+### The descriptor
+
+```json
+{
+  "version": 1,
+  "name": "komira",
+  "description": "komira-ai packages",
+  "channels": ["testing", "stable"],
+  "key": {
+    "keyring": "apt/komira-archive-keyring.gpg",
+    "fingerprints": [
+      "CB09CF205649494A92DFC22C70D1F2A25906CB22",
+      "F767235D83B0410CFAF4779E8738AD1BE061EEDD"
+    ]
+  },
+  "formats": {
+    "apt": { "path": "apt", "components": ["main"], "architectures": ["amd64", "arm64"] },
+    "rpm": { "path": "rpm", "architectures": ["x86_64", "aarch64"] },
+    "macos-pkg": {
+      "path": "pkg",
+      "platforms": ["macos-arm64"],
+      "packages": { "hostkeeper": { "dir": "hostkeeper" }, "hello": { "dir": "hostkeeper" } }
+    }
+  }
+}
+```
+
+The rules are one function, `hostkeeper_release::descriptor::check`, which the coordinator and the publishing
+tool both run; a descriptor that breaks one is refused (`descriptor_invalid`) naming the rule:
+
+- At most 64 KiB, a JSON object. `version` is the whole number 1; a higher one is refused as newer than the
+  coordinator reads, and a key the reader does not know, at any level, is ignored, so a later version can add keys.
+- `name`: 1 to 32 bytes of `[a-z0-9-]`, a suggestion (the operator's name wins). `description`: at most 200 bytes,
+  for display.
+- `channels`: 1 to 8, each 1 to 31 bytes of `[a-z0-9-]`, none twice.
+- `key.keyring`: a path under the base (no scheme, no `//`, no `.` or `..` segment, no `%`, no query): the binary
+  OpenPGP keyring, at most 64 KiB, public keys only. `key.fingerprints`: 1 to 8, each 40 or 64 upper-case hex
+  characters. This is a claim: the coordinator computes the fingerprints from the keyring itself, refuses a
+  descriptor that claims one the keyring does not have, and shows and stores the computed ones.
+- `formats.apt` is required in version 1: `path` (a path under the base), `components` (1 to 16 of
+  `[A-Za-z0-9._-]`) and `architectures` (display; `amd64` is `linux-x86_64`, `arm64` is `linux-arm64`; absent means
+  both). `formats.rpm` (`path`, `architectures`) is listed for display; hostkeeper installs no rpm yet.
+  `formats["macos-pkg"]` has `path`, `platforms` (each a Mac platform of hostkeeper, `macos-arm64` today) and
+  `packages`: at most 64 entries mapping a package's name to the `dir` of its installers, when that is not its own name.
+- The platforms a repository serves are derived: the Linux ones its apt format names, then those of `macos-pkg`.
+
+### To publish a repository others can add
+
+1. Lay out the files as above, over HTTPS, with no redirect on the descriptor, the keyring and the installers
+   (the coordinator follows none) and a `Content-Length` on each (a chunked answer is refused).
+2. Sign the apt suites with a key whose binary keyring you publish, and list every fingerprint a signature may come
+   from in `key.fingerprints`; publish those fingerprints where the repository's users can read them, since they
+   are what an operator compares.
+3. Write `hostkeeper-repository.json` at the base. A repository shared by several products (packages.komira.ai) must
+   write it by merging what each product publishes into what is there, never by overwriting it, and must never change
+   `key.fingerprints` without every product agreeing.
+4. Add the repository in the web app (Packages, Add repository) and read what the check shows: it is what the
+   coordinator will derive from the descriptor.
+
+A private repository (access `hosts`) needs the same files behind its credential: the coordinator reads the
+descriptor and the key with the credential file's line as `Authorization`, and the repository is then served to hosts as
+[Private repositories](#private-repositories-a-host-groups-configuration) says. Its suites are the host groups that exist
+when it is added (a group created later needs another Add or a `Put`), and its macOS format is not served yet: a
+private repository serves Linux hosts only.
+
+### How the key is confirmed
+
+Adding is trust on first use, made explicit. The descriptor and the key come over HTTPS (the roots the coordinator is
+built with); the operator is shown the fingerprints the coordinator computed from the keyring, with the key's user id, and
+confirms them as they would confirm a key file today; `Add` carries the digest of the descriptor and the fingerprints
+shown, reads both again, and refuses (`descriptor_changed`) when either differs. Nothing reads the descriptor or the key
+again unprompted: a key that changes at the origin reaches no host until an operator adds again and confirms the new
+fingerprint (docs/operations/repository-keys.md). The fingerprints of `komira` are pinned in the coordinator's code
+(`crates/hostkeeper-coordinator/src/builtin.rs`): the form says "This is komira's pinned key" for them, and an `Add` of
+the name `komira` with any other key is refused (`builtin`; a rotation goes through `Put`).
+
+The descriptor is not a trust anchor for a Mac's installer: its bytes are pinned by the digest in the release (CI sets
+it) and its signature is checked against the host's signers, as for an installer with explicit locations. A descriptor
+that lies can only make a file unavailable.
+
+### What a coordinator derives from it
+
+- **Linux.** The repository is an apt entry as before: the apt root is `<base>/<apt.path>`, the suites are the
+  channels, the components and fingerprints are the descriptor's and the key's. A host's entry, and the digest of what
+  hosts are sent, are the same as an entry put by hand for that root (`Put` stays, for every field by hand).
+- **macOS.** A release names the version and size of a Mac's installer and the channel, not its location:
+  `{"installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "0.1.306", "digest": "...", "bytes": "...",
+  "manifest": {...}}`. At order time the coordinator turns it into the entry daemons install, an artifact entry whose
+  one location is `repositories/<name>/pkg/<dir>/<version>/<package>-<version>-macos-arm64.pkg` in the implicit
+  `coordinator` store, and serves that path to an enrolled host by streaming `<base>/<path>/<dir>/<version>/<file>`
+  from the repository (no cache, no redirect; `Content-Length` required). A Mac's daemon, its `stores.toml` and the
+  MDM change nothing. A release that names a Mac's installer by `locations` in a store of the Mac's `stores.toml`
+  (docs/deploy/ci-client.md) is unchanged and keeps working.
+- **`komira` is built in.** A fresh coordinator holds it at generation 0 (`builtin` in `Repositories.List`): the key is
+  pinned in code, the base is `https://packages.komira.ai`, the channels are `testing` and `stable` and the macOS format
+  is the one above, so tierstore, js-agent, hostkeeper, kbf and anything published there are added by package name with
+  no repository setup. An entry put under the name `komira` replaces it (a key rotation, or another base); removing that
+  entry brings the built-in one back, and the built-in one itself cannot be removed.
+- **An entry added before descriptors** loads as it was: Linux only, no macOS source. Adding it again with the same name
+  and its base URL gives it the descriptor; when its apt root is the one the descriptor names, the entry hosts are sent
+  does not change.
+
+Two coordinator flags bound the read: `--repository-discover-secs` (20) for the time each of the two reads may take and
+`--repository-descriptor-max-bytes` (65536) for the descriptor's size. The coordinator reads the URL an operator
+names, including one on a private network (the operator's token is required); it follows no redirect and shows only
+the parsed fields, never the body or an error body.
 
 ## Where the files are
 

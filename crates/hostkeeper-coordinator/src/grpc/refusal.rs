@@ -214,15 +214,19 @@ pub(crate) fn repositories(refusal: RepositoriesRefusal) -> Status {
         RepositoriesRefusal::Unspecified | RepositoriesRefusal::StoreFailed => Code::Internal,
         RepositoriesRefusal::Unauthorized => Code::Unauthenticated,
         RepositoriesRefusal::Forbidden => Code::PermissionDenied,
-        RepositoriesRefusal::InvalidRequest | RepositoriesRefusal::KeyringInvalid => {
-            Code::InvalidArgument
-        }
+        RepositoriesRefusal::InvalidRequest
+        | RepositoriesRefusal::KeyringInvalid
+        | RepositoriesRefusal::DescriptorInvalid => Code::InvalidArgument,
         RepositoriesRefusal::UnknownRepository => Code::NotFound,
         RepositoriesRefusal::InUse
         | RepositoriesRefusal::Conflict
-        | RepositoriesRefusal::CredentialUnusable => Code::FailedPrecondition,
+        | RepositoriesRefusal::CredentialUnusable
+        | RepositoriesRefusal::DescriptorChanged
+        | RepositoriesRefusal::Builtin => Code::FailedPrecondition,
         RepositoriesRefusal::Capacity => Code::ResourceExhausted,
-        RepositoriesRefusal::AuditUnavailable => Code::Unavailable,
+        RepositoriesRefusal::AuditUnavailable | RepositoriesRefusal::DiscoveryFailed => {
+            Code::Unavailable
+        }
     };
     refused(code, refusal.as_str_name(), "REPOSITORIES_REFUSAL_")
 }

@@ -19,6 +19,10 @@
 //!    (`HeartbeatRequest.installers`); else it is picked nothing, [`Pick::NoBuildForHost`];
 //! 3. a host of a platform the release has no list for is picked nothing, [`Pick::NoTarget`].
 //!
+//! A `macos-pkg` entry that names a repository and a version is resolved before the pick
+//! ([`crate::macos_resolve`]): the releases the fleet keeps hold it as the artifact entry of a
+//! `.pkg` the coordinator serves, or without it when it does not resolve.
+//!
 //! An entry the host would be picked is private ([`Picks::is_private`]) when it is a repository
 //! entry whose channel is one of a private repository of the registry, or an artifact entry all
 //! of whose locations are in the store [`COORDINATOR_STORE`] (a `.pkg` the coordinator serves from
@@ -59,6 +63,7 @@ use crate::decide::Skip;
 use crate::desired::Desired;
 use crate::fleet::Fleet;
 use crate::identity::Identity;
+use crate::macos_resolve::{self, Source};
 use crate::membership::HEARTBEAT_V2;
 use crate::orders::PickedTarget;
 use crate::registry::{Digest, Package, index_platform};
@@ -136,6 +141,8 @@ pub struct Picks {
     releases: BTreeMap<(String, String), Arc<Release>>,
     /// The channels of the registry's private repositories.
     private: BTreeSet<String>,
+    /// Where each channel's macOS installers are ([`crate::macos_resolve`]).
+    macos: BTreeMap<String, Source>,
 }
 
 impl Picks {
@@ -149,9 +156,21 @@ impl Picks {
         self.heard.remove(id);
     }
 
-    /// Replaces the releases the decisions read with `releases`, by service and version.
+    /// Replaces the releases the decisions read with `releases`, by service and version, each as
+    /// [`macos_resolve::resolved`] reads it with the sources last kept ([`Self::keep_macos`]).
     pub(crate) fn keep(&mut self, releases: BTreeMap<(String, String), Arc<Release>>) {
-        self.releases = releases;
+        self.releases = releases
+            .into_iter()
+            .map(|((service, version), release)| {
+                let release = macos_resolve::resolved(&service, &release, &self.macos);
+                ((service, version), release)
+            })
+            .collect();
+    }
+
+    /// Replaces the macOS sources the named-version entries are resolved by with `sources`.
+    pub(crate) fn keep_macos(&mut self, sources: BTreeMap<String, Source>) {
+        self.macos = sources;
     }
 
     /// Replaces the channels of the private repositories the picks read with `channels`.
@@ -174,6 +193,7 @@ impl Picks {
 
     /// Adds `release` as the release of `service` at `version` (a force's, before its plan).
     pub(crate) fn keep_one(&mut self, service: &str, version: &Version, release: Arc<Release>) {
+        let release = macos_resolve::resolved(service, &release, &self.macos);
         self.releases
             .insert((service.to_owned(), version.as_str().to_owned()), release);
     }
