@@ -566,7 +566,17 @@ from the release's assets: its releases list native entries alone
 one native entry of the package's `.deb`, an `apt` entry of the repository entry `komira-testing`
 pinned by the `.deb`'s SHA-256, its manifest compiled into xtask; for macOS (hostkeeper and
 hello) the one `macos-pkg` entry of the signed `.pkg`, in the store `komira-testing` at
-`hostkeeper/<version>/<file>`, pinned by its SHA-256 and size. A host whose daemon announces
+`hostkeeper/<version>/<file>`, pinned by its SHA-256 and size. There are two forms of a Mac's
+entry, and a coordinator takes both: the **explicit** one above (a location in a store of the Mac's
+`stores.toml`, which each release sent before and which is unchanged), and the **named-version**
+one, `{"installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "<X.Y.Z>",
+"digest": "<SHA-256>", "bytes": "<size>", "manifest": {...}}`, which names the channel, the version
+and the file's size and leaves the location to the coordinator: it finds the `.pkg` in the repository
+that serves the channel ([package-repositories.md](package-repositories.md#structure-of-a-repository)),
+serves it to the Mac from the implicit `coordinator` store, and a Mac needs no `komira-testing` store.
+`bytes` is required in the named-version form and refused on any other repository entry; a
+coordinator before this form refuses it `target_invalid`, so a release writes it only for a
+coordinator that has it. A host whose daemon announces
 neither `apt` nor, on a Mac, `macos-pkg` (its signers file loaded, `/usr/sbin/installer` and
 `/usr/sbin/pkgutil` present) is ordered nothing (`installer_dropped`, or `no_build_for_host`). `--repo` is read and not used. It refuses a release whose `.deb`s or their
 bundles do not check out, and entries the coordinator or the daemon would refuse, and prints

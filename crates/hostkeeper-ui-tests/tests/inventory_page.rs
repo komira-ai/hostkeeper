@@ -489,3 +489,51 @@ fn inventory_page_names_the_host_enrolled_against_a_server() {
         ])
     );
 }
+
+#[test]
+fn the_data_mac_is_one_input_in_the_add_row_and_in_an_edited_row() {
+    // Proves: a server has one data MAC field: the add row and an edited row each hold exactly one
+    // input named for it and no button to add another; the edited row shows the stored MAC in it.
+    // Catches: a second data MAC input or an "add port" button creeping in before the API has
+    // several ports.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), records_reply());
+    let out = ui.run(&page_driver(
+        "inventory",
+        r#"{ edit: "web-1" }"#,
+        "[]",
+        r#"
+const inputs = nodes(tree).filter((n) => n.tag === "input" || n.tag === "textarea");
+return {
+  data: inputs.filter((n) => /dataMac/i.test(n.attrs["name"])).map((n) => [n.attrs["name"], n.attrs.value || ""]),
+  buttons: nodes(tree).filter((n) => n.tag === "button").map((n) => n.attrs["name"]).filter((n) => /mac|port/i.test(n)),
+};
+"#,
+    ));
+    assert_eq!(
+        out["out"]["data"],
+        json!([["edit-dataMac", "0c:c4:7a:00:00:31"], ["add-dataMac", ""]])
+    );
+    assert_eq!(out["out"]["buttons"], json!([]));
+}
+
+#[test]
+fn remove_on_an_inventory_row_is_the_danger_button_and_edit_is_not() {
+    // Proves: the Remove button of each record is of class `danger`; Edit carries none and Add is primary.
+    // Catches: a Remove that looks like Edit, one click from a mistake.
+    let mut ui = Ui::start();
+    ui.reply(&m("Enrollment/ListRecords"), records_reply());
+    let out = ui.run(&page_driver(
+        "inventory",
+        "{}",
+        "[]",
+        r#"
+const classes = (name) => named(tree, name).map((n) => n.attrs.class || "");
+return { remove: classes("remove-record"), edit: classes("edit-record"), add: classes("add-record") };
+"#,
+    ));
+    assert_eq!(
+        out["out"],
+        json!({"remove": ["danger", "danger", "danger"], "edit": ["", "", ""], "add": ["primary"]})
+    );
+}

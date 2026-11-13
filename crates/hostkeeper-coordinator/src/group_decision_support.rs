@@ -156,7 +156,6 @@ impl Farm {
     /// The operator's set of `package` at `at` with the release [`native_targets`] `n`, in the
     /// group `named` (empty: each group that lists the package).
     pub(crate) async fn deploy(&self, named: &str, package: &str, at: &str, n: u8) {
-        self.world.coordinator().keep_komira();
         let body = json!({"service": package, "version": at});
         self.set(named, &body, Some(native_targets(package, n)))
             .await;

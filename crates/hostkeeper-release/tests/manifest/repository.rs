@@ -538,3 +538,100 @@ fn an_entry_written_by_the_release_before_is_an_artifact_entry_and_passes_as_bef
         );
     }
 }
+
+/// The `macos-pkg` repository entry a release names by version (packages-repositories.md section
+/// 4.7): the repository, the package version, the pin, the file's size and a Mac manifest; no
+/// location and no attestation.
+fn macos_repository_entry() -> Target {
+    Target {
+        installer: Installer::MacosPkg.as_str().to_owned(),
+        digest: digest('d'),
+        bytes: 18_963_901,
+        manifest: Some(manifest(Installer::MacosPkg)),
+        repository: Some("komira-testing".to_owned()),
+        package_version: Some("0.1.306".to_owned()),
+        ..Target::default()
+    }
+}
+
+/// Catches: the named-version form of a Mac's entry refused, or accepted without the size of the
+/// file (which the coordinator cannot read from the repository), or accepted with a location or
+/// an attestation, which it names none of.
+#[test]
+fn a_macos_pkg_repository_entry_names_its_size_and_no_artifact() {
+    let mac = web();
+    let check = |entry: &Target| target::check_entry(&mac, Platform::MacosArm64, entry);
+    assert_eq!(check(&macos_repository_entry()), Ok(()));
+    let unsized_ = Target {
+        bytes: 0,
+        ..macos_repository_entry()
+    };
+    assert_eq!(check(&unsized_), Err(EntryError::NoBytes));
+    assert_eq!(
+        EntryError::NoBytes.to_string(),
+        "the macos-pkg repository entry needs bytes, the size of the .pkg"
+    );
+    let located = Target {
+        locations: vec![location("komira-testing", "pkg/hostkeeper/0.1.306/x.pkg")],
+        ..macos_repository_entry()
+    };
+    assert_eq!(check(&located), Err(EntryError::ArtifactField("locations")));
+    let attested = Target {
+        attestation: Some(Blob {
+            digest: digest('b'),
+            bytes: 10,
+            locations: vec![location("github", "o/r/x.sigstore.json")],
+        }),
+        ..macos_repository_entry()
+    };
+    assert_eq!(
+        check(&attested),
+        Err(EntryError::ArtifactField("attestation"))
+    );
+}
+
+/// Catches: `bytes` on an apt repository entry, or on one of an installer no daemon lists,
+/// accepted because the Mac's form was relaxed: only `macos-pkg` takes it.
+#[test]
+fn bytes_on_a_repository_entry_of_another_installer_is_still_refused() {
+    let sized = |installer: &str| Target {
+        installer: installer.to_owned(),
+        bytes: 5,
+        ..repository_entry()
+    };
+    for installer in ["apt", "dnf", "tarball"] {
+        assert_eq!(
+            check_entry(&sized(installer)),
+            Err(EntryError::ArtifactField("bytes")),
+            "{installer}"
+        );
+    }
+}
+
+/// Catches: the explicit-location form of a Mac's entry (an artifact entry with a store and a
+/// locator, as releases before the named-version form wrote) refused or its attestation rule
+/// changed.
+#[test]
+fn a_macos_pkg_artifact_entry_with_explicit_locations_is_checked_as_before() {
+    let mac = web();
+    let artifact = Target {
+        installer: Installer::MacosPkg.as_str().to_owned(),
+        digest: digest('d'),
+        bytes: 18_963_901,
+        locations: vec![location("komira-testing", "pkg/hostkeeper/0.1.306/x.pkg")],
+        manifest: Some(manifest(Installer::MacosPkg)),
+        ..Target::default()
+    };
+    assert_eq!(
+        target::check_entry(&mac, Platform::MacosArm64, &artifact),
+        Ok(())
+    );
+    let zero = Target {
+        bytes: 0,
+        ..artifact
+    };
+    assert_eq!(
+        target::check_entry(&mac, Platform::MacosArm64, &zero),
+        Err(EntryError::ZeroBytes)
+    );
+}

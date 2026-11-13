@@ -11,7 +11,7 @@ description = "The checks of a release's targets and manifests (hostkeeper.relea
 # docs/design/packages.md sections 3.4, 4.4 and 7.1, build item A1. A message goes in and the
 # first rule it breaks comes out: no file, socket, clock, process or hashed collection. What the
 # daemon checks of a staged tree it asks through a function its caller gives. crates/xtask/tests/
-# layering keeps the workspace dependencies to these two; registry.rs adds only hashes.
+# layering keeps the workspace dependencies to these two; registry.rs adds only hashes, descriptor.rs only JSON.
 [dependencies]
 # The name, path and unit grammars, the refused prefixes, the health URL and boot step rules,
 # the platforms and the daemon's version: today's manifest rules, one copy of each.
@@ -23,6 +23,8 @@ prost.workspace = true
 # the digest of a repository set (SHA-256): registry.rs.
 sha1.workspace = true
 sha2.workspace = true
+# The descriptor of a repository (descriptor.rs) is JSON.
+serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

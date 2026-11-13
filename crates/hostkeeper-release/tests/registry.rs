@@ -7,6 +7,8 @@
 #[path = "registry/support.rs"]
 mod support;
 
+#[path = "registry/descriptor.rs"]
+mod descriptor;
 #[path = "registry/keys.rs"]
 mod keys;
 #[path = "registry/private.rs"]

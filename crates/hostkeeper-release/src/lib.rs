@@ -16,6 +16,8 @@
 //!   manifest (`manifest_invalid`).
 //! - [`staged`]: what the daemon checks of a manifest against the tree its installer staged:
 //!   the hook program and every `place` source, reached through no link.
+//! - [`descriptor`]: the descriptor of a package repository, `<base>/hostkeeper-repository.json`,
+//!   through which one URL says what a repository serves (docs/deploy/package-repositories.md).
 //! - [`registry`]: the package repositories the coordinator keeps and pushes to every host: a
 //!   repository's rules, the files a host holds for a set, their digest, and a keyring's fingerprints.
 //! - [`installer`] the installers a manifest's rules know and which are repository backends, and
@@ -25,6 +27,7 @@
 //! check takes a message and answers the first rule it breaks, in a fixed order, so the same
 //! message is always refused with the same error.
 
+pub mod descriptor;
 pub mod grammar;
 pub mod installer;
 pub mod manifest;

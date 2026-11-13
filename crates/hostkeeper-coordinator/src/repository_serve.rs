@@ -18,6 +18,14 @@
 //! request, so a host whose certificate names another role is served that group's paths only, and
 //! once the store holds a host group a host is served the paths of the group its record holds.
 //!
+//! `GET /repositories/<name>/pkg/<dir>/<version>/<file>` serves a Mac the `.pkg` a release names by
+//! version ([`crate::macos_resolve`]) from a public repository whose descriptor has a `macos-pkg`
+//! format: any host that may read (the same caller rules), a `<file>` that is
+//! `<package>-<version>-<platform>.pkg` for a platform of the format, a `<dir>` that is the
+//! directory the descriptor gives `<package>`. Anything else is 404. The bytes are
+//! `<base_uri>/<path>/<dir>/<version>/<file>` from the origin, with no credential, no redirect and
+//! no cache; the pin of the release, not this route, decides what a Mac installs.
+//!
 //! The origin's 200 is answered 200, the body streamed as it arrives and never held whole, with
 //! the `Content-Length` the origin gave; its 404 is 404 `not_found`. Any other status, a failed
 //! connection, an answer with no `Content-Length`, an unusable credential file and a coordinator
@@ -26,7 +34,8 @@
 //! credential.
 
 use bytes::Bytes;
-use hostkeeper_release::grammar::{check_locator, is_repository_name};
+use hostkeeper_release::descriptor::{self, MacosPkg};
+use hostkeeper_release::grammar::{check_locator, is_package_version, is_repository_name};
 use hostkeeper_release::registry;
 use hostkeeper_wire::HostId;
 use http_body_util::{Either, Full};
@@ -38,11 +47,14 @@ use crate::grpc::RouteBody;
 use crate::http::{DENIED, Peer, error};
 use crate::identity::Identity;
 use crate::repository_credential::{self, CredentialError};
-use crate::repository_origin::{Origin, OriginError};
+use crate::repository_origin::{Forwarded, Origin, OriginError};
 use crate::service::Coordinator;
 
 /// The path every route of this module is under.
 pub(crate) const PREFIX: &str = "/repositories/";
+
+/// The kind of the path that serves a Mac's `.pkg`.
+const PKG: &str = "pkg";
 
 /// Why a read of the origin failed.
 #[derive(Debug, thiserror::Error)]
@@ -102,7 +114,8 @@ fn caller(coordinator: &Coordinator, peer: &Peer) -> Result<Identity, &'static s
 /// What a path under [`PREFIX`] asks for.
 struct Wanted<'a> {
     name: &'a str,
-    /// `dists` or `pool`.
+    /// `dists`, `pool` or `pkg` (where `group` is the package's directory and `rest` is
+    /// `<version>/<file>`).
     kind: &'a str,
     group: &'a str,
     rest: &'a str,
@@ -116,7 +129,7 @@ impl<'a> Wanted<'a> {
         let (name, kind, group, rest) =
             (parts.next()?, parts.next()?, parts.next()?, parts.next()?);
         let fits = is_repository_name(name)
-            && ["dists", "pool"].contains(&kind)
+            && ["dists", "pool", PKG].contains(&kind)
             && check_locator(rest).is_ok();
         fits.then_some(Self {
             name,
@@ -150,6 +163,9 @@ pub(crate) async fn serve<B>(
     let Some(wanted) = Wanted::of(path) else {
         return not_found();
     };
+    if wanted.kind == PKG {
+        return serve_pkg(coordinator, &wanted).await;
+    }
     let group = group_of(coordinator, &identity);
     let found = coordinator.desired.with_repositories(|registry| {
         registry
@@ -168,19 +184,91 @@ pub(crate) async fn serve<B>(
     };
     let under = wanted.under_uri();
     match read(coordinator, &uri, &credential_file, &under).await {
-        Ok(Origin::Found { length, body }) => {
-            let mut response = Response::new(Either::Right(tonic::body::Body::new(body)));
-            let headers = response.headers_mut();
-            headers.insert(CONTENT_LENGTH, HeaderValue::from(length));
-            headers.insert(
-                CONTENT_TYPE,
-                HeaderValue::from_static("application/octet-stream"),
-            );
-            response
-        }
+        Ok(Origin::Found { length, body }) => streamed(length, body),
         Ok(Origin::NotFound) => not_found(),
         Err(why) => {
             tracing::warn!(repository = %wanted.name, path = %under, %why, "the origin of a private repository failed");
+            plain(error(StatusCode::BAD_GATEWAY, "origin_failed"))
+        }
+    }
+}
+
+/// The origin's 200 as the route answers it: the body as it arrives, with the length the origin
+/// gave.
+fn streamed(length: u64, body: Forwarded) -> Response<RouteBody> {
+    let mut response = Response::new(Either::Right(tonic::body::Body::new(body)));
+    let headers = response.headers_mut();
+    headers.insert(CONTENT_LENGTH, HeaderValue::from(length));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/octet-stream"),
+    );
+    response
+}
+
+/// The macOS format of the public repository `name` and its base URI: none for a name that is not
+/// one, a private one, an entry put with no descriptor and a descriptor with no `macos-pkg`.
+fn macos_format(coordinator: &Coordinator, name: &str) -> Option<(MacosPkg, String)> {
+    let (descriptor, base) = coordinator.desired.with_repositories(|registry| {
+        registry
+            .get(name)
+            .map(|kept| &kept.repository)
+            .filter(|entry| !registry::is_private(entry))
+            .map(|entry| (entry.descriptor.clone(), entry.base_uri.clone()))
+    })?;
+    let format = descriptor::check(&descriptor).ok()?.macos_pkg?;
+    Some((format, base))
+}
+
+/// Whether `file` is `<package>-<version>-<platform>.pkg` for a platform of `format` and the
+/// `dir` is the directory `format` gives the package.
+fn is_pkg_of(format: &MacosPkg, dir: &str, version: &str, file: &str) -> bool {
+    let Some(stem) = file.strip_suffix(".pkg") else {
+        return false;
+    };
+    format.platforms.iter().any(|platform| {
+        stem.strip_suffix(platform.as_str())
+            .and_then(|rest| rest.strip_suffix(&format!("-{version}-")))
+            .is_some_and(|package| is_package_dir_name(package) && format.dir(package) == dir)
+    })
+}
+
+/// Whether `package` is 1 to 64 bytes of `[a-z0-9-]`: a package name of the descriptor.
+fn is_package_dir_name(package: &str) -> bool {
+    (1..=64).contains(&package.len())
+        && package
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() | b.is_ascii_digit() | (b == b'-'))
+}
+
+/// Serves `wanted`, a path of [`PKG`], from the repository's origin.
+async fn serve_pkg(coordinator: &Coordinator, wanted: &Wanted<'_>) -> Response<RouteBody> {
+    let not_found = || plain(error(StatusCode::NOT_FOUND, "not_found"));
+    let Some((version, file)) = wanted.rest.split_once('/') else {
+        return not_found();
+    };
+    let Some((format, base)) = macos_format(coordinator, wanted.name) else {
+        return not_found();
+    };
+    if file.contains('/')
+        || !is_package_version(version)
+        || !is_pkg_of(&format, wanted.group, version, file)
+    {
+        return not_found();
+    }
+    let under = format!("{}/{}/{version}/{file}", format.path, wanted.group);
+    let read = async {
+        let origin = coordinator
+            .repository_origin
+            .as_ref()
+            .ok_or(Failure::NoOrigin)?;
+        Ok::<_, Failure>(origin.get_with(&base, &under, None).await?)
+    };
+    match read.await {
+        Ok(Origin::Found { length, body }) => streamed(length, body),
+        Ok(Origin::NotFound) => not_found(),
+        Err(why) => {
+            tracing::warn!(repository = %wanted.name, path = %under, %why, "the origin of a repository failed");
             plain(error(StatusCode::BAD_GATEWAY, "origin_failed"))
         }
     }

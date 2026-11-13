@@ -153,6 +153,7 @@ A repository entry is checked by A16's rules in the shared crate `hostkeeper-rel
 | `repository` 1 to 32 bytes of `[a-z0-9-]`; `package_version` present, 1 to 128 bytes of `[A-Za-z0-9.+~:_-]`, its first byte a digit | `TARGET_INVALID` |
 | `package_version` present on an entry without `repository` | `TARGET_INVALID` |
 | No `locations`, `bytes` 0, no `attestation`: a repository entry names no artifact, and an attestation nobody checks must not look checked | `TARGET_INVALID` |
+| A `macos-pkg` repository entry (section 4.7, the named-version form) names `bytes`, the `.pkg`'s size: required, 1 up; every other repository entry still has `bytes` 0 | `TARGET_INVALID` |
 | `digest` absent, or not 64 lower-case hex (the SHA-256 of the package file, required from every caller) | `TARGET_INVALID` |
 | `manifest.package` present: 1 to 128 bytes of `[A-Za-z0-9+._@-]`, its first byte a letter or digit | `TARGET_INVALID` |
 | The manifest's installer-free checks (packages.md section 4.4), as for any entry | `TARGET_INVALID` |
@@ -271,6 +272,20 @@ suite over the agent listener, and sends it, with the host's group as its one su
 daemon that announces `private-repository-v1`, which writes its entry's `URIs` as its local mirror
 (`file:/var/lib/hostkeeper/mirror/<name>`); docs/deploy/package-repositories.md says how.
 
+**One entry for every platform (the descriptor).** A repository is added by a name and a URL
+(`Repositories.Add`, after `Repositories.Discover`): the coordinator reads the descriptor
+`<URL>/hostkeeper-repository.json` and the keyring it names, shows the operator the platforms, channels,
+packages and the fingerprints it computed from the keyring, and `Add` reads them again and refuses
+(`descriptor_changed`) when either differs from what was confirmed; docs/deploy/package-repositories.md ("Structure of a
+repository") is the descriptor's specification and the layout a repository follows. The stored `Repository`
+gains two optional fields, `descriptor` (the file, byte for byte) and `base_uri`, and nothing is re-meant: `uri` stays
+the apt root and `kind` stays `apt`, so an apt host's entry and the digest of what hosts are sent are those of an entry
+put by hand, and a coordinator before this reads and ignores the new keys of a stored record. `Put` stays for every field
+by hand. `komira` is **built in** (`crates/hostkeeper-coordinator/src/builtin.rs`): the coordinator answers it at generation 0
+with its keyring and pinned fingerprints in code until an entry of that name is put over it; it cannot be removed (`builtin`),
+and `Add` of the name with another key is refused. An entry put before descriptors serves Linux only and gains the
+descriptor, and the macOS source it describes, when it is added again with the same name and URL.
+
 **The push.** At each heartbeat of a daemon that announces `repositories-v1` (a Linux daemon), the coordinator takes
 the repositories the host's services name: those assigned to the host and those it runs. When the registry holds every
 one of them, and the host's report (`HeartbeatRequest.repositories`) holds neither that set's digest in force nor that
@@ -296,9 +311,10 @@ What is not pushed: an order never carries a repository's configuration; a repos
 `<name>-<suite>` (section 2.1), and `SetDesired` refuses a set with a repository entry when the registry lacks the
 service's repository or the entry names none of its suites (`repository_unknown`), so a release never waits on a
 repository no host will get. A host one of whose services names a repository the registry lacks is sent nothing, and
-its configuration stays as it is. A Mac never announces `repositories-v1`: its `.pkg` comes by digest from the stores
-of its `stores.toml`, and the MDM kit that places `hostkeeper.toml` (hostkeeper-mdm.md) places the channel stores
-and the signers of `macos-pkg.toml` (section 4.7); nothing of a Mac reads the registry. That is A17's, as before.
+its configuration stays as it is. A Mac is sent no repository set (it never announces `repositories-v1`): the coordinator resolves a Mac's entry from the
+registry at order time (section 4.7), and the MDM kit that places `hostkeeper.toml` (hostkeeper-mdm.md) places the
+signers of `macos-pkg.toml` and, for a release that names its `.pkg` by `locations`, the channel stores. That is
+A17's, as before.
 
 **Host setup.** On a host installed by network (network-install.md), `pxe` takes a directory of entries and
 keyrings with `--repositories <dir>`, checks it with the daemon's own loader before it writes a single seed, and writes
@@ -550,6 +566,20 @@ file the receipt lists, changed or not.
   A Mac whose `stores.toml` lacks that store answers `Failed`, `environment`, `no_store` (packages.md section 7.4), as
   an apt host without the entry answers `repository_unknown`. A mirror store serves the file by digest, as for any
   artifact.
+- **The named-version form: the repository finds the `.pkg`.** A release may instead send
+  `{"installer": "macos-pkg", "repository": "komira-testing", "packageVersion": "1.6.0", "digest", "bytes", "manifest"}`:
+  the channel (as for an apt entry), the version, the file's size and the pin, and no location and no attestation (as above).
+  When the repository's descriptor has a `macos-pkg` format for the Mac's platform, the coordinator resolves the entry at order
+  time, with no network, to the artifact entry the daemon already installs: one location in the implicit store `coordinator` at
+  `repositories/<name>/pkg/<dir>/<version>/<package>-<version>-macos-arm64.pkg` (`<dir>` is the descriptor's
+  directory for the package, else its name), and serves that path to the enrolled host by streaming the file from the
+  repository (no cache, no redirect). The daemon fetches it from the coordinator, checks the size and SHA-256 the release names and the
+  signature against its signers, and installs, so nothing of the daemon, the `stores.toml` or the MDM kit changes, and a Mac
+  needs no `komira-testing` store. An entry that does not resolve (a channel no public repository holds, a repository with
+  no macOS format, a platform it is not built for) is left out of what the picks read, so the host is picked no entry; the
+  stored release is as CI sent it. The repository is trusted for where the file is, never for its bytes. A coordinator
+  before this form refuses it (`TARGET_INVALID`: `bytes` on a repository entry); a release writes it only for a coordinator
+  that has it. The explicit form above is unchanged.
 - **A private `.pkg` is in the store `coordinator`.** A host group's configuration `.pkg` (hostgroups.md section 6.6)
   is located in the implicit store `coordinator`, at `repositories/<name>/pool/<group>/<file>.pkg`, which the daemon
   fetches from the coordinator over its mutual-TLS connection; it is checked by digest and signer as any `.pkg`. No

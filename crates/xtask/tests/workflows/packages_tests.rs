@@ -86,7 +86,7 @@ fn the_rows_hold_the_key_and_the_role_in_no_job_and_the_role_in_exactly_the_writ
     // Catches: a table that lets one job hold the signing key and assume the cloud role, or a
     // job that assumes the role without an exact `if:` for its `id-token: write`.
     let all = rows();
-    assert_eq!(all.len(), 46);
+    assert_eq!(all.len(), 47);
     let mut names = job_names();
     names.dedup();
     assert_eq!(names.len(), all.len(), "a job has two rows");
@@ -945,4 +945,73 @@ fn the_failing_builds_jobs_keep_the_signing_key_and_the_cloud_role_apart_and_che
         ),
         "release.yml: job testing-fail-apt-write needs the step `sha256sum --check --strict SHA256SUMS` in `dist` right after the download of the release's files",
     );
+}
+
+#[test]
+fn the_descriptor_job_runs_the_workflows_own_commit_and_holds_no_release() {
+    // Catches: the descriptor job checking out the release's commit (whose xtask may lack its
+    // verb), taking the release's commit or tag, needing the release's files, or being a need of
+    // the jobs that move the fleet or a channel, which a failing descriptor must never hold.
+    let text = release_yml();
+    assert_refused(
+        &in_job(
+            &text,
+            "descriptor",
+            "          persist-credentials: false\n",
+            "          ref: ${{ needs.newest.outputs.commit }}\n          persist-credentials: false\n",
+        ),
+        "release.yml: job descriptor needs a first step that checks out the workflow's own commit (no `ref`)",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "descriptor",
+            "    timeout-minutes: 10\n",
+            "    timeout-minutes: 10\n    env:\n      COMMIT: ${{ needs.newest.outputs.commit }}\n",
+        ),
+        "release.yml: job descriptor must not set `env: COMMIT`",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "descriptor",
+            "    permissions:\n      contents: read\n      id-token: write\n",
+            "    permissions:\n      contents: write\n      id-token: write\n",
+        ),
+        "job descriptor",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "descriptor",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n          APT_DISTRIBUTION_ID",
+            "          APT_BUCKET: ${{ vars.APT_BUCKET }}\n          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}\n          APT_DISTRIBUTION_ID",
+        ),
+        "job descriptor",
+    );
+    assert_refused(
+        &in_job(
+            &text,
+            "descriptor",
+            "    needs: [plan, testing-pkg-upload, testing-apt-write, testing-apt-write-2, testing-apt-write-3]\n",
+            "    needs: [plan, testing-pkg-upload]\n",
+        ),
+        "job descriptor",
+    );
+    // A need of the jobs that set the fleet's version or move a channel is refused.
+    for job in [
+        "no-downgrade",
+        "set-desired",
+        "promote-check",
+        "promote-pkg",
+    ] {
+        let (start, end) = job_range(&text, job);
+        let needs_at = text[start..end].find("    needs: [").expect("needs") + start;
+        let at = needs_at + "    needs: [".len();
+        let with = format!("{}descriptor, {}", &text[..at], &text[at..]);
+        assert!(
+            !problems(&with).is_empty(),
+            "a need of descriptor in {job} is accepted"
+        );
+    }
 }

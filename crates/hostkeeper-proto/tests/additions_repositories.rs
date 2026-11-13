@@ -60,6 +60,8 @@ fn repository() -> release::Repository {
         keyring: vec![0x99, 0x01, 0x02, 0xff],
         access: "hosts".to_owned(),
         credential_file: "/etc/hostkeeper-coordinator/lab.credential".to_owned(),
+        descriptor: br#"{"version":1}"#.to_vec(),
+        base_uri: "https://packages.example.com".to_owned(),
     }
 }
 
@@ -70,6 +72,8 @@ fn registered() -> op::RegisteredRepository {
         keyring_sha256: "ab".repeat(32),
         generation: 3,
         services: vec!["web".to_owned()],
+        builtin: true,
+        platforms: vec!["linux-x86_64".to_owned(), "macos-arm64".to_owned()],
     }
 }
 

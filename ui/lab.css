@@ -13,8 +13,9 @@
   --led-healthy: #3ddc84;
   --led-updating: #f5b83d;
   --led-failed: #ff5a4a;
-  --led-offline: #c2574d;
-  --led-pending: #7d8c9b;
+  --led-offline: #7d8c9b;
+  --led-pending: #d98a1f;
+  --led-idle: #5f6f7e;
   --glow: rgb(253 79 29 / 0.35);
 }
 
@@ -228,7 +229,7 @@
   min-width: 0;
   padding: 14px 18px;
   border: 1px solid var(--hw-line);
-  border-left: 3px solid var(--led-pending);
+  border-left: 3px solid var(--led-idle);
   border-radius: var(--radius);
   background: linear-gradient(90deg, rgb(255 255 255 / 0.05), rgb(255 255 255 / 0.015));
   color: var(--hw-ink);
@@ -244,9 +245,16 @@
   border-left-color: var(--led-updating);
 }
 
-.row-open.s-failed,
-.row-open.s-offline {
+.row-open.s-failed {
   border-left-color: var(--led-failed);
+}
+
+.row-open.s-offline {
+  border-left-color: var(--led-offline);
+}
+
+.row-open.s-pending {
+  border-left-color: var(--led-pending);
 }
 
 .row-open:hover,
@@ -305,7 +313,7 @@
 }
 
 .foot {
-  --tone: var(--led-pending);
+  --tone: var(--led-idle);
   display: flex;
   flex-direction: column;
   align-items: stretch;
@@ -322,9 +330,16 @@
   --tone: var(--led-updating);
 }
 
-.foot.s-failed,
-.foot.s-offline {
+.foot.s-failed {
   --tone: var(--led-failed);
+}
+
+.foot.s-offline {
+  --tone: var(--led-offline);
+}
+
+.foot.s-pending {
+  --tone: var(--led-pending);
 }
 
 .foot.s-empty {
@@ -368,7 +383,7 @@ span.mini {
   height: calc(var(--h) * 1%);
   min-height: 3px;
   border-radius: 1px;
-  background: var(--led-pending);
+  background: var(--led-idle);
 }
 
 .seg.s-healthy {
@@ -379,9 +394,16 @@ span.mini {
   background: var(--led-updating);
 }
 
-.seg.s-failed,
-.seg.s-offline {
+.seg.s-failed {
   background: var(--led-failed);
+}
+
+.seg.s-offline {
+  background: var(--led-offline);
+}
+
+.seg.s-pending {
+  background: var(--led-pending);
 }
 
 .foot-use {
@@ -405,7 +427,7 @@ span.mini {
   font-size: 11px;
   line-height: 18px;
   color: var(--hw-ink);
-  border-left: 3px solid var(--led-pending);
+  border-left: 3px solid var(--led-idle);
 }
 
 .dot.s-healthy {
@@ -416,9 +438,16 @@ span.mini {
   border-left-color: var(--led-updating);
 }
 
-.dot.s-failed,
-.dot.s-offline {
+.dot.s-failed {
   border-left-color: var(--led-failed);
+}
+
+.dot.s-offline {
+  border-left-color: var(--led-offline);
+}
+
+.dot.s-pending {
+  border-left-color: var(--led-pending);
 }
 
 .empty-lab {
@@ -686,7 +715,7 @@ button.rack-no:hover {
 }
 
 .led {
-  --led: var(--led-pending);
+  --led: var(--led-idle);
   flex: none;
   width: 7px;
   height: 7px;
@@ -710,6 +739,10 @@ button.rack-no:hover {
 .s-offline > .led {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--led-offline);
+}
+
+.s-pending > .led {
+  --led: var(--led-pending);
 }
 
 .plate-id {
@@ -887,6 +920,11 @@ button.rack-no:hover {
 }
 
 @media (max-width: 899px) {
+  /* Below the top bar, not against it: the breadcrumbs of a lab view and of a host page. */
+  .crumbs {
+    padding-top: 14px;
+  }
+
   .rack-solo {
     grid-template-columns: minmax(0, 1fr);
   }

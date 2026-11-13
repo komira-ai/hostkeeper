@@ -144,18 +144,21 @@ fn a_put_package_is_listed_with_its_repository_before_a_group_lists_it() {
 }
 
 /// Proves: an empty repository registers the package in the default repository, `komira`, which
-/// the registry must hold: without it the call is refused `repository_unknown`.
+/// is built in: it is taken with nothing put, and a repository the registry does not hold is
+/// refused `repository_unknown`.
 ///
-/// Catches: an empty repository stored as an empty name, or a default that is not checked against
-/// the registry.
+/// Catches: an empty repository stored as an empty name, a default that waits for an operator's
+/// `Put`, or a repository that is not checked against the registry.
 #[test]
-fn an_empty_repository_is_the_default_one_and_must_be_held() {
+fn an_empty_repository_is_the_default_one_which_is_built_in() {
     let farm = Farm::new("sp-default");
     farm.group("alpha", &["cfg-alpha"], None);
-    assert_eq!(put(&farm, "tierstore", ""), Err(Refusal::RepositoryUnknown));
+    assert_eq!(
+        put(&farm, "tierstore", "elsewhere"),
+        Err(Refusal::RepositoryUnknown)
+    );
     assert!(listed(&farm, "tierstore").is_none());
 
-    registry_has(&farm, "komira");
     put(&farm, "tierstore", "").expect("put");
 
     assert_eq!(

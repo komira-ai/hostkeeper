@@ -391,6 +391,8 @@ function lab(app, data, state) {
       const el = stripOf(e);
       el.scrollBy({ left: by * pitchOf(el), behavior: "smooth" });
     };
+    // Brings the number, the buttons and the fades up to date: on a scroll, once the strip is in the
+    // page and on each resize of the window (which changes how many racks fit).
     const sync = (e) => {
       const el = e.currentTarget;
       const frame = el.parentNode;
@@ -414,6 +416,8 @@ function lab(app, data, state) {
         class: "rack-strip", tabindex: "0", role: "region", "aria-label": "racks, scroll sideways",
         on: {
           scroll: sync,
+          mounted: sync,
+          resize: sync,
           keydown: (e) => {
             const to = e.key === "ArrowRight" ? 1 : (e.key === "ArrowLeft" ? -1 : 0);
             if (to !== 0 && e.currentTarget && e.currentTarget.scrollBy) {
