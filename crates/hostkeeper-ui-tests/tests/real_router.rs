@@ -229,6 +229,22 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"service": "kbf", "version": "1.2.3", "reason": "was the disk"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Repositories/Get",
+        r#"{"name": "komira"}"#,
+    ),
+    ("hostkeeper.operator.v1.Repositories/List", "{}"),
+    (
+        "hostkeeper.operator.v1.Repositories/Put",
+        r#"{"repository": {"name": "spare", "kind": "apt", "uri": "https://spare.example.com/apt",
+            "suites": ["testing"], "components": ["main"],
+            "fingerprints": ["0123456789ABCDEF0123456789ABCDEF01234567"], "keyring": "xg4EAAAAARYHBwcHBwcHBw==",
+            "access": "public"}, "reason": "set in the console"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Repositories/Remove",
+        r#"{"name": "spare", "reason": "removed in the console"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Rollouts/Advance",
         r#"{"service": "kbf", "reason": "canary looks fine"}"#,
     ),
@@ -249,6 +265,18 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"scope": {"host": "storage-1"}, "service": "kbf", "reason": "disk swap"}"#,
     ),
     ("hostkeeper.operator.v1.Services/List", r#"{}"#),
+    (
+        "hostkeeper.operator.v1.Services/Put",
+        r#"{"service": "js-agent", "repository": "komira", "reason": "set in the console"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Services/Remove",
+        r#"{"service": "js-agent", "reason": "removed in the console"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Services/SetRepository",
+        r#"{"service": "kbf", "repository": "komira", "reason": "set in the console"}"#,
+    ),
     (
         "hostkeeper.operator.v1.Services/SetMinVersion",
         r#"{"service": "kbf", "minVersion": {"role": "storage", "version": "1.0.0"}}"#,

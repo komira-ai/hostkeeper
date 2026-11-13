@@ -92,7 +92,8 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         | ServicesRefusal::NotHeld
         | ServicesRefusal::BelowMinVersion
         | ServicesRefusal::PlacedByHostGroup
-        | ServicesRefusal::NotInHostGroup => Code::FailedPrecondition,
+        | ServicesRefusal::NotInHostGroup
+        | ServicesRefusal::InUse => Code::FailedPrecondition,
         ServicesRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "SERVICES_REFUSAL_")

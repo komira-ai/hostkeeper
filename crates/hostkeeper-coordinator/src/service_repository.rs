@@ -68,7 +68,7 @@ impl Coordinator {
     }
 
     /// Whether some host group lists `package`.
-    fn listed_by_a_group(&self, package: &str) -> bool {
+    pub(crate) fn listed_by_a_group(&self, package: &str) -> bool {
         self.desired
             .host_groups()
             .0

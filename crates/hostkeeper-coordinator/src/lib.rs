@@ -223,6 +223,7 @@ pub mod retry;
 pub mod rollouts;
 mod running;
 pub mod service;
+pub(crate) mod service_put;
 pub(crate) mod service_repository;
 pub mod services;
 pub mod session;
@@ -506,6 +507,8 @@ mod rollouts_state_tests;
 mod running_tests;
 #[cfg(test)]
 mod self_update_fallback_tests;
+#[cfg(test)]
+mod service_put_tests;
 #[cfg(test)]
 mod service_repository_tests;
 #[cfg(test)]
