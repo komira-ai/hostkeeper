@@ -1,5 +1,5 @@
 //! The lab's layout ([`crate::layout`]) as the rows of the tables that migration `0015` adds:
-//! `lab_cluster`, `lab_rows`, `lab_racks` and `lab_placements`, a row for the name and one per row, rack and placement, keyed by id
+//! `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements` and, from migration `0016`, `lab_devices`, a row for the name and one per row, rack and placement, keyed by id
 //! (a placement by its subject's key), holding the record as the layout file holds it, without
 //! the key.
 //!
@@ -40,8 +40,21 @@ pub(crate) const LAB_CLUSTER: Table = Table {
     values: &[("record", Ty::Json)],
 };
 
+/// The table of the network devices (migration `0016`).
+pub(crate) const LAB_DEVICES: Table = Table {
+    name: "lab_devices",
+    keys: &[("id", KeyTy::Text)],
+    values: &[("record", Ty::Json)],
+};
+
 /// The layout's tables.
-pub(crate) const TABLES: [Table; 4] = [LAB_CLUSTER, LAB_ROWS, LAB_RACKS, LAB_PLACEMENTS];
+pub(crate) const TABLES: [Table; 5] = [
+    LAB_CLUSTER,
+    LAB_ROWS,
+    LAB_RACKS,
+    LAB_PLACEMENTS,
+    LAB_DEVICES,
+];
 
 /// The rows of one table: a record for each key.
 fn rows_of<'a, T: serde::Serialize + 'a>(items: impl Iterator<Item = (String, &'a T)>) -> Rows {
@@ -85,6 +98,10 @@ pub(crate) fn rows(layout: &Layout) -> Tables {
                     .map(|p| (p.subject.key(), p)),
             ),
         ),
+        (
+            LAB_DEVICES.name,
+            rows_of(layout.devices().into_iter().map(|d| (d.id.clone(), d))),
+        ),
     ])
 }
 
@@ -117,5 +134,6 @@ pub(crate) fn of_tables(tables: &Tables) -> Result<Layout, LayoutError> {
         records(&LAB_ROWS),
         records(&LAB_RACKS),
         records(&LAB_PLACEMENTS),
+        records(&LAB_DEVICES),
     )
 }

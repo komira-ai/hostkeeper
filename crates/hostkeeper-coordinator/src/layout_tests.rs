@@ -473,12 +473,14 @@ fn the_file_reads_back_the_layout_and_a_bad_file_is_refused_by_name() {
 fn records_are_read_as_strictly_as_the_file() {
     let place = std::path::Path::new("database:lab");
     let rows = vec![("row-1".to_owned(), serde_json::json!({"number": 1}))];
-    let ok = Layout::of_records(place, "Lab".into(), rows.clone(), vec![], vec![]).expect("reads");
+    let ok = Layout::of_records(place, "Lab".into(), rows.clone(), vec![], vec![], vec![])
+        .expect("reads");
     assert_eq!((ok.rows().len(), ok.name()), (1, "Lab"));
     let bad = Layout::of_records(
         place,
         String::new(),
         vec![("row-1".to_owned(), serde_json::json!({"number": "x"}))],
+        vec![],
         vec![],
         vec![],
     )
@@ -496,6 +498,7 @@ fn records_are_read_as_strictly_as_the_file() {
             "rack-1".to_owned(),
             serde_json::json!({"row": "row-2", "number": 1, "height_u": 5}),
         )],
+        vec![],
         vec![],
     )
     .expect_err("a rack in no row");

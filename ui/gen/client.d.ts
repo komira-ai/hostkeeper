@@ -56,6 +56,8 @@ export interface Client {
     removeRack(request: hostkeeper_operator_v1.RemoveLayoutRackRequest): Promise<hostkeeper_operator_v1.RemoveLayoutRackResponse>;
     place(request: hostkeeper_operator_v1.PlaceLayoutRequest): Promise<hostkeeper_operator_v1.PlaceLayoutResponse>;
     unplace(request: hostkeeper_operator_v1.UnplaceLayoutRequest): Promise<hostkeeper_operator_v1.UnplaceLayoutResponse>;
+    putDevice(request: hostkeeper_operator_v1.PutLayoutDeviceRequest): Promise<hostkeeper_operator_v1.PutLayoutDeviceResponse>;
+    removeDevice(request: hostkeeper_operator_v1.RemoveLayoutDeviceRequest): Promise<hostkeeper_operator_v1.RemoveLayoutDeviceResponse>;
   };
   readonly mdm: {
     listDevices(request: hostkeeper_operator_v1.ListDevicesRequest): Promise<hostkeeper_operator_v1.ListDevicesResponse>;
@@ -386,7 +388,13 @@ export namespace hostkeeper_operator_v1 {
   export interface GetHostResponse { host?: hostkeeper_operator_v1.Host; }
   export interface GetLayoutRequest {
   }
-  export interface GetLayoutResponse { rows?: hostkeeper_operator_v1.LayoutRow[]; racks?: hostkeeper_operator_v1.LayoutRack[]; placements?: hostkeeper_operator_v1.LayoutPlacement[]; name?: string; }
+  export interface GetLayoutResponse {
+    rows?: hostkeeper_operator_v1.LayoutRow[];
+    racks?: hostkeeper_operator_v1.LayoutRack[];
+    placements?: hostkeeper_operator_v1.LayoutPlacement[];
+    name?: string;
+    devices?: hostkeeper_operator_v1.NetworkDevice[];
+  }
   export interface GetReleaseRequest { service?: string; version?: string; hostGroup?: string; }
   export interface GetReleaseResponse { targets?: { [key: string]: hostkeeper_release_v1.TargetList }; releaseIndexDigest?: string; }
   export interface GetRepositoryRequest { name?: string; }
@@ -637,6 +645,8 @@ export namespace hostkeeper_operator_v1 {
   export interface MinVersion { role?: string; host?: string; version?: string; }
   export interface MoveHostRequest { nodeId?: string; hostGroup?: string; reason?: string; }
   export interface MoveHostResponse { entry?: hostkeeper_operator_v1.AuditEntry; fromHostGroup?: string; }
+  export interface NetworkDevice { id?: string; name?: string; role?: hostkeeper_operator_v1.NetworkRole; consoleHost?: string; consoleDevice?: string; managementMac?: string; notes?: string; }
+  export type NetworkRole = "NETWORK_ROLE_UNSPECIFIED" | "NETWORK_ROLE_BMC" | "NETWORK_ROLE_DATA";
   export interface OpenRecordRequest { hostId?: string; approveUntilUnix?: string; approveForSecs?: string; reason?: string; }
   export interface OpenRecordResponse { record?: hostkeeper_operator_v1.InventoryRecord; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PauseRequest { service?: string; reason?: string; hostGroup?: string; }
@@ -688,6 +698,17 @@ export namespace hostkeeper_operator_v1 {
   export interface PutAbmTokenResponse { secret?: hostkeeper_operator_v1.SecretInfo; serverName?: string; orgName?: string; }
   export interface PutHostGroupRequest { hostGroup?: hostkeeper_operator_v1.HostGroup; ifGeneration?: string; reason?: string; }
   export interface PutHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; generation?: string; }
+  export interface PutLayoutDeviceRequest {
+    id?: string;
+    name?: string;
+    role?: hostkeeper_operator_v1.NetworkRole;
+    consoleHost?: string;
+    consoleDevice?: string;
+    managementMac?: string;
+    notes?: string;
+    reason?: string;
+  }
+  export interface PutLayoutDeviceResponse { device?: hostkeeper_operator_v1.NetworkDevice; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutLayoutNameRequest { name?: string; reason?: string; }
   export interface PutLayoutNameResponse { name?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutLayoutRackRequest { id?: string; row?: string; heightU?: number; reason?: string; }
@@ -714,6 +735,8 @@ export namespace hostkeeper_operator_v1 {
   export interface RejectResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveHostGroupRequest { hostGroup?: string; reason?: string; }
   export interface RemoveHostGroupResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveLayoutDeviceRequest { id?: string; reason?: string; }
+  export interface RemoveLayoutDeviceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveLayoutRackRequest { id?: string; reason?: string; }
   export interface RemoveLayoutRackResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveLayoutRowRequest { id?: string; reason?: string; }

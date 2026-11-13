@@ -112,6 +112,9 @@ pub enum LayoutError {
         /// The rack's height.
         height: u32,
     },
+    /// No network device has the id.
+    #[error("there is no device {0}")]
+    UnknownDevice(String),
     /// More rows, racks or placements than the layout holds.
     #[error("the layout holds at most {0}")]
     Capacity(String),
@@ -237,6 +240,8 @@ pub struct Layout {
     racks: BTreeMap<String, Rack>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     placements: BTreeMap<String, Placement>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    devices: BTreeMap<String, Device>,
 }
 
 /// Whether `name` is a cluster's name.
@@ -277,6 +282,21 @@ impl Layout {
         racks: BTreeMap<String, Rack>,
         placements: BTreeMap<String, Placement>,
     ) -> Result<Self, LayoutError> {
+        Self::build(BTreeMap::new(), name, rows, racks, placements)
+    }
+
+    /// The layout of `devices` (by id) and the parts [`Layout::new`] takes, judged whole.
+    ///
+    /// # Errors
+    /// [`LayoutError`]: the first rule broken.
+    pub(crate) fn build(
+        devices: BTreeMap<String, Device>,
+        name: String,
+        rows: BTreeMap<String, Row>,
+        racks: BTreeMap<String, Rack>,
+        placements: BTreeMap<String, Placement>,
+    ) -> Result<Self, LayoutError> {
+        let devices = device::judge(devices)?;
         if !name.is_empty() && !is_name(&name) {
             return Err(LayoutError::Invalid(format!(
                 "the name: 1 to {MAX_NAME_CHARS} of letters, digits, space, . _ -"
@@ -377,6 +397,7 @@ impl Layout {
             rows,
             racks,
             placements,
+            devices,
         })
     }
 
@@ -451,7 +472,8 @@ impl Layout {
                 "the name is 1 or more characters".to_owned(),
             ));
         }
-        Self::new(
+        Self::build(
+            self.devices.clone(),
             name.to_owned(),
             self.rows.clone(),
             self.racks.clone(),
@@ -477,7 +499,8 @@ impl Layout {
             number,
         };
         rows.insert(id, row.clone());
-        let next = Self::new(
+        let next = Self::build(
+            self.devices.clone(),
             self.name.clone(),
             rows,
             self.racks.clone(),
@@ -499,7 +522,8 @@ impl Layout {
         }
         let mut rows = self.rows.clone();
         rows.remove(id);
-        Self::new(
+        Self::build(
+            self.devices.clone(),
             self.name.clone(),
             rows,
             self.racks.clone(),
@@ -558,7 +582,8 @@ impl Layout {
             height_u,
         };
         racks.insert(id, rack.clone());
-        let next = Self::new(
+        let next = Self::build(
+            self.devices.clone(),
             self.name.clone(),
             self.rows.clone(),
             racks,
@@ -584,7 +609,8 @@ impl Layout {
         }
         let mut racks = self.racks.clone();
         racks.remove(id);
-        Self::new(
+        Self::build(
+            self.devices.clone(),
             self.name.clone(),
             self.rows.clone(),
             racks,
@@ -601,7 +627,8 @@ impl Layout {
         let key = placement.subject.key();
         let mut placements = self.placements.clone();
         placements.insert(key, placement.clone());
-        let next = Self::new(
+        let next = Self::build(
+            self.devices.clone(),
             self.name.clone(),
             self.rows.clone(),
             self.racks.clone(),
@@ -619,7 +646,8 @@ impl Layout {
         placements
             .remove(&subject.key())
             .ok_or_else(|| LayoutError::UnknownPlacement(subject.key()))?;
-        Self::new(
+        Self::build(
+            self.devices.clone(),
             self.name.clone(),
             self.rows.clone(),
             self.racks.clone(),
@@ -639,6 +667,7 @@ impl Layout {
         rows: Vec<(String, serde_json::Value)>,
         racks: Vec<(String, serde_json::Value)>,
         placements: Vec<(String, serde_json::Value)>,
+        devices: Vec<(String, serde_json::Value)>,
     ) -> Result<Self, LayoutError> {
         let refused = |why: String| LayoutError::Stored {
             path: place.to_owned(),
@@ -657,7 +686,8 @@ impl Layout {
                 })
                 .collect()
         }
-        Self::new(
+        Self::build(
+            read(devices, &refused)?,
             name,
             read(rows, &refused)?,
             read(racks, &refused)?,
@@ -687,8 +717,14 @@ pub(crate) fn parse_file(path: &Path, bytes: &[u8]) -> Result<Layout, LayoutErro
         why,
     };
     let held: Layout = serde_json::from_slice(bytes).map_err(|e| refused(e.to_string()))?;
-    Layout::new(held.name, held.rows, held.racks, held.placements)
-        .map_err(|why| refused(why.to_string()))
+    Layout::build(
+        held.devices,
+        held.name,
+        held.rows,
+        held.racks,
+        held.placements,
+    )
+    .map_err(|why| refused(why.to_string()))
 }
 
 /// The layout stored, and the backend a change of it is committed to ([`crate::store`]).
@@ -786,6 +822,9 @@ impl LayoutStore {
         Ok(())
     }
 }
+
+mod device;
+pub use device::{Device, MAX_DEVICES, Segment};
 
 #[cfg(test)]
 #[path = "layout_tests.rs"]

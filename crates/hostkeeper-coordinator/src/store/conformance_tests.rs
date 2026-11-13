@@ -272,6 +272,27 @@ pub(crate) fn rich_layout() -> Layout {
     let (next, _) = next
         .with_placement(crate::operator_layout::placement_of(entry, &rack.id, 1, 1))
         .expect("a second placement");
+    let (next, device) = next
+        .with_device(
+            "",
+            crate::layout::Device {
+                id: String::new(),
+                name: "bmc-switch".into(),
+                role: crate::layout::Segment::Bmc,
+                console_host: "node-1".into(),
+                console_device: "/dev/ttyUSB0".into(),
+                management_mac: "aa:bb:cc:dd:ee:ff".into(),
+                notes: "top of the rack".into(),
+            },
+        )
+        .expect("a device");
+    let switch = crate::layout::Subject {
+        kind: crate::layout::Kind::Inventory,
+        id: device.id,
+    };
+    let (next, _) = next
+        .with_placement(crate::operator_layout::placement_of(switch, &rack.id, 3, 1))
+        .expect("the device placed");
     next
 }
 

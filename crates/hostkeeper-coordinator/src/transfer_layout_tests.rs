@@ -24,7 +24,8 @@ fn export_writes_the_layout_as_the_layout_file() {
     seeded(&from, &database);
     assert_eq!(count(&database, "lab_rows"), 1);
     assert_eq!(count(&database, "lab_racks"), 2);
-    assert_eq!(count(&database, "lab_placements"), 2);
+    assert_eq!(count(&database, "lab_placements"), 3);
+    assert_eq!(count(&database, "lab_devices"), 1);
     assert_eq!(loaded(&database).layout, rich_layout());
 
     let into = Store::new("transfer-layout-export-into");
@@ -34,7 +35,8 @@ fn export_writes_the_layout_as_the_layout_file() {
 
     assert!(report.contains("  lab_rows: 1 rows"), "{report}");
     assert!(report.contains("  lab_racks: 2 rows"), "{report}");
-    assert!(report.contains("  lab_placements: 2 rows"), "{report}");
+    assert!(report.contains("  lab_placements: 3 rows"), "{report}");
+    assert!(report.contains("  lab_devices: 1 rows"), "{report}");
     let path = layout_path(&into.paths.state_file);
     let written = std::fs::read(&path).expect("the file");
     assert_eq!(parse_file(&path, &written).expect("reads"), rich_layout());

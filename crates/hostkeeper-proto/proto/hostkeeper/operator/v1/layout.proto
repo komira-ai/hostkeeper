@@ -32,8 +32,8 @@ package hostkeeper.operator.v1;
 import "hostkeeper/operator/v1/entry.proto";
 
 // The lab's layout. Every write is audited under the caller's name: `layout_name_put`,
-// `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place`
-// and `layout_unplace`. A write takes an optional reason; without one the audit says "layout edit".
+// `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place`,
+// `layout_unplace`, `layout_device_put` and `layout_device_remove`. A write takes an optional reason; without one the audit says "layout edit".
 service Layout {
   // The whole layout: the cluster's name, every row by number, every rack by row and number,
   // every placement by rack and lowest U. Changes nothing. The layout is empty on a coordinator
@@ -57,6 +57,12 @@ service Layout {
   rpc Place(PlaceLayoutRequest) returns (PlaceLayoutResponse);
   // Takes a server out of its rack: it is unplaced again.
   rpc Unplace(UnplaceLayoutRequest) returns (UnplaceLayoutResponse);
+  // Adds a network device (a switch) to the lab (empty `id`: its id is `net.<n>`, one more than
+  // the highest held), or replaces every field of the device `id`. A device is placed like an
+  // inventory entry: `Place` with the subject kind INVENTORY and the device's id.
+  rpc PutDevice(PutLayoutDeviceRequest) returns (PutLayoutDeviceResponse);
+  // Removes a network device and its placement, if it has one.
+  rpc RemoveDevice(RemoveLayoutDeviceRequest) returns (RemoveLayoutDeviceResponse);
 }
 
 // Why `Layout` refused a request. The token is the value's name without the prefix, in lower
@@ -92,6 +98,8 @@ enum LayoutRefusal {
   LAYOUT_REFUSAL_OUT_OF_RACK = 12;
   // FAILED_PRECONDITION: a new row, rack or placement past the most the coordinator holds.
   LAYOUT_REFUSAL_CAPACITY = 13;
+  // NOT_FOUND: a device id the layout does not hold.
+  LAYOUT_REFUSAL_UNKNOWN_DEVICE = 14;
 }
 
 // A row of racks: a band of the floor plan.
@@ -157,6 +165,8 @@ message GetLayoutResponse {
   repeated LayoutPlacement placements = 3;
   // The cluster's name; empty until `PutName`.
   string name = 4;
+  // Every network device, by name.
+  repeated NetworkDevice devices = 5;
 }
 
 message PutLayoutNameRequest {
@@ -235,5 +245,63 @@ message UnplaceLayoutRequest {
 }
 
 message UnplaceLayoutResponse {
+  AuditEntry entry = 1;
+}
+
+// What a network device does in the lab.
+enum NetworkRole {
+  NETWORK_ROLE_UNSPECIFIED = 0;
+  // It carries the BMC network.
+  NETWORK_ROLE_BMC = 1;
+  // It carries the data network.
+  NETWORK_ROLE_DATA = 2;
+}
+
+// A network device, a switch: not a host, it enrolls nothing and hostkeeper hears no state from it.
+// At most 256 are held. Its placement subject is `INVENTORY` with its `id`; no host id has a `.`,
+// so it never shares an id with a server's inventory entry.
+message NetworkDevice {
+  // `net.<n>`: made by the coordinator, never changed.
+  string id = 1;
+  // 1 to 32 characters of letters, digits, space, `.`, `_` and `-`; no two devices share one.
+  string name = 2;
+  NetworkRole role = 3;
+  // The host id of the host the device's console cable ends at; empty for none. Not checked
+  // against the hosts.
+  string console_host = 4;
+  // What the console port is on that host: `/dev/` and 1 to 48 of letters, digits, `.`, `_`,
+  // `-` and `/`, without `..`; empty for none. Set with `console_host` or not at all.
+  string console_device = 5;
+  // The management interface's MAC, any common spelling in, lower-case colon-separated out;
+  // empty for none.
+  string management_mac = 6;
+  // 0 to 256 bytes once trimmed, no control character but the line break.
+  string notes = 7;
+}
+
+message PutLayoutDeviceRequest {
+  // Empty to add; else the device to replace.
+  string id = 1;
+  // Every field of the device but `id`.
+  string name = 2;
+  NetworkRole role = 3;
+  string console_host = 4;
+  string console_device = 5;
+  string management_mac = 6;
+  string notes = 7;
+  string reason = 8;
+}
+
+message PutLayoutDeviceResponse {
+  NetworkDevice device = 1;
+  AuditEntry entry = 2;
+}
+
+message RemoveLayoutDeviceRequest {
+  string id = 1;
+  string reason = 2;
+}
+
+message RemoveLayoutDeviceResponse {
   AuditEntry entry = 1;
 }

@@ -118,6 +118,11 @@ package)'s minimum version, marks and plan position), the whole audit log, and t
   before never reads either table, so going back below this release needs no restore for it.
   The login, the initial-admin file and the `Users` and `ApiTokens` services write these rows; `export` writes them to the
   accounts file.
+- **The lab's network devices.** Migration `0016` adds `lab_devices`, one row per switch, keyed by id (`net.<n>`), holding the
+  record as the layout file holds it under `devices` (name, role, console host and device, management MAC, notes;
+  `docs/design/network-gear.md`). A database that holds no row holds no device. `0016` says older releases may run on it
+  (`may-run`): they never read the table. A device is placed by the inventory subject of its id (`inventory:net.<n>`) in
+  `lab_placements`. The `Layout` calls `PutDevice` and `RemoveDevice` write the row; `export` writes the devices into the layout file.
 - **The lab layout.** Migration `0014` adds `lab_cluster` (one row, `name`, the cluster's name as a JSON text), `lab_rows`,
   `lab_racks` and `lab_placements`, one row per row, rack and placement, keyed by id (`row-<n>`, `rack-<n>`) or by subject
   (`host:<id>` or `inventory:<id>`), holding the record as the layout file holds it
@@ -274,7 +279,7 @@ hostkeeper-coordinator export --database-dsn-file <file> --state-file <file> [--
   database held, hashes and all; a database that holds neither is exported with no such file. There
   is no import: a file store's accounts file does not reach a database by any verb, and a database
   is filled by serving on it.
-- The rows of `lab_cluster`, `lab_rows`, `lab_racks` and `lab_placements` are written as `<state-file>.layout` (mode 0600, JSON,
+- The rows of `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements` and `lab_devices` are written as `<state-file>.layout` (mode 0600, JSON,
   the file the file store keeps), which a coordinator started on the files reads as the layout the database held; a database
   that holds none is exported with no such file. There is no import, as for the accounts.
 - The MDM tables (`mdm_*` and `abm_*`, the setup's sealed secrets and settings among them) are not
@@ -556,8 +561,9 @@ is its inventory entry when one matches the host (so a wipe and a new enrollment
   the placement are judged first, so a placement that cannot be made refuses the approval (`placement_overlap`,
   `placement_out_of_rack`, `unknown_rack`, `placement_invalid`) and nothing changes; the audit holds `enroll_approve` and then
   `layout_place` with the reason `approval`. An approval with no placement places nothing, and the host is listed as unplaced.
+- `PutDevice` adds a network device (a switch: name, role BMC or data network, console host and device, optional management MAC, notes) or replaces one by its id `net.<n>`; `RemoveDevice` removes it with its placement. A device is placed with `Place` under the inventory subject of its id.
 - Each write is audited by the caller: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`,
-  `layout_rack_remove`, `layout_place`, `layout_unplace`; a call whose audit line cannot be written changes nothing
+  `layout_rack_remove`, `layout_place`, `layout_unplace`, `layout_device_put`, `layout_device_remove`; a call whose audit line cannot be written changes nothing
   (`audit_unavailable`), and one the store then cannot write is `store_failed` and leaves the audit entry written before it.
 
 A coordinator before this release has no `Layout` service (`UNIMPLEMENTED`), never reads the layout file or tables, and an
