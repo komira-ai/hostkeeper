@@ -69,7 +69,7 @@ The desired state's `max_updating` and `min_up` maps move to the group's policy 
 
 ### 2.2 CI tokens
 
-An entry of the OIDC allow-list keeps `services` and gains an optional `host_groups`: the groups the token may deploy to. An entry without it may deploy its services to any group that lists them, as today it may deploy them to every host. A call without a group from a token limited to some groups is read as one deployment to each group the token may deploy to that lists the package.
+An entry of the OIDC allow-list keeps `services` and gains an optional `host_groups`: the groups the token may deploy to. (Since trusted publishers, the entries a package trusts are held per package in coordinator state and start as the file's; an imported entry keeps its `host_groups`; docs/deploy/ci-client.md, "Trusted publishers".) An entry without it may deploy its services to any group that lists them, as today it may deploy them to every host. A call without a group from a token limited to some groups is read as one deployment to each group the token may deploy to that lists the package.
 
 ### 2.3 What is per (group, package) and what is per (package, version)
 

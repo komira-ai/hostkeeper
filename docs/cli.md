@@ -1025,6 +1025,55 @@ is not registered. Writes the audit entry `service_remove`.
 | `--service` | STRING | The package. |
 | `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
 
+#### `hkctl services list-trusted-publishers`
+
+`/hostkeeper.operator.v1.Services/ListTrustedPublishers`
+
+The trusted publishers of a package: the GitHub Actions runs (repository, workflow file, ref
+and, if named, environment) whose OIDC token may set its desired version. A CI call sets a
+package only when its token matches one of the package's entries. A coordinator's first start
+with entries imports those of its `--oidc-config` allow-list for each package that has none
+held; the state's own entries win from then on. `unknown_service` for a package the
+coordinator does not know.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package. |
+
+#### `hkctl services put-trusted-publisher`
+
+`/hostkeeper.operator.v1.Services/PutTrustedPublisher`
+
+Add an entry to a package's list (one already held stays as it is). Takes effect at once.
+Writes the audit entry `trusted_publisher_put`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package. |
+| `--repository` | STRING | The repository, `owner/name`. |
+| `--workflow` | STRING | The workflow file: `.github/workflows/<name>.yml` (or `.yaml`). |
+| `--ref` | STRING | The branch (`main`) or the full ref (`refs/tags/v1`) the run is on. Empty: `main`. |
+| `--environment` | STRING | The environment of the job, if the entry names one; empty: not matched. |
+| `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
+
+#### `hkctl services remove-trusted-publisher`
+
+`/hostkeeper.operator.v1.Services/RemoveTrustedPublisher`
+
+Take an entry out of a package's list, `publisher_unknown` when the package holds none like it.
+Takes effect at once; leaving the list empty leaves the package with no CI caller, and a
+restart does not bring the allow-list's entries back. Writes the audit entry
+`trusted_publisher_remove`.
+
+| flag | value | meaning |
+|---|---|---|
+| `--service` | STRING | The package. |
+| `--repository` | STRING | The repository, `owner/name`. |
+| `--workflow` | STRING | The workflow file, as the list shows it. |
+| `--ref` | STRING | The branch or the full ref. Empty: `main`. |
+| `--environment` | STRING | The environment, as the list shows it; empty: none. |
+| `--reason` | STRING | Why, 1 to 256 bytes; recorded in the audit entry. |
+
 #### `hkctl services hold`
 
 `/hostkeeper.operator.v1.Services/Hold`

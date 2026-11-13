@@ -270,6 +270,11 @@ fn every_refusal_value_has_the_code_and_token_its_proto_comment_names() {
                 "repository_unknown",
             ),
             (ServicesRefusal::InUse, FailedPrecondition, "in_use"),
+            (
+                ServicesRefusal::PublisherUnknown,
+                NotFound,
+                "publisher_unknown",
+            ),
         ],
         refusal::services,
     );

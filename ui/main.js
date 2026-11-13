@@ -23,4 +23,8 @@ startApp({
   confirm: (question) => window.confirm(question),
   now: () => Math.floor(Date.now() / 1000),
   download,
+  every: (run, milliseconds) => {
+    const timer = window.setInterval(run, milliseconds);
+    return () => window.clearInterval(timer);
+  },
 });

@@ -245,6 +245,10 @@ pub struct Coordinator {
     /// sign-in routes are not served and no cookie is read.
     login: Option<crate::login::Login>,
     verifier: Arc<Verifier>,
+    /// The trusted publishers the allow-list file stands for, per package
+    /// ([`crate::trusted_publishers`]): a package's entries until the state holds its own.
+    pub(crate) listed_publishers:
+        std::collections::BTreeMap<String, Vec<crate::trusted_publishers::TrustedPublisher>>,
     pub(crate) tokens: OperatorTokens,
     pub(crate) clock: Clock,
     services_dropped: AtomicU64,
@@ -334,6 +338,7 @@ impl Coordinator {
             initial_admin: None,
             login: None,
             verifier,
+            listed_publishers: std::collections::BTreeMap::new(),
             tokens: operator.into(),
             clock,
             services_dropped: AtomicU64::new(0),
@@ -408,6 +413,19 @@ impl Coordinator {
     #[must_use]
     pub fn ui(&self) -> Option<&UiDir> {
         self.ui.as_ref()
+    }
+
+    /// The same coordinator whose packages' trusted publishers are, until the state holds a
+    /// package's own, those the allow-list `list` stands for (`legacy` for an entry that names no
+    /// service): [`crate::trusted_publishers::import`].
+    #[must_use]
+    pub fn with_allow_list(
+        mut self,
+        list: &hostkeeper_oidc::AllowList,
+        legacy: Option<&str>,
+    ) -> Self {
+        self.listed_publishers = crate::trusted_publishers::import(list, legacy);
+        self
     }
 
     /// The same coordinator over `ops` instead of a store that keeps nothing.
@@ -810,12 +828,17 @@ impl Coordinator {
         (reply, order, terms, acks)
     }
 
-    /// The CI token in `bearer`, checked by the verifier.
+    /// The CI token in `bearer`, checked by the verifier: its issuer, audience, times and run
+    /// rules as the allow-list file says them, and then that some package trusts the run
+    /// ([`crate::trusted_publishers`]; refused as the rule that fails says, `repository`,
+    /// `workflow`, `ref` or `environment`), before its `jti` is spent. Which package it may set is
+    /// [`Self::ci_admits`].
     pub(crate) async fn ci(&self, bearer: Option<&str>) -> Result<Verified, CiRefused> {
         let token = bearer
             .filter(|t| t.len() <= MAX_BEARER_BYTES)
             .ok_or(CiRefused::Unauthorized("missing"))?;
-        match self.verifier.verify(token).await {
+        let trusted = |who: &Verified| self.ops.read(|state| self.judge_publishers(state, who));
+        match self.verifier.verify_open(token, &trusted).await {
             Ok(verified) => Ok(verified),
             Err(Refusal::KeysUnavailable | Refusal::ReplayCacheUnavailable) => {
                 Err(CiRefused::Unavailable)

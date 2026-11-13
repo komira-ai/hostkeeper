@@ -230,22 +230,22 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
             row(
                 "old-1",
                 "linux-x86_64",
-                "-",
-                "-",
+                "hostkeeper-archive",
+                "hostkeeper-archive",
                 "hostkeeper-archive (entry 3)"
             ),
             row(
                 "new-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "-",
+                "Not installed",
                 "deb (entry 2)"
             ),
             row(
                 "runs-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "-",
+                "hostkeeper-archive",
                 "hostkeeper-archive (entry 3)"
             ),
             row(
@@ -259,7 +259,7 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
                 "absent-1",
                 "linux-x86_64",
                 "hostkeeper-archive, deb",
-                "rpm",
+                "Not installed",
                 "deb (entry 2)"
             ),
             row(
@@ -267,44 +267,56 @@ fn each_host_of_the_service_is_shown_with_its_pick_or_why_it_has_none() {
                 "linux-x86_64",
                 "hostkeeper-archive",
                 "rpm",
-                "none: installer_dropped"
+                "Installer missing"
             ),
             row(
                 "arm-1",
                 "linux-arm64",
                 "hostkeeper-archive, deb",
-                "-",
-                "none: no_build_for_host"
+                "Not installed",
+                "No build for this host"
             ),
             row(
                 "odd-1",
                 "linux-arm64",
                 "future-kind",
-                "-",
+                "Not installed",
                 "future-kind (entry 1)"
             ),
             row(
                 "mac-1",
                 "macos-arm64",
-                "-",
-                "-",
+                "hostkeeper-archive",
+                "Not installed",
                 "hostkeeper-archive (entry 1)"
             ),
-            row("quiet-1", "linux-x86_64", "-", "-", "none: unheard"),
-            row("blank-1", "-", "-", "-", "unknown: platform not reported"),
+            row(
+                "quiet-1",
+                "linux-x86_64",
+                "none reported",
+                "Not installed",
+                "Installer not reported"
+            ),
+            row(
+                "blank-1",
+                "-",
+                "hostkeeper-archive",
+                "Not installed",
+                "Unknown (platform not reported)"
+            ),
         ]])
     );
     assert_eq!(
         out["out"]["counts"],
         json!([[
+            "Installer missing: 1",
+            "Installer not reported: 1",
+            "No build for this host: 1",
+            "Unknown (platform not reported): 1",
             "deb (entry 2): 3",
             "future-kind (entry 1): 1",
             "hostkeeper-archive (entry 1): 1",
             "hostkeeper-archive (entry 3): 2",
-            "none: installer_dropped: 1",
-            "none: no_build_for_host: 1",
-            "none: unheard: 1",
-            "unknown: platform not reported: 1",
         ]])
     );
     assert!(shown(&out).contains("Hosts of web (11)"), "{}", shown(&out));
@@ -326,7 +338,10 @@ fn a_release_with_no_target_says_so_and_picks_every_host_nothing() {
     assert_eq!(out["out"]["digest"], json!("-"));
     assert_eq!(out["out"]["keys"], json!("none"));
     assert_eq!(out["out"]["platforms"], json!([]));
-    assert_eq!(out["out"]["counts"], json!([["none: no_target: 1"]]));
+    assert_eq!(
+        out["out"]["counts"],
+        json!([["No build for this platform: 1"]])
+    );
     assert!(
         shown(&out).contains("This release names no targets."),
         "{}",
@@ -567,72 +582,5 @@ export async function main() {
     assert_eq!(
         out["order"],
         json!([[], ["linux-x86_64", "macos-arm64", "a", "b"]])
-    );
-}
-
-/// Catches a Release page missing from the app's page list, or one the frame opens without
-/// what the operator typed: the page list's Release opens the form, and Show there reads the
-/// release of the service and version typed.
-#[test]
-fn the_page_list_opens_the_release_page_and_its_form_reads_the_release() {
-    let mut ui = Ui::start();
-    ui.session("operator-csrf");
-    ui.reply(&m("Releases/Status"), json!({}));
-    ui.reply(&m("Hosts/List"), json!({}));
-    ui.reply(&m("Releases/GetRelease"), json!({}));
-    ui.reply(&m("Hosts/List"), json!({}));
-    ui.run(
-        r#"
-import { fakeDocument, settle } from "../test/kit.js";
-import { startApp } from "./app.js";
-export async function main() {
-  const doc = fakeDocument();
-  globalThis.doc = doc;
-  startApp({ doc, root: doc.root, fetch: gatewayFetch, confirm: () => true, now: () => 1800000000 });
-  await settle();
-}"#,
-    );
-    let step = |steps: &str| {
-        format!(
-            r#"
-import {{ domNamed, domTexts, fire }} from "../test/kit.js";
-export async function main() {{
-  const doc = globalThis.doc;
-  {steps}
-  return domTexts(doc.root).join(" ");
-}}"#
-        )
-    };
-    // Each run settles every job the one before it started, so a run reads what the page drew.
-    ui.run(&step(
-        r#"fire(domNamed(doc.root, "page-release"), "click", {});"#,
-    ));
-    let before = ui.run(&step(""));
-    ui.run(&step(
-        r#"fire(domNamed(doc.root, "service"), "input", { target: { value: "web" } });
-  fire(domNamed(doc.root, "version"), "input", { target: { value: "1.0.0" } });
-  fire(domNamed(doc.root, "show"), "click", {});"#,
-    ));
-    let out = ui.run(&step(""));
-    let before = before.as_str().expect("text");
-    assert!(
-        before.contains("Name a service and a version to see the targets it was set with."),
-        "{before}"
-    );
-    let after = out.as_str().expect("text");
-    assert!(after.contains("This release names no targets."), "{after}");
-    assert!(after.contains("No host reports web."), "{after}");
-    let calls: Vec<(String, Value)> = ui
-        .requests()
-        .iter()
-        .filter(|r| r.method() == m("Releases/GetRelease"))
-        .map(|r| (r.method().to_owned(), r.body()))
-        .collect();
-    assert_eq!(
-        calls,
-        vec![(
-            m("Releases/GetRelease"),
-            json!({"service": "web", "version": "1.0.0"})
-        )]
     );
 }

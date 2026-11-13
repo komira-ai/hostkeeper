@@ -494,7 +494,8 @@ async fn without_a_legacy_service_a_body_naming_no_service_is_refused() {
 
 /// Catches: an allow-list entry without `services` admitting more than the legacy service,
 /// or nothing: with kbf as the legacy service it sets a body without `service`, a body naming
-/// `kbf`, and no other service; with no legacy service it sets nothing at all.
+/// `kbf`, and no other service; with no legacy service the entry stands for no package, so no
+/// token is trusted by any package (`repository`).
 #[tokio::test]
 async fn an_entry_without_services_stands_for_the_legacy_service_alone() {
     let mut rig = Rig::new("svc-entry-legacy");
@@ -513,14 +514,23 @@ async fn an_entry_without_services_stands_for_the_legacy_service_alone() {
     let mut rig = Rig::new("svc-entry-no-legacy");
     rig.coordinator = Rig::start(&rig.dir, &rig.clock)
         .with_services(with_kbf(OTHER_SERVICE))
-        .with_legacy_service(None);
+        .with_legacy_service(None)
+        .with_allow_list(
+            &crate::testutil::allow_list(&hostkeeper_oidc::testkit::config_text(
+                hostkeeper_oidc::testkit::STATIC_ISSUER,
+            )),
+            None,
+        );
     let c = &rig.coordinator;
     for body in [OTHER, named.as_str()] {
         let set = c.set_desired(Some(&ci_token()), body.as_bytes()).await;
-        assert!(matches!(set, Err(SetError::Forbidden)), "{body}");
+        assert!(
+            matches!(set, Err(SetError::Unauthorized("repository"))),
+            "{body}"
+        );
     }
     let set = c.set_desired(Some(&ci_token()), STATE.as_bytes()).await;
-    assert!(matches!(set, Err(SetError::Invalid(_))));
+    assert!(matches!(set, Err(SetError::Unauthorized("repository"))));
 }
 
 /// Catches: the agent of a host missing from the status or shown twice: a heartbeat without

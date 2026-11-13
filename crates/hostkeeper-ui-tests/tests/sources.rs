@@ -135,10 +135,11 @@ fn calls_json_matches_the_source() {
 }
 
 #[test]
-fn only_the_rollout_page_calls_set_desired() {
-    // Catches: a page other than Rollout that grows a set-desired call, a call site of it
-    // outside pages/, a list that names it under another page, and a Rollout page that stops
-    // calling it while the list still names it. The generated client defines the function, and
+fn only_the_rollout_module_calls_set_desired() {
+    // Catches: a page other than the Rollout module that grows a set-desired call, a call site of
+    // it outside pages/, a list that names it under another page, and a Rollout module that stops
+    // calling it while the list still names it. The package page offers the button by importing
+    // the Rollout module's `setDesired`; it makes no call of its own. The generated client defines the function, and
     // so names the method; it calls nothing by itself.
     let method = "hostkeeper.operator.v1.Releases/SetDesired";
     let callers: BTreeSet<String> = sites()
@@ -156,6 +157,7 @@ fn only_the_rollout_page_calls_set_desired() {
     for file in UI_FILES.iter().filter(|f| {
         ![
             "pages/rollout.js",
+            "pages/package.js",
             "calls.json",
             "gen/client.js",
             "gen/client.d.ts",
@@ -164,7 +166,7 @@ fn only_the_rollout_page_calls_set_desired() {
     }) {
         assert!(
             !file.text.contains("SetDesired") && !file.text.contains("setDesired"),
-            "{} names SetDesired: only the Rollout page sets the desired version",
+            "{} names SetDesired: only the Rollout module sets the desired version",
             file.path
         );
     }

@@ -236,6 +236,7 @@ pub mod status;
 pub(crate) mod store;
 pub mod tokens;
 pub mod transfer;
+pub mod trusted_publishers;
 pub mod trusted_root;
 pub mod ui;
 pub mod verdict_file;

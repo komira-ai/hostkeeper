@@ -158,9 +158,10 @@ impl Coordinator {
                 Some(release)
             }
         };
-        if let Setter::Ci(verified) = setter {
-            self.ci_admits(verified, &service)?;
-        }
+        let permitted = match setter {
+            Setter::Ci(verified) => self.ci_admits(verified, &service)?,
+            Setter::Operator(_) => None,
+        };
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
             Setter::Operator(name) => (*name, format!("operator token {name}")),
@@ -169,16 +170,12 @@ impl Coordinator {
         // The fleet's lock is held to the end of the set, as for a set of a service: the groups
         // and the marks the refusals are decided on do not change under it.
         let _fleet = self.lock_fleet_for_set();
-        let permitted = match setter {
-            Setter::Ci(verified) => verified.host_groups.as_deref(),
-            Setter::Operator(_) => None,
-        };
         let groups = deployment_targets(
             &self.desired.host_groups(),
             &service,
             host_group,
             ask,
-            permitted,
+            permitted.as_deref(),
         )?;
         let state = self.ops.state();
         for group in &groups {

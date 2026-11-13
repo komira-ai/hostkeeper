@@ -10,12 +10,12 @@ import { ApiError } from "./api.js";
 
 const TAGS = new Set([
   "a", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
-  "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
+  "legend", "li", "main", "nav", "option", "p", "pre", "progress", "section", "select", "small", "span",
   "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
 ]);
 const ATTRIBUTES = new Set([
   "aria-label", "href", "rel", "target", "autocomplete", "class", "id", "inputmode", "maxlength", "name", "placeholder",
-  "role", "rows", "spellcheck", "type",
+  "role", "rows", "spellcheck", "type", "max",
 ]);
 // Set as properties, not attributes: what the element shows now.
 const PROPERTIES = new Set(["checked", "disabled", "selected", "value"]);

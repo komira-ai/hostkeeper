@@ -120,9 +120,9 @@ async fn no_service_name_is_built_in() {
     assert_eq!(names, ["tierstore"]);
 }
 
-/// Proves: an allow-list entry that says `services = []` grants CI nothing: with tierstore
-/// defined, CI's desired state for it is refused 403 (a defined service the entry does not
-/// name), one for kbf is refused 400 (not defined), and nothing is stored.
+/// Proves: an allow-list entry that says `services = []` grants CI nothing: it makes no trusted
+/// publisher of any package, so the token is refused 401 whichever service the body names (a
+/// defined one or not), and nothing is stored.
 #[tokio::test]
 async fn an_entry_with_no_services_grants_ci_nothing() {
     let spec = Spec::recorded()
@@ -136,8 +136,14 @@ async fn an_entry_with_no_services_grants_ci_nothing() {
         format!(r#"{{"service":"{name}","version":"2.0","min_up":{{"storage":1,"frontend":1}}}}"#)
     };
     let (code, answer) = rig.desired(&body("tierstore")).await;
-    assert_eq!((code, answer.as_str()), (403, r#"{"error":"forbidden"}"#));
+    assert_eq!(
+        (code, answer.as_str()),
+        (401, r#"{"error":"unauthorized"}"#)
+    );
     let (code, answer) = rig.desired(&body("kbf")).await;
-    assert_eq!((code, answer.as_str()), (400, r#"{"error":"bad_request"}"#));
+    assert_eq!(
+        (code, answer.as_str()),
+        (401, r#"{"error":"unauthorized"}"#)
+    );
     assert!(!rig.dir.path().join("desired.json").exists());
 }

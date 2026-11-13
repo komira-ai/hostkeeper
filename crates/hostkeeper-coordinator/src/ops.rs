@@ -105,6 +105,7 @@ use crate::inventory::{InventoryRecord, RecordWindow};
 use crate::ops_file;
 use crate::rollouts::Rollout;
 use crate::store::{BackendError, Commit, Fake, Files, Shared, commit_across};
+use crate::trusted_publishers::TrustedPublisher;
 
 pub use crate::operate::OperateError;
 
@@ -293,6 +294,12 @@ pub struct ServiceOps {
     /// always did.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub repository: Option<String>,
+    /// The CI runs that may set the service's desired version ([`crate::trusted_publishers`]).
+    /// `None` until the service's entries are first held (the start imports the allow-list's);
+    /// `Some`, empty or not, is the state's own. Written only once it is `Some`, so a file of a
+    /// service whose entries were never held reads as it always did.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub trusted_publishers: Option<Vec<TrustedPublisher>>,
 }
 
 /// One change, as the ring and the log say it.
@@ -307,7 +314,7 @@ pub struct AuditEntry {
     pub by: String,
     /// What it was (`exclude`, `exclude_abandon`, `include`, `set_labels`, `clear_halt`, `halt`,
     /// `mark_bad`, `unmark_bad`, `abort`, `record_cleared`, `retry`, `hold`, `unhold`, `assign`, `unassign`,
-    /// `set_min_version`, `set_repository`, `service_put`, `service_remove`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
+    /// `set_min_version`, `set_repository`, `service_put`, `service_remove`, `trusted_publisher_put`, `trusted_publisher_remove`, `trusted_publishers_import`, `force` with the `unmark_bad`, `mark_bad` and `clear_halt` it made; the
     /// coordinator's own: `last_good`, `clear_last_good`, `mark_bad`, `uninstalled` and
     /// `uninstall_cancelled`; the update plans': `rollout_advance` (the coordinator's, when a plan
     /// enters a stage by itself, or an operator's `Rollouts.Advance`), `rollout_pause` and
