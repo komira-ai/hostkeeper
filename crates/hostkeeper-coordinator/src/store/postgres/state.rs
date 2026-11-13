@@ -34,6 +34,7 @@ use crate::ops::{
     Exclusion, FailureAck, Halt, HaltAck, HaltOrigin, HostOps, OpsError, OpsState, ServiceOps,
 };
 use crate::rollouts::{Pause, Rollout};
+use crate::trusted_publishers::TrustedPublisher;
 use crate::verdict_file::{self, VerdictsError};
 
 /// The desired state's tables, the releases' (`0004`), the registry's (`0007`) and the host
@@ -94,6 +95,7 @@ pub(crate) const OPS: [Table; 18] = [
             ("uninstall_generation", Ty::Int),
             ("force", Ty::Json),
             ("repository", Ty::Text),
+            ("trusted_publishers", Ty::Json),
         ],
     },
     Table {
@@ -514,12 +516,14 @@ pub(crate) fn ops_rows(state: &OpsState) -> Result<Tables, StoreError> {
             Val::Int(int(assigned.uninstall_generation)?),
             marks.force.as_ref().map_or(Val::Null, json),
             Val::text_or_null(marks.repository.as_deref()),
+            marks.trusted_publishers.as_ref().map_or(Val::Null, json),
         ];
         let default = [
             Val::Null,
             Val::Int(0),
             Val::Int(0),
             Val::Int(0),
+            Val::Null,
             Val::Null,
             Val::Null,
         ];
@@ -710,6 +714,7 @@ pub(crate) fn ops_of(tables: &Tables) -> Result<OpsState, OpsError> {
         marks.force_generation = at.count(2)?;
         marks.force = at.json::<ForceRecord>(4)?;
         marks.repository = at.text(5)?;
+        marks.trusted_publishers = at.json::<Vec<TrustedPublisher>>(6)?;
         let uninstall = at.count(3)?;
         if uninstall != 0 {
             state

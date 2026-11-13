@@ -87,7 +87,8 @@ pub(crate) fn services(refusal: ServicesRefusal) -> Status {
         | ServicesRefusal::UnknownHost
         | ServicesRefusal::UnknownRole
         | ServicesRefusal::UnknownHostGroup
-        | ServicesRefusal::RepositoryUnknown => Code::NotFound,
+        | ServicesRefusal::RepositoryUnknown
+        | ServicesRefusal::PublisherUnknown => Code::NotFound,
         ServicesRefusal::NotAssigned
         | ServicesRefusal::NotHeld
         | ServicesRefusal::BelowMinVersion

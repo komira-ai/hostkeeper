@@ -23,6 +23,10 @@ pub const AUDIENCE: &str = "hostkeeper-test";
 pub const WORKFLOW: &str =
     "example-org/example-repo/.github/workflows/ci-check.yml@refs/heads/main";
 
+/// The `workflow_ref` claim of [`good_claims`]: the workflow that started the run.
+pub const WORKFLOW_REF: &str =
+    "example-org/example-repo/.github/workflows/deploy.yml@refs/heads/main";
+
 /// An RSA signing key and the JWK that publishes it.
 pub struct TestKey {
     pub kid: String,
@@ -374,7 +378,8 @@ pub fn good_claims(issuer: &str) -> Value {
         "exp": NOW + 300, "iat": NOW, "nbf": NOW,
         "jti": format!("jti-{}", SERIAL.fetch_add(1, Ordering::SeqCst)),
         "repository_id": "4242", "repository": "example-org/example-repo",
-        "job_workflow_ref": WORKFLOW, "ref": "refs/heads/main", "environment": "canary",
+        "job_workflow_ref": WORKFLOW, "workflow_ref": WORKFLOW_REF, "ref": "refs/heads/main",
+        "environment": "canary",
         "event_name": "push", "runner_environment": "github-hosted",
         "sha": "0123456789abcdef0123456789abcdef01234567",
     })

@@ -202,6 +202,21 @@ service Services {
   // lists it (the groups it is listed by are the ones `List` names), and `unknown_service` when it
   // is not registered. Writes the audit entry `service_remove`.
   rpc Remove(RemoveServiceRequest) returns (RemoveServiceResponse);
+  // The trusted publishers of a package: the GitHub Actions runs (repository, workflow file, ref
+  // and, if named, environment) whose OIDC token may set its desired version. A CI call sets a
+  // package only when its token matches one of the package's entries. A coordinator's first start
+  // with entries imports those of its `--oidc-config` allow-list for each package that has none
+  // held; the state's own entries win from then on. `unknown_service` for a package the
+  // coordinator does not know.
+  rpc ListTrustedPublishers(ListTrustedPublishersRequest) returns (ListTrustedPublishersResponse);
+  // Add an entry to a package's list (one already held stays as it is). Takes effect at once.
+  // Writes the audit entry `trusted_publisher_put`.
+  rpc PutTrustedPublisher(PutTrustedPublisherRequest) returns (PutTrustedPublisherResponse);
+  // Take an entry out of a package's list, `publisher_unknown` when the package holds none like it.
+  // Takes effect at once; leaving the list empty leaves the package with no CI caller, and a
+  // restart does not bring the allow-list's entries back. Writes the audit entry
+  // `trusted_publisher_remove`.
+  rpc RemoveTrustedPublisher(RemoveTrustedPublisherRequest) returns (RemoveTrustedPublisherResponse);
   // Hold a service on a host, a role or the whole fleet where it is: the coordinator orders the
   // held pairs nothing (no update, install, rollback, uninstall or force) until the hold is
   // released. A hold carries no version, takes no slot, survives a coordinator restart, covers
@@ -390,6 +405,8 @@ enum ServicesRefusal {
   SERVICES_REFUSAL_REPOSITORY_UNKNOWN = 15;
   // FAILED_PRECONDITION: `Remove` of a package a host group (or the rollout file) lists or defines.
   SERVICES_REFUSAL_IN_USE = 16;
+  // NOT_FOUND: `RemoveTrustedPublisher` of an entry the package does not hold.
+  SERVICES_REFUSAL_PUBLISHER_UNKNOWN = 17;
 }
 
 // Why `Audit` refused a request. The token is the value's name without the prefix, in lower case.

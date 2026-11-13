@@ -4,7 +4,8 @@
 // bar with the versions the hosts run, the state in words and the plan; the acts on it behind
 // buttons that open a small form (set the version, pause, resume or advance the plan, hold, check
 // convergence); the manifest of a version in a collapsible code view, with the entry each host of
-// the package is picked; the holds that stand on the package; and, in a collapsed danger zone,
+// the package is picked; the holds that stand on the package; its trusted publishers, the GitHub
+// Actions runs that may set its desired version, added from a form behind a button; and, in a collapsed danger zone,
 // the acts that cut running work or set a bad mark: mark a version bad, halt, and force. These are
 // what the Rollout, Release and Holds pages did; their routes lead here.
 //
@@ -19,7 +20,11 @@
 // Calls: Releases.Status (for this package), Services.List, Repositories.List, Releases.GetRelease
 // and Hosts.List (every page of it, once for each version shown); on a button, Releases.SetDesired
 // (through `setDesired` of the Rollout module, which sets one host group when the entry names
-// one), Rollouts.Pause, Rollouts.Resume, Rollouts.Advance, Services.Hold, Services.Unhold,
+// one), Services.ListTrustedPublishers, Services.PutTrustedPublisher, Services.RemoveTrustedPublisher
+// (a package's trusted publishers: the GitHub Actions runs that may set its desired version; an entry
+// is a repository, a workflow file, a branch and, if named, an environment, one added or removed
+// at a time, and an entry the coordinator imported from its allow-list file shows what that file
+// pinned), Rollouts.Pause, Rollouts.Resume, Rollouts.Advance, Services.Hold, Services.Unhold,
 // Releases.MarkBad, Releases.UnmarkBad, Releases.Halt, Releases.ClearHalt, Releases.Converge and
 // Releases.Force.
 
@@ -588,6 +593,145 @@ async function loadManifest(ctx, pkg, state, groups) {
   }
 }
 
+// ---- trusted publishers ----
+
+// The reasons sent with a write to a package's trusted publishers.
+const PUT_REASON = "set in the console";
+const REMOVE_REASON = "removed in the console";
+
+// The rules of the API, checked here so the form answers before it sends.
+const REPOSITORY = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
+const WORKFLOW = /^\.github\/workflows\/[A-Za-z0-9_.-]+\.ya?ml$/;
+const BRANCH = /^[!-~]{1,150}$/;
+const BRANCH_FORBIDDEN = /[~^:?*[\\@]/;
+const ENVIRONMENT = /^[ -~]{1,100}$/;
+
+// A branch as the entry holds it (`refs/heads/main`), shown as the operator types it (`main`).
+function branchOf(ref) {
+  if (ref === "") {
+    return "any";
+  }
+  return ref.startsWith("refs/heads/") ? ref.slice("refs/heads/".length) : ref;
+}
+
+// What the allow-list file pinned on an imported entry, in words; "" for an entry made here.
+function pinned(entry) {
+  const parts = [];
+  if (entry.repositoryId) {
+    parts.push(`repository id ${entry.repositoryId}`);
+  }
+  const called = list(entry, "calledWorkflows");
+  if (called.length > 0) {
+    parts.push(`calls ${called.join(", ")}`);
+  }
+  if (entry.limitedToHostGroups === true) {
+    const groups = list(entry, "hostGroups");
+    parts.push(groups.length === 0 ? "deploys to no host group" : `deploys to host group ${groups.join(", ")}`);
+  }
+  return parts.join("; ");
+}
+
+// What the section holds for `pkg`: its entries, or why they could not be read, and the form.
+async function loadPublishers(ctx, pkg) {
+  const state = {
+    entries: [], failure: null, adding: false,
+    form: { repository: "", workflow: "", ref: "main", environment: "" },
+  };
+  try {
+    state.entries = list(await ctx.api.services.listTrustedPublishers({ service: pkg }), "publishers");
+  } catch (error) {
+    state.failure = error;
+  }
+  return state;
+}
+
+// The section for `pkg`; `redraw` draws the page again after the entries change.
+function publishersSection(ctx, pkg, state, redraw) {
+  const key = (entry) => ({
+    service: pkg, repository: entry.repository || "", workflow: entry.workflow || "", ref: entry.ref || "",
+    environment: entry.environment || "",
+  });
+
+  const add = action(ctx, "Add trusted publisher", "add-publisher", async () => {
+    const { form } = state;
+    const repository = trimmed(form.repository);
+    const workflow = trimmed(form.workflow);
+    const ref = trimmed(form.ref) === "" ? "main" : trimmed(form.ref);
+    const environment = trimmed(form.environment);
+    if (!REPOSITORY.test(repository)) {
+      return "Name the repository as owner/name, for example komira-ai/tierstore.";
+    }
+    if (!WORKFLOW.test(workflow)) {
+      return "Name the workflow file under .github/workflows, for example .github/workflows/release.yml.";
+    }
+    if (!BRANCH.test(ref) || BRANCH_FORBIDDEN.test(ref) || ref.includes("..")) {
+      return "Name the branch, for example main (or a full ref such as refs/tags/v1).";
+    }
+    if (environment !== "" && !ENVIRONMENT.test(environment)) {
+      return "An environment is printable text of at most 100 characters.";
+    }
+    const request = { service: pkg, repository, workflow, ref, reason: PUT_REASON };
+    if (environment !== "") {
+      request.environment = environment;
+    }
+    try {
+      state.entries = list(await ctx.api.services.putTrustedPublisher(request), "publishers");
+    } catch (error) {
+      return `${pkg}: ${describeError(error)}`;
+    }
+    state.form = { repository: "", workflow: "", ref: "main", environment: "" };
+    state.adding = false;
+    redraw();
+    return `${repository} ${workflow} may now set ${pkg}.`;
+  });
+
+  const remove = (entry) => action(ctx, "Remove", "remove-publisher", async () => {
+    const shown = `${entry.repository || "any repository"} ${entry.workflow || "any workflow"}`;
+    if (!ctx.confirm(`Remove ${shown}? Its runs can no longer set ${pkg}; the next call is refused at once.`)) {
+      return "Not removed.";
+    }
+    try {
+      state.entries = list(await ctx.api.services.removeTrustedPublisher({ ...key(entry), reason: REMOVE_REASON }), "publishers");
+    } catch (error) {
+      return `${pkg}: ${describeError(error)}`;
+    }
+    redraw();
+    return `Removed ${shown}.`;
+  });
+
+  const rows = () => state.entries.map((entry) => h("tr", {},
+    h("td", {}, entry.repository || "any"),
+    h("td", {}, entry.workflow || "any workflow of the repository"),
+    h("td", {}, branchOf(entry.ref || "")),
+    h("td", {}, entry.environment || "-"),
+    h("td", {}, pinned(entry) || "-"),
+    h("td", {}, remove(entry))));
+
+  const toggle = h("button", {
+    type: "button", name: "open-publisher-form", class: state.adding ? "on" : "",
+    on: { click: () => { state.adding = !state.adding; redraw(); } },
+  }, "Add");
+  return h("section", { class: "card publishers" },
+    h("div", { class: "rollout-top" }, h("h3", {}, "Trusted publishers"), toggle),
+    h("p", { class: "note" },
+      `The GitHub Actions runs that may set the desired version of ${pkg}. A run is trusted when its repository, workflow file and branch match one entry. With no entry, no CI call sets this package.`),
+    state.failure !== null ? h("p", { class: "error", role: "alert" }, `Trusted publishers: ${describeError(state.failure)}`) : null,
+    state.failure === null && state.entries.length === 0
+      ? h("p", { class: "note", name: "no-publishers" }, `No run is trusted to set ${pkg}.`) : null,
+    state.entries.length > 0
+      ? table(["Repository", "Workflow file", "Branch", "Environment", "Pinned by the allow-list file", ""], rows())
+      : null,
+    state.adding
+      ? h("div", { class: "panel", name: "panel-publisher" },
+        h("h3", { class: "panel-title" }, "Add trusted publisher"),
+        field("Repository", "publisher-repository", state.form, "repository", { placeholder: "owner/name" }),
+        field("Workflow file", "publisher-workflow", state.form, "workflow", { placeholder: ".github/workflows/release.yml" }),
+        field("Branch", "publisher-ref", state.form, "ref"),
+        field("Environment (optional)", "publisher-environment", state.form, "environment"),
+        h("div", { class: "buttons" }, add))
+      : null);
+}
+
 export async function render(ctx) {
   const pkg = param(ctx, "package");
   if (pkg === "") {
@@ -646,6 +790,7 @@ export async function render(ctx) {
   };
   const groups = statuses.map(groupName);
   await loadManifest(ctx, pkg, state, groups);
+  const publishers = await loadPublishers(ctx, pkg);
 
   const page = () => {
     const redraw = () => ctx.show(page());
@@ -721,6 +866,7 @@ export async function render(ctx) {
           ]),
       manifestCard(ctx, pkg, state, redraw),
       holdsCard(ctx, pkg, holds, state.hold),
+      publishersSection(ctx, pkg, publishers, redraw),
       dangerZone(ctx, pkg, statuses, versions, state, redraw));
   };
 

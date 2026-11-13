@@ -97,16 +97,62 @@ client may still pass them ([Pinning hostkeeper](#pinning-hostkeeper)).
 The calling job grants `id-token: write` and `contents: read`, and nothing else. The workflow
 takes no secrets: the OIDC token is its only credential, and GitHub issues it to the job.
 
-The coordinator must hold an allow-list entry for the calling repository and workflow that names
-the service and the audience you pass (design, section 5.1: a CI token sets the desired version
-only of the services its entry names).
+The coordinator must trust the calling repository, workflow file and branch as a publisher of the
+service ([Trusted publishers](#trusted-publishers)), and its allow-list must accept the audience you
+pass (design, section 5.1: a CI token sets the desired version only of the services whose trusted
+publishers it matches).
+
+## Trusted publishers
+
+Which GitHub Actions runs may set a package's desired version is set per package, on the package's
+page in the console (Packages, then the package, section Trusted publishers), or with
+`hkctl services list-trusted-publishers`, `put-trusted-publisher` and `remove-trusted-publisher`.
+An entry is:
+
+| field | example | meaning |
+|---|---|---|
+| repository | `komira-ai/tierstore` | The token's `repository` claim. |
+| workflow file | `.github/workflows/hostkeeper-desired.yml` | The workflow that started the run: the path of the token's `workflow_ref` claim. It is the calling workflow, not `set-desired.yml` (that one is the token's `job_workflow_ref`). |
+| branch | `main` | The token's `ref` claim, `refs/heads/main`. Empty is `main`; a full ref such as `refs/tags/v1` is taken as it is. |
+| environment | `production` | Optional. When the entry names one, the job must run in it. |
+
+The coordinator authorises a call to set a package only when the token's claims match one entry of
+that package: a token that matches no entry of any package is refused `unauthorized` (`publisher`),
+before its id is spent; one that matches only the entries of other packages is refused `forbidden`
+for this package. A put or a remove takes effect at once and writes the audit entry
+`trusted_publisher_put` or `trusted_publisher_remove`. A package with no entry is set by no CI call.
+
+The allow-list file still decides which tokens are checked at all: its `issuer`, `audience`,
+`event_names`, `runner_environment` and `max_token_lifetime_secs` apply to every token, from the
+first entry whose rules the token meets, so a repository added in the console passes an audience
+the file already names. What the file says of the run itself (`repository_id`, `repository`,
+`job_workflow_ref`, `refs`, `environments`, `services`, `host_groups`) is imported:
+
+- A package that has no entries of its own in the coordinator's state is trusted as the file says:
+  each entry of the file stands for one publisher of each service it names (the legacy service when
+  it names none), for each of its `refs` and `environments`. An imported entry keeps what the file
+  pinned: the repository's id, the `job_workflow_ref`s (the reusable workflow and its commit) the run
+  must call, and the `host_groups` it may deploy to. It names no workflow file, so it trusts any
+  workflow of the repository within those pins. Two file entries of one package that differ only in
+  audience or pin are one publisher listing both pins.
+- The first put or remove on a package writes the package's own list, starting from the entries
+  the file stands for, and from then on the state's list wins: the file's entries for that package
+  are no longer read, and a package whose list was emptied by removes stays empty, whatever the
+  file says. Nothing is written at start, so an older release reads the state as it did.
+- To tighten an imported entry, put the entry with the workflow file and remove the imported one.
+  An entry made in the console has no `repository_id` pin (a renamed repository is matched by its
+  new name), and no pin of the reusable workflow's commit.
+- The file keeps working unchanged: a coordinator that never has a put or a remove on a package
+  admits what it admitted before, entry for entry.
 
 ## The allow-list entry
 
 The coordinator reads its allow-list at start from the file of `--oidc-config`, one
 `[[remote_operator]]` table per entry (`crates/hostkeeper-oidc`, `config.rs`). The first entry
-that admits a token wins, and the token sets the desired version only of the services that entry
-names.
+whose issuer, audience, event and runner rules admit a token checks it; which packages the token
+may set is then decided by the packages' [trusted publishers](#trusted-publishers), which start as
+the entries of this file (the services an entry names, the repository, the `job_workflow_ref`s, the
+refs and environments it lists) until an operator changes a package's list.
 
 **`job_workflow_ref` names `set-desired.yml`, not your workflow.** GitHub sets a job's
 `job_workflow_ref` to the reusable workflow the job runs, so every caller's token names
@@ -554,7 +600,7 @@ them.
 | Check the version of the verified hkctl | hkctl does not say `hkctl <hostkeeper_version>+<first 12 hex digits of hostkeeper_commit>`. The version is not set. | Check the two pins belong together. |
 | Join the tailnet | Only with `join_tailnet`. Tailscale refused the federated identity (no credential for this client ID and audience, a subject that does not match the job, or a `tailnet_tag` the credential does not issue), or `tailnet_coordinator` did not answer a ping within 3 minutes. The version is not set. | Check the [federation](#the-federation-set-up-once-by-a-tailnet-admin) and the [ACL](#the-tag-and-the-acl). |
 | Write the request of the set | `targets` is empty or is not one JSON object (jq's error names the rule). `reason` is empty. The version is not set. | Give the targets of the release as one JSON object. |
-| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no allow-list entry admits this repository, workflow, audience or service), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hkctl made the call: it refused a field it does not know, and hkctl's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
+| Set the desired version | The coordinator refused the call, and `reason` is its token: `unauthorized` or `forbidden` (no trusted publisher of the service admits this repository, workflow file, branch or environment, or the allow-list does not accept the audience), `unknown_service`, `invalid_request` (a service or version the coordinator does not take), `not_in_host_group` (the group does not exist or does not list the service, or, with no `host_group`, no group lists it), `invalid_request` also when `host_group` is not a host group name, `ambiguous_host_group` (no `host_group`, and the set carries a generation while more than one group lists the service), `limits_in_host_group` (the request carries `max_updating` or `min_up`, which belong to the group's policy), `forbidden` also when the entry's `host_groups` do not include the group, or, with no `host_group`, include none that lists the service ([Host groups](#host-groups)), `held_bad` (the version is marked bad; only an operator can lift the mark, design 8.1), `keys_unavailable` (retry later), `coordinator_older` (the coordinator is older than the hostkeeper release whose hkctl made the call: it refused a field it does not know, and hkctl's one more call to the coordinator's `GET /v1/version` showed it older; do not retry, update the coordinator, [coordinator-update.md](coordinator-update.md), then run the job again), `target_invalid` (the targets break a rule of a release, [Targets](#targets)), `release_exists` (the version was set before with other targets; do not retry). `no_answer`: the coordinator could not be reached (with `join_tailnet` false this is what a GitHub-hosted runner gets, because the private listener is not reachable from it, [Reaching the coordinator](#reaching-the-coordinator)), GitHub issued no token (the calling job does not grant `id-token: write`), or hkctl refused a flag. `not_stored`: it answered with another version. The version is not set, except for `not_stored` and possibly `no_answer`: read `hkctl releases status --service <service>` before you retry. | Fix what the token names, then run the job again. |
 | Wait for the fleet to converge | The version is set. `halted`: a host halted the service, and no host is ordered until an operator clears the halt. `superseded`: the desired version changed while the job waited (an automatic rollback, or a newer release). `not_converged`: `max_polls` times 10 seconds passed and the fleet had not converged; the roll goes on. `invalid_wait`: `max_polls` is above 180 (or below 1). `too_many_waits`: the coordinator already holds 16 waits on its listener; run the job again. `no_answer`: the wait was cut (a restart of the coordinator, the network) or got no token. | Look at the service in the coordinator's UI or with `hkctl releases status`. |
 
 ## What it does not do

@@ -15,6 +15,7 @@ use crate::ops::{
     ServiceOps, Write,
 };
 use crate::testutil::version;
+use crate::trusted_publishers::TrustedPublisher;
 
 /// The file a write is staged in before it is renamed over `path`: `path` and `.new`.
 pub(crate) fn temp_beside(path: &Path) -> PathBuf {
@@ -87,7 +88,18 @@ const FULL: &str = r#"{
       "bad": [
         "1.9"
       ],
-      "repository": "private"
+      "repository": "private",
+      "trusted_publishers": [
+        {
+          "repository": "acme/kbf",
+          "workflow": ".github/workflows/release.yml",
+          "ref": "refs/heads/main",
+          "environment": "prod",
+          "repository_id": "42",
+          "called_workflows": ["acme/hk/.github/workflows/set.yml@abc"],
+          "host_groups": ["lab"]
+        }
+      ]
     }
   },
   "audit": [
@@ -194,6 +206,15 @@ fn the_file_reads_and_writes_every_field_of_the_schema() {
             force_generation: 0,
             bad_by_force: Vec::new(),
             repository: Some("private".to_owned()),
+            trusted_publishers: Some(vec![TrustedPublisher {
+                repository: "acme/kbf".to_owned(),
+                workflow: ".github/workflows/release.yml".to_owned(),
+                git_ref: "refs/heads/main".to_owned(),
+                environment: "prod".to_owned(),
+                repository_id: "42".to_owned(),
+                called_workflows: vec!["acme/hk/.github/workflows/set.yml@abc".to_owned()],
+                host_groups: Some(vec!["lab".to_owned()]),
+            }]),
         },
     );
     let mut seven = entry("exclude");

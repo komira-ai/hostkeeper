@@ -95,6 +95,9 @@ export interface Client {
     setRepository(request: hostkeeper_operator_v1.SetRepositoryRequest): Promise<hostkeeper_operator_v1.SetRepositoryResponse>;
     put(request: hostkeeper_operator_v1.PutServiceRequest): Promise<hostkeeper_operator_v1.PutServiceResponse>;
     remove(request: hostkeeper_operator_v1.RemoveServiceRequest): Promise<hostkeeper_operator_v1.RemoveServiceResponse>;
+    listTrustedPublishers(request: hostkeeper_operator_v1.ListTrustedPublishersRequest): Promise<hostkeeper_operator_v1.ListTrustedPublishersResponse>;
+    putTrustedPublisher(request: hostkeeper_operator_v1.PutTrustedPublisherRequest): Promise<hostkeeper_operator_v1.PutTrustedPublisherResponse>;
+    removeTrustedPublisher(request: hostkeeper_operator_v1.RemoveTrustedPublisherRequest): Promise<hostkeeper_operator_v1.RemoveTrustedPublisherResponse>;
     hold(request: hostkeeper_operator_v1.HoldRequest): Promise<hostkeeper_operator_v1.HoldResponse>;
     unhold(request: hostkeeper_operator_v1.UnholdRequest): Promise<hostkeeper_operator_v1.UnholdResponse>;
   };
@@ -540,6 +543,8 @@ export namespace hostkeeper_operator_v1 {
   export interface ListSettingsRequest {
   }
   export interface ListSettingsResponse { settings?: hostkeeper_operator_v1.MdmSetting[]; }
+  export interface ListTrustedPublishersRequest { service?: string; }
+  export interface ListTrustedPublishersResponse { publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
   export interface ListUsersRequest {
   }
   export interface ListUsersResponse { users?: hostkeeper_operator_v1.UserInfo[]; }
@@ -746,6 +751,8 @@ export namespace hostkeeper_operator_v1 {
   export interface PutServiceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutSettingRequest { name?: string; value?: string; }
   export interface PutSettingResponse { name?: string; value?: string; }
+  export interface PutTrustedPublisherRequest { service?: string; repository?: string; workflow?: string; ref?: string; environment?: string; reason?: string; }
+  export interface PutTrustedPublisherResponse { entry?: hostkeeper_operator_v1.AuditEntry; publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
   export type RecordState = "RECORD_STATE_UNSPECIFIED" | "RECORD_STATE_OPEN" | "RECORD_STATE_CLOSED" | "RECORD_STATE_USED";
   export interface RegisteredRepository { repository?: hostkeeper_release_v1.Repository; keyringSha256?: string; generation?: string; services?: string[]; }
   export interface RejectRequest { requestId?: string; reason?: string; }
@@ -758,6 +765,15 @@ export namespace hostkeeper_operator_v1 {
   export interface RemoveRepositoryResponse { generation?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface RemoveServiceRequest { service?: string; reason?: string; }
   export interface RemoveServiceResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
+  export interface RemoveTrustedPublisherRequest {
+    service?: string;
+    repository?: string;
+    workflow?: string;
+    ref?: string;
+    environment?: string;
+    reason?: string;
+  }
+  export interface RemoveTrustedPublisherResponse { entry?: hostkeeper_operator_v1.AuditEntry; publishers?: hostkeeper_operator_v1.TrustedPublisher[]; }
   export interface Replaced { version?: string; minUp?: { [key: string]: number }; }
   export interface ResetPasswordRequest { name?: string; }
   export interface ResetPasswordResponse { user?: hostkeeper_operator_v1.UserInfo; password?: string; }
@@ -878,6 +894,16 @@ export namespace hostkeeper_operator_v1 {
     audit?: hostkeeper_operator_v1.AuditEntry[];
   }
   export interface TlsRenewal { sinceUnix?: string; attempts?: number; message?: string; dnsRejected?: string; retryAtUnix?: string; }
+  export interface TrustedPublisher {
+    repository?: string;
+    workflow?: string;
+    ref?: string;
+    environment?: string;
+    repositoryId?: string;
+    calledWorkflows?: string[];
+    limitedToHostGroups?: boolean;
+    hostGroups?: string[];
+  }
   export interface UnassignRequest { nodeId?: string; service?: string; uninstall?: boolean; role?: string; }
   export interface UnassignResponse { entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface UnholdRequest { scope?: hostkeeper_operator_v1.HoldScope; service?: string; reason?: string; }

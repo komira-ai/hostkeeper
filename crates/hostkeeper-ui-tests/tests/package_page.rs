@@ -731,7 +731,11 @@ fn package_detail_calls_are_existing_operator_methods() {
     .collect();
     let mut used = BTreeSet::new();
     for call in listed_calls(file.text).expect("calls.json parses") {
-        if call.pages.iter().any(|p| p == "package") {
+        // The trusted publishers of a package are the one addition of the page: three methods of
+        // `Services` that the coordinator serves from the release that has them, and the section
+        // that calls them shows its own error when it is served by an older one.
+        let added = call.method.contains("TrustedPublisher");
+        if call.pages.iter().any(|p| p == "package") && !added {
             assert!(
                 call.pages.iter().any(|p| on_main.contains(p.as_str())),
                 "{} is called by the package page only",
@@ -917,5 +921,236 @@ return seen.reports;"#,
             .as_array()
             .expect("reports")
             .contains(&json!("Not halted."))
+    );
+}
+
+/// The entries of a package, as `Services.ListTrustedPublishers` answers: one made in the console
+/// and one the coordinator imported from its allow-list file, with what that file pinned.
+fn publishers_reply() -> Value {
+    json!({"publishers": [
+        {"repository": "komira-ai/api", "workflow": ".github/workflows/release.yml",
+         "ref": "refs/heads/main", "environment": "production"},
+        {"repository": "komira-ai/api", "ref": "refs/heads/main", "repositoryId": "1440761269",
+         "calledWorkflows": ["komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1"],
+         "limitedToHostGroups": true, "hostGroups": ["lab"]},
+    ]})
+}
+
+#[test]
+fn the_page_lists_the_trusted_publishers_of_the_package_with_what_the_file_pinned() {
+    // Catches: a section that leaves out an entry's repository, workflow file, branch or
+    // environment, shows an imported entry (no workflow file) as if any repository were trusted or
+    // hides what the allow-list file pinned on it, or shows the full ref instead of the branch.
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), publishers_reply());
+    let out = package(&mut ui, r#"{ package: "api" }"#, "[]", "return rows(tree);");
+    assert_eq!(
+        bodies_of(&ui, "Services/ListTrustedPublishers"),
+        vec![json!({"service": "api"})]
+    );
+    let rows = out["out"].as_array().expect("rows");
+    let row = |first: &str, env: &str| {
+        rows.iter()
+            .find(|r| r[0] == first && r[3] == env && r.as_array().map_or(0, Vec::len) == 6)
+            .unwrap_or_else(|| panic!("no entry {first} {env}: {rows:?}"))
+            .clone()
+    };
+    assert_eq!(
+        row("komira-ai/api", "production"),
+        json!([
+            "komira-ai/api",
+            ".github/workflows/release.yml",
+            "main",
+            "production",
+            "-",
+            "Remove"
+        ])
+    );
+    assert_eq!(
+        row("komira-ai/api", "-"),
+        json!([
+            "komira-ai/api",
+            "any workflow of the repository",
+            "main",
+            "-",
+            "repository id 1440761269; calls komira-ai/hostkeeper/.github/workflows/set-desired.yml@2c767d1; deploys to host group lab",
+            "Remove"
+        ])
+    );
+    assert!(
+        shown(&out).contains("Trusted publishers"),
+        "{}",
+        shown(&out)
+    );
+}
+
+#[test]
+fn a_package_with_no_entry_says_no_run_is_trusted_and_a_failed_read_is_shown() {
+    // Catches: an empty list drawn as a table with no rows and no words, and a refused read that
+    // is shown as an empty list (the operator would take it for "nothing trusted").
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), json!({}));
+    let out = package(&mut ui, r#"{ package: "api" }"#, "[]", "return null;");
+    assert!(
+        shown(&out).contains("No run is trusted to set api."),
+        "{}",
+        shown(&out)
+    );
+
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.refuse(
+        &m("Services/ListTrustedPublishers"),
+        404,
+        "NOT_FOUND",
+        "unknown_service",
+    );
+    let out = package(&mut ui, r#"{ package: "api" }"#, "[]", "return null;");
+    assert!(
+        shown(&out).contains("Trusted publishers: NOT_FOUND unknown_service"),
+        "{}",
+        shown(&out)
+    );
+    assert!(
+        !shown(&out).contains("No run is trusted"),
+        "{}",
+        shown(&out)
+    );
+}
+
+#[test]
+fn adding_an_entry_sends_the_four_fields_and_a_wrong_field_is_answered_before_it_sends() {
+    // Catches: a form that sends a malformed repository, workflow file or branch, one that sends
+    // an empty environment, one that does not default the branch to main, and one that does not
+    // clear itself and draw the entries the API answers.
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), json!({}));
+    ui.reply(
+        &m("Services/PutTrustedPublisher"),
+        json!({"publishers": [{"repository": "komira-ai/api", "workflow": ".github/workflows/release.yml",
+                               "ref": "refs/heads/main"}]}),
+    );
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"
+await click(tree, "open-publisher-form");
+const t = seen.shown[seen.shown.length - 1];
+type(t, "publisher-repository", "no-slash");
+await click(t, "add-publisher");
+type(t, "publisher-repository", "komira-ai/api");
+type(t, "publisher-workflow", "release.yml");
+await click(t, "add-publisher");
+type(t, "publisher-workflow", ".github/workflows/release.yml");
+type(t, "publisher-ref", "a b");
+await click(t, "add-publisher");
+type(t, "publisher-ref", "");
+type(t, "publisher-environment", "x".repeat(101));
+await click(t, "add-publisher");
+type(t, "publisher-environment", "");
+await click(t, "add-publisher");
+return seen.reports;"#,
+    );
+    assert_eq!(
+        out["out"],
+        json!([
+            "Name the repository as owner/name, for example komira-ai/tierstore.",
+            "Name the workflow file under .github/workflows, for example .github/workflows/release.yml.",
+            "Name the branch, for example main (or a full ref such as refs/tags/v1).",
+            "An environment is printable text of at most 100 characters.",
+            "komira-ai/api .github/workflows/release.yml may now set api."
+        ])
+    );
+    assert_eq!(
+        bodies_of(&ui, "Services/PutTrustedPublisher"),
+        vec![json!({"service": "api", "repository": "komira-ai/api",
+                    "workflow": ".github/workflows/release.yml", "ref": "main",
+                    "reason": "set in the console"})]
+    );
+}
+
+#[test]
+fn an_environment_is_sent_only_when_typed_and_a_refused_add_is_shown() {
+    // Catches: an environment dropped from the request, and a refusal that is not reported.
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), json!({}));
+    ui.refuse(
+        &m("Services/PutTrustedPublisher"),
+        404,
+        "NOT_FOUND",
+        "unknown_service",
+    );
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[]",
+        r#"
+await click(tree, "open-publisher-form");
+const t = seen.shown[seen.shown.length - 1];
+type(t, "publisher-repository", "komira-ai/api");
+type(t, "publisher-workflow", ".github/workflows/release.yml");
+type(t, "publisher-ref", "refs/tags/v1");
+type(t, "publisher-environment", "production");
+await click(t, "add-publisher");
+return seen.reports;"#,
+    );
+    assert_eq!(out["out"], json!(["api: NOT_FOUND unknown_service"]));
+    assert_eq!(
+        bodies_of(&ui, "Services/PutTrustedPublisher"),
+        vec![json!({"service": "api", "repository": "komira-ai/api",
+                    "workflow": ".github/workflows/release.yml", "ref": "refs/tags/v1",
+                    "environment": "production", "reason": "set in the console"})]
+    );
+}
+
+#[test]
+fn removing_an_entry_asks_first_and_sends_the_entry_as_listed() {
+    // Catches: a remove without the operator's yes, one that names the entry by anything but the
+    // four fields as listed (an imported entry has no workflow file), and a refusal not reported.
+    let mut ui = Ui::start();
+    script(&ui, vec![db_status()]);
+    ui.reply(&m("Services/ListTrustedPublishers"), publishers_reply());
+    ui.reply(
+        &m("Services/RemoveTrustedPublisher"),
+        json!({"publishers": []}),
+    );
+    ui.refuse(
+        &m("Services/RemoveTrustedPublisher"),
+        404,
+        "NOT_FOUND",
+        "publisher_unknown",
+    );
+    let out = package(
+        &mut ui,
+        r#"{ package: "api" }"#,
+        "[false, true, true]",
+        r#"
+await click(tree, "remove-publisher", 1);
+await click(tree, "remove-publisher", 1);
+await click(tree, "remove-publisher", 0);
+return seen.reports;"#,
+    );
+    assert_eq!(
+        out["out"],
+        json!([
+            "Not removed.",
+            "Removed komira-ai/api any workflow.",
+            "api: NOT_FOUND publisher_unknown"
+        ])
+    );
+    assert_eq!(
+        bodies_of(&ui, "Services/RemoveTrustedPublisher"),
+        vec![
+            json!({"service": "api", "repository": "komira-ai/api", "workflow": "",
+                   "ref": "refs/heads/main", "environment": "", "reason": "removed in the console"}),
+            json!({"service": "api", "repository": "komira-ai/api",
+                   "workflow": ".github/workflows/release.yml", "ref": "refs/heads/main",
+                   "environment": "production", "reason": "removed in the console"}),
+        ]
     );
 }

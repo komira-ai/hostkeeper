@@ -38,7 +38,7 @@ fn the_release_before_is_refused_on_a_database_with_0008() {
     );
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=13)
+        (1..=14)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );
@@ -94,7 +94,7 @@ fn this_release_reads_the_rows_of_the_release_before_as_naming_no_group() {
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version")
             .len(),
-        13
+        14
     );
 }
 
