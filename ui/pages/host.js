@@ -24,7 +24,7 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix, list, pill, reasonProblem,
   scopeLabel, select, table, trimmed,
 } from "../view.js";
-import { crumbs, hostState, layoutOf, layoutProblem, placementPanel, rackName, subjectOf } from "../lab.js";
+import { crumbs, hostState, layoutOf, layoutProblem, rackName, slotOf, slotOptions, subjectOf } from "../lab.js";
 
 // Rows of a facts table: a name and its value, no heading strip.
 function kv(rows, extra) {
@@ -596,33 +596,35 @@ export async function render(ctx) {
 // The tab the page shows, kept across refreshes of the same host.
 const chosen = { node: "", tab: "overview" };
 
-// The rack the host stands in, drawn small: the rack's U as a column, the other servers as dim
-// blocks and this host's U lit, with its place in words under it; an empty dashed column and
-// "Unplaced" for a host in no rack. 'held' is the host's placement, 'rackAt' its rack.
+// The rack the host stands in, drawn small: the rack's U as a column, the other sleds as dim blocks
+// and the sled this host stands on lit, with its address and place in words under it; an empty
+// dashed column and "Unplaced" for a host on no sled. 'held' is the host's placement, 'rackAt' its rack.
 export function miniRack(layout, held, rackAt) {
   if (held === undefined || rackAt === undefined) {
     return h("div", { class: "mini" },
       h("div", { class: "mini-rack empty", "aria-hidden": "true", vars: { "--units": 12 } }),
-      h("p", { class: "mini-cap" }, h("strong", {}, "Unplaced"), "in no rack"));
+      h("p", { class: "mini-cap" }, h("strong", {}, "Unplaced"), "on no sled"));
   }
-  const block = (p, me) => h("span", {
+  const block = (sled, me) => h("span", {
     class: me ? "mini-u me" : "mini-u", "aria-hidden": "true",
-    vars: { "--r": rackAt.height - (p.u + p.height - 1) + 1, "--s": p.height },
+    vars: { "--r": rackAt.height - (sled.u + sled.height - 1) + 1, "--s": sled.height },
   });
-  const others = layout.placements.filter((p) => p.rack === rackAt.id && p.key !== held.key);
+  const others = layout.sleds.filter((x) => x.rack === rackAt.id && x.id !== held.sled);
+  const mine = layout.sleds.find((x) => x.id === held.sled);
   return h("div", { class: "mini" },
     h("div", { class: "mini-rack", role: "img", "aria-label": `${rackName(layout, rackAt.id)}, U${held.u}`, vars: { "--units": rackAt.height } },
-      others.map((p) => block(p, false)), block(held, true)),
+      others.map((x) => block(x, false)), mine === undefined ? null : block(mine, true)),
     h("p", { class: "mini-cap" },
       h("strong", {}, rackName(layout, rackAt.id)),
-      `U${held.u}${held.height > 1 ? `-${held.u + held.height - 1}` : ""} of ${rackAt.height}`));
+      `U${held.u}${held.height > 1 ? `-${held.u + held.height - 1}` : ""} of ${rackAt.height}`),
+    h("p", { class: "mini-cap", name: "address" }, held.address));
 }
 
-// Where the host stands, and the controls that move it: the height, row, rack and U position, each
-// chosen from the lab's layout (the U position among the free slots of the rack), then Place or
-// Move, and Unplace. The place belongs to the physical server, which is the host's inventory
-// entry when one matches it, else the host. The lab layout is read once; when it cannot be, the
-// section says so and offers nothing. Every change is audited by the coordinator.
+// Where the host stands, and the controls that move it: one choice, the Sled slot, among the free
+// slots of the lab by address (the slot it stands on included), then Place or Move, and Unplace. The
+// place belongs to the physical server, which is the host's inventory entry when one matches it, else
+// the host. The lab layout is read once; when it cannot be, the section says so and offers nothing.
+// Every change is audited by the coordinator.
 async function placementSection(ctx, host, nodeId, show) {
   let layout;
   try {
@@ -642,16 +644,11 @@ async function placementSection(ctx, host, nodeId, show) {
   const key = `${server.kind}:${server.id}`;
   const held = layout.placements.find((p) => p.key === key);
   const rackAt = held === undefined ? undefined : layout.racks.find((r) => r.id === held.rack);
-  const state = {
-    height: held === undefined ? "1" : String(held.height),
-    row: rackAt === undefined ? "" : rackAt.row,
-    rack: held === undefined ? "" : held.rack,
-    u: held === undefined ? "" : String(held.u),
-  };
-  const panel = placementPanel(layout, state, key, false, show);
+  const options = slotOptions(layout, key, false);
+  const state = { slot: held === undefined ? (options.length > 0 ? options[0][0] : "") : `${held.sled}:${held.slot}` };
   const standing = held === undefined
-    ? "Unplaced: it stands in no rack."
-    : `Stands at ${rackName(layout, held.rack)}, U${held.u}, ${held.height}U.`;
+    ? "Unplaced: it stands on no sled."
+    : `Stands at ${held.address} (${rackName(layout, held.rack)}, U${held.u}, a sled ${held.height}U high).`;
   const spot = rackAt === undefined ? {} : { rack: rackAt.id };
   return {
     crumbs: crumbs(layout, { ...spot, host: host.nodeId || nodeId }, (view, params) => ctx.navigate(view, params)),
@@ -660,22 +657,24 @@ async function placementSection(ctx, host, nodeId, show) {
     section: h("fieldset", { class: "card" },
       h("legend", {}, "Placement"),
       h("p", { name: "standing" }, standing),
-      panel,
+      options.length === 0
+        ? h("p", { class: "note" }, "No sled slot is free: add a sled on Home, in Edit layout.")
+        : select("Sled slot", "place-slot", state, "slot", options),
       h("div", { class: "buttons" }, action(ctx, held === undefined ? "Place" : "Move", "place", async () => {
-        const chosen = panel.choices.request();
+        const chosen = slotOf(state.slot);
         if (chosen === null) {
-          return panel.choices.note || "Choose a rack and a U position.";
+          return "Choose a sled slot.";
         }
         try {
           await ctx.api.layout.place({
-            subject: subjectOf(server), ...chosen,
+            subject: subjectOf(server), sled: chosen.sled, slot: chosen.slot,
             reason: `${held === undefined ? "placed" : "moved"} ${nodeId}`,
           });
         } catch (error) {
           return layoutProblem(error);
         }
         ctx.refresh();
-        return `${nodeId} is at ${rackName(layout, chosen.rack)}, U${chosen.u}.`;
+        return `${nodeId} is at ${options.find(([value]) => value === state.slot)[1]}.`;
       }, { class: "primary" }),
       held === undefined ? null : action(ctx, "Unplace", "unplace", async () => {
         try {

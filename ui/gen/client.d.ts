@@ -262,6 +262,8 @@ export namespace hostkeeper_operator_v1 {
     rack?: string;
     placementU?: number;
     placementHeightU?: number;
+    placementSled?: string;
+    placementSlot?: number;
   }
   export interface ApproveResponse { hostId?: string; certificateIssuedAtPoll?: boolean; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface AssignRequest { nodeId?: string; service?: string; role?: string; }
@@ -507,10 +509,10 @@ export namespace hostkeeper_operator_v1 {
     hostGroup?: string;
     enrolledHostId?: string;
   }
-  export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; sled?: string; slot?: number; }
+  export interface LayoutPlacement { subject?: hostkeeper_operator_v1.LayoutSubject; rack?: string; heightU?: number; u?: number; sled?: string; slot?: number; address?: string; }
   export interface LayoutRack { id?: string; row?: string; heightU?: number; number?: number; }
   export interface LayoutRow { id?: string; number?: number; }
-  export interface LayoutSled { id?: string; rack?: string; number?: number; u?: number; heightU?: number; slots?: number; label?: string; }
+  export interface LayoutSled { id?: string; rack?: string; number?: number; u?: number; heightU?: number; label?: string; address?: string; slots?: number; }
   export interface LayoutSubject { kind?: hostkeeper_operator_v1.LayoutSubjectKind; id?: string; }
   export type LayoutSubjectKind = "LAYOUT_SUBJECT_KIND_UNSPECIFIED" | "LAYOUT_SUBJECT_KIND_HOST" | "LAYOUT_SUBJECT_KIND_INVENTORY";
   export interface ListAlertsRequest {
@@ -735,7 +737,7 @@ export namespace hostkeeper_operator_v1 {
   export interface PutLayoutNameResponse { name?: string; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutLayoutRackRequest { id?: string; row?: string; heightU?: number; reason?: string; }
   export interface PutLayoutRackResponse { rack?: hostkeeper_operator_v1.LayoutRack; entry?: hostkeeper_operator_v1.AuditEntry; }
-  export interface PutLayoutSledRequest { id?: string; rack?: string; u?: number; heightU?: number; slots?: number; label?: string; reason?: string; }
+  export interface PutLayoutSledRequest { id?: string; rack?: string; u?: number; heightU?: number; label?: string; reason?: string; slots?: number; }
   export interface PutLayoutSledResponse { sled?: hostkeeper_operator_v1.LayoutSled; entry?: hostkeeper_operator_v1.AuditEntry; }
   export interface PutNameRequest { name?: string; }
   export interface PutNameResponse { name?: string; enrollmentUrl?: string; }

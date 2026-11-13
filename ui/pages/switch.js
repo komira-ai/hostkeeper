@@ -39,6 +39,7 @@ export async function render(ctx) {
     ["Network", roleWords(device.role)],
     ["Console", consoleCell],
     ["Management MAC", device.managementMac || "-"],
+    ["Address", held === undefined ? "-" : held.address],
     ["Where", whereWords(layout, held)],
     ["Notes", device.notes ? h("pre", {}, device.notes) : "-"],
   ];
@@ -51,7 +52,7 @@ export async function render(ctx) {
           h("h2", {}, device.name),
           pill(roleWords(device.role), "info")),
         h("div", { class: "hb-meta" },
-          [["Console", consoleWords(device)], ["Where", whereWords(layout, held)]]
+          [["Console", consoleWords(device)], ["Address", held === undefined ? "-" : held.address], ["Where", whereWords(layout, held)]]
             .map(([k, v]) => h("span", { class: "meta" }, h("small", {}, k), v)))),
       miniRack(layout, held, rackAt)),
     h("div", { class: "table-wrap facts" }, h("table", { class: "kv" },

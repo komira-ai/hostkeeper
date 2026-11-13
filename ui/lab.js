@@ -1,9 +1,11 @@
 // The lab: the model the Home page and the pages that place a server share. The coordinator keeps
 // the lab's layout (`Layout.Get`: the cluster's name, its numbered rows, the numbered racks of each
-// row with their height in U, and the placements of servers in racks); this module reads it, joins
-// it with the hosts and the inventory entries, and answers the questions the views ask: which
-// server stands where, in what state, which U of a rack are free for a server of a given height,
-// and in words, why the coordinator refused a change.
+// row with their height in U, the sleds in the racks and the items standing on the slots of the
+// sleds); this module reads it, joins it with the hosts and the inventory entries, and answers the
+// questions the views ask: which server stands where (its address), in what state, which U of a
+// rack are free for a sled of a given height, which slots are free, and in words, why the
+// coordinator refused a change. A sled is what goes in a rack (docs/design/rack-sleds.md): it has
+// the U and the height, and 1 to 8 slots; a server or a switch has no height of its own.
 //
 // A server is the physical machine. Its place belongs to its inventory entry (so it survives a
 // wipe and a new enrollment); a host that no entry matches carries its own. Everything here is a
@@ -15,9 +17,11 @@ import { h, list } from "./view.js";
 const KIND_HOST = "LAYOUT_SUBJECT_KIND_HOST";
 const KIND_INVENTORY = "LAYOUT_SUBJECT_KIND_INVENTORY";
 
-// The heights a rack is made at, in U (the first is the default), and the heights a server takes.
+// The heights a rack is made at, in U (the first is the default), the heights a sled is made at
+// (1 to 60 U) and the slots it has (1 to 8): lists to pick from, never typed.
 export const RACK_HEIGHTS = [42, 48, 45, 36, 32, 27, 24, 21, 18, 12, 6];
-export const SERVER_HEIGHTS = [1, 2, 3, 4];
+export const SLED_HEIGHTS = Array.from({ length: 60 }, (_, i) => i + 1);
+export const SLED_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8];
 export const DEFAULT_RACK_HEIGHT = 42;
 
 // The states a server shows, with the words of its pill and its tone.
@@ -30,8 +34,12 @@ export const STATES = [
 ];
 
 // The layout a `Layout.Get` reply holds, with the lists in order and the numbers as numbers:
-// `{name, rows, racks, placements, devices}`; each placement is `{kind, id, key, rack, u, height}`
-// where `key` is `host:<id>` or `inventory:<id>` and `u` its lowest U; each device (a switch) is
+// `{name, rows, racks, sleds, placements, devices}`; each sled is `{id, rack, number, u, height,
+// label, address, slots}` (`u` its lowest U, `number` its place counted from the bottom of its
+// rack, `address` as the coordinator computed it: `C0-R0-R0-S2`); each placement is `{kind, id,
+// key, rack, u, height, sled, slot, address}` where `key` is `host:<id>` or `inventory:<id>`, `sled`
+// the sled it stands on, `slot` its slot (from 0), `address` `C0-R0-R0-S2-S1`, and `rack`, `u` and
+// `height` the sled's, repeated; each device (a switch) is
 // `{id, key, name, role, consoleHost, consoleDevice, managementMac, notes}`, its `key` the key of
 // its placement (a device is placed as an inventory entry, under the id `net.<n>`) and `role`
 // `bmc` or `data`.
@@ -43,8 +51,15 @@ export function layoutOf(reply) {
   const placements = list(reply, "placements").map((p) => {
     const kind = p.subject && p.subject.kind === KIND_INVENTORY ? "inventory" : "host";
     const id = p.subject ? p.subject.id : "";
-    return { kind, id, key: `${kind}:${id}`, rack: p.rack, u: Number(p.u), height: Number(p.heightU) };
+    return {
+      kind, id, key: `${kind}:${id}`, rack: p.rack, u: Number(p.u), height: Number(p.heightU),
+      sled: p.sled || "", slot: Number(p.slot || 0), address: p.address || "",
+    };
   });
+  const sleds = list(reply, "sleds").map((s) => ({
+    id: s.id, rack: s.rack, number: Number(s.number || 0), u: Number(s.u), height: Number(s.heightU),
+    label: s.label || "", address: s.address || "", slots: Number(s.slots || 1),
+  }));
   const devices = list(reply, "devices").map((d) => ({
     id: d.id,
     key: `inventory:${d.id}`,
@@ -59,6 +74,7 @@ export function layoutOf(reply) {
     name: typeof reply?.name === "string" ? reply.name : "",
     rows: rows.sort((a, b) => a.number - b.number),
     racks: racks.sort((a, b) => a.number - b.number),
+    sleds: sleds.sort((a, b) => a.u - b.u),
     placements,
     devices,
   };
@@ -96,14 +112,20 @@ export function subjectOf(server) {
   return { kind: server.kind === "inventory" ? KIND_INVENTORY : KIND_HOST, id: server.id };
 }
 
-// "Row 2", "Rack 3" and "Row 2 / Rack 3" for the ids of a layout; an id it does not hold is shown as is.
+// The number a row or a rack is called by: its number less one, since the lab counts from 0 (the
+// address `C0-R0-R0-S0-S0`). The ids stay as they are.
+export function shownNumber(number) {
+  return Number(number) - 1;
+}
+
+// "Row 1", "Rack 2" and "Row 1 / Rack 2" for the ids of a layout; an id it does not hold is shown as is.
 export function rowName(layout, rowId) {
   const row = layout.rows.find((r) => r.id === rowId);
-  return row === undefined ? rowId : `Row ${row.number}`;
+  return row === undefined ? rowId : `Row ${shownNumber(row.number)}`;
 }
 export function rackName(layout, rackId) {
   const rack = layout.racks.find((r) => r.id === rackId);
-  return rack === undefined ? rackId : `${rowName(layout, rack.row)} / Rack ${rack.number}`;
+  return rack === undefined ? rackId : `${rowName(layout, rack.row)} / Rack ${shownNumber(rack.number)}`;
 }
 
 // A host's state: `pending` for one the coordinator never heard from, `offline` when it is not
@@ -205,35 +227,113 @@ export function serversOf(layout, hosts, records) {
 export function inRack(servers, rackId) {
   return servers
     .filter((s) => s.placement !== null && s.placement.rack === rackId)
-    .sort((a, b) => a.placement.u - b.placement.u);
+    .sort((a, b) => a.placement.u - b.placement.u || a.placement.slot - b.placement.slot);
 }
 
-// The U (lowest U) at which a server `height` U high fits in `rackId`, each of its U free of other
-// servers; the server `except` (a key) is not counted, so it may be moved over its own U.
-export function freeStarts(layout, rackId, height, except) {
+// The sleds standing in `rackId`, lowest U first.
+export function sledsIn(layout, rackId) {
+  return layout.sleds.filter((s) => s.rack === rackId).sort((a, b) => a.u - b.u);
+}
+
+// The U in use in a rack: the sum of its sleds' heights (only sleds take U).
+export function usedU(layout, rackId) {
+  return sledsIn(layout, rackId).reduce((n, s) => n + s.height, 0);
+}
+
+// Whether a sled `height` U high with its lowest U at `u` fits in `rackId`: inside the rack and over
+// no U of another sled; the sled `except` (an id) is not counted, so it may be moved over its own U.
+export function fitsAt(layout, rackId, height, u, except) {
   const rack = layout.racks.find((r) => r.id === rackId);
-  if (rack === undefined || !(height >= 1)) {
-    return [];
+  if (rack === undefined || !(height >= 1) || !(u >= 1) || u + height - 1 > rack.height) {
+    return false;
   }
-  const taken = new Set();
-  for (const p of layout.placements) {
-    if (p.rack === rackId && p.key !== except) {
-      for (let u = p.u; u < p.u + p.height; u += 1) {
-        taken.add(u);
-      }
-    }
-  }
+  return sledsIn(layout, rackId).every((s) => s.id === except || s.u + s.height <= u || s.u >= u + height);
+}
+
+// The U (lowest U) at which a sled `height` U high fits in `rackId`.
+export function freeSledStarts(layout, rackId, height, except) {
+  const rack = layout.racks.find((r) => r.id === rackId);
   const starts = [];
+  if (rack === undefined || !(height >= 1)) {
+    return starts;
+  }
   for (let u = 1; u + height - 1 <= rack.height; u += 1) {
-    let free = true;
-    for (let k = 0; k < height && free; k += 1) {
-      free = !taken.has(u + k);
-    }
-    if (free) {
+    if (fitsAt(layout, rackId, height, u, except)) {
       starts.push(u);
     }
   }
   return starts;
+}
+
+// Where a sled `height` U high dropped on the free U `u` of `rackId` would stand: the lowest start
+// whose U include `u` and at which it fits, or null when there is none.
+export function dropStart(layout, rackId, height, u, except) {
+  for (let start = u - height + 1; start <= u; start += 1) {
+    if (fitsAt(layout, rackId, height, start, except)) {
+      return start;
+    }
+  }
+  return null;
+}
+
+// The numbers of an address, `C0-R0-R1-S2-S0` -> [0, 0, 1, 2, 0], to order addresses by place.
+function addressKey(address) {
+  return (address.match(/\d+/g) || []).map(Number);
+}
+export function byAddress(a, b) {
+  const x = addressKey(a.address);
+  const y = addressKey(b.address);
+  for (let i = 0; i < Math.max(x.length, y.length); i += 1) {
+    const d = (x[i] === undefined ? -1 : x[i]) - (y[i] === undefined ? -1 : y[i]);
+    if (d !== 0) {
+      return d;
+    }
+  }
+  return 0;
+}
+
+// The slots no item stands on, `[{sled, slot, address}]` by address; the item `except` (a key) is
+// not counted, so the slot it stands on is free for it.
+export function freeSlots(layout, except) {
+  const taken = new Set(layout.placements.filter((p) => p.key !== except).map((p) => `${p.sled}:${p.slot}`));
+  const out = [];
+  for (const sled of layout.sleds) {
+    for (let slot = 0; slot < sled.slots; slot += 1) {
+      if (!taken.has(`${sled.id}:${slot}`)) {
+        out.push({ sled: sled.id, slot, address: `${sled.address}-S${slot}` });
+      }
+    }
+  }
+  return out.sort(byAddress);
+}
+
+// The items standing on a sled, by slot.
+export function occupants(layout, sledId) {
+  return layout.placements.filter((p) => p.sled === sledId).sort((a, b) => a.slot - b.slot);
+}
+
+// The address of the item with `key`, "" when it stands nowhere.
+export function addressOf(layout, key) {
+  const held = layout.placements.find((p) => p.key === key);
+  return held === undefined ? "" : held.address;
+}
+
+// What the choice of a slot is made from: `[value, address]` for each free slot, `value` being
+// `<sled>:<slot>`; with `unplaced`, "Unplaced" ("") first. `slotOf(value)` reads a value back as
+// `{sled, slot}`, or null for "" or anything else.
+export function slotOptions(layout, except, unplaced) {
+  const options = freeSlots(layout, except).map((s) => [`${s.sled}:${s.slot}`, s.address]);
+  return unplaced === true ? [["", "Unplaced"], ...options] : options;
+}
+export function slotOf(value) {
+  const match = /^(.+):(\d+)$/.exec(String(value || ""));
+  return match === null ? null : { sled: match[1], slot: Number(match[2]) };
+}
+
+// A sled in words: its address, its label when it has one, and where it stands.
+export function sledWords(layout, sled) {
+  const top = sled.u + sled.height - 1;
+  return `${sled.address}${sled.label === "" ? "" : ` ${sled.label}`}, ${rackName(layout, sled.rack)}, U${sled.u}${top > sled.u ? `-${top}` : ""}`;
 }
 
 // The racks of `rowId`, by number.
@@ -256,116 +356,26 @@ export function counts(servers, placedOnly) {
 // The words for a refusal of `Layout` or of an approval's placement: what the operator reads
 // instead of a bare token. Any other error is shown by its code and token.
 const PROBLEMS = {
-  overlap: "Another server already stands in one of those U.",
+  overlap: "That place is taken: another sled stands in one of those U, or another item on that slot.",
   out_of_rack: "That does not fit in the rack: it would reach past U 1 or the top U.",
   unknown_rack: "That rack no longer exists.",
+  unknown_sled: "That sled no longer exists.",
   unknown_row: "That row no longer exists.",
   unknown_placement: "That server is not placed.",
-  in_use: "It still holds something: remove what stands in it first.",
-  capacity: "The lab holds no more of those.",
+  in_use: "It still holds something: take what stands on it away first.",
+  capacity: "That sled has no free slot.",
   name_taken: "Another switch already has that name.",
   unknown_device: "That switch no longer exists.",
   invalid_request: "The coordinator did not accept that value.",
-  placement_overlap: "Another server already stands in one of those U.",
+  placement_overlap: "That slot is taken.",
   placement_out_of_rack: "That does not fit in the rack: it would reach past U 1 or the top U.",
-  placement_invalid: "Give the rack, the height and the U together, or none of them.",
+  placement_invalid: "Give the sled and the slot together, or none of them.",
 };
 export function layoutProblem(error) {
   if (error instanceof ApiError && Object.hasOwn(PROBLEMS, error.reason)) {
     return PROBLEMS[error.reason];
   }
   return error instanceof ApiError ? `${error.code} ${error.reason}`.trim() : "the app failed unexpectedly";
-}
-
-// A select whose options are `[value, label]` pairs, chosen by `state[key]`; unlike the bound
-// `select` of the shared controls it takes its own name and re-draws nothing.
-function chooser(name, state, key, options, redraw) {
-  const choices = options.map(([value, text]) => h("option", { value: String(value), selected: String(state[key]) === String(value) }, text));
-  const control = h("select", { name }, choices);
-  control.on = {
-    change: (e) => {
-      state[key] = e.target.value;
-      for (const choice of choices) {
-        choice.attrs.selected = choice.attrs.value === String(state[key]);
-      }
-      if (redraw) {
-        redraw();
-      }
-    },
-  };
-  return control;
-}
-
-// The controls that place a server: its height (`name=place-height`), the row, the rack of that
-// row and the U of the rack at which that height is free (`place-row`, `place-rack`, `place-u`),
-// each a choice from the lists the layout holds, never typed. `state` keeps the choices
-// (`height`, `row`, `rack`, `u`, strings), `redraw` shows the page again after one changes, and
-// `except` is the key of the server being moved (its own U count as free). With `optional`, the
-// row's first choice is "Unplaced": the server is placed nowhere, and the rack and the U have no
-// choice. The choices of U are only those that fit. Returns the elements, `request()`: `{rack,
-// heightU, u}` for the choices made, or null for none (a rack or a free U is missing, or
-// "Unplaced"), and `note`, a sentence when a choice cannot be made.
-export function placementChoices(layout, state, except, redraw, optional) {
-  const height = Number(state.height || 1);
-  const rows = layout.rows;
-  const none = optional === true && state.row === "";
-  if (!none && !rows.some((r) => r.id === state.row)) {
-    state.row = rows.length > 0 ? rows[0].id : "";
-  }
-  const racks = none ? [] : racksOf(layout, state.row);
-  if (!racks.some((r) => r.id === state.rack)) {
-    state.rack = racks.length > 0 ? racks[0].id : "";
-  }
-  const starts = none ? [] : freeStarts(layout, state.rack, height, except);
-  if (!starts.includes(Number(state.u))) {
-    state.u = starts.length > 0 ? String(starts[0]) : "";
-  }
-  const rowChoices = rows.map((r) => [r.id, `Row ${r.number}`]);
-  const elements = [
-    h("label", {}, "Height", chooser("place-height", state, "height",
-      SERVER_HEIGHTS.map((n) => [n, `${n}U`]), redraw)),
-    h("label", {}, "Row", chooser("place-row", state, "row",
-      optional === true ? [["", "Unplaced"], ...rowChoices] : rowChoices, redraw)),
-    h("label", {}, "Rack", chooser("place-rack", state, "rack",
-      racks.map((r) => [r.id, `Rack ${r.number}`]), redraw)),
-    h("label", {}, "U position", chooser("place-u", state, "u",
-      starts.map((u) => [u, `U${u}`]), null)),
-  ];
-  let note = "";
-  if (!none && rows.length === 0) {
-    note = "There is no rack yet: add rows and racks on Home, in Edit layout.";
-  } else if (!none && racks.length === 0) {
-    note = "That row has no rack yet.";
-  } else if (!none && starts.length === 0) {
-    note = "No free slot of that height in this rack.";
-  }
-  return {
-    elements,
-    note,
-    request: () => (state.rack === "" || state.u === "" || none
-      ? null
-      : { rack: state.rack, heightU: Number(state.height || 1), u: Number(state.u) }),
-  };
-}
-
-// A panel of the placement controls that keeps itself current: when a choice changes, the choices
-// that depend on it are made again in place and `show()` draws the page's tree again (the same
-// tree, so nothing typed elsewhere on the page is lost). `panel.choices.request()` is the placement
-// the choices name, or null.
-export function placementPanel(layout, state, except, optional, show) {
-  const panel = h("div", { class: "buttons" });
-  const fill = () => {
-    const choices = placementChoices(layout, state, except, () => {
-      fill();
-      show();
-    }, optional);
-    panel.choices = choices;
-    panel.children = choices.note === ""
-      ? choices.elements
-      : [...choices.elements, h("p", { class: "note" }, choices.note)];
-  };
-  fill();
-  return panel;
 }
 
 // The breadcrumbs of a lab view as buttons: `Lab` (named after the cluster when it has a name),
@@ -379,7 +389,7 @@ export function crumbs(layout, at, go) {
     trail.push([rowName(layout, rowId), "row", "home", { row: rowId }]);
   }
   if (rack !== undefined) {
-    trail.push([`Rack ${rack.number}`, "rack", "home", { rack: rack.id }]);
+    trail.push([`Rack ${shownNumber(rack.number)}`, "rack", "home", { rack: rack.id }]);
   }
   if (at.host) {
     trail.push([at.host, "host", "host", { nodeId: at.host }]);

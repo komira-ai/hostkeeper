@@ -30,7 +30,7 @@ import {
   h, action, allPages, checkbox, describeError, enumLabel, errorView, field, fmtUnix,
   select, table, trimmed,
 } from "../view.js";
-import { layoutOf, layoutProblem, placementChoices, rackName } from "../lab.js";
+import { layoutOf, layoutProblem, slotOf, slotOptions } from "../lab.js";
 
 const PAGE_SIZE = 50;
 const UNENROLLED = "ENROLLMENT_REQUEST_STATE_UNENROLLED";
@@ -196,11 +196,10 @@ function groupChoices(groups) {
   }).filter(([name]) => name !== "" && name !== "all")];
 }
 
-// The placement controls of an approval: where the server stands, optional (no rack lands the host
-// in Unplaced). Height, row, rack and U position are choices from the lab's layout, the U position
-// only the free slots of the rack for the height chosen. A matched request names the record whose
-// server keeps its place across a wipe: where it stands now is said, and is kept unless another
-// place is chosen.
+// The placement control of an approval: the Sled slot the server stands on, optional (the first choice,
+// Unplaced, lands the host on no sled), one choice among the free slots of the lab by address. A
+// matched request names the record whose server keeps its place across a wipe: where it stands now
+// is said, and is kept unless another slot is chosen.
 function placementSection(request, form, lab) {
   if (lab.failure !== null) {
     return h("p", { class: "flag warn" },
@@ -208,13 +207,12 @@ function placementSection(request, form, lab) {
   }
   const record = request.inventoryMatch === "INVENTORY_MATCH_MATCHED" ? recordHostId(request) : "";
   const held = record === "" ? undefined : lab.layout.placements.find((p) => p.key === `inventory:${record}`);
-  const chosen = placementChoices(lab.layout, form.place, held === undefined ? undefined : held.key, lab.redraw, true);
-  form.chosen = chosen;
+  const options = slotOptions(lab.layout, held === undefined ? undefined : held.key, true);
   return [
-    ...chosen.elements,
-    chosen.note === "" ? null : h("p", { class: "note wide" }, chosen.note),
+    select("Sled slot", "place-slot", form.place, "slot", options),
+    options.length === 1 ? h("p", { class: "note wide" }, "No sled slot is free: add a sled on Home, in Edit layout.") : null,
     held === undefined ? null : h("p", { class: "note wide" },
-      `${record} stands at ${rackName(lab.layout, held.rack)}, U${held.u}, and stays there unless another place is chosen.`),
+      `${record} stands at ${held.address}, and stays there unless another slot is chosen.`),
   ];
 }
 
@@ -260,8 +258,7 @@ function pending(ctx, request, groups, lab) {
       hostId: request.renewalOf || recordHostId(request),
       hostGroup: choices.some(([name]) => name === recorded) ? recorded : "",
       replace: false,
-      place: { height: "1", row: "", rack: "", u: "" },
-      chosen: null,
+      place: { slot: "" },
     });
   }
   const form = lab.forms.get(request.requestId);
@@ -315,17 +312,16 @@ function pending(ctx, request, groups, lab) {
             `Approve request ${body.requestId} as ${named} and revoke the certificate of any host that holds ${named}?`)) {
             return "Not approved.";
           }
-          const spot = form.chosen === null ? null : form.chosen.request();
+          const spot = slotOf(form.place.slot);
           if (spot !== null) {
-            body.rack = spot.rack;
-            body.placementU = spot.u;
-            body.placementHeightU = spot.heightU;
+            body.placementSled = spot.sled;
+            body.placementSlot = spot.slot;
           }
           let reply;
           try {
             reply = await ctx.api.enrollment.approve(body);
           } catch (error) {
-            if (spot !== null && /^(placement_|unknown_rack$)/.test(error.reason || "")) {
+            if (spot !== null && /^(placement_|unknown_sled$|overlap$|capacity$)/.test(error.reason || "")) {
               return layoutProblem(error);
             }
             throw error;
@@ -334,7 +330,7 @@ function pending(ctx, request, groups, lab) {
           const placed = body.hostGroup === ""
             ? "with no host group (it runs the packages of all until it is put in one)"
             : `into host group ${body.hostGroup}`;
-          const stands = spot === null ? "" : `, at ${rackName(lab.layout, spot.rack)}, U${spot.u}`;
+          const stands = spot === null ? "" : `, at ${lab.layout.sleds.find((x) => x.id === spot.sled).address}-S${spot.slot}`;
           return `Approved ${reply.hostId || named} ${placed}${stands}: the host gets its certificate at its next poll.`;
         }, { class: "primary" }),
         rejectButton(ctx, request))));
