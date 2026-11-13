@@ -529,6 +529,14 @@ enroll. **Solution.** All of it is **data the operator enters in the coordinator
 shown as status. A new UI page, "MDM setup", calls new `Mdm` rpcs of the operator API (the page has no logic of its own, as the other
 pages; `ui/calls.json` is generated from the API, **Built**).
 
+**The page is one form (owner's decision after trying the stepped page and a wizard).** The rpcs below are unchanged and still
+served, but the page no longer walks through steps: it is one form of the files and values the setup needs, a one-line status above
+it and *Verify* below it (`docs/ui-serving.md`; where each file comes from: `docs/operations/mdm-setup.md`). *Save* calls, in order,
+`PutName` (only while no name is set), `PutPushCertificate` with certificate and key, `PutSecret` for the ABM key and certificate,
+`PutAbmToken`, `PutSecret` for the DNS credential, and `PutSetting` for `dns_zone` (worked out from the name) and `acme_contact`.
+The page has no buttons for `CreatePushRequest`, `PutPushReply` (steps 1a and 1a' below), the TLS upload and the ACME settings other than
+those two; the table below says what each rpc does, not what the page shows.
+
 **The setup, step by step** (the numbers of 1.3; each is one rpc and one audit row):
 
 | Step | Operator does | Coordinator does | Checks at entry |

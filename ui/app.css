@@ -128,7 +128,7 @@ button:disabled {
   color: var(--muted);
 }
 
-button.linklike {
+button.linkishlike {
   border: none;
   padding: 0;
   color: var(--accent);
@@ -201,4 +201,24 @@ form.sign-in {
 tr[aria-current="true"] {
   background: var(--panel);
   outline: 2px solid var(--accent);
+}
+
+.field {
+  margin: 12px 0;
+}
+
+.field p {
+  margin: 2px 0;
+}
+
+button.linkish {
+  border: 0;
+  padding: 0;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+a {
+  color: var(--accent);
 }

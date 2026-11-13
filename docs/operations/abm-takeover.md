@@ -27,9 +27,9 @@ NanoDEP does not keep the `.p7m` file ABM hands over. It keeps the token already
    The verb reads the five files, writes the JSON object `Mdm.PutAbmToken` takes (`consumer_key`, `consumer_secret`, `access_token`, `access_secret`,
    `access_secret_expiry`) to `<file>` with mode 0600, and refuses to overwrite a file that exists. It prints the file's name and no value, and sends
    nothing anywhere. A part that is missing or empty is refused, naming the file.
-2. In the setup page, signed in as a user (an API token is refused), upload `key.js-mdm` as the ABM key (kind `abm_key`) and `cert.js-mdm` as the ABM
-   certificate (`abm_cert`): the page checks that the key is an RSA key and that the certificate is the key's. Upload the key first.
-3. Upload `<file>` as the ABM token (`Mdm.PutAbmToken`). The coordinator opens a session with it and reads the account before it keeps the token, so
+2. In the setup page, signed in as a user (an API token is refused), choose `key.js-mdm` in the field *Apple Business Manager private key* and `cert.js-mdm` in *Apple Business Manager certificate*:
+   the coordinator checks that the key is an RSA key and that the certificate is the key's, and stores them together (kind `abm_key` with its certificate).
+3. Choose `<file>` in the field *Apple Business Manager token* (the page sends it as `Mdm.PutAbmToken`; Save may send the key pair and the token in one go, the key pair first). The coordinator opens a session with it and reads the account before it keeps the token, so
    a token that is not good is refused and stores nothing: `abm_credential_refused` (the parts do not belong together, or the token was revoked) and
    `abm_clock_refused` (the clock of the machine the coordinator runs on is an hour or more off) are told apart. The answer names the server entry and
    the organisation Apple says the token belongs to.
@@ -40,7 +40,7 @@ that have none); until then it only reads the device list.
 
 ## When the key pair cannot be read out
 
-Download the coordinator's own public key instead (`Mdm.GetAbmPublicKey`: it makes an RSA 2048 key pair once and answers the certificate), add the
+Download the coordinator's own public key instead (the link *Download the public certificate to upload to ABM* next to the token field, `Mdm.GetAbmPublicKey`: it makes an RSA 2048 key pair once and answers the certificate), add the
 certificate to the server entry in ABM as the MDM server's key, and upload the token file ABM then returns (`.p7m`) with `Mdm.PutAbmToken` as
 `token_p7m`. The coordinator opens it with its own key. Whether ABM accepts a replaced key for an existing entry is not verified (design section 12,
 item 16).
