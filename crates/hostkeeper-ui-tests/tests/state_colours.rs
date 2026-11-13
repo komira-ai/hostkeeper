@@ -149,3 +149,23 @@ fn the_packages_table_rule_is_not_split_by_collapsed_borders() {
         .1;
     assert!(buttons.contains("height: 30px"), "{buttons}");
 }
+
+#[test]
+fn the_danger_button_is_red_in_every_page_not_voided_by_an_undeclared_colour() {
+    // Proves: no `button.danger` rule of the app stylesheet reads a custom property the stylesheet
+    // never declares, so the red of `--bad` is not overridden by an empty value (black text).
+    // Catches: a later `button.danger { color: var(--alert) }` that turned every Remove black.
+    let css = UiFile::named("app.css").expect("app.css is held").text;
+    for (selector, body) in rules(css) {
+        if !selector.starts_with("button.danger") {
+            continue;
+        }
+        for part in body.split("var(--").skip(1) {
+            let name = &part[..part.find(')').expect("a var( closes")];
+            assert!(
+                css.contains(&format!("--{name}:")),
+                "{selector} reads --{name}, which no rule declares"
+            );
+        }
+    }
+}
