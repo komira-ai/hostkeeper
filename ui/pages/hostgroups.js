@@ -4,23 +4,23 @@
 // (each package's desired and minimum version and convergence, and its hosts a page at a time,
 // each a link to the Host page); a form that creates a group or changes one's ordered package list
 // (the packages are the services deployed to each of its hosts: one per line, in install order;
-// `all` lists `hostkeeper`, which a specific group need not); and moving a host into a specific
-// group, the group chosen from a dropdown of the groups held but `all`, which has every host. A group's rollout policy is not edited here: a change keeps the policy the
-// group holds, and a new group has the default one (`hkctl host-groups put` sets one).
+// `all` lists `hostkeeper`, which a specific group need not). A host is moved into a group on its
+// own Host page, not here. A group's rollout policy is not edited here: a change keeps the policy
+// the group holds, and a new group has the default one (`hkctl host-groups put` sets one).
 // Calls: HostGroups.List (every page), HostGroups.Get on a group's name and its hosts' "Next",
 // HostGroups.Put on Save, which replaces the group named over the generation List gave (or
-// creates it), and HostGroups.Move on its button, and with an empty group on "Remove from group"
-// beside each host of a group's detail (a host in no group runs the packages of `all` alone). The reason of a Put is optional here: it is
-// sent as a default when left empty.
+// creates it), and HostGroups.Move with an empty group on "Remove from group" beside each host of
+// a group's detail (a host in no group runs the packages of `all` alone). The reason of a Put is
+// optional here: it is sent as a default when left empty.
 
 import {
-  h, action, allPages, area, describeError, enumLabel, field, list, reasonProblem, select, table,
+  h, action, allPages, area, describeError, enumLabel, field, list, reasonProblem, table,
   trimmed, words,
 } from "../view.js";
 
 const HOSTS_PER_PAGE = 50;
 
-// The built-in group every host is in: it cannot be removed, and a host is not moved into it.
+// The built-in group every host is in: it cannot be removed.
 const ALL = "all";
 
 // The keys of a group's policy that are set, in words; "default" when none is.
@@ -80,9 +80,8 @@ const DEFAULT_REMOVE_REASON = "removed from the group in the console";
 // The body of a group as List answers it (its name, packages and policy).
 const bodyOf = (one) => (one || {})["group"] || {};
 
-// The Host groups page: a table of the groups, the detail of the one opened, the form that
-// creates or changes a group, the hosts in no group, and the form that moves a host into a group.
-// A List that fails shows its reason in the page.
+// The Host groups page: a table of the groups, the detail of the one opened, and the form that
+// creates or changes a group. A List that fails shows its reason in the page.
 export async function render(ctx) {
   let groups = [];
   let failure = null;
@@ -91,18 +90,8 @@ export async function render(ctx) {
   } catch (error) {
     failure = error;
   }
-  // The hosts in no group, which a Move puts in one; a List that fails leaves none shown.
-  let ungrouped = [];
-  let hostsFailure = null;
-  try {
-    const hosts = await allPages((token) => ctx.api.hosts.list(token === "" ? {} : { pageToken: token }), "hosts");
-    ungrouped = hosts.filter((host) => !host.hostGroup).map((host) => host.nodeId);
-  } catch (error) {
-    hostsFailure = error;
-  }
   const state = {
     picked: null,
-    move: { nodeId: "", hostGroup: "", reason: "" },
     edit: { name: "", packages: "", reason: "" },
   };
   const show = () => ctx.show(page());
@@ -223,45 +212,6 @@ export async function render(ctx) {
         return `Saved host group ${name} (generation ${reply.generation || "-"}).`;
       })));
 
-  const moveForm = () => h("fieldset", {},
-    h("legend", {}, "Move a host"),
-    ungrouped.length > 0
-      ? h("div", {},
-        h("p", { class: "note" }, "Hosts in no host group run the packages of all alone until they are moved into one."),
-        h("ul", { class: "plain" }, ungrouped.map((nodeId) => h("li", {},
-          action(ctx, nodeId, "pick-host", () => {
-            state.move.nodeId = nodeId;
-            show();
-          }, { class: "linklike" })))))
-      : null,
-    hostsFailure === null ? null : h("p", { class: "error", role: "alert" }, `Hosts: ${describeError(hostsFailure)}`),
-    field("Host", "move-host", state.move, "nodeId"),
-    select("Host group", "move-group", state.move, "hostGroup",
-      [["", "Choose a group"], ...groups.map((one) => bodyOf(one).name).filter((name) => name !== ALL).map((name) => [name, name])]),
-    field("Reason", "move-reason", state.move, "reason", { maxlength: 256 }),
-    h("div", { class: "buttons" },
-      action(ctx, "Move", "move", async () => {
-        if (trimmed(state.move.reason) === "") {
-          return "Give a reason first.";
-        }
-        const problem = reasonProblem(trimmed(state.move.reason));
-        if (problem) {
-          return problem;
-        }
-        const reason = trimmed(state.move.reason);
-        const nodeId = trimmed(state.move.nodeId);
-        const hostGroup = trimmed(state.move.hostGroup);
-        if (nodeId === "" || hostGroup === "") {
-          return "Name the host and the host group.";
-        }
-        if (!ctx.confirm(`Move ${nodeId} to host group ${hostGroup}? It is ordered that group's packages at its next heartbeat.`)) {
-          return "Not moved.";
-        }
-        const reply = await ctx.api.hostGroups.move({ nodeId, hostGroup, reason });
-        ctx.refresh();
-        return `Moved ${nodeId} from ${reply.fromHostGroup || "no group"} to ${hostGroup}.`;
-      })));
-
   const rows = () => groups.map((one) => {
     const { group = {} } = one;
     const { name } = group;
@@ -286,7 +236,6 @@ export async function render(ctx) {
       ? table(["Group", "Packages", "Policy", "Generation", "Hosts", "Desired", ""], rows())
       : null,
     detail(),
-    editForm(),
-    moveForm());
+    editForm());
   return page();
 }
