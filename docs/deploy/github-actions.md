@@ -126,7 +126,7 @@ one credential is the OIDC token GitHub issues to the job.
    hand-over, installing the package once the new binary has confirmed itself
    ([packages-native.md](../design/packages-native.md), section 10.4).
 
-Watch the roll on the UI's Rollout page, or with `hkctl releases converge --service hostkeeper`.
+Watch the roll on the UI's Packages page (open the package), or with `hkctl releases converge --service hostkeeper`.
 
 ## Turning it on and off
 
