@@ -7,7 +7,7 @@ mod support;
 
 use serde_json::{Value, json};
 use support::Ui;
-use support::pages::{assert_shows, bodies, m, page_driver};
+use support::pages::{assert_shows, bodies, m, page_driver, shown};
 
 /// Driver helpers: the last tree the page showed, and the choice of a file in the key picker.
 const HELPERS: &str = r#"
@@ -101,9 +101,8 @@ fn bodies_of(ui: &Ui, method: &str) -> Vec<Value> {
 
 #[test]
 fn the_page_lists_the_packages_with_their_repository_minimums_and_host_groups() {
-    // Proves: each registered package is a row with its repository, its minimum version in each
-    // host group that has one, the host groups that run it, and Edit and Remove; a package no
-    // group runs shows "-" for both.
+    // Proves: each registered package is a row with its repository, the host groups that run it,
+    // and Edit and Remove; a package no group runs shows "-".
     // Catches: a table that leaves out the repository or the groups, or shows a default as a value.
     let mut ui = Ui::start();
     replies(&mut ui);
@@ -111,50 +110,146 @@ fn the_page_lists_the_packages_with_their_repository_minimums_and_host_groups() 
         "packages",
         "{}",
         "[]",
-        "return rows(tree).slice(0, 4);",
+        "return rows(tree).slice(3);",
     ));
     assert_eq!(
         out["out"],
         json!([
-            [
-                "Package",
-                "Repository",
-                "Minimum version",
-                "Host groups",
-                ""
-            ],
-            [
-                "hostkeeper",
-                "komira",
-                "web 0.1.200",
-                "all, web",
-                "Edit Remove"
-            ],
-            ["js-agent", "acme", "-", "-", "Edit Remove"],
-            ["tierstore", "komira", "-", "web", "Edit Remove"],
+            ["Package", "Repository", "Host groups", ""],
+            ["hostkeeper", "komira", "all, web", "Edit Remove"],
+            ["js-agent", "acme", "-", "Edit Remove"],
+            ["tierstore", "komira", "web", "Edit Remove"],
         ])
     );
 }
 
 #[test]
-fn an_empty_registry_says_so_and_both_forms_are_there() {
-    // Proves: with no package and no repository the page says so in words and still offers the
-    // two forms, the first with its hint to add a repository.
-    // Catches: an empty table with no way to register the first package.
+fn an_empty_registry_says_so_and_add_package_waits_for_a_repository() {
+    // Proves: with no package and no repository the page says so in words, "Add repository" is
+    // enabled, "Add package" is disabled with the hint "Add a repository first" and does nothing
+    // when clicked, and no form is open.
+    // Catches: a first package that can be started with no repository to come from.
     let mut ui = Ui::start();
     ui.reply(&m("Services/List"), json!({}));
     ui.reply(&m("Repositories/List"), json!({}));
-    let out = ui.run(&page_driver("packages", "{}", "[]", ""));
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        r#"
+const flags = [named(tree, "add-repository")[0].attrs.disabled === true, named(tree, "add-package")[0].attrs.disabled === true];
+await click(tree, "add-package");
+return { flags, shown: seen.shown.length };
+"#,
+    ));
+    assert_eq!(out["out"], json!({"flags": [false, true], "shown": 0}));
     assert_shows(
         &out,
         &[
             "No package is registered yet.",
             "No repository is registered yet.",
-            "Add package",
-            "No repository is registered: add one under Repositories below first.",
-            "Add repository",
+            "Add a repository first",
         ],
     );
+    assert!(!shown(&out).contains("Save"));
+}
+
+#[test]
+fn no_form_is_visible_by_default_and_each_add_button_opens_its_own_with_save_and_cancel() {
+    // Proves: the page opens with no field and no Save button; "Add repository" opens the
+    // repository form alone, "Add package" the package form alone (replacing the other), Cancel
+    // closes each, and a form is not shown again by the redraw after it.
+    // Catches: a form shown by default, or an Add button that opens the wrong form.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        &format!(
+            r#"{HELPERS}
+const form = (t) => nodes(t).filter((n) => n.tag === "fieldset").length;
+const names = (t) => nodes(t).filter((n) => n.tag === "button").map((n) => n.attrs["name"]);
+const start = [form(tree), names(tree).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+await click(tree, "add-repository");
+const repo = [form(last()), names(last()).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+await click(last(), "add-package");
+const pkg = [form(last()), names(last()).filter((n) => n.startsWith("put-") || n.startsWith("cancel-"))];
+await click(last(), "cancel-package");
+const closed = form(last());
+await click(last(), "add-repository");
+await click(last(), "cancel-repository");
+return {{ start, repo, pkg, closed, again: form(last()) }};
+"#
+        ),
+    ));
+    assert_eq!(
+        out["out"],
+        json!({
+            "start": [0, []],
+            "repo": [1, ["put-repository", "cancel-repository"]],
+            "pkg": [1, ["put-package", "cancel-package"]],
+            "closed": 0,
+            "again": 0
+        })
+    );
+}
+
+#[test]
+fn the_repositories_are_listed_above_the_packages() {
+    // Proves: the Repositories heading, its table and its Add button come before the Packages
+    // heading, its table and its Add button.
+    // Catches: packages listed first, with the repository they come from below them.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    let out = ui.run(&page_driver("packages", "{}", "[]", ""));
+    let text = shown(&out);
+    let at = |piece: &str| {
+        text.find(piece)
+            .unwrap_or_else(|| panic!("{piece:?} not in {text}"))
+    };
+    assert!(at("Repositories") < at("Add repository"));
+    assert!(at("Add repository") < at("Repository URL Used by"));
+    assert!(at("Repository URL Used by") < at("Add package"));
+    assert!(at("Add package") < at("Package Repository Host groups"));
+}
+
+#[test]
+fn each_list_has_one_description_and_marks_add_primary_and_remove_danger() {
+    // Proves: each list's header holds its title, one description and its Add button in a
+    // `list-head`; every Add is `primary` and every Remove, of a package and of a repository, is
+    // `danger`; each row's Edit and Remove sit in one `row-actions` cell; Edit is not danger.
+    // Catches: an Add button outside its header, a Remove that looks like Edit, or a second
+    // description repeated under the page title.
+    let mut ui = Ui::start();
+    replies(&mut ui);
+    let out = ui.run(&page_driver(
+        "packages",
+        "{}",
+        "[]",
+        r#"
+const classes = (name) => named(tree, name).map((n) => n.attrs.class || "");
+const heads = nodes(tree).filter((n) => n.attrs && n.attrs.class === "list-head");
+return {
+  add: [...classes("add-repository"), ...classes("add-package")],
+  remove: [...classes("remove-package"), ...classes("remove-repository")],
+  edit: [...classes("edit-package"), ...classes("edit-repository")],
+  heads: heads.length,
+  notes: heads.map((n) => nodes(n).filter((m) => m.attrs && m.attrs.class === "note").length),
+  cells: nodes(tree).filter((n) => n.attrs && n.attrs.class === "row-actions").length,
+};
+"#,
+    ));
+    let got = &out["out"];
+    assert_eq!(got["add"], json!(["primary", "primary"]));
+    assert_eq!(
+        got["remove"],
+        json!(["danger", "danger", "danger", "danger", "danger"])
+    );
+    assert_eq!(got["edit"], json!(["", "", "", "", ""]));
+    assert_eq!(got["heads"], json!(2));
+    assert_eq!(got["notes"], json!([1, 1]));
+    assert_eq!(got["cells"], json!(5));
 }
 
 #[test]
@@ -179,7 +274,7 @@ fn a_refused_list_shows_an_alert_and_the_rest_of_the_page() {
 
 #[test]
 fn adding_a_package_chooses_its_repository_from_the_registry_and_puts_it() {
-    // Proves: the repository dropdown offers the registered repositories (komira preselected),
+    // Proves: Add package opens the form, the repository dropdown offers the registered repositories (komira preselected),
     // Add package sends Services.Put with the name trimmed, that repository and a fixed reason,
     // reports it and refreshes once; the form has no field for a repository's name.
     // Catches: a repository typed instead of chosen, or a Put that carries another body.
@@ -193,14 +288,18 @@ fn adding_a_package_chooses_its_repository_from_the_registry_and_puts_it() {
         "packages",
         "{}",
         "[]",
-        r#"
-const offered = choices(tree, "package-repository");
-const before = chosen(tree, "package-repository");
-type(tree, "package-name", " js-agent ");
-choose(tree, "package-repository", "acme");
-await click(tree, "put-package");
-return { offered, before };
-"#,
+        &format!(
+            r#"{HELPERS}
+await click(tree, "add-package");
+const form = last();
+const offered = choices(form, "package-repository");
+const before = chosen(form, "package-repository");
+type(form, "package-name", " js-agent ");
+choose(form, "package-repository", "acme");
+await click(form, "put-package");
+return {{ offered, before }};
+"#
+        ),
     ));
     assert_eq!(
         out["out"],
@@ -229,17 +328,21 @@ fn a_package_without_a_good_name_or_a_repository_is_not_put_and_a_refusal_is_sho
         "packages",
         "{}",
         "[]",
-        r#"
-await click(tree, "put-package");
-type(tree, "package-name", "Bad Name");
-await click(tree, "put-package");
-type(tree, "package-name", "js-agent");
-choose(tree, "package-repository", "");
-await click(tree, "put-package");
-choose(tree, "package-repository", "acme");
-await click(tree, "put-package");
+        &format!(
+            r#"{HELPERS}
+await click(tree, "add-package");
+const form = last();
+await click(form, "put-package");
+type(form, "package-name", "Bad Name");
+await click(form, "put-package");
+type(form, "package-name", "js-agent");
+choose(form, "package-repository", "");
+await click(form, "put-package");
+choose(form, "package-repository", "acme");
+await click(form, "put-package");
 return seen.reports;
-"#,
+"#
+        ),
     ));
     assert_eq!(
         out["out"],
@@ -342,6 +445,7 @@ await click(tree, "edit-package", 0);
 const loaded = last();
 const groups = choices(loaded, "package-min-group");
 const repository = chosen(loaded, "package-repository");
+const note = text(loaded).includes("Minimum versions set: web 0.1.200.");
 await click(loaded, "put-package");
 choose(loaded, "package-repository", "acme");
 choose(loaded, "package-min-group", "web");
@@ -352,7 +456,7 @@ await click(loaded, "put-package");
 await click(tree, "edit-package", 1);
 const lone = last();
 const none = nodes(lone).filter((n) => n.attrs["name"] === "package-min-version").length;
-return {{ groups, repository, none, reports: seen.reports }};
+return {{ groups, repository, note, none, reports: seen.reports }};
 "#
         ),
     ));
@@ -361,6 +465,7 @@ return {{ groups, repository, none, reports: seen.reports }};
         json!({
             "groups": ["No change", "all", "web"],
             "repository": "komira",
+            "note": true,
             "none": 0,
             "reports": [
                 "Nothing to change for hostkeeper.",
@@ -387,10 +492,10 @@ return {{ groups, repository, none, reports: seen.reports }};
 
 #[test]
 fn the_repositories_section_lists_each_with_its_packages_keys_and_access() {
-    // Proves: each repository is a row with its URL, suites, components, access, the packages that
-    // come from it and its keys by the last 16 hex characters of their fingerprints; a repository
-    // packages name that the registry lacks is shown as an alert.
-    // Catches: a table that hides the private access, or the packages a repository serves.
+    // Proves: each repository is a row with its name, its URL and how many packages come from it,
+    // with Edit and Remove; a repository packages name that the registry lacks is shown as an
+    // alert.
+    // Catches: a table that hides how many packages use a repository, or an unregistered one.
     let mut ui = Ui::start();
     ui.reply(&m("Services/List"), json!({}));
     let mut reply = repositories_reply();
@@ -398,23 +503,24 @@ fn the_repositories_section_lists_each_with_its_packages_keys_and_access() {
     ui.reply(&m("Repositories/List"), reply);
     let out = ui.run(&page_driver("packages", "{}", "[]", "return rows(tree);"));
     let rows = out["out"].as_array().expect("rows");
-    assert!(rows.contains(&json!([
-        "acme",
-        "https://acme.example.com/apt",
-        "testing",
-        "main",
-        "private",
-        "js-agent",
-        "AAAAAAAA11112222",
-        "Edit Remove"
-    ])));
-    assert!(rows.iter().any(|row| {
-        row[0] == "komira"
-            && row[3] == "main, extra"
-            && row[4] == "public"
-            && row[5] == "hostkeeper, tierstore"
-            && row[6] == "BBBBBBBB33334444"
-    }));
+    assert_eq!(
+        rows[..3],
+        [
+            json!(["Repository", "URL", "Used by", ""]),
+            json!([
+                "acme",
+                "https://acme.example.com/apt",
+                "used by 1 package",
+                "Edit Remove"
+            ]),
+            json!([
+                "komira",
+                "https://packages.example.com/apt",
+                "used by 2 packages",
+                "Edit Remove"
+            ]),
+        ]
+    );
     assert_shows(
         &out,
         &["Packages come from repositories that are not registered: ghost."],
@@ -438,12 +544,14 @@ fn adding_a_repository_reads_the_fingerprints_from_the_key_file_and_puts_it() {
         "[]",
         &format!(
             r#"{HELPERS}
-type(tree, "repository-name", "spare");
-type(tree, "repository-uri", " https://spare.example.com/apt ");
-type(tree, "repository-suites", "testing, stable");
-type(tree, "repository-components", "main contrib");
-chooseKey(tree, file({}));
-await click(tree, "put-repository");
+await click(tree, "add-repository");
+const form = last();
+type(form, "repository-name", "spare");
+type(form, "repository-uri", " https://spare.example.com/apt ");
+type(form, "repository-suites", "testing, stable");
+type(form, "repository-components", "main contrib");
+chooseKey(form, file({}));
+await click(form, "put-repository");
 return null;
 "#,
             js_bytes(&key)
@@ -478,31 +586,32 @@ fn a_repository_form_that_breaks_a_rule_sends_nothing_and_says_why() {
         "[]",
         &format!(
             r#"{HELPERS}
-const say = async () => {{ await click(tree, "put-repository"); return seen.reports[seen.reports.length - 1]; }};
+const say = async () => {{ await click(last(), "put-repository"); return seen.reports[seen.reports.length - 1]; }};
 const out = [];
+await click(tree, "add-repository");
 out.push(await say());
-type(tree, "repository-name", "spare");
+type(last(), "repository-name", "spare");
 out.push(await say());
-type(tree, "repository-uri", "http://spare.example.com");
+type(last(), "repository-uri", "http://spare.example.com");
 out.push(await say());
-type(tree, "repository-uri", "https://spare.example.com");
+type(last(), "repository-uri", "https://spare.example.com");
 out.push(await say());
-type(tree, "repository-suites", "testing");
+type(last(), "repository-suites", "testing");
 out.push(await say());
-choose(tree, "repository-access", "hosts");
+choose(last(), "repository-access", "hosts");
 const priv = last();
 out.push(await say());
-choose(tree, "repository-access", "public");
+choose(last(), "repository-access", "public");
 out.push(await say());
-chooseKey(tree, file([45, 45, 45, 45, 45]));
+chooseKey(last(), file([45, 45, 45, 45, 45]));
 out.push(await say());
-chooseKey(tree, file([1, 2, 3]));
+chooseKey(last(), file([1, 2, 3]));
 out.push(await say());
-chooseKey(tree, file([], 70000));
+chooseKey(last(), file([], 70000));
 out.push(await say());
-chooseKey(tree, file([], 0));
+chooseKey(last(), file([], 0));
 out.push(await say());
-chooseKey(tree, {{ name: "k", arrayBuffer: async () => new ArrayBuffer(70000) }});
+chooseKey(last(), {{ name: "k", arrayBuffer: async () => new ArrayBuffer(70000) }});
 out.push(await say());
 return out;
 "#
@@ -544,11 +653,12 @@ fn a_private_repository_sends_its_credential_file_and_a_public_one_sends_none() 
         "[]",
         &format!(
             r#"{HELPERS}
-type(tree, "repository-name", "priv");
-type(tree, "repository-uri", "https://priv.example.com");
-type(tree, "repository-suites", "web");
-chooseKey(tree, file({}));
-choose(tree, "repository-access", "hosts");
+await click(tree, "add-repository");
+type(last(), "repository-name", "priv");
+type(last(), "repository-uri", "https://priv.example.com");
+type(last(), "repository-suites", "web");
+chooseKey(last(), file({}));
+choose(last(), "repository-access", "hosts");
 const shown = last();
 type(shown, "repository-credential", " /etc/hostkeeper/priv.cred ");
 await click(shown, "put-repository");
@@ -605,7 +715,7 @@ type(loaded, "repository-uri", "https://mirror.example.com/apt");
 await click(loaded, "put-repository");
 chooseKey(loaded, file({}));
 await click(loaded, "put-repository");
-return form;
+return [...form, text(loaded).includes("Signing keys held: BBBBBBBB33334444.")];
 "#,
             js_bytes(&fresh)
         ),
@@ -616,7 +726,8 @@ return form;
             "https://packages.example.com/apt",
             "testing, stable",
             "main, extra",
-            "public"
+            "public",
+            true
         ])
     );
     assert_eq!(

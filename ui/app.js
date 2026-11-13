@@ -13,11 +13,9 @@ import { changeView, signInView, wordsFor } from "./signin.js";
 import { h, describeError, errorView, icon, mount } from "./view.js";
 import * as home from "./pages/home.js";
 import * as host from "./pages/host.js";
-import * as rollout from "./pages/rollout.js";
 import * as packages from "./pages/packages.js";
+import * as pkg from "./pages/package.js";
 import * as hostgroups from "./pages/hostgroups.js";
-import * as release from "./pages/release.js";
-import * as holds from "./pages/holds.js";
 import * as enrollment from "./pages/enrollment.js";
 import * as inventory from "./pages/inventory.js";
 import * as audit from "./pages/audit.js";
@@ -45,15 +43,13 @@ const SETTINGS = [
   ["audit", "Audit", audit],
 ];
 // The pages that are reached by a link and not by the menu, each `[name, title, module, crumb]`:
-// Home, a host of the lab view, and the three release pages, whose place is the package page. The
+// Home, a host of the lab view, and a package, which the Packages page opens. The
 // crumb is the top bar's one line of where the page is; Home and the host page have their own
 // breadcrumbs (Lab > Row > Rack > Host) and so none here.
 const LINKED = [
   ["home", "Lab", home, ""],
   ["host", "Host", host, ""],
-  ["release", "Release", release, "Release"],
-  ["rollout", "Rollout", rollout, "Rollout"],
-  ["holds", "Holds", holds, "Holds"],
+  ["package", "Package", pkg, "Package"],
 ];
 const PAGES = GROUPS.flatMap(([group, pages]) => pages.map(([name, title, page, glyph]) => [name, title, page, glyph, title]))
   .concat(SETTINGS.map(([name, title, page]) => [name, title, page, "", "Settings"]))
@@ -73,12 +69,30 @@ const THEMES = ["system", "light", "dark"];
 // The theme port used when the browser gives none: it shows nothing.
 const NO_PREFS = { apply: () => {} };
 
+// Where the routes of the pages that were removed lead now: the package the route names, else the
+// Packages page. A bookmark or a link in the docs to one of them keeps working.
+export function redirected(name, params) {
+  const service = params && typeof params.service === "string" ? params.service : "";
+  if ((name === "release" || name === "rollout") && service !== "") {
+    const to = { package: service };
+    if (typeof params.version === "string") {
+      to.version = params.version;
+    }
+    return ["package", to];
+  }
+  if (name === "release" || name === "rollout" || name === "holds") {
+    return ["packages", {}];
+  }
+  return [name, params || {}];
+}
+
 // Starts the app in `root`. `doc` is the document, `fetch` the browser's fetch, `confirm` a
 // yes-or-no question to the operator (the browser's confirm), `now` the time in unix seconds and
-// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`),
-// each injected so tests can fake them. Returns the frame's controls, which the browser does not
-// need.
-export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_PREFS }) {
+// `download` the saving of a file the page offers (`{name, mime, text}` or `{name, mime, base64}`)
+// and `every` (`(run, milliseconds)` to a function that stops it) the repeating of a call a page
+// asks for, each injected so tests can fake them; without `every` a page's repeat never runs.
+// Returns the frame's controls, which the browser does not need.
+export function startApp({ doc, root, fetch, confirm, now, download, every, prefs = NO_PREFS }) {
   // The operator's look, kept in memory: the theme (`prefs.apply(theme)` shows it) and whether the
   // side menu is collapsed to icons.
   let theme = "system";
@@ -320,6 +334,22 @@ export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_
       now: () => now(),
       download: (file) => download(file),
       navigate,
+      // Runs `run` every `seconds` while this rendering of the page is the latest; it stops itself
+      // on the first tick after the operator has left, signed out or the page was drawn again, and
+      // the returned function stops it at once.
+      every: (run, seconds) => {
+        if (typeof every !== "function") {
+          return () => {};
+        }
+        const stop = every(() => {
+          if (here() && mine === generation) {
+            run();
+          } else {
+            stop();
+          }
+        }, seconds * 1000);
+        return stop;
+      },
       refresh: () => {
         if (here()) {
           show();
@@ -359,8 +389,9 @@ export function startApp({ doc, root, fetch, confirm, now, download, prefs = NO_
     }
   }
 
-  function navigate(name, params) {
-    current = { view: ROUTES[name] || name, params: params || {} };
+  function navigate(asked, given) {
+    const [name, params] = redirected(ROUTES[asked] || asked, given);
+    current = { view: name, params };
     status = "";
     show();
   }

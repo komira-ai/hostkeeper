@@ -70,7 +70,7 @@ A package has one plan for each group that lists it, over that group's hosts alo
 
 ## Reading a plan
 
-`Releases.Status` (`hkctl releases status`) and the Rollout page show, per service, the
+`Releases.Status` (`hkctl releases status`) and the package page (Packages, then the package) show, per service, the
 plan: its stages with their sizes and hosts, each host `waiting`, `updating`, `baking`, `done` or
 `failed`; the current stage ("stage 2 of 3"); and why the plan waits:
 

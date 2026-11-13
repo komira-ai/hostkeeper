@@ -55,7 +55,7 @@ export const NOW = 1800000000;
 // replies to the page's questions, in order; a question beyond them is answered no. Its clock
 // reads `now` (NOW when absent).
 export function recorder(client, params, answers, now) {
-  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], downloads: [] };
+  const seen = { reports: [], refreshes: 0, navigations: [], questions: [], shown: [], downloads: [], repeats: [] };
   const left = (answers || []).slice();
   const ctx = {
     api: client,
@@ -81,6 +81,15 @@ export function recorder(client, params, answers, now) {
     },
     download(file) {
       seen.downloads.push(file);
+    },
+    // A repeat the test drives: nothing runs by itself, `run` is called by the test, and a call
+    // of the function this returns counts a stop.
+    every(run, seconds) {
+      const repeat = { run, seconds, stops: 0 };
+      seen.repeats.push(repeat);
+      return () => {
+        repeat.stops += 1;
+      };
     },
   };
   return { ctx, seen };

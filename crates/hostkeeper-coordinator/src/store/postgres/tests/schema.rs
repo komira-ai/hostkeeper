@@ -32,7 +32,8 @@ fn shipped_rows() -> Vec<Vec<Option<String>>> {
         row("11", "mdm", "may-run"),
         row("12", "mdm_setup", "may-run"),
         row("13", "host_group_all", "may-run"),
-        row("14", "lab_layout", "may-run"),
+        row("14", "trusted_publishers", "may-run"),
+        row("15", "lab_layout", "may-run"),
     ]
 }
 
@@ -93,7 +94,7 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     let db = TestDatabase::new();
     let shipped = migrate::checked(&migrate::SHIPPED).expect("the shipped set");
     let failing = Migration {
-        version: 14,
+        version: 15,
         name: "half",
         older: OlderReleases::Refuse,
         sql: "CREATE TABLE half (x int); SELECT 1/0;",
@@ -106,14 +107,14 @@ fn a_migration_that_fails_is_rolled_back_whole_and_stops_the_start() {
     assert!(matches!(
         error,
         ApplyError::Failed {
-            version: 14,
+            version: 15,
             name: "half",
             ..
         }
     ));
     assert_eq!(
         error.to_string(),
-        "migration 14 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
+        "migration 15 (half) failed and was rolled back: ERROR: division by zero (SQLSTATE 22012)"
     );
     assert_eq!(
         db.rows("SELECT to_regclass('hostkeeper.half')::text"),

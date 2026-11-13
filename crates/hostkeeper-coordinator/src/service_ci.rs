@@ -3,8 +3,8 @@
 //! by [`Coordinator::ci`], which spends it, so a token is checked once; an operator's token
 //! is resolved to its name by [`Coordinator::caller`] and spends nothing. CI and an operator
 //! both set the desired state, and only CI reads the convergence here. They differ in what may
-//! be set (CI: the services its allow-list entry names, and in the host groups it names, when it
-//! names any; an operator: any service the coordinator manages) and in who the audit names.
+//! be set (CI: the packages that have a trusted publisher the token matches, and in the host groups
+//! that publisher names, when it names any; an operator: any service the coordinator manages) and in who the audit names.
 
 use std::sync::Arc;
 
@@ -156,19 +156,6 @@ impl Coordinator {
                 .set_desired_by_group(setter, body, ask, targets, host_group)
                 .await;
         }
-        // A token limited to host groups deploys to groups alone, and there are none.
-        if let Setter::Ci(verified) = setter
-            && verified.host_groups.is_some()
-        {
-            tracing::warn!(
-                workflow = %verified.job_workflow_ref,
-                "refused a desired state: the allow-list entry names host groups, the coordinator none"
-            );
-            return Err(SetError::Forbidden);
-        }
-        if !host_group.is_empty() {
-            return Err(SetError::NotInHostGroup);
-        }
         if ask.needs_records() && !self.desired.keeps_write_records() {
             return Err(SetError::Invalid(DesiredError::Unrecorded));
         }
@@ -184,8 +171,18 @@ impl Coordinator {
                 Some(release)
             }
         };
-        if let Setter::Ci(verified) = setter {
-            self.ci_admits(verified, &service)?;
+        if let Setter::Ci(verified) = setter
+            && self.ci_admits(verified, &service)?.is_some()
+        {
+            // A publisher limited to host groups deploys to groups alone, and there are none.
+            tracing::warn!(
+                workflow = %verified.job_workflow_ref,
+                "refused a desired state: the trusted publisher names host groups, the coordinator none"
+            );
+            return Err(SetError::Forbidden);
+        }
+        if !host_group.is_empty() {
+            return Err(SetError::NotInHostGroup);
         }
         let (actor, set_by) = match setter {
             Setter::Ci(verified) => (crate::reconcile::CI, verified.job_workflow_ref.clone()),
@@ -280,26 +277,25 @@ impl Coordinator {
         ))
     }
 
-    /// Whether the allow-list entry that admitted `verified` names `service`: an entry that names
-    /// no services stands for the legacy service. (Its `host_groups` are judged where the groups
-    /// are: [`Self::set_desired_in`].)
+    /// Whether a trusted publisher of `service` admits `verified` ([`crate::trusted_publishers`]).
+    /// The answer is the host groups that entry limits a call to: `None` when it limits none.
+    /// (They are judged where the groups are: [`Self::set_desired_in`].)
     ///
     /// # Errors
-    /// [`SetError::Forbidden`].
-    pub(super) fn ci_admits(&self, verified: &Verified, service: &str) -> Result<(), SetError> {
-        let admitted = match &verified.services {
-            Some(names) => names.iter().any(|name| name == service),
-            None => self.legacy.as_deref() == Some(service),
-        };
-        if !admitted {
+    /// [`SetError::Forbidden`]: no entry of the package admits the token.
+    pub(super) fn ci_admits(
+        &self,
+        verified: &Verified,
+        service: &str,
+    ) -> Result<Option<Vec<String>>, SetError> {
+        self.publisher_admits(verified, service).ok_or_else(|| {
             tracing::warn!(
                 workflow = %verified.job_workflow_ref,
                 %service,
-                "refused a desired state: the allow-list entry does not name the service"
+                "refused a desired state: no trusted publisher of the package admits the token"
             );
-            return Err(SetError::Forbidden);
-        }
-        Ok(())
+            SetError::Forbidden
+        })
     }
 
     /// Why CI may not set `desired` for `service`, if it may not: the refusals of

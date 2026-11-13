@@ -76,7 +76,12 @@ pub fn coordinator(
     let rollout = format!(
         "[[service]]\nname = \"web\"\nroles = [\"daemon\", \"other\"]\nrepository = \"{repository}\"\n"
     );
+    let allow = hostkeeper_oidc::AllowList::parse(&hostkeeper_oidc::testkit::config_text(
+        hostkeeper_oidc::testkit::STATIC_ISSUER,
+    ))
+    .expect("the allow-list");
     let mut coordinator = Coordinator::new(desired, verifier, OPERATOR.to_owned(), clock)
+        .with_allow_list(&allow, None)
         .with_services(Services::parse(&rollout).expect("the rollout file"))
         .with_ops(ops);
     if let Some(origin) = origin {

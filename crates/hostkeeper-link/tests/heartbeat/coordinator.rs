@@ -76,6 +76,10 @@ pub(crate) fn coordinator(dir: &Path) -> Arc<Coordinator> {
     ));
     let rollout = "[[service]]\nname = \"web\"\nroles = [\"daemon\"]\n";
     let coordinator = Coordinator::new(desired, verifier, OPERATOR.to_owned(), clock)
+        .with_allow_list(
+            &hostkeeper_oidc::AllowList::parse(&allow).expect("the allow-list"),
+            None,
+        )
         .with_services(Services::parse(rollout).expect("the rollout file"))
         .with_ops(ops);
     seconds.store(1_100, Ordering::SeqCst);

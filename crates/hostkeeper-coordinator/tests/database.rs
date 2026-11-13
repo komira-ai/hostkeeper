@@ -361,7 +361,7 @@ fn a_serve_starts_on_a_database_at_the_schema_of_the_release_before() {
     // `schema_version` rows.
     run(
         &database,
-        "ALTER TABLE services DROP COLUMN repository; \
+        "ALTER TABLE services DROP COLUMN repository, DROP COLUMN trusted_publishers; \
          DROP TABLE api_tokens; DROP TABLE users; \
          DROP TABLE mdm_secrets, mdm_settings, mdm_commands, mdm_identities, mdm_enrollments, \
          abm_devices, abm_state; \

@@ -310,6 +310,18 @@ const REQUESTS: &[(&str, &str)] = &[
         r#"{"service": "js-agent", "reason": "removed in the console"}"#,
     ),
     (
+        "hostkeeper.operator.v1.Services/ListTrustedPublishers",
+        r#"{"service": "kbf"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Services/PutTrustedPublisher",
+        r#"{"service": "kbf", "repository": "komira-ai/kbf", "workflow": ".github/workflows/release.yml", "ref": "main", "reason": "set in the console"}"#,
+    ),
+    (
+        "hostkeeper.operator.v1.Services/RemoveTrustedPublisher",
+        r#"{"service": "kbf", "repository": "komira-ai/kbf", "workflow": ".github/workflows/release.yml", "ref": "main", "reason": "removed in the console"}"#,
+    ),
+    (
         "hostkeeper.operator.v1.Services/SetRepository",
         r#"{"service": "kbf", "repository": "komira", "reason": "set in the console"}"#,
     ),

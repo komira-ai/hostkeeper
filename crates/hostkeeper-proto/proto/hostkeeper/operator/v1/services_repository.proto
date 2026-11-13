@@ -1,7 +1,9 @@
 // hostkeeper.operator.v1: the messages of `Services.SetRepository`, the call that sets which
 // repository of the coordinator's registry a package comes from (docs/design/hostgroups.md
 // section 9), and of `Services.Put` and `Services.Remove`, which register a package and take
-// one out. The `Services` service, its refusals (`ServicesRefusal`) and the rest of the
+// one out, and of `Services.ListTrustedPublishers`, `Services.PutTrustedPublisher` and
+// `Services.RemoveTrustedPublisher`, which hold the GitHub Actions runs that may set a package's
+// desired version (docs/deploy/ci-client.md, "Trusted publishers"). The `Services` service, its refusals (`ServicesRefusal`) and the rest of the
 // package, `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal`
 // among it, are operator.proto; this file is the same package and API, kept apart so that each
 // file stays short.
@@ -70,4 +72,89 @@ message RemoveServiceRequest {
 message RemoveServiceResponse {
   // The audit entry the call wrote.
   AuditEntry entry = 1;
+}
+
+// One GitHub Actions run a package trusts to set its desired version: the claims of its OIDC token.
+message TrustedPublisher {
+  // The repository, `owner/name`, as the token's `repository` claim says it. Empty only of an
+  // entry imported from a coordinator's `--oidc-config` that names no repository.
+  string repository = 1;
+  // The workflow file that started the run, from the root of the repository
+  // (`.github/workflows/release.yml`): the path of the token's `workflow_ref` claim. Empty only of
+  // an imported entry, which then trusts any workflow of the repository, within `called_workflows`.
+  string workflow = 2;
+  // The ref the run was started on, as the token's `ref` claim says it: `refs/heads/main`. Empty
+  // only of an imported entry that names environments and no refs.
+  string ref = 3;
+  // The environment the job ran in, as the token's `environment` claim says it; empty: the
+  // environment is not matched.
+  string environment = 4;
+  // The repository's numeric id (the token's `repository_id`), when an imported entry pinned it.
+  // Read only: `PutTrustedPublisher` sets none.
+  string repository_id = 5;
+  // The reusable workflows (the token's `job_workflow_ref`) an imported entry pinned; the run
+  // must call one of them. Read only.
+  repeated string called_workflows = 6;
+  // Whether an imported entry limited the host groups a call may deploy to. Read only.
+  bool limited_to_host_groups = 7;
+  // The host groups of that limit (empty with the limit: none). Read only.
+  repeated string host_groups = 8;
+}
+
+// `Services.ListTrustedPublishers`: the entries a package holds.
+message ListTrustedPublishersRequest {
+  // The package.
+  string service = 1;
+}
+
+message ListTrustedPublishersResponse {
+  // The package's entries, in the order they were put. None: no CI call sets the package.
+  repeated TrustedPublisher publishers = 1;
+}
+
+// `Services.PutTrustedPublisher`: adds one entry to a package's list.
+message PutTrustedPublisherRequest {
+  // The package.
+  string service = 1;
+  // The repository, `owner/name`.
+  string repository = 2;
+  // The workflow file: `.github/workflows/<name>.yml` (or `.yaml`).
+  string workflow = 3;
+  // The branch (`main`) or the full ref (`refs/tags/v1`) the run is on. Empty: `main`.
+  string ref = 4;
+  // The environment of the job, if the entry names one; empty: not matched.
+  string environment = 5;
+  // Why, 1 to 256 bytes; recorded in the audit entry.
+  string reason = 6;
+}
+
+message PutTrustedPublisherResponse {
+  // The audit entry the call wrote.
+  AuditEntry entry = 1;
+  // The package's entries after the call.
+  repeated TrustedPublisher publishers = 2;
+}
+
+// `Services.RemoveTrustedPublisher`: takes one entry out of a package's list. The entry is named
+// by the four fields as `PutTrustedPublisherRequest` has them.
+message RemoveTrustedPublisherRequest {
+  // The package.
+  string service = 1;
+  // The repository, `owner/name`.
+  string repository = 2;
+  // The workflow file, as the list shows it.
+  string workflow = 3;
+  // The branch or the full ref. Empty: `main`.
+  string ref = 4;
+  // The environment, as the list shows it; empty: none.
+  string environment = 5;
+  // Why, 1 to 256 bytes; recorded in the audit entry.
+  string reason = 6;
+}
+
+message RemoveTrustedPublisherResponse {
+  // The audit entry the call wrote.
+  AuditEntry entry = 1;
+  // The package's entries after the call.
+  repeated TrustedPublisher publishers = 2;
 }

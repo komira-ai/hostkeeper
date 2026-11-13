@@ -489,7 +489,7 @@ import { domTexts, elements, domNamed, fire } from "../test/kit.js";
 export async function main() {
   const doc = globalThis.doc;
   const pages = [];
-  for (const name of ["host", "rollout", "holds", "enrollment", "inventory", "audit"]) {
+  for (const name of ["host", "packages", "enrollment", "inventory", "audit"]) {
     globalThis.theApp.navigate(name, {});
     await null;
     pages.push(domTexts(doc.root).join(" "));

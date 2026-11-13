@@ -10,7 +10,7 @@ import { ApiError } from "./api.js";
 
 const TAGS = new Set([
   "a", "aside", "button", "code", "div", "fieldset", "form", "h1", "h2", "h3", "header", "input", "label",
-  "legend", "li", "main", "nav", "option", "p", "pre", "section", "select", "small", "span",
+  "legend", "li", "main", "nav", "option", "p", "pre", "progress", "section", "select", "small", "span",
   "strong", "table", "tbody", "td", "textarea", "th", "thead", "tr", "ul",
   "svg", "path", "circle", "rect", "line", "polyline",
 ]);
@@ -23,7 +23,7 @@ const SVG_NAMESPACE = ["http:", "", "www.w3.org", "2000", "svg"].join("/");
 const ATTRIBUTES = new Set([
   "aria-controls", "aria-current", "aria-expanded", "aria-hidden", "aria-label", "aria-pressed", "href", "rel", "target",
   "autocomplete", "class", "draggable", "id", "inputmode", "maxlength", "name", "placeholder", "role", "rows",
-  "spellcheck", "tabindex", "title", "type",
+  "spellcheck", "tabindex", "title", "type", "max",
   "viewBox", "d", "fill", "stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "cx", "cy", "r",
   "x", "y", "x1", "y1", "x2", "y2", "width", "height", "rx", "points", "focusable",
 ]);

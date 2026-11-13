@@ -79,7 +79,17 @@ const STEPS: &str = "crates/hostkeeper-hook/src/step.rs";
 /// The page modules of the web UI, one per page, which the mock-ups draw.
 const UI_PAGES: &str = "ui/pages";
 /// The shared modules of the web UI whose strings any page may print.
-const UI_SHARED_JS: &[&str] = &["ui/app.js", "ui/view.js", "ui/lab.js"];
+/// The Rollout, Release and Holds modules are no page of the page list any more (their routes open
+/// the package page); the package page prints their forms, tables and buttons, so their strings
+/// are the package page's too.
+const UI_SHARED_JS: &[&str] = &[
+    "ui/app.js",
+    "ui/view.js",
+    "ui/lab.js",
+    "ui/pages/rollout.js",
+    "ui/pages/release.js",
+    "ui/pages/holds.js",
+];
 const UI_SHARED_HTML: &[&str] = &["ui/index.html"];
 
 /// The measurements the report promises: each is a cell, filled from a result or open.

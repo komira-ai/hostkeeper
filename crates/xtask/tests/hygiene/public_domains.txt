@@ -186,3 +186,5 @@ fleetdm.com
 =s.health
 =view.health
 =where.mini
+n.attrs.name
+y.name

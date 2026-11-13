@@ -162,11 +162,12 @@ return { audit: audit.includes("Audit"), home: home.includes("Lab 1") && home.in
 }
 
 #[test]
-fn the_old_release_pages_still_open_by_their_route_but_have_no_menu_entry() {
+fn the_old_release_routes_land_on_the_packages_page() {
     // Catches: a route that is dropped from the app because its entry left the menu, which breaks
-    // every link to it until the package page takes its place.
+    // every link to it; a route that names no package lands on the Packages page.
     let mut ui = start();
-    ui.reply(&m("Releases/Status"), json!({}));
+    ui.reply(&m("Services/List"), json!({}));
+    ui.reply(&m("Repositories/List"), json!({}));
     let out = steps(
         &mut ui,
         r#"
@@ -181,7 +182,7 @@ return shown;"#,
     );
     assert_eq!(
         out,
-        json!(["Release", "Rollout", "Holds", null]),
+        json!(["Packages", "Packages", "Packages", null]),
         "the host page has the lab breadcrumbs and no top-bar crumb"
     );
 }
