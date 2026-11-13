@@ -126,6 +126,7 @@ pub(super) fn stored(store: &Store, legacy: Option<&str>) -> Moved {
         .with_desired(state, legacy)
         .with_verdicts(&verdicts_path(state))
         .with_accounts(&accounts_path(state))
+        .with_layout(&crate::layout::layout_path(state))
         .with_ops(&ops, DEFAULT_ROTATION)
         .expect("the ops files")
         .with_jti(&jti_path(state), Arc::new(|| AT))

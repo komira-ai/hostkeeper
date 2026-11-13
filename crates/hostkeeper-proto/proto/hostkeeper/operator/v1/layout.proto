@@ -1,0 +1,239 @@
+// hostkeeper.operator.v1: the `Layout` service of the operator API and its refusals
+// (`LayoutRefusal`): the lab's layout, which the web page's Home draws as rows of racks with the
+// hosts in their slots. A hostkeeper runs one lab only, so the layout has one cluster name. It is
+// its own small model, not part of the inventory: rows (numbered 1, 2, 3, ...), racks (numbered
+// within their row, each with its height in U) and placements (a server in a rack: its lowest U
+// and its height in U). The rest of the package,
+// `Enrollment` and `EnrollmentRefusal` (enrollment.proto) and `Audit` and `AuditRefusal` among it,
+// is operator.proto; this file is the same package and API, kept apart so that each file stays
+// short.
+//
+// Served by: the coordinator, on its control listener, as operator.proto says.
+//
+// Authentication: `Layout` takes the operator's credential only; no CI token reaches it (see
+// operator.proto).
+//
+// Refusals: a gRPC status whose message is exactly one token of `LayoutRefusal`, written as the
+// value's name without the prefix, in lower case; the status code is the one each value names. A
+// refused request changes nothing; a call that cannot write its audit line changes nothing either
+// (`audit_unavailable`).
+//
+// Units: as operator.proto says. A U is one rack unit; U 1 is the bottom of a rack. A placement
+// occupies the U from `u` up to `u + height_u - 1`. The cluster's name is 1 to 32
+// characters of letters, digits, space, `.`, `_` and `-`. The coordinator holds at most 64 rows,
+// 512 racks and 4096 placements; a rack is 1 to 60 U high. A request is at most 4 KiB.
+//
+// Extending: as operator.proto says: add fields, messages, enum values and RPCs; never renumber,
+// rename, retype or remove one, and never reuse a number.
+syntax = "proto3";
+
+package hostkeeper.operator.v1;
+
+import "hostkeeper/operator/v1/entry.proto";
+
+// The lab's layout. Every write is audited under the caller's name: `layout_name_put`,
+// `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place`
+// and `layout_unplace`. A write takes an optional reason; without one the audit says "layout edit".
+service Layout {
+  // The whole layout: the cluster's name, every row by number, every rack by row and number,
+  // every placement by rack and lowest U. Changes nothing. The layout is empty on a coordinator
+  // that holds none.
+  rpc Get(GetLayoutRequest) returns (GetLayoutResponse);
+  // Names the cluster.
+  rpc PutName(PutLayoutNameRequest) returns (PutLayoutNameResponse);
+  // Adds the next row: its number is one more than the highest row number held (1 for the first).
+  rpc AddRow(AddLayoutRowRequest) returns (AddLayoutRowResponse);
+  // Removes a row that holds no rack: refused `in_use` otherwise. A rack is removed only when it
+  // holds no placement, so a row's servers are named by `Get` (the page names them).
+  rpc RemoveRow(RemoveLayoutRowRequest) returns (RemoveLayoutRowResponse);
+  // Adds a rack to a row (empty `id`): its number is one more than the highest rack number of
+  // that row. With an `id`, resizes that rack and, when `row` names another row, moves it there
+  // (it takes that row's next number). A rack made shorter than a placement it holds is refused.
+  rpc PutRack(PutLayoutRackRequest) returns (PutLayoutRackResponse);
+  // Removes a rack that holds no placement.
+  rpc RemoveRack(RemoveLayoutRackRequest) returns (RemoveLayoutRackResponse);
+  // Puts a server in a rack, or moves it there from where it was: a subject is in at most one
+  // place.
+  rpc Place(PlaceLayoutRequest) returns (PlaceLayoutResponse);
+  // Takes a server out of its rack: it is unplaced again.
+  rpc Unplace(UnplaceLayoutRequest) returns (UnplaceLayoutResponse);
+}
+
+// Why `Layout` refused a request. The token is the value's name without the prefix, in lower
+// case.
+enum LayoutRefusal {
+  LAYOUT_REFUSAL_UNSPECIFIED = 0;
+  // UNAUTHENTICATED: no credential, or not an operator's.
+  LAYOUT_REFUSAL_UNAUTHORIZED = 1;
+  // PERMISSION_DENIED: the bearer is a valid CI token, which `Layout` does not take.
+  LAYOUT_REFUSAL_FORBIDDEN = 2;
+  // INVALID_ARGUMENT: a field breaks its rule (a name, an id, a height, a subject, a reason).
+  LAYOUT_REFUSAL_INVALID_REQUEST = 3;
+  // INTERNAL: the change could not be written. Nothing changed, and asking again is safe.
+  LAYOUT_REFUSAL_STORE_FAILED = 4;
+  // UNAVAILABLE: the audit entry could not be written. Nothing changed.
+  LAYOUT_REFUSAL_AUDIT_UNAVAILABLE = 5;
+  // NOT_FOUND: a row id the layout does not hold.
+  LAYOUT_REFUSAL_UNKNOWN_ROW = 6;
+  // NOT_FOUND: a rack id the layout does not hold.
+  LAYOUT_REFUSAL_UNKNOWN_RACK = 7;
+  // NOT_FOUND: `Unplace` of a subject that is not placed.
+  LAYOUT_REFUSAL_UNKNOWN_PLACEMENT = 8;
+  // ALREADY_EXISTS: not used, since the rows and racks are numbered by the coordinator; kept so
+  // that no number is reused.
+  LAYOUT_REFUSAL_NAME_TAKEN = 9;
+  // FAILED_PRECONDITION: `RemoveRow` of a row that holds a rack, or `RemoveRack` of a rack that
+  // holds a placement.
+  LAYOUT_REFUSAL_IN_USE = 10;
+  // FAILED_PRECONDITION: a placement that shares a U with another placement of the rack.
+  LAYOUT_REFUSAL_OVERLAP = 11;
+  // FAILED_PRECONDITION: a placement that is not within the rack's U 1 to its height, or a
+  // rack made shorter than a placement it holds.
+  LAYOUT_REFUSAL_OUT_OF_RACK = 12;
+  // FAILED_PRECONDITION: a new row, rack or placement past the most the coordinator holds.
+  LAYOUT_REFUSAL_CAPACITY = 13;
+}
+
+// A row of racks: a band of the floor plan.
+message LayoutRow {
+  // `row-<n>`: made by the coordinator, never changed.
+  string id = 1;
+  // Not used; kept so that no number is reused.
+  reserved 2, 3;
+  // 1, 2, 3, ...: the row's number as the operator sees it.
+  uint32 number = 4;
+}
+
+// A rack.
+message LayoutRack {
+  // `rack-<n>`: made by the coordinator, never changed.
+  string id = 1;
+  // Not used; kept so that no number is reused.
+  reserved 2, 5;
+  // The id of the row it stands in.
+  string row = 3;
+  // 1 to 60.
+  uint32 height_u = 4;
+  // 1, 2, 3, ... within its row.
+  uint32 number = 6;
+}
+
+// What a placement places.
+enum LayoutSubjectKind {
+  LAYOUT_SUBJECT_KIND_UNSPECIFIED = 0;
+  // An enrolled host that no inventory entry matches, by node id.
+  LAYOUT_SUBJECT_KIND_HOST = 1;
+  // An inventory entry, by its id: the physical server, which keeps its place across a wipe and
+  // a new enrollment.
+  LAYOUT_SUBJECT_KIND_INVENTORY = 2;
+}
+
+// A host or an inventory entry. The coordinator does not check that it exists: an entry that is
+// removed, or a host that is retired, leaves its placement, which `Unplace` takes away.
+message LayoutSubject {
+  LayoutSubjectKind kind = 1;
+  // 1 to 128 visible ASCII bytes.
+  string id = 2;
+}
+
+// A subject in a rack.
+message LayoutPlacement {
+  LayoutSubject subject = 1;
+  // The id of the rack.
+  string rack = 2;
+  // Not used; kept so that no number is reused.
+  reserved 3;
+  // How many U it occupies, 1 to the rack's height.
+  uint32 height_u = 4;
+  // The lowest U it occupies, 1 to the rack's height minus `height_u` plus 1. U 1 is the bottom.
+  uint32 u = 5;
+}
+
+message GetLayoutRequest {}
+
+message GetLayoutResponse {
+  repeated LayoutRow rows = 1;
+  repeated LayoutRack racks = 2;
+  repeated LayoutPlacement placements = 3;
+  // The cluster's name; empty until `PutName`.
+  string name = 4;
+}
+
+message PutLayoutNameRequest {
+  // 1 to 32 characters of letters, digits, space, `.`, `_` and `-`.
+  string name = 1;
+  // 0 to 256 bytes, no control character; empty: "layout edit".
+  string reason = 2;
+}
+
+message PutLayoutNameResponse {
+  string name = 1;
+  AuditEntry entry = 2;
+}
+
+message AddLayoutRowRequest {
+  string reason = 1;
+}
+
+message AddLayoutRowResponse {
+  LayoutRow row = 1;
+  AuditEntry entry = 2;
+}
+
+message RemoveLayoutRowRequest {
+  string id = 1;
+  string reason = 2;
+}
+
+message RemoveLayoutRowResponse {
+  AuditEntry entry = 1;
+}
+
+message PutLayoutRackRequest {
+  // Empty to add a rack; else the rack to resize or move.
+  string id = 1;
+  // The id of the row it stands in (or, with an `id`, is moved to).
+  string row = 3;
+  // 1 to 60; 0 on an add is 42.
+  uint32 height_u = 4;
+  string reason = 6;
+}
+
+message PutLayoutRackResponse {
+  LayoutRack rack = 1;
+  AuditEntry entry = 2;
+}
+
+message RemoveLayoutRackRequest {
+  string id = 1;
+  string reason = 2;
+}
+
+message RemoveLayoutRackResponse {
+  AuditEntry entry = 1;
+}
+
+message PlaceLayoutRequest {
+  LayoutSubject subject = 1;
+  // The id of the rack.
+  string rack = 2;
+  // How many U it occupies, 1 to the rack's height; required (0 is refused).
+  uint32 height_u = 4;
+  // The lowest U it occupies; required (0 is refused).
+  uint32 u = 5;
+  string reason = 6;
+}
+
+message PlaceLayoutResponse {
+  LayoutPlacement placement = 1;
+  AuditEntry entry = 2;
+}
+
+message UnplaceLayoutRequest {
+  LayoutSubject subject = 1;
+  string reason = 2;
+}
+
+message UnplaceLayoutResponse {
+  AuditEntry entry = 1;
+}

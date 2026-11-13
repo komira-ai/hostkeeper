@@ -20,6 +20,7 @@ use crate::fleet::{Fleet, Node, QUIET_START};
 use crate::group_scope::Basis;
 use crate::halt;
 use crate::identity::Identity;
+use crate::layout::LayoutStore;
 use crate::membership::{Standing, standing};
 use crate::ops::{AuditEntry, OperateError, OpsError, OpsStore};
 use crate::order_terms::Terms;
@@ -239,6 +240,7 @@ pub struct Coordinator {
     pub(crate) ops: Arc<OpsStore>,
     pub(crate) verdicts: VerdictFile,
     accounts: AccountStore,
+    layout: LayoutStore,
     /// The initial-admin file of `--initial-admin-file` ([`crate::initial_admin`]).
     pub(crate) initial_admin: Option<crate::initial_admin::InitialAdmin>,
     /// The sessions, the limiter and the passwords of the sign-in ([`crate::login`]); none: the
@@ -330,6 +332,7 @@ impl Coordinator {
             ops: Arc::new(OpsStore::volatile()),
             verdicts: VerdictFile::volatile(),
             accounts: AccountStore::volatile(),
+            layout: LayoutStore::volatile(),
             mdm_server: None,
             mdm_setup: Arc::new(crate::mdm_setup::MdmSetup::volatile()),
             abm: None,
@@ -458,6 +461,14 @@ impl Coordinator {
         self
     }
 
+    /// The same coordinator over the lab layout of `layout` instead of a store that keeps
+    /// nothing.
+    #[must_use]
+    pub fn with_layout(mut self, layout: LayoutStore) -> Self {
+        self.layout = layout;
+        self
+    }
+
     /// The same coordinator looking at `initial_admin` ([`Coordinator::look_at_initial_admin`]).
     #[must_use]
     pub fn with_initial_admin(mut self, initial_admin: crate::initial_admin::InitialAdmin) -> Self {
@@ -483,6 +494,12 @@ impl Coordinator {
     #[must_use]
     pub fn accounts(&self) -> &AccountStore {
         &self.accounts
+    }
+
+    /// The lab layout the store keeps.
+    #[must_use]
+    pub fn layout(&self) -> &LayoutStore {
+        &self.layout
     }
 
     /// The same coordinator advertising `features` instead of [`FEATURES`].

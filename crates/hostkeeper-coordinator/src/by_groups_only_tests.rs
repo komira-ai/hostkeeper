@@ -72,6 +72,7 @@ fn approval(
         replace: false,
         reason: WHY.to_owned(),
         host_group: host_group.to_owned(),
+        ..Default::default()
     }
 }
 

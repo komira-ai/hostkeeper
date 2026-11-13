@@ -85,6 +85,7 @@ const UI_PAGES: &str = "ui/pages";
 const UI_SHARED_JS: &[&str] = &[
     "ui/app.js",
     "ui/view.js",
+    "ui/lab.js",
     "ui/pages/rollout.js",
     "ui/pages/release.js",
     "ui/pages/holds.js",

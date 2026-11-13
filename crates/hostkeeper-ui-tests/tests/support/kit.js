@@ -189,13 +189,22 @@ export async function click(tree, name, index) {
 // A document that makes plain objects and records every element it makes.
 export function fakeDocument() {
   const created = [];
-  function createElement(tag) {
+  function createElement(tag, namespace) {
     const element = {
+      namespace,
       nodeType: 1,
       tagName: tag.toUpperCase(),
       attributes: {},
       children: [],
       listeners: {},
+      // The element's style object: only custom properties are set through it, which the page's
+      // content security policy allows (a `style` attribute it does not).
+      style: {
+        custom: {},
+        setProperty(name, value) {
+          this.custom[name] = value;
+        },
+      },
       setAttribute(name, value) {
         this.attributes[name] = String(value);
       },
@@ -216,6 +225,7 @@ export function fakeDocument() {
   return {
     created,
     createElement,
+    createElementNS: (namespace, tag) => createElement(tag, namespace),
     createTextNode(data) {
       return { nodeType: 3, data };
     },

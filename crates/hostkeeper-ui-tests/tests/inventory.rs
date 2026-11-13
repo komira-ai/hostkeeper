@@ -111,6 +111,7 @@ return filled;
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (
                 m("Enrollment/Approve"),
                 json!({"requestId": "1f".repeat(32), "keySha256": "ab".repeat(32),
@@ -209,6 +210,7 @@ return filled;
         [
             (m("Enrollment/List"), json!({"limit": 50, "pageToken": ""})),
             (m("HostGroups/List"), json!({})),
+            (m("Layout/Get"), json!({})),
             (m("Enrollment/Approve"), body("1f", "ab", "", false)),
             (m("Enrollment/Approve"), body("1f", "ab", "db-9", true)),
             (m("Enrollment/Approve"), body("2e", "cd", "s6", false)),

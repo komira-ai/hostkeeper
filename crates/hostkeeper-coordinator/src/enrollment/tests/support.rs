@@ -245,6 +245,7 @@ pub fn approval(key: &HostKey, host: &str) -> ApproveRequest {
         replace: false,
         reason: "new rack".to_owned(),
         host_group: String::new(),
+        ..Default::default()
     }
 }
 

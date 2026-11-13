@@ -222,7 +222,8 @@ fn the_release_before_starts_on_a_database_with_0012_and_this_one_on_its() {
         vec![
             vec![Some("12".to_owned())],
             vec![Some("13".to_owned())],
-            vec![Some("14".to_owned())]
+            vec![Some("14".to_owned())],
+            vec![Some("15".to_owned())]
         ]
     );
 }

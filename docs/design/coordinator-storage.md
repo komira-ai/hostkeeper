@@ -66,6 +66,7 @@ storage trait (section 4.1).
 | Spent CI token ids | `<state-file>.jti` | table `spent_tokens` |
 | Acknowledged and counted verdicts | `<state-file>.verdicts` | tables `verdict_standing`, `verdict_counted` |
 | The operator's users and the API tokens made in the UI (`docs/design/operator-login.md`, komira-ai/hostkeeper#300) | `<state-file>.accounts` | tables `users`, `api_tokens` (migration `0010`, `may-run`) |
+| The lab's layout: the cluster's name, rows, racks and placements (`docs/design/ui-shell-lab.md`) | `<state-file>.layout` | tables `lab_cluster`, `lab_rows`, `lab_racks`, `lab_placements` (migration `0014`, `may-run`) |
 | Exclusions, labels, holds, assignments, minimums, uninstall intents, bad marks, last good, standing force, inventory | `--ops-file` | the tables of section 3.3 |
 | Halts, halt reports, clear generations | `<ops-file>.halts` with the ops file | tables `halts`, `halt_reports`, column `services.halt_generation` |
 | Plan positions (rollout-update-plans.md section 3) | `rollouts` of `<ops-file>.halts` | tables `rollouts`, `rollout_done` |

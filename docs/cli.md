@@ -143,6 +143,9 @@ enrolled in no specific group: it is in the built-in group `all` alone, and runs
 | `--replace` | true\|false | Take the host id from the host that holds it, revoking that host's certificate; also needed to approve a `duplicate_claim` request or a denied host id. It never approves a contested request (`record_contested`). |
 | `--reason` | STRING | Why, for the audit log: 1 to 256 bytes with no control character, or empty for none. |
 | `--host-group` | STRING | The host group the host is in, which must exist (`unknown_host_group`; a coordinator that does not hold host groups refuses any); empty for none (with `role` empty too, from a coordinator that holds host groups): the host is enrolled in no specific group (in `all` alone) until `HostGroups.Move`. `all`, which every host is in, is no group a request names (`unknown_host_group`). With a renewal or `replace`, the group of that host (`host_group_differs`); empty keeps it. |
+| `--rack` | STRING | Where the server stands, an optional placement the approval makes in the same step (`docs/design/ui-shell-lab.md`): the lab layout's rack id, which must exist (`unknown_rack`); empty for none, and then `placement_u` and `placement_height_u` are 0 (`placement_invalid`): the host is unplaced until it is placed (`Place` of `Layout`). A coordinator that holds no layout refuses a rack (`unknown_rack`). The placement is of the inventory entry the host id names when there is one, so the server keeps its place across a wipe, else of the host. A refused placement refuses the approval, and nothing changes (`placement_overlap`, `placement_out_of_rack`). |
+| `--placement-u` | UINT32 | The lowest U the server occupies, from 1 (the bottom); required with `rack`. |
+| `--placement-height-u` | UINT32 | How many U it occupies; required with `rack`. |
 
 #### `hkctl enrollment reject`
 
@@ -445,6 +448,105 @@ at its next heartbeat, at the next try (see `RetryRequest`). Audited `retry`.
 |---|---|---|
 | `--node-id` | STRING | The host, heard from since the coordinator started. |
 | `--service` | STRING | The service whose failed report is set aside; one the coordinator manages. |
+
+### `layout`
+
+The service `Layout` of the package `hostkeeper.operator.v1`. The lab's layout. Every write is audited under the caller's name: `layout_name_put`, `layout_row_add`, `layout_row_remove`, `layout_rack_put`, `layout_rack_remove`, `layout_place` and `layout_unplace`. A write takes an optional reason; without one the audit says "layout edit".
+
+#### `hkctl layout get`
+
+`/hostkeeper.operator.v1.Layout/Get`
+
+The whole layout: the cluster's name, every row by number, every rack by row and number,
+every placement by rack and lowest U. Changes nothing. The layout is empty on a coordinator
+that holds none.
+
+#### `hkctl layout put-name`
+
+`/hostkeeper.operator.v1.Layout/PutName`
+
+Names the cluster.
+
+| flag | value | meaning |
+|---|---|---|
+| `--name` | STRING | 1 to 32 characters of letters, digits, space, `.`, `_` and `-`. |
+| `--reason` | STRING | 0 to 256 bytes, no control character; empty: "layout edit". |
+
+#### `hkctl layout add-row`
+
+`/hostkeeper.operator.v1.Layout/AddRow`
+
+Adds the next row: its number is one more than the highest row number held (1 for the first).
+
+| flag | value | meaning |
+|---|---|---|
+| `--reason` | STRING |  |
+
+#### `hkctl layout remove-row`
+
+`/hostkeeper.operator.v1.Layout/RemoveRow`
+
+Removes a row that holds no rack: refused `in_use` otherwise. A rack is removed only when it
+holds no placement, so a row's servers are named by `Get` (the page names them).
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hkctl layout put-rack`
+
+`/hostkeeper.operator.v1.Layout/PutRack`
+
+Adds a rack to a row (empty `id`): its number is one more than the highest rack number of
+that row. With an `id`, resizes that rack and, when `row` names another row, moves it there
+(it takes that row's next number). A rack made shorter than a placement it holds is refused.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING | Empty to add a rack; else the rack to resize or move. |
+| `--row` | STRING | The id of the row it stands in (or, with an `id`, is moved to). |
+| `--height-u` | UINT32 | 1 to 60; 0 on an add is 42. |
+| `--reason` | STRING |  |
+
+#### `hkctl layout remove-rack`
+
+`/hostkeeper.operator.v1.Layout/RemoveRack`
+
+Removes a rack that holds no placement.
+
+| flag | value | meaning |
+|---|---|---|
+| `--id` | STRING |  |
+| `--reason` | STRING |  |
+
+#### `hkctl layout place`
+
+`/hostkeeper.operator.v1.Layout/Place`
+
+Puts a server in a rack, or moves it there from where it was: a subject is in at most one
+place.
+
+| flag | value | meaning |
+|---|---|---|
+| `--rack` | STRING | The id of the rack. |
+| `--height-u` | UINT32 | How many U it occupies, 1 to the rack's height; required (0 is refused). |
+| `--u` | UINT32 | The lowest U it occupies; required (0 is refused). |
+| `--reason` | STRING |  |
+
+Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
+
+#### `hkctl layout unplace`
+
+`/hostkeeper.operator.v1.Layout/Unplace`
+
+Takes a server out of its rack: it is unplaced again.
+
+| flag | value | meaning |
+|---|---|---|
+| `--reason` | STRING |  |
+
+Through `--request` only: `subject` (hostkeeper.operator.v1.LayoutSubject).
 
 ### `mdm`
 

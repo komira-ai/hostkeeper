@@ -8,7 +8,7 @@
 
 use hostkeeper_proto::hostkeeper::operator::v1::{
     AlertsRefusal, ApiTokensRefusal, AuditRefusal, EnrollmentRefusal, HostGroupsRefusal,
-    HostsRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
+    HostsRefusal, LayoutRefusal, MdmRefusal, ReleasesRefusal, RepositoriesRefusal, RolloutsRefusal,
     ServicesRefusal, UsersRefusal,
 };
 use tonic::{Code, Status};
@@ -108,7 +108,8 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         EnrollmentRefusal::Forbidden => Code::PermissionDenied,
         EnrollmentRefusal::UnknownRequest
         | EnrollmentRefusal::NoRecord
-        | EnrollmentRefusal::UnknownHostGroup => Code::NotFound,
+        | EnrollmentRefusal::UnknownHostGroup
+        | EnrollmentRefusal::UnknownRack => Code::NotFound,
         EnrollmentRefusal::KeyMismatch
         | EnrollmentRefusal::DuplicateClaim
         | EnrollmentRefusal::NotPending
@@ -116,13 +117,16 @@ pub(crate) fn enrollment(refusal: EnrollmentRefusal) -> Status {
         | EnrollmentRefusal::RecordMismatch
         | EnrollmentRefusal::RecordContested
         | EnrollmentRefusal::RecordUsed
-        | EnrollmentRefusal::HostGroupDiffers => Code::FailedPrecondition,
+        | EnrollmentRefusal::HostGroupDiffers
+        | EnrollmentRefusal::PlacementOverlap
+        | EnrollmentRefusal::PlacementOutOfRack => Code::FailedPrecondition,
         EnrollmentRefusal::HostIdTaken
         | EnrollmentRefusal::RecordExists
         | EnrollmentRefusal::RecordConflict => Code::AlreadyExists,
         EnrollmentRefusal::PendingFull | EnrollmentRefusal::Capacity => Code::ResourceExhausted,
         EnrollmentRefusal::AuditUnavailable => Code::Unavailable,
-        EnrollmentRefusal::InvalidHostId
+        EnrollmentRefusal::PlacementInvalid
+        | EnrollmentRefusal::InvalidHostId
         | EnrollmentRefusal::InvalidRole
         | EnrollmentRefusal::InvalidService
         | EnrollmentRefusal::InvalidWindow
@@ -276,4 +280,24 @@ pub(crate) fn api_tokens(refusal: ApiTokensRefusal) -> Status {
         ApiTokensRefusal::AuditUnavailable => Code::Unavailable,
     };
     refused(code, refusal.as_str_name(), "API_TOKENS_REFUSAL_")
+}
+
+/// The status of a refusal by `Layout`.
+pub(crate) fn layout(refusal: LayoutRefusal) -> Status {
+    let code = match refusal {
+        LayoutRefusal::Unspecified | LayoutRefusal::StoreFailed => Code::Internal,
+        LayoutRefusal::Unauthorized => Code::Unauthenticated,
+        LayoutRefusal::Forbidden => Code::PermissionDenied,
+        LayoutRefusal::InvalidRequest => Code::InvalidArgument,
+        LayoutRefusal::AuditUnavailable => Code::Unavailable,
+        LayoutRefusal::UnknownRow
+        | LayoutRefusal::UnknownRack
+        | LayoutRefusal::UnknownPlacement => Code::NotFound,
+        LayoutRefusal::NameTaken => Code::AlreadyExists,
+        LayoutRefusal::InUse
+        | LayoutRefusal::Overlap
+        | LayoutRefusal::OutOfRack
+        | LayoutRefusal::Capacity => Code::FailedPrecondition,
+    };
+    refused(code, refusal.as_str_name(), "LAYOUT_REFUSAL_")
 }

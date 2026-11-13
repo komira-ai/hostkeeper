@@ -167,7 +167,7 @@ package page's Assign and Unassign with them: the group is the only placement.
 
 **Watch:** nothing is ordered yet for hello. `hkctl host-groups get --host-group farm` answers
 the group with its generation, its hosts, and per package its desired version (none set) and its
-convergence. Hosts and Fleet show a moved host with the group as its role. The Audit page shows a
+convergence. Hosts and Home show a moved host with the group as its role. The Audit page shows a
 `host_group_put` and a `host_move` entry by the token's name, which `Audit.List` with
 `host_group` `farm` lists.
 
@@ -212,7 +212,7 @@ confirm.
   default.
   The plan shows "stage k of n" and why it waits. The role table counts `Updating`, then `At
   desired`. `State` ends `converged`.
-- Fleet: each host shows `hello <v1>, healthy`. Healthy is the daemon's own probe of
+- Home: each host shows `hello <v1>, healthy`. Healthy is the daemon's own probe of
   `/readyz` on each running slot.
 - Host, `Last update`: `Verdict` succeeded, the steps prepare, cutover, verify and cleanup.
   `Assigned services` shows hello with `Installed` and `Desired` both `<v1>`, and `State` `at
@@ -242,7 +242,7 @@ tells it from `<v2>` (`verify` stops at the 503 and never compares it).
 **Watch:**
 
 - Host, `Last update` of the canary: `Verdict` failed, `Phase` `gate_release`, `Reason`
-  `not_ready`. The host's own hook rolled it back: the slot of `<v2>` serves again, and Fleet
+  `not_ready`. The host's own hook rolled it back: the slot of `<v2>` serves again, and Home
   shows `hello <v2>, healthy`.
 - Rollout, section `hello`: `Bad versions` lists `<v2>-fail-ready`, and `Desired` is back at
   `<v2>`, the last good version. No other host was ordered the failing build.
@@ -331,7 +331,7 @@ heartbeat link that carries the order to the host (`NoLink`).
 The daemon then runs hello's `uninstall` step, which stops both slots and removes the hook's
 record. It then removes hello's placed units, its package directory and its step records.
 
-**Watch:** Fleet. The host no longer lists hello. The Audit page shows a `host_group_put` entry
+**Watch:** Home. The host no longer lists hello. The Audit page shows a `host_group_put` entry
 by the token's name.
 The package page's `Uninstalling` lists the hosts until each reports hello gone, and the Host
 page's `Assigned services` shows hello with `State` `uninstalling`.

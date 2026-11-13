@@ -48,7 +48,8 @@ export function signInView({ username, message, submit }) {
     },
   },
   h("h1", {}, "hostkeeper"),
-  h("p", {}, "Sign in with your user name and password."),
+  h("p", { class: "lede" }, "Sign in with your user name and password."),
+  alertLine(message),
   h("label", {}, "User name",
     h("input", {
       type: "text", name: "username", autocomplete: "username", spellcheck: "false", value: form.username,
@@ -59,8 +60,7 @@ export function signInView({ username, message, submit }) {
       type: "password", name: "password", autocomplete: "current-password", spellcheck: "false",
       on: { input: (e) => { form.password = e.target.value; } },
     })),
-  h("button", { type: "submit", name: "sign-in" }, "Sign in"),
-  alertLine(message));
+  h("button", { type: "submit", name: "sign-in", class: "primary" }, "Sign in"));
 }
 
 // The form of the new password: the current one and the new one twice. `until` is the second the
@@ -83,6 +83,7 @@ export function changeView({ username, until, message, submit, signOut }) {
   h("h1", {}, "hostkeeper"),
   h("h2", {}, "Choose a new password"),
   h("p", {}, `${username} is signed in with a temporary password. Choose a new one to continue: nothing else works until you do.`),
+  alertLine(message),
   until > 0 ? h("p", { class: "note" }, `The temporary password can be exchanged until ${fmtUnix(until)}.`) : null,
   h("label", {}, "Current password",
     h("input", {
@@ -99,7 +100,6 @@ export function changeView({ username, until, message, submit, signOut }) {
       type: "password", name: "again", autocomplete: "new-password", spellcheck: "false",
       on: { input: (e) => { form.again = e.target.value; } },
     })),
-  h("button", { type: "submit", name: "change-password" }, "Change password"),
-  h("button", { type: "button", name: "sign-out", on: { click: () => signOut() } }, "Sign out"),
-  alertLine(message));
+  h("button", { type: "submit", name: "change-password", class: "primary" }, "Change password"),
+  h("button", { type: "button", name: "sign-out", on: { click: () => signOut() } }, "Sign out"));
 }

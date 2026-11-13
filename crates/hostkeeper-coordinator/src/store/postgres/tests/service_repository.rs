@@ -102,7 +102,7 @@ fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_a
     store.stop();
 
     let after = db.rows(migrated);
-    assert_eq!(after.len(), 14, "{after:?}");
+    assert_eq!(after.len(), 15, "{after:?}");
     assert_eq!(after[..8], before[..], "0001 to 0008 were not run again");
     assert_eq!(
         after[8][..2],
@@ -127,6 +127,10 @@ fn this_release_starts_on_a_database_the_release_before_migrated_and_runs_0009_a
     assert_eq!(
         after[13][..2],
         [Some("14".to_owned()), Some("trusted_publishers".to_owned())]
+    );
+    assert_eq!(
+        after[14][..2],
+        [Some("15".to_owned()), Some("lab_layout".to_owned())]
     );
     assert_eq!(db.rows(COLUMN), vec![vec![Some("1".to_owned())]]);
     assert_eq!(
@@ -163,7 +167,7 @@ fn the_release_before_runs_on_a_database_this_release_migrated() {
     assert_eq!(ran, Vec::<i32>::new());
     assert_eq!(
         db.rows("SELECT version FROM schema_version ORDER BY version"),
-        (1..=14)
+        (1..=15)
             .map(|n| vec![Some(n.to_string())])
             .collect::<Vec<_>>()
     );

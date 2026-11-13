@@ -13,6 +13,7 @@ use crate::desired::StoreError;
 use crate::enrollment::{AllowlistError, SetupError};
 use crate::inventory::WindowAboveMax;
 use crate::jti_file::JtiError;
+use crate::layout::LayoutError;
 use crate::mdm::MdmError;
 use crate::ops::OpsError;
 use crate::origin_https::OriginTlsError;
@@ -237,6 +238,9 @@ pub enum StartError {
     /// The file of users and API tokens is refused.
     #[error(transparent)]
     Accounts(#[from] AccountsError),
+    /// The file of the lab layout is refused.
+    #[error(transparent)]
+    Layout(#[from] LayoutError),
     /// The TLS client for the repository origins could not be made.
     #[error("repository origins: {0}")]
     OriginTls(#[from] OriginTlsError),
