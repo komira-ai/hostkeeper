@@ -170,7 +170,7 @@ export function board(env) {
             ops.refuse(`${sled.address} does not fit at U${state.target.u}: another sled stands there or it would reach past the top.`);
             return;
           }
-          ops.moveSled(sled.id, state.target.rack, state.target.u);
+          return ops.moveSled(sled.id, state.target.rack, state.target.u);
         }
         return;
       }
@@ -188,7 +188,7 @@ export function board(env) {
       } else if (e.key === "Enter") {
         e.preventDefault();
         if (state.target !== null && state.target.slot !== item.placement.slot) {
-          ops.place(item.key, sled.id, state.target.slot);
+          return ops.place(item.key, sled.id, state.target.slot);
         }
       }
     };
@@ -313,7 +313,7 @@ export function board(env) {
       const d = state.drag;
       clearDrag();
       if (d !== null && d.kind === "item") {
-        ops.place(d.key, sled.id, slot);
+        return ops.place(d.key, sled.id, slot);
       }
     };
     return h("button", {
@@ -323,8 +323,7 @@ export function board(env) {
         click: () => {
           const sel = state.selected;
           if (sel !== null && sel.kind === "item") {
-            ops.place(sel.id, sled.id, slot);
-            return;
+            return ops.place(sel.id, sled.id, slot);
           }
           state.selected = null;
           state.target = null;
@@ -413,15 +412,15 @@ export function board(env) {
     const putOn = (u) => {
       const sel = state.selected;
       if (sel === null || sel.kind !== "sled") {
-        return;
+        return undefined;
       }
       const sled = sledOf(sel.id);
       const start = startFor(sled, u);
       if (start === null) {
         ops.refuse(`${sled.address} does not fit at U${u}: it needs ${sled.height} free U.`);
-      } else {
-        ops.moveSled(sled.id, rack.id, start);
+        return undefined;
       }
+      return ops.moveSled(sled.id, rack.id, start);
     };
     for (let u = rack.height; u >= 1; u -= 1) {
       const s = at.get(u);
@@ -463,9 +462,9 @@ export function board(env) {
                 const start = startFor(sled, u);
                 if (start === null) {
                   ops.refuse(`${sled.address} does not fit at U${u}: it needs ${sled.height} free U.`);
-                } else {
-                  ops.moveSled(sled.id, rack.id, start);
+                  return undefined;
                 }
+                return ops.moveSled(sled.id, rack.id, start);
               },
             },
           }));
